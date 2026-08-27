@@ -1,0 +1,21 @@
+{
+  "name": "vlt-studio-platform",
+  "private": true,
+  "packageManager": "pnpm@11.3.0",
+  "engines": {
+    "node": ">=24 <25",
+    "pnpm": "11.3.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @vlt/web --filter @vlt/admin dev",
+    "build": "pnpm --filter @vlt/api-client build && pnpm --filter @vlt/web build && pnpm --filter @vlt/admin build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "generate:api": "pnpm --filter @vlt/api-client generate",
+    "check:release-security": "node scripts/check-next-security.mjs"
+  },
+  "devDependencies": {
+    "openapi-typescript": "7.9.1",
+    "typescript": "5.9.2"
+  }
+}

@@ -1,0 +1,66 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.vs/
+.VSCodeCounter/
+*.suo
+*.user
+*.vcxproj.user
+*.swp
+
+# Local tools and caches
+.agents/
+.cache/
+.claude/
+.pnpm-store/
+.postman/
+.sisyphus/
+.zcode/
+.codex-ssh-askpass.cmd
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# JavaScript / TypeScript
+node_modules/
+.next/
+.turbo/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+next-env.d.ts
+
+# CMake / C++ build output
+/build*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+CTestTestfile.cmake
+cmake_install.cmake
+compile_commands.json
+Testing/
+*.a
+*.dll
+*.dylib
+*.exe
+*.lib
+*.o
+*.obj
+*.pdb
+*.so
+
+# Go runtime data and binaries
+backend/bin/
+backend/storage/
+coverage.out
+*.coverprofile
+
+# Logs and local captures
+*.log
+/Изображение Codex*.png

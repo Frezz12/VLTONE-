@@ -1,0 +1,13 @@
+{
+  "name": "@vlt/ui",
+  "version": "0.0.1",
+  "private": true,
+  "sideEffects": ["*.css"],
+  "dependencies": {
+    "@fontsource/fira-code": "5.3.0",
+    "@fontsource/fira-sans": "5.3.0"
+  },
+  "exports": {
+    "./tokens.css": "./tokens.css"
+  }
+}

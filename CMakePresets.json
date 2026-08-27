@@ -1,0 +1,62 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "macos",
+      "displayName": "macOS (Homebrew + Ninja)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "DAW_BUILD_APP": "ON",
+        "DAW_BUILD_TESTS": "ON",
+        "VLT_DEFAULT_API_ORIGIN": "https://vltstudio.ru/api/v1"
+      }
+    },
+    {
+      "name": "windows-vcpkg",
+      "displayName": "Windows Release x64 (Qt 6.8.3 + vcpkg)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-windows",
+      "installDir": "${sourceDir}/build-windows/stage",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_STANDARD": "23",
+        "CMAKE_SYSTEM_VERSION": "10.0.26100.0",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build-windows/stage",
+        "CMAKE_PREFIX_PATH": "$env{QTDIR}",
+        "DAW_BUILD_APP": "ON",
+        "DAW_BUILD_TESTS": "ON",
+        "DAW_PACKAGE": "ON",
+        "DAW_QT_VERSION": "6.8.3",
+        "DAW_REQUIRE_EXACT_QT_VERSION": "ON",
+        "VLT_DEFAULT_API_ORIGIN": "https://vltstudio.ru/api/v1",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "macos", "configurePreset": "macos" },
+    {
+      "name": "windows-vcpkg",
+      "configurePreset": "windows-vcpkg",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-vcpkg",
+      "configurePreset": "windows-vcpkg",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    }
+  ]
+}

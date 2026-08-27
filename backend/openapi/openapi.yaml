@@ -1,0 +1,702 @@
+openapi: 3.1.0
+info:
+  title: VLT Studio Platform API
+  version: 0.0.1
+  description: Source-of-truth contract shared by the public site, admin site, and desktop application.
+servers:
+  - url: http://localhost:8080
+paths:
+  /v1/meta:
+    get:
+      operationId: getMeta
+      responses:
+        "200": { description: Service metadata, content: { application/json: { schema: { $ref: "#/components/schemas/Meta" } } } }
+  /v1/web/auth/register:
+    post:
+      operationId: register
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RegisterRequest" } } }
+      responses:
+        "201": { $ref: "#/components/responses/AccountSession" }
+        "422": { $ref: "#/components/responses/Error" }
+  /v1/web/auth/login:
+    post:
+      operationId: webLogin
+      requestBody: { $ref: "#/components/requestBodies/Login" }
+      responses:
+        "200": { $ref: "#/components/responses/AccountSession" }
+        "401": { $ref: "#/components/responses/Error" }
+  /v1/web/auth/logout:
+    post:
+      operationId: webLogout
+      security: [{ webCookie: [], csrf: [] }]
+      responses: { "204": { description: Signed out }, "403": { $ref: "#/components/responses/Error" } }
+  /v1/web/auth/password-reset/request:
+    post:
+      operationId: requestPasswordReset
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string, format: email } } } } }
+      responses: { "202": { description: Accepted regardless of account existence } }
+  /v1/web/auth/password-reset/confirm:
+    post:
+      operationId: confirmPasswordReset
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PasswordResetConfirmRequest" } } }
+      responses: { "204": { description: Password changed and sessions revoked }, "400": { $ref: "#/components/responses/Error" } }
+  /v1/me:
+    get:
+      operationId: getMe
+      security: [{ webCookie: [] }]
+      responses: { "200": { $ref: "#/components/responses/AccountSession" } }
+  /v1/me/quota:
+    get:
+      operationId: getMyQuota
+      security: [{ webCookie: [] }]
+      responses: { "200": { description: Current UTC cycle, content: { application/json: { schema: { $ref: "#/components/schemas/Quota" } } } } }
+  /v1/me/devices:
+    get:
+      operationId: listMyDevices
+      security: [{ webCookie: [] }]
+      responses:
+        "200":
+          description: Devices, including revoked history and the active-device limit
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [devices, limit]
+                properties:
+                  devices: { type: array, items: { $ref: "#/components/schemas/Device" } }
+                  limit: { const: 2 }
+  /v1/me/devices/{deviceId}:
+    delete:
+      operationId: revokeMyDevice
+      security: [{ webCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses: { "204": { description: Revoked }, "404": { $ref: "#/components/responses/Error" } }
+  /v1/bug-reports:
+    post:
+      operationId: createBugReport
+      security: [{ webCookie: [], csrf: [] }]
+      requestBody:
+        required: true
+        content: { multipart/form-data: { schema: { $ref: "#/components/schemas/BugReportRequest" } } }
+      responses: { "201": { description: One-way report receipt }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/desktop/auth/login:
+    post:
+      operationId: desktopLogin
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/DesktopLoginRequest" } } }
+      responses: { "200": { $ref: "#/components/responses/DesktopSession" }, "409": { $ref: "#/components/responses/Error" } }
+  /v1/desktop/auth/refresh:
+    post:
+      operationId: desktopRefresh
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/DesktopRefreshRequest" } } }
+      responses: { "200": { $ref: "#/components/responses/DesktopSession" }, "401": { $ref: "#/components/responses/Error" } }
+  /v1/desktop/auth/logout:
+    post:
+      operationId: desktopLogout
+      security: [{ desktopBearer: [] }]
+      responses: { "204": { description: Revoked } }
+  /v1/desktop/me:
+    get:
+      operationId: desktopMe
+      security: [{ desktopBearer: [] }]
+      responses: { "200": { $ref: "#/components/responses/AccountSession" } }
+  /v1/desktop/telemetry/batch:
+    post:
+      operationId: uploadTelemetryBatch
+      security: [{ reporterBearer: [] }, { desktopBearer: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/TelemetryBatch" } } }
+      responses: { "202": { description: Idempotent batch accepted }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/desktop/crashes:
+    post:
+      operationId: uploadCrash
+      security: [{ reporterBearer: [] }, { desktopBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [metadata]
+              properties:
+                metadata: { type: string, description: JSON-encoded CrashMetadata object }
+                artifact: { type: string, format: binary, description: UTF-8 crash log preferred; at most 50 MiB }
+      responses: { "201": { description: Crash stored } }
+  /v1/desktop/ai/models:
+    get:
+      operationId: listDesktopAIModels
+      summary: Public metadata for enabled administrator-managed models
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200":
+          description: Selectable managed models; endpoint URLs and provider keys are issued only by a checked one-request lease
+          content: { application/json: { schema: { type: object, properties: { models: { type: array, items: { $ref: "#/components/schemas/DesktopAIModel" } } } } } }
+  /v1/desktop/ai/models/{modelId}/lease:
+    post:
+      operationId: leaseDesktopAIModel
+      summary: Check the current model and quota, then issue its direct provider configuration for one request
+      security: [{ desktopBearer: [] }]
+      parameters:
+        - { name: modelId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody: { $ref: "#/components/requestBodies/AILeaseRequest" }
+      responses:
+        "201":
+          description: Ephemeral direct-provider configuration; must not be cached or persisted
+          content: { application/json: { schema: { $ref: "#/components/schemas/AIModelLease" } } }
+        "402": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/desktop/ai/reservations/{reservationId}/settle:
+    post:
+      operationId: settleDesktopAIReservation
+      summary: Settle a direct provider request against the authenticated user's reservation
+      security: [{ desktopBearer: [] }]
+      parameters:
+        - { name: reservationId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody: { $ref: "#/components/requestBodies/AISettlementRequest" }
+      responses:
+        "200":
+          description: Updated quota after settlement
+          content: { application/json: { schema: { type: object, required: [quota], properties: { quota: { $ref: "#/components/schemas/Quota" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/desktop/ai/models/{modelId}/invoke:
+    post:
+      operationId: invokeDesktopAIModel
+      deprecated: true
+      summary: Compatibility proxy for older desktop builds
+      security: [{ desktopBearer: [] }]
+      parameters:
+        - { name: modelId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody: { $ref: "#/components/requestBodies/AIProviderRequest" }
+      responses: { "200": { description: Provider JSON or SSE stream }, "402": { $ref: "#/components/responses/Error" } }
+  /v1/desktop/ai/prompts:
+    get:
+      operationId: getAIPrompts
+      summary: The assistant's instructions — the main prompt and every playbook
+      description: >
+        Served rather than compiled in, so the assistant's behaviour can be
+        edited in the admin panel without a release. Send If-None-Match with the
+        ETag of the copy already cached; the usual answer is 304.
+      security: [{ desktopBearer: [] }]
+      parameters:
+        - { name: If-None-Match, in: header, required: false, schema: { type: string } }
+      responses:
+        "200": { description: The prompt pack }
+        "304": { description: Unchanged since the cached copy }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/admin/ai/prompts:
+    get:
+      operationId: adminListAIPrompts
+      security: [{ adminSession: [] }]
+      responses: { "200": { description: Every instruction document, with its text } }
+    post:
+      operationId: adminCreateAIPrompt
+      summary: Add a playbook
+      security: [{ adminSession: [] }]
+      responses: { "201": { description: The new document }, "409": { $ref: "#/components/responses/Error" } }
+  /v1/admin/ai/models:
+    get:
+      operationId: adminListAIModels
+      security: [{ adminCookie: [] }]
+      responses:
+        "200":
+          description: Every administrator-managed model; keys are represented only by has_api_key
+          content: { application/json: { schema: { type: object, properties: { models: { type: array, items: { $ref: "#/components/schemas/AdminAIModel" } } } } } }
+    post:
+      operationId: adminCreateAIModel
+      security: [{ adminCookie: [], csrf: [] }]
+      requestBody: { $ref: "#/components/requestBodies/AIModelWrite" }
+      responses: { "201": { description: Model created }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/admin/ai/models/{modelId}:
+    parameters:
+      - { name: modelId, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      operationId: adminUpdateAIModel
+      security: [{ adminCookie: [], csrf: [] }]
+      requestBody: { $ref: "#/components/requestBodies/AIModelWrite" }
+      responses: { "200": { description: Model updated }, "404": { $ref: "#/components/responses/Error" } }
+    delete:
+      operationId: adminDeleteAIModel
+      security: [{ adminCookie: [], csrf: [] }]
+      responses: { "200": { description: Model deleted }, "404": { $ref: "#/components/responses/Error" } }
+  /v1/admin/ai/prompts/{promptId}:
+    parameters:
+      - { name: promptId, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: adminGetAIPrompt
+      security: [{ adminSession: [] }]
+      responses: { "200": { description: One document }, "404": { $ref: "#/components/responses/Error" } }
+    put:
+      operationId: adminUpdateAIPrompt
+      summary: Edit a document, keeping the text it replaced as a revision
+      security: [{ adminSession: [] }]
+      responses: { "200": { description: The saved document }, "422": { $ref: "#/components/responses/Error" } }
+    delete:
+      operationId: adminDeleteAIPrompt
+      security: [{ adminSession: [] }]
+      responses: { "200": { description: Deleted }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/admin/ai/prompts/{promptId}/revert:
+    post:
+      operationId: adminRevertAIPrompt
+      summary: Put back the text the desktop build ships with
+      security: [{ adminSession: [] }]
+      parameters:
+        - { name: promptId, in: path, required: true, schema: { type: string } }
+      responses: { "200": { description: The restored document }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/admin/ai/prompts/{promptId}/revisions:
+    get:
+      operationId: adminAIPromptRevisions
+      security: [{ adminSession: [] }]
+      parameters:
+        - { name: promptId, in: path, required: true, schema: { type: string } }
+      responses: { "200": { description: The last 50 revisions } }
+  /v1/admin/auth/login:
+    post:
+      operationId: adminLogin
+      requestBody: { $ref: "#/components/requestBodies/Login" }
+      responses: { "200": { description: Admin session }, "401": { $ref: "#/components/responses/Error" } }
+  /v1/admin/auth/logout:
+    post:
+      operationId: adminLogout
+      security: [{ adminCookie: [], csrf: [] }]
+      responses: { "204": { description: Signed out } }
+  /v1/admin/me:
+    get:
+      operationId: adminGetMe
+      security: [{ adminCookie: [] }]
+      responses: { "200": { description: Current administrator and CSRF token }, "401": { $ref: "#/components/responses/Error" } }
+  /v1/admin/dashboard:
+    get:
+      operationId: adminDashboard
+      security: [{ adminCookie: [] }]
+      responses: { "200": { description: Operational counters } }
+  /v1/admin/users:
+    get:
+      operationId: adminListUsers
+      security: [{ adminCookie: [] }]
+      responses: { "200": { description: User registry } }
+  /v1/admin/users/{userId}:
+    get:
+      operationId: adminGetUser
+      security: [{ adminCookie: [] }]
+      parameters: [{ $ref: "#/components/parameters/UserId" }]
+      responses: { "200": { description: Full user profile } }
+    delete:
+      operationId: adminDeleteUser
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/UserId" }]
+      requestBody: { $ref: "#/components/requestBodies/PasswordConfirmation" }
+      responses: { "204": { description: Account and related data deleted } }
+  /v1/admin/users/{userId}/telemetry:
+    get:
+      operationId: adminGetUserTelemetry
+      security: [{ adminCookie: [] }]
+      parameters: [{ $ref: "#/components/parameters/UserId" }]
+      responses: { "200": { description: Sessions, hardware snapshots, samples, and aggregate plugin data } }
+  /v1/admin/users/{userId}/ledger:
+    get:
+      operationId: adminGetUserTokenLedger
+      security: [{ adminCookie: [] }]
+      parameters: [{ $ref: "#/components/parameters/UserId" }]
+      responses: { "200": { description: Current quota cycle and immutable token ledger } }
+  /v1/admin/users/{userId}/suspend:
+    post:
+      operationId: adminSuspendUser
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/UserId" }]
+      responses: { "204": { description: User suspended and all sessions revoked } }
+  /v1/admin/users/{userId}/activate:
+    post:
+      operationId: adminActivateUser
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/UserId" }]
+      responses: { "204": { description: User activated } }
+  /v1/admin/users/{userId}/tokens/add:
+    post:
+      operationId: adminAddUserTokens
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/UserId" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [amount], properties: { amount: { type: integer, format: int64 } } } } }
+      responses: { "200": { description: Updated current UTC quota cycle, content: { application/json: { schema: { $ref: "#/components/schemas/Quota" } } } } }
+  /v1/admin/users/{userId}/tokens/reset:
+    post:
+      operationId: adminResetUserTokens
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/UserId" }]
+      requestBody: { $ref: "#/components/requestBodies/PasswordConfirmation" }
+      responses: { "200": { description: Reset current UTC quota cycle, content: { application/json: { schema: { $ref: "#/components/schemas/Quota" } } } }, "401": { $ref: "#/components/responses/Error" } }
+  /v1/admin/users/{userId}/devices/{deviceId}/revoke:
+    post:
+      operationId: adminRevokeUserDevice
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/UserId" }, { $ref: "#/components/parameters/DeviceId" }]
+      responses: { "204": { description: Device and its desktop sessions revoked } }
+  /v1/admin/users/{userId}/sessions/revoke:
+    post:
+      operationId: adminRevokeUserSessions
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/UserId" }]
+      responses: { "204": { description: Web and desktop sessions revoked } }
+  /v1/admin/users/{userId}/diagnostics:
+    delete:
+      operationId: adminDeleteUserDiagnostics
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/UserId" }]
+      responses: { "204": { description: Telemetry, crashes, bug reports, and diagnostic files deleted } }
+  /v1/admin/bugs:
+    get:
+      operationId: adminListBugs
+      security: [{ adminCookie: [] }]
+      responses: { "200": { description: Bug registry } }
+  /v1/admin/bugs/{bugId}:
+    patch:
+      operationId: adminUpdateBug
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/BugId" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/BugUpdateRequest" } } }
+      responses: { "204": { description: Bug status and internal note updated } }
+  /v1/admin/bugs/{bugId}/attachments/{attachmentId}:
+    get:
+      operationId: adminDownloadBugAttachment
+      security: [{ adminCookie: [] }]
+      parameters: [{ $ref: "#/components/parameters/BugId" }, { $ref: "#/components/parameters/AttachmentId" }]
+      responses: { "200": { description: Sanitized image attachment, content: { image/jpeg: {}, image/png: {}, image/webp: {} } } }
+  /v1/admin/crashes:
+    get:
+      operationId: adminListCrashes
+      security: [{ adminCookie: [] }]
+      responses: { "200": { description: Crash registry } }
+  /v1/admin/crashes/{crashId}/artifact:
+    get:
+      operationId: adminDownloadCrashArtifact
+      security: [{ adminCookie: [] }]
+      parameters: [{ $ref: "#/components/parameters/CrashId" }]
+      responses: { "200": { description: Readable crash log or a legacy binary artifact, content: { text/plain: {}, application/json: {}, application/octet-stream: {} } }, "404": { $ref: "#/components/responses/Error" } }
+  /v1/admin/audit:
+    get:
+      operationId: adminAudit
+      security: [{ adminCookie: [] }]
+      responses: { "200": { description: Append-only administrative audit } }
+components:
+  securitySchemes:
+    webCookie: { type: apiKey, in: cookie, name: vlt_web_session }
+    adminCookie: { type: apiKey, in: cookie, name: vlt_admin_session }
+    csrf: { type: apiKey, in: header, name: X-CSRF-Token }
+    desktopBearer: { type: http, scheme: bearer, bearerFormat: Ed25519 }
+    reporterBearer: { type: http, scheme: bearer, bearerFormat: opaque }
+  parameters:
+    UserId: { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+    DeviceId: { name: deviceId, in: path, required: true, schema: { type: string, format: uuid } }
+    BugId: { name: bugId, in: path, required: true, schema: { type: string, format: uuid } }
+    AttachmentId: { name: attachmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    CrashId: { name: crashId, in: path, required: true, schema: { type: string, format: uuid } }
+  requestBodies:
+    Login:
+      required: true
+      content: { application/json: { schema: { $ref: "#/components/schemas/LoginRequest" } } }
+    PasswordConfirmation:
+      required: true
+      content: { application/json: { schema: { type: object, additionalProperties: false, required: [password], properties: { password: { type: string, minLength: 12, maxLength: 128 } } } } }
+    AIProviderRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [model]
+            properties:
+              model: { type: string }
+            additionalProperties: true
+    AILeaseRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [input_bytes, max_output_tokens]
+            properties:
+              input_bytes: { type: integer, format: int64, minimum: 1, maximum: 4194304 }
+              max_output_tokens: { type: integer, format: int64, minimum: 1, maximum: 1000000 }
+    AISettlementRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [actual_tokens, outcome]
+            properties:
+              actual_tokens: { type: integer, format: int64, minimum: 0 }
+              outcome: { type: string, enum: [provider_usage, provider_rejected, transport_failure, cancelled, conservative_no_usage] }
+    AIModelWrite:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AIModelWrite"
+  responses:
+    Error:
+      description: Structured API error
+      content: { application/json: { schema: { $ref: "#/components/schemas/APIError" } } }
+    AccountSession:
+      description: Authenticated account state
+      content: { application/json: { schema: { $ref: "#/components/schemas/AccountSession" } } }
+    DesktopSession:
+      description: Rotating desktop credentials and offline entitlement
+      content: { application/json: { schema: { $ref: "#/components/schemas/DesktopSession" } } }
+  schemas:
+    APIError:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        field_errors: { type: object, additionalProperties: { type: string } }
+        request_id: { type: string }
+    DesktopAIModel:
+      type: object
+      additionalProperties: false
+      required: [id, display_name, provider, model]
+      properties:
+        id: { type: string, format: uuid }
+        display_name: { type: string }
+        provider: { type: string, enum: [openai, anthropic] }
+        model: { type: string }
+    AIModelLease:
+      type: object
+      additionalProperties: false
+      required: [reservation_id, reserved_tokens, provider, model, endpoint_url, api_key]
+      properties:
+        reservation_id: { type: string, format: uuid }
+        reserved_tokens: { type: integer, format: int64 }
+        provider: { type: string, enum: [openai, anthropic] }
+        model: { type: string }
+        endpoint_url: { type: string, format: uri }
+        api_key: { type: string, writeOnly: true, description: Ephemeral provider credential; never persist it }
+    AdminAIModel:
+      allOf:
+        - { $ref: "#/components/schemas/DesktopAIModel" }
+        - type: object
+          required: [endpoint_url, has_api_key, enabled, sort_order]
+          properties:
+            endpoint_url: { type: string, format: uri }
+            has_api_key: { type: boolean }
+            enabled: { type: boolean }
+            sort_order: { type: integer }
+    AIModelWrite:
+      type: object
+      additionalProperties: false
+      required: [display_name, provider, model, endpoint_url, api_key, enabled, sort_order]
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 80 }
+        provider: { type: string, enum: [openai, anthropic] }
+        model: { type: string, minLength: 1, maxLength: 200 }
+        endpoint_url: { type: string, format: uri }
+        api_key: { type: string, writeOnly: true, maxLength: 16384 }
+        enabled: { type: boolean }
+        sort_order: { type: integer }
+    Meta:
+      type: object
+      properties:
+        service: { const: vlt-studio }
+        api_version: { const: v1 }
+        consent_version: { type: string }
+        offline_hours: { const: 72 }
+        access_token_minutes: { const: 15 }
+        public_key: { type: string }
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 12, maxLength: 128 }
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, nickname, password, password_confirmation, locale, consent_accepted, consent_version]
+      properties:
+        email: { type: string, format: email }
+        nickname: { type: string, minLength: 3, maxLength: 32 }
+        password: { type: string, minLength: 12, maxLength: 128 }
+        password_confirmation: { type: string, minLength: 12, maxLength: 128 }
+        locale: { type: string, enum: [ru, en] }
+        consent_accepted: { const: true }
+        consent_version: { type: string }
+    PasswordResetConfirmRequest:
+      type: object
+      additionalProperties: false
+      required: [token, password, password_confirmation]
+      properties:
+        token: { type: string }
+        password: { type: string, minLength: 12, maxLength: 128 }
+        password_confirmation: { type: string, minLength: 12, maxLength: 128 }
+    User:
+      type: object
+      required: [id, email, nickname, locale, status]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        nickname: { type: string }
+        locale: { type: string, enum: [ru, en] }
+        status: { type: string, enum: [active, suspended] }
+        consent_version: { type: string }
+        consent_accepted_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+    Quota:
+      type: object
+      required: [base_limit, adjustment, used_tokens, reserved_tokens, remaining_tokens, starts_at, ends_at]
+      properties:
+        base_limit: { type: integer, format: int64 }
+        adjustment: { type: integer, format: int64 }
+        used_tokens: { type: integer, format: int64 }
+        reserved_tokens: { type: integer, format: int64 }
+        remaining_tokens: { type: integer, format: int64 }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: string, format: date-time }
+    Device:
+      type: object
+      required: [id, display_name, platform, os_version, app_version, first_seen_at, last_seen_at]
+      properties:
+        id: { type: string, format: uuid }
+        display_name: { type: string }
+        platform: { type: string, enum: [windows, macos] }
+        os_version: { type: string }
+        app_version: { type: string }
+        hardware: { $ref: "#/components/schemas/HardwareSnapshot" }
+        first_seen_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        revoked_at: { type: [string, "null"], format: date-time }
+    HardwareSnapshot:
+      type: object
+      additionalProperties: false
+      properties:
+        cpu_model: { type: string }
+        cpu_cores: { type: integer }
+        cpu_threads: { type: integer }
+        gpu:
+          type: array
+          maxItems: 8
+          items:
+            type: object
+            additionalProperties: false
+            properties: { name: { type: string }, driver: { type: string } }
+        ram_bytes: { type: integer, format: int64 }
+        os_name: { type: string }
+        os_version: { type: string }
+        arch: { type: string }
+    AccountSession:
+      type: object
+      required: [user, subscription, quota]
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        csrf_token: { type: string }
+        subscription:
+          type: object
+          properties: { plan: { const: demo }, display_name: { const: Demo }, all_features: { const: true } }
+        quota: { $ref: "#/components/schemas/Quota" }
+    DesktopLoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password, installation_id, device_name, platform, os_version, app_version, hardware]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 12, maxLength: 128 }
+        installation_id: { type: string, format: uuid, description: Random installation UUID; never hardware-derived }
+        device_name: { type: string }
+        platform: { type: string, enum: [windows, macos] }
+        os_version: { type: string }
+        app_version: { type: string }
+        hardware: { $ref: "#/components/schemas/HardwareSnapshot" }
+    DesktopRefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [refresh_token, app_version]
+      properties:
+        refresh_token: { type: string }
+        app_version: { type: string }
+    DesktopSession:
+      allOf:
+        - { $ref: "#/components/schemas/AccountSession" }
+        - type: object
+          required: [access_token, refresh_token, reporter_token, reporter_expires_at, offline_entitlement, server_time, public_key]
+          properties:
+            access_token: { type: string }
+            refresh_token: { type: string }
+            reporter_token: { type: string }
+            reporter_expires_at: { type: string, format: date-time }
+            offline_entitlement: { type: string }
+            server_time: { type: string, format: date-time }
+            public_key: { type: string }
+    TelemetryBatch:
+      type: object
+      additionalProperties: false
+      required: [events]
+      properties:
+        events:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { $ref: "#/components/schemas/TelemetryEvent" }
+    TelemetryEvent:
+      type: object
+      additionalProperties: false
+      required: [event_id, session_id, kind, occurred_at, payload]
+      properties:
+        event_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid }
+        kind: { type: string, enum: [session_started, sample, session_ended] }
+        occurred_at: { type: string, format: date-time }
+        payload: { type: object, description: Strict kind-specific allowlist; never project content or paths }
+    CrashMetadata:
+      type: object
+      additionalProperties: false
+      required: [report_id, build_id, app_version, platform, reason, occurred_at]
+      properties:
+        session_id: { type: [string, "null"], format: uuid }
+        report_id: { type: string, format: uuid }
+        build_id: { type: string }
+        app_version: { type: string }
+        platform: { type: string, enum: [windows, macos] }
+        reason: { type: string }
+        last_plugin: { type: string }
+        occurred_at: { type: string, format: date-time }
+        exception_code: { type: string }
+        signal: { type: string }
+        health_samples: { type: array, items: { type: object } }
+        modules: { type: array, items: { type: object } }
+    BugReportRequest:
+      type: object
+      required: [title, description]
+      properties:
+        title: { type: string, minLength: 3, maxLength: 160 }
+        description: { type: string, minLength: 10, maxLength: 20000 }
+        steps: { type: string }
+        expected: { type: string }
+        actual: { type: string }
+        attachments:
+          type: array
+          maxItems: 5
+          items: { type: string, format: binary }
+    BugUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [status, internal_note]
+      properties:
+        status: { type: string, enum: [new, triage, in_progress, fixed, duplicate, wont_fix] }
+        internal_note: { type: string, maxLength: 20000 }

@@ -1,0 +1,110 @@
+name: Windows Release Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-x64:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\build-windows\vcpkg-cache
+      WINDOWS_SIGN_CERT_BASE64: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}
+      WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-${{ runner.os }}-x64-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-x64-
+
+      - name: Install Qt 6.8.3
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: "qtwebengine qtserialport"
+          cache: true
+
+      - name: Locate Qt and Inno Setup
+        shell: pwsh
+        run: |
+          $qmake = (Get-Command qmake.exe -ErrorAction Stop).Source
+          $qtRoot = Split-Path -Parent (Split-Path -Parent $qmake)
+          "QTDIR=$qtRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $innoVersion = if (Test-Path -LiteralPath $iscc) {
+            (Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion
+          } else { "" }
+          if (-not $innoVersion.StartsWith("6.7.1")) {
+            choco upgrade innosetup --version=6.7.1 --allow-downgrade `
+              --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "Inno Setup installation failed." }
+          }
+
+      - name: Build, test, deploy and package
+        shell: pwsh
+        run: |
+          $signingArguments = @()
+          $requireSignature = "${{ startsWith(github.ref, 'refs/tags/v') }}" -eq "true"
+          if ($env:WINDOWS_SIGN_CERT_BASE64) {
+            $pfx = Join-Path $env:RUNNER_TEMP "vlt-studio-signing.pfx"
+            [IO.File]::WriteAllBytes(
+              $pfx,
+              [Convert]::FromBase64String($env:WINDOWS_SIGN_CERT_BASE64))
+            $signingArguments += "-SignPfxPath", $pfx
+          } elseif ($requireSignature) {
+            throw "A v* release tag requires WINDOWS_SIGN_CERT_BASE64 and WINDOWS_SIGN_CERT_PASSWORD secrets."
+          }
+
+          & .\packaging\windows\build.ps1 `
+            -QtRoot $env:QTDIR `
+            -RequireSignature:$requireSignature `
+            @signingArguments
+
+      - name: Upload CTest diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-diagnostics
+          path: |
+            build-windows/Testing/Temporary/**
+            build-windows/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: ignore
+
+      - name: Upload private build-ID symbols
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VLT-Studio-Pro-${{ github.sha }}-windows-symbols
+          path: build-windows/**/*.pdb
+          if-no-files-found: warn
+
+      - name: Publish Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: VLT-Studio-Pro-${{ github.sha }}-windows-x64
+          path: |
+            build-windows/artifacts/VLT-Studio-Pro-*-windows-x64.zip
+            build-windows/artifacts/VLT-Studio-Pro-*-x64-Setup.exe
+          if-no-files-found: error

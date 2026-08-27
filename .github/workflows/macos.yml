@@ -1,0 +1,56 @@
+name: macOS Desktop
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Install native dependencies
+        run: brew install cmake ninja qt qtwebengine qtserialport portaudio libsndfile nlohmann-json
+
+      - name: Configure Release desktop
+        run: cmake --preset macos -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build DAW, reporter and tests
+        run: cmake --build build --parallel
+
+      - name: Run CTest
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Run deterministic offscreen self-test
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QTWEBENGINE_DISABLE_SANDBOX: "1"
+        run: build/bin/daw --selftest
+
+      - name: Preserve private build-ID symbols
+        if: always()
+        run: |
+          mkdir -p build/symbols
+          dsymutil build/bin/daw -o build/symbols/daw.dSYM
+          dsymutil build/bin/daw_reporter -o build/symbols/daw_reporter.dSYM
+
+      - name: Upload symbols
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VLT-Studio-Pro-${{ github.sha }}-macos-symbols
+          path: build/symbols/**
+          if-no-files-found: error

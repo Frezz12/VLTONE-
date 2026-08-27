@@ -1,0 +1,43 @@
+name: DAW
+options:
+  bundleIdPrefix: com.daw
+  deploymentTarget:
+    macOS: "15.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  SWIFT_VERSION: "6.0"
+  CLANG_CXX_LANGUAGE_STANDARD: "c++20"
+  CLANG_CXX_LIBRARY: "libc++"
+  CLANG_ENABLE_OBJC_WEAK: "YES"
+  ENABLE_STRICT_OBJC_MSGSEND: "YES"
+
+targets:
+  DAW:
+    type: application
+    platform: macOS
+    sources:
+      - DAW
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.daw.app
+      INFOPLIST_FILE: DAW/Info.plist
+      SWIFT_OBJC_BRIDGING_HEADER: "$SRCROOT/DAW/DAW-Bridging-Header.h"
+      SWIFT_STRICT_CONCURRENCY: complete
+      ENABLE_MODULE_VERIFIER: "YES"
+      MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS: "gnu++20"
+      USER_HEADER_SEARCH_PATHS: "$(SRCROOT)/DAW"
+      HEADER_SEARCH_PATHS:
+        - "$(SRCROOT)/DAW"
+        - "$(SRCROOT)/DAW/AudioEngine"
+      USER_HEADER_SEARCH_PATHS:
+        - "$(SRCROOT)/DAW"
+        - "$(SRCROOT)/DAW/AudioEngine"
+      OTHER_LDFLAGS: "-framework AudioToolbox -framework CoreAudio -framework AVFoundation"
+    info:
+      path: DAW/Info.plist
+      properties:
+        NSHighResolutionCapable: true
+        LSMinimumSystemVersion: "15.0"
+        NSHumanReadableCopyright: "Copyright © 2026. All rights reserved."
+        CFBundleIconName: "AppIcon"

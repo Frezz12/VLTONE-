@@ -1,0 +1,40 @@
+#pragma code_page(65001)
+#include <windows.h>
+
+#define IDI_VLT_STUDIO_PRO 101
+
+IDI_VLT_STUDIO_PRO ICON "@DAW_RC_ICON@"
+1 RT_MANIFEST "@DAW_RC_MANIFEST@"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+ FILEFLAGS VS_FF_DEBUG
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "VLT Studio\0"
+            VALUE "FileDescription", "@DAW_RC_FILE_DESCRIPTION@\0"
+            VALUE "FileVersion", "@PROJECT_VERSION@.0\0"
+            VALUE "InternalName", "@DAW_RC_INTERNAL_NAME@\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 VLT Studio. All rights reserved.\0"
+            VALUE "OriginalFilename", "@DAW_RC_ORIGINAL_FILENAME@\0"
+            VALUE "ProductName", "VLT Studio Pro\0"
+            VALUE "ProductVersion", "@PROJECT_VERSION@.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

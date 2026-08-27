@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Project ToolsVersion="17.14" xmlns="http://schemas.microsoft.com/developer/msbuild/2002">
+  <PropertyGroup>
+    <Configuration>Debug</Configuration>
+    <Platform>x64</Platform>
+    <OutDir>bin\Debug\</OutDir>
+    <TargetName>DAW</TargetName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ClCompile Include="app/main.cpp" />
+    <ClCompile Include="engine/src/rt/rt.cpp" />
+    <ClCompile Include="engine/src/graph/ProcessGraph.cpp" />
+    <ClCompile Include="engine/src/model/Session.cpp" />
+    <ClCompile Include="engine/src/model/Track.cpp" />
+    <ClCompile Include="engine/src/model/Clip.cpp" />
+    <ClCompile Include="engine/src/rt/TempoMap.cpp" />
+    <ClCompile Include="engine/src/rt/Metronome.cpp" />
+    <ClCompile Include="engine/src/rt/TransportState.cpp" />
+    <ClCompile Include="engine/src/rt/Engine.cpp" />
+    <ClCompile Include="app/shell/MainWindow.cpp" />
+    <ClCompile Include="app/views/LevelMeter.cpp" />
+    <ClCompile Include="app/views/MixerView.cpp" />
+    <ClCompile Include="app/views/TimelineView.cpp" />
+    <ClCompile Include="app/views/TransportBar.cpp" />
+    <ClCompile Include="app/core/PeakBuilder.cpp" />
+    <ClCompile Include="engine/src/rt/RtGuard.cpp" />
+    <ClCompile Include="engine/src/rt/RtAudioWrapper.cpp" />
+    <ClCompile Include="engine/src/rt/RtMidiWrapper.cpp" />
+    <ClCompile Include="engine/src/rt/Command.cpp" />
+    <ClCompile Include="engine/src/model/Commands.cpp" />
+    <ClCompile Include="engine/src/model/UndoStack.cpp" />
+    <ClCompile Include="engine/src/model/RippleEditCommand.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <Link Include="engine/lib/daw_engined.lib" />
+    <Link Include="engine/lib/Catch2d.lib" />
+    <Link Include="engine/lib/Catch2Maind.lib" />
+    <Link Include="engine/lib/rtaudiod.lib" />
+    <Link Include="engine/lib/sndfiled.dll" />
+    <Link Include="Qt6::Widgets" />
+  </ItemGroup>
+  <Target Name="Build" />
+</Project>"}}]

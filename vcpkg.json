@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "daw",
+  "version": "0.0.1",
+  "description": "Cross-platform digital audio workstation",
+  "dependencies": [
+    "portaudio",
+    {
+      "name": "portaudio",
+      "features": [
+        "asio"
+      ],
+      "platform": "windows"
+    },
+    { "name": "libsndfile", "features": ["external-libs", "mpeg"] },
+    "nlohmann-json",
+    "openssl"
+  ]
+}
