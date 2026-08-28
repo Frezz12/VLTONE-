@@ -1390,6 +1390,7 @@ public:
     /// Where the undo stack stands, for a caller that will later fold
     /// everything it did into one entry.
     std::size_t undoDepth() const { return m_undo.depth(); }
+    std::uint64_t projectRevision() const { return m_undo.revision(); }
     /// How deep the stack can get. Beyond it `undoDepth` stops rising, so a
     /// caller comparing depths across an edit has to expect the ceiling.
     std::size_t undoLimit() const { return m_undo.limit(); }

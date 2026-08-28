@@ -59,10 +59,11 @@ int main() {
             plugin(plugins::Format::Clap, "com.acme.colour", "Colour CLAP", "Acme Ltd"),
             plugin(plugins::Format::Clap, "com.only.clap", "CLAP Exclusive", "Only"),
             plugin(plugins::Format::Internal, "daw.sampler", "Sampler", "DAW", true),
+            plugin(plugins::Format::Internal, "daw.gravity", "Gravity", "DAW"),
         };
 
         const auto au = preferredPluginVariants(catalogue, plugins::Format::AudioUnit);
-        check(au.size() == 3,
+        check(au.size() == 4,
               "format preference collapses three variants into one product");
         check(std::ranges::any_of(au, [](const auto& descriptor) {
                   return descriptor.uid == "aufx:colr:acme";
@@ -275,6 +276,11 @@ int main() {
               "effects and instruments are told apart by their features");
         check(manager.find(plugins::Format::Clap, "com.daw.test.gain").has_value(),
               "a plugin can be looked up by its identity");
+        const auto gravity =
+            manager.find(plugins::Format::Internal, "daw.gravity");
+        check(gravity && !gravity->isInstrument &&
+                  manager.instantiate(*gravity) != nullptr,
+              "Gravity is registered as an instantiable built-in effect");
 
         // It must be usable, not merely listed.
         const auto descriptor =

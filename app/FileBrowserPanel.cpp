@@ -218,13 +218,15 @@ QWidget* FileBrowserPanel::buildHeader() {
 
     auto* add = new ui::IconButton(icons::Glyph::Plus, tr("Add a folder…"), header);
     add->setButtonSize(22, 20);
-    connect(add, &QAbstractButton::clicked, this, &FileBrowserPanel::addFolder);
+    connect(add, &QAbstractButton::clicked, this,
+            &FileBrowserPanel::requestAddFolder);
     row->addWidget(add);
 
     auto* refresh =
         new ui::IconButton(icons::Glyph::Restart, tr("Re-read the folders"), header);
     refresh->setButtonSize(22, 20);
-    connect(refresh, &QAbstractButton::clicked, this, [this] { m_tree->refresh(); });
+    connect(refresh, &QAbstractButton::clicked, this,
+            &FileBrowserPanel::refreshFolders);
     row->addWidget(refresh);
 
     auto* settings = new ui::IconButton(icons::Glyph::Gear,
@@ -265,13 +267,8 @@ QWidget* FileBrowserPanel::buildPreviewBar() {
     m_playButton = new ui::IconButton(icons::Glyph::Play, tr("Play the selection"), row);
     m_playButton->setButtonSize(22, 20);
     m_playButton->setAccentTint(true);
-    connect(m_playButton, &QAbstractButton::clicked, this, [this] {
-        if (m_controller && m_controller->previewPlaying()) {
-            stopPreview();
-        } else if (!m_selectedPath.isEmpty()) {
-            startPreview(m_selectedPath);
-        }
-    });
+    connect(m_playButton, &QAbstractButton::clicked, this,
+            &FileBrowserPanel::togglePreview);
     controls->addWidget(m_playButton);
 
     m_loopButton = new ui::IconButton(icons::Glyph::Loop,
@@ -487,6 +484,43 @@ void FileBrowserPanel::reloadSettings() {
     }
 }
 
+void FileBrowserPanel::requestAddFolder() { addFolder(); }
+
+void FileBrowserPanel::refreshFolders() {
+    if (m_tree) m_tree->refresh();
+}
+
+bool FileBrowserPanel::hasPreviewableSelection() const {
+    return !m_selectedPath.isEmpty() && ui::isAudioFile(m_selectedPath);
+}
+
+void FileBrowserPanel::togglePreview() {
+    if (m_controller && m_controller->previewPlaying()) {
+        stopPreview();
+    } else if (hasPreviewableSelection()) {
+        startPreview(m_selectedPath);
+    }
+}
+
+void FileBrowserPanel::setPreviewLoopEnabled(bool enabled) {
+    if (m_loopButton) {
+        if (m_loopButton->isChecked() != enabled)
+            m_loopButton->setChecked(enabled);
+        return;
+    }
+    ui::browserprefs::setPreviewLoop(enabled);
+    if (m_controller) m_controller->setPreviewLoop(enabled);
+}
+
+void FileBrowserPanel::setAutoPreviewEnabled(bool enabled) {
+    if (m_autoButton) {
+        if (m_autoButton->isChecked() != enabled)
+            m_autoButton->setChecked(enabled);
+        return;
+    }
+    ui::browserprefs::setAutoPreview(enabled);
+}
+
 void FileBrowserPanel::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
     if (m_tree->topLevelItemCount() == 0) m_tree->setRoots(ui::browserprefs::folders());
@@ -583,10 +617,11 @@ void FileBrowserPanel::stopPreview() {
 void FileBrowserPanel::refreshPreviewState() {
     if (!m_playButton) return;
     const bool playing = m_controller && m_controller->previewPlaying();
+    const bool available = hasPreviewableSelection();
     m_playButton->setGlyph(playing ? icons::Glyph::Stop : icons::Glyph::Play);
     m_playButton->setToolTip(playing ? tr("Stop") : tr("Play the selection"));
-    m_playButton->setEnabled(!m_selectedPath.isEmpty() &&
-                             ui::isAudioFile(m_selectedPath));
+    m_playButton->setEnabled(available);
+    emit previewAvailabilityChanged(available);
 }
 
 bool FileBrowserPanel::showFolderForTest(const QString& folder,

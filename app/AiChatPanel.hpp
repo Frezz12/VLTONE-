@@ -11,7 +11,7 @@
 
 namespace daw {
 class EngineController;
-namespace ai { class AiSession; struct ModelReply; }
+namespace ai { class AiSession; class ContentCatalog; class CompositionCandidateStore; struct ModelReply; }
 } // namespace daw
 
 class QLabel;
@@ -24,6 +24,7 @@ class QStackedWidget;
 class QTimer;
 class QVBoxLayout;
 class QVariantAnimation;
+class ShortcutManager;
 namespace ui {
 class IconButton;
 class LlmClient;
@@ -66,6 +67,9 @@ public:
     /// Where the assistant reads "this" and "that track" from. Not owned.
     void setSelectionModel(ui::SelectionModel* selection) {
         m_selection = selection;
+    }
+    void setCommandManager(ShortcutManager* commands) {
+        m_commands = commands;
     }
 
     /// Where the open project lives on disk, so the assistant can save it when
@@ -132,6 +136,11 @@ private:
     QWidget* buildMusicPage();
 
     void applyTheme();
+    /// Keep the browser-backed catalog warm without decoding libraries on the
+    /// UI thread. `force` re-reads unchanged roots; false only starts an idle
+    /// or cancelled catalog.
+    void startContentIndex(bool force);
+    void updateContentIndexStatus();
     void send();
     void sendMusic();
     void stop();
@@ -178,8 +187,11 @@ private:
 
     daw::EngineController* m_controller = nullptr;
     ui::SelectionModel* m_selection = nullptr;
+    ShortcutManager* m_commands = nullptr;
     QString m_projectPath;
     std::unique_ptr<daw::ai::AiSession> m_session;
+    std::shared_ptr<daw::ai::ContentCatalog> m_contentCatalog;
+    std::shared_ptr<daw::ai::CompositionCandidateStore> m_compositionCandidates;
     std::unique_ptr<ui::LlmClient> m_client;
     std::unique_ptr<ui::MusicClient> m_musicClient;
 
@@ -205,7 +217,9 @@ private:
     QListWidget* m_attachments = nullptr;
     QLabel* m_titleLabel = nullptr;
     class QToolButton* m_modelLabel = nullptr;
+    QLabel* m_contentIndexLabel = nullptr;
     QLabel* m_usageLabel = nullptr;
+    QTimer* m_contentIndexTicker = nullptr;
     /// Prose streamed in but not yet part of the transcript.
     QString m_streaming;
     QLabel* m_streamingLabel = nullptr;

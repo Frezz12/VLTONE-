@@ -42,6 +42,7 @@ public:
         m_redoStack.clear();
         m_undoStack.push_back({std::move(label), std::move(undo),
                                std::move(redo), m_nextSequence++});
+        ++m_revision;
         trimToLimit();
     }
 
@@ -55,6 +56,11 @@ public:
     /// How many entries are on the undo stack. Paired with `collapse` it lets a
     /// caller mark where a long operation began and fold everything since.
     size_t depth() const { return m_undoStack.size(); }
+
+    /// Monotonic document-history activity. Unlike depth it changes at a full
+    /// stack and on undo/redo, so a long-running assistant can tell that the
+    /// user edited the project while a model request was in flight.
+    std::uint64_t revision() const noexcept { return m_revision; }
 
     /// Start a compound operation that may push ordinary entries over several
     /// event-loop turns. While it is open, entries are allowed to exceed the
@@ -160,6 +166,7 @@ public:
         if (e.undo) e.undo();
         m_applying = false;
         m_redoStack.push_back(std::move(e));
+        ++m_revision;
     }
 
     void redo() {
@@ -172,6 +179,7 @@ public:
         // Redo is a new top-of-history event for any group currently open.
         e.sequence = m_nextSequence++;
         m_undoStack.push_back(std::move(e));
+        ++m_revision;
         trimToLimit();
     }
 
@@ -243,6 +251,7 @@ private:
     bool m_applying = false;
     std::uint64_t m_nextSequence = 1;
     std::uint64_t m_nextGroupId = 1;
+    std::uint64_t m_revision = 0;
     std::vector<Entry> m_undoStack;
     std::vector<Entry> m_redoStack;
     std::vector<ActiveGroup> m_activeGroups;

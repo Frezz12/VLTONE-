@@ -13,6 +13,8 @@
 #include "AudioAnalysis.hpp"
 #include "ai/AiTools.hpp"
 #include "ai/AiWire.hpp"
+#include "ai/ContentCatalog.hpp"
+#include "ai/CompositionEngine.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -112,6 +114,52 @@ int main() {
     daw::EngineController c;
     c.initialize(48000.0, 512, /*openDevice=*/false);
     c.setTempo(120.0);
+
+    // ── Interaction modes are capabilities, not prompt suggestions ──
+    {
+        check(ai::inferInteractionMode("how do I quantize this?") ==
+                  ai::InteractionMode::Teach &&
+                  ai::inferInteractionMode("напиши мелодию") ==
+                      ai::InteractionMode::Compose &&
+                  ai::inferInteractionMode("/help compressor") ==
+                      ai::InteractionMode::Help,
+              "natural language and explicit prefixes select interaction modes");
+
+        const auto helpTools =
+            ai::toolSpecsForMode(ai::InteractionMode::Help);
+        bool readOnly = !helpTools.empty();
+        for (const ai::ToolSpec& spec : helpTools)
+            readOnly = readOnly &&
+                       spec.effect == ai::ToolSpec::Effect::ReadOnly;
+        check(readOnly && helpTools.size() < ai::toolSpecs().size(),
+              "Help receives only read-only tool schemas");
+
+        ai::ToolContext help;
+        help.mode = ai::InteractionMode::Help;
+        const ai::ToolResult blocked = ai::callTool(
+            c, "set_tempo", json{{"bpm", 99}}, help);
+        check(!blocked.ok && c.tempo() == 120.0 &&
+                  mentions(blocked.error, "HELP"),
+              "the dispatcher independently blocks mutation in Help mode");
+
+        bool invoked = false;
+        help.searchCommands = [](const std::string&, ai::InteractionMode) {
+            return json{{"commands", json::array({json{{"commandId", "view.mixer"}}})}};
+        };
+        help.invokeCommand = [&invoked](const std::string&,
+                                        ai::InteractionMode,
+                                        std::string&) {
+            invoked = true;
+            return true;
+        };
+        check(ai::callTool(c, "search_commands", json{{"query", "mixer"}}, help)
+                      .ok &&
+                  !ai::callTool(c, "run_command",
+                                json{{"commandId", "view.mixer"}}, help)
+                       .ok &&
+                  !invoked,
+              "Help can locate a real UI command but cannot invoke it");
+    }
 
     // ── Unknown tool, malformed arguments ──
     {
@@ -659,13 +707,18 @@ int main() {
         check(silent.ok && silent.value.value("silent", false),
               "a channel with nothing on it says so, instead of returning -120");
 
-        const ai::ToolResult described =
-            ai::callTool(m, "analyze_sample", json{{"filePath", tonePath}});
+        ai::ToolContext sampleContext;
+        sampleContext.attachments.push_back(
+            ai::Attachment{"tone.wav", tonePath, 1.0, 48000, 2,
+                           "attachment_1"});
+        const ai::ToolResult described = ai::callTool(
+            m, "analyze_sample", json{{"contentId", "attachment_1"}},
+            sampleContext);
         check(described.ok && described.value.contains("character") &&
                   described.value.contains("peakDb"),
               "analyze_sample describes a file on disk");
         check(!ai::callTool(m, "analyze_sample",
-                            json{{"filePath", "/no/such/file.wav"}})
+                            json{{"contentId", "missing"}}, sampleContext)
                    .ok,
               "and refuses a path that is not there");
     }
@@ -686,16 +739,25 @@ int main() {
         std::ofstream((dir / "samples" / "notes.txt").string()) << "not audio";
 
         gContext.sampleFolders = {(dir / "samples").string()};
+        gContext.contentCatalog = std::make_shared<ai::ContentCatalog>();
+        gContext.contentCatalog->setBrowserRoots(gContext.sampleFolders);
+        gContext.contentCatalog->refresh();
 
         const ai::ToolResult byName =
             call(c, "search_files", json{{"query", "kick"}});
         check(byName.ok && byName.value["files"].size() == 1 &&
                   byName.value["files"][0]["name"] == "Kick_808.wav",
               "a name search finds a file in a sub-folder, ignoring case");
+        check(!byName.value["files"][0].contains("path") &&
+                  byName.value["files"][0].contains("contentId"),
+              "search returns an opaque content id and never exposes a path");
         check(!byName.value["files"].empty() &&
                   byName.value["files"][0].contains("seconds") &&
-                  byName.value["files"][0]["channels"] == 2,
-              "and reports what the file is, without decoding it");
+                  byName.value["files"][0]["channels"] == 2 &&
+                  byName.value["files"][0].contains("timbre") &&
+                  byName.value["indexState"] == "ready" &&
+                  byName.value["indexProgress"] == 1.0,
+              "and reports cached audio/timbre facts plus index readiness");
 
         const ai::ToolResult byExt =
             call(c, "search_files", json{{"query", ".wav"}});
@@ -719,6 +781,7 @@ int main() {
                   capped.value.value("truncated", false),
               "a limit is honoured and the truncation is admitted");
         gContext.sampleFolders.clear();
+        gContext.contentCatalog.reset();
     }
 
     // ── The snapshot the prompt carries ──
@@ -754,8 +817,60 @@ int main() {
             ai::Attachment{"kick_808.wav", "/tmp/kick_808.wav", 0.8, 44100, 1});
         const std::string withFile = ai::systemPrompt(c, withSample);
         check(withFile.find("kick_808.wav") != std::string::npos &&
-                  withFile.find("cannot listen") != std::string::npos,
-              "an attachment reaches the prompt, with the model told it cannot hear it");
+                  withFile.find("cannot listen") != std::string::npos &&
+                  withFile.find("/tmp/kick_808.wav") == std::string::npos &&
+                  withFile.find("attachment_1") != std::string::npos,
+              "attachments use opaque ids in the prompt and never expose paths");
+    }
+
+    // ── Context-aware composition candidates ──
+    {
+        daw::EngineController m;
+        m.initialize(48000.0, 512, /*openDevice=*/false);
+        const std::string target =
+            m.addTrack(daw::TrackKind::Instrument, "Lead");
+
+        ai::ToolContext composing;
+        composing.mode = ai::InteractionMode::Compose;
+        composing.compositionCandidates =
+            std::make_shared<ai::CompositionCandidateStore>();
+        const ai::ToolResult generated = ai::callTool(
+            m, "compose_candidates",
+            json{{"role", "melody"},
+                 {"fromBar", 1},
+                 {"bars", 2},
+                 {"variations", 3},
+                 {"seed", 42},
+                 {"keyRoot", 9},
+                 {"scale", "natural_minor"}},
+            composing);
+        check(generated.ok && generated.value["candidates"].size() == 3 &&
+                  generated.value["candidates"][0].contains("score"),
+              "composition produces three validated, explainably scored alternatives");
+
+        const std::string candidateId =
+            generated.ok
+                ? generated.value["candidates"][0].value("candidateId", "")
+                : std::string();
+        const ai::ToolResult applied = ai::callTool(
+            m, "apply_composition_candidate",
+            json{{"candidateId", candidateId},
+                 {"trackId", target},
+                 {"startBar", 1}},
+            composing);
+        const daw::TrackModel* track = m.project().findTrack(target);
+        check(applied.ok && track && track->clips.size() == 1 &&
+                  !track->clips.front().notes.empty(),
+              "applying by opaque candidate id inserts the exact stored MIDI");
+
+        ai::ToolContext help = composing;
+        help.mode = ai::InteractionMode::Help;
+        check(!ai::callTool(m, "apply_composition_candidate",
+                            json{{"candidateId", candidateId},
+                                 {"trackId", target}},
+                            help)
+                   .ok,
+              "a stored candidate still cannot bypass Help mode policy");
     }
 
     // ── The agent loop ──
@@ -816,6 +931,55 @@ int main() {
 
         check(session.messages().size() == 8,
               "the transcript holds the user turn, each reply and each result");
+    }
+
+    // ── User edits during a model wait are never absorbed by AI undo ──
+    {
+        daw::EngineController m;
+        m.initialize(48000.0, 512, /*openDevice=*/false);
+        ai::AiSession session(m);
+        session.begin("add an audio track");
+
+        const std::string userTrack =
+            m.addTrack(daw::TrackKind::Audio, "User edit");
+        ai::ModelReply stale;
+        stale.calls.push_back(
+            {"stale", "add_track",
+             json{{"kind", "audio"}, {"name", "Wrong stale target"}}});
+        check(session.applyReply(stale) == ai::AiSession::Step::NeedsRequest &&
+                  m.project().tracks.size() == 1 &&
+                  !session.messages().back().outcomes[0].ok &&
+                  mentions(session.messages().back().outcomes[0].result.dump(),
+                           "project changed"),
+              "a stale tool batch is rejected and sent back for replanning");
+
+        ai::ModelReply replanned;
+        replanned.calls.push_back(
+            {"fresh", "add_track",
+             json{{"kind", "audio"}, {"name", "AI edit"}}});
+        session.applyReply(replanned);
+        session.applyReply(ai::ModelReply{{"Done after replanning."}, {}, {}});
+        check(m.project().tracks.size() == 2 && m.undoDepth() == 2 &&
+                  session.checkpoints().empty(),
+              "interleaved user and AI edits remain separate history entries");
+        m.undo();
+        check(m.project().tracks.size() == 1 &&
+                  m.project().findTrack(userTrack) != nullptr,
+              "undo removes only the AI edit and preserves the user's work");
+
+        ai::AiSession answerSession(m);
+        answerSession.begin("what is the tempo?");
+        m.setTempo(101.0);
+        check(answerSession.applyReply(ai::ModelReply{
+                  "The tempo is 120.", {}, {}}) ==
+                  ai::AiSession::Step::NeedsRequest &&
+                  answerSession.messages()[answerSession.messages().size() - 2]
+                      .text.empty(),
+              "stale prose is hidden and automatically requested again");
+        check(answerSession.applyReply(ai::ModelReply{
+                  "The tempo is 101.", {}, {}}) ==
+                  ai::AiSession::Step::Finished,
+              "the refreshed answer completes against the current project");
     }
 
     // ── What real models actually send ──
@@ -1121,10 +1285,18 @@ int main() {
 
         const json gpt =
             requestBody(Provider::OpenAi, "m", 4096, "SYSTEM", conversation, true);
-        check(gpt["messages"][0]["role"] == "system" &&
+        check(gpt["max_tokens"] == 4096 &&
+                  gpt["messages"][0]["role"] == "system" &&
                   gpt["stream_options"]["include_usage"] == true,
-              "the OpenAI body puts the prompt in a system turn and asks for "
-              "usage, which it otherwise omits when streaming");
+              "the OpenAI body carries the output cap, system turn and streamed usage");
+        const std::vector<ai::ToolSpec> helpSpecs =
+            ai::toolSpecsForMode(ai::InteractionMode::Help);
+        const json filtered = requestBody(
+            Provider::OpenAi, "m", 4096, "SYSTEM", conversation, true,
+            /*vendorExtensions=*/true, &helpSpecs);
+        check(filtered["tools"].size() == helpSpecs.size() &&
+                  filtered["tools"].size() < gpt["tools"].size(),
+              "the provider receives only capabilities allowed by the active mode");
         check(!requestBody(Provider::OpenAi, "m", 4096, "S", conversation, true,
                            /*vendorExtensions=*/false)
                    .contains("stream_options"),

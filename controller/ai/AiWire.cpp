@@ -23,9 +23,10 @@ constexpr const char* kUseTheInterface =
 json anthropicBody(const std::string& model, int maxTokens,
                    const std::string& system,
                    const std::vector<Message>& messages, bool stream,
-                   bool vendorExtensions) {
+                   bool vendorExtensions,
+                   const std::vector<ToolSpec>& availableTools) {
     json tools = json::array();
-    for (const ToolSpec& spec : toolSpecs())
+    for (const ToolSpec& spec : availableTools)
         tools.push_back(json{{"name", spec.name},
                              {"description", spec.description},
                              {"input_schema", spec.inputSchema}});
@@ -100,11 +101,13 @@ json anthropicBody(const std::string& model, int maxTokens,
     return body;
 }
 
-json openAiBody(const std::string& model, const std::string& system,
+json openAiBody(const std::string& model, int maxTokens,
+                const std::string& system,
                 const std::vector<Message>& messages, bool stream,
-                bool vendorExtensions) {
+                bool vendorExtensions,
+                const std::vector<ToolSpec>& availableTools) {
     json tools = json::array();
-    for (const ToolSpec& spec : toolSpecs())
+    for (const ToolSpec& spec : availableTools)
         tools.push_back(json{{"type", "function"},
                              {"function", json{{"name", spec.name},
                                                {"description", spec.description},
@@ -157,6 +160,7 @@ json openAiBody(const std::string& model, const std::string& system,
     }
 
     json body{{"model", model},
+              {"max_tokens", maxTokens},
               {"messages", std::move(wire)},
               {"tools", std::move(tools)}};
     if (stream) {
@@ -183,11 +187,15 @@ json argsFromString(const std::string& raw) {
 
 json requestBody(Provider provider, const std::string& model, int maxTokens,
                  const std::string& system, const std::vector<Message>& messages,
-                 bool stream, bool vendorExtensions) {
+                 bool stream, bool vendorExtensions,
+                 const std::vector<ToolSpec>* availableTools) {
+    const std::vector<ToolSpec>& tools =
+        availableTools ? *availableTools : toolSpecs();
     return provider == Provider::Anthropic
                ? anthropicBody(model, maxTokens, system, messages, stream,
-                               vendorExtensions)
-               : openAiBody(model, system, messages, stream, vendorExtensions);
+                               vendorExtensions, tools)
+               : openAiBody(model, maxTokens, system, messages, stream,
+                            vendorExtensions, tools);
 }
 
 ModelReply parseReply(Provider provider, const json& body) {

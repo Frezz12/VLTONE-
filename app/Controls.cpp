@@ -6,6 +6,7 @@
 #include <QAction>
 #include <QContextMenuEvent>
 #include <QCoreApplication>
+#include <QFontMetrics>
 #include <QLabel>
 #include <QKeyEvent>
 #include <QMenu>
@@ -1820,6 +1821,7 @@ void Knob::paintEvent(QPaintEvent*) {
     const Theme& t = th();
 
     const bool digital = m_visualStyle == VisualStyle::SamplerDigital;
+    const bool gravityStyle = m_visualStyle == VisualStyle::Gravity;
     const int size = m_bare ? m_bare
                             : digital ? kSamplerKnobSize
                                       : (m_compact ? kKnobCompactSize : kKnobSize);
@@ -1829,6 +1831,75 @@ void Knob::paintEvent(QPaintEvent*) {
     const QPointF centre = ring.center();
     const double radius = ring.width() / 2.0;
     const double pen = m_bare ? 2.0 : (digital ? 2.4 : (m_compact ? 2.5 : 3.0));
+
+    if (gravityStyle) {
+        const double f = fraction();
+        const double interaction = m_dragging ? 1.0 : m_hoverFade.value();
+        const QColor red(0xE8, 0x10, 0x48);
+        const QColor magenta(0xFF, 0x26, 0xB5);
+        const QColor accent = mixColors(red, magenta, f * 0.65);
+
+        // Discrete orbital ticks make the value readable even when the dark
+        // body is viewed at the panel's minimum size.
+        for (int tick = 0; tick < 17; ++tick) {
+            const double tf = double(tick) / 16.0;
+            const double angle = (225.0 - tf * 270.0) * kDegToRad;
+            const bool active = m_bipolar ? tf >= std::min(0.5, f) &&
+                                               tf <= std::max(0.5, f)
+                                           : tf <= f;
+            const double outer = radius - 0.5;
+            const double inner = outer - (tick % 4 == 0 ? 5.5 : 3.2);
+            QColor ink = active ? accent : QColor(0x72, 0x76, 0x7D);
+            ink.setAlpha(active ? 205 : 115);
+            p.setPen(QPen(ink, active ? 1.45 : 0.85,
+                          Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(QPointF(centre.x() + std::cos(angle) * inner,
+                               centre.y() - std::sin(angle) * inner),
+                       QPointF(centre.x() + std::cos(angle) * outer,
+                               centre.y() - std::sin(angle) * outer));
+        }
+
+        const QRectF body = ring.adjusted(radius * 0.19, radius * 0.19,
+                                           -radius * 0.19, -radius * 0.19);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, 145));
+        p.drawEllipse(body.translated(0.0, std::max(1.0, radius * 0.045)));
+
+        QRadialGradient graphite(body.topLeft() +
+                                     QPointF(body.width() * 0.30,
+                                             body.height() * 0.24),
+                                 body.width() * 0.82);
+        graphite.setColorAt(0.0, QColor(0x3A, 0x3D, 0x40));
+        graphite.setColorAt(0.46, QColor(0x25, 0x27, 0x29));
+        graphite.setColorAt(1.0, QColor(0x0D, 0x0E, 0x10));
+        p.setPen(QPen(QColor(0x08, 0x09, 0x0A), 1.4));
+        p.setBrush(graphite);
+        p.drawEllipse(body);
+
+        QColor sheen(255, 255, 255, int(24 + interaction * 18));
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(sheen, 1.0, Qt::SolidLine, Qt::RoundCap));
+        p.drawArc(body.adjusted(2.0, 2.0, -2.0, -2.0), 32 * 16, 112 * 16);
+
+        const double angle = (225.0 - f * 270.0) * kDegToRad;
+        const QPointF start(centre.x() + std::cos(angle) * body.width() * 0.12,
+                            centre.y() - std::sin(angle) * body.width() * 0.12);
+        const QPointF end(centre.x() + std::cos(angle) * body.width() * 0.41,
+                          centre.y() - std::sin(angle) * body.width() * 0.41);
+        p.setPen(QPen(mixColors(QColor(0xC8, 0xCB, 0xD0), accent,
+                                0.20 + interaction * 0.35),
+                      std::max(1.6, radius * 0.045), Qt::SolidLine,
+                      Qt::RoundCap));
+        p.drawLine(start, end);
+
+        if (hasFocus()) {
+            QColor focus = accent;
+            focus.setAlpha(230);
+            p.setPen(QPen(focus, 2.0, Qt::DashLine));
+            p.drawEllipse(ring.adjusted(-1.0, -1.0, 1.0, 1.0));
+        }
+        return;
+    }
 
     if (digital) {
         const double f = fraction();
@@ -2048,6 +2119,28 @@ void Knob::wheelEvent(QWheelEvent* ev) {
     const double step = m_stepped ? 1.0 : (m_max - m_min) * 0.02;
     commit(m_value + (ev->angleDelta().y() > 0 ? 1 : -1) * step * fine);
     emit editFinished();
+}
+
+void Knob::keyPressEvent(QKeyEvent* event) {
+    const double base = m_stepped ? 1.0 : (m_max - m_min) * 0.01;
+    const double fine = (event->modifiers() & Qt::ShiftModifier) ? 0.25 : 1.0;
+    double next = m_value;
+    switch (event->key()) {
+        case Qt::Key_Left:
+        case Qt::Key_Down: next -= base * fine; break;
+        case Qt::Key_Right:
+        case Qt::Key_Up: next += base * fine; break;
+        case Qt::Key_PageDown: next -= base * 10.0 * fine; break;
+        case Qt::Key_PageUp: next += base * 10.0 * fine; break;
+        case Qt::Key_Home: next = m_min; break;
+        case Qt::Key_End: next = m_max; break;
+        default:
+            QWidget::keyPressEvent(event);
+            return;
+    }
+    commit(next);
+    emit editFinished();
+    event->accept();
 }
 
 void Knob::enterEvent(QEnterEvent*) { m_hoverFade.setTarget(1.0); }
@@ -2452,6 +2545,13 @@ bool InlineNameEdit::event(QEvent* ev) {
 
 void InlineNameEdit::mouseDoubleClickEvent(QMouseEvent* ev) {
     if (isReadOnly()) {
+        const int textRight = textMargins().left() +
+                              std::max(8, fontMetrics().horizontalAdvance(text())) +
+                              4;
+        if (ev->position().x() > textRight) {
+            ev->ignore();
+            return;
+        }
         setReadOnly(false);
         setFocusPolicy(Qt::StrongFocus);
         setFocus(Qt::MouseFocusReason);

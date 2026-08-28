@@ -12,6 +12,7 @@
 #include <QPlainTextEdit>
 #include <QSet>
 #include <QSettings>
+#include <QStringList>
 #include <QTextEdit>
 #include <QWidget>
 
@@ -20,6 +21,32 @@
 
 namespace {
 QString settingsKey(const QString& id) { return "shortcuts/" + id; }
+
+ShortcutManager::Metadata inferredMetadata(const QString& id,
+                                           const QString& label) {
+    ShortcutManager::Metadata metadata;
+    metadata.description = label;
+    metadata.helpId = id;
+    const QString lower = id.toLower();
+    if (lower == "app.quit" || lower == "file.new" ||
+        lower == "file.open" || lower == "edit.undo" ||
+        lower == "edit.redo" || lower.contains("delete") ||
+        lower.contains("remove") || lower.contains("clear") ||
+        lower.contains("cut")) {
+        metadata.risk = ShortcutManager::Risk::Destructive;
+    } else if (lower.startsWith("file.save") ||
+               lower.startsWith("file.export") ||
+               lower.startsWith("file.import")) {
+        metadata.risk = ShortcutManager::Risk::ExternalSideEffect;
+    } else if (lower.startsWith("view.") || lower.startsWith("window.") ||
+               lower.startsWith("help.") ||
+               lower.startsWith("transport.")) {
+        metadata.risk = ShortcutManager::Risk::Safe;
+    } else {
+        metadata.risk = ShortcutManager::Risk::Reversible;
+    }
+    return metadata;
+}
 
 struct PhysicalKey {
     quint32 native;
@@ -179,12 +206,21 @@ ShortcutManager::ShortcutManager(QObject* parent) : QObject(parent) {
 void ShortcutManager::registerCommand(const QString& id, const QString& label,
                                       const QString& category,
                                       const QKeySequence& def, QAction* action) {
+    registerCommand(id, label, category, def, action,
+                    inferredMetadata(id, label));
+}
+
+void ShortcutManager::registerCommand(const QString& id, const QString& label,
+                                      const QString& category,
+                                      const QKeySequence& def, QAction* action,
+                                      Metadata metadata) {
     Command c;
     c.id = id;
     c.label = label;
     c.category = category;
     c.defaultSeq = canonicalSequence(def);
     c.action = action;
+    c.metadata = std::move(metadata);
     if (action) action->setObjectName(id);
 
     // Saved override wins over the default; a saved empty string means the user
@@ -215,6 +251,45 @@ const ShortcutManager::Command* ShortcutManager::find(const QString& id) const {
     for (const auto& c : m_commands)
         if (c.id == id) return &c;
     return nullptr;
+}
+
+const ShortcutManager::Command* ShortcutManager::command(
+    const QString& id) const {
+    return find(id);
+}
+
+QVector<ShortcutManager::Command> ShortcutManager::search(
+    const QString& query) const {
+    const QStringList terms =
+        query.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (terms.isEmpty()) return m_commands;
+
+    QVector<Command> matches;
+    for (const Command& candidate : m_commands) {
+        const auto hasTerm = [&candidate](const QString& term) {
+            return candidate.id.contains(term, Qt::CaseInsensitive) ||
+                   candidate.label.contains(term, Qt::CaseInsensitive) ||
+                   candidate.category.contains(term, Qt::CaseInsensitive) ||
+                   candidate.metadata.description.contains(
+                       term, Qt::CaseInsensitive) ||
+                   candidate.metadata.helpId.contains(term,
+                                                      Qt::CaseInsensitive);
+        };
+        if (std::all_of(terms.cbegin(), terms.cend(), hasTerm))
+            matches.push_back(candidate);
+    }
+    return matches;
+}
+
+bool ShortcutManager::invoke(const QString& id) const {
+    const Command* candidate = find(id);
+    if (!candidate || !candidate->action ||
+        !candidate->action->isEnabled() ||
+        !candidate->action->isVisible()) {
+        return false;
+    }
+    candidate->action->trigger();
+    return true;
 }
 
 bool ShortcutManager::isSuppressed(const QKeySequence& seq) const {

@@ -120,7 +120,8 @@ void LlmClient::send(const QString& system,
     const json body = wire::requestBody(m_provider, toStd(model),
                                         m_config.maxTokens, toStd(system),
                                         messages, stream,
-                                        /*vendorExtensions=*/false);
+                                        /*vendorExtensions=*/false,
+                                        &m_availableTools);
     sendToProvider(resolvedEndpoint(m_config.endpoint, m_provider).toString(),
                    m_config.apiKey, body, stream);
 }
@@ -138,7 +139,7 @@ void LlmClient::requestManagedLease(
         m_config.model.isEmpty() ? defaultModel() : m_config.model;
     const json provisional = wire::requestBody(
         m_provider, toStd(provisionalModel), m_config.maxTokens, toStd(system),
-        messages, stream, /*vendorExtensions=*/true);
+        messages, stream, /*vendorExtensions=*/true, &m_availableTools);
     const QByteArray providerBytes = QByteArray::fromStdString(provisional.dump());
     const json leaseBody = {
         {"input_bytes", std::max<qint64>(1, providerBytes.size())},
@@ -219,7 +220,7 @@ void LlmClient::requestManagedLease(
 
         const json body = wire::requestBody(
             m_provider, toStd(model), m_config.maxTokens, toStd(system),
-            messages, stream, /*vendorExtensions=*/true);
+            messages, stream, /*vendorExtensions=*/true, &m_availableTools);
         sendToProvider(endpoint, apiKey, body, stream);
     });
 }

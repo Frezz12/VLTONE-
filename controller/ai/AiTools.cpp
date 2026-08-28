@@ -1,4 +1,7 @@
 #include "ai/AiTools.hpp"
+#include "ai/ContentCatalog.hpp"
+#include "ai/CompositionEngine.hpp"
+#include "ai/ProjectMusicContext.hpp"
 
 #include "EngineController.hpp"
 #include "MidiTools.hpp"
@@ -36,6 +39,11 @@ double gainToDb(double gain) {
 /// Rounded to two places: a model that reads back `0.9999999` will helpfully
 /// "fix" it on the next call and burn a round trip doing nothing.
 double round2(double v) { return std::round(v * 100.0) / 100.0; }
+
+std::string privateFileLabel(const std::string& path) {
+    const std::string name = fs::path(path).filename().string();
+    return name.empty() ? "selected file" : name;
+}
 
 // ── Argument reading ────────────────────────────────────────────────────────
 // Every failure has to reach the model as a sentence, so these accumulate into
@@ -297,31 +305,148 @@ std::optional<plugins::PluginDescriptor> findPlugin(EngineController& c,
     return std::nullopt;
 }
 
-// A sample library can hold hundreds of thousands of files; these are what
-// keep a search from stalling the request. The same shape the browser's own
-// search worker uses, and for the same reason.
+// The catalog enforces its own hard cap; the tool keeps the public response
+// bounded too so a broad query cannot consume the model's whole context.
 constexpr std::size_t kSearchLimit = 200;
-constexpr std::size_t kSearchVisitLimit = 60000;
-constexpr int kSearchDepth = 8;
 
-/// Matches a name, or an extension written as "wav", ".wav" or "*.wav" — the
-/// same rule the browser's search field follows, so the two cannot disagree
-/// about what a query means.
-bool matchesQuery(const std::string& fileName, const std::string& query) {
-    if (query.empty()) return true;
-    std::string needle = query;
-    if (needle.rfind("*.", 0) == 0) needle = needle.substr(2);
-    else if (needle[0] == '.') needle = needle.substr(1);
-    std::transform(needle.begin(), needle.end(), needle.begin(),
-                   [](unsigned char ch) { return char(std::tolower(ch)); });
+/// Model-facing metadata deliberately omits the trusted native path.
+json contentJson(const ContentItem& item) {
+    json out{{"contentId", item.contentId},
+             {"name", item.name},
+             {"type", toString(item.type)},
+             {"sizeBytes", item.sizeBytes}};
+    if (item.audio) {
+        out["seconds"] = round2(item.audio->durationSeconds);
+        out["sampleRate"] = round2(item.audio->sampleRate);
+        out["channels"] = item.audio->channels;
+        if (item.audio->timbre) {
+            const AudioTimbreMetadata& timbre = *item.audio->timbre;
+            out["timbre"] =
+                json{{"rmsDbfs", round2(timbre.rmsDbfs)},
+                     {"peakDbfs", round2(timbre.peakDbfs)},
+                     {"crestFactorDb", round2(timbre.crestFactorDb)},
+                     {"brightness", round2(timbre.brightness)},
+                     {"transientness", round2(timbre.transientness)},
+                     {"stereoWidth", round2(timbre.stereoWidth)},
+                     {"zeroCrossingRate", round2(timbre.zeroCrossingRate)},
+                     {"sampledSeconds", round2(timbre.sampledSeconds)}};
+        }
+    }
+    if (item.midi) {
+        out["noteCount"] = item.midi->noteCount;
+        out["lengthBeats"] = round2(item.midi->lengthBeats);
+        out["trackCount"] = item.midi->trackCount;
+        if (item.midi->firstTempoBpm > 0.0)
+            out["tempo"] = round2(item.midi->firstTempoBpm);
+        out["tempoChanges"] = item.midi->hasTempoChanges;
+    }
+    return out;
+}
 
-    std::string lowered = fileName;
-    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                   [](unsigned char ch) { return char(std::tolower(ch)); });
+std::optional<CompositionRole> compositionRole(const std::string& name) {
+    if (name == "melody") return CompositionRole::Melody;
+    if (name == "bass") return CompositionRole::Bass;
+    if (name == "chords") return CompositionRole::Chords;
+    if (name == "drums") return CompositionRole::Drums;
+    return std::nullopt;
+}
 
-    const auto dot = lowered.rfind('.');
-    if (dot != std::string::npos && lowered.substr(dot + 1) == needle) return true;
-    return lowered.find(needle) != std::string::npos;
+json scoreJson(const CompositionCandidateScore& score) {
+    const auto component = [](const CompositionScoreComponent& value) {
+        return json{{"value", round2(value.value)},
+                    {"explanation", value.explanation}};
+    };
+    return json{{"total", round2(score.total)},
+                {"harmony", component(score.harmony)},
+                {"rhythm", component(score.rhythm)},
+                {"register", component(score.registerFit)},
+                {"repetition", component(score.repetition)},
+                {"voiceLeading", component(score.voiceLeading)}};
+}
+
+json candidateJson(const CompositionCandidate& candidate) {
+    json notes = json::array();
+    for (const CompositionNoteEvent& note : candidate.notes)
+        notes.push_back(json{{"pitch", note.pitch},
+                             {"start", round2(note.startBeats)},
+                             {"length", round2(note.lengthBeats)},
+                             {"velocity", note.velocity}});
+    return json{{"candidateId", candidate.id},
+                {"variation", candidate.variationIndex + 1},
+                {"noteCount", candidate.notes.size()},
+                {"score", scoreJson(candidate.score)},
+                {"notes", std::move(notes)}};
+}
+
+std::string attachmentId(const Attachment& attachment, std::size_t index) {
+    return attachment.contentId.empty()
+               ? "attachment_" + std::to_string(index + 1)
+               : attachment.contentId;
+}
+
+bool pathWithin(const fs::path& candidate, const fs::path& root) {
+    std::error_code ec;
+    const fs::path relative = fs::relative(candidate, root, ec);
+    if (ec || relative.empty() || relative.is_absolute()) return false;
+    for (const fs::path& component : relative)
+        if (component == "..") return false;
+    return true;
+}
+
+std::optional<std::string> authorizedInputPath(const json& args,
+                                               const ToolContext& ctx,
+                                               std::string& error) {
+    std::string contentId, legacyPath;
+    optString(args, "contentId", contentId, error);
+    optString(args, "filePath", legacyPath, error);
+    if (!error.empty()) return std::nullopt;
+
+    if (!contentId.empty()) {
+        for (std::size_t i = 0; i < ctx.attachments.size(); ++i)
+            if (attachmentId(ctx.attachments[i], i) == contentId)
+                return ctx.attachments[i].path;
+        if (ctx.contentCatalog) {
+            if (const auto resolved = ctx.contentCatalog->resolvePath(contentId))
+                return resolved;
+        }
+        error = "contentId '" + contentId +
+                "' is unknown or its folder permission was revoked; call "
+                "search_files again";
+        return std::nullopt;
+    }
+
+    if (legacyPath.empty()) {
+        error = "send contentId from search_files or from FILES THE USER "
+                "ATTACHED";
+        return std::nullopt;
+    }
+
+    std::error_code ec;
+    const fs::path candidate =
+        fs::canonical(platform::pathFromUtf8(legacyPath), ec);
+    if (ec) {
+        error = "file '" +
+                platform::pathToUtf8(platform::pathFromUtf8(legacyPath).filename()) +
+                "' does not exist or cannot be read";
+        return std::nullopt;
+    }
+    for (const Attachment& attachment : ctx.attachments) {
+        const fs::path attached =
+            fs::canonical(platform::pathFromUtf8(attachment.path), ec);
+        if (!ec && candidate == attached)
+            return platform::pathToUtf8(candidate);
+        ec.clear();
+    }
+    for (const std::string& rootText : ctx.sampleFolders) {
+        const fs::path root =
+            fs::canonical(platform::pathFromUtf8(rootText), ec);
+        if (!ec && pathWithin(candidate, root))
+            return platform::pathToUtf8(candidate);
+        ec.clear();
+    }
+    error = "that path is outside the files the user granted to the browser "
+            "or attached to this chat";
+    return std::nullopt;
 }
 
 /// Pitch-class names for reporting a key back. Sharps, because that is what
@@ -420,10 +545,15 @@ json projectSnapshot(const EngineController& c, const ToolContext& ctx) {
             here["selectedTrackName"] = t->name;
     }
     if (!ctx.focus.clipId.empty()) here["selectedClipId"] = ctx.focus.clipId;
+    if (!ctx.focus.trackIds.empty())
+        here["selectedTrackIds"] = ctx.focus.trackIds;
+    if (!ctx.focus.clipIds.empty())
+        here["selectedClipIds"] = ctx.focus.clipIds;
 
     return json{{"name", c.projectName()},
                 {"focus", std::move(here)},
                 {"tempo", round2(c.tempo())},
+                {"assistantMode", interactionModeName(ctx.mode)},
                 {"key", noteNames()[c.keyRoot()] + " " +
                             miditools::scaleName(
                                 miditools::scaleFromId(c.projectScale()))},
@@ -477,12 +607,65 @@ std::vector<ToolSpec> buildSpecs() {
                           "PLAYBOOKS, e.g. bass or drums")}}),
                {"id"}));
 
+    add("search_commands",
+        "Find real program actions by id, label, category or description. Use "
+        "this to answer where/how questions with the current shortcut and to "
+        "discover the stable commandId before run_command.",
+        schema(obj({{"query", prop("string", "words describing the action; empty lists commands")}}),
+               {"query"}));
+
+    add("run_command",
+        "Invoke one currently visible and enabled program action by the exact "
+        "commandId returned by search_commands. Unknown, destructive and "
+        "external actions require confirmation in the application.",
+        schema(obj({{"commandId", prop("string", "exact stable command id")}}),
+               {"commandId"}));
+
     // ── Reading ──
     add("get_project",
         "The whole project: tempo, time signature, and every track with its "
         "id, kind, level, instrument, inserts, sends and clips. The ids in the "
         "reply are what every other tool takes.",
         schema(json::object(), {}));
+
+    add("inspect_music_context",
+        "Read the musical context before composing: key with source and "
+        "confidence, detected MIDI key, stored audio tempo/key analysis, chord "
+        "timeline and chord tones, plus each part's rhythmic activity, density, "
+        "register, polyphony, instrument and effects.",
+        schema(obj({{"fromBar", prop("number", "start bar; default 1")},
+                    {"toBar", prop("number", "exclusive end bar; omit for project end")},
+                    {"segmentBeats", prop("number", "optional chord-analysis window in beats")}}),
+               {}));
+
+    add("compose_candidates",
+        "Generate and validate three to five deterministic MIDI alternatives "
+        "against the project's current key and chord timeline. Each candidate "
+        "has an opaque id and explainable harmony, rhythm, register, repetition "
+        "and voice-leading scores. Present the alternatives before applying one.",
+        schema(obj({{"role",
+                     json{{"type", "string"},
+                          {"enum", json::array({"melody", "bass", "chords", "drums"})}}},
+                    {"fromBar", prop("number", "where the part will start; default playhead")},
+                    {"bars", prop("integer", "length in bars; default 4")},
+                    {"variations", prop("integer", "three to five; default 3")},
+                    {"seed", prop("integer", "repeatable variation seed; change it to regenerate")},
+                    {"creativity", prop("number", "0 stable to 1 adventurous; default 0.5")},
+                    {"density", prop("number", "0 sparse to 1 busy; default 0.5")},
+                    {"keyRoot", prop("integer", "optional pitch class 0 to 11")},
+                    {"scale", prop("string", "optional scale id")},
+                    {"lowestPitch", prop("integer", "optional MIDI register floor")},
+                    {"highestPitch", prop("integer", "optional MIDI register ceiling")}}),
+               {"role"}));
+
+    add("apply_composition_candidate",
+        "Insert one previously generated, validated composition candidate into "
+        "a new MIDI clip. The stored notes are applied by candidateId, so they "
+        "cannot change between scoring and insertion.",
+        schema(obj({{"candidateId", prop("string", "id from compose_candidates")},
+                    {"trackId", prop("string", "target instrument or MIDI track")},
+                    {"startBar", prop("number", "clip start; default playhead")}}),
+               {"candidateId", "trackId"}));
 
     add("get_clip_notes",
         "Every note in a MIDI clip, as pitch, start and length in beats from "
@@ -507,14 +690,19 @@ std::vector<ToolSpec> buildSpecs() {
                {"kind"}));
 
     add("search_files",
-        "Find audio files in the folders the user added to the browser. "
-        "Nothing outside those folders is searched. Use this to go and get a "
-        "sound rather than asking the user for one — a query matches part of a "
-        "file name, or an extension like \".wav\".",
+        "Search the user's explicitly granted browser folders for audio or "
+        "MIDI. Audio results include lightweight loudness, brightness, "
+        "transient and stereo-width descriptors for choosing a sound by role. "
+        "Results contain an opaque contentId, never a path. Pass that "
+        "contentId to analyze_sample, load_sampler or import_audio.",
         schema(obj({{"query",
                      prop("string",
                           "part of a file name, or an extension such as "
                           "\".wav\". Empty lists what is there.")},
+                    {"type",
+                     json{{"type", "string"},
+                          {"enum", json::array({"audio", "midi", "all"})},
+                          {"description", "optional type; default all"}}},
                     {"limit",
                      prop("integer", "how many to return at most; default 40")}}),
                {"query"}));
@@ -552,8 +740,9 @@ std::vector<ToolSpec> buildSpecs() {
         "attacks, whether it holds a pitch, and a guess at what it is. Use it "
         "when a file's name does not tell you enough — you cannot listen, and "
         "this is the closest thing to it.",
-        schema(obj({{"filePath", prop("string", "absolute path to an audio file")}}),
-               {"filePath"}));
+        schema(obj({{"contentId",
+                     prop("string", "id from search_files or an attachment")}}),
+               {"contentId"}));
 
     // ── Project ──
     add("set_tempo", "Set the project tempo in BPM (20–300).",
@@ -710,10 +899,11 @@ std::vector<ToolSpec> buildSpecs() {
     add("load_sampler",
         "Put the built-in sampler on a track and load an audio file into it, "
         "in one step. The fastest way to make a drum or a one-shot playable "
-        "from MIDI. Use a path the user attached or one you were given.",
+        "from MIDI. Use a contentId from search_files or an attachment.",
         schema(obj({{"trackId", prop("string", "an instrument or MIDI track")},
-                    {"filePath", prop("string", "absolute path to an audio file")}}),
-               {"trackId", "filePath"}));
+                    {"contentId",
+                     prop("string", "id from search_files or an attachment")}}),
+               {"trackId", "contentId"}));
 
     // ── Clips and notes ──
     add("add_midi_clip",
@@ -925,9 +1115,9 @@ std::vector<ToolSpec> buildSpecs() {
                {"path"}));
 
     add("import_audio",
-        "Put an audio file into the project as a clip. Use search_files or an "
-        "attachment to get the path.",
-        schema(obj({{"filePath", prop("string", "path to the audio file")},
+        "Put an audio file into the project as a clip. Use the contentId from "
+        "search_files or an attachment.",
+        schema(obj({{"contentId", prop("string", "id of the audio file")},
                     {"trackId",
                      prop("string",
                           "optional: an existing audio track. Omit to make a "
@@ -935,7 +1125,7 @@ std::vector<ToolSpec> buildSpecs() {
                     {"atBar", prop("number", "where it starts, default 1")},
                     {"trackName",
                      prop("string", "name for the new track, when making one")}}),
-               {"filePath"}));
+               {"contentId"}));
 
     // ── The action tools. Their full tables are in the tools-reference
     // playbook, so the schema here stays small enough to send every time. ──
@@ -1145,6 +1335,25 @@ std::vector<ToolSpec> buildSpecs() {
                           "a machine copy")}}),
                {"trackId", "clipId"}));
 
+    for (ToolSpec& spec : specs) {
+        const std::string& name = spec.name;
+        if (name.starts_with("get_") || name.starts_with("list_") ||
+            name.starts_with("search_") || name.starts_with("analyze_") ||
+            name.starts_with("inspect_") || name.starts_with("describe_")) {
+            spec.effect = ToolSpec::Effect::ReadOnly;
+        } else if (name.starts_with("remove_")) {
+            spec.effect = ToolSpec::Effect::DestructiveEdit;
+        } else if (name == "undo" || name == "redo") {
+            spec.effect = ToolSpec::Effect::History;
+        } else if (name == "transport" || name == "set_loop") {
+            spec.effect = ToolSpec::Effect::LiveControl;
+        } else if (name == "save_project" || name == "export_audio" ||
+                   name == "run_command") {
+            spec.effect = ToolSpec::Effect::ExternalSideEffect;
+        } else {
+            spec.effect = ToolSpec::Effect::ReversibleEdit;
+        }
+    }
     return specs;
 }
 
@@ -1155,10 +1364,83 @@ const std::vector<ToolSpec>& toolSpecs() {
     return specs;
 }
 
+const char* interactionModeName(InteractionMode mode) {
+    switch (mode) {
+        case InteractionMode::Help: return "HELP";
+        case InteractionMode::Teach: return "TEACH";
+        case InteractionMode::Compose: return "COMPOSE";
+        case InteractionMode::Do: return "DO";
+    }
+    return "DO";
+}
+
+bool toolAllowedInMode(const ToolSpec& tool, InteractionMode mode) {
+    if (mode == InteractionMode::Do) return true;
+    if (mode == InteractionMode::Help || mode == InteractionMode::Teach)
+        return tool.effect == ToolSpec::Effect::ReadOnly;
+    return tool.effect == ToolSpec::Effect::ReadOnly ||
+           tool.effect == ToolSpec::Effect::ReversibleEdit ||
+           tool.effect == ToolSpec::Effect::LiveControl;
+}
+
+std::vector<ToolSpec> toolSpecsForMode(InteractionMode mode) {
+    std::vector<ToolSpec> allowed;
+    for (const ToolSpec& spec : toolSpecs())
+        if (toolAllowedInMode(spec, mode)) allowed.push_back(spec);
+    return allowed;
+}
+
+InteractionMode inferInteractionMode(const std::string& prompt) {
+    std::string text = prompt;
+    const auto first = text.find_first_not_of(" \t\r\n");
+    if (first != std::string::npos) text.erase(0, first);
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) {
+        return ch < 128 ? static_cast<char>(std::tolower(ch))
+                        : static_cast<char>(ch);
+    });
+
+    const auto has = [&text](const char* word) {
+        return text.find(word) != std::string::npos;
+    };
+    if (text.starts_with("/help")) return InteractionMode::Help;
+    if (text.starts_with("/teach")) return InteractionMode::Teach;
+    if (text.starts_with("/do")) return InteractionMode::Do;
+    if (text.starts_with("/compose")) return InteractionMode::Compose;
+
+    const bool asksHow = has("how do ") || has("how can ") ||
+                         has("show me how") || has("teach me") ||
+                         has("как ") || has("покажи, как") ||
+                         has("покажи как") || has("научи");
+    if (asksHow) return InteractionMode::Teach;
+
+    const bool asksWhat = has("what is ") || has("what does ") ||
+                          has("where is ") || has("explain ") ||
+                          has("что такое") || has("что делает") ||
+                          has("где находится") || has("объясни");
+    if (asksWhat) return InteractionMode::Help;
+
+    const bool music = has("melod") || has("bass") || has("chord") ||
+                       has("drum") || has("beat") || has("harmony") ||
+                       has("music") || has("мелод") || has("бас") ||
+                       has("аккорд") || has("барабан") || has("бит") ||
+                       has("гармон") || has("музык");
+    return music ? InteractionMode::Compose : InteractionMode::Do;
+}
+
 // ── Dispatch ────────────────────────────────────────────────────────────────
 
 ToolResult callTool(EngineController& c, const std::string& name,
                     const json& rawArgs, const ToolContext& ctx) {
+    const auto spec = std::find_if(
+        toolSpecs().begin(), toolSpecs().end(),
+        [&name](const ToolSpec& candidate) { return candidate.name == name; });
+    if (spec != toolSpecs().end() && !toolAllowedInMode(*spec, ctx.mode)) {
+        return fail("tool '" + name + "' is not available in " +
+                    interactionModeName(ctx.mode) +
+                    " mode; answer without changing the project or ask the "
+                    "user to switch modes");
+    }
+
     // A model occasionally sends the arguments as a JSON *string*, or sends
     // nothing at all for a no-argument tool. Both are cheap to accept.
     json args = json::object();
@@ -1191,8 +1473,206 @@ ToolResult callTool(EngineController& c, const std::string& name,
                          {"body", book->body}});
     }
 
+    if (name == "search_commands") {
+        std::string query;
+        wantString(args, "query", query, err);
+        if (!err.empty()) return fail(err);
+        if (!ctx.searchCommands)
+            return fail("the program command catalog is unavailable");
+        return done(ctx.searchCommands(query, ctx.mode));
+    }
+
+    if (name == "run_command") {
+        std::string commandId;
+        wantString(args, "commandId", commandId, err);
+        if (!err.empty()) return fail(err);
+        if (!ctx.invokeCommand)
+            return fail("program command execution is unavailable");
+        std::string commandError;
+        if (!ctx.invokeCommand(commandId, ctx.mode, commandError))
+            return fail(commandError.empty() ? "the command could not run"
+                                             : commandError);
+        return done(json{{"commandId", commandId}, {"invoked", true}});
+    }
+
     // ── Reading ──
     if (name == "get_project") return done(projectSnapshot(c, ctx));
+
+    if (name == "inspect_music_context") {
+        double fromBar = 1.0, toBar = 0.0, segmentBeats = 0.0;
+        optNumber(args, "fromBar", fromBar, err);
+        optNumber(args, "toBar", toBar, err);
+        optNumber(args, "segmentBeats", segmentBeats, err);
+        if (!err.empty()) return fail(err);
+        if (fromBar < 1.0) return fail("bars start at 1, not 0");
+        if (toBar > 0.0 && toBar <= fromBar)
+            return fail("toBar must be after fromBar");
+        if (segmentBeats < 0.0)
+            return fail("segmentBeats cannot be negative");
+        return done(buildProjectMusicContext(c, fromBar, toBar, segmentBeats)
+                        .toJson());
+    }
+
+    if (name == "compose_candidates") {
+        std::string roleName, requestedScale;
+        double fromBar = secondsToBars(c, c.positionSeconds()) + 1.0;
+        double barsValue = 4.0, variations = 3.0, seed = 0.0;
+        double creativity = 0.5, density = 0.5;
+        double keyRoot = -1.0, lowest = -1.0, highest = -1.0;
+        wantString(args, "role", roleName, err);
+        optString(args, "scale", requestedScale, err);
+        optNumber(args, "fromBar", fromBar, err);
+        optNumber(args, "bars", barsValue, err);
+        optNumber(args, "variations", variations, err);
+        optNumber(args, "seed", seed, err);
+        optNumber(args, "creativity", creativity, err);
+        optNumber(args, "density", density, err);
+        optNumber(args, "keyRoot", keyRoot, err);
+        optNumber(args, "lowestPitch", lowest, err);
+        optNumber(args, "highestPitch", highest, err);
+        if (!err.empty()) return fail(err);
+        const std::optional<CompositionRole> role = compositionRole(roleName);
+        if (!role) return fail("role must be melody, bass, chords or drums");
+        if (fromBar < 1.0) return fail("bars start at 1, not 0");
+        if (std::abs(barsValue - std::round(barsValue)) > 1e-6)
+            return fail("bars must be a whole number");
+        if (seed < 0.0) return fail("seed cannot be negative");
+        if ((lowest >= 0.0) != (highest >= 0.0))
+            return fail("send both lowestPitch and highestPitch, or neither");
+        if (!ctx.compositionCandidates)
+            return fail("the composition candidate store is unavailable; "
+                        "reopen the AI panel and try again");
+
+        CompositionRequest request;
+        request.role = *role;
+        request.bars = int(std::llround(barsValue));
+        request.variationCount = int(std::llround(variations));
+        request.seed = args.contains("seed")
+                           ? std::uint64_t(std::llround(seed))
+                           : ctx.compositionCandidates->nextSeed(
+                                 c.projectRevision() + 1);
+        request.creativity = creativity;
+        request.rhythmicDensity = density;
+        request.beatsPerBar = beatsPerBar(c);
+        if (lowest >= 0.0)
+            request.pitchRange = CompositionPitchRange{
+                int(std::llround(lowest)), int(std::llround(highest))};
+
+        const ProjectMusicContext music = buildProjectMusicContext(
+            c, fromBar, fromBar + std::max(1, request.bars));
+        const MusicKeySummary& inferred =
+            music.detectedMidiKey.available() ? music.detectedMidiKey
+                                              : music.globalKey;
+        if (*role == CompositionRole::Melody) {
+            request.avoidOnsetProfile16.assign(16, 0.0);
+            for (const MusicTrackSummary& track : music.tracks) {
+                if (track.muted || track.activity.onsetProfile16.size() != 16)
+                    continue;
+                for (std::size_t slot = 0; slot < 16; ++slot)
+                    request.avoidOnsetProfile16[slot] = std::max(
+                        request.avoidOnsetProfile16[slot],
+                        track.activity.onsetProfile16[slot]);
+            }
+        }
+        if (keyRoot >= 0.0)
+            request.keyRoot = int(std::llround(keyRoot));
+        else if (inferred.available())
+            request.keyRoot = inferred.root;
+        request.scale = !requestedScale.empty()
+                            ? std::optional<std::string>(requestedScale)
+                            : inferred.available()
+                                  ? std::optional<std::string>(inferred.scale)
+                                  : std::nullopt;
+        for (const MusicChordSummary& chord : music.chords) {
+            CompositionHarmonySegment segment;
+            segment.startBeats =
+                std::max(0.0, (chord.startBar - fromBar) * request.beatsPerBar);
+            segment.lengthBeats = chord.lengthBeats;
+            segment.root = chord.root;
+            segment.chordTonePitchClasses = chord.chordTonePitchClasses;
+            const double total = request.bars * request.beatsPerBar;
+            if (segment.startBeats >= total) continue;
+            segment.lengthBeats =
+                std::min(segment.lengthBeats, total - segment.startBeats);
+            request.harmony.push_back(std::move(segment));
+        }
+
+        const CompositionValidation validation =
+            validateCompositionRequest(request);
+        if (!validation.valid()) return fail(join(validation.errors));
+        const std::vector<CompositionCandidate> candidates =
+            generateCompositionCandidates(request);
+        if (candidates.empty())
+            return fail("no valid composition candidates were generated");
+        ctx.compositionCandidates->replace(request, candidates);
+
+        json alternatives = json::array();
+        for (const CompositionCandidate& candidate : candidates)
+            alternatives.push_back(candidateJson(candidate));
+        return done(json{{"role", roleName},
+                         {"fromBar", round2(fromBar)},
+                         {"bars", request.bars},
+                         {"seed", request.seed},
+                         {"keyRoot", request.keyRoot.value_or(0)},
+                         {"scale", request.scale.value_or("major")},
+                         {"keySource", inferred.source},
+                         {"harmonySegments", request.harmony.size()},
+                         {"candidates", std::move(alternatives)},
+                         {"next", "Present these alternatives, then apply only the candidate the user chooses."}});
+    }
+
+    if (name == "apply_composition_candidate") {
+        std::string candidateId, trackId;
+        double startBar = secondsToBars(c, c.positionSeconds()) + 1.0;
+        wantString(args, "candidateId", candidateId, err);
+        wantString(args, "trackId", trackId, err);
+        optNumber(args, "startBar", startBar, err);
+        if (!err.empty()) return fail(err);
+        if (!ctx.compositionCandidates)
+            return fail("there are no composition candidates in this panel");
+        const std::optional<StoredCompositionCandidate> stored =
+            ctx.compositionCandidates->find(candidateId);
+        if (!stored)
+            return fail("candidateId '" + candidateId +
+                        "' is unknown or was replaced by a newer generation");
+        const TrackModel* track = c.project().findTrack(trackId);
+        if (!track) return fail(unknownTrack(c, trackId));
+        if (!trackAccepts(track->kind, ClipKind::Midi))
+            return fail("track '" + track->name + "' cannot hold MIDI clips");
+        if (startBar < 1.0) return fail("bars start at 1, not 0");
+        const CompositionValidation validation = validateCompositionCandidate(
+            stored->request, stored->candidate);
+        if (!validation.valid())
+            return fail("stored candidate failed validation: " +
+                        join(validation.errors));
+
+        const std::string clipId = c.addMidiClip(
+            trackId, barsToSeconds(c, startBar - 1.0),
+            barsToSeconds(c, stored->request.bars));
+        if (clipId.empty()) return fail("the MIDI clip could not be created");
+        std::vector<NoteModel> notes;
+        notes.reserve(stored->candidate.notes.size());
+        for (const CompositionNoteEvent& event : stored->candidate.notes) {
+            NoteModel note;
+            note.pitch = event.pitch;
+            note.startBeats = event.startBeats;
+            note.lengthBeats = event.lengthBeats;
+            note.velocity = event.velocity;
+            notes.push_back(std::move(note));
+        }
+        c.setClipNotes(trackId, clipId, std::move(notes),
+                       "AI: Apply composition candidate");
+        c.setClipName(trackId, clipId,
+                      "AI " + std::string(compositionRoleName(stored->request.role)) +
+                          " " + std::to_string(stored->candidate.variationIndex + 1));
+        return done(json{{"candidateId", candidateId},
+                         {"trackId", trackId},
+                         {"clipId", clipId},
+                         {"startBar", round2(startBar)},
+                         {"bars", stored->request.bars},
+                         {"noteCount", stored->candidate.notes.size()},
+                         {"score", scoreJson(stored->candidate.score)}});
+    }
 
     if (name == "get_clip_notes") {
         std::string trackId, clipId;
@@ -1260,68 +1740,53 @@ ToolResult callTool(EngineController& c, const std::string& name,
 
     if (name == "search_files") {
         std::string query;
+        std::string type = "all";
         double limit = 40.0;
         wantString(args, "query", query, err);
+        optString(args, "type", type, err);
         optNumber(args, "limit", limit, err);
         if (!err.empty()) return fail(err);
+        if (type != "all" && type != "audio" && type != "midi")
+            return fail("type must be audio, midi or all");
         if (ctx.sampleFolders.empty())
             return fail("the user has not added any folders to the browser, so "
                         "there is nowhere to search. Ask them to add one, or "
                         "use an installed instrument plugin instead.");
+        if (!ctx.contentCatalog)
+            return fail("the content index is unavailable; reopen the AI panel "
+                        "and try again");
 
         const std::size_t want =
             std::size_t(std::clamp(limit, 1.0, double(kSearchLimit)));
-        json found = json::array();
-        bool truncated = false;
-        std::size_t visited = 0;
+        std::optional<ContentType> filter;
+        if (type == "audio") filter = ContentType::Audio;
+        if (type == "midi") filter = ContentType::Midi;
+        std::vector<ContentItem> matches =
+            ctx.contentCatalog->search(query, filter, want + 1);
+        const CatalogIndexStatus status = ctx.contentCatalog->status();
+        const bool truncated = matches.size() > want;
+        if (truncated) matches.resize(want);
+        json files = json::array();
+        for (const ContentItem& item : matches)
+            files.push_back(contentJson(item));
+        json indexed{{"files", std::move(files)},
+                     {"indexState", toString(status.state)},
+                     {"indexedFiles", status.filesPublished}};
+        if (const std::optional<double> progress = status.progress())
+            indexed["indexProgress"] = round2(*progress);
+        if (status.running()) indexed["partial"] = true;
+        if (truncated) indexed["truncated"] = true;
+        if (indexed["files"].empty() && status.running())
+            indexed["note"] =
+                "the library index is still building and no published item "
+                "matches yet. Tell the user it is indexing, or continue with "
+                "an installed instrument.";
+        else if (indexed["files"].empty())
+            indexed["note"] =
+                "nothing matched. Try a shorter query, an extension like "
+                "'.wav', or type 'all'.";
+        return done(std::move(indexed));
 
-        for (const std::string& root : ctx.sampleFolders) {
-            if (found.size() >= want) { truncated = true; break; }
-            std::error_code ec;
-            fs::recursive_directory_iterator it(
-                platform::pathFromUtf8(root),
-                fs::directory_options::skip_permission_denied, ec);
-            if (ec) continue;
-            const fs::recursive_directory_iterator end;
-            for (; it != end; it.increment(ec)) {
-                if (ec) break;
-                // A sample library can be enormous, and a search that walks all
-                // of it would stall the request for minutes.
-                if (++visited > kSearchVisitLimit) { truncated = true; break; }
-                if (it.depth() > kSearchDepth) { it.disable_recursion_pending(); continue; }
-                if (!it->is_regular_file(ec)) continue;
-
-                const fs::path path = it->path();
-                // `isDecodableExtension` wants a bare lower-case suffix, not
-                // the ".wav" that `extension()` hands back.
-                std::string ext = platform::pathToUtf8(path.extension());
-                if (!ext.empty() && ext[0] == '.') ext.erase(0, 1);
-                std::transform(ext.begin(), ext.end(), ext.begin(),
-                               [](unsigned char ch) { return char(std::tolower(ch)); });
-                if (!audio::platform::isDecodableExtension(ext)) continue;
-                const std::string filename =
-                    platform::pathToUtf8(path.filename());
-                const std::string utf8Path = platform::pathToUtf8(path);
-                if (!matchesQuery(filename, query)) continue;
-
-                audio::platform::AudioFileInfo probed;
-                json entry{{"name", filename}, {"path", utf8Path}};
-                if (audio::platform::probeAudioFile(utf8Path, probed).isOk()) {
-                    entry["seconds"] = round2(probed.durationSeconds());
-                    entry["sampleRate"] = int(probed.sampleRate);
-                    entry["channels"] = int(probed.channels);
-                }
-                found.push_back(std::move(entry));
-                if (found.size() >= want) { truncated = true; break; }
-            }
-        }
-
-        json out{{"files", std::move(found)}};
-        if (truncated) out["truncated"] = true;
-        if (out["files"].empty())
-            out["note"] = "nothing matched. Try a shorter query, or an "
-                          "extension like \".wav\" to see what is there.";
-        return done(std::move(out));
     }
 
     if (name == "list_plugin_parameters") {
@@ -1391,14 +1856,15 @@ ToolResult callTool(EngineController& c, const std::string& name,
     }
 
     if (name == "analyze_sample") {
-        std::string filePath;
-        wantString(args, "filePath", filePath, err);
-        if (!err.empty()) return fail(err);
+        const std::optional<std::string> input =
+            authorizedInputPath(args, ctx, err);
+        if (!input) return fail(err);
+        const std::string& filePath = *input;
 
         analysis::SampleTraits traits;
         const audio::Result result = c.analyzeSampleFile(filePath, traits);
         if (!result.isOk())
-            return fail("could not read '" + filePath +
+            return fail("could not read '" + privateFileLabel(filePath) +
                         "': " + result.message());
 
         json out{{"seconds", round2(traits.level.seconds)},
@@ -1736,10 +2202,13 @@ ToolResult callTool(EngineController& c, const std::string& name,
     }
 
     if (name == "load_sampler") {
-        std::string trackId, filePath;
+        std::string trackId;
         wantString(args, "trackId", trackId, err);
-        wantString(args, "filePath", filePath, err);
         if (!err.empty()) return fail(err);
+        const std::optional<std::string> input =
+            authorizedInputPath(args, ctx, err);
+        if (!input) return fail(err);
+        const std::string& filePath = *input;
         const TrackModel* track = c.project().findTrack(trackId);
         if (!track) return fail(unknownTrack(c, trackId));
         if (!trackAccepts(track->kind, ClipKind::Midi))
@@ -1747,7 +2216,7 @@ ToolResult callTool(EngineController& c, const std::string& name,
                         "' cannot hold an instrument. Make an instrument track "
                         "with add_track.");
         if (!c.loadInstrumentSampler(trackId, filePath))
-            return fail("could not load '" + filePath +
+            return fail("could not load '" + privateFileLabel(filePath) +
                         "' — check the path, and that it is an audio file this "
                         "program can decode");
 
@@ -2125,6 +2594,12 @@ ToolResult callTool(EngineController& c, const std::string& name,
             json entry{{"bar", round2(segment.startBeats / perBar + 1.0)},
                        {"lengthBeats", round2(segment.lengthBeats)},
                        {"quality", segment.quality}};
+            entry["pitchClasses"] = segment.pitchClasses;
+            json pitchClassNames = json::array();
+            for (int pitchClass : segment.pitchClasses)
+                pitchClassNames.push_back(
+                    miditools::pitchClassName(pitchClass));
+            entry["pitchClassNames"] = std::move(pitchClassNames);
             if (segment.root >= 0) {
                 entry["root"] = miditools::pitchClassName(segment.root);
                 entry["rootPitchClass"] = segment.root;
@@ -2304,13 +2779,16 @@ ToolResult callTool(EngineController& c, const std::string& name,
     }
 
     if (name == "import_audio") {
-        std::string filePath, trackId, trackName;
+        std::string trackId, trackName;
         double atBar = 1.0;
-        wantString(args, "filePath", filePath, err);
         optString(args, "trackId", trackId, err);
         optString(args, "trackName", trackName, err);
         optNumber(args, "atBar", atBar, err);
         if (!err.empty()) return fail(err);
+        const std::optional<std::string> input =
+            authorizedInputPath(args, ctx, err);
+        if (!input) return fail(err);
+        const std::string& filePath = *input;
         if (atBar < 1.0) return fail("bars start at 1, not 0");
         if (!trackId.empty() && !c.project().findTrack(trackId))
             return fail(unknownTrack(c, trackId));
@@ -2320,13 +2798,15 @@ ToolResult callTool(EngineController& c, const std::string& name,
         if (trackId.empty()) {
             trackId = c.importAudioToNewTrack(filePath, at, trackName);
             if (trackId.empty())
-                return fail("that file could not be read as audio: " + filePath);
+                return fail("that file could not be read as audio: " +
+                            privateFileLabel(filePath));
             const TrackModel* made = c.project().findTrack(trackId);
             if (made && !made->clips.empty()) clipId = made->clips.front().id;
         } else {
             clipId = c.importAudio(filePath, trackId, at);
             if (clipId.empty())
-                return fail("that file could not be read as audio: " + filePath);
+                return fail("that file could not be read as audio: " +
+                            privateFileLabel(filePath));
         }
         return done(json{{"trackId", trackId},
                          {"clipId", clipId},
@@ -2964,6 +3444,34 @@ std::string systemPrompt(const EngineController& c, const ToolContext& ctx) {
         out += c.aiInstructions();
     }
 
+    out += "\n\nACTIVE INTERACTION MODE: ";
+    out += interactionModeName(ctx.mode);
+    switch (ctx.mode) {
+        case InteractionMode::Help:
+            out +=
+                "\nAnswer the question from inspected project state. This is "
+                "read-only: do not change, audition, save, or export anything.";
+            break;
+        case InteractionMode::Teach:
+            out +=
+                "\nTeach in short, concrete steps using this project's real "
+                "names and values. Inspect when useful, but do not perform the "
+                "steps for the user.";
+            break;
+        case InteractionMode::Do:
+            out +=
+                "\nCarry out the requested operation. Prefer reversible actions, "
+                "inspect before editing, and report the exact result.";
+            break;
+        case InteractionMode::Compose:
+            out +=
+                "\nCompose against the existing musical context. Inspect key, "
+                "harmony, rhythm, register and instrumentation first; create "
+                "reversible material and audition it, but do not delete work, "
+                "rewrite history, save, or export.";
+            break;
+    }
+
     out += "\n\nFILES THE USER ATTACHED\n";
     if (ctx.attachments.empty()) {
         out +=
@@ -2971,15 +3479,16 @@ std::string systemPrompt(const EngineController& c, const ToolContext& ctx) {
             "installed instrument plugin instead.";
     } else {
         out +=
-            "You cannot listen to these. Judge them by their name, their "
-            "length and their channel count, and pass the path to "
-            "load_sampler.\n";
-        for (const Attachment& a : ctx.attachments) {
+            "You cannot listen to these directly. Judge them by their name, "
+            "length and channel count; inspect audio with analyze_sample, then "
+            "pass the opaque contentId to load_sampler or import_audio.\n";
+        for (std::size_t i = 0; i < ctx.attachments.size(); ++i) {
+            const Attachment& a = ctx.attachments[i];
             char line[1024];
             std::snprintf(line, sizeof(line),
-                          "- %s  (%.2f s, %d Hz, %d ch)\n  path: %s\n",
+                          "- %s  (%.2f s, %d Hz, %d ch)\n  contentId: %s\n",
                           a.name.c_str(), a.seconds, a.sampleRate, a.channels,
-                          a.path.c_str());
+                          attachmentId(a, i).c_str());
             out += line;
         }
     }

@@ -89,6 +89,15 @@ add_test(NAME sampler_test COMMAND sampler_test)
 set_tests_properties(sampler_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 
+# Gravity 2: stable state/parameters, the allocation-free granular cloud,
+# six trajectories, sidechain detector, A/B attractors and feedback safety.
+add_executable(gravity_test gravity_test.cpp)
+target_link_libraries(gravity_test PRIVATE daw_controller)
+
+add_test(NAME gravity_test COMMAND gravity_test)
+set_tests_properties(gravity_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
 # The rebuilt engine: graph compilation, latency compensation, and the
 # dependency-driven parallel scheduler (correctness, determinism, scaling).
 add_executable(engine_graph_test engine_graph_test.cpp)
@@ -141,6 +150,38 @@ target_link_libraries(ai_tools_test PRIVATE daw_controller)
 
 add_test(NAME ai_tools_test COMMAND ai_tools_test)
 set_tests_properties(ai_tools_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
+add_executable(project_music_context_test project_music_context_test.cpp)
+target_link_libraries(project_music_context_test PRIVATE daw_controller)
+
+add_test(NAME project_music_context_test COMMAND project_music_context_test)
+set_tests_properties(project_music_context_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
+add_executable(content_catalog_test content_catalog_test.cpp)
+target_link_libraries(content_catalog_test PRIVATE daw_controller)
+
+add_test(NAME content_catalog_test COMMAND content_catalog_test)
+set_tests_properties(content_catalog_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
+add_executable(composition_engine_test composition_engine_test.cpp)
+target_link_libraries(composition_engine_test PRIVATE daw_controller)
+
+add_test(NAME composition_engine_test COMMAND composition_engine_test)
+set_tests_properties(composition_engine_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
+# Reproducible quality baseline for contextual melody/bass/chords/drums.
+# Run with --ratings-template <file.tsv> to prepare a human listening sheet.
+add_executable(composition_eval composition_eval.cpp)
+target_link_libraries(composition_eval PRIVATE daw_controller)
+target_compile_definitions(composition_eval PRIVATE
+    DAW_COMPOSITION_EVAL_GOLDEN="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/composition_eval_golden.tsv")
+
+add_test(NAME composition_eval COMMAND composition_eval)
+set_tests_properties(composition_eval PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 
 # A hand-run diagnostic, deliberately not a ctest target: it loads a real

@@ -23,8 +23,8 @@ namespace ui { class LevelMeter; class FaderWidget; class PanKnob;
 ///
 /// A row is a single line — colour rail, a large kind icon, the name over a
 /// strip of small M/S/monitor/record chips, then the fader and the pan knob —
-/// and it sheds the pan, then compacts the fader to a round level control when
-/// there is no width for the full throw. Folder tracks add a disclosure chevron and
+/// and it compacts level and pan into a pair of round controls when there is no
+/// width for the full throw. Folder tracks add a disclosure chevron and
 /// indent their children; a folder that does not sum has no channel at all, so
 /// it shows nothing but its name and mute/solo.
 ///
@@ -164,9 +164,8 @@ private:
     void applyHighlight();
     void applyTheme();
     void showTrackContextMenu(const QString& id, const QPoint& globalPos);
-    /// Adapt a row to the resizable column. Pan goes first; the horizontal
-    /// fader then becomes a compact round level control before it ever has to
-    /// disappear.
+    /// Adapt a row to the resizable column. Level and pan become a compact
+    /// round pair before either control has to disappear.
     void applyRowAdaptivity(const Row& row);
     /// The row a plugin drag is over, and the drop itself. Split out because
     /// the highlight and the landing must agree on which row that is.

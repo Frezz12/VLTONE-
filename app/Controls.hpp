@@ -18,6 +18,7 @@ class QMenu;
 class QPainter;
 class QAction;
 class QContextMenuEvent;
+class QKeyEvent;
 class QTimer;
 class QVariantAnimation;
 
@@ -441,7 +442,7 @@ private:
 class Knob : public QWidget {
     Q_OBJECT
 public:
-    enum class VisualStyle { Standard, SamplerDigital };
+    enum class VisualStyle { Standard, SamplerDigital, Gravity };
 
     Knob(const QString& caption, QWidget* parent = nullptr);
 
@@ -503,6 +504,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent*) override;
     void mouseDoubleClickEvent(QMouseEvent*) override;
     void wheelEvent(QWheelEvent*) override;
+    void keyPressEvent(QKeyEvent*) override;
     void contextMenuEvent(QContextMenuEvent*) override;
     void enterEvent(QEnterEvent*) override;
     void leaveEvent(QEvent*) override;

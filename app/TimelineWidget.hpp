@@ -196,6 +196,9 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw };
     /// Headless check only: the vertical centre of one visible lane, so a test
     /// can click on a lane it has just created.
     int laneCentreForTest(int lane) const;
+    /// Geometry probes for the real-mouse region drag check.
+    double regionStartSecondsForTest() const { return m_regionStart; }
+    int regionFirstLaneForTest() const { return m_regionLaneA; }
 
 signals:
     void clipSelected(const QString& trackId, const QString& clipId);
@@ -290,6 +293,10 @@ private:
     double xToSeconds(int x) const;
     int secondsToX(double seconds) const;
     double snap(double seconds, bool enabled) const;
+    /// Preserve an off-grid start on a vertical drag and give the gesture's
+    /// original position a small magnetic detent before the normal grid wins.
+    double snapMoveStart(double originalStart, double rawStart,
+                         bool enabled) const;
     bool hitTestClip(const QPoint& pos, ClipHit& out) const;
     /// Arrangement controls preview continuously. These helpers remember only
     /// a history marker and let the controller record small, gesture-specific
@@ -309,6 +316,10 @@ private:
     void finishProjectGesture();
     void beginClipPositionGesture(const QString& label);
     void cancelProjectGesture();
+    void captureClipDragOrigins();
+    bool duplicateClipDrag();
+    void moveClipDragToLane(int grabbedLane);
+    void autoScrollMarquee(const QPoint& pointer);
 
     // ── The cycle region ──
     /// What a press in the cycle strip is doing.
@@ -335,6 +346,7 @@ private:
     int visibleLaneHeight() const;
     int maxVerticalScroll() const;
     QString trackIdForLane(int lane) const;  // track id for a lane, or empty
+    int laneForTrackId(const QString& trackId) const;
     QRectF clipRect(int lane, const daw::ClipModel& clip) const;
     /// The comp editor's area under an expanded clip — empty when collapsed.
     QRectF compRect(int lane, const daw::ClipModel& clip) const;
@@ -419,6 +431,8 @@ private:
     /// Draw the committed/dragged region: a light box plus a glow over the
     /// clip portions inside it.
     void drawRegion(QPainter& p);
+    /// Faint original-boundary guides shown only while clips or a region move.
+    void drawMoveGuides(QPainter& p);
     /// Split a clip so the part inside [r0, r1] becomes its own clip; returns
     /// that piece's id (empty when the clip doesn't touch the region). The
     /// outer fragments keep their original ids.
@@ -646,9 +660,28 @@ private:
     QString m_dragTrackId;
     QString m_dragClipId;
     double m_dragGrabOffset = 0.0;  // pointer seconds − clip start
-    // Original starts of every selected clip at drag start, so the whole group
-    // moves by the same delta. Pairs of (clipId, startSeconds).
-    QVector<QPair<QString, double>> m_dragOrigStarts;
+    QPoint m_dragPressPosition;
+    bool m_duplicateDragPending = false;
+    int m_dragLaneOffset = 0;
+    struct DragOrigin {
+        QString trackId;
+        QString clipId;
+        double startSeconds = 0.0;
+        int lane = -1;
+        daw::ClipKind kind = daw::ClipKind::Audio;
+    };
+    // Stable gesture origins let the whole selection keep both its timing and
+    // its lane spacing while the live document moves underneath it.
+    QVector<DragOrigin> m_dragOrigins;
+    // The original horizontal extent of the dragged selection. These two
+    // boundaries stay put as quiet alignment guides while the contents move.
+    bool m_moveGuidesActive = false;
+    double m_moveGuideStart = 0.0;
+    double m_moveGuideEnd = 0.0;
+    int m_moveGuideLaneA = -1;
+    int m_moveGuideLaneB = -1;
+    int m_moveGuideTargetLaneA = -1;
+    int m_moveGuideTargetLaneB = -1;
 
     // Trim (edge-drag) state, captured at press so the whole gesture stays
     // relative to the clip's original geometry.
@@ -688,6 +721,7 @@ private:
 
     // Marquee (rubber-band) selection.
     bool m_marqueeActive = false;
+    bool m_marqueeScrollScheduled = false;
     QPoint m_marqueeOrigin;
     QPoint m_marqueeCurrent;
 
@@ -709,6 +743,10 @@ private:
     double m_regionMoveGrab = 0.0;          // pointer seconds at move start
     double m_regionMoveOrigStart = 0.0;
     double m_regionMoveOrigEnd = 0.0;
+    int m_regionMoveGrabLane = -1;
+    int m_regionMoveOrigLaneA = -1;
+    int m_regionMoveOrigLaneB = -1;
+    int m_regionMoveLaneOffset = 0;
     // The region the pointer last went down in. Qt delivers a double-click as
     // press → release → double-click, and the release has already cleared the
     // region by then — so its geometry is kept here for the double-click that
@@ -721,6 +759,8 @@ private:
         QString trackId;
         QString clipId;
         double origStart = 0.0;
+        int origLane = -1;
+        daw::ClipKind kind = daw::ClipKind::Audio;
     };
     std::vector<RegionPiece> m_regionPieces;
 

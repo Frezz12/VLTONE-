@@ -6,7 +6,7 @@ tags: [sound design, sampler, patch, synthesis, fx, riser]
 ---
 THE BUILT-IN SAMPLER
 load_sampler puts a sample on a track without needing any plugin installed. It is the fallback whenever list_plugins has nothing suitable, and the right choice for one-shots and drums.
-- Find material with search_files — it only looks in the folders the user added to the browser.
+- Find material with search_files — it only looks in the folders the user added to the browser. Use the returned brightness, transientness, crest factor and stereo width to compare plausible files instead of trusting names alone. Results may be partial while the background index is still running.
 - Shape it like any other plugin: list_plugin_parameters on the instrument slot, then set_insert_parameters. The envelope is what turns a sample into an instrument — a fast attack and a short decay for a pluck, a slow attack for a pad, a long release for anything that should ring.
 - Pitch the sample rather than looking for another one: one good hit tuned to the key beats three untuned ones.
 

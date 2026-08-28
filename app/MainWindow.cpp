@@ -9,6 +9,7 @@
 #include "AudioPreferences.hpp"
 #include "AccountService.hpp"
 #include "FileBrowserPanel.hpp"
+#include "GravityPanel.hpp"
 #include "Controls.hpp"
 #include "Icons.hpp"
 #include "InspectorWidget.hpp"
@@ -39,11 +40,14 @@
 #include "TrackListWidget.hpp"
 #include "FileTypes.hpp"
 #include "plugins/PluginConvert.hpp"
+#include "Internal/GravityInstance.hpp"
 #include "TransportBar.hpp"
 #include "TypingKeyboard.hpp"
 #include "UiConstants.hpp"
 #include "WebBrowserPanel.hpp"
 #include "WebPrefs.hpp"
+
+#include <array>
 
 #include <QAction>
 #include <QActionGroup>
@@ -747,6 +751,7 @@ MainWindow::MainWindow(bool openDevice, QWidget* parent)
 
     buildLayout();
     buildMenus();
+    buildSemanticCommands();
     buildStatusBar();
 
     // Start with one audio track so the arrangement isn't empty, and select it:
@@ -1209,6 +1214,13 @@ bool MainWindow::checkAutomationForTest() {
         m_timeline->ensureLaneVisible(toRow);
         QApplication::processEvents();
 
+        // A recorded clip can start between grid lines. Moving it straight to
+        // another lane must not silently quantise that placement.
+        constexpr double offGridStart = 0.137;
+        m_controller.setClipStartSeconds(lane, clip, offGridStart);
+        m_timeline->setSnapEnabled(true);
+        QApplication::processEvents();
+
         // The grip is the top of the lane's row, which is where the clip's name
         // is drawn; the curve owns everything under it.
         const int gripY = m_timeline->laneTopForTest(fromRow) + 6;
@@ -1228,6 +1240,11 @@ bool MainWindow::checkAutomationForTest() {
             std::fprintf(stderr, "dragging by the grip did not move the clip\n");
             return false;
         }
+        if (std::abs(landed->clips.front().startSeconds - offGridStart) > 1e-9) {
+            std::fprintf(stderr,
+                         "a vertical clip drag snapped its off-grid start\n");
+            return false;
+        }
         if (landed->clips.front().automation.points.size() != pointsBefore) {
             std::fprintf(stderr, "the drag changed the curve it carried\n");
             return false;
@@ -1236,6 +1253,28 @@ bool MainWindow::checkAutomationForTest() {
         const daw::TrackModel* left = m_controller.project().findTrack(lane);
         if (!left || !left->clips.empty()) {
             std::fprintf(stderr, "the clip is on both lanes at once\n");
+            return false;
+        }
+
+        // Pull it away horizontally, then return within the quiet 6 px guide
+        // detent. The clip must land back on its exact off-grid start rather
+        // than on the neighbouring grid line.
+        const QPoint landedGrip(grip.x(),
+                                m_timeline->laneTopForTest(toRow) + 6);
+        send(QEvent::MouseButtonPress, landedGrip, Qt::LeftButton,
+             Qt::LeftButton, Qt::NoModifier);
+        send(QEvent::MouseMove, landedGrip + QPoint(20, 0), Qt::NoButton,
+             Qt::LeftButton, Qt::NoModifier);
+        send(QEvent::MouseMove, landedGrip + QPoint(4, 0), Qt::NoButton,
+             Qt::LeftButton, Qt::NoModifier);
+        send(QEvent::MouseButtonRelease, landedGrip + QPoint(4, 0),
+             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::processEvents();
+        landed = m_controller.project().findTrack(second);
+        if (!landed || landed->clips.empty() ||
+            std::abs(landed->clips.front().startSeconds - offGridStart) > 1e-9) {
+            std::fprintf(stderr,
+                         "the original-position guide did not catch the clip\n");
             return false;
         }
 
@@ -2028,6 +2067,7 @@ bool MainWindow::checkCycleRegionForTest() {
             QApplication::sendEvent(m_timeline, &event);
         };
 
+        m_timeline->setSnapEnabled(false);
         m_transport->setToolIndex(3);   // Region
         pointEvent(QEvent::MouseButtonPress, QPoint(regionLeft, laneY),
                    Qt::LeftButton, Qt::LeftButton);
@@ -2039,6 +2079,10 @@ bool MainWindow::checkCycleRegionForTest() {
             std::fprintf(stderr, "the Region tool made no committed selection\n");
             return false;
         }
+        const double offGridRegionStart =
+            m_timeline->regionStartSecondsForTest();
+        const int originalRegionLane = m_timeline->regionFirstLaneForTest();
+        m_timeline->setSnapEnabled(true);
 
         const int probeLane =
             daw::visibleTracks(m_controller.project()).size() > 1 ? 1 : 0;
@@ -2068,10 +2112,10 @@ bool MainWindow::checkCycleRegionForTest() {
 
         m_transport->setToolIndex(1);   // Knife, but the region owns its body.
         const QPoint grab((regionLeft + regionRight) / 2, laneY);
-        const QPoint drop = grab + QPoint(28, 0);
+        const QPoint drop(grab.x(), m_timeline->laneCentreForTest(probeLane));
         pointEvent(QEvent::MouseButtonPress, grab, Qt::LeftButton,
                    Qt::LeftButton);
-        pointEvent(QEvent::MouseMove, grab + QPoint(6, 0), Qt::NoButton,
+        pointEvent(QEvent::MouseMove, grab + QPoint(0, 6), Qt::NoButton,
                    Qt::LeftButton);
         pointEvent(QEvent::MouseMove, drop, Qt::NoButton, Qt::LeftButton);
         pointEvent(QEvent::MouseButtonRelease, drop, Qt::LeftButton,
@@ -2079,6 +2123,17 @@ bool MainWindow::checkCycleRegionForTest() {
         if (!m_timeline->hasRegionSelection()) {
             std::fprintf(stderr,
                          "dragging a committed region with the Knife lost it\n");
+            return false;
+        }
+        if (std::abs(m_timeline->regionStartSecondsForTest() -
+                     offGridRegionStart) > 1e-9) {
+            std::fprintf(stderr,
+                         "a vertical region drag snapped its off-grid start\n");
+            return false;
+        }
+        if (probeLane != originalRegionLane &&
+            m_timeline->regionFirstLaneForTest() != probeLane) {
+            std::fprintf(stderr, "a vertical region drag stayed on its old lane\n");
             return false;
         }
 
@@ -2237,7 +2292,18 @@ bool MainWindow::checkTrackSelectionForTest() {
             std::fprintf(stderr, "the track name editor is missing\n");
             return false;
         }
-        const QPoint local(name->width() / 2, name->height() / 2);
+        const QPoint blank(name->width() - 2, name->height() / 2);
+        QMouseEvent blankName(QEvent::MouseButtonDblClick, QPointF(blank),
+                              QPointF(name->mapToGlobal(blank)),
+                              Qt::LeftButton, Qt::LeftButton,
+                              Qt::NoModifier);
+        QApplication::sendEvent(name, &blankName);
+        if (!name->isReadOnly()) {
+            std::fprintf(stderr,
+                         "double-clicking past the track text started a rename\n");
+            return false;
+        }
+        const QPoint local(4, name->height() / 2);
         QMouseEvent openName(QEvent::MouseButtonDblClick, QPointF(local),
                              QPointF(name->mapToGlobal(local)),
                              Qt::LeftButton, Qt::LeftButton,
@@ -2371,6 +2437,26 @@ bool MainWindow::checkTrackSelectionForTest() {
         }
     }
 
+    // Bare S/M are application-wide track commands, not timeline-only keys.
+    // Send them through the application filter rather than clicking a chip.
+    const auto globalTrackKey = [&](int key) {
+        QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+        eventFilter(m_timeline, &press);
+        QApplication::processEvents();
+    };
+    globalTrackKey(Qt::Key_M);
+    globalTrackKey(Qt::Key_S);
+    for (size_t i = 0; i < 3; ++i) {
+        const auto* track = m_controller.project().findTrack(ids[i]);
+        if (!track || !track->muted || !track->soloed) {
+            std::fprintf(stderr,
+                         "global S/M did not reach selected track %d\n", int(i));
+            return false;
+        }
+    }
+    globalTrackKey(Qt::Key_M);
+    globalTrackKey(Qt::Key_S);
+
     // The fader, driven by a real drag: the other selected tracks follow by
     // ratio, so the balance they started with survives.
     {
@@ -2419,9 +2505,8 @@ bool MainWindow::checkTrackSelectionForTest() {
         }
     }
 
-    // A row squeezed by indentation gives up its pan first and turns its
-    // horizontal fader into the compact round level control. The gain remains
-    // reachable even when the full throw no longer fits.
+    // A row squeezed by indentation turns level and pan into a compact round
+    // pair, so neither channel control disappears with the full fader throw.
     {
         std::vector<std::string> chain;
         std::string parent = folder->id;
@@ -2446,8 +2531,8 @@ bool MainWindow::checkTrackSelectionForTest() {
             std::fprintf(stderr, "a shallow row lost controls it had room for\n");
             return false;
         }
-        if (deepControls.second) {
-            std::fprintf(stderr, "a deeply nested row kept its pan\n");
+        if (!deepControls.second) {
+            std::fprintf(stderr, "a deeply nested row lost its compact pan\n");
             return false;
         }
         auto* compact = m_trackList->rowFaderForTest(deep);
@@ -2710,6 +2795,163 @@ bool MainWindow::checkTimelinePanForTest() {
                      int(timeMoved), int(rowsMoved));
     }
     return timeMoved && rowsMoved;
+}
+
+bool MainWindow::checkTimelineClipGesturesForTest() {
+    if (!m_timeline) return false;
+    m_timeline->setTool(TimelineWidget::Tool::Select);
+
+    std::vector<std::string> tracks;
+    for (int i = 0; i < 4; ++i) {
+        tracks.push_back(m_controller.addTrack(
+            daw::TrackKind::Midi, "Clip drag " + std::to_string(i + 1)));
+    }
+    const std::string first = m_controller.addMidiClip(tracks[0], 1.0, 1.0);
+    const std::string second = m_controller.addMidiClip(tracks[1], 1.5, 1.0);
+    syncViews();
+    QApplication::processEvents();
+
+    const auto rowOf = [&](const std::string& id) {
+        const auto& rows = daw::visibleTracks(m_controller.project());
+        for (int i = 0; i < int(rows.size()); ++i) {
+            if (m_controller.project().tracks[rows[std::size_t(i)].index].id == id)
+                return i;
+        }
+        return -1;
+    };
+    const auto send = [&](QEvent::Type type, const QPoint& at,
+                          Qt::MouseButton button, Qt::MouseButtons held,
+                          Qt::KeyboardModifiers modifiers) {
+        QMouseEvent event(type, QPointF(at),
+                          QPointF(m_timeline->mapToGlobal(at)), button, held,
+                          modifiers);
+        QApplication::sendEvent(m_timeline, &event);
+    };
+    const auto clipCentreX = [&](const std::string& track,
+                                 const std::string& clip) {
+        m_timeline->selectClips({{QString::fromStdString(track),
+                                  QString::fromStdString(clip)}});
+        int left = 0;
+        int right = 0;
+        return m_timeline->selectionSpanX(left, right) ? (left + right) / 2 : -1;
+    };
+
+    const int rowA = rowOf(tracks[0]);
+    const int rowB = rowOf(tracks[1]);
+    const int rowC = rowOf(tracks[2]);
+    m_timeline->ensureLaneVisible(rowA);
+    QApplication::processEvents();
+    const int xA = clipCentreX(tracks[0], first);
+    const int xB = clipCentreX(tracks[1], second);
+    if (rowA < 0 || rowB < 0 || rowC < 0 || xA < 0 || xB < 0) return false;
+
+    // Shift-click adds a clip of another lane/type to the current set without
+    // copying until a real drag passes the platform threshold.
+    m_timeline->selectClips({{QString::fromStdString(tracks[0]),
+                              QString::fromStdString(first)}});
+    const QPoint secondPoint(xB, m_timeline->laneCentreForTest(rowB));
+    send(QEvent::MouseButtonPress, secondPoint, Qt::LeftButton,
+         Qt::LeftButton, Qt::ShiftModifier);
+    send(QEvent::MouseButtonRelease, secondPoint, Qt::LeftButton,
+         Qt::NoButton, Qt::ShiftModifier);
+    QApplication::processEvents();
+    if (m_selection.clips().size() != 2) {
+        std::fprintf(stderr, "Shift-click selected %d clips, wanted two\n",
+                     int(m_selection.clips().size()));
+        return false;
+    }
+
+    // Move the two clips down together. Their relative lane offset survives.
+    const QPoint grab(xA, m_timeline->laneCentreForTest(rowA));
+    const QPoint drop(xA, m_timeline->laneCentreForTest(rowB));
+    send(QEvent::MouseButtonPress, grab, Qt::LeftButton, Qt::LeftButton,
+         Qt::NoModifier);
+    send(QEvent::MouseMove, drop, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    send(QEvent::MouseButtonRelease, drop, Qt::LeftButton, Qt::NoButton,
+         Qt::NoModifier);
+    QApplication::processEvents();
+    const auto hasClip = [&](const std::string& trackId,
+                             const std::string& clipId) {
+        const auto* track = m_controller.project().findTrack(trackId);
+        return track && std::any_of(
+                            track->clips.begin(), track->clips.end(),
+                            [&](const daw::ClipModel& clip) {
+                                return clip.id == clipId;
+                            });
+    };
+    if (!hasClip(tracks[1], first) || !hasClip(tracks[2], second)) {
+        const auto where = [&](const std::string& clipId) {
+            for (const auto& track : m_controller.project().tracks) {
+                if (std::any_of(track.clips.begin(), track.clips.end(),
+                                [&](const daw::ClipModel& clip) {
+                                    return clip.id == clipId;
+                                })) {
+                    return track.id;
+                }
+            }
+            return std::string("<missing>");
+        };
+        std::fprintf(stderr,
+                     "a selected clip group did not move down as a lane block "
+                     "(%s, %s; rows %d/%d/%d, y %d->%d)\n",
+                     where(first).c_str(), where(second).c_str(), rowA, rowB,
+                     rowC, grab.y(), drop.y());
+        return false;
+    }
+
+    // Shift-drag moves newly minted copies; the original ids remain in place.
+    const QPoint copiedDrop = drop + QPoint(80, 0);
+    send(QEvent::MouseButtonPress, drop, Qt::LeftButton, Qt::LeftButton,
+         Qt::ShiftModifier);
+    send(QEvent::MouseMove, copiedDrop, Qt::NoButton, Qt::LeftButton,
+         Qt::ShiftModifier);
+    send(QEvent::MouseButtonRelease, copiedDrop, Qt::LeftButton, Qt::NoButton,
+         Qt::ShiftModifier);
+    QApplication::processEvents();
+    if (!hasClip(tracks[1], first) || !hasClip(tracks[2], second) ||
+        m_controller.project().findTrack(tracks[1])->clips.size() != 2 ||
+        m_controller.project().findTrack(tracks[2])->clips.size() != 2) {
+        std::fprintf(stderr,
+                     "Shift-drag moved originals or failed to make both copies\n");
+        return false;
+    }
+    m_controller.undo();
+    if (m_controller.project().findTrack(tracks[1])->clips.size() != 1 ||
+        m_controller.project().findTrack(tracks[2])->clips.size() != 1) {
+        std::fprintf(stderr, "one undo did not remove the Shift-drag copies\n");
+        return false;
+    }
+
+    // A marquee pulled above the ruler follows the pointer toward earlier
+    // tracks instead of stopping at the top of the viewport.
+    for (int i = 0; i < 18; ++i) {
+        tracks.push_back(m_controller.addTrack(
+            daw::TrackKind::Midi, "Scroll drag " + std::to_string(i + 1)));
+    }
+    syncViews();
+    m_timeline->setVerticalScroll(100000);
+    QApplication::processEvents();
+    const int scrollBefore = m_timeline->verticalScroll();
+    const QPoint marqueeStart(m_timeline->width() - 12,
+                              m_timeline->height() - 12);
+    const QPoint marqueeOutside(marqueeStart.x(), ui::kRulerHeight - 30);
+    send(QEvent::MouseButtonPress, marqueeStart, Qt::LeftButton,
+         Qt::LeftButton, Qt::NoModifier);
+    send(QEvent::MouseMove, marqueeOutside, Qt::NoButton, Qt::LeftButton,
+         Qt::NoModifier);
+    send(QEvent::MouseButtonRelease, marqueeOutside, Qt::LeftButton,
+         Qt::NoButton, Qt::NoModifier);
+    QApplication::processEvents();
+    if (scrollBefore <= 0 || m_timeline->verticalScroll() >= scrollBefore) {
+        std::fprintf(stderr, "a marquee above the ruler did not auto-scroll up\n");
+        return false;
+    }
+
+    m_timeline->clearClipSelection();
+    for (const std::string& track : tracks) m_controller.removeTrack(track);
+    syncViews();
+    QApplication::processEvents();
+    return true;
 }
 
 bool MainWindow::checkLiveTempoForTest() {
@@ -3717,6 +3959,7 @@ void MainWindow::buildLayout() {
     // same top edge as the transport and becomes their shared right boundary.
     m_aiPanel = new AiChatPanel(&m_controller, central);
     m_aiPanel->setSelectionModel(&m_selection);
+    m_aiPanel->setCommandManager(m_shortcuts);
     m_aiWidth = ui::aiprefs::width();
     m_aiPanel->setFixedWidth(m_aiWidth);
     connect(m_aiPanel, &AiChatPanel::statusMessage, this,
@@ -4971,6 +5214,189 @@ QAction* MainWindow::addCommand(QMenu* menu, const QString& id,
     return action;
 }
 
+void MainWindow::buildSemanticCommands() {
+    using Risk = ShortcutManager::Risk;
+    const QString kTransport = tr("Transport"), kEdit = tr("Edit"),
+                  kView = tr("View"), kTools = tr("Tools"),
+                  kBrowser = tr("Browser"), kTrack = tr("Track"),
+                  kEditors = tr("Editors");
+
+    // These actions do not need another menu. Adding them to the window gives
+    // a user-assigned shortcut the same scope as the fixed toolbar control;
+    // triggering them calls the control's existing state transition.
+    auto bind = [this](const char* rawId, const QString& label,
+                       const QString& category, const QString& description,
+                       const QString& helpId, Risk risk, auto&& run) {
+        const QString id = QString::fromLatin1(rawId);
+        auto* action = new QAction(label, this);
+        QWidget::addAction(action);
+        ShortcutManager::Metadata metadata;
+        metadata.description = description;
+        metadata.helpId = helpId;
+        metadata.risk = risk;
+        metadata.modes = ShortcutManager::AllModes;
+        m_shortcuts->registerCommand(id, label, category, {}, action,
+                                     std::move(metadata));
+        connect(action, &QAction::triggered, this,
+                std::forward<decltype(run)>(run));
+        return action;
+    };
+
+    bind("transport.rewindBar", tr("Rewind One Bar"), kTransport,
+         tr("Move the playhead backward by one bar."),
+         QStringLiteral("transport.navigation"), Risk::Safe,
+         [this] { onNudge(-1); });
+    bind("transport.forwardBar", tr("Forward One Bar"), kTransport,
+         tr("Move the playhead forward by one bar."),
+         QStringLiteral("transport.navigation"), Risk::Safe,
+         [this] { onNudge(1); });
+    bind("view.timeBars", tr("Show Position as Bars"), kView,
+         tr("Display the transport and ruler position in bars and beats."),
+         QStringLiteral("transport.time-display"), Risk::Safe,
+         [this] { m_transport->setTimeDisplayBars(true); });
+    bind("view.timeClock", tr("Show Position as Time"), kView,
+         tr("Display the transport and ruler position as clock time."),
+         QStringLiteral("transport.time-display"), Risk::Safe,
+         [this] { m_transport->setTimeDisplayBars(false); });
+    bind("edit.snapOn", tr("Enable Snap"), kEdit,
+         tr("Make arrangement edits snap to the current grid."),
+         QStringLiteral("arrangement.snap"), Risk::Safe,
+         [this] { m_transport->setSnapEnabled(true); });
+    bind("edit.snapOff", tr("Disable Snap"), kEdit,
+         tr("Allow free arrangement edits between grid lines."),
+         QStringLiteral("arrangement.snap"), Risk::Safe,
+         [this] { m_transport->setSnapEnabled(false); });
+
+    static constexpr std::array<const char*, 9> kGridCommandIds = {
+        "edit.grid.off", "edit.grid.whole", "edit.grid.half",
+        "edit.grid.quarter", "edit.grid.eighth", "edit.grid.sixteenth",
+        "edit.grid.thirtySecond", "edit.grid.quarterTriplet",
+        "edit.grid.eighthTriplet"};
+    const auto& divisions = ui::gridDivisions();
+    for (int i = 0; i < int(kGridCommandIds.size()) && i < divisions.size(); ++i) {
+        const QString label = i == 0
+            ? tr("Turn Grid Off")
+            : tr("Set Grid to %1").arg(divisions[i].name);
+        bind(kGridCommandIds[std::size_t(i)], label, kEdit,
+             i == 0
+                 ? tr("Turn off the arrangement grid division.")
+                 : tr("Use %1 as the arrangement grid division.")
+                       .arg(divisions[i].name),
+             QStringLiteral("arrangement.grid"), Risk::Safe,
+             [this, i] { m_transport->setGridIndex(i); });
+    }
+
+    static constexpr std::array<const char*, 6> kSecondaryToolIds = {
+        "tool.secondarySelect", "tool.secondaryKnife",
+        "tool.secondaryEraser", "tool.secondaryRegion",
+        "tool.secondaryMute", "tool.secondaryDraw"};
+    const QStringList secondaryTools = {
+        tr("Pointer"), tr("Knife"), tr("Eraser"), tr("Region"),
+        tr("Mute"), tr("Draw")};
+    for (int i = 0; i < int(kSecondaryToolIds.size()); ++i) {
+        bind(kSecondaryToolIds[std::size_t(i)],
+             tr("Use %1 as Secondary Tool").arg(secondaryTools[i]), kTools,
+             tr("Choose the %1 tool used while the secondary-tool modifier is held.")
+                 .arg(secondaryTools[i]),
+             QStringLiteral("arrangement.secondary-tool"), Risk::Safe,
+             [this, i] { m_transport->setSecondaryToolIndex(i); });
+    }
+
+    bind("transport.playbackResume", tr("Resume Playback from Stop Position"),
+         kTransport, tr("Make Play continue from the current stopped position."),
+         QStringLiteral("transport.playback-start"), Risk::Safe,
+         [this] { m_toolPanel->setRestartMode(false); });
+    bind("transport.playbackRestart", tr("Restart Playback from Anchor"),
+         kTransport, tr("Make Play restart from the anchored position."),
+         QStringLiteral("transport.playback-start"), Risk::Safe,
+         [this] { m_toolPanel->setRestartMode(true); });
+    bind("transport.playFromClipOn", tr("Enable Play from Selected Clip"),
+         kTransport, tr("Loop playback over the selected clip."),
+         QStringLiteral("transport.play-from-clip"), Risk::Safe,
+         [this] { m_toolPanel->setPlayFromClip(true); });
+    bind("transport.playFromClipOff", tr("Disable Play from Selected Clip"),
+         kTransport, tr("Stop constraining playback to the selected clip."),
+         QStringLiteral("transport.play-from-clip"), Risk::Safe,
+         [this] { m_toolPanel->setPlayFromClip(false); });
+
+    bind("view.automation.showAll", tr("Show Automation for All Tracks"), kView,
+         tr("Reveal automation lanes, creating a volume lane where needed."),
+         QStringLiteral("automation.visibility"), Risk::Reversible,
+         [this] { setAllAutomationLanesVisible(true); });
+    bind("view.automation.hideAll", tr("Hide Automation for All Tracks"), kView,
+         tr("Hide every track's automation lanes without deleting curves."),
+         QStringLiteral("automation.visibility"), Risk::Reversible,
+         [this] { setAllAutomationLanesVisible(false); });
+    bind("tool.automationCreationOn", tr("Enable Automation Creation Mode"),
+         kTools, tr("Latch the mode that creates automation from a control."),
+         QStringLiteral("automation.creation-mode"), Risk::Safe,
+         [this] {
+             m_automationCreationLatched = true;
+             updateAutomationCreationMode();
+         });
+    bind("tool.automationCreationOff", tr("Disable Automation Creation Mode"),
+         kTools, tr("Release the latched automation-creation mode."),
+         QStringLiteral("automation.creation-mode"), Risk::Safe,
+         [this] {
+             m_automationCreationLatched = false;
+             updateAutomationCreationMode();
+         });
+
+    bind("track.clearMutes", tr("Unmute Every Track"), kTrack,
+         tr("Clear the mute state from every track."),
+         QStringLiteral("tracks.mute-solo"), Risk::Destructive,
+         [this] { onClearMutes(); });
+
+    bind("browser.addFolder", tr("Add Browser Folder…"), kBrowser,
+         tr("Open the folder picker and grant the chosen folder to the browser."),
+         QStringLiteral("browser.folders"), Risk::ExternalSideEffect,
+         [this] { m_browser->requestAddFolder(); });
+    bind("browser.refresh", tr("Refresh Browser Folders"), kBrowser,
+         tr("Re-read the files in the browser's granted folders."),
+         QStringLiteral("browser.folders"), Risk::Safe,
+         [this] { m_browser->refreshFolders(); });
+    bind("browser.settings", tr("Open Browser Settings"), kBrowser,
+         tr("Open settings for browser folders, audition and placement."),
+         QStringLiteral("browser.settings"), Risk::Safe,
+         [this] { openSettings(SettingsWindow::kBrowserTab); });
+    QAction* preview = bind(
+        "browser.previewToggle", tr("Play or Stop Browser Selection"), kBrowser,
+        tr("Audition the selected audio file, or stop its current audition."),
+        QStringLiteral("browser.audition"), Risk::Safe,
+        [this] { m_browser->togglePreview(); });
+    preview->setEnabled(m_browser->hasPreviewableSelection());
+    connect(m_browser, &FileBrowserPanel::previewAvailabilityChanged, preview,
+            [preview](bool available) { preview->setEnabled(available); });
+    bind("browser.previewLoopOn", tr("Loop Browser Preview"), kBrowser,
+         tr("Repeat browser auditions until they are stopped."),
+         QStringLiteral("browser.audition"), Risk::Safe,
+         [this] { m_browser->setPreviewLoopEnabled(true); });
+    bind("browser.previewLoopOff", tr("Play Browser Preview Once"), kBrowser,
+         tr("Play browser auditions once instead of looping."),
+         QStringLiteral("browser.audition"), Risk::Safe,
+         [this] { m_browser->setPreviewLoopEnabled(false); });
+    bind("browser.autoPreviewOn", tr("Enable Browser Auto-preview"), kBrowser,
+         tr("Audition an audio file automatically when it is selected."),
+         QStringLiteral("browser.audition"), Risk::Safe,
+         [this] { m_browser->setAutoPreviewEnabled(true); });
+    bind("browser.autoPreviewOff", tr("Disable Browser Auto-preview"), kBrowser,
+         tr("Select browser files silently until Play is requested."),
+         QStringLiteral("browser.audition"), Risk::Safe,
+         [this] { m_browser->setAutoPreviewEnabled(false); });
+
+    QAction* openEditor = bind(
+        "editor.openSelected", tr("Open Editor for Selection"), kEditors,
+        tr("Open the Piano Roll, Sample, Automation or Pattern editor for the current selection."),
+        QStringLiteral("editors.open-selection"), Risk::Safe,
+        [this] { openSelectedEditor(); });
+    const auto updateEditorAvailability = [this, openEditor] {
+        openEditor->setEnabled(canOpenSelectedEditor());
+    };
+    connect(&m_selection, &ui::SelectionModel::changed, openEditor,
+            updateEditorAvailability);
+    updateEditorAvailability();
+}
+
 void MainWindow::buildMenus() {
     const QString kFile = tr("File"), kEdit = tr("Edit"), kTrack = tr("Track"),
                   kTransport = tr("Transport"), kView = tr("View"),
@@ -5703,6 +6129,94 @@ bool MainWindow::openDemoSampler(const QString& samplePath) {
     return false;
 }
 
+bool MainWindow::openDemoGravity() {
+    const auto gravity = m_controller.pluginManager().find(
+        daw::plugins::Format::Internal, "daw.gravity");
+    if (!gravity) return false;
+
+    for (const auto& track : m_controller.project().tracks) {
+        if (track.kind != daw::TrackKind::Audio) continue;
+        const std::string slot = m_controller.addInsert(track.id, *gravity, 0);
+        if (slot.empty()) return false;
+        if (qEnvironmentVariableIsSet("DAW_SHOT_GRAVITY_DUAL"))
+            m_controller.setInsertParameter(track.id, slot, "pitch.spread", 7.0);
+        onTracksChanged();
+        openPluginEditor(QString::fromStdString(track.id),
+                         QString::fromStdString(slot));
+        if (qEnvironmentVariableIsSet("DAW_SHOT_GRAVITY")) {
+            // The offscreen screenshot runner has no audio device callback.
+            // Exercise the real DSP here so every dot in the captured field
+            // still comes from the instance's grain-spawn telemetry.
+            auto* instance = dynamic_cast<daw::plugins::gravity::GravityInstance*>(
+                m_controller.insertInstance(track.id, slot));
+            if (instance) {
+                constexpr std::uint32_t frames = 256;
+                std::array<float, frames> inLeft{};
+                std::array<float, frames> inRight{};
+                std::array<float, frames> outLeft{};
+                std::array<float, frames> outRight{};
+                const float* inputs[] = {inLeft.data(), inRight.data()};
+                float* outputs[] = {outLeft.data(), outRight.data()};
+                const bool preparedHere = !instance->isActive();
+                if (preparedHere) instance->activate({48000.0, frames, true});
+                instance->startProcessing();
+                daw::plugins::PluginProcessContext context;
+                context.inputs = inputs;
+                context.inputChannels = 2;
+                context.outputs = outputs;
+                context.outputChannels = 2;
+                context.frames = frames;
+                context.transport.tempo = 120.0;
+                for (int block = 0; block < 4200; ++block) {
+                    for (std::uint32_t i = 0; i < frames; ++i) {
+                        const float sample = ((block * int(frames) + int(i)) %
+                                              2400 == 0) ? 0.42f : 0.0f;
+                        inLeft[i] = sample;
+                        inRight[i] = sample * 0.78f;
+                    }
+                    instance->process(context);
+                }
+                if (preparedHere) {
+                    instance->stopProcessing();
+                    instance->deactivate();
+                }
+            }
+            m_controller.play();
+        }
+        return true;
+    }
+    return false;
+}
+
+bool MainWindow::checkGravityPanelForTest() {
+    if (!openDemoGravity()) return false;
+    QElapsedTimer wait;
+    wait.start();
+    do {
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+        for (PluginEditorWindow* editor : std::as_const(m_pluginEditors)) {
+            if (GravityPanel* panel = editor->findChild<GravityPanel*>())
+                return panel->checkForTest();
+        }
+        QThread::msleep(1);
+    } while (wait.elapsed() < 1000);
+    if (qEnvironmentVariableIsSet("DAW_SELFTEST_VERBOSE")) {
+        std::fprintf(stderr,
+                     "Gravity UI selftest: editor did not become ready\n");
+    }
+    return false;
+}
+
+void MainWindow::resizeGravityForShot() {
+    for (PluginEditorWindow* editor : std::as_const(m_pluginEditors)) {
+        if (!editor || editor->pluginUid() != QStringLiteral("daw.gravity"))
+            continue;
+        if (InternalEditorFrame* frame =
+                m_internalEditorFrames.value(editor, nullptr))
+            frame->resizeForContent(QSize(820, 638));
+    }
+}
+
 bool MainWindow::checkTypingKeyboard() {
     if (!m_typingKeyboard || !m_shortcuts) return false;
 
@@ -5827,7 +6341,103 @@ bool MainWindow::checkLayoutIndependentShortcuts() {
     QApplication::sendEvent(m_timeline ? static_cast<QWidget*>(m_timeline) : this,
                             &press);
     if (production) production->setEnabled(productionEnabled);
-    return capturedAsPhysicalB && triggered == 1;
+
+    // The fixed toolbar controls are not menu items, but they are first-class
+    // commands: searchable metadata, stable ids, and the same outcome as the
+    // visible control. Keep the complete coverage list here so a renamed or
+    // accidentally unregistered button fails the existing runnable selftest.
+    const QStringList semanticIds = {
+        QStringLiteral("transport.rewindBar"),
+        QStringLiteral("transport.forwardBar"),
+        QStringLiteral("view.timeBars"),
+        QStringLiteral("view.timeClock"),
+        QStringLiteral("edit.snapOn"),
+        QStringLiteral("edit.snapOff"),
+        QStringLiteral("edit.grid.off"),
+        QStringLiteral("edit.grid.whole"),
+        QStringLiteral("edit.grid.half"),
+        QStringLiteral("edit.grid.quarter"),
+        QStringLiteral("edit.grid.eighth"),
+        QStringLiteral("edit.grid.sixteenth"),
+        QStringLiteral("edit.grid.thirtySecond"),
+        QStringLiteral("edit.grid.quarterTriplet"),
+        QStringLiteral("edit.grid.eighthTriplet"),
+        QStringLiteral("tool.secondarySelect"),
+        QStringLiteral("tool.secondaryKnife"),
+        QStringLiteral("tool.secondaryEraser"),
+        QStringLiteral("tool.secondaryRegion"),
+        QStringLiteral("tool.secondaryMute"),
+        QStringLiteral("tool.secondaryDraw"),
+        QStringLiteral("transport.playbackResume"),
+        QStringLiteral("transport.playbackRestart"),
+        QStringLiteral("transport.playFromClipOn"),
+        QStringLiteral("transport.playFromClipOff"),
+        QStringLiteral("view.automation.showAll"),
+        QStringLiteral("view.automation.hideAll"),
+        QStringLiteral("tool.automationCreationOn"),
+        QStringLiteral("tool.automationCreationOff"),
+        QStringLiteral("track.clearMutes"),
+        QStringLiteral("browser.addFolder"),
+        QStringLiteral("browser.refresh"),
+        QStringLiteral("browser.settings"),
+        QStringLiteral("browser.previewToggle"),
+        QStringLiteral("browser.previewLoopOn"),
+        QStringLiteral("browser.previewLoopOff"),
+        QStringLiteral("browser.autoPreviewOn"),
+        QStringLiteral("browser.autoPreviewOff"),
+        QStringLiteral("editor.openSelected")};
+    bool catalogComplete = true;
+    for (const QString& id : semanticIds) {
+        const ShortcutManager::Command* command = m_shortcuts->command(id);
+        catalogComplete = catalogComplete && command && command->action &&
+            command->action->objectName() == id &&
+            !command->metadata.description.isEmpty() &&
+            !command->metadata.helpId.isEmpty() &&
+            command->metadata.risk != ShortcutManager::Risk::Unknown;
+    }
+    std::set<QString> uniqueIds;
+    bool idsUnique = true;
+    for (const ShortcutManager::Command& command : m_shortcuts->commands())
+        idsUnique = uniqueIds.insert(command.id).second && idsUnique;
+
+    const bool snapBefore = m_transport->snapEnabled();
+    const bool snapCommands =
+        m_shortcuts->invoke(QStringLiteral("edit.snapOff")) &&
+        !m_transport->snapEnabled() &&
+        m_shortcuts->invoke(QStringLiteral("edit.snapOn")) &&
+        m_transport->snapEnabled();
+    m_transport->setSnapEnabled(snapBefore);
+
+    const bool barsBefore = m_transport->showsBars();
+    const bool timeCommands =
+        m_shortcuts->invoke(QStringLiteral("view.timeClock")) &&
+        !m_transport->showsBars() &&
+        m_shortcuts->invoke(QStringLiteral("view.timeBars")) &&
+        m_transport->showsBars();
+    m_transport->setTimeDisplayBars(barsBefore);
+
+    const int gridBefore = m_transport->gridIndex();
+    const bool gridCommand =
+        m_shortcuts->invoke(QStringLiteral("edit.grid.eighth")) &&
+        m_transport->gridIndex() == 4;
+    m_transport->setGridIndex(gridBefore);
+
+    const int secondaryBefore = m_transport->secondaryToolIndex();
+    const bool secondaryCommand =
+        m_shortcuts->invoke(QStringLiteral("tool.secondaryKnife")) &&
+        m_transport->secondaryToolIndex() == 1;
+    m_transport->setSecondaryToolIndex(secondaryBefore);
+
+    const bool semanticCommands = catalogComplete && idsUnique && snapCommands &&
+                                  timeCommands && gridCommand && secondaryCommand;
+    if (!semanticCommands) {
+        std::fprintf(stderr,
+                     "semantic command catalog: complete=%d unique=%d "
+                     "snap=%d time=%d grid=%d secondary=%d\n",
+                     int(catalogComplete), int(idsUnique), int(snapCommands),
+                     int(timeCommands), int(gridCommand), int(secondaryCommand));
+    }
+    return capturedAsPhysicalB && triggered == 1 && semanticCommands;
 }
 
 bool MainWindow::checkFileDrop(const QStringList& paths, int expectedClips) {
@@ -6619,6 +7229,65 @@ void MainWindow::openDemoPattern(bool showEditor) {
     if (showEditor) openPattern(QString::fromStdString(patternId));
 }
 
+bool MainWindow::canOpenSelectedEditor() const {
+    const ui::ClipSel clip = m_selection.singleClip();
+    if (!clip.clipId.isEmpty()) {
+        const daw::TrackModel* track =
+            m_controller.project().findTrack(clip.trackId.toStdString());
+        if (!track) return false;
+        return std::any_of(track->clips.cbegin(), track->clips.cend(),
+                           [&clip](const daw::ClipModel& candidate) {
+                               return candidate.id == clip.clipId.toStdString();
+                           });
+    }
+    const QString trackId = m_selection.singleTrack();
+    const daw::TrackModel* track =
+        m_controller.project().findTrack(trackId.toStdString());
+    return track && track->kind == daw::TrackKind::Pattern;
+}
+
+void MainWindow::openSelectedEditor() {
+    const ui::ClipSel selected = m_selection.singleClip();
+    if (!selected.clipId.isEmpty()) {
+        const daw::TrackModel* track =
+            m_controller.project().findTrack(selected.trackId.toStdString());
+        if (track) {
+            const auto found = std::find_if(
+                track->clips.cbegin(), track->clips.cend(),
+                [&selected](const daw::ClipModel& clip) {
+                    return clip.id == selected.clipId.toStdString();
+                });
+            if (found != track->clips.cend()) {
+                switch (found->kind) {
+                    case daw::ClipKind::Midi:
+                        openPianoRoll(selected.trackId, selected.clipId);
+                        return;
+                    case daw::ClipKind::Audio:
+                        openSampleEditor(selected.trackId, selected.clipId);
+                        return;
+                    case daw::ClipKind::Automation:
+                        openAutomationEditor(selected.trackId, selected.clipId);
+                        return;
+                    case daw::ClipKind::Pattern:
+                        openPattern(selected.trackId);
+                        return;
+                }
+            }
+        }
+    } else {
+        const QString trackId = m_selection.singleTrack();
+        const daw::TrackModel* track =
+            m_controller.project().findTrack(trackId.toStdString());
+        if (track && track->kind == daw::TrackKind::Pattern) {
+            openPattern(trackId);
+            return;
+        }
+    }
+    statusBar()->showMessage(
+        tr("Select a MIDI, audio, automation or Pattern clip to open its editor"),
+        3000);
+}
+
 void MainWindow::openPianoRoll(const QString& trackId, const QString& clipId) {
     if (!m_pianoRoll) {
         if (!m_editorHost) return;
@@ -7112,8 +7781,17 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* ev) {
             // Never while typing: a name field would swallow half its letters.
             if (auto* focus = QApplication::focusWidget();
                 qobject_cast<QLineEdit*>(focus) ||
-                qobject_cast<QAbstractSpinBox*>(focus)) {
+                qobject_cast<QAbstractSpinBox*>(focus) ||
+                qobject_cast<QPlainTextEdit*>(focus) ||
+                qobject_cast<QTextEdit*>(focus)) {
                 break;
+            }
+            const Qt::KeyboardModifiers modifiers =
+                key->modifiers() & ~Qt::KeypadModifier;
+            if (down && modifiers == Qt::NoModifier &&
+                (key->key() == Qt::Key_S || key->key() == Qt::Key_M) &&
+                toggleSelectedTrackState(key->key() == Qt::Key_S)) {
+                return true;
             }
             // T, not A: A opens a track's automation lanes, which is a thing
             // reached far more often than auditioning one layer of a comp.
@@ -7693,6 +8371,53 @@ QStringList MainWindow::selectedTrackIds() const {
     return ids;
 }
 
+bool MainWindow::toggleSelectedTrackState(bool solo) {
+    std::vector<std::string> targets;
+    const auto& project = m_controller.project();
+    for (const QString& selectedId : selectedTrackIds()) {
+        const auto* selected = project.findTrack(selectedId.toStdString());
+        if (!selected) continue;
+        const std::string id = daw::isAutomationLane(*selected)
+                                   ? selected->parentId
+                                   : selected->id;
+        if (id.empty() || std::find(targets.begin(), targets.end(), id) !=
+                              targets.end()) {
+            continue;
+        }
+        targets.push_back(id);
+    }
+    if (targets.empty()) return false;
+
+    const bool allSet = std::all_of(
+        targets.begin(), targets.end(), [&](const std::string& id) {
+            const auto* track = project.findTrack(id);
+            return track && (solo ? track->soloed : track->muted);
+        });
+    const bool next = !allSet;
+    for (const std::string& id : targets) {
+        const auto* track = project.findTrack(id);
+        if (!track) continue;
+        if (solo) {
+            m_controller.setTrackSoloed(id, next);
+            continue;
+        }
+        m_controller.setTrackMuted(id, next);
+        if (daw::isFolder(*track) && !daw::carriesAudio(*track)) {
+            for (const std::string& child : daw::subtreeOf(project, id))
+                m_controller.setTrackMuted(child, next);
+        }
+    }
+
+    if (m_trackList) m_trackList->syncTrackValues();
+    if (m_mixer) m_mixer->syncFromModel();
+    if (m_inspector) m_inspector->syncFromModel();
+    if (m_contextPanel) m_contextPanel->refresh();
+    if (m_timeline) m_timeline->update();
+    m_selection.refresh();
+    markDirty();
+    return true;
+}
+
 void MainWindow::onNewFolder() {
     const QStringList selection = selectedTrackIds();
     FolderKindDialog dialog(int(selection.size()), this);
@@ -7879,6 +8604,12 @@ void MainWindow::onClearSolos() {
     for (const auto& t : m_controller.project().tracks) {
         if (t.soloed) m_controller.setTrackSoloed(t.id, false);
     }
+    syncViews();
+    markDirty();
+}
+
+void MainWindow::onClearMutes() {
+    m_controller.clearAllMutes();
     syncViews();
     markDirty();
 }

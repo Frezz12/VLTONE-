@@ -110,6 +110,50 @@ int main() {
     const std::string trackId = ctrl.addTrack(daw::TrackKind::Audio, "Audio");
     const std::string clipId = ctrl.importAudio(tonePath, trackId, 0.0);
 
+    std::string gravityTrackId;
+    std::string gravityInsertId;
+    daw::AutomationTarget gravityAutomation;
+    // ── Built-in Gravity follows the ordinary insert/project pipeline ──
+    {
+        const auto gravity = ctrl.pluginManager().find(
+            daw::plugins::Format::Internal, "daw.gravity");
+        check(gravity.has_value() && !gravity->isInstrument,
+              "Gravity appears in the built-in effect catalogue");
+        gravityTrackId = ctrl.addTrack(daw::TrackKind::Audio, "Gravity Test");
+        gravityInsertId = gravity
+            ? ctrl.addInsert(gravityTrackId, *gravity)
+            : std::string{};
+        check(!gravityInsertId.empty() &&
+                  ctrl.insertInstance(gravityTrackId, gravityInsertId) != nullptr,
+              "Gravity adds as a live insert");
+        ctrl.setInsertParameter(gravityTrackId, gravityInsertId, "pitch", 4.5);
+        ctrl.setInsertParameter(gravityTrackId, gravityInsertId, "mass", 0.8);
+        ctrl.setInsertParameter(gravityTrackId, gravityInsertId,
+                                "detector.source", 1.0);
+        check(ctrl.insertSupportsSidechain(gravityTrackId, gravityInsertId),
+              "Gravity exposes its optional detector sidechain");
+
+        gravityAutomation.kind = daw::AutomationTargetKind::PluginParameter;
+        gravityAutomation.channelId = gravityTrackId;
+        gravityAutomation.slotId = gravityInsertId;
+        gravityAutomation.parameterId = "gravity";
+        const auto automation = ctrl.ensureAutomation(gravityAutomation);
+        check(!automation.first.empty() && !automation.second.empty(),
+              "Gravity parameters can create automation");
+
+        const std::string duplicate = ctrl.duplicateTrack(gravityTrackId, true);
+        const std::vector<daw::InsertModel>* copied = ctrl.channelInserts(duplicate);
+        check(copied && copied->size() == 1 &&
+                  copied->front().uid == "daw.gravity" &&
+                  copied->front().id != gravityInsertId &&
+                  std::fabs(ctrl.insertParameter(duplicate, copied->front().id,
+                                                 "pitch") - 4.5) < 1e-6 &&
+                  std::fabs(ctrl.insertParameter(duplicate, copied->front().id,
+                                                 "mass") - 0.8) < 1e-6,
+              "duplicating a track clones Gravity with independent state");
+        ctrl.removeTrack(duplicate);
+    }
+
     const std::string dryPath = (dir / "dry.wav").string();
     check(ctrl.exportMixdown(dryPath, false).isOk(), "exports the dry mixdown");
     const float dryPeak = peakOf(dryPath);
@@ -645,6 +689,25 @@ int main() {
         reloaded.pluginManager().waitForScan();
 
         check(reloaded.openProject(packageDir).isOk(), "the project reloads");
+        const std::vector<daw::InsertModel>* reloadedGravity =
+            reloaded.channelInserts(gravityTrackId);
+        check(reloadedGravity && reloadedGravity->size() == 1 &&
+                  reloadedGravity->front().uid == "daw.gravity" &&
+                  std::fabs(reloaded.insertParameter(
+                                gravityTrackId, reloadedGravity->front().id,
+                                "pitch") - 4.5) < 1e-6 &&
+                  std::fabs(reloaded.insertParameter(
+                                gravityTrackId, reloadedGravity->front().id,
+                                "mass") - 0.8) < 1e-6 &&
+                  std::fabs(reloaded.insertParameter(
+                                gravityTrackId, reloadedGravity->front().id,
+                                "detector.source") - 1.0) < 1e-6,
+              "Gravity insert and advanced parameters survive project reload");
+        const auto reloadedGravityAutomation =
+            reloaded.findAutomation(gravityAutomation);
+        check(!reloadedGravityAutomation.first.empty() &&
+                  !reloadedGravityAutomation.second.empty(),
+              "Gravity automation target survives project reload");
         const std::vector<daw::InsertModel>* slots =
             reloaded.channelInserts(reloaded.project().tracks.front().id);
         check(slots && slots->size() == 1, "the insert slot came back");

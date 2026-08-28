@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -29,14 +30,37 @@ class EngineController;
 /// that is sent on every single request.
 namespace daw::ai {
 
+class ContentCatalog;
+class CompositionCandidateStore;
+
 /// One tool as the model sees it. `inputSchema` is JSON Schema, which both
 /// providers accept — Anthropic as `input_schema`, OpenAI as
 /// `function.parameters`.
 struct ToolSpec {
+    enum class Effect {
+        ReadOnly,
+        ReversibleEdit,
+        DestructiveEdit,
+        History,
+        LiveControl,
+        ExternalSideEffect,
+    };
+
     std::string name;
     std::string description;
     nlohmann::json inputSchema;
+    Effect effect = Effect::ReadOnly;
 };
+
+/// The user's intent controls both the instructions and the capabilities sent
+/// to the provider. Help/Teach cannot mutate a project; Compose can build and
+/// audition material but cannot delete, save/export, or rewrite history.
+enum class InteractionMode { Help, Teach, Do, Compose };
+
+InteractionMode inferInteractionMode(const std::string& prompt);
+const char* interactionModeName(InteractionMode mode);
+bool toolAllowedInMode(const ToolSpec& tool, InteractionMode mode);
+std::vector<ToolSpec> toolSpecsForMode(InteractionMode mode);
 
 /// The registry, built once. Stable order, so a cached prompt stays cached.
 const std::vector<ToolSpec>& toolSpecs();
@@ -62,6 +86,7 @@ struct Attachment {
     double seconds = 0.0;
     int sampleRate = 0;
     int channels = 0;
+    std::string contentId;
 };
 
 /// What the user is looking at.
@@ -74,6 +99,8 @@ struct Attachment {
 struct Focus {
     std::string trackId;
     std::string clipId;
+    std::vector<std::string> trackIds;
+    std::vector<std::string> clipIds;
 };
 
 /// Everything a tool call needs that is not in the document.
@@ -83,6 +110,7 @@ struct Focus {
 /// handed down rather than reached for.
 struct ToolContext {
     Focus focus;
+    InteractionMode mode = InteractionMode::Do;
     /// Asked before anything that destroys work — deleting a track, a clip or
     /// an effect. Returning false refuses the call, and the model is told why.
     /// Unset means allow, which is what a test wants and what the panel falls
@@ -91,6 +119,15 @@ struct ToolContext {
     /// Where `search_files` may look — the browser's folders. Nothing outside
     /// them is ever listed, which is the same promise the browser makes.
     std::vector<std::string> sampleFolders;
+    std::shared_ptr<ContentCatalog> contentCatalog;
+    std::shared_ptr<CompositionCandidateStore> compositionCandidates;
+    /// Semantic UI command catalog supplied by the Qt shell. Help/Teach can
+    /// discover where an action lives; Do may invoke one after risk checks in
+    /// the shell. The controller layer stays independent of QAction.
+    std::function<nlohmann::json(const std::string&, InteractionMode)>
+        searchCommands;
+    std::function<bool(const std::string&, InteractionMode, std::string&)>
+        invokeCommand;
     std::vector<Attachment> attachments;
     /// The instructions in force: the main prompt and the playbooks the model
     /// may load. Null means the text compiled into this build, which is what a

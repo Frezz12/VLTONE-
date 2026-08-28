@@ -5,7 +5,9 @@ use_when: writing a melody, a lead line, a topline, a hook, a riff or a counter-
 tags: [melody, lead, hook, topline, riff]
 ---
 BEFORE YOU WRITE
-Call analyze_harmony. A melody is heard against the chords under it: the same note is a resolution over one chord and a clash over another. If nothing is there, choose a key and say so.
+Call inspect_music_context when available; otherwise call analyze_harmony, then get_clip_notes for every existing melody or lead in the target range. A melody is heard against the chords under it, and a counter-melody needs the activity/rest pattern of the first line. If nothing harmonic is there, choose a key and say so.
+
+Use compose_candidates with role melody for the first draft. Compare its explainable scores, not just note count. Prefer the strongest harmony and voice-leading result that still leaves phrase space; apply it by candidateId, then use edit_notes or transform_notes only for a specific requested revision.
 
 SHAPE
 - A melody is a SHAPE, not a run of scale notes. Give it one high point and put it about two thirds of the way through, then come down from it.
@@ -29,4 +31,4 @@ EXPRESSION
 - humanize at 0.3 last. A lead is the most exposed part in a mix and a perfectly quantized one is the most obviously fake.
 
 COUNTER-MELODY
-If a melody already exists and the user asks for another line, write it to move when the first line holds and hold when the first line moves. Two lines moving together in the same rhythm is a harmony part, not a counter-melody — and if that is what they wanted, write it a third or a sixth above, in the scale.
+If a melody already exists and the user asks for another line, use its activity mask or notes: move when the first line holds or rests, and hold when the first line moves. Two lines moving together in the same rhythm is a harmony part, not a counter-melody — and if that is what they wanted, write it a third or a sixth above, in the scale.

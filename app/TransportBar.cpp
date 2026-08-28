@@ -554,18 +554,11 @@ QWidget* TransportBar::buildRightGroup() {
             QCoreApplication::translate("TransportBar", fmt.label));
         action->setCheckable(true);
         action->setChecked(fmt.bars == m_showBars);
+        action->setData(fmt.bars);
         timeGroup->addAction(action);
         const bool bars = fmt.bars;
-        const QString label =
-            QCoreApplication::translate("TransportBar", fmt.label);
-        connect(action, &QAction::triggered, this, [this, bars, label] {
-            m_showBars = bars;
-            const QString description = tr("Time display — %1").arg(label);
-            m_timeFormatButton->setToolTip(description);
-            m_timeFormatButton->setAccessibleName(description);
-            emit timeFormatChanged();
-            refresh();
-        });
+        connect(action, &QAction::triggered, this,
+                [this, bars] { setTimeDisplayBars(bars); });
     }
     m_timeFormatButton->setMenu(timeMenu);
     const QString timeDescription =
@@ -591,16 +584,10 @@ QWidget* TransportBar::buildRightGroup() {
         QAction* action = gridMenu->addAction(divisions[i].name);
         action->setCheckable(true);
         action->setChecked(i == m_gridIndex);
+        action->setData(i);
         gridGroup->addAction(action);
-        connect(action, &QAction::triggered, this, [this, i] {
-            m_gridIndex = i;
-            const QString description =
-                tr("Grid division — %1").arg(ui::gridDivisions()[i].name);
-            m_gridButton->setToolTip(description);
-            m_gridButton->setAccessibleName(description);
-            QSettings().setValue(ui::kGridIndexSetting, i);
-            emit gridChanged();
-        });
+        connect(action, &QAction::triggered, this,
+                [this, i] { setGridIndex(i); });
     }
     m_gridButton->setMenu(gridMenu);
     const QString gridDescription =
@@ -838,6 +825,58 @@ QWidget* TransportBar::buildLcd() {
 
 double TransportBar::gridBeats() const {
     return ui::gridDivisions()[m_gridIndex].beats;
+}
+
+void TransportBar::setGridIndex(int index) {
+    const auto& divisions = ui::gridDivisions();
+    if (index < 0 || index >= divisions.size()) return;
+    const bool changed = index != m_gridIndex;
+    m_gridIndex = index;
+    if (m_gridButton) {
+        const QString description =
+            tr("Grid division — %1").arg(divisions[index].name);
+        m_gridButton->setToolTip(description);
+        m_gridButton->setAccessibleName(description);
+        if (m_gridButton->menu()) {
+            for (QAction* action : m_gridButton->menu()->actions()) {
+                if (action->data().isValid())
+                    action->setChecked(action->data().toInt() == index);
+            }
+        }
+    }
+    if (!changed) return;
+    QSettings().setValue(ui::kGridIndexSetting, index);
+    emit gridChanged();
+}
+
+void TransportBar::setSnapEnabled(bool enabled) {
+    if (m_snapButton) {
+        if (m_snapButton->isChecked() != enabled)
+            m_snapButton->setChecked(enabled);
+        return;
+    }
+    if (m_snapEnabled == enabled) return;
+    m_snapEnabled = enabled;
+    emit snapChanged(enabled);
+}
+
+void TransportBar::setTimeDisplayBars(bool bars) {
+    if (m_showBars == bars) return;
+    m_showBars = bars;
+    if (m_timeFormatButton) {
+        const QString description =
+            tr("Time display — %1").arg(bars ? tr("Bars") : tr("Time"));
+        m_timeFormatButton->setToolTip(description);
+        m_timeFormatButton->setAccessibleName(description);
+        if (m_timeFormatButton->menu()) {
+            for (QAction* action : m_timeFormatButton->menu()->actions()) {
+                if (action->data().isValid())
+                    action->setChecked(action->data().toBool() == bars);
+            }
+        }
+    }
+    emit timeFormatChanged();
+    refresh();
 }
 
 void TransportBar::setToolIndex(int index) {

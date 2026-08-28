@@ -33,6 +33,16 @@ public:
     /// Re-read the folder list and the preview options from the settings.
     void reloadSettings();
 
+    /// Semantic counterparts of the browser header and audition controls.
+    /// They deliberately carry no path: the current tree selection and the
+    /// user's folder picker remain the only sources of filesystem authority.
+    void requestAddFolder();
+    void refreshFolders();
+    void togglePreview();
+    void setPreviewLoopEnabled(bool enabled);
+    void setAutoPreviewEnabled(bool enabled);
+    bool hasPreviewableSelection() const;
+
     /// Scale the browser's own interface — rows, icons, labels and the search
     /// field — without touching the rest of the window. `step` is a multiplier
     /// (1.15 in, 1/1.15 out); `setZoom` takes the factor directly. Persisted.
@@ -79,6 +89,8 @@ signals:
     void statusMessage(const QString& text);
     /// The gear button: the shell opens the Browser page of Settings.
     void settingsRequested();
+    /// Lets a semantic command mirror the Play button's real availability.
+    void previewAvailabilityChanged(bool available);
     /// A browser preset was activated and should be applied to the currently
     /// selected mixer channel by the shell.
     void channelStripPresetActivated(const QString& path);

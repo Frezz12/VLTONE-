@@ -148,6 +148,12 @@ public:
     /// and open its editor. False when the project has no such track.
     bool openDemoSampler(const QString& samplePath = {});
 
+    /// Headless check only: add the built-in Gravity effect to the first audio
+    /// track and open its branded editor.
+    bool openDemoGravity();
+    bool checkGravityPanelForTest();
+    void resizeGravityForShot();
+
     /// Headless check only: switch the typing keyboard on, press and release a
     /// note key through the real event path, and report whether it sounded and
     /// then stopped. Also checks that the keys it borrows stay reported as
@@ -269,6 +275,9 @@ public:
     /// Drive an actual middle-button drag through the timeline and prove it
     /// moves both time and the track stack without an edit tool being involved.
     bool checkTimelinePanForTest();
+    /// Exercise multi-lane clip movement, Shift-add/duplicate and marquee
+    /// auto-scroll with real mouse events.
+    bool checkTimelineClipGesturesForTest();
     /// Drag a cycle region out of the ruler's top strip with real mouse events,
     /// then arm it the way C does, and prove the playhead is held inside it.
     /// The strip, the snap, the two-step arming and the transport's jump-in are
@@ -409,6 +418,7 @@ private slots:
     void selectTrackFromHeader(const QString& trackId);
     void onTracksChanged();
     void onClearSolos();
+    void onClearMutes();
     /// Open (or close) the selected tracks' automation lanes. The first time a
     /// track is asked, it gets a volume lane with a curve on it — the default
     /// the request asked for, and the one nobody has to go looking for.
@@ -425,6 +435,9 @@ private slots:
     /// Everything selected in the header column, in display order; falls back
     /// to the primary track when the column has not been touched.
     QStringList selectedTrackIds() const;
+    /// Global S/M act on the selected channels even while an editor window has
+    /// focus. Returns false when there is no usable selection.
+    bool toggleSelectedTrackState(bool solo);
     /// Tell the header column whether a recording is pending and where it
     /// would land, so the record chips can show it.
     void refreshRecordChips();
@@ -528,6 +541,9 @@ private:
     void onRecordModeChanged();
 
     void buildMenus();
+    /// Register stable, non-menu actions for permanent toolbar controls so the
+    /// shortcut editor and assistant use the same handlers as their buttons.
+    void buildSemanticCommands();
     /// Create a menu action, wire its shortcut through the ShortcutManager under
     /// `id`, and return it so the caller can connect triggered/toggled.
     QAction* addCommand(QMenu* menu, const QString& id, const QString& text,
@@ -541,6 +557,8 @@ private:
     void openPianoRoll(const QString& trackId, const QString& clipId);
     /// Show the compact editor for a Pattern container.
     void openPattern(const QString& patternId);
+    bool canOpenSelectedEditor() const;
+    void openSelectedEditor();
     /// Set the arrangement edit tool (0 Select, 1 Knife, 2 Eraser, 3 Region)
     /// and keep the transport chip in sync — used by the tool keyboard
     /// shortcuts.

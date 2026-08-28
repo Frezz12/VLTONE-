@@ -5,9 +5,11 @@ use_when: writing, replacing or fixing a bass part — bass guitar, sub, 808, sy
 tags: [bass, 808, sub, low end]
 ---
 THE RULE THAT MATTERS MOST
-A bass part follows the ROOT NOTE of the harmony that is already playing. Before you write a single note, call analyze_harmony on the clip the user means (or over the bar range they named). It gives you one segment per chord with `rootName`, `rootPitch` and a suggested `bassPitch`. Those roots are the skeleton of the part. If analyze_harmony finds nothing — an empty project, or only drums — then you are writing the harmony yourself, and you say which key you chose.
+A bass part follows the ROOT NOTE of the harmony that is already playing. Before you write a single note, call inspect_music_context when available, or analyze_harmony on the clip the user means. `analyze_harmony` gives one segment per chord with `root`, `rootPitchClass` and `suggestedBassPitch`. Those roots are the skeleton of the part. If analysis finds nothing — an empty project, or only drums — then you are writing the harmony yourself, and you say which key you chose.
 
 Every chord segment gets its root on its own downbeat. Anything else you add hangs off that.
+
+Use compose_candidates with role bass so those chord roots are copied into the validated request and each alternative stays monophonic. Prefer the candidate with the best harmony/rhythm balance, apply it by candidateId, then revise only if the user's style calls for a different groove.
 
 RANGE
 - Write between MIDI 28 and 55 (E1 to G3 in this program's labels: E2–G4 as shown in the piano roll, since 60 is labelled C5).

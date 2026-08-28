@@ -33,9 +33,13 @@ public:
     void syncTempo();
 
     bool snapEnabled() const { return m_snapEnabled; }
+    void setSnapEnabled(bool enabled);
     /// Grid division in beats; 0 when the grid is off.
     double gridBeats() const;
+    int gridIndex() const { return m_gridIndex; }
+    void setGridIndex(int index);
     bool showsBars() const { return m_showBars; }
+    void setTimeDisplayBars(bool bars);
 
     /// Select the edit tool (0 Select, 1 Knife, 2 Eraser, 3 Region): updates
     /// the chip and emits toolChanged. Lets keyboard shortcuts drive the tool

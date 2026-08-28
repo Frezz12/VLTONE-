@@ -503,6 +503,8 @@ int main(int argc, char** argv) {
 
     if (screenshotPath) {
         window.populateDemo();
+        if (std::getenv("DAW_SHOT_REDUCE_MOTION"))
+            QSettings().setValue(QStringLiteral("ui/reduceMotion"), true);
         // Engaged, not rolling: the state the recording options belong to.
         if (std::getenv("DAW_SHOT_RECORD")) window.engageRecord(true);
         // DAW_SHOT_TRACKS adds this many extra tracks, so a grab shows what a
@@ -611,6 +613,16 @@ int main(int argc, char** argv) {
         const char* shotSampler = std::getenv("DAW_SHOT_SAMPLER");
         const bool shootSampler = shotSampler != nullptr;
         if (shootSampler) window.openDemoSampler(QString::fromUtf8(shotSampler));
+        // DAW_SHOT_GRAVITY opens the built-in spatial pitch-delay. It is pure
+        // Qt, so preferred and minimum layouts can both be captured offscreen.
+        // DAW_SHOT_GRAVITY_DRAWER expands the advanced controls and
+        // DAW_SHOT_GRAVITY_DUAL separates the linked A/B attractors.
+        const bool shootGravity = std::getenv("DAW_SHOT_GRAVITY") != nullptr;
+        if (shootGravity) window.openDemoGravity();
+        if (shootGravity && std::getenv("DAW_SHOT_GRAVITY_MIN")) {
+            QTimer::singleShot(300, &window,
+                               [&window] { window.resizeGravityForShot(); });
+        }
         // Both hosts embed the same panel and therefore share the same minimum
         // size check; this also makes CLIP screenshots prove layout parity.
         if ((shootSampler || shootClip) &&
@@ -775,7 +787,7 @@ int main(int argc, char** argv) {
                 }
             }
             if (shootRoll || shootClip || shootPattern || shootPlugins ||
-                shootSampler || shootSettings || shootAutomation ||
+                shootSampler || shootGravity || shootSettings || shootAutomation ||
                 shootExport) {
                 for (QWidget* w : QApplication::topLevelWidgets()) {
                     if (w != &window && w->isVisible() && w->width() > 600) target = w;
@@ -821,6 +833,17 @@ int main(int argc, char** argv) {
         *boom = 1;
         return 9;   // unreachable; keeps the compiler from eliding the store
     } else if (selftest) {
+        // Keep Gravity's widget/undo/preset invariants independently runnable:
+        // the full UI selftest also exercises platform codecs, file watching
+        // and WebEngine, which may be unavailable on a sanitizer machine.
+        if (qEnvironmentVariableIsSet("DAW_SELFTEST_GRAVITY_ONLY")) {
+            window.populateDemo();
+            if (!window.checkGravityPanelForTest()) {
+                std::fprintf(stderr, "Gravity panel UI invariants failed\n");
+                return 30;
+            }
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else {
         // Build every secondary window too: they are where the tables, the
         // timers and the theme hooks live, and a crash in one of them would
         // otherwise only show up in front of the user.
@@ -848,6 +871,10 @@ int main(int argc, char** argv) {
             return 29;
         }
         window.openDemoSampler();
+        if (!window.checkGravityPanelForTest()) {
+            std::fprintf(stderr, "Gravity panel UI invariants failed\n");
+            return 30;
+        }
         // The typing keyboard is a key filter over the whole application, and
         // the only way to know it still plays a note is to send it one.
         if (!window.checkTypingKeyboard()) {
@@ -919,6 +946,10 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "middle-button timeline panning failed\n");
             return 13;
         }
+        if (!window.checkTimelineClipGesturesForTest()) {
+            std::fprintf(stderr, "timeline clip gestures failed\n");
+            return 36;
+        }
         if (!window.checkLiveTempoForTest()) {
             std::fprintf(stderr, "the tempo grid did not update live\n");
             return 14;
@@ -983,6 +1014,7 @@ int main(int argc, char** argv) {
             }
         }
         QTimer::singleShot(shotEditor ? 1200 : 400, &app, [] { QApplication::quit(); });
+        }
     }
     const int result = app.exec();
     if (selftest && g_selftestQtFailure.load(std::memory_order_relaxed)) {

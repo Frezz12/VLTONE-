@@ -789,29 +789,17 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         break;
     }
     case Glyph::Knife: {
-        // Precision craft knife: an outlined grip and a distinct triangular
-        // blade. The previous solid diagonal lozenge read as a pencil at small
-        // sizes; this silhouette remains recognisable in every toolbar and as
-        // the piano-roll cursor.
-        p.save();
-        p.translate(12.0, 12.0);
-        p.rotate(-38.0);
-        p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(c, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        p.drawRoundedRect(QRectF(-8.5, -2.8, 12.0, 5.6), 1.8, 1.8);
-        // Two grip grooves keep it from being confused with a pencil body.
-        p.drawLine(QPointF(-4.5, -1.7), QPointF(-4.5, 1.7));
-        p.drawLine(QPointF(-1.5, -1.7), QPointF(-1.5, 1.7));
-        QPainterPath blade;
-        blade.moveTo(3.5, -2.4);
-        blade.lineTo(9.2, -0.8);
-        blade.lineTo(9.8, 0.0);
-        blade.lineTo(3.5, 2.4);
-        blade.closeSubpath();
-        p.setBrush(c);
+        // Plain chef's knife: handle on the left, pointed blade on the right.
         p.setPen(Qt::NoPen);
+        p.setBrush(c);
+        p.drawRoundedRect(QRectF(3.0, 12.0, 8.5, 4.5), 1.8, 1.8);
+        QPainterPath blade;
+        blade.moveTo(10.0, 9.5);
+        blade.lineTo(21.0, 6.0);
+        blade.lineTo(18.4, 12.8);
+        blade.quadTo(15.2, 16.0, 10.0, 15.0);
+        blade.closeSubpath();
         p.drawPath(blade);
-        p.restore();
         break;
     }
     case Glyph::Eraser: {

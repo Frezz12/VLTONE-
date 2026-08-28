@@ -46,6 +46,10 @@ std::size_t objectEnd(const std::string& text, std::size_t open) {
 
 constexpr std::size_t kMaxCheckpoints = 10;
 
+constexpr const char* kStaleProject =
+    "the project changed while this request was being planned; inspect the "
+    "fresh CURRENT PROJECT and retry against its current ids and selection";
+
 bool isToolName(const std::string& name) {
     for (const ToolSpec& spec : toolSpecs())
         if (spec.name == name) return true;
@@ -108,16 +112,18 @@ std::string AiSession::systemPrompt() const {
 
 bool AiSession::begin(const std::string& prompt) {
     if (m_running) return false;
+    m_context.mode = inferInteractionMode(prompt);
     m_running = true;
     m_cancelled = false;
     m_iterations = 0;
     m_lastError.clear();
     m_runStartMessage = m_messages.size();
-    // Where the undo stack stood before the assistant touched anything. Taken
-    // here rather than held as an UndoStack::Suspend because the run spans
-    // network waits the user can keep editing through, and a suspend held that
-    // long would silently swallow their edits too.
-    m_undoMark = m_controller.undoDepth();
+    // A stable undo group survives a full history stack. It is collapsed only
+    // if revision tracking proves no user edit landed during the network waits.
+    m_undoGroup = m_controller.beginUndoGroup();
+    m_expectedRevision = m_controller.projectRevision();
+    m_interleaved = false;
+    m_hadAiEdits = false;
     m_undoLabel = labelFor(prompt);
 
     m_messages.push_back(Message{Role::User, prompt, {}, {}});
@@ -143,11 +149,44 @@ AiSession::Step AiSession::applyReply(const ModelReply& reply) {
     // the user seeing raw JSON in the chat.
     std::string text = reply.text;
     std::vector<ToolCall> calls = reply.calls;
-    if (calls.empty()) calls = toolCallsInText(text);
+    if (calls.empty() && m_context.mode != InteractionMode::Help &&
+        m_context.mode != InteractionMode::Teach)
+        calls = toolCallsInText(text);
 
     m_messages.push_back(Message{Role::Assistant, text, calls, {}});
 
+    // The provider worked from an earlier snapshot. If the user edited while
+    // it was thinking, return a structured stale result instead of applying a
+    // now-mis-targeted call; the next request receives the fresh project and
+    // can re-plan. History remains separate for the rest of this run.
+    const bool staleAtReply =
+        m_controller.projectRevision() != m_expectedRevision;
+    if (staleAtReply) {
+        m_interleaved = true;
+        m_expectedRevision = m_controller.projectRevision();
+    }
+
     if (calls.empty()) {
+        if (staleAtReply && !m_cancelled) {
+            ++m_iterations;
+            if (m_iterations > m_maxIterations) {
+                m_lastError = "the project kept changing while the assistant "
+                              "was answering";
+                finish();
+                return Step::Failed;
+            }
+            // Do not display prose based on a snapshot we already know is old.
+            m_messages.back().text.clear();
+            ToolResult stale;
+            stale.error = kStaleProject;
+            Message update;
+            update.role = Role::Tool;
+            update.outcomes.push_back(ToolOutcome{
+                "stale-project", "project_state", false, stale.toJson(),
+                /*fromText=*/true});
+            m_messages.push_back(std::move(update));
+            return Step::NeedsRequest;
+        }
         finish();
         return Step::Finished;
     }
@@ -170,9 +209,26 @@ AiSession::Step AiSession::applyReply(const ModelReply& reply) {
     Message results;
     results.role = Role::Tool;
     results.outcomes.reserve(calls.size());
+    bool staleBatch = staleAtReply;
     for (const ToolCall& call : calls) {
+        if (m_controller.projectRevision() != m_expectedRevision) {
+            m_interleaved = true;
+            m_expectedRevision = m_controller.projectRevision();
+            staleBatch = true;
+        }
+        if (staleBatch) {
+            ToolResult stale;
+            stale.error = kStaleProject;
+            results.outcomes.push_back(ToolOutcome{
+                call.id, call.name, false, stale.toJson(), call.fromText});
+            continue;
+        }
+        const std::uint64_t before = m_controller.projectRevision();
         const ToolResult result =
             callTool(m_controller, call.name, call.args, m_context);
+        const std::uint64_t after = m_controller.projectRevision();
+        if (after != before) m_hadAiEdits = true;
+        m_expectedRevision = after;
         results.outcomes.push_back(ToolOutcome{call.id, call.name, result.ok,
                                                result.toJson(), call.fromText});
     }
@@ -225,12 +281,16 @@ bool AiSession::revertTo(std::size_t messageIndex) {
 
 void AiSession::finish() {
     m_running = false;
-    // Whatever the run managed to change becomes one entry, including when it
-    // failed or was stopped part way: the user still wants those edits back
-    // with a single Ctrl+Z.
-    m_controller.collapseUndo(m_undoMark, m_undoLabel);
+    // A non-interleaved run becomes one entry, including when it was stopped.
+    // Once the user edited during a wait, release the group instead: folding
+    // it would silently absorb their work into the assistant's undo.
+    if (m_interleaved)
+        m_controller.releaseUndoGroup(m_undoGroup);
+    else
+        m_controller.collapseUndo(m_undoGroup, m_undoLabel);
+    m_undoGroup = {};
 
-    if (m_controller.undoDepth() > m_undoMark) {
+    if (m_hadAiEdits && !m_interleaved) {
         m_checkpoints.push_back(std::move(m_pendingCheckpoint));
         // A snapshot of a large project is megabytes; ten deep is enough to
         // undo a session's worth of assistant work without holding the lot.

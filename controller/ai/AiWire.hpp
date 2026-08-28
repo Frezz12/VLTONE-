@@ -30,7 +30,8 @@ enum class Provider { Anthropic, OpenAi };
 nlohmann::json requestBody(Provider provider, const std::string& model,
                            int maxTokens, const std::string& system,
                            const std::vector<Message>& messages, bool stream,
-                           bool vendorExtensions = true);
+                           bool vendorExtensions = true,
+                           const std::vector<ToolSpec>* availableTools = nullptr);
 
 /// A complete (non-streamed) answer.
 ModelReply parseReply(Provider provider, const nlohmann::json& body);

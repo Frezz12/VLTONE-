@@ -1,0 +1,14 @@
+composition-eval-v2
+scenario	rank	candidate_id	note_hash	notes	total	harmony	rhythm	register	repetition	voice_leading	cadence	motif_development
+melody_busy_arrangement	1	melody-007a0e2bcd9f55c8	ccba1caffe06360d	16	0.928	1.000	0.836	1.000	0.893	0.882	1	1
+melody_busy_arrangement	2	melody-7510dfd7eedd2af9	3b4a448ee83f907d	12	0.876	1.000	0.708	1.000	0.782	0.837	1	1
+melody_busy_arrangement	3	melody-fd38623b6dc35f41	870c054ec216d34f	20	0.872	1.000	0.786	1.000	0.760	0.751	1	1
+bass_minor_progression	1	bass-6fbf1d6740d0e465	9a0b0e7383d67223	12	0.815	1.000	0.828	1.000	0.571	0.570	1	1
+bass_minor_progression	2	bass-4c83001a1edffad2	2b15c5e3f4e18032	12	0.794	1.000	0.828	1.000	0.460	0.546	1	1
+bass_minor_progression	3	bass-6a8656d91c73eb37	51fd950cfa43e236	16	0.760	1.000	0.438	1.000	0.543	0.705	1	1
+chords_dorian_progression	1	chords-970ecb596789bf98	80cc500af769aa7a	24	0.958	1.000	0.947	1.000	0.869	0.942	na	na
+chords_dorian_progression	2	chords-4e5b870c8936ff03	c84ff43674858a28	24	0.937	1.000	0.947	1.000	0.869	0.835	na	na
+chords_dorian_progression	3	chords-eb7801e9bbcb4d46	5df951c4af2c30af	24	0.935	1.000	0.947	1.000	0.869	0.826	na	na
+drums_four_on_floor	1	drums-48d9933aa62e5d3e	276decc083787662	48	0.856	1.000	0.676	1.000	0.475	1.000	na	na
+drums_four_on_floor	2	drums-91365c620c35aa81	e705036a71e974b4	52	0.856	1.000	0.676	1.000	0.475	1.000	na	na
+drums_four_on_floor	3	drums-fd939bab0ceffd75	14b8a30e3efd24df	44	0.849	1.000	0.591	1.000	0.536	1.000	na	na

@@ -2,6 +2,7 @@
 
 #include "ai/AiTools.hpp"
 #include "model/Document.hpp"
+#include "UndoStack.hpp"
 
 #include <cstdint>
 #include <string>
@@ -148,6 +149,12 @@ public:
     /// told about must be the one its last tool call left behind.
     std::string systemPrompt() const;
 
+    /// Capability-filtered schema for the active mode. The provider never sees
+    /// operations that the policy layer would reject.
+    std::vector<ToolSpec> availableTools() const {
+        return toolSpecsForMode(m_context.mode);
+    }
+
     const std::string& lastError() const { return m_lastError; }
 
     /// What the last request cost, as the provider reported it. Zero when the
@@ -189,7 +196,10 @@ private:
     int m_iterations = 0;
     int m_maxIterations = 24;
     std::size_t m_runStartMessage = 0;
-    std::size_t m_undoMark = 0;
+    UndoStack::Group m_undoGroup;
+    std::uint64_t m_expectedRevision = 0;
+    bool m_interleaved = false;
+    bool m_hadAiEdits = false;
     std::string m_undoLabel;
     std::string m_lastError;
     Usage m_usage;

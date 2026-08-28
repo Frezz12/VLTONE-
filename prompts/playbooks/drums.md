@@ -8,7 +8,9 @@ THE MAP
 Drum instruments are addressed by MIDI pitch. Use the General MIDI map — every drum plugin and the built-in sampler follow it:
 36 kick · 37 side stick · 38 snare · 39 clap · 40 rim snare · 41 low tom · 42 closed hat · 44 pedal hat · 45 mid tom · 46 open hat · 47 high tom · 48 high tom · 49 crash · 51 ride · 54 tambourine · 56 cowbell · 57 crash 2 · 75 clave
 
-Write the whole kit into ONE MIDI clip on ONE track unless the user asked for separate tracks per drum. One clip is how the program's own editor shows a beat, and it is how the user will edit it.
+With a real drum instrument, write the whole GM kit into ONE MIDI clip on ONE track. With the built-in single-sample sampler, one track can only play one loaded file: make separate sampler tracks for kick, snare/clap and hats, play each original hit at MIDI 60, and group those tracks. Never transpose one sample across GM pitches and call it a kit.
+
+For a real drum instrument, use compose_candidates with role drums to get 3–5 scored GM patterns and apply the chosen candidate. For separate single-sample sampler tracks, use those candidates only as a rhythmic plan: split kick, snare and hat events onto their own MIDI-60 clips.
 
 THE GRID
 A bar of 4/4 is 4 beats; a sixteenth is 0.25 beats. Positions inside a bar: beat 1 = 0.0, beat 2 = 1.0, beat 3 = 2.0, beat 4 = 3.0.
@@ -33,7 +35,7 @@ LENGTH AND VARIATION
 - Crash on the downbeat of the bar where a new section starts.
 
 SOUND
-- Prefer an installed drum instrument (list_plugins, kind instrument). If nothing is there, load_sampler with a drum sample per pitch, or use the built-in sampler.
+- Prefer an installed drum instrument (list_plugins, kind instrument). If none is suitable, search_files for the individual pieces, create one instrument track per piece, load_sampler once on each, and group the tracks with arrange_tracks.
 - Chain: no reverb on the kick. Compression on the whole kit, not on each drum. If the user wants room, send the snare to a reverb bus with add_send.
 
 CHECK

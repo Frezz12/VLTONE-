@@ -5,7 +5,9 @@ use_when: writing a chord progression, a pad part, comping, or reharmonising
 tags: [chords, harmony, progression, pads, comping]
 ---
 BEFORE YOU WRITE
-If the project already has material, call analyze_harmony. Adding a progression that fights the melody already there is the most common way this goes wrong. If the project is empty, choose a key, write the progression, and record the key with set_project_key so everything after it agrees.
+If the project already has material, call inspect_music_context when available, otherwise analyze_harmony. Adding a progression that fights the melody already there is the most common way this goes wrong. If the project is empty, choose a key, write the progression, and record the key with set_project_key so everything after it agrees.
+
+Use compose_candidates with role chords for the first draft. Its stored harmony and voice-leading scores catch the two failures that matter most here: wrong chord tones and block voicings that jump. Apply by candidateId, then strum or edit only for the requested playing style.
 
 PROGRESSIONS THAT WORK
 Written as scale degrees; convert to the project's key.

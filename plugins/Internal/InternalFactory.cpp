@@ -1,5 +1,6 @@
 #include "Internal/InternalFactory.hpp"
 
+#include "Internal/GravityInstance.hpp"
 #include "Internal/SampleDecoder.hpp"
 #include "Internal/SamplerInstance.hpp"
 
@@ -44,6 +45,9 @@ std::vector<PluginDescriptor> InternalFactory::inspect(const std::string& path) 
 }
 
 std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& descriptor) {
+    if (descriptor.uid == gravity::GravityInstance::uid()) {
+        return std::make_unique<gravity::GravityInstance>();
+    }
     if (descriptor.uid == sampler::SamplerInstance::uid()) {
         return std::make_unique<sampler::SamplerInstance>();
     }
@@ -51,7 +55,8 @@ std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& 
 }
 
 std::vector<PluginDescriptor> builtinPlugins() {
-    return {sampler::SamplerInstance::staticDescriptor()};
+    return {sampler::SamplerInstance::staticDescriptor(),
+            gravity::GravityInstance::staticDescriptor()};
 }
 
 } // namespace daw::plugins

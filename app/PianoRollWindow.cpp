@@ -435,7 +435,7 @@ const QCursor& toolCursor(icons::Glyph glyph) {
     // brush paints from its bristles, the blade cuts at its edge, and the
     // arrow points from its own tip.
     const QPoint hot = glyph == icons::Glyph::Brush   ? QPoint(6, 18)
-                     : glyph == icons::Glyph::Knife   ? QPoint(20, 6)
+                     : glyph == icons::Glyph::Knife   ? QPoint(12, 18)
                      : glyph == icons::Glyph::Pointer ? QPoint(6, 4)
                                                       : QPoint(12, 12);
     return *cache.insert(int(glyph), QCursor(pm, hot.x(), hot.y()));

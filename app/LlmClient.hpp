@@ -56,6 +56,9 @@ public:
 
     void setPartialSink(PartialSink sink) { m_partialSink = std::move(sink); }
     void setUsageSink(UsageSink sink) { m_usageSink = std::move(sink); }
+    void setAvailableTools(std::vector<daw::ai::ToolSpec> tools) {
+        m_availableTools = std::move(tools);
+    }
 
     /// Human-readable, for the panel's header and error messages.
     QString displayName() const;
@@ -98,6 +101,7 @@ private:
     Reply m_onReply;
     PartialSink m_partialSink;
     UsageSink m_usageSink;
+    std::vector<daw::ai::ToolSpec> m_availableTools;
     std::unique_ptr<daw::ai::wire::StreamDecoder> m_decoder;
     QString m_reservationId;
     qint64 m_reservedTokens = 0;

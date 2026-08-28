@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QHash>
+#include <QFlags>
 #include <QKeySequence>
 #include <QList>
 #include <QObject>
@@ -21,12 +22,41 @@ class QKeyEvent;
 class ShortcutManager : public QObject {
     Q_OBJECT
 public:
+    /// Consequence classification for callers that need to decide whether a
+    /// command may run automatically. Unknown is the safe migration default
+    /// for commands registered through the legacy overload.
+    enum class Risk {
+        Unknown,
+        Safe,
+        Reversible,
+        Destructive,
+        ExternalSideEffect,
+    };
+
+    /// Assistant interaction modes in which a command may be offered. This is
+    /// metadata only: the policy layer remains responsible for enforcing it.
+    enum Mode {
+        HelpMode = 0x1,
+        TeachMode = 0x2,
+        DoMode = 0x4,
+        AllModes = HelpMode | TeachMode | DoMode,
+    };
+    Q_DECLARE_FLAGS(ModeMask, Mode)
+
+    struct Metadata {
+        QString description;
+        QString helpId;
+        Risk risk = Risk::Unknown;
+        ModeMask modes = AllModes;
+    };
+
     struct Command {
         QString id;
         QString label;
         QString category;
         QKeySequence defaultSeq;
         QAction* action = nullptr;   // the live action this command drives
+        Metadata metadata;
     };
 
     explicit ShortcutManager(QObject* parent = nullptr);
@@ -35,8 +65,22 @@ public:
     void registerCommand(const QString& id, const QString& label,
                          const QString& category, const QKeySequence& def,
                          QAction* action);
+    /// Metadata-aware registration for semantic command discovery. The legacy
+    /// overload above remains the normal shortcut-only path.
+    void registerCommand(const QString& id, const QString& label,
+                         const QString& category, const QKeySequence& def,
+                         QAction* action, Metadata metadata);
 
     const QVector<Command>& commands() const { return m_commands; }
+    /// Exact lookup by stable id. The pointer remains valid until another
+    /// command is registered.
+    const Command* command(const QString& id) const;
+    /// Case-insensitive AND search across id, label, category, description and
+    /// help id. An empty query returns every command in registration order.
+    QVector<Command> search(const QString& query) const;
+    /// Trigger a semantic command only when it exists and its QAction is both
+    /// enabled and visible. Returns whether it was triggered.
+    bool invoke(const QString& id) const;
 
     /// Take a set of keys away from the actions, without changing what the
     /// commands are *bound* to.
@@ -106,3 +150,5 @@ private:
     QHash<QString, QList<QKeySequence>> m_parked;
     std::function<bool(int)> m_suppressed;
 };
+
+Q_DECLARE_OPERATORS_FOR_FLAGS(ShortcutManager::ModeMask)

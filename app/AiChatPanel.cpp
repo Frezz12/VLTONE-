@@ -10,9 +10,12 @@
 #include "MusicClient.hpp"
 #include "PromptService.hpp"
 #include "SelectionModel.hpp"
+#include "ShortcutManager.hpp"
 #include "Theme.hpp"
 #include "ai/AiSession.hpp"
 #include "ai/AiTools.hpp"
+#include "ai/ContentCatalog.hpp"
+#include "ai/CompositionEngine.hpp"
 #include "ai/MusicGen.hpp"
 #include "platform/AudioFileDecoder.hpp"
 
@@ -20,6 +23,7 @@
 #include "Recording/RecordingEngine.hpp"
 
 #include <QApplication>
+#include <QAction>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -62,6 +66,26 @@ namespace ai = daw::ai;
 using json = nlohmann::json;
 
 namespace {
+
+const char* commandRiskName(ShortcutManager::Risk risk) {
+    switch (risk) {
+        case ShortcutManager::Risk::Safe: return "safe";
+        case ShortcutManager::Risk::Reversible: return "reversible";
+        case ShortcutManager::Risk::Destructive: return "destructive";
+        case ShortcutManager::Risk::ExternalSideEffect: return "external";
+        case ShortcutManager::Risk::Unknown: return "unknown";
+    }
+    return "unknown";
+}
+
+bool commandAllowsMode(const ShortcutManager::Metadata& metadata,
+                       ai::InteractionMode mode) {
+    const ShortcutManager::Mode required =
+        mode == ai::InteractionMode::Help ? ShortcutManager::HelpMode
+        : mode == ai::InteractionMode::Teach ? ShortcutManager::TeachMode
+                                             : ShortcutManager::DoMode;
+    return metadata.modes.testFlag(required);
+}
 
 // Three rows: the title strip, the model line, and the mode switch.
 constexpr int kHeaderHeight = 88;
@@ -272,6 +296,9 @@ AiChatPanel::AiChatPanel(daw::EngineController* controller, QWidget* parent)
     setBackdropFrozen(true);
 
     m_session = std::make_unique<ai::AiSession>(*controller);
+    m_contentCatalog = std::make_shared<ai::ContentCatalog>();
+    m_compositionCandidates =
+        std::make_shared<ai::CompositionCandidateStore>();
 
     auto* column = new QVBoxLayout(this);
     // Keep every child inside the painted glass plate. The six-pixel outer
@@ -321,6 +348,10 @@ AiChatPanel::AiChatPanel(daw::EngineController* controller, QWidget* parent)
         ++m_musicElapsed;
         updateMusicElapsedLabel();
     });
+    m_contentIndexTicker = new QTimer(this);
+    m_contentIndexTicker->setInterval(200);
+    connect(m_contentIndexTicker, &QTimer::timeout, this,
+            &AiChatPanel::updateContentIndexStatus);
 
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             &AiChatPanel::applyTheme);
@@ -360,6 +391,8 @@ AiChatPanel::AiChatPanel(daw::EngineController* controller, QWidget* parent)
     renderTranscript();
     renderMusicTranscript();
     applyModeToComposer();
+    QTimer::singleShot(0, this,
+                       [this] { startContentIndex(/*force=*/true); });
 }
 
 AiChatPanel::~AiChatPanel() {
@@ -367,6 +400,7 @@ AiChatPanel::~AiChatPanel() {
     // turn list they would reach into go away.
     if (m_client) m_client->cancel();
     if (m_musicClient) m_musicClient->cancel();
+    if (m_contentCatalog) m_contentCatalog->cancelRefresh();
 }
 
 QWidget* AiChatPanel::buildHeader() {
@@ -437,6 +471,11 @@ QWidget* AiChatPanel::buildHeader() {
     m_modelLabel->setMenu(modelMenu);
     meta->addWidget(m_modelLabel);
     meta->addStretch(1);
+
+    m_contentIndexLabel = new QLabel(header);
+    m_contentIndexLabel->setObjectName("AiIndexStatus");
+    m_contentIndexLabel->setText(tr("LIB —"));
+    meta->addWidget(m_contentIndexLabel);
 
     m_usageLabel = new QLabel(header);
     m_usageLabel->setObjectName("AiUsage");
@@ -674,6 +713,7 @@ void AiChatPanel::applyTheme() {
 #AiModel::menu-indicator { subcontrol-position: right center;
                            subcontrol-origin: padding; right: 4px; }
 #AiUsage { color: %TEXT2%; font-size: 9px; }
+#AiIndexStatus { color: %TEXT2%; font-size: 9px; font-weight: 650; }
 #AiHint { color: %TEXT2%; font-size: 10px; }
 #AiEmptyMark { background: %MARK_FILL%; border: 1px solid %ACCENT_SOFT%;
                border-radius: 29px; color: %TEXT1%; font-size: 15px;
@@ -714,13 +754,23 @@ void AiChatPanel::applyTheme() {
 #AiUserRole { color: %TEXT2%; }
 #AiAssistantRole, #AiLiveRole { color: %ACCENT_SOFT%; }
 #AiActionRole { color: %TEXT2%; }
-#AiActionStatusOk, #AiActionStatusError {
+#AiActionStatusOk, #AiActionStatusWarn, #AiActionStatusError {
     border-radius: 5px; padding: 2px 5px; font-family: "%MONO%";
     font-size: 8px; font-weight: 700;
 }
 #AiActionStatusOk { background: %STATUS_FILL%; color: %ACCENT_SOFT%; }
+#AiActionStatusWarn { background: %MARK_FILL%; color: %TEXT1%; }
 #AiActionStatusError { background: %ERROR_FILL%; color: %ERROR%; }
 #AiActionText { color: %TEXT2%; font-family: "%MONO%"; font-size: 9px; }
+#AiCandidateCard { background: %ASSISTANT_TOP%; border: 1px solid %ACTION_BORDER%;
+                   border-radius: 9px; }
+#AiCandidateTitle { color: %TEXT1%; font-size: 9px; font-weight: 750;
+                    letter-spacing: 0.7px; }
+#AiCandidateScore { color: %TEXT2%; font-size: 9px; }
+#AiCandidateButton { background: %MARK_FILL%; border: 1px solid %ACCENT_SOFT%;
+                     border-radius: 6px; color: %TEXT1%; font-size: 8px;
+                     font-weight: 700; padding: 3px 7px; }
+#AiCandidateButton:hover { background: %MODEL_FILL%; }
 #AiRevertButton { background: transparent; border: none; color: %TEXT2%;
                   font-size: 8px; font-weight: 700; letter-spacing: 0.7px;
                   padding: 2px 0; text-align: left; }
@@ -780,9 +830,71 @@ void AiChatPanel::syncEdgeAnimation() {
 void AiChatPanel::showEvent(QShowEvent* event) {
     ui::GlassPanel::showEvent(event);
     syncEdgeAnimation();
+    startContentIndex(/*force=*/false);
     // A generation may have continued while the panel was hidden. Refresh
     // its one live field immediately without recreating the transcript.
     updateMusicElapsedLabel();
+}
+
+void AiChatPanel::startContentIndex(bool force) {
+    if (!m_contentCatalog) return;
+    std::vector<std::string> roots;
+    for (const QString& folder : ui::browserprefs::folders())
+        roots.push_back(folder.toStdString());
+    m_contentCatalog->setBrowserRoots(std::move(roots));
+    const ai::CatalogIndexStatus before = m_contentCatalog->status();
+    if (force || before.state == ai::CatalogIndexState::Idle ||
+        before.state == ai::CatalogIndexState::Cancelled)
+        m_contentCatalog->startRefresh();
+    updateContentIndexStatus();
+}
+
+void AiChatPanel::updateContentIndexStatus() {
+    if (!m_contentCatalog || !m_contentIndexLabel) return;
+    const ai::CatalogIndexStatus status = m_contentCatalog->status();
+    QString text;
+    QString tip;
+    switch (status.state) {
+        case ai::CatalogIndexState::Idle:
+            text = tr("LIB —");
+            tip = tr("The sound-library index has not started");
+            break;
+        case ai::CatalogIndexState::Scanning:
+            text = tr("LIB SCAN");
+            tip = tr("Scanning browser folders: %1 files found")
+                      .arg(status.filesDiscovered);
+            break;
+        case ai::CatalogIndexState::ReadingMetadata: {
+            const int percent = int(std::lround(
+                status.progress().value_or(0.0) * 100.0));
+            text = tr("LIB %1%").arg(percent);
+            tip = tr("Reading sound metadata: %1 of %2")
+                      .arg(status.filesProcessed)
+                      .arg(status.filesDiscovered);
+            break;
+        }
+        case ai::CatalogIndexState::CancelRequested:
+            text = tr("LIB STOP");
+            tip = tr("Stopping sound-library indexing");
+            break;
+        case ai::CatalogIndexState::Ready:
+            text = tr("LIB %1").arg(status.filesPublished);
+            tip = tr("%1 browser files are ready for the assistant")
+                      .arg(status.filesPublished);
+            break;
+        case ai::CatalogIndexState::Cancelled:
+            text = tr("LIB PAUSED");
+            tip = tr("Sound-library indexing was paused");
+            break;
+    }
+    m_contentIndexLabel->setText(text);
+    m_contentIndexLabel->setToolTip(tip);
+    if (m_contentIndexTicker) {
+        if (status.running() && !m_contentIndexTicker->isActive())
+            m_contentIndexTicker->start();
+        else if (!status.running())
+            m_contentIndexTicker->stop();
+    }
 }
 
 void AiChatPanel::hideEvent(QHideEvent* event) {
@@ -1130,7 +1242,8 @@ void AiChatPanel::send() {
         context.attachments.push_back(
             ai::Attachment{QFileInfo(path).fileName().toStdString(),
                            path.toStdString(), probed.durationSeconds(),
-                           int(probed.sampleRate), int(probed.channels)});
+                           int(probed.sampleRate), int(probed.channels),
+                           "attachment_" + std::to_string(i + 1)});
     }
 
     // What the user is looking at, so "this" and "here" mean something. Read at
@@ -1141,11 +1254,28 @@ void AiChatPanel::send() {
                                     ? m_selection->singleTrack().toStdString()
                                     : clip.trackId.toStdString();
         context.focus.clipId = clip.clipId.toStdString();
+        const auto addTrack = [&context](const QString& id) {
+            const std::string value = id.toStdString();
+            if (!value.empty() &&
+                std::find(context.focus.trackIds.begin(),
+                          context.focus.trackIds.end(), value) ==
+                    context.focus.trackIds.end())
+                context.focus.trackIds.push_back(value);
+        };
+        for (const QString& id : m_selection->tracks()) addTrack(id);
+        for (const ui::ClipSel& selected : m_selection->clips()) {
+            addTrack(selected.trackId);
+            if (!selected.clipId.isEmpty())
+                context.focus.clipIds.push_back(selected.clipId.toStdString());
+        }
     }
     // The assistant searches exactly the folders the browser shows, and nothing
     // else — the same promise the browser makes to the user.
     for (const QString& folder : ui::browserprefs::folders())
         context.sampleFolders.push_back(folder.toStdString());
+    startContentIndex(/*force=*/true);
+    context.contentCatalog = m_contentCatalog;
+    context.compositionCandidates = m_compositionCandidates;
 
     // The instructions in force, which may have been edited on the server
     // since this session started. Read at send time for exactly that reason.
@@ -1165,6 +1295,81 @@ void AiChatPanel::send() {
                    QMessageBox::No) == QMessageBox::Yes;
     };
 
+    context.searchCommands = [this](const std::string& query,
+                                    ai::InteractionMode mode) {
+        json commands = json::array();
+        if (!m_commands) return json{{"commands", std::move(commands)}};
+        const QVector<ShortcutManager::Command> matches =
+            m_commands->search(QString::fromStdString(query));
+        for (const ShortcutManager::Command& command : matches) {
+            if (commands.size() >= 60 ||
+                !commandAllowsMode(command.metadata, mode))
+                continue;
+            const QString shortcut =
+                m_commands->shortcut(command.id).toString(
+                    QKeySequence::NativeText);
+            commands.push_back(
+                json{{"commandId", command.id.toStdString()},
+                     {"label", command.label.toStdString()},
+                     {"category", command.category.toStdString()},
+                     {"description", command.metadata.description.toStdString()},
+                     {"helpId", command.metadata.helpId.toStdString()},
+                     {"risk", commandRiskName(command.metadata.risk)},
+                     {"shortcut", shortcut.toStdString()},
+                     {"enabled", command.action && command.action->isEnabled()},
+                     {"visible", command.action && command.action->isVisible()}});
+        }
+        return json{{"commands", std::move(commands)}};
+    };
+    context.invokeCommand = [this](const std::string& id,
+                                   ai::InteractionMode mode,
+                                   std::string& error) {
+        if (!m_commands) {
+            error = "the program command catalog is unavailable";
+            return false;
+        }
+        const QString commandId = QString::fromStdString(id);
+        const ShortcutManager::Command* command =
+            m_commands->command(commandId);
+        if (!command) {
+            error = "no command with id '" + id +
+                    "'; call search_commands and use an exact commandId";
+            return false;
+        }
+        if (!commandAllowsMode(command->metadata, mode)) {
+            error = "that command is not allowed in the active interaction mode";
+            return false;
+        }
+        if (!command->action || !command->action->isVisible() ||
+            !command->action->isEnabled()) {
+            error = "command '" + id +
+                    "' is not currently visible and enabled in this UI state";
+            return false;
+        }
+        const bool needsConfirmation =
+            command->metadata.risk == ShortcutManager::Risk::Unknown ||
+            command->metadata.risk == ShortcutManager::Risk::Destructive ||
+            command->metadata.risk ==
+                ShortcutManager::Risk::ExternalSideEffect;
+        if (needsConfirmation &&
+            QMessageBox::question(
+                this, tr("Assistant command"),
+                tr("The assistant wants to run “%1”.\n\nRisk: %2\n\nAllow it?")
+                    .arg(command->label,
+                         QString::fromLatin1(
+                             commandRiskName(command->metadata.risk))),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No) != QMessageBox::Yes) {
+            error = "the user declined command '" + id + "'";
+            return false;
+        }
+        if (!m_commands->invoke(commandId)) {
+            error = "command '" + id + "' became unavailable before it ran";
+            return false;
+        }
+        return true;
+    };
+
     m_session->setContext(std::move(context));
 
     m_session->begin(text.toStdString());
@@ -1175,6 +1380,7 @@ void AiChatPanel::send() {
 }
 
 void AiChatPanel::step() {
+    m_client->setAvailableTools(m_session->availableTools());
     m_client->setUsageSink([this](ai::AiSession::Usage usage) {
         m_session->addUsage(usage);
         updateUsageLabel();
@@ -1558,7 +1764,12 @@ void AiChatPanel::renderTranscript() {
         const ai::Message& message = messages[at];
         switch (message.role) {
             case ai::Role::User: {
-                auto card = messageCard(m_transcriptBody, "AiUserCard", tr("YOU"), "AiUserRole");
+                const QString mode = QString::fromLatin1(
+                    ai::interactionModeName(
+                        ai::inferInteractionMode(message.text)));
+                auto card = messageCard(
+                    m_transcriptBody, "AiUserCard",
+                    tr("YOU / %1").arg(mode), "AiUserRole");
                 card.second->addWidget(cardText(m_transcriptBody, 
                     QString::fromStdString(message.text), "AiMessageText"));
                 if (revertable.contains(qulonglong(at)) && !m_session->running()) {
@@ -1609,10 +1820,20 @@ void AiChatPanel::renderTranscript() {
                         actionLayout->setContentsMargins(0, 1, 0, 1);
                         actionLayout->setSpacing(7);
 
+                        const std::string resultError =
+                            out.ok ? std::string()
+                                   : out.result.value("error", std::string());
+                        const bool replan =
+                            resultError.find("project changed") !=
+                            std::string::npos;
                         auto* status = new QLabel(
-                            out.ok ? tr("DONE") : tr("ERROR"), actionRow);
-                        status->setObjectName(out.ok ? "AiActionStatusOk"
-                                                     : "AiActionStatusError");
+                            out.ok ? tr("DONE")
+                                   : replan ? tr("REPLAN") : tr("ERROR"),
+                            actionRow);
+                        status->setObjectName(
+                            out.ok ? "AiActionStatusOk"
+                                   : replan ? "AiActionStatusWarn"
+                                            : "AiActionStatusError");
                         status->setAlignment(Qt::AlignCenter);
                         status->setSizePolicy(QSizePolicy::Fixed,
                                               QSizePolicy::Fixed);
@@ -1620,15 +1841,98 @@ void AiChatPanel::renderTranscript() {
 
                         QString detail = QString::fromStdString(out.name);
                         if (!out.ok) {
-                            const std::string error =
-                                out.result.value("error", std::string());
-                            if (!error.empty())
+                            if (!resultError.empty())
                                 detail += QStringLiteral(" — ") +
-                                          QString::fromStdString(error);
+                                          QString::fromStdString(resultError);
                         }
                         auto* action = cardText(m_transcriptBody, detail, "AiActionText", true);
                         actionLayout->addWidget(action, 1);
                         card.second->addWidget(actionRow);
+
+                        if (out.ok && out.name == "compose_candidates" &&
+                            out.result.contains("candidates") &&
+                            out.result["candidates"].is_array()) {
+                            int choice = 0;
+                            for (const json& candidate :
+                                 out.result["candidates"]) {
+                                if (!candidate.is_object()) continue;
+                                auto* preview = new QWidget(card.first);
+                                preview->setObjectName("AiCandidateCard");
+                                auto* previewLayout = new QVBoxLayout(preview);
+                                previewLayout->setContentsMargins(8, 6, 8, 6);
+                                previewLayout->setSpacing(3);
+
+                                const QString letter =
+                                    QString(QChar('A' + std::min(choice, 25)));
+                                const double total =
+                                    candidate.value("score", json::object())
+                                        .value("total", 0.0);
+                                auto* title = new QLabel(
+                                    tr("OPTION %1  ·  %2")
+                                        .arg(letter,
+                                             QString::number(total, 'f', 2)),
+                                    preview);
+                                title->setObjectName("AiCandidateTitle");
+                                previewLayout->addWidget(title);
+
+                                const json& score =
+                                    candidate.value("score", json::object());
+                                const auto value = [&score](const char* key) {
+                                    return score.value(key, json::object())
+                                        .value("value", 0.0);
+                                };
+                                auto* metrics = new QLabel(
+                                    tr("Harmony %1  ·  Rhythm %2  ·  Voice %3  ·  %4 notes")
+                                        .arg(QString::number(value("harmony"), 'f', 2),
+                                             QString::number(value("rhythm"), 'f', 2),
+                                             QString::number(value("voiceLeading"), 'f', 2),
+                                             QString::number(candidate.value("noteCount", 0))),
+                                    preview);
+                                metrics->setObjectName("AiCandidateScore");
+                                metrics->setWordWrap(true);
+                                previewLayout->addWidget(metrics);
+
+                                const QString candidateId =
+                                    QString::fromStdString(candidate.value(
+                                        "candidateId", std::string()));
+                                auto* choose = new QPushButton(
+                                    tr("CHOOSE %1").arg(letter), preview);
+                                choose->setObjectName("AiCandidateButton");
+                                choose->setCursor(Qt::PointingHandCursor);
+                                choose->setEnabled(!m_session->running());
+                                choose->setToolTip(
+                                    tr("Apply this validated MIDI alternative to the selected track"));
+                                connect(choose, &QAbstractButton::clicked, this,
+                                        [this, candidateId] {
+                                            m_input->setPlainText(
+                                                tr("/compose Apply composition candidate %1 to the currently selected instrument track.")
+                                                    .arg(candidateId));
+                                            m_input->setFocus();
+                                            send();
+                                        });
+                                previewLayout->addWidget(choose, 0,
+                                                         Qt::AlignLeft);
+                                card.second->addWidget(preview);
+                                ++choice;
+                            }
+
+                            auto* regenerate = new QPushButton(
+                                tr("REGENERATE OPTIONS"), card.first);
+                            regenerate->setObjectName("AiRevertButton");
+                            regenerate->setCursor(Qt::PointingHandCursor);
+                            regenerate->setEnabled(!m_session->running());
+                            regenerate->setToolTip(
+                                tr("Ask for fresh candidates with a different seed"));
+                            connect(regenerate, &QAbstractButton::clicked, this,
+                                    [this] {
+                                        m_input->setPlainText(
+                                            tr("/compose Regenerate the same composition with a different seed and show new alternatives."));
+                                        m_input->setFocus();
+                                        send();
+                                    });
+                            card.second->addWidget(regenerate, 0,
+                                                   Qt::AlignLeft);
+                        }
                     }
                     ++toolAt;
                 }

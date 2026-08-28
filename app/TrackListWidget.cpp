@@ -56,10 +56,10 @@ constexpr int kChipH = 15;
 constexpr int kChipGap = 3;
 
 /// What each part of a row needs before it is worth showing at all.
-constexpr int kStackMin = 4 * kChipW + 3 * kChipGap;   // the chip strip
 constexpr int kFaderMin = 68;
 constexpr int kPanSize = 24;
 constexpr int kPartGap = 6;
+constexpr int kFullChipStrip = 4 * kChipW + 3 * kChipGap;
 
 /// Full-height row geometry stays aligned to the timeline, while the painted
 /// inset surface gives each channel a modern card silhouette and breathing
@@ -833,6 +833,7 @@ void TrackListWidget::applyRecordChips() {
         row.record->setVisible(m_recordEngaged);
         QSignalBlocker block(row.record);
         row.record->setChecked(m_recordTargets.contains(id));
+        applyRowAdaptivity(row);
     }
 }
 
@@ -912,18 +913,30 @@ void TrackListWidget::applyRowAdaptivity(const Row& row) {
                       (row.meter ? row.meter->width() : 0) + 4 * kPartGap;
     const int flexible = width - fixed;
 
-    // Priority order: pan yields first. If the normal fader no longer has a
-    // useful throw it becomes a 24 px level knob, so narrowing the column does
-    // not make volume vanish. Only extreme folder indentation can exhaust even
-    // that last compact form.
+    int chipCount = 0;
+    for (const QWidget* chip : {static_cast<QWidget*>(row.mute),
+                                static_cast<QWidget*>(row.solo),
+                                static_cast<QWidget*>(row.pattern),
+                                static_cast<QWidget*>(row.monitor),
+                                static_cast<QWidget*>(row.record)}) {
+        if (chip && !chip->isHidden()) ++chipCount;
+    }
+    const int stackMin = std::max(
+        40, chipCount > 0 ? chipCount * kChipW + (chipCount - 1) * kChipGap
+                          : 0);
+
+    // When the normal throw no longer fits, level and pan both stay reachable
+    // as a compact pair of round controls.
     constexpr int kCompactFaderSide = 24;
     const bool normalFader =
-        flexible >= kStackMin + kPartGap + kFaderMin;
+        flexible >= kFullChipStrip + kPartGap + kFaderMin;
     const bool showFader = normalFader ||
-        flexible >= kStackMin + kPartGap + kCompactFaderSide;
+        flexible >= kFullChipStrip + kPartGap + kCompactFaderSide;
     const bool showPan =
-        normalFader &&
-        flexible >= kStackMin + 2 * kPartGap + kFaderMin + kPanSize;
+        normalFader
+            ? flexible >= kFullChipStrip + 2 * kPartGap + kFaderMin + kPanSize
+            : flexible >= stackMin + 2 * kPartGap +
+                              kCompactFaderSide + kPanSize;
     row.fader->setCompactKnob(showFader && !normalFader);
     row.fader->setVisible(showFader);
     if (row.pan) row.pan->setVisible(showPan);

@@ -1,6 +1,7 @@
 #include "PluginEditorWindow.hpp"
 
 #include "Controls.hpp"
+#include "GravityPanel.hpp"
 #include "InternalEditorFrame.hpp"
 #include "EngineController.hpp"
 #include "SamplerPanel.hpp"
@@ -395,7 +396,21 @@ void PluginEditorWindow::rebuildEditorContent() {
         return;
     }
 
-    if (dynamic_cast<daw::plugins::sampler::SamplerInstance*>(plugin)) {
+    if (dynamic_cast<daw::plugins::gravity::GravityInstance*>(plugin)) {
+        auto* gravityPanel =
+            new GravityPanel(m_controller, m_channelId, m_insertId, this);
+        m_generic = gravityPanel;
+        connect(gravityPanel, &GravityPanel::projectEdited, this,
+                &PluginEditorWindow::projectEdited);
+        connect(gravityPanel, &GravityPanel::automationRequested, this,
+                [this](const QString& parameterId) {
+                    emit automationRequested(m_channelId, m_insertId, parameterId);
+                });
+        m_contentRow->insertWidget(0, m_generic, 1);
+        setMinimumSize(820, 638);
+        m_fallbackContentSize = QSize(920, 718);
+        resize(m_fallbackContentSize);
+    } else if (dynamic_cast<daw::plugins::sampler::SamplerInstance*>(plugin)) {
         auto* samplerPanel =
             new SamplerPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = samplerPanel;

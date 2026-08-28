@@ -65,6 +65,10 @@ constexpr double kGainGrabPx = 9.0;
 /// Vertical drag distance that doubles (or halves) a clip's gain.
 constexpr double kGainPixelsPerDoubling = 100.0;
 constexpr float kMaxTimelineClipGain = 15.8489319f; // +24 dB
+/// Tiny horizontal hand jitter still counts as a vertical-only drag. With snap
+/// enabled, the original clip boundaries get a slightly wider magnetic detent.
+constexpr double kVerticalDragSlopPx = 2.0;
+constexpr double kOriginGuideSnapPx = 6.0;
 /// A clip nearly fills its lane; this hairline of breathing room keeps adjacent
 /// clips from visually fusing with the track dividers.
 constexpr int kClipVerticalInset = 2;
@@ -91,7 +95,7 @@ const QCursor& arrangementToolCursor(icons::Glyph glyph) {
     painter.end();
 
     const QPoint hot = glyph == icons::Glyph::Brush   ? QPoint(6, 18)
-                     : glyph == icons::Glyph::Knife   ? QPoint(20, 6)
+                     : glyph == icons::Glyph::Knife   ? QPoint(12, 18)
                      : glyph == icons::Glyph::Pointer ? QPoint(6, 4)
                                                       : QPoint(12, 12);
     return *cache.insert(int(glyph),
@@ -307,10 +311,151 @@ void TimelineWidget::cancelProjectGesture() {
     m_fadeSide = Fade::None;
     m_gainDragging = false;
     m_erasing = false;
-    m_dragOrigStarts.clear();
+    m_dragOrigins.clear();
+    m_duplicateDragPending = false;
+    m_moveGuidesActive = false;
     m_regionPieces.clear();
     m_gainOrig.clear();
     if (changed) emit projectEdited();
+}
+
+void TimelineWidget::captureClipDragOrigins() {
+    m_dragOrigins.clear();
+    m_dragLaneOffset = 0;
+    m_moveGuidesActive = false;
+    m_moveGuideStart = std::numeric_limits<double>::max();
+    m_moveGuideEnd = std::numeric_limits<double>::lowest();
+    m_moveGuideLaneA = std::numeric_limits<int>::max();
+    m_moveGuideLaneB = -1;
+
+    const auto& project = m_controller->project();
+    for (const auto& ref : m_selection) {
+        const auto* track = project.findTrack(ref.trackId.toStdString());
+        if (!track) continue;
+        for (const auto& clip : track->clips) {
+            if (QString::fromStdString(clip.id) != ref.clipId) continue;
+            const int lane = laneForTrackId(ref.trackId);
+            m_dragOrigins.push_back(
+                {ref.trackId, ref.clipId, clip.startSeconds, lane, clip.kind});
+            m_moveGuideStart = std::min(m_moveGuideStart, clip.startSeconds);
+            m_moveGuideEnd = std::max(
+                m_moveGuideEnd, clip.startSeconds + clip.durationSeconds);
+            if (lane >= 0) {
+                m_moveGuideLaneA = std::min(m_moveGuideLaneA, lane);
+                m_moveGuideLaneB = std::max(m_moveGuideLaneB, lane);
+            }
+            break;
+        }
+    }
+    if (m_moveGuideLaneB < 0) m_moveGuideLaneA = m_moveGuideLaneB = 0;
+    m_moveGuideTargetLaneA = m_moveGuideLaneA;
+    m_moveGuideTargetLaneB = m_moveGuideLaneB;
+}
+
+bool TimelineWidget::duplicateClipDrag() {
+    std::unordered_set<std::string> selectedPatterns;
+    for (const auto& origin : m_dragOrigins) {
+        if (origin.kind == daw::ClipKind::Pattern)
+            selectedPatterns.insert(origin.clipId.toStdString());
+    }
+
+    QVector<ClipRef> copies;
+    QString copiedGrabbed;
+    for (const auto& origin : m_dragOrigins) {
+        const auto* clip = findClipModel(origin.trackId, origin.clipId);
+        if (!clip || selectedPatterns.contains(clip->patternClipId)) continue;
+        const std::string id = m_controller->duplicateClipAt(
+            origin.trackId.toStdString(), origin.clipId.toStdString(),
+            origin.startSeconds);
+        if (id.empty()) continue;
+        const QString copy = QString::fromStdString(id);
+        copies.push_back({origin.trackId, copy});
+        if (origin.clipId == m_dragClipId) copiedGrabbed = copy;
+    }
+    if (copies.isEmpty()) return false;
+
+    m_selection = copies;
+    m_dragClipId = copiedGrabbed.isEmpty() ? copies.front().clipId
+                                           : copiedGrabbed;
+    m_selectedClipId = m_dragClipId;
+    for (const auto& copy : copies) {
+        if (copy.clipId == m_dragClipId) {
+            m_dragTrackId = copy.trackId;
+            break;
+        }
+    }
+    captureClipDragOrigins();
+    markProjectGestureChanged();
+    emit clipSelected(m_dragTrackId, m_dragClipId);
+    return true;
+}
+
+void TimelineWidget::moveClipDragToLane(int grabbedLane) {
+    if (grabbedLane < 0 || m_dragOrigins.isEmpty()) return;
+    const auto grabbed = std::find_if(
+        m_dragOrigins.cbegin(), m_dragOrigins.cend(),
+        [this](const DragOrigin& origin) { return origin.clipId == m_dragClipId; });
+    if (grabbed == m_dragOrigins.cend()) return;
+
+    const int offset = grabbedLane - grabbed->lane;
+    if (offset == m_dragLaneOffset) return;
+
+    QVector<QString> targets;
+    targets.reserve(m_dragOrigins.size());
+    for (const auto& origin : m_dragOrigins) {
+        const QString target = trackIdForLane(origin.lane + offset);
+        const auto* track = target.isEmpty()
+                                ? nullptr
+                                : m_controller->project().findTrack(
+                                      target.toStdString());
+        if (!track || !daw::trackAccepts(track->kind, origin.kind)) return;
+        targets.push_back(target);
+    }
+
+    for (int i = 0; i < m_dragOrigins.size(); ++i) {
+        auto selected = std::find_if(
+            m_selection.begin(), m_selection.end(),
+            [&](const ClipRef& ref) {
+                return ref.clipId == m_dragOrigins[i].clipId;
+            });
+        if (selected == m_selection.end() || selected->trackId == targets[i])
+            continue;
+        m_controller->moveClipToTrack(selected->trackId.toStdString(),
+                                      selected->clipId.toStdString(),
+                                      targets[i].toStdString());
+        selected->trackId = targets[i];
+        if (selected->clipId == m_dragClipId) m_dragTrackId = targets[i];
+    }
+    m_dragLaneOffset = offset;
+    m_moveGuideTargetLaneA = m_moveGuideLaneA + offset;
+    m_moveGuideTargetLaneB = m_moveGuideLaneB + offset;
+}
+
+void TimelineWidget::autoScrollMarquee(const QPoint& pointer) {
+    const int bottom = std::max(ui::kRulerHeight, height() - m_bottomInset);
+    int delta = 0;
+    if (pointer.y() < ui::kRulerHeight) {
+        delta = -std::clamp((ui::kRulerHeight - pointer.y()) / 3, 2, 32);
+    } else if (pointer.y() > bottom) {
+        delta = std::clamp((pointer.y() - bottom) / 3, 2, 32);
+    }
+    if (delta == 0) return;
+
+    const int before = m_scrollY;
+    setVerticalScroll(m_scrollY + delta);
+    if (before == m_scrollY) return;
+    // The anchor belongs to content, not the viewport. Keep it attached to the
+    // same lane while that content moves under the stationary pointer.
+    m_marqueeOrigin.ry() += before - m_scrollY;
+    if (!m_marqueeScrollScheduled) {
+        m_marqueeScrollScheduled = true;
+        QTimer::singleShot(30, this, [this] {
+            m_marqueeScrollScheduled = false;
+            if (!m_marqueeActive) return;
+            autoScrollMarquee(m_marqueeCurrent);
+            update();
+        });
+    }
 }
 
 void TimelineWidget::publishSelection() {
@@ -745,6 +890,7 @@ void TimelineWidget::clearRegion() {
     m_regionPicking = false;
     m_regionMovePending = false;
     m_regionMoving = false;
+    m_moveGuidesActive = false;
     m_regionPieces.clear();
     m_regionLaneA = -1;
     m_regionLaneB = -1;
@@ -774,17 +920,21 @@ void TimelineWidget::collectRegionPieces() {
         const std::string id = regionInnerPiece(candidate, r0, r1);
         if (id.empty()) continue;
         double start = std::max(candidate.startSeconds, r0);
+        daw::ClipKind kind = daw::ClipKind::Audio;
         if (const auto* track =
                 m_controller->project().findTrack(candidate.trackId)) {
             for (const auto& clip : track->clips) {
                 if (clip.id == id) {
                     start = clip.startSeconds;
+                    kind = clip.kind;
                     break;
                 }
             }
         }
-        m_regionPieces.push_back({QString::fromStdString(candidate.trackId),
-                                  QString::fromStdString(id), start});
+        const QString trackId = QString::fromStdString(candidate.trackId);
+        m_regionPieces.push_back(
+            {trackId, QString::fromStdString(id), start,
+             laneForTrackId(trackId), kind});
     }
 }
 
@@ -803,6 +953,28 @@ void TimelineWidget::drawRegion(QPainter& p) {
     p.fillRect(QRect(x0, top, x1 - x0, bottom - top), t.ink(24));
     p.setPen(QPen(t.ink(150), 1.0, Qt::DashLine));
     p.drawRect(QRect(x0, top, x1 - x0, bottom - top));
+}
+
+void TimelineWidget::drawMoveGuides(QPainter& p) {
+    if (!m_moveGuidesActive || m_moveGuideLaneA < 0 ||
+        m_moveGuideLaneB < m_moveGuideLaneA) {
+        return;
+    }
+
+    const int laneA = std::min(m_moveGuideLaneA, m_moveGuideTargetLaneA);
+    const int laneB = std::max(m_moveGuideLaneB, m_moveGuideTargetLaneB);
+    const int top = laneTop(laneA) + 2;
+    const int bottom = std::min(laneTop(laneB + 1) - 2,
+                                height() - m_bottomInset);
+    if (bottom <= top) return;
+
+    QPen guide(th().ink(72), 1.0, Qt::CustomDashLine, Qt::FlatCap);
+    guide.setDashPattern({2.0, 4.0});
+    p.setPen(guide);
+    for (double seconds : {m_moveGuideStart, m_moveGuideEnd}) {
+        const qreal x = secondsToX(seconds) + 0.5;
+        p.drawLine(QPointF(x, top), QPointF(x, bottom));
+    }
 }
 
 void TimelineWidget::setTool(Tool tool) {
@@ -892,6 +1064,17 @@ double TimelineWidget::snap(double seconds, bool enabled) const {
     const double tempo = std::max(1.0, m_controller->project().tempo);
     const double gridSeconds = m_gridBeats * 60.0 / tempo;
     return std::max(0.0, std::round(seconds / gridSeconds) * gridSeconds);
+}
+
+double TimelineWidget::snapMoveStart(double originalStart, double rawStart,
+                                     bool enabled) const {
+    const double distancePx =
+        std::abs(rawStart - originalStart) * m_pixelsPerSecond;
+    if (distancePx <= kVerticalDragSlopPx ||
+        (enabled && distancePx <= kOriginGuideSnapPx)) {
+        return originalStart;
+    }
+    return snap(rawStart, enabled);
 }
 
 int TimelineWidget::laneAt(int yy) const {
@@ -1020,6 +1203,18 @@ QString TimelineWidget::trackIdForLane(int lane) const {
     const auto& rows = daw::visibleTracks(project);
     if (lane < 0 || lane >= int(rows.size())) return {};
     return QString::fromStdString(project.tracks[rows[size_t(lane)].index].id);
+}
+
+int TimelineWidget::laneForTrackId(const QString& trackId) const {
+    const auto& project = m_controller->project();
+    const auto& rows = daw::visibleTracks(project);
+    for (int lane = 0; lane < int(rows.size()); ++lane) {
+        if (QString::fromStdString(
+                project.tracks[rows[std::size_t(lane)].index].id) == trackId) {
+            return lane;
+        }
+    }
+    return -1;
 }
 
 QRectF TimelineWidget::clipRect(int lane, const daw::ClipModel& clip) const {
@@ -3641,6 +3836,7 @@ void TimelineWidget::drawStaticFrame(QPainter& p,
     }
 
     drawRegion(p);
+    drawMoveGuides(p);
 
     // Drop target highlight for an external file drag.
     if (m_dropActive) {
@@ -3912,7 +4108,12 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         m_regionMoveGrab = xToSeconds(pos.x());
         m_regionMoveOrigStart = m_regionStart;
         m_regionMoveOrigEnd = m_regionEnd;
+        m_regionMoveGrabLane = laneAt(pos.y());
+        m_regionMoveOrigLaneA = m_regionLaneA;
+        m_regionMoveOrigLaneB = m_regionLaneB;
+        m_regionMoveLaneOffset = 0;
         m_regionPieces.clear();
+        m_moveGuidesActive = false;
         m_selection.clear();
         m_selectedClipId.clear();
         setCursor(Qt::ClosedHandCursor);
@@ -4446,28 +4647,25 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
     }
     if (over) {
         // Clicking a clip that is not already part of the selection selects
-        // just it; clicking one that is keeps the group so it can be dragged.
+        // just it; Shift extends the set, and clicking one already in it keeps
+        // the group so it can be dragged together.
         if (!isClipSelected(hit.clipId)) {
-            m_selection = {ClipRef{hit.trackId, hit.clipId}};
+            if (ev->modifiers() & Qt::ShiftModifier)
+                m_selection.push_back({hit.trackId, hit.clipId});
+            else
+                m_selection = {ClipRef{hit.trackId, hit.clipId}};
         }
         m_selectedClipId = hit.clipId;
-        beginClipPositionGesture(tr("Move Clips"));
+        m_duplicateDragPending = ev->modifiers() & Qt::ShiftModifier;
+        beginClipPositionGesture(m_duplicateDragPending
+                                     ? tr("Duplicate Clips")
+                                     : tr("Move Clips"));
         m_dragging = true;
         m_dragTrackId = hit.trackId;
         m_dragClipId = hit.clipId;
+        m_dragPressPosition = pos;
         m_dragGrabOffset = xToSeconds(pos.x()) - hit.startSeconds;
-        // Remember every selected clip's start so the whole group moves as one.
-        m_dragOrigStarts.clear();
-        const auto& project = m_controller->project();
-        for (const auto& ref : m_selection) {
-            if (const auto* tr = project.findTrack(ref.trackId.toStdString())) {
-                for (const auto& c : tr->clips) {
-                    if (QString::fromStdString(c.id) == ref.clipId) {
-                        m_dragOrigStarts.push_back({ref.clipId, c.startSeconds});
-                    }
-                }
-            }
-        }
+        captureClipDragOrigins();
         setCursor(Qt::ClosedHandCursor);
         emit clipSelected(hit.trackId, hit.clipId);
         update();
@@ -4640,7 +4838,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
     // tool; pending/moving are properties of the selection itself.
     if (m_regionPicking || m_regionMovePending || m_regionMoving) {
         const bool snapOn =
-            m_snapEnabled && !(ev->modifiers() & Qt::ShiftModifier);
+            m_snapEnabled && !(ev->modifiers() & Qt::AltModifier);
         if (m_regionPicking) {
             updateRegionFromDrag(pos, snapOn);
             update();
@@ -4653,18 +4851,69 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
                 m_regionMovePending = false;
                 m_regionMoving = true;
                 m_regionActive = true;
-                m_regionMoveGrab = xToSeconds(pos.x());
                 collectRegionPieces();
+                m_moveGuidesActive = true;
+                m_moveGuideStart = m_regionMoveOrigStart;
+                m_moveGuideEnd = m_regionMoveOrigEnd;
+                m_moveGuideLaneA = m_regionMoveOrigLaneA;
+                m_moveGuideLaneB = m_regionMoveOrigLaneB;
+                m_moveGuideTargetLaneA = m_regionMoveOrigLaneA;
+                m_moveGuideTargetLaneB = m_regionMoveOrigLaneB;
                 if (!m_regionPieces.empty()) markProjectGestureChanged();
             }
             update();
             return;
         }
         if (m_regionMoving) {
-            const double newStart = snap(m_regionMoveOrigStart +
-                                             (xToSeconds(pos.x()) - m_regionMoveGrab),
-                                         snapOn);
+            const double rawStart = m_regionMoveOrigStart +
+                                    (xToSeconds(pos.x()) - m_regionMoveGrab);
+            const double newStart = snapMoveStart(
+                m_regionMoveOrigStart, rawStart, snapOn);
             const double delta = newStart - m_regionMoveOrigStart;
+
+            // A time selection keeps its lane shape while it travels. Move all
+            // split-out pieces by the same lane offset, but only when every
+            // destination accepts its clip kind; an incompatible lane is a
+            // hard edge rather than a partial, destructive move.
+            const int hoveredLane = laneAt(pos.y());
+            const int laneCount =
+                int(daw::visibleTracks(m_controller->project()).size());
+            if (hoveredLane >= 0 && laneCount > 0 &&
+                m_regionMoveGrabLane >= 0) {
+                const int wantedOffset = std::clamp(
+                    hoveredLane - m_regionMoveGrabLane,
+                    -m_regionMoveOrigLaneA,
+                    laneCount - 1 - m_regionMoveOrigLaneB);
+                if (wantedOffset != m_regionMoveLaneOffset) {
+                    bool compatible = true;
+                    for (const auto& piece : m_regionPieces) {
+                        const QString targetId =
+                            trackIdForLane(piece.origLane + wantedOffset);
+                        const auto* target =
+                            m_controller->project().findTrack(targetId.toStdString());
+                        if (!target || !daw::trackAccepts(target->kind, piece.kind)) {
+                            compatible = false;
+                            break;
+                        }
+                    }
+                    if (compatible) {
+                        for (auto& piece : m_regionPieces) {
+                            const QString targetId =
+                                trackIdForLane(piece.origLane + wantedOffset);
+                            m_controller->moveClipToTrack(
+                                piece.trackId.toStdString(),
+                                piece.clipId.toStdString(), targetId.toStdString());
+                            piece.trackId = targetId;
+                        }
+                        m_regionMoveLaneOffset = wantedOffset;
+                        m_regionLaneA = m_regionMoveOrigLaneA + wantedOffset;
+                        m_regionLaneB = m_regionMoveOrigLaneB + wantedOffset;
+                        m_moveGuideTargetLaneA = m_regionLaneA;
+                        m_moveGuideTargetLaneB = m_regionLaneB;
+                    }
+                }
+            }
+
             std::vector<daw::EngineController::ClipStartChange> changes;
             changes.reserve(m_regionPieces.size());
             for (const auto& piece : m_regionPieces) {
@@ -4682,6 +4931,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
 
     if (m_marqueeActive) {
         m_marqueeCurrent = pos;
+        autoScrollMarquee(pos);
         update();
         return;
     }
@@ -4787,53 +5037,46 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
         return;
     }
 
+    if (m_duplicateDragPending) {
+        if ((pos - m_dragPressPosition).manhattanLength() <
+            QApplication::startDragDistance()) {
+            return;
+        }
+        m_duplicateDragPending = false;
+        duplicateClipDrag();
+    }
+
     markProjectGestureChanged();
+    m_moveGuidesActive = true;
 
     // Alt is the usual "ignore the grid for a moment" modifier.
-    const double pointerStart = snap(xToSeconds(pos.x()) - m_dragGrabOffset, snapOn);
-
-    // A single clip can be dragged onto another lane that takes its kind —
-    // audio onto audio, MIDI onto MIDI/instrument.
-    if (m_selection.size() == 1) {
-        const int lane = laneAt(pos.y());
-        const QString target = trackIdForLane(lane);
-        if (!target.isEmpty() && target != m_dragTrackId) {
-            const auto* tr =
-                m_controller->project().findTrack(target.toStdString());
-            // The clip's kind has to come from the document; the drag state
-            // only carries ids.
-            daw::ClipKind dragKind = daw::ClipKind::Audio;
-            if (const auto* src = m_controller->project().findTrack(
-                    m_dragTrackId.toStdString())) {
-                for (const auto& c : src->clips) {
-                    if (c.id == m_dragClipId.toStdString()) {
-                        dragKind = c.kind;
-                        break;
-                    }
-                }
-            }
-            if (tr && daw::trackAccepts(tr->kind, dragKind)) {
-                m_controller->moveClipToTrack(m_dragTrackId.toStdString(),
-                                              m_dragClipId.toStdString(),
-                                              target.toStdString());
-                m_dragTrackId = target;
-                if (!m_selection.isEmpty()) m_selection[0].trackId = target;
-            }
+    const double rawPointerStart = xToSeconds(pos.x()) - m_dragGrabOffset;
+    double grabbedOrig = rawPointerStart;
+    for (const auto& origin : m_dragOrigins) {
+        if (origin.clipId == m_dragClipId) {
+            grabbedOrig = origin.startSeconds;
+            break;
         }
     }
+    const double pointerStart = snapMoveStart(
+        grabbedOrig, rawPointerStart, snapOn);
+
+    // Keep the selected clips' lane spacing. A mixed selection moves only when
+    // every destination lane accepts the corresponding clip kind.
+    moveClipDragToLane(laneAt(pos.y()));
 
     // Original start of the grabbed clip; the group moves by the same delta.
-    double grabbedOrig = pointerStart;
-    for (const auto& kv : m_dragOrigStarts) {
-        if (kv.first == m_dragClipId) { grabbedOrig = kv.second; break; }
-    }
-    const double delta = pointerStart - grabbedOrig;
+    const double delta = std::max(-m_moveGuideStart,
+                                  pointerStart - grabbedOrig);
     std::vector<daw::EngineController::ClipStartChange> changes;
     changes.reserve(std::size_t(m_selection.size()));
     for (const auto& ref : m_selection) {
         double orig = grabbedOrig;
-        for (const auto& kv : m_dragOrigStarts) {
-            if (kv.first == ref.clipId) { orig = kv.second; break; }
+        for (const auto& origin : m_dragOrigins) {
+            if (origin.clipId == ref.clipId) {
+                orig = origin.startSeconds;
+                break;
+            }
         }
         changes.push_back({ref.trackId.toStdString(), ref.clipId.toStdString(),
                            std::max(0.0, orig + delta)});
@@ -4929,6 +5172,7 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
         m_regionMoving = false;
         m_regionActive = m_regionEnd > m_regionStart && m_regionLaneA >= 0;
         finishProjectGesture();
+        m_moveGuidesActive = false;
         m_regionPieces.clear();
         emit projectEdited();
     }
@@ -4941,7 +5185,10 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
     if (m_dragging) {
         m_dragging = false;
         finishProjectGesture();
-        m_dragOrigStarts.clear();
+        m_moveGuidesActive = false;
+        m_dragOrigins.clear();
+        m_duplicateDragPending = false;
+        emit clipSelected(m_dragTrackId, m_dragClipId);
         emit projectEdited();
     }
     if (m_trimming) {
@@ -4991,6 +5238,7 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
     m_erasing = false;
     m_scrubbing = false;
     updateCursor(ev->position().toPoint());
+    update();
 }
 
 void TimelineWidget::leaveEvent(QEvent*) {
