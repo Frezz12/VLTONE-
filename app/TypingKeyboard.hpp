@@ -74,6 +74,9 @@ signals:
     void octaveChanged(int octave);
     /// A key went down, with the pitch it played — for the status bar.
     void notePlayed(int pitch);
+    /// A successfully routed note changed state, including its owning track.
+    /// MainWindow merges this with hardware MIDI for the Piano Roll keyboard.
+    void noteStateChanged(const QString& trackId, int pitch, bool down);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;

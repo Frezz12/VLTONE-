@@ -156,6 +156,10 @@ void InternalEditorFrame::setContent(QWidget* content) {
     });
 }
 
+void InternalEditorFrame::setAccessoryWidget(QWidget* accessory) {
+    m_accessory = accessory;
+}
+
 void InternalEditorFrame::present() {
     if (!m_placementRestored) restorePlacement();
     if (m_content) m_content->show();
@@ -316,7 +320,7 @@ bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
         }
         activateEditor();
     } else if (event->type() == QEvent::MouseButtonPress && target) {
-        if (belongsToFrame(target)) {
+        if (belongsToFrame(target) || belongsToAccessory(target)) {
             activateEditor();
         } else if (isVisible() && target->window() == window()) {
             setEditorActive(false);
@@ -532,6 +536,11 @@ void InternalEditorFrame::restoreContentFocus() {
 
 bool InternalEditorFrame::belongsToFrame(const QWidget* widget) const {
     return widget && (widget == this || isAncestorOf(widget));
+}
+
+bool InternalEditorFrame::belongsToAccessory(const QWidget* widget) const {
+    return m_accessory && widget &&
+           (widget == m_accessory || m_accessory->isAncestorOf(widget));
 }
 
 void InternalEditorFrame::installApplicationEventFilter() {

@@ -306,6 +306,7 @@ void TimelineWidget::cancelProjectGesture() {
     m_regionActive = m_regionEnd > m_regionStart && m_regionLaneA >= 0;
     m_trimming = false;
     m_trimEdge = Edge::None;
+    m_trimOrigins.clear();
     m_fading = false;
     m_fadeCurving = false;
     m_fadeSide = Fade::None;
@@ -2381,6 +2382,7 @@ void TimelineWidget::showAutomationMenu(const PointHit& hit,
     const daw::ClipModel* clip = findClipModel(hit.trackId, hit.clipId);
     if (!clip) return;
     const std::vector<daw::AutomationPoint> before = clip->automation.points;
+    const bool activeBefore = clip->automation.active;
     std::vector<daw::AutomationPoint> points = before;
 
     QMenu menu(this);
@@ -2456,7 +2458,7 @@ void TimelineWidget::showAutomationMenu(const PointHit& hit,
                                       hit.clipId.toStdString(), points);
     m_controller->commitAutomationEdit(hit.trackId.toStdString(),
                                        hit.clipId.toStdString(), before,
-                                       "Edit Automation");
+                                       "Edit Automation", activeBefore);
     emit projectEdited();
     update();
 }
@@ -2793,6 +2795,8 @@ void TimelineWidget::drawPatternClips(
             clipPath.addRoundedRect(body, 6, 6);
             p.save();
             p.setClipPath(clipPath, Qt::IntersectClip);
+            p.setRenderHint(QPainter::Antialiasing, false);
+            const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
             for (const std::string& id : *children) {
                 const auto* child = project.findTrack(id);
                 if (!child) continue;
@@ -2817,11 +2821,12 @@ void TimelineWidget::drawPatternClips(
                             2.0, noteLength * m_pixelsPerSecond);
                         const double ny = content.bottom() -
                             double(note.pitch - basePitch + 1) * rowH;
-                        const QRectF noteRect(
-                            nx, ny, nw, std::max(2.0, rowH * 0.78));
+                        const QRectF noteRect = ui::pixelAlignedRect(
+                            QRectF(nx, ny, nw, std::max(2.0, rowH * 0.78)),
+                            dpr);
                         if (paintRegion.intersects(
                                 noteRect.toAlignedRect().adjusted(-1, -1, 1, 1)))
-                            p.drawRoundedRect(noteRect, 1.5, 1.5);
+                            p.drawRect(noteRect);
                     }
                 }
             }
@@ -3635,6 +3640,7 @@ void TimelineWidget::drawTakeAudio(QPainter& p, const daw::ClipModel& clip,
         const QRegion paintRegion = p.clipRegion();
         QPainterPath path;
         bool any = false;
+        const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
         index.forEachVisible(
             take.notes, fromBeat, toBeat,
             [&](const daw::NoteModel& note, std::size_t) {
@@ -3646,7 +3652,8 @@ void TimelineWidget::drawTakeAudio(QPainter& p, const daw::ClipModel& clip,
                     ((double(note.pitch) - lowest) / range) *
                         (vis.height() - 3.0) -
                     3.0;
-                const QRectF noteRect(x, y, noteWidth, 2.0);
+                const QRectF noteRect = ui::pixelAlignedRect(
+                    QRectF(x, y, noteWidth, 2.0), dpr);
                 if (!paintRegion.intersects(
                         noteRect.toAlignedRect().adjusted(-1, -1, 1, 1))) {
                     return;
@@ -3658,6 +3665,7 @@ void TimelineWidget::drawTakeAudio(QPainter& p, const daw::ClipModel& clip,
 
         p.save();
         p.setClipRect(vis, Qt::IntersectClip);
+        p.setRenderHint(QPainter::Antialiasing, false);
         p.setPen(Qt::NoPen);
         p.setBrush(color);
         p.drawPath(path);
@@ -3720,6 +3728,7 @@ void TimelineWidget::drawMidiNotes(QPainter& p, const daw::ClipModel& clip,
     QPainterPath path;
     bool any = false;
     const QRegion paintRegion = p.clipRegion();
+    const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
     index.forEachVisible(
         clip.notes, fromBeat, toBeat,
         [&](const daw::NoteModel& note, std::size_t) {
@@ -3728,14 +3737,13 @@ void TimelineWidget::drawMidiNotes(QPainter& p, const daw::ClipModel& clip,
                 std::max(kMinNoteWidth, note.lengthBeats * pxPerBeat);
             const double y =
                 area.bottom() - double(note.pitch - base + 1) * rowHeight;
-            const double radius =
-                std::min({2.0, noteHeight * 0.4, noteWidth * 0.4});
-            const QRectF noteRect(x, y, noteWidth, noteHeight);
+            const QRectF noteRect = ui::pixelAlignedRect(
+                QRectF(x, y, noteWidth, noteHeight), dpr);
             if (!paintRegion.intersects(
                     noteRect.toAlignedRect().adjusted(-1, -1, 1, 1))) {
                 return;
             }
-            path.addRoundedRect(noteRect, radius, radius);
+            path.addRect(noteRect);
             any = true;
         });
     if (!any) return;
@@ -3749,6 +3757,7 @@ void TimelineWidget::drawMidiNotes(QPainter& p, const daw::ClipModel& clip,
     p.save();
     p.setClipPath(bodyClip, Qt::IntersectClip);
     p.setClipRect(area, Qt::IntersectClip);
+    p.setRenderHint(QPainter::Antialiasing, false);
     p.setPen(Qt::NoPen);
     p.setBrush(QColor(255, 255, 255));
     p.drawPath(path);          // one fill for the whole clip, not one per note
@@ -4160,13 +4169,14 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
             if (clip && std::size_t(point.index) < clip->automation.points.size()) {
                 std::vector<daw::AutomationPoint> points = clip->automation.points;
                 const std::vector<daw::AutomationPoint> before = points;
+                const bool activeBefore = clip->automation.active;
                 points[std::size_t(point.index)].value =
                     m_controller->automationResetValue(clip->automation.target);
                 m_controller->setAutomationPoints(point.trackId.toStdString(),
                                                   point.clipId.toStdString(), points);
                 m_controller->commitAutomationEdit(
                     point.trackId.toStdString(), point.clipId.toStdString(), before,
-                    "Reset Automation Point");
+                    "Reset Automation Point", activeBefore);
                 selectAutomationClip(point.trackId, point.clipId);
                 emit projectEdited();
                 update();
@@ -4188,6 +4198,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
             findClipModel(point.trackId, point.clipId);
         if (clip) {
             m_pointsBefore = clip->automation.points;
+            m_pointsBeforeActive = clip->automation.active;
             m_pointDrag = point;
             selectAutomationClip(point.trackId, point.clipId);
 
@@ -4626,9 +4637,13 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         return;
     }
     if (over && hit.edge != Edge::None && hit.durationSeconds > 0.0) {
-        m_selection = {ClipRef{hit.trackId, hit.clipId}};
+        // An edge on an already-selected clip resizes the whole selection. An
+        // unselected edge starts the usual one-clip gesture.
+        if (!isClipSelected(hit.clipId))
+            m_selection = {ClipRef{hit.trackId, hit.clipId}};
         m_selectedClipId = hit.clipId;
-        beginProjectGesture(tr("Trim Clip"),
+        beginProjectGesture(m_selection.size() > 1 ? tr("Trim Clips")
+                                                   : tr("Trim Clip"),
                             ProjectGestureKind::ClipTrim);
         m_trimming = true;
         m_trimEdge = hit.edge;
@@ -4637,8 +4652,35 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         m_trimOrigStart = hit.startSeconds;
         m_trimOrigOffset = hit.offsetSeconds;
         m_trimOrigDuration = hit.durationSeconds;
-        m_controller->beginClipTrimEdit(m_trimTrackId.toStdString(),
-                                        m_trimClipId.toStdString());
+        m_trimOrigins.clear();
+        std::vector<std::pair<std::string, std::string>> addresses;
+        addresses.reserve(std::size_t(m_selection.size()));
+        const auto& project = m_controller->project();
+        for (const ClipRef& ref : std::as_const(m_selection)) {
+            const auto* track = project.findTrack(ref.trackId.toStdString());
+            if (!track) continue;
+            const auto found = std::find_if(
+                track->clips.begin(), track->clips.end(),
+                [&](const daw::ClipModel& clip) {
+                    return QString::fromStdString(clip.id) == ref.clipId;
+                });
+            if (found == track->clips.end()) continue;
+            double stretch = 1.0;
+            if (found->kind == daw::ClipKind::Audio ||
+                found->kind == daw::ClipKind::Midi) {
+                stretch = std::max(
+                    0.01, m_controller->clipSampleParameter(
+                              ref.trackId.toStdString(),
+                              ref.clipId.toStdString(), "stretch.time"));
+            }
+            m_trimOrigins.push_back(
+                {ref.trackId, ref.clipId, found->startSeconds,
+                 found->offsetSeconds, found->durationSeconds, stretch,
+                 found->kind});
+            addresses.emplace_back(ref.trackId.toStdString(),
+                                   ref.clipId.toStdString());
+        }
+        m_controller->beginClipTrimEdit(addresses);
         m_clipTrimEditOpen = true;
         setCursor(Qt::SizeHorCursor);
         emit clipSelected(hit.trackId, hit.clipId);
@@ -4753,13 +4795,8 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
             const double value = (ev->modifiers() & Qt::ShiftModifier)
                                      ? m_dragPoints[std::size_t(m_pointDrag.index)].value
                                      : automationValueAtY(m_pointDrag.body, pos.y());
-            const double guard = snapOn && m_gridBeats > 0.0
-                                     ? m_gridBeats
-                                     : daw::secondsToBeats(
-                                           8.0 / m_pixelsPerSecond,
-                                           m_controller->project().tempo);
             points = daw::autotools::dragPoint(
-                m_dragPoints, std::size_t(m_pointDrag.index), moved, value, guard);
+                m_dragPoints, std::size_t(m_pointDrag.index), moved, value);
             m_controller->setAutomationPoints(m_pointDrag.trackId.toStdString(),
                                               m_pointDrag.clipId.toStdString(),
                                               points);
@@ -5005,28 +5042,48 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
         constexpr double kMinTrim = 0.02;
         const double pointer = snap(xToSeconds(pos.x()), snapOn);
         if (m_trimEdge == Edge::Right) {
-            const double newDuration = std::max(kMinTrim, pointer - m_trimOrigStart);
-            markProjectGestureChanged();
-            m_controller->setClipTrim(m_trimTrackId.toStdString(),
-                                      m_trimClipId.toStdString(), m_trimOrigStart,
-                                      m_trimOrigOffset, newDuration);
+            double delta = pointer -
+                           (m_trimOrigStart + m_trimOrigDuration);
+            double minDelta = -std::numeric_limits<double>::infinity();
+            for (const TrimOrigin& origin : std::as_const(m_trimOrigins))
+                minDelta = std::max(minDelta,
+                                    kMinTrim - origin.durationSeconds);
+            delta = std::max(delta, minDelta);
+            if (std::abs(delta) > 1e-12) markProjectGestureChanged();
+            for (const TrimOrigin& origin : std::as_const(m_trimOrigins)) {
+                m_controller->setClipTrim(
+                    origin.trackId.toStdString(), origin.clipId.toStdString(),
+                    origin.startSeconds, origin.offsetSeconds,
+                    origin.durationSeconds + delta);
+            }
         } else {  // Left edge
             double delta = pointer - m_trimOrigStart;
-            const double stretch = std::max(
-                0.01, m_controller->clipSampleParameter(
-                          m_trimTrackId.toStdString(), m_trimClipId.toStdString(),
-                          "stretch.time"));
-            // Can't expose audio before the source start, shrink below the
-            // minimum, or push the clip start before zero.
-            const double minDelta =
-                std::max(-m_trimOrigOffset * stretch, -m_trimOrigStart);
-            const double maxDelta = m_trimOrigDuration - kMinTrim;
+            double minDelta = -std::numeric_limits<double>::infinity();
+            double maxDelta = std::numeric_limits<double>::infinity();
+            for (const TrimOrigin& origin : std::as_const(m_trimOrigins)) {
+                double originMin = -origin.startSeconds;
+                if (origin.kind == daw::ClipKind::Audio ||
+                    origin.kind == daw::ClipKind::Midi) {
+                    originMin = std::max(
+                        originMin, -origin.offsetSeconds * origin.stretch);
+                }
+                minDelta = std::max(minDelta, originMin);
+                maxDelta = std::min(
+                    maxDelta, origin.durationSeconds - kMinTrim);
+            }
             delta = std::clamp(delta, minDelta, maxDelta);
-            markProjectGestureChanged();
-            m_controller->setClipTrim(
-                m_trimTrackId.toStdString(), m_trimClipId.toStdString(),
-                m_trimOrigStart + delta, m_trimOrigOffset + delta / stretch,
-                m_trimOrigDuration - delta);
+            if (std::abs(delta) > 1e-12) markProjectGestureChanged();
+            for (const TrimOrigin& origin : std::as_const(m_trimOrigins)) {
+                const bool sourceBound =
+                    origin.kind == daw::ClipKind::Audio ||
+                    origin.kind == daw::ClipKind::Midi;
+                m_controller->setClipTrim(
+                    origin.trackId.toStdString(), origin.clipId.toStdString(),
+                    origin.startSeconds + delta,
+                    origin.offsetSeconds +
+                        (sourceBound ? delta / origin.stretch : 0.0),
+                    origin.durationSeconds - delta);
+            }
         }
         update();
         return;
@@ -5094,7 +5151,8 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
         // the hand went down — the split every curve editor here uses.
         m_controller->commitAutomationEdit(m_pointDrag.trackId.toStdString(),
                                            m_pointDrag.clipId.toStdString(),
-                                           m_pointsBefore, "Edit Automation");
+                                           m_pointsBefore, "Edit Automation",
+                                           m_pointsBeforeActive);
         m_pointsBefore.clear();
         m_dragPoints.clear();
         updateCursor(ev->position().toPoint());
@@ -5195,6 +5253,7 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
         m_trimming = false;
         finishProjectGesture();
         m_trimEdge = Edge::None;
+        m_trimOrigins.clear();
         emit projectEdited();
     }
     if (m_fading) {

@@ -3,10 +3,12 @@
 #include "Theme.hpp"
 
 #include <QColor>
+#include <QRectF>
 #include <QString>
 #include <QVector>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 // Shared metrics so the track headers and the timeline lanes stay aligned, plus
@@ -51,6 +53,21 @@ inline int laneHeightFor(double storedHeight) {
 /// 0xRRGGBB → QColor.
 inline QColor colorFromRgb(uint32_t rgb) { return ::colorFromRgb(rgb); }
 
+/// Round painted geometry to physical pixels without quantising the model or
+/// its hit targets. Fractional logical coordinates are otherwise especially
+/// soft on 125/150% displays, where a one-pixel outline straddles device pixels.
+inline QRectF pixelAlignedRect(const QRectF& rect, qreal devicePixelRatio) {
+    const qreal scale = std::max<qreal>(1.0, devicePixelRatio);
+    const auto snap = [scale](qreal value) {
+        return std::round(value * scale) / scale;
+    };
+    const qreal left = snap(rect.left());
+    const qreal top = snap(rect.top());
+    const qreal right = std::max(left + 1.0 / scale, snap(rect.right()));
+    const qreal bottom = std::max(top + 1.0 / scale, snap(rect.bottom()));
+    return QRectF(QPointF(left, top), QPointF(right, bottom));
+}
+
 /// A timeline grid division, measured in beats (one beat = a quarter note).
 struct GridDivision {
     QString name;
@@ -78,6 +95,10 @@ inline constexpr int kDefaultGridIndex = 5;
 /// QSettings key for the Space play/pause behaviour, an int matching
 /// EngineController::PlaybackMode.
 inline constexpr const char* kPlaybackModeSetting = "transport/playMode";
+/// Optional audio file used for the metronome. Empty selects the built-in
+/// muted knock.
+inline constexpr const char* kMetronomeSampleSetting =
+    "transport/metronomeSample";
 /// The timeline's grid division, as an index into `gridDivisions()`.
 inline constexpr const char* kGridIndexSetting = "transport/gridIndex";
 /// The selected edit tool, as an index (0 Select, 1 Knife, 2 Eraser, 3 Region).

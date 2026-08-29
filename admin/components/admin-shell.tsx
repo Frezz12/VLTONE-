@@ -1,7 +1,7 @@
 "use client";
 
 import { api } from "@vlt/api-client";
-import { Activity, BellRing, Bot, Bug, CircleGauge, Files, MessageSquareText, ShieldCheck, Users, X } from "lucide-react";
+import { Activity, BellRing, Bot, Bug, CircleGauge, Files, MessageSquareText, PackageOpen, ShieldCheck, Users, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -10,6 +10,7 @@ import { adminPollingAllowed, markAdminActivity } from "./admin-activity";
 const links = [
   ["/", "Обзор", CircleGauge], ["/users", "Пользователи", Users], ["/bugs", "Баги", Bug],
   ["/crashes", "Краши", Activity], ["/models", "Модели AI", Bot], ["/prompts", "Промпты", MessageSquareText],
+  ["/releases", "Релизы", PackageOpen],
   ["/audit", "Аудит", Files],
 ] as const;
 

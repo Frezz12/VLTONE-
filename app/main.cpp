@@ -4,6 +4,7 @@
 #include "LocalizationManager.hpp"
 #include "PromptService.hpp"
 #include "StartupWindow.hpp"
+#include "UpdateChecker.hpp"
 #include "TelemetryClient.hpp"
 #include "SettingsWindow.hpp"
 #include "Theme.hpp"
@@ -177,6 +178,7 @@ private:
 
 int main(int argc, char** argv) {
     bool selftest = false;
+    bool updateSelftest = false;
     // Deliberately faults after writing a known project into the recovery
     // journal, so the recovery path can be verified against a real crash
     // rather than a simulated one. Needs DAW_RECOVERY_ROOT.
@@ -190,6 +192,8 @@ int main(int argc, char** argv) {
     QString projectArgument;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--selftest") == 0) selftest = true;
+        else if (std::strcmp(argv[i], "--update-selftest") == 0)
+            updateSelftest = true;
         else if (std::strcmp(argv[i], "--crashtest") == 0) crashtest = true;
         else if (std::strcmp(argv[i], "--recovercheck") == 0) recovercheck = true;
         else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc)
@@ -200,6 +204,28 @@ int main(int argc, char** argv) {
             languageLocale = argv[++i];
         else if (argv[i][0] != '-' && projectArgument.isEmpty())
             projectArgument = QString::fromLocal8Bit(argv[i]);
+    }
+    if (updateSelftest) {
+        const QUrl windowsUrl = UpdateChecker::latestReleaseUrlForTest(
+            QStringLiteral("https://example.invalid/api/v1"),
+            QStringLiteral("windows"), QStringLiteral("ru"));
+        const QUrl macosUrl = UpdateChecker::latestReleaseUrlForTest(
+            QStringLiteral("https://example.invalid/api/v1"),
+            QStringLiteral("macos"), QStringLiteral("en"));
+        const QUrl linuxUrl = UpdateChecker::latestReleaseUrlForTest(
+            QStringLiteral("https://example.invalid/api/v1"),
+            QStringLiteral("linux"), QStringLiteral("en"));
+        if (!UpdateChecker::isNewerVersionForTest(QStringLiteral("0.1.2"), QStringLiteral("0.1.1")) ||
+            UpdateChecker::isNewerVersionForTest(QStringLiteral("0.1.1"), QStringLiteral("0.1.1")) ||
+            UpdateChecker::isNewerVersionForTest(QStringLiteral("0.1.0"), QStringLiteral("0.1.1")) ||
+            UpdateChecker::isNewerVersionForTest(QStringLiteral("0.1-beta"), QStringLiteral("0.1.1")) ||
+            windowsUrl.query() != QStringLiteral("platform=windows&locale=ru") ||
+            macosUrl.query() != QStringLiteral("platform=macos&locale=en") ||
+            linuxUrl.query() != QStringLiteral("platform=linux&locale=en")) {
+            std::fprintf(stderr, "update selftest failed\n");
+            return 36;
+        }
+        return 0;
     }
     const bool headless = selftest || screenshotPath || crashtest || recovercheck;
     if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) {
@@ -393,6 +419,13 @@ int main(int argc, char** argv) {
                          accountService.apiOrigin().toUtf8().constData());
             return 30;
         }
+        if (!UpdateChecker::isNewerVersionForTest(QStringLiteral("0.1.2"), QStringLiteral("0.1.1")) ||
+            UpdateChecker::isNewerVersionForTest(QStringLiteral("0.1.1"), QStringLiteral("0.1.1")) ||
+            UpdateChecker::isNewerVersionForTest(QStringLiteral("0.1.0"), QStringLiteral("0.1.1")) ||
+            UpdateChecker::isNewerVersionForTest(QStringLiteral("0.1-beta"), QStringLiteral("0.1.1"))) {
+            std::fprintf(stderr, "update version comparison failed\n");
+            return 36;
+        }
     }
     std::unique_ptr<StartupWindow> startup;
     if (headless) {
@@ -485,6 +518,15 @@ int main(int argc, char** argv) {
     // let the separate process own retries and post-crash delivery.
     std::unique_ptr<TelemetryClient> telemetry;
     if (!headless) telemetry = std::make_unique<TelemetryClient>(&window);
+
+    std::unique_ptr<UpdateChecker> updateChecker;
+    if (!headless) {
+        updateChecker = std::make_unique<UpdateChecker>(&accountService);
+        QTimer::singleShot(0, updateChecker.get(),
+                           [&window, checker = updateChecker.get()] {
+                               checker->start(&window);
+                           });
+    }
 
     projectOpenFilter.setHandler(
         [&window](const QString& path) { window.openProjectPath(path); });
@@ -622,6 +664,13 @@ int main(int argc, char** argv) {
         if (shootGravity && std::getenv("DAW_SHOT_GRAVITY_MIN")) {
             QTimer::singleShot(300, &window,
                                [&window] { window.resizeGravityForShot(); });
+        }
+        // DAW_SHOT_EQUALIZER opens the built-in EQ with a factory curve.
+        const bool shootEqualizer = std::getenv("DAW_SHOT_EQUALIZER") != nullptr;
+        if (shootEqualizer) window.openDemoEqualizer();
+        if (shootEqualizer && std::getenv("DAW_SHOT_EQUALIZER_MIN")) {
+            QTimer::singleShot(300, &window,
+                               [&window] { window.resizeEqualizerForShot(); });
         }
         // Both hosts embed the same panel and therefore share the same minimum
         // size check; this also makes CLIP screenshots prove layout parity.
@@ -787,7 +836,7 @@ int main(int argc, char** argv) {
                 }
             }
             if (shootRoll || shootClip || shootPattern || shootPlugins ||
-                shootSampler || shootGravity || shootSettings || shootAutomation ||
+                shootSampler || shootGravity || shootEqualizer || shootSettings || shootAutomation ||
                 shootExport) {
                 for (QWidget* w : QApplication::topLevelWidgets()) {
                     if (w != &window && w->isVisible() && w->width() > 600) target = w;
@@ -843,6 +892,13 @@ int main(int argc, char** argv) {
                 return 30;
             }
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_EQUALIZER_ONLY")) {
+            window.populateDemo();
+            if (!window.checkEqualizerPanelForTest()) {
+                std::fprintf(stderr, "Equalizer panel UI invariants failed\n");
+                return 31;
+            }
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
         } else {
         // Build every secondary window too: they are where the tables, the
         // timers and the theme hooks live, and a crash in one of them would
@@ -875,6 +931,10 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "Gravity panel UI invariants failed\n");
             return 30;
         }
+        if (!window.checkEqualizerPanelForTest()) {
+            std::fprintf(stderr, "Equalizer panel UI invariants failed\n");
+            return 31;
+        }
         // The typing keyboard is a key filter over the whole application, and
         // the only way to know it still plays a note is to send it one.
         if (!window.checkTypingKeyboard()) {
@@ -898,6 +958,11 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                          "the internal piano-roll frame did not follow workspace policy\n");
             return 18;
+        }
+        if (!window.checkMidiInput()) {
+            std::fprintf(stderr,
+                         "hardware MIDI routing or Piano Roll highlighting failed\n");
+            return 32;
         }
         if (!window.checkPianoRollForTest()) {
             std::fprintf(stderr, "piano-roll gesture invariants failed\n");

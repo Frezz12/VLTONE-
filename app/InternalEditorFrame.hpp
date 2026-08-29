@@ -35,6 +35,10 @@ public:
 
     void setContent(QWidget* content);
     QWidget* content() const { return m_content; }
+    /// A control surface outside the frame which still belongs to this editor.
+    /// Mouse-down there must not deactivate the editor before the control gets
+    /// its matching release/click.
+    void setAccessoryWidget(QWidget* accessory);
 
     /// Restore the saved placement on first use, show, raise and activate.
     void present();
@@ -82,6 +86,7 @@ private:
     void updateMaximizeButton();
     void restoreContentFocus();
     bool belongsToFrame(const QWidget* widget) const;
+    bool belongsToAccessory(const QWidget* widget) const;
     void installApplicationEventFilter();
     void uninstallApplicationEventFilter();
     QRect interactiveResizeGeometry(const QPoint& globalPosition) const;
@@ -96,6 +101,7 @@ private:
     ui::IconButton* m_maximizeButton = nullptr;
     ui::IconButton* m_closeButton = nullptr;
     QPointer<QWidget> m_content;
+    QPointer<QWidget> m_accessory;
     QPointer<QWidget> m_lastContentFocus;
     QSize m_preferredContentSize{1100, 640};
     std::array<QWidget*, 8> m_resizeHandles{};

@@ -101,8 +101,11 @@ void TypingKeyboard::setOctave(int octave) {
 }
 
 void TypingKeyboard::allNotesOff() {
-    for (auto it = m_held.constBegin(); it != m_held.constEnd(); ++it)
+    for (auto it = m_held.constBegin(); it != m_held.constEnd(); ++it) {
         m_controller->liveNoteOff(it->trackId, it->pitch);
+        emit noteStateChanged(QString::fromStdString(it->trackId),
+                              it->pitch, false);
+    }
     m_held.clear();
 }
 
@@ -144,6 +147,7 @@ void TypingKeyboard::pressKey(int key) {
     if (!m_controller->liveNoteOn(track, pitch, kVelocity)) return;
 
     m_held.insert(key, Held{track, pitch});
+    emit noteStateChanged(QString::fromStdString(track), pitch, true);
     emit notePlayed(pitch);
 }
 
@@ -151,6 +155,8 @@ void TypingKeyboard::releaseKey(int key) {
     auto found = m_held.find(key);
     if (found == m_held.end()) return;
     m_controller->liveNoteOff(found->trackId, found->pitch);
+    emit noteStateChanged(QString::fromStdString(found->trackId),
+                          found->pitch, false);
     m_held.erase(found);
 }
 

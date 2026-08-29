@@ -27,6 +27,9 @@ struct MidiEvent {
     /// the three-byte wire message, and makes equal-frame arrival order explicit
     /// for the dense O(N log N) sorting path.
     std::uint32_t sortOrder = 0;
+    /// Host-only per-note stereo position. It is not encoded into the three
+    /// MIDI wire bytes and defaults to centre for ordinary MIDI producers.
+    float notePan = 0.0f;
 
     static constexpr std::uint8_t kNoteOff = 0x80;
     static constexpr std::uint8_t kNoteOn = 0x90;
@@ -48,8 +51,11 @@ struct MidiEvent {
     }
 
     static MidiEvent noteOn(FrameCount offset, std::uint8_t channel, std::uint8_t key,
-                            std::uint8_t velocity) noexcept {
-        return {offset, std::uint8_t(kNoteOn | (channel & 0x0F)), key, velocity};
+                            std::uint8_t velocity, float pan = 0.0f) noexcept {
+        MidiEvent event{
+            offset, std::uint8_t(kNoteOn | (channel & 0x0F)), key, velocity};
+        event.notePan = std::clamp(pan, -1.0f, 1.0f);
+        return event;
     }
     static MidiEvent noteOff(FrameCount offset, std::uint8_t channel,
                              std::uint8_t key) noexcept {

@@ -10,6 +10,8 @@
 #include <QPointer>
 #include <QQueue>
 #include <QString>
+#include <array>
+#include <bitset>
 #include <string>
 #include <vector>
 
@@ -43,6 +45,7 @@ class FileBrowserPanel;
 class AiChatPanel;
 class WebBrowserPanel;
 class TypingKeyboard;
+class MidiInputManager;
 
 /// The application shell. Top to bottom: the transport bar with its centred
 /// pill and inset panel toggles, then a row of [inspector | arrangement over
@@ -154,6 +157,11 @@ public:
     bool checkGravityPanelForTest();
     void resizeGravityForShot();
 
+    /// Headless/screenshot check for the built-in VLT Equalizer editor.
+    bool openDemoEqualizer();
+    bool checkEqualizerPanelForTest();
+    void resizeEqualizerForShot();
+
     /// Headless check only: switch the typing keyboard on, press and release a
     /// note key through the real event path, and report whether it sounded and
     /// then stopped. Also checks that the keys it borrows stay reported as
@@ -163,6 +171,9 @@ public:
     /// It deliberately exits with the keyboard on and a key still held, so the
     /// teardown path for a note that outlives the window is exercised too.
     bool checkTypingKeyboard();
+    /// Headless check for hardware-style MIDI parsing, source overlap and the
+    /// Piano Roll's live-key state; no physical device is required.
+    bool checkMidiInput();
 
     /// Headless check: choosing the built-in Sampler from an empty instrument
     /// slot must emit the editor request for the slot that was just created.
@@ -520,6 +531,10 @@ private:
     /// Switch the typing keyboard on or off, keeping the button, the menu item
     /// and the keyboard itself saying the same thing.
     void setTypingKeyboardEnabled(bool enabled);
+    /// Resolve the shared live-input destination for typing and hardware MIDI.
+    std::string liveInputTarget() const;
+    void onLiveNoteStateChanged(const QString& trackId, int pitch, bool down);
+    std::bitset<128> livePitchesForTrack(const QString& trackId) const;
     /// Lend the typing keyboard's keys to it while it is on, and take them
     /// back afterwards. Necessary because on macOS the menu bar is the
     /// system's: AppKit fires a key equivalent before any Qt event filter is
@@ -689,6 +704,9 @@ private:
     /// window because it filters the whole application: a key plays a note
     /// whichever window has focus.
     TypingKeyboard* m_typingKeyboard = nullptr;
+    /// Every physical MIDI input, hot-plugged and marshalled onto the UI thread.
+    MidiInputManager* m_midiInput = nullptr;
+    QHash<QString, std::array<unsigned int, 128>> m_livePitchCounts;
     QAction* m_typingKeyboardAction = nullptr;
     SettingsWindow* m_settingsWindow = nullptr;
     PluginManagerWindow* m_pluginManagerWindow = nullptr;

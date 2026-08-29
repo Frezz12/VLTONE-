@@ -122,7 +122,7 @@ private:
     /// Read the parameter array into the plain snapshot a block's voices use.
     SamplerSettings snapshot() const noexcept;
     void applyEvent(const PluginEvent& event, std::uint32_t frameOffset) noexcept;
-    void noteOn(int key, int channel, float velocity) noexcept;
+    void noteOn(int key, int channel, float velocity, float pan) noexcept;
     void noteOff(int key, int channel) noexcept;
     /// Render `frames` starting at `offset` into the context's outputs.
     void renderSlice(const PluginProcessContext& context, const SamplerSettings& settings,

@@ -264,6 +264,62 @@ type AdminAuditLog struct {
 	CreatedAt   time.Time      `json:"created_at"`
 }
 
+const (
+	ReleaseDraft     = "draft"
+	ReleasePublished = "published"
+)
+
+type Release struct {
+	ID           uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
+	Version      *string        `gorm:"uniqueIndex" json:"version"`
+	VersionMajor *int           `json:"version_major,omitempty"`
+	VersionMinor *int           `json:"version_minor,omitempty"`
+	VersionPatch *int           `json:"version_patch,omitempty"`
+	Status       string         `gorm:"not null;default:draft" json:"status"`
+	SummaryRU    string         `gorm:"not null;default:''" json:"summary_ru"`
+	SummaryEN    string         `gorm:"not null;default:''" json:"summary_en"`
+	FeaturesRU   datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"features_ru"`
+	FeaturesEN   datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"features_en"`
+	ChangesRU    datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"changes_ru"`
+	ChangesEN    datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"changes_en"`
+	FixesRU      datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"fixes_ru"`
+	FixesEN      datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"fixes_en"`
+	CreatedBy    *uuid.UUID     `gorm:"type:uuid" json:"created_by,omitempty"`
+	UpdatedBy    *uuid.UUID     `gorm:"type:uuid" json:"updated_by,omitempty"`
+	PublishedAt  *time.Time     `json:"published_at"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+}
+
+type ReleaseArtifact struct {
+	ID        uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	ReleaseID uuid.UUID `gorm:"type:uuid;uniqueIndex:release_artifact_kind;not null" json:"release_id"`
+	Kind      string    `gorm:"uniqueIndex:release_artifact_kind;not null" json:"kind"`
+	FileName  string    `gorm:"not null" json:"file_name"`
+	MimeType  string    `gorm:"not null" json:"mime_type"`
+	Path      string    `gorm:"not null" json:"-"`
+	Bytes     int64     `gorm:"not null" json:"bytes"`
+	SHA256    string    `gorm:"not null" json:"sha256"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type ReleaseScreenshot struct {
+	ID        uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	ReleaseID uuid.UUID `gorm:"type:uuid;index;not null" json:"release_id"`
+	CaptionRU string    `gorm:"not null;default:''" json:"caption_ru"`
+	CaptionEN string    `gorm:"not null;default:''" json:"caption_en"`
+	SortOrder int       `gorm:"not null;default:0" json:"sort_order"`
+	MimeType  string    `gorm:"not null" json:"mime_type"`
+	Path      string    `gorm:"not null" json:"-"`
+	Bytes     int64     `gorm:"not null" json:"bytes"`
+	Width     int       `gorm:"not null" json:"width"`
+	Height    int       `gorm:"not null" json:"height"`
+	SHA256    string    `gorm:"not null" json:"sha256"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // AIPromptDocument is one of the assistant's instruction documents: the main
 // prompt, or one playbook. Edited in the admin panel and served to the desktop,
 // which is what lets the assistant's behaviour change without a release.

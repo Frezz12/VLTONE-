@@ -9,12 +9,14 @@
 #include "AudioPreferences.hpp"
 #include "AccountService.hpp"
 #include "FileBrowserPanel.hpp"
+#include "EqualizerPanel.hpp"
 #include "GravityPanel.hpp"
 #include "Controls.hpp"
 #include "Icons.hpp"
 #include "InspectorWidget.hpp"
 #include "InternalEditorFrame.hpp"
 #include "MixerWidget.hpp"
+#include "MidiInputManager.hpp"
 #include "NoteContextPanel.hpp"
 #include "PianoRollWindow.hpp"
 #include "PatternWindow.hpp"
@@ -41,6 +43,7 @@
 #include "FileTypes.hpp"
 #include "plugins/PluginConvert.hpp"
 #include "Internal/GravityInstance.hpp"
+#include "Internal/EqualizerInstance.hpp"
 #include "TransportBar.hpp"
 #include "TypingKeyboard.hpp"
 #include "UiConstants.hpp"
@@ -719,6 +722,14 @@ MainWindow::MainWindow(bool openDevice, QWidget* parent)
     const int stored =
         QSettings().value(ui::kPlaybackModeSetting, int(Mode::Resume)).toInt();
     m_controller.setPlaybackMode(Mode(std::clamp(stored, 0, int(Mode::Restart))));
+    const QString metronomeSample =
+        QSettings().value(ui::kMetronomeSampleSetting).toString();
+    if (!metronomeSample.isEmpty() &&
+        !m_controller.setMetronomeSample(metronomeSample.toStdString())) {
+        // A moved or deleted preference must not leave a permanently broken
+        // selection: fall back to the built-in knock on this and later runs.
+        QSettings().remove(ui::kMetronomeSampleSetting);
+    }
 
     // Before any widget is built, so the transport's Layers button and the
     // track chips come up showing the restored mode rather than the default.
@@ -733,21 +744,18 @@ MainWindow::MainWindow(bool openDevice, QWidget* parent)
     // goes on after this window's: the two never want the same key, and the
     // gesture filter above must keep seeing everything.
     m_typingKeyboard = new TypingKeyboard(&m_controller, this);
-    m_typingKeyboard->setTargetProvider([this]() -> std::string {
-        // The focused piano roll is playing its own track — that is the part
-        // being written. Otherwise it is whatever is selected, and failing that
-        // the first track that can take notes at all.
-        QString preferred = m_selection.singleTrack();
-        if (preferred.isEmpty() && !m_selection.clips().isEmpty())
-            preferred = m_selection.clips().first().trackId;
-        if (m_pianoRoll && m_pianoRoll->isVisible() && m_pianoRollFrame &&
-            m_pianoRollFrame->isEditorActive() &&
-            !m_pianoRoll->trackId().isEmpty()) {
-            preferred = m_pianoRoll->trackId();
-        }
-        return m_controller.liveNoteTarget(preferred.toStdString());
-    });
+    m_typingKeyboard->setTargetProvider(
+        [this] { return liveInputTarget(); });
+    connect(m_typingKeyboard, &TypingKeyboard::noteStateChanged, this,
+            &MainWindow::onLiveNoteStateChanged);
     qApp->installEventFilter(m_typingKeyboard);
+
+    m_midiInput = new MidiInputManager(&m_controller, this);
+    m_midiInput->setTargetProvider([this] { return liveInputTarget(); });
+    connect(m_midiInput, &MidiInputManager::noteStateChanged, this,
+            &MainWindow::onLiveNoteStateChanged);
+    connect(&m_selection, &ui::SelectionModel::changed, m_midiInput,
+            &MidiInputManager::refreshTarget);
 
     buildLayout();
     buildMenus();
@@ -1070,16 +1078,14 @@ bool MainWindow::checkAutomationForTest() {
     }
 
     // ── And the same gesture drags it ──
-    const double placed = curve()->points.back().value;
+    const double placed = curve()->points[1].value;
     const QPoint lower(at.x(), at.y() + 14);
     click(at, lower, Qt::AltModifier);
     const daw::ClipAutomationModel* after = curve();
     if (!after) return false;
-    if (after->points.size() != before + 2 ||
-        std::abs(after->points[after->points.size() - 2].value - placed) > 0.02 ||
-        after->points.back().value >= placed - 0.02) {
-        std::fprintf(stderr,
-                     "lowering a point did not preserve its old level with an anchor\n");
+    if (after->points.size() != before + 1 ||
+        after->points[1].value >= placed - 0.02) {
+        std::fprintf(stderr, "dragging one automation point created another\n");
         return false;
     }
     double moved = placed;
@@ -1098,8 +1104,8 @@ bool MainWindow::checkAutomationForTest() {
     }
 
     // ── Shift moves a point in time and locks its value ──
-    const double lockedValue = after->points.back().value;
-    const double lockedFrom = after->points.back().beats;
+    const double lockedValue = after->points[1].value;
+    const double lockedFrom = after->points[1].beats;
     const QPoint right(lower.x() + 40, lower.y() + 25);
     click(lower, right, Qt::ShiftModifier | Qt::AltModifier);
     after = curve();
@@ -3199,14 +3205,39 @@ bool MainWindow::checkPianoRollForTest() {
     m_pianoRoll->selectAllNotesForTest();
     syncPianoRollContextPanel();
     QApplication::processEvents();
-    const bool mergedContext = m_noteContextPanel && m_toolPanel && centralWidget() &&
-        m_noteContextPanel->parentWidget() == centralWidget() &&
+    const bool mergedContext = m_noteContextPanel && m_toolPanel &&
+        m_noteContextPanel->parentWidget() == m_toolPanel &&
         m_noteContextPanel->isVisible() && !m_contextPanel->isVisible() &&
         std::abs(m_noteContextPanel->geometry().center().x() -
-                 centralWidget()->rect().center().x()) <= 1 &&
-        m_noteContextPanel->geometry().top() ==
-            centralWidget()->mapFromGlobal(
-                m_toolPanel->mapToGlobal(QPoint(0, 0))).y();
+                 m_toolPanel->rect().center().x()) <= 1 &&
+        m_noteContextPanel->geometry().top() == 0;
+    bool contextPressKeptEditorActive = false;
+    if (mergedContext) {
+        const auto buttons = m_noteContextPanel->findChildren<QAbstractButton*>();
+        QAbstractButton* button = nullptr;
+        for (QAbstractButton* candidate : buttons) {
+            if (candidate && candidate->isVisible() && candidate->isEnabled()) {
+                button = candidate;
+                break;
+            }
+        }
+        if (button) {
+            const QPoint at = button->rect().center();
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(at),
+                              QPointF(button->mapToGlobal(at)), Qt::LeftButton,
+                              Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(button, &press);
+            contextPressKeptEditorActive = m_pianoRollFrame->isEditorActive() &&
+                                           m_noteContextPanel->isVisible();
+            // Release outside the button: the check must not perform the
+            // button's edit, only prove that mouse-down no longer hides it.
+            const QPoint outside(-2, -2);
+            QMouseEvent release(QEvent::MouseButtonRelease, QPointF(outside),
+                                QPointF(button->mapToGlobal(outside)),
+                                Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(button, &release);
+        }
+    }
     if (!mergedContext) {
         std::fprintf(stderr,
                      "the MIDI note context did not take over the shared strip "
@@ -3215,7 +3246,8 @@ bool MainWindow::checkPianoRollForTest() {
                      int(m_contextPanel->isVisible()));
     }
     const bool cycle = m_pianoRoll->checkCycleGestureForTest();
-    const bool ok = gestures && compact && mergedContext && cycle;
+    const bool ok = gestures && compact && mergedContext &&
+                    contextPressKeptEditorActive && cycle;
     // Later shell checks measure and drive the track-header layout. A native
     // editor used to live outside that surface; the internal pilot must leave
     // the same clean harness state rather than covering the rows under test.
@@ -3802,6 +3834,8 @@ MainWindow::~MainWindow() {
     ui::setAutomationCreationMode(false);
     delete m_noteContextPanel;
     m_noteContextPanel = nullptr;
+    delete m_midiInput;
+    m_midiInput = nullptr;
     delete m_pianoRoll;
     m_pianoRoll = nullptr;
     delete m_pianoRollFrame;
@@ -6217,6 +6251,137 @@ void MainWindow::resizeGravityForShot() {
     }
 }
 
+bool MainWindow::openDemoEqualizer() {
+    const auto equalizer = m_controller.pluginManager().find(
+        daw::plugins::Format::Internal, "daw.equalizer");
+    if (!equalizer) return false;
+    for (const auto& track : m_controller.project().tracks) {
+        if (track.kind != daw::TrackKind::Audio) continue;
+        const std::string slot = m_controller.addInsert(track.id, *equalizer, 0);
+        if (slot.empty()) return false;
+        if (qEnvironmentVariableIsSet("DAW_SHOT_EQUALIZER")) {
+            const auto presets = daw::plugins::equalizer::factoryPresets();
+            const auto& preset = presets[2]; // Vocal Cleanup: a useful graph for docs.
+            for (const daw::plugins::ParameterInfo& info :
+                 daw::plugins::equalizer::parameterTable())
+                m_controller.setInsertParameter(track.id, slot, info.id,
+                                                preset.values[info.index]);
+            if (auto* instance = dynamic_cast<
+                    daw::plugins::equalizer::EqualizerInstance*>(
+                    m_controller.insertInstance(track.id, slot)))
+                instance->setPresetReference("factory", "Vocal Cleanup");
+        }
+        onTracksChanged();
+        openPluginEditor(QString::fromStdString(track.id),
+                         QString::fromStdString(slot));
+        return true;
+    }
+    return false;
+}
+
+bool MainWindow::checkEqualizerPanelForTest() {
+    if (!openDemoEqualizer()) return false;
+    QElapsedTimer wait;
+    wait.start();
+    do {
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+        for (PluginEditorWindow* editor : std::as_const(m_pluginEditors)) {
+            if (EqualizerPanel* panel = editor->findChild<EqualizerPanel*>())
+                return panel->checkForTest();
+        }
+        QThread::msleep(1);
+    } while (wait.elapsed() < 1000);
+    if (qEnvironmentVariableIsSet("DAW_SELFTEST_VERBOSE"))
+        std::fprintf(stderr, "Equalizer UI selftest: editor did not become ready\n");
+    return false;
+}
+
+void MainWindow::resizeEqualizerForShot() {
+    for (PluginEditorWindow* editor : std::as_const(m_pluginEditors)) {
+        if (!editor || editor->pluginUid() != QStringLiteral("daw.equalizer"))
+            continue;
+        if (InternalEditorFrame* frame = m_internalEditorFrames.value(editor, nullptr))
+            frame->resizeForContent(QSize(820, 559));
+    }
+}
+
+bool MainWindow::checkMidiInput() {
+    if (!m_midiInput || !m_pianoRoll || !m_pianoRollFrame ||
+        !m_pianoRollFrame->isEditorActive()) {
+        return false;
+    }
+
+    const auto message = [](int status, int data1, int data2 = -1) {
+        QByteArray bytes;
+        bytes.append(char(status));
+        bytes.append(char(data1));
+        if (data2 >= 0) bytes.append(char(data2));
+        return bytes;
+    };
+    constexpr int pitch = 64;
+    constexpr quint64 sourceA = 0xFFFFFF01u;
+    constexpr quint64 sourceB = 0xFFFFFF02u;
+
+    const bool first = m_midiInput->injectMessageForTest(
+        message(0x93, pitch, 117), sourceA);
+    const bool lit = m_pianoRoll->livePitchHeldForTest(pitch);
+    const bool second = m_midiInput->injectMessageForTest(
+        message(0x93, pitch, 91), sourceB);
+    const bool firstOff = m_midiInput->injectMessageForTest(
+        message(0x83, pitch, 0), sourceA);
+    const bool overlapStayedLit = m_pianoRoll->livePitchHeldForTest(pitch);
+    const bool secondOff = m_midiInput->injectMessageForTest(
+        message(0x93, pitch, 0), sourceB);
+    const bool cleared = !m_pianoRoll->livePitchHeldForTest(pitch);
+    const bool filtered =
+        !m_midiInput->injectMessageForTest(message(0x90, pitch), sourceA) &&
+        !m_midiInput->injectMessageForTest(QByteArray(1, char(0xF8)), sourceA);
+
+    // A held note belongs only to the track that accepted it. Switching the
+    // open roll releases that track and must not paint the same pitch on the
+    // newly opened one.
+    const QString originalTrack = m_pianoRoll->trackId();
+    QString originalClip;
+    QString otherTrack;
+    QString otherClip;
+    for (const daw::TrackModel& track : m_controller.project().tracks) {
+        const QString id = QString::fromStdString(track.id);
+        if (!daw::trackAccepts(track.kind, daw::ClipKind::Midi)) continue;
+        QString midiClip;
+        for (const daw::ClipModel& clip : track.clips) {
+            if (clip.kind == daw::ClipKind::Midi) {
+                midiClip = QString::fromStdString(clip.id);
+                break;
+            }
+        }
+        if (id == originalTrack) originalClip = midiClip;
+        else if (otherTrack.isEmpty()) {
+            otherTrack = id;
+            otherClip = midiClip;
+        }
+    }
+    if (!otherTrack.isEmpty() && otherClip.isEmpty()) {
+        otherClip = QString::fromStdString(
+            m_controller.addMidiClip(otherTrack.toStdString(), 0.0, 1.0));
+    }
+    if (originalClip.isEmpty() || otherTrack.isEmpty() || otherClip.isEmpty())
+        return false;
+
+    constexpr quint64 sourceC = 0xFFFFFF03u;
+    const bool originalOn = m_midiInput->injectMessageForTest(
+        message(0x92, pitch, 100), sourceC);
+    const bool originalLit = m_pianoRoll->livePitchHeldForTest(pitch);
+    openPianoRoll(otherTrack, otherClip);
+    const bool releasedOnSwitch = m_midiInput->heldCount() == 0 &&
+        !livePitchesForTrack(originalTrack).test(std::size_t(pitch));
+    const bool otherStayedDark = !m_pianoRoll->livePitchHeldForTest(pitch);
+    openPianoRoll(originalTrack, originalClip);
+
+    return first && lit && second && firstOff && overlapStayedLit &&
+           secondOff && cleared && filtered && originalOn && originalLit &&
+           releasedOnSwitch && otherStayedDark;
+}
+
 bool MainWindow::checkTypingKeyboard() {
     if (!m_typingKeyboard || !m_shortcuts) return false;
 
@@ -6271,12 +6436,20 @@ bool MainWindow::checkTypingKeyboard() {
                     QString(QChar(0x042f)), false, 1);
     QApplication::sendEvent(target, &press);
     const bool sounded = m_typingKeyboard->heldCount() == 1;
+    const std::string routedTrack = liveInputTarget();
+    const int typedPitch = m_typingKeyboard->octave() * 12;
+    const bool tracked = !routedTrack.empty() &&
+        livePitchesForTrack(QString::fromStdString(routedTrack))
+            .test(std::size_t(typedPitch));
 
     QKeyEvent release(QEvent::KeyRelease, kCyrillicYa, Qt::NoModifier,
                       nativeScan, nativeVirtual, 0,
                       QString(QChar(0x042f)), false, 1);
     QApplication::sendEvent(target, &release);
     const bool stopped = m_typingKeyboard->heldCount() == 0;
+    const bool untracked = routedTrack.empty() ||
+        !livePitchesForTrack(QString::fromStdString(routedTrack))
+             .test(std::size_t(typedPitch));
 
     setTypingKeyboardEnabled(false);
     for (const ShortcutManager::Command& c : m_shortcuts->commands()) {
@@ -6292,7 +6465,7 @@ bool MainWindow::checkTypingKeyboard() {
     setTypingKeyboardEnabled(true);
     QApplication::sendEvent(target, &press);
 
-    return sounded && stopped;
+    return sounded && stopped && tracked && untracked;
 }
 
 bool MainWindow::checkLayoutIndependentShortcuts() {
@@ -7295,22 +7468,21 @@ void MainWindow::openPianoRoll(const QString& trackId, const QString& clipId) {
             QStringLiteral("internalEditors/pianoRoll"), m_editorHost);
         m_pianoRoll = new PianoRollWindow(&m_controller, m_pianoRollFrame);
         m_pianoRollFrame->setContent(m_pianoRoll);
-        m_noteContextPanel = m_pianoRoll->createContextPanel(centralWidget());
+        // Keep the note island in the actual shared strip. Parenting it to the
+        // whole workspace made it only look like a toolbar control: a press was
+        // classified as leaving the internal editor, so the panel disappeared
+        // before the button could receive its release/click.
+        m_noteContextPanel = m_pianoRoll->createContextPanel(m_toolPanel);
         if (m_noteContextPanel) {
-            // Notes are edited in a workspace-wide surface, so their island is
-            // fixed to the centre of the whole DAW rather than following the
-            // MIDI clip's old position on the covered timeline. Its y stays in
-            // the shared context strip even though its parent spans Web/AI too.
-            m_noteContextPanel->setTopProvider([this] {
-                if (!m_toolPanel || !centralWidget()) return 0;
-                const QPoint global = m_toolPanel->mapToGlobal(QPoint(0, 0));
-                return centralWidget()->mapFromGlobal(global).y();
-            });
+            m_pianoRollFrame->setAccessoryWidget(m_noteContextPanel);
             m_noteContextPanel->setPanelEnabled(
                 m_contextPanel && m_contextPanel->isPanelEnabled());
         }
         connect(m_pianoRollFrame, &InternalEditorFrame::activeChanged, this,
-                [this](bool) { syncPianoRollContextPanel(); });
+                [this](bool) {
+                    syncPianoRollContextPanel();
+                    if (m_midiInput) m_midiInput->refreshTarget();
+                });
         connect(m_pianoRoll, &PianoRollWindow::noteSelectionChanged, this,
                 [this](bool) { syncPianoRollContextPanel(); });
         connect(m_pianoRoll, &PianoRollWindow::internalWindowRequested, this,
@@ -7351,7 +7523,9 @@ void MainWindow::openPianoRoll(const QString& trackId, const QString& clipId) {
         });
     }
     m_pianoRoll->setClip(trackId, clipId);
+    m_pianoRoll->setLivePitches(livePitchesForTrack(trackId));
     m_pianoRollFrame->present();
+    if (m_midiInput) m_midiInput->refreshTarget();
     syncPianoRollContextPanel();
 }
 
@@ -8055,6 +8229,46 @@ void MainWindow::suppressTypingKeyConflicts(bool suppress) {
     m_shortcuts->setKeySuppressor(
         suppress ? std::function<bool(int)>(&TypingKeyboard::usesKey)
                  : std::function<bool(int)>());
+}
+
+std::string MainWindow::liveInputTarget() const {
+    // The focused piano roll is playing its own track — that is the part being
+    // written. Otherwise input follows the selection and finally the first
+    // track that can take MIDI.
+    QString preferred = m_selection.singleTrack();
+    if (preferred.isEmpty() && !m_selection.clips().isEmpty())
+        preferred = m_selection.clips().first().trackId;
+    if (m_pianoRoll && m_pianoRoll->isVisible() && m_pianoRollFrame &&
+        m_pianoRollFrame->isEditorActive() &&
+        !m_pianoRoll->trackId().isEmpty()) {
+        preferred = m_pianoRoll->trackId();
+    }
+    return m_controller.liveNoteTarget(preferred.toStdString());
+}
+
+std::bitset<128> MainWindow::livePitchesForTrack(
+    const QString& trackId) const {
+    std::bitset<128> pitches;
+    const auto found = m_livePitchCounts.constFind(trackId);
+    if (found == m_livePitchCounts.cend()) return pitches;
+    for (std::size_t pitch = 0; pitch < found->size(); ++pitch)
+        pitches.set(pitch, (*found)[pitch] != 0);
+    return pitches;
+}
+
+void MainWindow::onLiveNoteStateChanged(const QString& trackId, int pitch,
+                                        bool down) {
+    if (trackId.isEmpty() || pitch < 0 || pitch > 127) return;
+    auto& counts = m_livePitchCounts[trackId];
+    unsigned int& count = counts[std::size_t(pitch)];
+    if (down) {
+        if (count != std::numeric_limits<unsigned int>::max()) ++count;
+    } else if (count > 0) {
+        --count;
+    }
+
+    if (m_pianoRoll && m_pianoRoll->trackId() == trackId)
+        m_pianoRoll->setLivePitches(livePitchesForTrack(trackId));
 }
 
 void MainWindow::setTypingKeyboardEnabled(bool enabled) {

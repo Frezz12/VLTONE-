@@ -38,6 +38,7 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
 
@@ -47,7 +48,10 @@ private:
     bool rowStructureMatches(const QStringList& ids) const;
     bool syncRowsFromModel();
     void showInstrumentMenu();
-    void addSampleFiles(const QStringList& paths, double startSeconds = 0.0);
+    void addSampleFiles(const QStringList& paths, double startSeconds = 0.0,
+                        int insertionIndex = -1);
+    bool replaceSample(const QString& trackId, const QString& path);
+    void chooseReplacementSample(const QString& trackId);
     void openInstrument(const QString& trackId);
     void renameSource(const QString& trackId);
     void duplicateSource(const QString& trackId);
@@ -69,6 +73,9 @@ private:
     void selectRange(int first, int last);
     void updateSelectionVisuals();
     void updateDropIndicator(int insertionIndex);
+    int replacementRowAtGlobal(const QPoint& globalPos) const;
+    void updateExternalDropFeedback(const QPoint& globalPos);
+    void clearExternalDropFeedback();
     void endRowGestureState();
     QStringList childTrackIds() const;
 
@@ -84,6 +91,7 @@ private:
     QPoint m_gesturePressGlobal;
     int m_gestureAnchorIndex = -1;
     int m_dropIndex = -1;
+    int m_externalReplaceIndex = -1;
     Qt::KeyboardModifiers m_gestureModifiers = Qt::NoModifier;
     bool m_rowGestureActive = false;
     bool m_rangeSelecting = false;

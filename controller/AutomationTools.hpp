@@ -96,13 +96,9 @@ Points ramp(double fromBeats, double toBeats, double fromValue, double toValue,
 /// every generator lands through when the editor has a selection.
 Points splice(Points points, const Range& range, const Points& replacement);
 
-/// Move one breakpoint as a pointer gesture would. Lowering a point preserves
-/// the curve immediately before it with a second, anchored breakpoint, so a
-/// level change becomes a short ramp instead of pulling the whole preceding
-/// segment down. `guardBeats` is the width of that ramp when the pointer has not
-/// moved to the right of the point it picked up.
+/// Move exactly one breakpoint as a pointer gesture would.
 Points dragPoint(const Points& points, std::size_t index, double beats,
-                 double value, double guardBeats);
+                 double value);
 
 // ── Transforms ──────────────────────────────────────────────────────────────
 

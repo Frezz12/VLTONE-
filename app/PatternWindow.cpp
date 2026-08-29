@@ -14,7 +14,9 @@
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QDragEnterEvent>
+#include <QDragLeaveEvent>
 #include <QDropEvent>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QFontMetrics>
 #include <QHBoxLayout>
@@ -306,6 +308,7 @@ public:
 
     Action onOpen;
     Action onRename;
+    Action onReplace;
     Action onDuplicate;
     Action onRemove;
 
@@ -314,12 +317,37 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
         const Theme& t = th();
-        QColor fill = isDown() ? mixColors(t.well(), t.accent, 0.16) : t.well();
-        if (underMouse()) fill = mixColors(fill, t.accent, 0.08);
-        p.setBrush(fill);
-        p.setPen(QPen(hasFocus() ? t.accent : t.separator(),
+        const QRectF panel = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        QPainterPath shape;
+        shape.addRoundedRect(panel, 7, 7);
+        QLinearGradient glass(0, panel.top(), 0, panel.bottom());
+        QColor top = mixColors(t.surfaceElevated, t.headerBackground, 0.30);
+        QColor bottom = mixColors(t.surface, t.headerBackground, 0.16);
+        if (isDown()) {
+            top = mixColors(top, t.accent, 0.16);
+            bottom = mixColors(bottom, t.accent, 0.12);
+        } else if (underMouse()) {
+            top = mixColors(top, t.accent, 0.09);
+            bottom = mixColors(bottom, t.accent, 0.06);
+        }
+        top.setAlphaF(t.dark ? 0.88 : 0.82);
+        bottom.setAlphaF(t.dark ? 0.78 : 0.74);
+        glass.setColorAt(0.0, top);
+        glass.setColorAt(1.0, bottom);
+        p.fillPath(shape, glass);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(hasFocus() ? t.accent
+                                 : mixColors(t.separator(), t.textPrimary, 0.12),
                       hasFocus() ? 1.8 : 1.0));
-        p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 7, 7);
+        p.drawPath(shape);
+        p.save();
+        p.setClipPath(shape);
+        QColor sheen = t.textPrimary;
+        sheen.setAlpha(t.dark ? 22 : 38);
+        p.setPen(QPen(sheen, 1));
+        p.drawLine(QPointF(panel.left() + 7, panel.top() + 1),
+                   QPointF(panel.right() - 7, panel.top() + 1));
+        p.restore();
 
         QFont font = p.font();
         font.setPixelSize(11);
@@ -358,12 +386,14 @@ protected:
                 ? QObject::tr("Open Instrument")
                 : QObject::tr("Open %1").arg(m_instrumentName));
         QAction* rename = menu.addAction(QObject::tr("Rename…"));
+        QAction* replace = menu.addAction(QObject::tr("Replace with Sample..."));
         QAction* duplicate = menu.addAction(QObject::tr("Duplicate Source"));
         menu.addSeparator();
         QAction* remove = menu.addAction(QObject::tr("Remove Source"));
         QAction* chosen = menu.exec(event->globalPos());
         if (chosen == open && onOpen) onOpen();
         else if (chosen == rename && onRename) onRename();
+        else if (chosen == replace && onReplace) onReplace();
         else if (chosen == duplicate && onDuplicate) onDuplicate();
         else if (chosen == remove && onRemove) onRemove();
         event->accept();
@@ -640,6 +670,53 @@ int PatternWindow::insertionIndexAtGlobal(const QPoint& globalPos) const {
             first = middle + 1;
     }
     return first;
+}
+
+int PatternWindow::replacementRowAtGlobal(const QPoint& globalPos) const {
+    if (!m_rowsHost) return -1;
+    const QPoint local = m_rowsHost->mapFromGlobal(globalPos);
+    for (int i = 0; i < m_rowWidgets.size(); ++i) {
+        const QWidget* row = m_rowWidgets[i];
+        if (row && row->geometry().adjusted(0, 8, 0, -8).contains(local))
+            return i;
+    }
+    return -1;
+}
+
+void PatternWindow::updateExternalDropFeedback(const QPoint& globalPos) {
+    const int replacement = replacementRowAtGlobal(globalPos);
+    if (replacement != m_externalReplaceIndex) {
+        for (int i = 0; i < m_rowWidgets.size(); ++i) {
+            QWidget* row = m_rowWidgets[i];
+            if (!row) continue;
+            const bool target = i == replacement;
+            if (row->property("dropTarget").toBool() == target) continue;
+            row->setProperty("dropTarget", target);
+            row->style()->unpolish(row);
+            row->style()->polish(row);
+            row->update();
+        }
+        m_externalReplaceIndex = replacement;
+    }
+    if (replacement >= 0) {
+        if (m_dropIndicator) m_dropIndicator->hide();
+        m_dropIndex = -1;
+    } else {
+        updateDropIndicator(insertionIndexAtGlobal(globalPos));
+    }
+}
+
+void PatternWindow::clearExternalDropFeedback() {
+    m_externalReplaceIndex = -1;
+    m_dropIndex = -1;
+    if (m_dropIndicator) m_dropIndicator->hide();
+    for (QWidget* row : std::as_const(m_rowWidgets)) {
+        if (!row || !row->property("dropTarget").toBool()) continue;
+        row->setProperty("dropTarget", false);
+        row->style()->unpolish(row);
+        row->style()->polish(row);
+        row->update();
+    }
 }
 
 void PatternWindow::beginRowGesture(
@@ -954,6 +1031,7 @@ void PatternWindow::rebuildRows() {
         name->setObjectName(QStringLiteral("PatternSourceName"));
         name->onOpen = [this, id] { openInstrument(id); };
         name->onRename = [this, id] { renameSource(id); };
+        name->onReplace = [this, id] { chooseReplacementSample(id); };
         name->onDuplicate = [this, id] { duplicateSource(id); };
         name->onRemove = [this, id] { removeSource(id); };
         layout->addWidget(name);
@@ -1154,17 +1232,18 @@ void PatternWindow::showInstrumentMenu() {
 }
 
 void PatternWindow::addSampleFiles(const QStringList& paths,
-                                   double startSeconds) {
+                                   double startSeconds,
+                                   int insertionIndex) {
     bool changed = false;
     QStringList failed;
+    QStringList added;
     for (const QString& path : paths) {
         if (!ui::isAudioFile(path)) continue;
-        const bool loaded = !m_controller
-                                 ->addPatternSample(m_patternId.toStdString(),
-                                                    path.toStdString(),
-                                                    startSeconds)
-                                 .empty();
+        const std::string id = m_controller->addPatternSample(
+            m_patternId.toStdString(), path.toStdString(), startSeconds);
+        const bool loaded = !id.empty();
         changed |= loaded;
+        if (loaded) added.push_back(QString::fromStdString(id));
         if (!loaded) failed.push_back(QFileInfo(path).fileName());
     }
     if (!failed.isEmpty()) {
@@ -1175,8 +1254,48 @@ void PatternWindow::addSampleFiles(const QStringList& paths,
                 .arg(failed.join(QLatin1Char('\n'))));
     }
     if (!changed) return;
+    if (insertionIndex >= 0 && !added.isEmpty()) {
+        setSelectedSources(added, added.back());
+        m_selectionAnchorId = added.back();
+        reorderSelectedSources(insertionIndex);
+    }
     emit projectEdited();
     refresh();
+}
+
+bool PatternWindow::replaceSample(const QString& trackId,
+                                  const QString& path) {
+    const auto* track = m_controller->project().findTrack(trackId.toStdString());
+    if (!track || track->parentId != m_patternId.toStdString()) return false;
+    const std::size_t undoStart = m_controller->undoDepth();
+    const bool loaded = track->instrument.uid == "daw.sampler" &&
+                                !track->instrument.id.empty()
+                            ? m_controller->loadSamplerSample(
+                                  track->id, track->instrument.id,
+                                  path.toStdString())
+                            : m_controller->loadInstrumentSampler(
+                                  track->id, path.toStdString());
+    if (!loaded) return false;
+    const QString name = QFileInfo(path).completeBaseName().trimmed();
+    if (!name.isEmpty())
+        m_controller->renameTrack(trackId.toStdString(), name.toStdString());
+    m_controller->collapseUndo(undoStart, "Replace Pattern Sample");
+    setSelectedSources({trackId}, trackId);
+    m_selectionAnchorId = trackId;
+    emit projectEdited();
+    refresh();
+    return true;
+}
+
+void PatternWindow::chooseReplacementSample(const QString& trackId) {
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("Replace Pattern Sample"), QString(), ui::audioNameFilter());
+    if (path.isEmpty()) return;
+    if (replaceSample(trackId, path)) return;
+    QMessageBox::warning(
+        this, tr("Sample could not be replaced"),
+        tr("The selected audio file could not be decoded or loaded into the "
+           "Sampler."));
 }
 
 void PatternWindow::openInstrument(const QString& trackId) {
@@ -1319,6 +1438,8 @@ void PatternWindow::dragEnterEvent(QDragEnterEvent* event) {
     for (const QUrl& url : event->mimeData()->urls()) {
         if (ui::isAudioFile(url.toLocalFile())) {
             event->acceptProposedAction();
+            updateExternalDropFeedback(
+                mapToGlobal(event->position().toPoint()));
             return;
         }
     }
@@ -1329,9 +1450,16 @@ void PatternWindow::dragMoveEvent(QDragMoveEvent* event) {
     for (const QUrl& url : event->mimeData()->urls()) {
         if (ui::isAudioFile(url.toLocalFile())) {
             event->acceptProposedAction();
+            updateExternalDropFeedback(
+                mapToGlobal(event->position().toPoint()));
             return;
         }
     }
+}
+
+void PatternWindow::dragLeaveEvent(QDragLeaveEvent* event) {
+    clearExternalDropFeedback();
+    event->accept();
 }
 
 void PatternWindow::dropEvent(QDropEvent* event) {
@@ -1341,8 +1469,24 @@ void PatternWindow::dropEvent(QDropEvent* event) {
         if (ui::isAudioFile(path)) files.push_back(path);
     }
     if (files.isEmpty()) return;
+    const QPoint globalPos = mapToGlobal(event->position().toPoint());
+    const int replacement = replacementRowAtGlobal(globalPos);
+    const int insertion = insertionIndexAtGlobal(globalPos);
+    const QStringList ids = childTrackIds();
+    clearExternalDropFeedback();
     event->acceptProposedAction();
-    addSampleFiles(files);
+    if (replacement >= 0 && replacement < ids.size()) {
+        const QString first = files.takeFirst();
+        if (!replaceSample(ids[replacement], first)) {
+            QMessageBox::warning(
+                this, tr("Sample could not be replaced"),
+                tr("The selected audio file could not be decoded or loaded "
+                   "into the Sampler."));
+        }
+        if (!files.isEmpty()) addSampleFiles(files, 0.0, replacement + 1);
+        return;
+    }
+    addSampleFiles(files, 0.0, insertion);
 }
 
 bool PatternWindow::checkInteractionGesturesForTest() {
@@ -1420,6 +1564,8 @@ QDialog { background: %BG%; color: %TEXT%; }
 #PatternSourceRow[selected="true"] { background: %SELECTED%;
     border-color: %ACCENT%; }
 #PatternSourceRow[primary="true"] { border-width: 2px; }
+#PatternSourceRow[dropTarget="true"] { background: %SELECTED%;
+    border: 2px solid %ACCENT%; }
 #PatternDropIndicator { background: %ACCENT%; border-radius: 1px; }
 QToolButton#PatternToolbarButton { color: %TEXT%; background: %WELL%;
     border: 1px solid %SEP%; border-radius: 7px; padding: 4px 8px; }

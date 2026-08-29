@@ -205,7 +205,7 @@ Points splice(Points points, const Range& range, const Points& replacement) {
 }
 
 Points dragPoint(const Points& points, std::size_t index, double beats,
-                 double value, double guardBeats) {
+                 double value) {
     if (index >= points.size()) return finish(points);
 
     const AutomationPoint origin = points[index];
@@ -220,22 +220,6 @@ Points dragPoint(const Points& points, std::size_t index, double beats,
     std::erase_if(result, [&](const AutomationPoint& point) {
         return std::abs(point.beats - moved.beats) < kEps;
     });
-
-    if (moved.value < origin.value - kEps) {
-        AutomationPoint anchor = origin;
-        if (moved.beats <= origin.beats + kEps) {
-            // A vertical or leftward pull has no horizontal distance in which
-            // to reveal the ramp. Put the guard immediately before the landing
-            // point at the value the handle had when it was picked up. This is
-            // the point the user otherwise has to recreate by hand before
-            // drawing a fade down.
-            anchor.beats = std::max(0.0, moved.beats - std::max(guardBeats, kEps));
-            anchor.value = origin.value;
-            anchor.shape = AutomationSegment::Linear;
-            anchor.curve = 0.0;
-        }
-        if (anchor.beats < moved.beats - kEps) result.push_back(anchor);
-    }
 
     result.push_back(moved);
     return finish(std::move(result));

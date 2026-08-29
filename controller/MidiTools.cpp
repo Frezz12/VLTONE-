@@ -362,40 +362,49 @@ Notes arpeggiate(const Notes& source, const ArpParams& params,
     double spanStart = 0.0, spanEnd = 0.0;
     spanOf(source, &spanStart, &spanEnd);
 
-    // ── The pitch pool: the chord, stacked up the requested octaves ──
-    std::vector<int> chord;
-    for (const auto& n : source) chord.push_back(n.pitch);
-    std::sort(chord.begin(), chord.end());
-    chord.erase(std::unique(chord.begin(), chord.end()), chord.end());
-    if (chord.empty()) return out;
-
-    std::vector<int> pool;
     const int octaves = std::clamp(params.octaves, 1, 5);
-    for (int octave = 0; octave < octaves; ++octave) {
-        for (int pitch : chord) pool.push_back(pitch + 12 * octave);
-    }
+    const auto pitchPool = [octaves](std::vector<int> chord) {
+        std::sort(chord.begin(), chord.end());
+        chord.erase(std::unique(chord.begin(), chord.end()), chord.end());
+        std::vector<int> pool;
+        pool.reserve(chord.size() * std::size_t(octaves));
+        for (int octave = 0; octave < octaves; ++octave) {
+            for (int pitch : chord) pool.push_back(pitch + 12 * octave);
+        }
+        return pool;
+    };
+    const auto orderedSequence = [&params](const std::vector<int>& pool) {
+        std::vector<int> sequence = pool;
+        switch (params.direction) {
+            case ArpParams::Direction::Up:
+                break;
+            case ArpParams::Direction::Down:
+                std::reverse(sequence.begin(), sequence.end());
+                break;
+            case ArpParams::Direction::UpDown:
+                // The turning notes are not repeated, so a loop reads as one
+                // line rather than stuttering at each end.
+                for (size_t i = pool.size() - 1; i-- > 1;)
+                    sequence.push_back(pool[i]);
+                break;
+            case ArpParams::Direction::DownUp:
+                std::reverse(sequence.begin(), sequence.end());
+                for (size_t i = 1; i + 1 < pool.size(); ++i)
+                    sequence.push_back(pool[i]);
+                break;
+            case ArpParams::Direction::Random:
+            case ArpParams::Direction::Chord:
+                break;
+        }
+        return sequence;
+    };
 
-    std::vector<int> sequence = pool;
-    switch (params.direction) {
-        case ArpParams::Direction::Up:
-            break;
-        case ArpParams::Direction::Down:
-            std::reverse(sequence.begin(), sequence.end());
-            break;
-        case ArpParams::Direction::UpDown:
-            // The turning notes are not repeated, so a loop reads as one line
-            // rather than as a bounce that stutters at each end.
-            for (size_t i = pool.size() - 1; i-- > 1;) sequence.push_back(pool[i]);
-            break;
-        case ArpParams::Direction::DownUp:
-            std::reverse(sequence.begin(), sequence.end());
-            for (size_t i = 1; i + 1 < pool.size(); ++i) sequence.push_back(pool[i]);
-            break;
-        case ArpParams::Direction::Random:
-        case ArpParams::Direction::Chord:
-            break;
-    }
-    if (sequence.empty()) sequence = pool;
+    std::vector<int> allPitches;
+    allPitches.reserve(source.size());
+    for (const auto& note : source) allPitches.push_back(note.pitch);
+    const std::vector<int> allPool = pitchPool(std::move(allPitches));
+    const std::vector<int> allSequence = orderedSequence(allPool);
+    if (allSequence.empty()) return out;
 
     std::vector<ArpParams::Step> steps = params.steps;
     if (steps.empty()) steps.push_back(ArpParams::Step{});
@@ -407,7 +416,7 @@ Notes arpeggiate(const Notes& source, const ArpParams& params,
     }
     size_t slotCount = 0;
     if (params.playMode == ArpParams::PlayMode::Once) {
-        slotCount = sequence.size();
+        slotCount = allSequence.size();
     } else {
         const double length = std::max(0.0, end - spanStart);
         slotCount = size_t(std::max(1.0, std::ceil(length / params.rateBeats - kEps)));
@@ -419,15 +428,78 @@ Notes arpeggiate(const Notes& source, const ArpParams& params,
     // Index of the last note this call emitted, so a tie can lengthen it.
     size_t lastEmitted = out.size();
     bool haveLast = false;
+    std::vector<int> previousChord;
+    double previousChordStart = -1.0;
+    size_t chordSlot = 0;
+    std::vector<const NoteModel*> starts;
+    starts.reserve(source.size());
+    for (const NoteModel& note : source) starts.push_back(&note);
+    std::sort(starts.begin(), starts.end(), [](const NoteModel* a,
+                                               const NoteModel* b) {
+        return a->startBeats < b->startBeats;
+    });
+    std::vector<const NoteModel*> active;
+    size_t nextStart = 0;
+    std::vector<int> lastChord;
+    double lastChordStart = -1.0;
 
     for (size_t slot = 0; slot < slotCount; ++slot) {
         const ArpParams::Step& step = steps[slot % steps.size()];
-        double time = spanStart + double(slot) * params.rateBeats;
+        const double nominalTime =
+            spanStart + double(slot) * params.rateBeats;
+        double time = nominalTime;
         if (std::abs(params.swing - 0.5) > kEps && slot % 2 != 0) {
             time += (params.swing - 0.5) * params.rateBeats;
         }
         if (params.humanizeTiming > 0.0) time += rng.uniform(params.humanizeTiming);
         time = std::max(0.0, time);
+
+        // Resolve the chord at this step, not one global pool for the whole
+        // clip. A global pool mixes later chords into earlier harmony and is
+        // especially obvious in Random mode. Swing/humanisation move only the
+        // emitted note; they must not make a boundary pick the wrong chord.
+        std::vector<int> chord;
+        double chordStart = -1.0;
+        while (nextStart < starts.size() &&
+               starts[nextStart]->startBeats <= nominalTime + kEps) {
+            active.push_back(starts[nextStart++]);
+        }
+        std::erase_if(active, [nominalTime](const NoteModel* note) {
+            return nominalTime >=
+                   note->startBeats + note->lengthBeats - kEps;
+        });
+        for (const NoteModel* note : active) {
+            chord.push_back(note->pitch);
+            chordStart = std::max(chordStart, note->startBeats);
+        }
+        // Fill deliberately continues beyond the source. Carry only the last
+        // chord forward there; carrying the union of the whole progression was
+        // the source of the out-of-harmony notes.
+        if (chord.empty() && params.playMode == ArpParams::PlayMode::Fill &&
+            nominalTime >= spanEnd - kEps) {
+            chord = lastChord;
+            chordStart = lastChordStart;
+        }
+        std::sort(chord.begin(), chord.end());
+        chord.erase(std::unique(chord.begin(), chord.end()), chord.end());
+        if (chord.empty()) {
+            haveLast = false;
+            previousChord.clear();
+            previousChordStart = -1.0;
+            chordSlot = 0;
+            continue;
+        }
+        lastChord = chord;
+        lastChordStart = chordStart;
+        if (chord != previousChord ||
+            std::abs(chordStart - previousChordStart) > kEps) {
+            previousChord = chord;
+            previousChordStart = chordStart;
+            chordSlot = 0;
+            haveLast = false;
+        }
+        const std::vector<int> pool = pitchPool(chord);
+        const std::vector<int> sequence = orderedSequence(pool);
 
         if (step.tie && haveLast) {
             // Fold this slot into the note before it instead of restriking: the
@@ -436,10 +508,12 @@ Notes arpeggiate(const Notes& source, const ArpParams& params,
                 spanStart + double(slot) * params.rateBeats + params.rateBeats * gate;
             out[lastEmitted].lengthBeats =
                 std::max(kMinLength, heldEnd - out[lastEmitted].startBeats);
+            ++chordSlot;
             continue;
         }
         if (step.skip) {
             haveLast = false;
+            ++chordSlot;
             continue;
         }
 
@@ -457,7 +531,7 @@ Notes arpeggiate(const Notes& source, const ArpParams& params,
         auto emit = [&](int pitch) {
             NoteModel note;
             note.id.clear();   // created, not kept: setClipNotes mints the uuid
-            note.pitch = pitch + step.transpose;
+            note.pitch = std::clamp(pitch + step.transpose, 0, 127);
             note.startBeats = time;
             note.lengthBeats = length;
             note.velocity = velocity;
@@ -471,10 +545,11 @@ Notes arpeggiate(const Notes& source, const ArpParams& params,
             emit(sequence[rng.index(sequence.size())]);
             lastEmitted = out.size() - 1;
         } else {
-            emit(sequence[slot % sequence.size()]);
+            emit(sequence[chordSlot % sequence.size()]);
             lastEmitted = out.size() - 1;
         }
         haveLast = true;
+        ++chordSlot;
     }
 
     return out;

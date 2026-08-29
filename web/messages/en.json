@@ -295,6 +295,17 @@
             "figures": [{"slug": "plugin-picker", "alt": "Plugin picker with its search field", "caption": "Search filters the list while retaining keyboard focus.", "ratio": "4 / 3"}, {"slug": "plugin-search", "alt": "Inline plugin search in the context panel", "caption": "Inline search expands directly over the selected track."}]
           },
           {
+            "id": "vlt-equalizer",
+            "title": "VLT Equalizer",
+            "intro": "VLT Equalizer is the built-in 24-band parametric and dynamic EQ for corrective, creative, and mastering work, with Zero Latency, Analog Phase, and Linear Phase processing.",
+            "steps": ["Add VLT Equalizer to an audio insert and open its editor.", "Double-click the logarithmic graph to create a band. Drag to change frequency and gain, use the mouse wheel for Q, or enter values in the selected-band controls.", "Choose the filter type, slope, and Stereo, Left, Right, Mid, or Side placement. Ctrl/Cmd-click selects several bands for grouped movement.", "For Bell, Shelf, or Tilt, enable Dynamics and set range, threshold, attack, release, and the internal or external detector range.", "Choose a phase mode. Linear Phase adds reported PDC latency; its Low, Medium, and High resolutions trade latency and CPU for frequency resolution.", "Use A/B and Copy A/B to compare states, then save a user preset or choose one of the factory presets. Analyzer checkboxes show Pre, Post, and sidechain traces; Freeze holds the current frame."],
+            "result": "The track is frequency-balanced with the required phase behaviour, channel placement, and optional level-dependent correction.",
+            "shortcuts": [{"keys": "Double-click", "label": "Create a band"}, {"keys": "Mouse wheel", "label": "Change Q"}, {"keys": "Alt+drag", "label": "Change dynamic range"}, {"keys": "Delete", "label": "Delete selected bands"}],
+            "notes": ["If an external detector is selected without a connected sidechain, dynamics stays inactive and the editor shows SC missing.", "All Pass bands remain saved but are temporarily inactive in Linear Phase mode.", "Processing mode and Linear Phase resolution are intentionally not automatable because they change plugin latency."],
+            "problems": [{"problem": "A dynamic band does not react.", "fix": "Check that Dynamics is enabled, the range is non-zero, the detector crosses its threshold, and an external sidechain is connected when selected."}, {"problem": "Playback shifts after changing phase mode.", "fix": "Let the host rebuild plugin delay compensation; mode changes update the reported latency."}],
+            "figures": [{"slug": "equalizer", "alt": "VLT Equalizer editor with a vocal cleanup curve", "caption": "The resizable editor combines the response graph, direct band controls, phase mode, presets, A/B, and analyzer options."}]
+          },
+          {
             "id": "plugin-manager",
             "title": "Plugin Manager",
             "intro": "Plugin Manager lists CLAP, VST, VST3, and Audio Unit, and controls scan paths, rescanning, and Blacklist.",

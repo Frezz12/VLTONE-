@@ -1,6 +1,7 @@
 #include "PluginEditorWindow.hpp"
 
 #include "Controls.hpp"
+#include "EqualizerPanel.hpp"
 #include "GravityPanel.hpp"
 #include "InternalEditorFrame.hpp"
 #include "EngineController.hpp"
@@ -11,6 +12,7 @@
 #endif
 
 #include "Internal/SamplerInstance.hpp"
+#include "Internal/EqualizerInstance.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -396,7 +398,23 @@ void PluginEditorWindow::rebuildEditorContent() {
         return;
     }
 
-    if (dynamic_cast<daw::plugins::gravity::GravityInstance*>(plugin)) {
+    if (dynamic_cast<daw::plugins::equalizer::EqualizerInstance*>(plugin)) {
+        auto* equalizerPanel =
+            new EqualizerPanel(m_controller, m_channelId, m_insertId, this);
+        m_generic = equalizerPanel;
+        connect(equalizerPanel, &EqualizerPanel::projectEdited, this,
+                &PluginEditorWindow::projectEdited);
+        connect(equalizerPanel, &EqualizerPanel::automationRequested, this,
+                [this](const QString& parameterId) {
+                    emit automationRequested(m_channelId, m_insertId, parameterId);
+                });
+        m_contentRow->insertWidget(0, m_generic, 1);
+        // The branded EQ view itself is 820x520 minimum; this host widget also
+        // owns the 39 px plugin header above it.
+        setMinimumSize(820, 559);
+        m_fallbackContentSize = QSize(1040, 680);
+        resize(m_fallbackContentSize);
+    } else if (dynamic_cast<daw::plugins::gravity::GravityInstance*>(plugin)) {
         auto* gravityPanel =
             new GravityPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = gravityPanel;

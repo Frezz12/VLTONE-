@@ -17,6 +17,7 @@ find_package(Qt6 ${DAW_QT_VERSION} REQUIRED COMPONENTS
         Widgets Network WebEngineWidgets SerialPort LinguistTools)
 endif()
 find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
+find_package(RtMidi CONFIG REQUIRED)
 qt_standard_project_setup()   # enables AUTOMOC / AUTOUIC / AUTORCC
 
 # Headers are listed too so AUTOMOC always sees the Q_OBJECT classes that live
@@ -63,7 +64,7 @@ target_compile_definitions(daw PRIVATE
 target_include_directories(daw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(daw PRIVATE daw_controller Qt6::Widgets Qt6::Network
                                   Qt6::WebEngineWidgets Qt6::SerialPort
-                                  OpenSSL::Crypto)
+                                  OpenSSL::Crypto RtMidi::rtmidi)
 if(APPLE)
     target_link_libraries(daw PRIVATE "-framework Security")
 elseif(WIN32)

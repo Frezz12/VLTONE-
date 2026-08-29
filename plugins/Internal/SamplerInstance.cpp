@@ -514,7 +514,8 @@ SamplerSettings SamplerInstance::snapshot() const noexcept {
     return s;
 }
 
-void SamplerInstance::noteOn(int key, int channel, float velocity) noexcept {
+void SamplerInstance::noteOn(int key, int channel, float velocity,
+                             float pan) noexcept {
     auto sample = m_sample.read();
     if (!sample) return;
 
@@ -547,7 +548,7 @@ void SamplerInstance::noteOn(int key, int channel, float velocity) noexcept {
         }
     }
 
-    chosen->start(key, channel, velocity, snapshot(), *sample, m_sampleRate);
+    chosen->start(key, channel, velocity, pan, snapshot(), *sample, m_sampleRate);
     chosen->setStartedAt(++m_voiceStamp);
 }
 
@@ -584,7 +585,8 @@ void SamplerInstance::applyEvent(const PluginEvent& event, std::uint32_t) noexce
             }
             break;
         case PluginEvent::Kind::NoteOn:
-            noteOn(int(event.key), int(event.channel), float(event.value));
+            noteOn(int(event.key), int(event.channel), float(event.value),
+                   float(event.notePan));
             break;
         case PluginEvent::Kind::NoteOff:
             noteOff(int(event.key), int(event.channel));

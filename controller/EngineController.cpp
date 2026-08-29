@@ -942,6 +942,7 @@ void EngineController::syncTrackNotes(const TrackModel& track,
             out.lengthBeats = audibleEnd - audibleStart;
             out.key = std::uint8_t(std::clamp(note.pitch, 0, 127));
             out.velocity = std::uint8_t(std::clamp(note.velocity, 1, 127));
+            out.pan = std::clamp(note.pan, -1.0f, 1.0f);
             notes->push_back(out);
         }
     }
@@ -1147,7 +1148,8 @@ void EngineController::syncTrackAutomation(const TrackModel& track) {
     for (const TrackModel& lane : m_project.tracks) {
         if (!isAutomationLane(lane)) continue;
         for (const ClipModel& clip : lane.clips) {
-            if (clip.kind != ClipKind::Automation || clip.muted) continue;
+            if (clip.kind != ClipKind::Automation || clip.muted ||
+                !clip.automation.active) continue;
             const AutomationTarget& target = clip.automation.target;
             if (target.kind != AutomationTargetKind::PluginParameter) continue;
             if (target.channelId != track.id) continue;
@@ -1205,7 +1207,8 @@ void EngineController::syncTrackLevelAutomation(const TrackModel& track) {
     for (const TrackModel& lane : m_project.tracks) {
         if (!isAutomationLane(lane)) continue;
         for (const ClipModel& clip : lane.clips) {
-            if (clip.kind != ClipKind::Automation || clip.muted) continue;
+            if (clip.kind != ClipKind::Automation || clip.muted ||
+                !clip.automation.active) continue;
             const AutomationTarget& target = clip.automation.target;
             if (target.channelId != track.id) continue;
 
@@ -1269,6 +1272,22 @@ void EngineController::syncAllLevelAutomation() {
     for (const TrackModel& track : m_project.tracks) {
         if (carriesAudio(track)) syncTrackLevelAutomation(track);
     }
+}
+
+void EngineController::followPassiveAutomation(const AutomationTarget& target,
+                                                double normalized) {
+    normalized = std::clamp(normalized, 0.0, 1.0);
+    for (TrackModel& lane : m_project.tracks) {
+        if (!isAutomationLane(lane)) continue;
+        for (ClipModel& clip : lane.clips) {
+            if (clip.kind != ClipKind::Automation || clip.automation.active ||
+                clip.automation.target != target) continue;
+            clip.automation.defaultValue = normalized;
+            for (AutomationPoint& point : clip.automation.points)
+                point.value = normalized;
+        }
+    }
+    invalidateAutomationReadoutCache();
 }
 
 void EngineController::syncAutomationTarget(const AutomationTarget& target) {
@@ -3144,6 +3163,10 @@ void EngineController::play() {
 void EngineController::stop() { m_engine.transport().stop(); }
 void EngineController::pause() { m_engine.transport().pause(); }
 void EngineController::seekSeconds(double seconds) {
+    // A recording owns the transport until it is stopped. Letting any UI
+    // surface relocate it mid-take makes the visible playhead disagree with
+    // the recorder's continuous stream and can create a malformed clip.
+    if (isRecording()) return;
     const double s = std::max(0.0, seconds);
     // Any repositioning while stopped/paused is the start of the next run, so
     // Restart mode can return there. Seeks during playback don't move it.
@@ -3305,6 +3328,22 @@ void EngineController::setProjectKey(int root, const std::string& scaleId) {
 void EngineController::setMetronomeEnabled(bool enabled) {
     m_metronomeEnabled = enabled;
     if (m_metronome) m_metronome->setEnabled(enabled);
+}
+
+bool EngineController::setMetronomeSample(const std::string& filePath) {
+    if (filePath.empty()) {
+        m_metronomeSamplePath.clear();
+        if (m_metronome) m_metronome->setSample({});
+        return true;
+    }
+    std::shared_ptr<const engine::SampleBuffer> sample = loadSamples(filePath);
+    if (!sample || sample->frames() == 0) return false;
+    m_metronomeSamplePath = filePath;
+    if (!m_metronome)
+        m_metronome = std::make_shared<engine::MetronomeNode>();
+    m_metronome->setEnabled(m_metronomeEnabled);
+    m_metronome->setSample(std::move(sample));
+    return true;
 }
 
 void EngineController::setLoopEnabled(bool enabled) {
@@ -3477,6 +3516,18 @@ std::string EngineController::appendTrack(TrackModel model) {
 }
 
 void EngineController::removeTrack(const std::string& trackId) {
+    const TrackModel* requested = m_project.findTrack(trackId);
+    if (!requested) return;
+    const bool removePatternTree = requested->kind == TrackKind::Pattern;
+    const std::size_t compoundUndoStart = m_undo.depth();
+    if (removePatternTree) {
+        // A Pattern is one musical object. Its source lanes are implementation
+        // detail, so deleting the container must not detach and reveal them.
+        std::vector<std::string> children = subtreeOf(m_project, trackId);
+        for (auto it = children.rbegin(); it != children.rend(); ++it)
+            removeTrack(*it);
+    }
+
     const size_t index = m_project.indexOf(trackId);
     if (index == std::string::npos) return;
 
@@ -3599,6 +3650,8 @@ void EngineController::removeTrack(const std::string& trackId) {
     // TrackModel left those related tracks permanently detached after undo.
     m_undo.push("Remove Track", [apply] { apply(false); },
                 [apply] { apply(true); });
+    if (removePatternTree)
+        collapseUndo(compoundUndoStart, "Remove Pattern");
 }
 
 void EngineController::renameTrack(const std::string& trackId,
@@ -3653,6 +3706,10 @@ void EngineController::setTrackVolumeLive(const std::string& trackId,
     const float applied = std::clamp(volume, 0.0f, 2.0f);
     if (track->volume == applied) return;
     track->volume = applied;
+    AutomationTarget target;
+    target.kind = AutomationTargetKind::TrackVolume;
+    target.channelId = trackId;
+    followPassiveAutomation(target, normalizedFromGain(applied));
     syncTrackGain(*track);
 }
 
@@ -3662,6 +3719,10 @@ void EngineController::setTrackPanLive(const std::string& trackId, float pan) {
     const float applied = std::clamp(pan, -1.0f, 1.0f);
     if (track->pan == applied) return;
     track->pan = applied;
+    AutomationTarget target;
+    target.kind = AutomationTargetKind::TrackPan;
+    target.channelId = trackId;
+    followPassiveAutomation(target, plainToAutomation(target, applied));
     syncTrackGain(*track);
 }
 
@@ -6689,58 +6750,65 @@ void EngineController::moveClipToTrack(const std::string& fromTrackId,
 
 void EngineController::beginClipTrimEdit(const std::string& trackId,
                                          const std::string& clipId) {
+    beginClipTrimEdit({{trackId, clipId}});
+}
+
+void EngineController::beginClipTrimEdit(
+    const std::vector<std::pair<std::string, std::string>>& clips) {
     if (m_clipTrimEdit.active) endClipTrimEdit();
     m_clipTrimEdit = {};
+    m_clipTrimEdit.origins.reserve(clips.size());
+    for (const auto& [trackId, clipId] : clips) {
+        const bool duplicate = std::any_of(
+            m_clipTrimEdit.origins.begin(), m_clipTrimEdit.origins.end(),
+            [&](const ClipTrimOrigin& origin) {
+                return origin.trackId == trackId && origin.clipId == clipId;
+            });
+        if (duplicate) continue;
+        const ClipModel* clip = findClip(trackId, clipId);
+        if (!clip) continue;
 
-    const ClipModel* clip = findClip(trackId, clipId);
-    if (!clip) return;
-    ClipTrimEdit& edit = m_clipTrimEdit;
-    edit.active = true;
-    edit.trackId = trackId;
-    edit.clipId = clipId;
-    edit.kind = clip->kind;
-    edit.beforeStartSeconds = clip->startSeconds;
-    edit.beforeOffsetSeconds = clip->offsetSeconds;
-    edit.beforeDurationSeconds = clip->durationSeconds;
-    edit.beforeMusicalAnalysis = clip->musicalAnalysis;
-    if (clip->kind == ClipKind::Automation)
-        edit.beforeAutomation = clip->automation;
+        ClipTrimOrigin origin;
+        origin.trackId = trackId;
+        origin.clipId = clipId;
+        origin.kind = clip->kind;
+        origin.beforeStartSeconds = clip->startSeconds;
+        origin.beforeOffsetSeconds = clip->offsetSeconds;
+        origin.beforeDurationSeconds = clip->durationSeconds;
+        origin.beforeMusicalAnalysis = clip->musicalAnalysis;
+        if (clip->kind == ClipKind::Automation)
+            origin.beforeAutomation = clip->automation;
 
-    // Resolving the source can touch the media/cache layer. Do it once on
-    // press, never for every pointer sample of the edge drag.
-    if (clip->kind == ClipKind::Audio && !clip->filePath.empty()) {
-        if (auto samples = loadSamples(clip->filePath);
-            samples && samples->sampleRate() > 0.0) {
-            edit.sourceDurationSeconds =
-                double(samples->frames()) / samples->sampleRate();
+        // Resolving source files can touch caches. Do it once on press, never
+        // for every pointer sample of the group edge drag.
+        if (clip->kind == ClipKind::Audio && !clip->filePath.empty()) {
+            if (auto samples = loadSamples(clip->filePath);
+                samples && samples->sampleRate() > 0.0) {
+                origin.sourceDurationSeconds =
+                    double(samples->frames()) / samples->sampleRate();
+            }
         }
-    }
-
-    if (clip->kind == ClipKind::Pattern) {
-        edit.patternMemberTrackIds.reserve(m_project.tracks.size());
-        for (const TrackModel& memberTrack : m_project.tracks) {
-            const bool owns = std::any_of(
-                memberTrack.clips.begin(), memberTrack.clips.end(),
-                [&](const ClipModel& member) {
-                    return member.patternClipId == clipId;
-                });
-            if (owns) edit.patternMemberTrackIds.push_back(memberTrack.id);
+        if (clip->kind == ClipKind::Pattern) {
+            origin.patternMemberTrackIds.reserve(m_project.tracks.size());
+            for (const TrackModel& memberTrack : m_project.tracks) {
+                const bool owns = std::any_of(
+                    memberTrack.clips.begin(), memberTrack.clips.end(),
+                    [&](const ClipModel& member) {
+                        return member.patternClipId == clipId;
+                    });
+                if (owns)
+                    origin.patternMemberTrackIds.push_back(memberTrack.id);
+            }
         }
+        m_clipTrimEdit.origins.push_back(std::move(origin));
     }
+    m_clipTrimEdit.active = !m_clipTrimEdit.origins.empty();
 }
 
 void EngineController::endClipTrimEdit(const std::string& label) {
     if (!m_clipTrimEdit.active) return;
     ClipTrimEdit edit = std::move(m_clipTrimEdit);
     m_clipTrimEdit = {};
-
-    ClipModel* clip = findClip(edit.trackId, edit.clipId);
-    if (!clip) return;
-    const bool geometryChanged =
-        edit.beforeStartSeconds != clip->startSeconds ||
-        edit.beforeOffsetSeconds != clip->offsetSeconds ||
-        edit.beforeDurationSeconds != clip->durationSeconds;
-    if (!edit.dirty || !geometryChanged) return;
 
     struct TrimSnapshot {
         double startSeconds = 0.0;
@@ -6749,45 +6817,69 @@ void EngineController::endClipTrimEdit(const std::string& label) {
         ClipMusicalAnalysisModel musicalAnalysis;
         ClipAutomationModel automation;
     };
-    struct TrimDelta {
+    struct TrimItem {
+        std::string trackId;
+        std::string clipId;
+        ClipKind kind = ClipKind::Audio;
         TrimSnapshot before;
         TrimSnapshot after;
+        std::vector<std::string> patternMemberTrackIds;
+    };
+    struct TrimDelta {
+        std::vector<TrimItem> items;
     };
 
-    auto delta = std::make_shared<const TrimDelta>(TrimDelta{
-        TrimSnapshot{edit.beforeStartSeconds, edit.beforeOffsetSeconds,
-                     edit.beforeDurationSeconds,
-                     std::move(edit.beforeMusicalAnalysis),
-                     std::move(edit.beforeAutomation)},
-        TrimSnapshot{clip->startSeconds, clip->offsetSeconds,
-                     clip->durationSeconds, clip->musicalAnalysis,
-                     edit.kind == ClipKind::Automation
-                         ? clip->automation
-                         : ClipAutomationModel{}}});
+    TrimDelta captured;
+    captured.items.reserve(edit.origins.size());
+    for (ClipTrimOrigin& origin : edit.origins) {
+        ClipModel* clip = findClip(origin.trackId, origin.clipId);
+        if (!clip) continue;
+        const bool geometryChanged =
+            origin.beforeStartSeconds != clip->startSeconds ||
+            origin.beforeOffsetSeconds != clip->offsetSeconds ||
+            origin.beforeDurationSeconds != clip->durationSeconds;
+        if (!origin.dirty || !geometryChanged) continue;
+        captured.items.push_back(TrimItem{
+            origin.trackId, origin.clipId, origin.kind,
+            TrimSnapshot{origin.beforeStartSeconds,
+                         origin.beforeOffsetSeconds,
+                         origin.beforeDurationSeconds,
+                         std::move(origin.beforeMusicalAnalysis),
+                         std::move(origin.beforeAutomation)},
+            TrimSnapshot{clip->startSeconds, clip->offsetSeconds,
+                         clip->durationSeconds, clip->musicalAnalysis,
+                         origin.kind == ClipKind::Automation
+                             ? clip->automation
+                             : ClipAutomationModel{}},
+            std::move(origin.patternMemberTrackIds)});
+    }
+    if (captured.items.empty()) return;
+    auto delta = std::make_shared<const TrimDelta>(std::move(captured));
 
-    auto publish = [this, trackId = edit.trackId, clipId = edit.clipId,
-                    kind = edit.kind,
-                    memberTracks = std::move(edit.patternMemberTrackIds)] {
-        switch (kind) {
+    auto publish = [this, delta] {
+        for (const TrimItem& item : delta->items) {
+            switch (item.kind) {
             case ClipKind::Audio: {
-                if (TrackModel* track = m_project.findTrack(trackId))
+                if (TrackModel* track = m_project.findTrack(item.trackId))
                     syncTrackClips(*track);
                 break;
             }
             case ClipKind::Midi: {
-                if (TrackModel* track = m_project.findTrack(trackId)) {
+                if (TrackModel* track = m_project.findTrack(item.trackId)) {
                     syncTrackNotes(*track);
                     syncTrackAutomation(*track);
                 }
                 break;
             }
             case ClipKind::Automation: {
-                if (const ClipModel* current = findClip(trackId, clipId))
+                if (const ClipModel* current =
+                        findClip(item.trackId, item.clipId))
                     syncAutomationTarget(current->automation.target);
                 break;
             }
             case ClipKind::Pattern:
-                for (const std::string& memberTrackId : memberTracks) {
+                for (const std::string& memberTrackId :
+                     item.patternMemberTrackIds) {
                     if (TrackModel* track =
                             m_project.findTrack(memberTrackId)) {
                         syncTrackNotes(*track);
@@ -6795,20 +6887,23 @@ void EngineController::endClipTrimEdit(const std::string& label) {
                     }
                 }
                 break;
+            }
         }
         updateTimelineDuration();
     };
 
-    auto apply = [this, trackId = edit.trackId, clipId = edit.clipId,
-                  kind = edit.kind, publish](const TrimSnapshot& value) {
-        ClipModel* target = findClip(trackId, clipId);
-        if (!target) return;
-        target->startSeconds = value.startSeconds;
-        target->offsetSeconds = value.offsetSeconds;
-        target->durationSeconds = value.durationSeconds;
-        target->musicalAnalysis = value.musicalAnalysis;
-        if (kind == ClipKind::Automation)
-            target->automation = value.automation;
+    auto apply = [this, delta, publish](bool after) {
+        for (const TrimItem& item : delta->items) {
+            ClipModel* target = findClip(item.trackId, item.clipId);
+            if (!target) continue;
+            const TrimSnapshot& value = after ? item.after : item.before;
+            target->startSeconds = value.startSeconds;
+            target->offsetSeconds = value.offsetSeconds;
+            target->durationSeconds = value.durationSeconds;
+            target->musicalAnalysis = value.musicalAnalysis;
+            if (item.kind == ClipKind::Automation)
+                target->automation = value.automation;
+        }
         publish();
     };
 
@@ -6816,9 +6911,8 @@ void EngineController::endClipTrimEdit(const std::string& label) {
     // assigning any captured payload back into the live clip.
     publish();
     if (!label.empty()) {
-        m_undo.push(label,
-                    [apply, delta] { apply(delta->before); },
-                    [apply, delta] { apply(delta->after); });
+        m_undo.push(label, [apply] { apply(false); },
+                    [apply] { apply(true); });
     }
 }
 
@@ -6830,11 +6924,15 @@ void EngineController::setClipTrim(const std::string& trackId,
     for (auto& clip : track->clips) {
         if (clip.id != clipId) continue;
 
-        ClipTrimEdit* gesture =
-            m_clipTrimEdit.active && m_clipTrimEdit.trackId == trackId &&
-                    m_clipTrimEdit.clipId == clipId
-                ? &m_clipTrimEdit
-                : nullptr;
+        ClipTrimOrigin* gesture = nullptr;
+        if (m_clipTrimEdit.active) {
+            const auto found = std::find_if(
+                m_clipTrimEdit.origins.begin(), m_clipTrimEdit.origins.end(),
+                [&](const ClipTrimOrigin& origin) {
+                    return origin.trackId == trackId && origin.clipId == clipId;
+                });
+            if (found != m_clipTrimEdit.origins.end()) gesture = &*found;
+        }
 
         if (clip.kind == ClipKind::Pattern) {
             const double newStart = std::max(0.0, startSeconds);
@@ -8017,7 +8115,7 @@ std::string EngineController::addMidiClip(const std::string& trackId,
 
     const std::size_t undoStart = m_undo.depth();
     const double resolvedStart = std::max(0.0, startSeconds);
-    const double resolvedLength =
+    double resolvedLength =
         lengthSeconds > 0.0
             ? lengthSeconds
             : beatsToSeconds(double(std::max(1, m_project.timeSigNumerator)),
@@ -8041,7 +8139,6 @@ std::string EngineController::addMidiClip(const std::string& trackId,
     if (!patternTrackId.empty()) {
         TrackModel* pattern = m_project.findTrack(patternTrackId);
         if (pattern) {
-            const double memberEnd = resolvedStart + resolvedLength;
             for (ClipModel& candidate : pattern->clips) {
                 if (candidate.kind != ClipKind::Pattern) continue;
                 const double end = candidate.startSeconds +
@@ -8051,6 +8148,14 @@ std::string EngineController::addMidiClip(const std::string& trackId,
                     continue;
                 }
                 patternClipId = candidate.id;
+                if (lengthSeconds <= 0.0) {
+                    // New sources inherit the actual Pattern instance window,
+                    // including a container the user stretched to several
+                    // bars, instead of silently falling back to one bar.
+                    resolvedLength = std::max(
+                        kMinClipSeconds, end - resolvedStart);
+                }
+                const double memberEnd = resolvedStart + resolvedLength;
                 if (memberEnd > end) {
                     const double before = candidate.durationSeconds;
                     const double after = memberEnd - candidate.startSeconds;
@@ -8146,7 +8251,7 @@ ClipModel* findMidiClip(ProjectModel& project, const std::string& trackId,
 bool sameNotePlayback(const NoteModel& a, const NoteModel& b) {
     return a.pitch == b.pitch && a.startBeats == b.startBeats &&
            a.lengthBeats == b.lengthBeats && a.velocity == b.velocity &&
-           a.muted == b.muted;
+           a.muted == b.muted && a.pan == b.pan;
 }
 
 bool sameNoteGeometry(const NoteModel& a, const NoteModel& b) {
@@ -8560,6 +8665,8 @@ void EngineController::setNotePan(const std::string& trackId,
         if (note->pan == next) return;
         captureNoteDeltaBefore(*note);
         note->pan = next;
+        if (const TrackModel* track = m_project.findTrack(trackId))
+            publishOrDeferNotePlayback(trackId, clipId, *track, false);
         return;
     }
     for (auto& note : clip->notes) {
@@ -8568,9 +8675,8 @@ void EngineController::setNotePan(const std::string& trackId,
         if (note.pan == next) return;
         captureNoteEditBeforeMutation(trackId, clipId, *clip);
         note.pan = next;
-        // Pan is document/UI metadata until MidiNote carries a matching engine
-        // field. Republishing the realtime schedule here only copies and sorts
-        // the whole track for identical playback data.
+        if (const TrackModel* track = m_project.findTrack(trackId))
+            publishOrDeferNotePlayback(trackId, clipId, *track, false);
         return;
     }
 }
@@ -9076,18 +9182,26 @@ std::vector<std::string> EngineController::importMidiFile(
 
 bool EngineController::liveNoteOn(const std::string& trackId, int pitch,
                                   int velocity) {
-    auto found = m_channels.find(trackId);
-    if (found == m_channels.end() || !found->second.midiClips) return false;
-    return found->second.midiClips->sendLiveNoteOn(
-        std::uint8_t(std::clamp(pitch, 0, 127)),
-        std::uint8_t(std::clamp(velocity, 1, 127)));
+    return liveMidiEvent(trackId, engine::MidiEvent::kNoteOn,
+                         std::clamp(pitch, 0, 127),
+                         std::clamp(velocity, 1, 127));
 }
 
 bool EngineController::liveNoteOff(const std::string& trackId, int pitch) {
+    return liveMidiEvent(trackId, engine::MidiEvent::kNoteOff,
+                         std::clamp(pitch, 0, 127), 0);
+}
+
+bool EngineController::liveMidiEvent(const std::string& trackId, int status,
+                                     int data1, int data2) {
+    if (status < 0x80 || status > 0xEF || data1 < 0 || data1 > 127 ||
+        data2 < 0 || data2 > 127) {
+        return false;
+    }
     auto found = m_channels.find(trackId);
     if (found == m_channels.end() || !found->second.midiClips) return false;
-    return found->second.midiClips->sendLiveNoteOff(
-        std::uint8_t(std::clamp(pitch, 0, 127)));
+    return found->second.midiClips->sendLiveEvent(engine::MidiEvent{
+        0, std::uint8_t(status), std::uint8_t(data1), std::uint8_t(data2)});
 }
 
 std::string EngineController::liveNoteTarget(const std::string& preferred) const {
@@ -9274,7 +9388,8 @@ void EngineController::rebuildAutomationReadoutCache() const {
     for (const TrackModel& lane : m_project.tracks) {
         if (!isAutomationLane(lane)) continue;
         for (const ClipModel& clip : lane.clips) {
-            if (clip.kind != ClipKind::Automation || clip.muted) continue;
+            if (clip.kind != ClipKind::Automation || clip.muted ||
+                !clip.automation.active) continue;
 
             const AutomationTarget& target = clip.automation.target;
             engine::LevelCurve& curve = m_automationReadoutCurves[target];
@@ -9492,6 +9607,11 @@ std::string EngineController::addAutomationClip(const std::string& laneTrackId,
     clip.color = lane->color;
     clip.automation.target = target;
     clip.automation.defaultValue = defaultAutomationValue(target);
+    const double endBeats = secondsToBeats(length, m_project.tempo);
+    clip.automation.points = {
+        AutomationPoint{0.0, clip.automation.defaultValue},
+        AutomationPoint{endBeats, clip.automation.defaultValue},
+    };
     clip.name = automationTargetName(target);
 
     const ClipModel created = clip;
@@ -9555,6 +9675,12 @@ void EngineController::setAutomationTarget(const std::string& trackId,
     const std::string beforeName = clip->name;
     clip->automation.target = target;
     clip->name = automationTargetName(target);
+    if (!clip->automation.active) {
+        const double value = defaultAutomationValue(target);
+        clip->automation.defaultValue = value;
+        for (AutomationPoint& point : clip->automation.points)
+            point.value = value;
+    }
     // Both endpoints are republished in the same control-thread turn: the old
     // target must stop moving as the new one starts, but unrelated channels do
     // not need their immutable automation snapshots rebuilt.
@@ -9573,11 +9699,18 @@ void EngineController::setAutomationTarget(const std::string& trackId,
 
 void EngineController::setAutomationPoints(const std::string& trackId,
                                            const std::string& clipId,
-                                           std::vector<AutomationPoint> points) {
+                                           std::vector<AutomationPoint> points,
+                                           bool active) {
     auto* clip = findAutomationClip(m_project, trackId, clipId);
     if (!clip) return;
     normalizeAutomation(points);
+    // Re-sending the untouched endpoints is not a user edit.
+    if (points == clip->automation.points && active && !clip->automation.active)
+        return;
+    if (points == clip->automation.points && active == clip->automation.active)
+        return;
     clip->automation.points = std::move(points);
+    clip->automation.active = active;
     // The lane can live anywhere, but its target names the one channel whose
     // compiled snapshot changed. A live point drag should not rebuild every
     // plugin and fader curve in the project on every mouse event.
@@ -9587,19 +9720,25 @@ void EngineController::setAutomationPoints(const std::string& trackId,
 void EngineController::commitAutomationEdit(const std::string& trackId,
                                             const std::string& clipId,
                                             std::vector<AutomationPoint> before,
-                                            const std::string& label) {
+                                            const std::string& label,
+                                            bool activeBefore) {
     auto* clip = findAutomationClip(m_project, trackId, clipId);
     if (!clip) return;
     normalizeAutomation(before);
     std::vector<AutomationPoint> after = clip->automation.points;
-    if (after == before) return;   // the gesture moved nothing
+    const bool activeAfter = clip->automation.active;
+    if (after == before && activeAfter == activeBefore) return;
+    if (after == before) {
+        setAutomationPoints(trackId, clipId, before, activeBefore);
+        return;
+    }
 
     m_undo.push(label,
-                [this, trackId, clipId, before] {
-                    setAutomationPoints(trackId, clipId, before);
+                [this, trackId, clipId, before, activeBefore] {
+                    setAutomationPoints(trackId, clipId, before, activeBefore);
                 },
-                [this, trackId, clipId, after] {
-                    setAutomationPoints(trackId, clipId, after);
+                [this, trackId, clipId, after, activeAfter] {
+                    setAutomationPoints(trackId, clipId, after, activeAfter);
                 });
 }
 

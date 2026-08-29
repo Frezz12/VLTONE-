@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Audio/SampleBuffer.hpp"
+#include "Common/RealtimeSnapshot.hpp"
 #include "DSP/Simd.hpp"
 #include "Graph/Node.hpp"
 
@@ -37,6 +39,12 @@ public:
         return m_enabled.load(std::memory_order_relaxed);
     }
 
+    /// Publish an immutable custom click. A null buffer restores the built-in
+    /// muted knock. Publication and reclamation stay off the audio thread.
+    void setSample(std::shared_ptr<const SampleBuffer> sample) {
+        m_sample.publish(std::move(sample));
+    }
+
     /// Fire `beats` count-in clicks starting at the next block, at the
     /// transport's tempo and whatever the transport is doing. A count-in has to
     /// be heard with the transport parked — which is exactly the case the
@@ -61,7 +69,8 @@ public:
         const double tempo =
             context.transport.tempo > 0.0 ? context.transport.tempo : 120.0;
 
-        renderCountIn(context, tempo);
+        auto custom = m_sample.read();
+        renderCountIn(context, tempo, custom.get());
 
         if (!context.playing || !m_enabled.load(std::memory_order_relaxed))
             return;
@@ -78,7 +87,7 @@ public:
 
         const SamplePos blockStart = context.timelinePosition;
         const SamplePos blockEnd = blockStart + SamplePos(context.frames);
-        const SamplePos clickLen = SamplePos(0.035 * m_sampleRate);  // 35 ms
+        const SamplePos clickLen = clickLength(custom.get());
 
         // The first beat whose click could reach into this block.
         long beat = long(std::floor(
@@ -92,16 +101,25 @@ public:
             // mixClick clamps to the overlap with this block up front. Walking
             // from the click's onset and skipping meant iterating the whole
             // 35 ms tail sample by sample for every beat that started before it.
-            mixClick(context, onset, blockStart, clickLen,
-                     accent ? 1600.0 : 1000.0, accent ? 0.5f : 0.32f);
+            mixClick(context, onset, blockStart, clickLen, accent,
+                     custom.get());
         }
     }
 
 private:
+    SamplePos clickLength(const SampleBuffer* custom) const noexcept {
+        if (!custom || custom->frames() == 0 || custom->sampleRate() <= 0.0)
+            return SamplePos(0.055 * m_sampleRate);
+        return std::max<SamplePos>(
+            1, SamplePos(std::ceil(double(custom->frames()) * m_sampleRate /
+                                  custom->sampleRate())));
+    }
+
     /// One click of `length` samples starting at `onset`, measured from the
     /// same origin as `blockStart`, mixed into every output channel.
-    void mixClick(const ProcessContext& context, double onset, SamplePos blockStart,
-                  SamplePos length, double freq, float amp) const {
+    void mixClick(const ProcessContext& context, double onset,
+                  SamplePos blockStart, SamplePos length, bool accent,
+                  const SampleBuffer* custom) const {
         const SamplePos blockEnd = blockStart + SamplePos(context.frames);
         const SamplePos start = SamplePos(onset);
         const SamplePos from = std::max(start, blockStart);
@@ -110,19 +128,46 @@ private:
         for (SamplePos s = from; s < to; ++s) {
             const SamplePos idx = s - blockStart;
             const double tt = double(s - start) / m_sampleRate;
-            const float env = std::exp(float(-tt) * 40.0f);
-            const float val =
-                amp * env *
-                std::sin(float(2.0 * std::numbers::pi_v<double> * freq * tt));
+            if (custom && custom->frames() > 0 &&
+                custom->sampleRate() > 0.0) {
+                const double sourcePosition = tt * custom->sampleRate();
+                const auto a = std::min<FrameCount>(
+                    FrameCount(sourcePosition), custom->frames() - 1);
+                const auto b = std::min<FrameCount>(a + 1,
+                                                    custom->frames() - 1);
+                const float fraction = std::clamp(
+                    float(sourcePosition - double(a)), 0.0f, 1.0f);
+                const float gain = accent ? 0.86f : 0.66f;
+                for (ChannelCount ch = 0; ch < channels; ++ch) {
+                    const float* source = custom->channel(ch);
+                    context.output.data(ch)[idx] +=
+                        (source[a] + (source[b] - source[a]) * fraction) * gain;
+                }
+                continue;
+            }
+
+            // A short low body plus a very quiet woody transient reads as a
+            // muted stick/knock, not the bright sine beep this replaced.
+            const double bodyHz = accent ? 185.0 : 132.0;
+            const double phase = 2.0 * std::numbers::pi_v<double> *
+                                 (bodyHz * tt + 34.0 * tt * tt);
+            const float body = std::sin(float(phase)) *
+                               std::exp(float(-tt) * 54.0f);
+            const float transient =
+                std::sin(float(2.0 * std::numbers::pi_v<double> * 620.0 * tt)) *
+                std::exp(float(-tt) * 145.0f);
+            const float value = (accent ? 0.42f : 0.29f) *
+                                (0.86f * body + 0.14f * transient);
             for (ChannelCount ch = 0; ch < channels; ++ch)
-                context.output.data(ch)[idx] += val;
+                context.output.data(ch)[idx] += value;
         }
     }
 
     /// The count-in clicks, on the node's own sample clock rather than the
     /// timeline's: the transport is parked while they play, so there is no
     /// timeline position to lock them to.
-    void renderCountIn(const ProcessContext& context, double tempo) {
+    void renderCountIn(const ProcessContext& context, double tempo,
+                       const SampleBuffer* custom) {
         const int request = m_countInRequest.exchange(-1, std::memory_order_acquire);
         if (request >= 0) {
             m_countInBeats = request;
@@ -135,7 +180,7 @@ private:
             m_countInBeats = 0;
             return;
         }
-        const SamplePos clickLen = SamplePos(0.035 * m_sampleRate);
+        const SamplePos clickLen = clickLength(custom);
         for (int beat = 0; beat < m_countInBeats; ++beat) {
             const double onset = double(beat) * samplesPerBeat;
             if (onset >= double(m_countInPos) + double(context.frames)) break;
@@ -143,8 +188,7 @@ private:
             // The first click is the accent, so "three, two, one" has a top to
             // count down from.
             const bool accent = beat == 0;
-            mixClick(context, onset, m_countInPos, clickLen,
-                     accent ? 1600.0 : 1000.0, accent ? 0.5f : 0.32f);
+            mixClick(context, onset, m_countInPos, clickLen, accent, custom);
         }
         m_countInPos += SamplePos(context.frames);
         if (double(m_countInPos) >=
@@ -155,6 +199,7 @@ private:
 
     std::string m_name;
     std::atomic<bool> m_enabled{false};
+    RealtimeSnapshot<SampleBuffer> m_sample;
     SampleRate m_sampleRate = 48000.0;
 
     // Count-in: the control thread posts a beat count, the audio thread owns

@@ -82,6 +82,11 @@ source is `backend/openapi/openapi.yaml`; update the checked-in client with
 `pnpm generate:api`. The backend never calls GORM `AutoMigrate`; schema changes
 are versioned SQL in `backend/migrations/`.
 
+Release installers and screenshots live under `STORAGE_ROOT/releases`; production
+must mount that directory on persistent storage. The external reverse proxy must
+allow request bodies up to 2 GiB and upload timeouts of at least 30 minutes. The
+admin uses its dedicated `/release-upload` streaming route for these requests.
+
 Before running the normal DAW, keep the API running. Development defaults to
 `http://localhost:8080/v1`; override it with `VLT_API_ORIGIN`. The value is the
 versioned API base URL (for production, `https://vltstudio.ru/api/v1`). Headless CTest and
@@ -104,7 +109,7 @@ the security patch announced for 26 August 2026 is pinned and reviewed.
 Dependencies via Homebrew:
 
 ```bash
-brew install cmake ninja qt qtwebengine qtserialport portaudio libsndfile nlohmann-json
+brew install cmake ninja qt qtwebengine qtserialport portaudio rtmidi libsndfile nlohmann-json
 ```
 
 Configure, build, test:

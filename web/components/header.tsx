@@ -1,7 +1,8 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
-import { BookOpenText, Bug, CircleUserRound } from "lucide-react";
+import { BookOpenText, Bug, CircleUserRound, PackageOpen } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 export function Header({ locale }: { locale: string }) {
@@ -12,8 +13,9 @@ export function Header({ locale }: { locale: string }) {
   const localeHref = parts.join("/") || `/${other}`;
   return (
     <header className="vlt-topbar">
-      <Link className="vlt-brand" href={`/${locale}`}><span className="vlt-brand-mark">VLT</span><span>Studio Pro</span></Link>
+      <Link className="vlt-brand" href={`/${locale}`}><Image className="vlt-brand-logo" src="/logo.png" width={40} height={40} alt="VLT" priority /><span>Studio Pro</span></Link>
       <nav className="vlt-nav" aria-label={locale === "ru" ? "Навигация сайта" : "Site navigation"}>
+        <Link href={`/${locale}/releases`}><PackageOpen size={16} aria-hidden /> {locale === "ru" ? "Обновления" : "Releases"}</Link>
         <Link href={`/${locale}/manual`}><BookOpenText size={16} aria-hidden /> {locale === "ru" ? "Инструкция" : "Manual"}</Link>
         <Link className="vlt-nav-optional" href={`/${locale}/bug-report`}><Bug size={16} aria-hidden /> {locale === "ru" ? "Сообщить о баге" : "Report a bug"}</Link>
         <Link href={`/${locale}/account`}><CircleUserRound size={16} aria-hidden /> {locale === "ru" ? "Аккаунт" : "Account"}</Link>

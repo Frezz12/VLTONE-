@@ -13,6 +13,7 @@
       "platform": "windows"
     },
     { "name": "libsndfile", "features": ["external-libs", "mpeg"] },
+    "rtmidi",
     "nlohmann-json",
     "openssl"
   ]

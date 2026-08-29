@@ -24,7 +24,7 @@ See **[BUILD.md](BUILD.md)** for macOS and Windows instructions. Quick start on
 macOS:
 
 ```bash
-brew install cmake ninja qt qtwebengine qtserialport portaudio libsndfile nlohmann-json
+brew install cmake ninja qt qtwebengine qtserialport portaudio rtmidi libsndfile nlohmann-json
 cmake --preset macos
 cmake --build build
 ./build/bin/daw
@@ -35,7 +35,8 @@ cmake --build build
 Working end-to-end: create tracks, import audio and MIDI files, arrange clips
 (drag/snap/delete), play with a moving playhead, mix (volume/pan/mute/solo/
 meters), edit track properties in the inspector, write parts in the piano roll,
-play notes from the computer keyboard, host VST3, legacy VST1/VST2, CLAP and
+play notes from the computer keyboard or a hot-plugged MIDI keyboard, host VST3,
+legacy VST1/VST2, CLAP and
 AU plugins and the
 built-in sampler, browse and audition sample folders, choose the audio device,
 export a mixdown, and save/open portable `.vlt` projects — with undo/redo and
@@ -80,7 +81,7 @@ QT_QPA_PLATFORM=offscreen ./build/bin/daw --screenshot shot.png
 ```
 
 `--screenshot` grabs the shell; environment variables aim it at a particular
-state — `DAW_SHOT_PIANOROLL`, `DAW_SHOT_SAMPLER=<wav>`, `DAW_SHOT_PLUGINS=<tab>`,
+state — `DAW_SHOT_PIANOROLL`, `DAW_SHOT_SAMPLER=<wav>`, `DAW_SHOT_EQUALIZER=1`, `DAW_SHOT_PLUGINS=<tab>`,
 `DAW_SHOT_SLOTS`, `DAW_SHOT_RECORD`, `DAW_SHOT_PLUGIN_EDITOR=<name>`, and for
 the file browser `DAW_SHOT_BROWSER=<folder>` with the optional
 `DAW_SHOT_BROWSER_FILE=<file>` (so the preview strip shows a real waveform) and

@@ -49,6 +49,7 @@ func New(cfg config.Config, db *gorm.DB) (*Server, error) {
 	for _, directory := range []string{
 		filepath.Join(cfg.StorageRoot, "bugs"),
 		filepath.Join(cfg.StorageRoot, "crashes"),
+		filepath.Join(cfg.StorageRoot, "releases"),
 	} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return nil, fmt.Errorf("create storage: %w", err)
@@ -74,12 +75,17 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(s.trustedRealIP)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(4 * time.Minute))
+	r.Use(s.requestTimeout)
 	r.Use(s.securityHeaders)
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	})
 	r.Get("/v1/meta", s.meta)
+	r.Get("/v1/releases", s.publicReleases)
+	r.Get("/v1/releases/latest", s.latestRelease)
+	r.Get("/v1/releases/{version}", s.publicRelease)
+	r.Get("/v1/releases/{version}/download/{kind}", s.downloadReleaseArtifact)
+	r.Get("/v1/releases/{version}/screenshots/{screenshotID}", s.releaseScreenshot)
 
 	r.Route("/v1/web/auth", func(r chi.Router) {
 		r.With(s.requireOrigin(false)).Post("/register", s.register)
@@ -147,6 +153,18 @@ func (s *Server) Router() http.Handler {
 		r.Get("/v1/admin/crashes", s.adminCrashes)
 		r.Get("/v1/admin/crashes/{crashID}/artifact", s.adminCrashArtifact)
 		r.Get("/v1/admin/audit", s.adminAudit)
+		r.Get("/v1/admin/releases", s.adminReleases)
+		r.Get("/v1/admin/releases/{releaseID}", s.adminRelease)
+		r.With(s.adminCSRF).Post("/v1/admin/releases", s.adminCreateRelease)
+		r.With(s.adminCSRF).Put("/v1/admin/releases/{releaseID}", s.adminUpdateRelease)
+		r.With(s.adminCSRF).Delete("/v1/admin/releases/{releaseID}", s.adminDeleteRelease)
+		r.With(s.adminCSRF).Post("/v1/admin/releases/{releaseID}/publish", s.adminPublishRelease)
+		r.With(s.adminCSRF).Put("/v1/admin/releases/{releaseID}/artifacts/{kind}", s.adminUploadReleaseArtifact)
+		r.With(s.adminCSRF).Delete("/v1/admin/releases/{releaseID}/artifacts/{kind}", s.adminDeleteReleaseArtifact)
+		r.With(s.adminCSRF).Post("/v1/admin/releases/{releaseID}/screenshots", s.adminUploadReleaseScreenshot)
+		r.With(s.adminCSRF).Put("/v1/admin/releases/{releaseID}/screenshots/{screenshotID}", s.adminUpdateReleaseScreenshot)
+		r.With(s.adminCSRF).Delete("/v1/admin/releases/{releaseID}/screenshots/{screenshotID}", s.adminDeleteReleaseScreenshot)
+		r.Get("/v1/admin/releases/{releaseID}/screenshots/{screenshotID}/file", s.adminReleaseScreenshotFile)
 		r.Get("/v1/admin/ai/models", s.adminAIModels)
 		r.With(s.adminCSRF).Post("/v1/admin/ai/models", s.adminCreateAIModel)
 		r.With(s.adminCSRF).Put("/v1/admin/ai/models/{modelID}", s.adminUpdateAIModel)
@@ -160,6 +178,16 @@ func (s *Server) Router() http.Handler {
 		r.With(s.adminCSRF).Delete("/v1/admin/ai/prompts/{promptID}", s.adminDeletePrompt)
 	})
 	return r
+}
+
+func (s *Server) requestTimeout(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		duration := 4 * time.Minute
+		if r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/admin/releases/") && strings.Contains(r.URL.Path, "/artifacts/") {
+			duration = 30 * time.Minute
+		}
+		middleware.Timeout(duration)(next).ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) trustedRealIP(next http.Handler) http.Handler {

@@ -74,6 +74,7 @@ $states = @(
     @{ Name = "piano-roll"; Env = @{ DAW_SHOT_PIANOROLL = "selected" } },
     @{ Name = "pattern"; Env = @{ DAW_SHOT_PATTERN = "editor" } },
     @{ Name = "sampler"; Env = @{ DAW_SHOT_SAMPLER = $samplePath } },
+    @{ Name = "equalizer"; Env = @{ DAW_SHOT_EQUALIZER = "1"; DAW_SHOT_DELAY = "900" } },
     @{ Name = "mixer"; Env = @{ DAW_SHOT_MIXER = "420" } },
     @{ Name = "plugin-picker"; Env = @{ DAW_SHOT_MENU = "plugins" } },
     @{ Name = "plugin-search"; Env = @{ DAW_SHOT_PLUGIN_SEARCH = "open" } },
@@ -109,7 +110,7 @@ $shotKeys = @(
     "DAW_SHOT_PIANOROLL", "DAW_SHOT_PATTERN", "DAW_SHOT_SAMPLER", "DAW_SHOT_MIXER",
     "DAW_SHOT_MENU", "DAW_SHOT_PLUGIN_SEARCH", "DAW_SHOT_PLUGINS", "DAW_SHOT_AUTOMATION",
     "DAW_SHOT_AUTOMATION_EDITOR", "DAW_SHOT_AI", "DAW_SHOT_WEB", "DAW_SHOT_EXPORT",
-    "DAW_SHOT_RECOVERY", "DAW_SHOT_SETTINGS", "DAW_SHOT_DELAY"
+    "DAW_SHOT_RECOVERY", "DAW_SHOT_SETTINGS", "DAW_SHOT_EQUALIZER", "DAW_SHOT_DELAY"
 )
 
 try {
@@ -158,10 +159,10 @@ try {
             }
         }
     }
-    if ($files.Count -lt 78) {
-        throw "Expected at least 78 screenshots, found $($files.Count)."
+    if ($files.Count -lt 80) {
+        throw "Expected at least 80 screenshots, found $($files.Count)."
     }
-    Write-Host "Manual screenshots ready: 78 files in $OutputRoot"
+    Write-Host "Manual screenshots ready: 80 files in $OutputRoot"
 } finally {
     foreach ($key in $shotKeys + @("DAW_PREF_DIR", "DAW_SHOT_SIZE")) {
         [Environment]::SetEnvironmentVariable($key, $null, "Process")

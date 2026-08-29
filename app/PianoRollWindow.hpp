@@ -152,6 +152,8 @@ public:
     /// Repaint only the old/new playhead slivers and keyboard keys whose held
     /// state changed. Called by the window's 30 Hz transport timer.
     void refreshPlayheadFrame();
+    /// Pitches currently held by live computer/hardware input for this track.
+    void setLivePitches(const std::bitset<128>& pitches);
 
     // ── The parameter lane along the bottom ──
     /// Point the lane at velocity, pan, or one of the clip's controller curves.
@@ -421,6 +423,7 @@ private:
     /// 256 binary searches over fixed pitch buckets and allocate nothing.
     PitchMask soundingPitches() const;
     PitchMask soundingPitchesAtBeat(double beat) const;
+    PitchMask keyboardPitches() const { return soundingPitches() | m_livePitches; }
     void invalidateSoundingPitchIndex() const noexcept;
     void ensureSoundingPitchIndex(const daw::miditools::Notes& notes) const;
     void paintKeyboard(QPainter& p, double fieldBottom);
@@ -491,6 +494,7 @@ private:
     bool m_followPlayback = true;
     int m_lastPlayheadPixel = -1;
     PitchMask m_lastSoundingPitches;
+    PitchMask m_livePitches;
     mutable SoundingPitchIndex m_soundingPitchIndex;
     mutable const daw::miditools::Notes* m_soundingPitchSource = nullptr;
     mutable const daw::NoteModel* m_soundingPitchData = nullptr;
@@ -682,6 +686,9 @@ public:
     /// Repaint only the shared transport cursor; safe to call for every scrub
     /// event because it does not rebuild menus or editor state.
     void refreshPlayhead();
+    /// Replace the live-input pitches painted on the left keyboard.
+    void setLivePitches(const std::bitset<128>& pitches);
+    bool livePitchHeldForTest(int pitch) const;
     bool checkInteractionGesturesForTest();
 
     /// The four clipboard chords, performed on the notes.

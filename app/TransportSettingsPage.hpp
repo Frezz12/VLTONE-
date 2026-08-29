@@ -7,6 +7,7 @@ class EngineController;
 }
 
 class QComboBox;
+class QLineEdit;
 
 /// Preferences for the transport's play/pause behaviour — the "Transport" tab
 /// of the settings window.
@@ -19,4 +20,5 @@ public:
 private:
     daw::EngineController* m_controller;
     QComboBox* m_modeCombo = nullptr;
+    QLineEdit* m_metronomeFile = nullptr;
 };

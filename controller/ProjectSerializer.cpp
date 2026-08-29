@@ -159,6 +159,7 @@ json automationToJson(const ClipAutomationModel& automation) {
         {"parameterId", automation.target.parameterId},
         {"sendId", automation.target.sendId},
         {"defaultValue", automation.defaultValue},
+        {"active", automation.active},
         {"points", std::move(points)},
     };
 }
@@ -172,6 +173,8 @@ ClipAutomationModel automationFromJson(const json& j) {
     automation.target.parameterId = j.value("parameterId", std::string());
     automation.target.sendId = j.value("sendId", std::string());
     automation.defaultValue = std::clamp(j.value("defaultValue", 0.0), 0.0, 1.0);
+    // Curves saved before passive automation existed were always applied.
+    automation.active = j.value("active", true);
     if (j.contains("points") && j.at("points").is_array()) {
         const auto& points = j.at("points");
         automation.points.reserve(points.size());

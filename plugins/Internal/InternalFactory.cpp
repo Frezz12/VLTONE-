@@ -1,6 +1,7 @@
 #include "Internal/InternalFactory.hpp"
 
 #include "Internal/GravityInstance.hpp"
+#include "Internal/EqualizerInstance.hpp"
 #include "Internal/SampleDecoder.hpp"
 #include "Internal/SamplerInstance.hpp"
 
@@ -45,6 +46,9 @@ std::vector<PluginDescriptor> InternalFactory::inspect(const std::string& path) 
 }
 
 std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& descriptor) {
+    if (descriptor.uid == equalizer::EqualizerInstance::uid()) {
+        return std::make_unique<equalizer::EqualizerInstance>();
+    }
     if (descriptor.uid == gravity::GravityInstance::uid()) {
         return std::make_unique<gravity::GravityInstance>();
     }
@@ -56,6 +60,7 @@ std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& 
 
 std::vector<PluginDescriptor> builtinPlugins() {
     return {sampler::SamplerInstance::staticDescriptor(),
+            equalizer::EqualizerInstance::staticDescriptor(),
             gravity::GravityInstance::staticDescriptor()};
 }
 

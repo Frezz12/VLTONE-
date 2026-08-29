@@ -41,6 +41,15 @@ test("manual screenshot opens in a native dialog and closes with Escape", async 
   await expect(dialog).not.toBeVisible();
 });
 
+test("manual sidebar opens a chapter from another category", async ({ page }) => {
+  await page.goto("/en/manual");
+  const sidebar = page.getByRole("complementary", { name: "On this page" });
+  await sidebar.getByRole("link", { name: "Piano roll" }).click();
+  await expect(page).toHaveURL(/\/en\/manual#piano-roll$/);
+  await expect(page.getByRole("tab", { name: "MIDI and instruments" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { name: "Piano roll" })).toBeInViewport();
+});
+
 for (const viewport of [
   { width: 375, height: 760 },
   { width: 768, height: 900 },

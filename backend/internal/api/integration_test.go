@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -41,6 +42,28 @@ func performJSON(handler http.Handler, method, path string, body any, remote str
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	for _, cookie := range cookies {
+		req.AddCookie(cookie)
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	result := testResponse{Status: recorder.Code, Cookies: recorder.Result().Cookies(), Body: map[string]any{}}
+	_ = json.Unmarshal(recorder.Body.Bytes(), &result.Body)
+	return result
+}
+
+func performMultipart(handler http.Handler, method, path, field, filename string, body []byte, remote string, cookies []*http.Cookie, headers map[string]string) testResponse {
+	var encoded bytes.Buffer
+	writer := multipart.NewWriter(&encoded)
+	part, _ := writer.CreateFormFile(field, filename)
+	_, _ = part.Write(body)
+	_ = writer.Close()
+	req := httptest.NewRequest(method, path, &encoded)
+	req.RemoteAddr = remote
+	req.Header.Set("Content-Type", writer.FormDataContentType())
 	for _, cookie := range cookies {
 		req.AddCookie(cookie)
 	}
@@ -334,6 +357,53 @@ func TestPostgresAccountFlow(t *testing.T) {
 		t.Fatalf("admin login failed: %d %v", adminLogin.Status, adminLogin.Body)
 	}
 	adminCSRF, _ := adminLogin.Body["csrf_token"].(string)
+	adminHeaders := map[string]string{"Origin": cfg.AdminOrigin, "X-CSRF-Token": adminCSRF}
+	emptyRelease := map[string]any{
+		"version": "", "summary_ru": "", "summary_en": "", "features_ru": []string{}, "features_en": []string{},
+		"changes_ru": []string{}, "changes_en": []string{}, "fixes_ru": []string{}, "fixes_en": []string{},
+	}
+	draftRelease := performJSON(router, http.MethodPost, "/v1/admin/releases", emptyRelease, "203.0.113.40:1234", adminLogin.Cookies, adminHeaders)
+	if draftRelease.Status != http.StatusCreated || draftRelease.Body["status"] != model.ReleaseDraft {
+		t.Fatalf("empty release draft failed: %d %v", draftRelease.Status, draftRelease.Body)
+	}
+	releaseID, _ := draftRelease.Body["id"].(string)
+	notReady := performJSON(router, http.MethodPost, "/v1/admin/releases/"+releaseID+"/publish", map[string]any{}, "203.0.113.40:1234", adminLogin.Cookies, adminHeaders)
+	if notReady.Status != http.StatusUnprocessableEntity || notReady.Body["code"] != "release_not_ready" {
+		t.Fatalf("empty release published: %d %v", notReady.Status, notReady.Body)
+	}
+	readyRelease := map[string]any{
+		"version": "0.1.2", "summary_ru": "Новая версия", "summary_en": "New release",
+		"features_ru": []string{"Новое"}, "features_en": []string{"New"},
+		"changes_ru": []string{}, "changes_en": []string{}, "fixes_ru": []string{}, "fixes_en": []string{},
+	}
+	updatedRelease := performJSON(router, http.MethodPut, "/v1/admin/releases/"+releaseID, readyRelease, "203.0.113.40:1234", adminLogin.Cookies, adminHeaders)
+	if updatedRelease.Status != http.StatusOK {
+		t.Fatalf("release update failed: %d %v", updatedRelease.Status, updatedRelease.Body)
+	}
+	uploadedArtifact := performMultipart(router, http.MethodPut, "/v1/admin/releases/"+releaseID+"/artifacts/windows-exe", "file", "VLT-Setup.exe", []byte("MZ-test-installer"), "203.0.113.40:1234", adminLogin.Cookies, adminHeaders)
+	if uploadedArtifact.Status != http.StatusOK || uploadedArtifact.Body["kind"] != "windows-exe" {
+		t.Fatalf("release artifact upload failed: %d %v", uploadedArtifact.Status, uploadedArtifact.Body)
+	}
+	publishedRelease := performJSON(router, http.MethodPost, "/v1/admin/releases/"+releaseID+"/publish", map[string]any{}, "203.0.113.40:1234", adminLogin.Cookies, adminHeaders)
+	if publishedRelease.Status != http.StatusOK || publishedRelease.Body["status"] != model.ReleasePublished {
+		t.Fatalf("release publish failed: %d %v", publishedRelease.Status, publishedRelease.Body)
+	}
+	publicRelease := performJSON(router, http.MethodGet, "/v1/releases/0.1.2?locale=ru", nil, "203.0.113.41:1234", nil, nil)
+	if publicRelease.Status != http.StatusOK || publicRelease.Body["summary"] != "Новая версия" {
+		t.Fatalf("public release failed: %d %v", publicRelease.Status, publicRelease.Body)
+	}
+	latestWindows := performJSON(router, http.MethodGet, "/v1/releases/latest?platform=windows&locale=ru", nil, "203.0.113.41:1234", nil, nil)
+	if latestWindows.Status != http.StatusOK || latestWindows.Body["version"] != "0.1.2" {
+		t.Fatalf("latest Windows release failed: %d %v", latestWindows.Status, latestWindows.Body)
+	}
+	latestMac := performJSON(router, http.MethodGet, "/v1/releases/latest?platform=macos&locale=ru", nil, "203.0.113.41:1234", nil, nil)
+	if latestMac.Status != http.StatusNoContent {
+		t.Fatalf("unsupported macOS release was exposed: %d %v", latestMac.Status, latestMac.Body)
+	}
+	lastArtifact := performJSON(router, http.MethodDelete, "/v1/admin/releases/"+releaseID+"/artifacts/windows-exe", nil, "203.0.113.40:1234", adminLogin.Cookies, adminHeaders)
+	if lastArtifact.Status != http.StatusConflict || lastArtifact.Body["code"] != "last_artifact_required" {
+		t.Fatalf("last published artifact was deleted: %d %v", lastArtifact.Status, lastArtifact.Body)
+	}
 	badReset := performJSON(router, http.MethodPost, "/v1/admin/users/"+user.ID.String()+"/tokens/reset", map[string]string{"password": ""}, "203.0.113.40:1234", adminLogin.Cookies,
 		map[string]string{"Origin": cfg.AdminOrigin, "X-CSRF-Token": adminCSRF})
 	if badReset.Status != http.StatusUnauthorized || badReset.Body["code"] != "reauthentication_failed" {

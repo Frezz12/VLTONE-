@@ -31,6 +31,7 @@ struct MidiNote {
     std::uint8_t key = 60;
     std::uint8_t velocity = 100;
     std::uint8_t channel = 0;
+    float pan = 0.0f;             ///< per-note stereo position, -1 ... 1
 };
 
 /// Plays MIDI clips: turns a list of notes into note-on and note-off events at
@@ -260,7 +261,7 @@ public:
 
             const bool started = context.midiOutput->push(MidiEvent::noteOn(
                 std::min(onOffset, context.frames - 1), note.channel, note.key,
-                note.velocity));
+                note.velocity, note.pan));
             if (!started) continue;
             if (endsThisBlock) {
                 const auto offOffset =
@@ -303,7 +304,7 @@ private:
                 const bool endsThisBlock = endBeats < blockEndBeats;
                 if (endsThisBlock || m_sounding.size() < kMaxSounding) {
                     const bool started = out.push(MidiEvent::noteOn(
-                        0, note.channel, note.key, note.velocity));
+                        0, note.channel, note.key, note.velocity, note.pan));
                     // Do not remember or release a voice the destination never
                     // received.
                     if (started) {

@@ -5,6 +5,8 @@ export type APIError = {
   request_id?: string;
 };
 
+export type { components, operations, paths } from "./schema";
+
 export type User = {
   id: string;
   email: string;

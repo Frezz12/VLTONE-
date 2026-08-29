@@ -8,6 +8,7 @@
 #include "Recording/RecordingEngine.hpp"
 #include "Core/AudioBuffer.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -428,8 +429,7 @@ int main() {
               "Pattern extension redo republishes only linked children");
     }
 
-    // Removing a Pattern is structural, but its history endpoint must include
-    // the membership and routing fields rewritten on every surviving child.
+    // Removing a Pattern removes its private source subtree as one object.
     {
         daw::EngineController p;
         p.initialize(48000, 512, false);
@@ -445,10 +445,9 @@ int main() {
                                       : std::string{};
 
         p.removeTrack(pattern);
-        const auto* detached = p.project().findTrack(child);
-        check(!p.project().findTrack(pattern) && detached &&
-                  detached->parentId.empty() && detached->outputBusId.empty(),
-              "removing a Pattern detaches its surviving child endpoint");
+        check(!p.project().findTrack(pattern) &&
+                  !p.project().findTrack(child),
+              "removing a Pattern removes its child MIDI endpoint");
         p.undo();
         const auto* restoredPattern = p.project().findTrack(pattern);
         const auto* restoredChild = p.project().findTrack(child);
@@ -462,13 +461,34 @@ int main() {
                   restoredNotes && restoredNotes->size() == 1,
               "Pattern-track undo restores child membership, routing and notes");
         p.redo();
-        detached = p.project().findTrack(child);
-        check(!p.project().findTrack(pattern) && detached &&
-                  detached->parentId.empty() && detached->outputBusId.empty(),
-              "Pattern-track redo restores the exact detached endpoint");
+        check(!p.project().findTrack(pattern) &&
+                  !p.project().findTrack(child),
+              "Pattern-track redo removes the complete object again");
     }
 
     // ── Pattern clips are real arrangement containers ──
+    // A newly added source follows the edited arrangement window of its
+    // Pattern instance instead of reverting to the global one-bar default.
+    {
+        daw::EngineController p;
+        p.initialize(48000, 512, false);
+        const std::string pattern = p.addPattern("Long Pattern");
+        const auto* patternTrack = p.project().findTrack(pattern);
+        const std::string owner =
+            patternTrack && !patternTrack->clips.empty()
+                ? patternTrack->clips.front().id
+                : std::string{};
+        p.beginClipTrimEdit(pattern, owner);
+        p.setClipTrim(pattern, owner, 0.0, 0.0, 8.0);
+        p.endClipTrimEdit("Extend Pattern");
+        const std::string child = p.addPatternSample(pattern, tonePath, 0.0);
+        const auto* childTrack = p.project().findTrack(child);
+        check(childTrack && !childTrack->clips.empty() &&
+                  std::fabs(childTrack->clips.front().durationSeconds - 8.0) <
+                      1e-9,
+              "new Pattern MIDI inherits the current Pattern length");
+    }
+
     {
         daw::EngineController p;
         p.initialize(48000, 512, false);
@@ -621,7 +641,7 @@ int main() {
             findClip(p, denseTrack, denseClip)->notes.data();
         const std::string denseNoteId =
             findClip(p, denseTrack, denseClip)->notes.front().id;
-        const auto denseSchedule = engineNotesFor(p, denseTrack);
+        auto denseSchedule = engineNotesFor(p, denseTrack);
 
         const std::string right = p.splitClip(pattern, owner, 1.0);
         const auto ownerAfterSplit = clipIds(pattern);
@@ -639,6 +659,7 @@ int main() {
               "Pattern split captures only crossing clips and scalar right-member ownership");
 
         p.setNotePan(denseTrack, denseClip, denseNoteId, 0.1f);
+        denseSchedule = engineNotesFor(p, denseTrack);
         p.undo();
         check(clipIds(pattern) == ownerBeforeSplit &&
                   clipIds(child) == memberBeforeSplit &&
@@ -675,6 +696,7 @@ int main() {
                       rightMemberStorage,
               "Pattern mute updates only parent/member booleans");
         p.setNotePan(denseTrack, denseClip, denseNoteId, 0.2f);
+        denseSchedule = engineNotesFor(p, denseTrack);
         p.undo();
         check(!findClip(p, pattern, right)->muted &&
                   findClip(p, child, future)->muted &&
@@ -726,6 +748,7 @@ int main() {
             withoutIds(memberWithTail, copiedMembers);
 
         p.setNotePan(denseTrack, denseClip, denseNoteId, 0.3f);
+        denseSchedule = engineNotesFor(p, denseTrack);
         p.undo();
         check(clipIds(pattern) == ownerWithoutCopy &&
                   clipIds(child) == memberWithoutCopy,
@@ -749,6 +772,7 @@ int main() {
                   clipIds(child) == memberWithoutCopy,
               "Pattern remove erases only its captured parent/member ids");
         p.setNotePan(denseTrack, denseClip, denseNoteId, 0.4f);
+        denseSchedule = engineNotesFor(p, denseTrack);
         p.undo();
         check(clipIds(pattern) == ownerWithTail &&
                   clipIds(child) == memberWithTail &&
@@ -1637,6 +1661,43 @@ int main() {
         check(model && std::fabs(model->automation.defaultValue -
                                  daw::normalizedFromGain(1.0)) < 1e-6,
               "a fresh curve starts where the control already stands");
+        const double endBeats = daw::secondsToBeats(
+            model ? model->durationSeconds : 0.0, a.project().tempo);
+        check(model && !model->automation.active &&
+                  model->automation.points.size() == 2 &&
+                  std::fabs(model->automation.points.front().beats) < 1e-9 &&
+                  std::fabs(model->automation.points.back().beats - endBeats) < 1e-9,
+              "a fresh curve has only passive start and end points");
+
+        a.setTrackVolumeLive(track, 0.5f);
+        model = findClip(a, lane, clip);
+        const double half = daw::normalizedFromGain(0.5);
+        check(model && !model->automation.active &&
+                  std::fabs(model->automation.defaultValue - half) < 1e-9 &&
+                  std::all_of(model->automation.points.begin(),
+                              model->automation.points.end(),
+                              [half](const daw::AutomationPoint& point) {
+                                  return std::fabs(point.value - half) < 1e-9;
+                              }) &&
+                  !a.automationValueAtPlayhead(target).has_value(),
+              "an untouched curve follows the fader without driving it");
+
+        const auto passive = model->automation.points;
+        auto edited = passive;
+        edited.front().value = 0.0;
+        a.setAutomationPoints(lane, clip, edited);
+        a.commitAutomationEdit(lane, clip, passive, "First Automation Edit",
+                               false);
+        check(findClip(a, lane, clip)->automation.active &&
+                  a.automationValueAtPlayhead(target).has_value(),
+              "the first point edit activates the curve");
+        a.undo();
+        check(!findClip(a, lane, clip)->automation.active &&
+                  findClip(a, lane, clip)->automation.points == passive,
+              "undoing the first edit makes the curve passive again");
+        a.redo();
+        check(findClip(a, lane, clip)->automation.active,
+              "redoing the first edit activates it again");
 
         // Only automation clips go on an automation lane, and they go nowhere
         // else.
@@ -1810,8 +1871,9 @@ int main() {
         const daw::ClipModel* reloaded = findClip(back, lane, clip);
         check(reloaded && reloaded->kind == daw::ClipKind::Automation,
               "the clip comes back as an automation clip");
-        check(reloaded && reloaded->automation.points.size() == 3,
-              "with every point");
+        check(reloaded && reloaded->automation.active &&
+                  reloaded->automation.points.size() == 3,
+              "active, with every point");
         check(reloaded &&
                   reloaded->automation.points[0].shape ==
                       daw::AutomationSegment::Hold &&
@@ -2444,6 +2506,14 @@ int main() {
         check(!r.isMetronomeEnabled(), "metronome starts off");
         r.setMetronomeEnabled(true);
         check(r.isMetronomeEnabled(), "metronome toggles on");
+        check(r.setMetronomeSample(tonePath) &&
+                  r.metronomeSamplePath() == tonePath,
+              "a custom metronome sample can be loaded");
+        check(!r.setMetronomeSample((dir / "missing-click.wav").string()) &&
+                  r.metronomeSamplePath() == tonePath,
+              "a bad custom click leaves the working choice in place");
+        check(r.setMetronomeSample({}) && r.metronomeSamplePath().empty(),
+              "clearing the custom click restores the built-in knock");
 
         const std::string clickPath = (dir / "click.wav").string();
         check(r.exportMixdown(clickPath, false).isOk(), "metronome mixdown renders");
@@ -2552,7 +2622,10 @@ int main() {
         t.setPlaybackMode(Mode::Restart);
         t.seekSeconds(4.0);   // anchor = 4.0
         check(t.startRecording(track), "recording starts in restart mode");
-        t.seekSeconds(8.0);   // recording advances; anchor stays at 4.0
+        const double recordingCursor = t.positionSeconds();
+        t.seekSeconds(8.0);
+        check(std::fabs(t.positionSeconds() - recordingCursor) < 1e-6,
+              "a recording owns the playhead until it is stopped");
         t.stopRecording();
         check(t.startRecording(track), "a second recording starts while rolling");
         check(std::fabs(t.recordingStartSeconds(track) - 4.0) < 1e-6,
@@ -2684,28 +2757,39 @@ int main() {
         const std::uint64_t beforePanRevision =
             p.midiNotesRevision(trackId);
         p.setNotePan(trackId, clipId, noteId, 0.6f);
-        check(engineNotes() == afterSingleton &&
+        const auto afterPanSingleton = engineNotes();
+        check(afterPanSingleton && afterPanSingleton != afterSingleton &&
+                  std::abs(afterPanSingleton->front().pan - 0.6f) < 1e-6f &&
                   p.midiNotesRevision(trackId) == beforePanRevision,
-              "a singleton pan edit does not republish identical MIDI data");
+              "a singleton pan edit publishes its audible per-note pan");
         p.beginNoteEdit(trackId, clipId);
         p.setNotePan(trackId, clipId, noteId, -0.4f);
+        check(engineNotes() == afterPanSingleton,
+              "a live pan drag defers its realtime publication");
         p.endNoteEdit("Pan Notes");
-        check(engineNotes() == afterSingleton && p.undoLabel() == "Pan Notes" &&
+        const auto afterPanGesture = engineNotes();
+        check(afterPanGesture && afterPanGesture != afterPanSingleton &&
+                  std::abs(afterPanGesture->front().pan + 0.4f) < 1e-6f &&
+                  p.undoLabel() == "Pan Notes" &&
                   p.midiNotesRevision(trackId) == beforePanRevision,
-              "a pan gesture remains undoable without publishing MIDI");
+              "a pan gesture publishes once and remains undoable");
         p.undo();
         {
             const auto* clip = findClip(p, trackId, clipId);
             check(clip && clip->notes[0].pan == 0.6f,
                   "undo restores the pan gesture's lazily captured state");
         }
-        check(engineNotes() == afterSingleton &&
+        const auto afterPanUndo = engineNotes();
+        check(afterPanUndo && afterPanUndo != afterPanGesture &&
+                  std::abs(afterPanUndo->front().pan - 0.6f) < 1e-6f &&
                   engineNotesFor(p, unrelatedTrackId) == unrelated,
-              "pan-gesture undo publishes no identical MIDI snapshots");
+              "pan-gesture undo republishes the restored stereo position");
         p.redo();
-        check(engineNotes() == afterSingleton &&
+        const auto afterPanRedo = engineNotes();
+        check(afterPanRedo && afterPanRedo != afterPanUndo &&
+                  std::abs(afterPanRedo->front().pan + 0.4f) < 1e-6f &&
                   engineNotesFor(p, unrelatedTrackId) == unrelated,
-              "pan-gesture redo publishes no identical MIDI snapshots");
+              "pan-gesture redo republishes the final stereo position");
 
         std::vector<daw::NoteModel> transformed =
             findClip(p, trackId, clipId)->notes;
@@ -2734,15 +2818,21 @@ int main() {
             findClip(p, trackId, clipId)->notes;
         panOnly.front().pan = 0.25f;
         p.setClipNotes(trackId, clipId, panOnly, "Transform Note Pan");
-        check(engineNotes() == transformedRedo,
-              "pan-only setClipNotes publishes no identical MIDI snapshot");
+        const auto panOnlyLive = engineNotes();
+        check(panOnlyLive && panOnlyLive != transformedRedo &&
+                  std::abs(panOnlyLive->front().pan - 0.25f) < 1e-6f,
+              "pan-only setClipNotes publishes its audible note pan");
         p.undo();
-        check(engineNotes() == transformedRedo,
-              "pan-only setClipNotes undo publishes no MIDI snapshot");
+        const auto panOnlyUndo = engineNotes();
+        check(panOnlyUndo && panOnlyUndo != panOnlyLive &&
+                  std::abs(panOnlyUndo->front().pan + 0.4f) < 1e-6f,
+              "pan-only setClipNotes undo republishes the old note pan");
         p.redo();
-        check(engineNotes() == transformedRedo &&
+        const auto panOnlyRedo = engineNotes();
+        check(panOnlyRedo && panOnlyRedo != panOnlyUndo &&
+                  std::abs(panOnlyRedo->front().pan - 0.25f) < 1e-6f &&
                   engineNotesFor(p, unrelatedTrackId) == unrelated,
-              "pan-only setClipNotes redo leaves every schedule intact");
+              "pan-only setClipNotes redo republishes only its MIDI track");
 
         std::vector<daw::NoteModel> idOnly =
             findClip(p, trackId, clipId)->notes;
@@ -2752,17 +2842,17 @@ int main() {
         p.setClipNotes(trackId, clipId, idOnly, "Change Note Identity");
         const std::uint64_t liveIdRevision =
             p.midiNotesRevision(trackId);
-        check(engineNotes() == transformedRedo &&
+        check(engineNotes() == panOnlyRedo &&
                   liveIdRevision == beforeIdRevision + 1,
               "geometry-only setClipNotes invalidates preview without playback");
         p.undo();
         const std::uint64_t undoIdRevision =
             p.midiNotesRevision(trackId);
-        check(engineNotes() == transformedRedo &&
+        check(engineNotes() == panOnlyRedo &&
                   undoIdRevision == liveIdRevision + 1,
               "geometry-only setClipNotes undo invalidates preview");
         p.redo();
-        check(engineNotes() == transformedRedo &&
+        check(engineNotes() == panOnlyRedo &&
                   p.midiNotesRevision(trackId) == undoIdRevision + 1,
               "geometry-only setClipNotes redo invalidates preview");
 
@@ -2777,17 +2867,17 @@ int main() {
         p.endNoteEdit("Structural Geometry Delta");
         const std::uint64_t liveStructuralRevision =
             p.midiNotesRevision(trackId);
-        check(engineNotes() == transformedRedo &&
+        check(engineNotes() == panOnlyRedo &&
                   liveStructuralRevision == beforeStructuralRevision + 1,
               "geometry-only structural gesture invalidates preview live");
         p.undo();
         const std::uint64_t undoStructuralRevision =
             p.midiNotesRevision(trackId);
-        check(engineNotes() == transformedRedo &&
+        check(engineNotes() == panOnlyRedo &&
                   undoStructuralRevision == liveStructuralRevision + 1,
               "geometry-only structural undo invalidates preview");
         p.redo();
-        check(engineNotes() == transformedRedo &&
+        check(engineNotes() == panOnlyRedo &&
                   p.midiNotesRevision(trackId) ==
                       undoStructuralRevision + 1,
               "geometry-only structural redo invalidates preview");
@@ -3467,6 +3557,45 @@ int main() {
                   findClip(p, second, denseClip)->notes.data() == noteStorage &&
                   std::fabs(p.project().findTrack(unrelated)->pan + 0.42f) < 1e-6f,
               "dense MIDI trim redo reapplies only scalar geometry");
+    }
+
+    // Mixed clip kinds share one edge gesture and one history endpoint.
+    {
+        daw::EngineController p;
+        p.initialize(48000, 512, false);
+        const std::string audio =
+            p.addTrack(daw::TrackKind::Audio, "Group Trim Audio");
+        const std::string midi =
+            p.addTrack(daw::TrackKind::Midi, "Group Trim MIDI");
+        const std::string audioClip = p.importAudio(tonePath, audio, 0.0);
+        const std::string midiClip = p.addMidiClip(midi, 1.0, 4.0);
+        const auto* audioBefore = findClip(p, audio, audioClip);
+        const double audioLength =
+            audioBefore ? audioBefore->durationSeconds : 0.0;
+        const std::size_t depth = p.undoDepth();
+
+        p.beginClipTrimEdit({{audio, audioClip}, {midi, midiClip}});
+        p.setClipTrim(audio, audioClip, 0.0, 0.0, audioLength - 0.2);
+        p.setClipTrim(midi, midiClip, 1.0, 0.0, 3.8);
+        p.endClipTrimEdit("Trim Clips");
+        check(p.undoDepth() == depth + 1 &&
+                  std::fabs(findClip(p, audio, audioClip)->durationSeconds -
+                            (audioLength - 0.2)) < 1e-9 &&
+                  std::fabs(findClip(p, midi, midiClip)->durationSeconds - 3.8) <
+                      1e-9,
+              "mixed selected clips trim in one transaction");
+        p.undo();
+        check(std::fabs(findClip(p, audio, audioClip)->durationSeconds -
+                        audioLength) < 1e-9 &&
+                  std::fabs(findClip(p, midi, midiClip)->durationSeconds - 4.0) <
+                      1e-9,
+              "one undo restores every clip in a group trim");
+        p.redo();
+        check(std::fabs(findClip(p, audio, audioClip)->durationSeconds -
+                        (audioLength - 0.2)) < 1e-9 &&
+                  std::fabs(findClip(p, midi, midiClip)->durationSeconds - 3.8) <
+                      1e-9,
+              "group trim redo restores the mixed endpoint");
     }
 
     // A Pattern owner generates child movements during the same gesture. The

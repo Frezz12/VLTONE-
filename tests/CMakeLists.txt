@@ -98,6 +98,15 @@ add_test(NAME gravity_test COMMAND gravity_test)
 set_tests_properties(gravity_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 
+# VLT Equalizer: stable registration/state, IIR and WOLA paths, dynamic
+# sidechain, PDC notifications, sample-offset events and realtime safety.
+add_executable(equalizer_test equalizer_test.cpp)
+target_link_libraries(equalizer_test PRIVATE daw_controller)
+
+add_test(NAME equalizer_test COMMAND equalizer_test)
+set_tests_properties(equalizer_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
 # The rebuilt engine: graph compilation, latency compensation, and the
 # dependency-driven parallel scheduler (correctness, determinism, scaling).
 add_executable(engine_graph_test engine_graph_test.cpp)

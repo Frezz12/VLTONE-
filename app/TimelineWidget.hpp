@@ -578,9 +578,9 @@ private:
     double m_bendStartY = 0.0;
     double m_bendStartCurve = 0.0;
     std::vector<daw::AutomationPoint> m_pointsBefore;
-    /// Normalized curve at point-pickup time. Downward drags are rebuilt from
-    /// it on every move so their guard point is stable and Shift can keep the
-    /// exact original value while the handle crosses neighbours.
+    bool m_pointsBeforeActive = false;
+    /// Normalized curve at point-pickup time. Each move is rebuilt from it so
+    /// Shift can keep the exact original value while the handle crosses neighbours.
     std::vector<daw::AutomationPoint> m_dragPoints;
 
     LoopGrab m_loopGrab = LoopGrab::None;
@@ -692,6 +692,16 @@ private:
     double m_trimOrigStart = 0.0;
     double m_trimOrigOffset = 0.0;
     double m_trimOrigDuration = 0.0;
+    struct TrimOrigin {
+        QString trackId;
+        QString clipId;
+        double startSeconds = 0.0;
+        double offsetSeconds = 0.0;
+        double durationSeconds = 0.0;
+        double stretch = 1.0;
+        daw::ClipKind kind = daw::ClipKind::Audio;
+    };
+    QVector<TrimOrigin> m_trimOrigins;
 
     // Fade (corner-drag) state.
     bool m_fading = false;

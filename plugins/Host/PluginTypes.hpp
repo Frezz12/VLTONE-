@@ -110,6 +110,9 @@ struct PluginEvent {
     std::int32_t noteId = -1;        ///< -1 = address by key/channel
     /// Plain parameter value, or note velocity in 0…1.
     double value = 0.0;
+    /// Host-only per-note stereo position, -1 ... 1. Format adapters may
+    /// ignore it; internal instruments can render it without inventing a CC.
+    double notePan = 0.0;
 };
 static_assert(std::is_trivially_copyable_v<PluginEvent>,
               "PluginEvent travels through a lock-free ring");

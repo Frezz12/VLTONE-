@@ -20,6 +20,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listReleases"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/releases/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getLatestRelease"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/releases/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRelease"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/releases/{version}/download/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["downloadReleaseArtifact"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/releases/{version}/screenshots/{screenshotId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getReleaseScreenshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/web/auth/register": {
         parameters: {
             query?: never;
@@ -807,6 +887,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["adminListReleases"];
+        put?: never;
+        post: operations["adminCreateRelease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/releases/{releaseId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["adminGetRelease"];
+        put: operations["adminUpdateRelease"];
+        post?: never;
+        delete: operations["adminDeleteRelease"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/releases/{releaseId}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["adminPublishRelease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/releases/{releaseId}/artifacts/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["adminUploadReleaseArtifact"];
+        post?: never;
+        delete: operations["adminDeleteReleaseArtifact"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/releases/{releaseId}/screenshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["adminUploadReleaseScreenshot"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/releases/{releaseId}/screenshots/{screenshotId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["adminUpdateReleaseScreenshot"];
+        post?: never;
+        delete: operations["adminDeleteReleaseScreenshot"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/releases/{releaseId}/screenshots/{screenshotId}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["adminGetReleaseScreenshotFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -818,6 +1010,96 @@ export interface components {
                 [key: string]: string;
             };
             request_id: string;
+        };
+        /** @enum {string} */
+        ArtifactKind: "windows-exe" | "macos-dmg" | "linux-appimage" | "linux-deb" | "linux-rpm" | "linux-tar-gz" | "linux-tar-xz";
+        ReleaseArtifact: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["ArtifactKind"];
+            /** @enum {string} */
+            platform: "windows" | "macos" | "linux";
+            label: string;
+            file_name: string;
+            /** Format: int64 */
+            bytes: number;
+            sha256: string;
+            download_url: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ReleaseScreenshot: {
+            /** Format: uuid */
+            id: string;
+            caption?: string;
+            caption_ru?: string;
+            caption_en?: string;
+            sort_order: number;
+            width: number;
+            height: number;
+            sha256: string;
+            url: string;
+        };
+        PublicRelease: {
+            /** Format: uuid */
+            id: string;
+            version: string;
+            summary: string;
+            features: string[];
+            changes: string[];
+            fixes: string[];
+            artifacts: components["schemas"]["ReleaseArtifact"][];
+            screenshots: components["schemas"]["ReleaseScreenshot"][];
+            /** Format: uri */
+            page_url: string;
+            /** Format: date-time */
+            published_at: string;
+        };
+        AdminRelease: {
+            /** Format: uuid */
+            id: string;
+            version: string;
+            /** @enum {string} */
+            status: "draft" | "published";
+            summary_ru: string;
+            summary_en: string;
+            features_ru: string[];
+            features_en: string[];
+            changes_ru: string[];
+            changes_en: string[];
+            fixes_ru: string[];
+            fixes_en: string[];
+            artifacts: components["schemas"]["ReleaseArtifact"][];
+            screenshots: components["schemas"]["ReleaseScreenshot"][];
+            /** Format: date-time */
+            published_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ReleaseWrite: {
+            version: string;
+            summary_ru: string;
+            summary_en: string;
+            features_ru: string[];
+            features_en: string[];
+            changes_ru: string[];
+            changes_en: string[];
+            fixes_ru: string[];
+            fixes_en: string[];
+        };
+        ReleaseScreenshotWrite: {
+            caption_ru: string;
+            caption_en: string;
+            sort_order: number;
+        };
+        LatestRelease: {
+            version: string;
+            /** Format: date-time */
+            published_at: string;
+            /** Format: uri */
+            page_url: string;
         };
         DesktopAIModel: {
             /** Format: uuid */
@@ -1080,6 +1362,12 @@ export interface components {
         BugId: string;
         AttachmentId: string;
         CrashId: string;
+        ReleaseId: string;
+        ReleaseVersion: string;
+        ScreenshotId: string;
+        ArtifactKind: components["schemas"]["ArtifactKind"];
+        Platform: "windows" | "macos" | "linux";
+        Locale: "ru" | "en";
     };
     requestBodies: {
         Login: {
@@ -1128,6 +1416,11 @@ export interface components {
                 "application/json": components["schemas"]["AIModelWrite"];
             };
         };
+        ReleaseWrite: {
+            content: {
+                "application/json": components["schemas"]["ReleaseWrite"];
+            };
+        };
     };
     headers: never;
     pathItems: never;
@@ -1152,6 +1445,134 @@ export interface operations {
                     "application/json": components["schemas"]["Meta"];
                 };
             };
+        };
+    };
+    listReleases: {
+        parameters: {
+            query?: {
+                locale?: components["parameters"]["Locale"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published releases ordered by semantic version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        releases: components["schemas"]["PublicRelease"][];
+                    };
+                };
+            };
+        };
+    };
+    getLatestRelease: {
+        parameters: {
+            query: {
+                platform: components["parameters"]["Platform"];
+                locale?: components["parameters"]["Locale"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest release with an installer for the requested platform */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LatestRelease"];
+                };
+            };
+            /** @description No published release supports this platform */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getRelease: {
+        parameters: {
+            query?: {
+                locale?: components["parameters"]["Locale"];
+            };
+            header?: never;
+            path: {
+                version: components["parameters"]["ReleaseVersion"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Localized published release */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicRelease"];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    downloadReleaseArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version: components["parameters"]["ReleaseVersion"];
+                kind: components["parameters"]["ArtifactKind"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Installer with Range */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    getReleaseScreenshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version: components["parameters"]["ReleaseVersion"];
+                screenshotId: components["parameters"]["ScreenshotId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sanitized release screenshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/png": string;
+                };
+            };
+            404: components["responses"]["Error"];
         };
     };
     register: {
@@ -2264,6 +2685,298 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    adminListReleases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Draft and published releases */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        releases: components["schemas"]["AdminRelease"][];
+                    };
+                };
+            };
+        };
+    };
+    adminCreateRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ReleaseWrite"];
+        responses: {
+            /** @description Saved draft */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminRelease"];
+                };
+            };
+            422: components["responses"]["Error"];
+        };
+    };
+    adminGetRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                releaseId: components["parameters"]["ReleaseId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Release editor state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminRelease"];
+                };
+            };
+        };
+    };
+    adminUpdateRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                releaseId: components["parameters"]["ReleaseId"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ReleaseWrite"];
+        responses: {
+            /** @description Saved release */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminRelease"];
+                };
+            };
+            422: components["responses"]["Error"];
+        };
+    };
+    adminDeleteRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                releaseId: components["parameters"]["ReleaseId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Draft and stored files deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Error"];
+        };
+    };
+    adminPublishRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                releaseId: components["parameters"]["ReleaseId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published release */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminRelease"];
+                };
+            };
+            422: components["responses"]["Error"];
+        };
+    };
+    adminUploadReleaseArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                releaseId: components["parameters"]["ReleaseId"];
+                kind: components["parameters"]["ArtifactKind"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Uploaded or atomically replaced artifact */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseArtifact"];
+                };
+            };
+            413: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    adminDeleteReleaseArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                releaseId: components["parameters"]["ReleaseId"];
+                kind: components["parameters"]["ArtifactKind"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Artifact deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Error"];
+        };
+    };
+    adminUploadReleaseScreenshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                releaseId: components["parameters"]["ReleaseId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                    caption_ru?: string;
+                    caption_en?: string;
+                    sort_order?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Sanitized screenshot */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseScreenshot"];
+                };
+            };
+            422: components["responses"]["Error"];
+        };
+    };
+    adminUpdateReleaseScreenshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                releaseId: components["parameters"]["ReleaseId"];
+                screenshotId: components["parameters"]["ScreenshotId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReleaseScreenshotWrite"];
+            };
+        };
+        responses: {
+            /** @description Updated screenshot metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseScreenshot"];
+                };
+            };
+        };
+    };
+    adminDeleteReleaseScreenshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                releaseId: components["parameters"]["ReleaseId"];
+                screenshotId: components["parameters"]["ScreenshotId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Screenshot deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    adminGetReleaseScreenshotFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                releaseId: components["parameters"]["ReleaseId"];
+                screenshotId: components["parameters"]["ScreenshotId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sanitized screenshot preview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/png": string;
+                };
+            };
+            404: components["responses"]["Error"];
         };
     };
 }

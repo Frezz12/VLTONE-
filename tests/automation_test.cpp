@@ -172,25 +172,21 @@ int main() {
     // ── Point gestures ─────────────────────────────────────────────────────
     {
         const at::Points curve{pt(0.0, 0.8), pt(4.0, 0.8), pt(8.0, 0.6)};
-        const at::Points lowered = at::dragPoint(curve, 1, 6.0, 0.2, 0.25);
-        check(lowered.size() == curve.size() + 1 &&
-                  near(lowered[1].beats, 4.0) && near(lowered[1].value, 0.8) &&
-                  near(lowered[2].beats, 6.0) && near(lowered[2].value, 0.2),
-              "lowering a point keeps its old position as the ramp anchor");
-        check(near(daw::automationValueAt(lowered, 3.0, 0.8), 0.8),
-              "the guarded drag leaves the preceding curve unchanged");
+        const at::Points lowered = at::dragPoint(curve, 1, 6.0, 0.2);
+        check(lowered.size() == curve.size() && near(lowered[1].beats, 6.0) &&
+                  near(lowered[1].value, 0.2),
+              "lowering a point moves only that point");
 
         const at::Points vertical =
-            at::dragPoint(curve, 1, 4.0, 0.2, 0.25);
-        check(vertical.size() == curve.size() + 1 &&
-                  near(vertical[1].beats, 3.75) && near(vertical[1].value, 0.8) &&
-                  near(vertical[2].beats, 4.0) && near(vertical[2].value, 0.2),
-              "a vertical downward drag inserts a guard immediately before it");
+            at::dragPoint(curve, 1, 4.0, 0.2);
+        check(vertical.size() == curve.size() &&
+                  near(vertical[1].beats, 4.0) && near(vertical[1].value, 0.2),
+              "a vertical drag does not create a second point");
 
-        const at::Points raised = at::dragPoint(curve, 1, 6.0, 0.9, 0.25);
+        const at::Points raised = at::dragPoint(curve, 1, 6.0, 0.9);
         check(raised.size() == curve.size() && near(raised[1].beats, 6.0) &&
                   near(raised[1].value, 0.9),
-              "raising a point moves one handle without adding a guard");
+              "raising a point also moves one handle");
     }
 
     // ── Transforms ──────────────────────────────────────────────────────────
@@ -338,6 +334,7 @@ int main() {
         spec.lengthBeats = 8.0;
         spec.rateBeats = 2.0;
         const at::Points before = clip->automation.points;
+        const bool activeBefore = clip->automation.active;
         const at::Points drawn = at::lfo(spec);
 
         const std::size_t undoDepth = controller.undoDepth();
@@ -345,7 +342,8 @@ int main() {
         check(controller.undoDepth() == undoDepth,
               "a live edit costs nothing on the undo stack");
         controller.setAutomationPoints(laneId, clipId, at::invert(drawn));
-        controller.commitAutomationEdit(laneId, clipId, before, "LFO");
+        controller.commitAutomationEdit(laneId, clipId, before, "LFO",
+                                        activeBefore);
         check(controller.undoDepth() == undoDepth + 1,
               "however many live steps it took, letting go is one entry");
 
@@ -355,8 +353,9 @@ int main() {
 
         controller.undo();
         clip = findClip(controller, laneId, clipId);
-        check(clip && clip->automation.points == before,
-              "one undo puts the whole gesture back");
+        check(clip && clip->automation.points == before &&
+                  !clip->automation.active,
+              "one undo puts the whole gesture back and makes it passive");
         controller.shutdown();
     }
 

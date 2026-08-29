@@ -226,6 +226,7 @@ void AutomationCurveView::beginGesture() {
     if (m_gesture) return;
     const daw::ClipModel* c = clip();
     m_before = c ? c->automation.points : at::Points{};
+    m_beforeActive = c && c->automation.active;
     m_gesture = true;
 }
 
@@ -243,7 +244,7 @@ void AutomationCurveView::commit(const QString& label) {
     m_gesture = false;
     m_controller->commitAutomationEdit(m_trackId.toStdString(),
                                        m_clipId.toStdString(), m_before,
-                                       label.toStdString());
+                                       label.toStdString(), m_beforeActive);
     emit edited();
     update();
 }
@@ -264,7 +265,10 @@ void AutomationCurveView::cancelPreview() {
         // entry, so there is nothing to undo — there is only a value the engine
         // is still holding that has to stop being held.
         m_gesture = false;
-        pushLive(before);
+        m_controller->setAutomationPoints(m_trackId.toStdString(),
+                                          m_clipId.toStdString(), before,
+                                          m_beforeActive);
+        emit liveEdited();
     }
     update();
 }
@@ -565,12 +569,8 @@ void AutomationCurveView::mouseMoveEvent(QMouseEvent* ev) {
         const double value = (ev->modifiers() & Qt::ShiftModifier)
                                  ? m_dragPoints[std::size_t(m_dragPoint)].value
                                  : yToValue(pos.y());
-        const double guard = m_snapBeats > 0.0
-                                 ? m_snapBeats
-                                 : lengthBeats() * 8.0 /
-                                       std::max(1.0, plot().width());
         at::Points points = at::dragPoint(
-            m_dragPoints, std::size_t(m_dragPoint), moved, value, guard);
+            m_dragPoints, std::size_t(m_dragPoint), moved, value);
         pushLive(points);
         setCursor((ev->modifiers() & Qt::ShiftModifier)
                       ? Qt::SizeHorCursor

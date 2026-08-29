@@ -273,6 +273,25 @@ int main() {
             identical = r1[i].pitch == r2[i].pitch;
         }
         check(identical, "the same seed gives the same random arpeggio");
+
+        const mt::Notes progression = {
+            makeNote("c", 60, 0.0, 2.0), makeNote("e", 64, 0.0, 2.0),
+            makeNote("g", 67, 0.0, 2.0), makeNote("f2", 65, 2.0, 2.0),
+            makeNote("a2", 69, 2.0, 2.0), makeNote("c2", 72, 2.0, 2.0)};
+        p.rateBeats = 0.25;
+        p.playMode = mt::ArpParams::PlayMode::Loop;
+        const mt::Notes localRandom = mt::arpeggiate(progression, p, 4.0);
+        bool followsHarmony = localRandom.size() == 16;
+        for (const auto& note : localRandom) {
+            const std::vector<int> allowed = note.startBeats < 2.0
+                                                 ? std::vector<int>{60, 64, 67}
+                                                 : std::vector<int>{65, 69, 72};
+            followsHarmony = followsHarmony &&
+                             std::find(allowed.begin(), allowed.end(),
+                                       note.pitch) != allowed.end();
+        }
+        check(followsHarmony,
+              "Random arpeggiation draws only from the chord sounding at each step");
     }
 
     // ── Glue ──

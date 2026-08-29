@@ -727,6 +727,8 @@ void PluginNode::process(const engine::ProcessContext& context) {
                 if (note.isNoteOn()) {
                     converted.kind = PluginEvent::Kind::NoteOn;
                     converted.value = double(note.data2) / 127.0;
+                    converted.notePan =
+                        std::clamp(double(note.notePan), -1.0, 1.0);
                 } else if (note.isNoteOff()) {
                     converted.kind = PluginEvent::Kind::NoteOff;
                     converted.value = 0.0;

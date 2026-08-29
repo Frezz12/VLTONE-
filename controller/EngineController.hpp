@@ -238,6 +238,13 @@ public:
     /// Toggle the click track. It plays whenever the transport is rolling.
     void setMetronomeEnabled(bool enabled);
     bool isMetronomeEnabled() const { return m_metronomeEnabled; }
+    /// Replace the built-in muted knock with a decoded audio file. Passing an
+    /// empty path restores the built-in sound. The choice is a workstation
+    /// preference, not project data, so the UI persists the path in settings.
+    bool setMetronomeSample(const std::string& filePath);
+    const std::string& metronomeSamplePath() const {
+        return m_metronomeSamplePath;
+    }
 
     // ── Loop ──
     void setLoopEnabled(bool enabled);
@@ -768,6 +775,10 @@ public:
     /// drag can be recomputed non-destructively from the gesture origin.
     void beginClipTrimEdit(const std::string& trackId,
                            const std::string& clipId);
+    /// Bracket one edge-drag across a multi-selection. Every address is
+    /// captured once and the entire mixed-kind resize becomes one undo entry.
+    void beginClipTrimEdit(
+        const std::vector<std::pair<std::string, std::string>>& clips);
     void endClipTrimEdit(const std::string& label = {});
     /// Split a clip in two at `atSeconds` (timeline time). Returns the id of the
     /// new right-hand clip, or empty when the cut is outside the clip. Undoable.
@@ -948,8 +959,8 @@ public:
                       const std::string& noteId, bool muted);
 
     /// Place a note in the stereo field, −1 … 1. The document updates live
-    /// per mouse-move, but the current engine MidiNote has no pan field, so this
-    /// does not republish an identical realtime schedule.
+    /// per mouse-move; a bracketed drag republishes the affected track once on
+    /// mouse-up.
     void setNotePan(const std::string& trackId, const std::string& clipId,
                     const std::string& noteId, float pan);
 
@@ -1000,6 +1011,10 @@ public:
     /// End one. Always send this for every `liveNoteOn`, or the synth holds the
     /// note forever — there is no timeline here to end it.
     bool liveNoteOff(const std::string& trackId, int pitch);
+    /// Send one three-byte MIDI channel-voice message to a track now. System
+    /// messages and bytes outside 0…127 are rejected at this public boundary.
+    bool liveMidiEvent(const std::string& trackId, int status, int data1,
+                       int data2 = 0);
     /// The track a live note would sound on: `preferred` when it takes notes,
     /// otherwise the first track that does. Empty when the project has none.
     std::string liveNoteTarget(const std::string& preferred = {}) const;
@@ -1158,10 +1173,12 @@ public:
     /// mouse-move. `commitAutomationEdit` turns the finished gesture into one
     /// undo entry.
     void setAutomationPoints(const std::string& trackId, const std::string& clipId,
-                             std::vector<AutomationPoint> points);
+                             std::vector<AutomationPoint> points,
+                             bool active = true);
     void commitAutomationEdit(const std::string& trackId, const std::string& clipId,
                               std::vector<AutomationPoint> before,
-                              const std::string& label);
+                              const std::string& label,
+                              bool activeBefore);
 
     /// Replace a MIDI clip's whole note vector in one undoable step, labelled
     /// for the undo menu.
@@ -1470,6 +1487,8 @@ private:
     void syncAllNotes();
     /// Turn a track's plugin-parameter lanes into curves on the plugin nodes.
     void syncTrackAutomation(const TrackModel& track);
+    void followPassiveAutomation(const AutomationTarget& target,
+                                 double normalized);
     void syncAllAutomation();
     /// Upgrade pre-Pattern-clip projects in memory and repair unowned child MIDI
     /// clips. The migration is silent and is persisted on the next save.
@@ -1771,6 +1790,7 @@ private:
     engine::NodeId m_masterFaderId = engine::kInvalidNode;
     engine::NodeId m_masterSumId = engine::kInvalidNode;
     bool m_metronomeEnabled = false;
+    std::string m_metronomeSamplePath;
 
     double m_sampleRate = 48000.0;
     uint32_t m_bufferSize = 512;
@@ -1964,8 +1984,7 @@ private:
     };
     ClipPositionEdit m_clipPositionEdit;
 
-    struct ClipTrimEdit {
-        bool active = false;
+    struct ClipTrimOrigin {
         bool dirty = false;
         std::string trackId;
         std::string clipId;
@@ -1979,6 +1998,10 @@ private:
         ClipAutomationModel beforeAutomation;
         double sourceDurationSeconds = 0.0;
         std::vector<std::string> patternMemberTrackIds;
+    };
+    struct ClipTrimEdit {
+        bool active = false;
+        std::vector<ClipTrimOrigin> origins;
     };
     ClipTrimEdit m_clipTrimEdit;
 };

@@ -11,6 +11,47 @@ paths:
       operationId: getMeta
       responses:
         "200": { description: Service metadata, content: { application/json: { schema: { $ref: "#/components/schemas/Meta" } } } }
+  /v1/releases:
+    get:
+      operationId: listReleases
+      parameters: [{ $ref: "#/components/parameters/Locale" }]
+      responses:
+        "200":
+          description: Published releases ordered by semantic version
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [releases]
+                properties: { releases: { type: array, items: { $ref: "#/components/schemas/PublicRelease" } } }
+  /v1/releases/latest:
+    get:
+      operationId: getLatestRelease
+      parameters: [{ $ref: "#/components/parameters/Platform" }, { $ref: "#/components/parameters/Locale" }]
+      responses:
+        "200": { description: Latest release with an installer for the requested platform, content: { application/json: { schema: { $ref: "#/components/schemas/LatestRelease" } } } }
+        "204": { description: No published release supports this platform }
+  /v1/releases/{version}:
+    get:
+      operationId: getRelease
+      parameters: [{ $ref: "#/components/parameters/ReleaseVersion" }, { $ref: "#/components/parameters/Locale" }]
+      responses:
+        "200": { description: Localized published release, content: { application/json: { schema: { $ref: "#/components/schemas/PublicRelease" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/releases/{version}/download/{kind}:
+    get:
+      operationId: downloadReleaseArtifact
+      parameters: [{ $ref: "#/components/parameters/ReleaseVersion" }, { $ref: "#/components/parameters/ArtifactKind" }]
+      responses:
+        "200": { description: Installer with Range, ETag and SHA-256 headers, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/releases/{version}/screenshots/{screenshotId}:
+    get:
+      operationId: getReleaseScreenshot
+      parameters: [{ $ref: "#/components/parameters/ReleaseVersion" }, { $ref: "#/components/parameters/ScreenshotId" }]
+      responses:
+        "200": { description: Sanitized release screenshot, content: { image/jpeg: { schema: { type: string, format: binary } }, image/png: { schema: { type: string, format: binary } } } }
+        "404": { $ref: "#/components/responses/Error" }
   /v1/web/auth/register:
     post:
       operationId: register
@@ -391,6 +432,91 @@ paths:
       operationId: adminAudit
       security: [{ adminCookie: [] }]
       responses: { "200": { description: Append-only administrative audit } }
+  /v1/admin/releases:
+    get:
+      operationId: adminListReleases
+      security: [{ adminCookie: [] }]
+      responses: { "200": { description: Draft and published releases, content: { application/json: { schema: { type: object, required: [releases], properties: { releases: { type: array, items: { $ref: "#/components/schemas/AdminRelease" } } } } } } } }
+    post:
+      operationId: adminCreateRelease
+      security: [{ adminCookie: [], csrf: [] }]
+      requestBody: { $ref: "#/components/requestBodies/ReleaseWrite" }
+      responses: { "201": { description: Saved draft, content: { application/json: { schema: { $ref: "#/components/schemas/AdminRelease" } } } }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/admin/releases/{releaseId}:
+    get:
+      operationId: adminGetRelease
+      security: [{ adminCookie: [] }]
+      parameters: [{ $ref: "#/components/parameters/ReleaseId" }]
+      responses: { "200": { description: Release editor state, content: { application/json: { schema: { $ref: "#/components/schemas/AdminRelease" } } } } }
+    put:
+      operationId: adminUpdateRelease
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/ReleaseId" }]
+      requestBody: { $ref: "#/components/requestBodies/ReleaseWrite" }
+      responses: { "200": { description: Saved release, content: { application/json: { schema: { $ref: "#/components/schemas/AdminRelease" } } } }, "422": { $ref: "#/components/responses/Error" } }
+    delete:
+      operationId: adminDeleteRelease
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/ReleaseId" }]
+      responses: { "204": { description: Draft and stored files deleted }, "409": { $ref: "#/components/responses/Error" } }
+  /v1/admin/releases/{releaseId}/publish:
+    post:
+      operationId: adminPublishRelease
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/ReleaseId" }]
+      responses: { "200": { description: Published release, content: { application/json: { schema: { $ref: "#/components/schemas/AdminRelease" } } } }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/admin/releases/{releaseId}/artifacts/{kind}:
+    put:
+      operationId: adminUploadReleaseArtifact
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/ReleaseId" }, { $ref: "#/components/parameters/ArtifactKind" }]
+      requestBody:
+        required: true
+        content: { multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary } } } } }
+      responses: { "200": { description: Uploaded or atomically replaced artifact, content: { application/json: { schema: { $ref: "#/components/schemas/ReleaseArtifact" } } } }, "413": { $ref: "#/components/responses/Error" }, "422": { $ref: "#/components/responses/Error" } }
+    delete:
+      operationId: adminDeleteReleaseArtifact
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/ReleaseId" }, { $ref: "#/components/parameters/ArtifactKind" }]
+      responses: { "204": { description: Artifact deleted }, "409": { $ref: "#/components/responses/Error" } }
+  /v1/admin/releases/{releaseId}/screenshots:
+    post:
+      operationId: adminUploadReleaseScreenshot
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/ReleaseId" }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                caption_ru: { type: string, maxLength: 1000 }
+                caption_en: { type: string, maxLength: 1000 }
+                sort_order: { type: integer }
+      responses: { "201": { description: Sanitized screenshot, content: { application/json: { schema: { $ref: "#/components/schemas/ReleaseScreenshot" } } } }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/admin/releases/{releaseId}/screenshots/{screenshotId}:
+    put:
+      operationId: adminUpdateReleaseScreenshot
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/ReleaseId" }, { $ref: "#/components/parameters/ScreenshotId" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReleaseScreenshotWrite" } } }
+      responses: { "200": { description: Updated screenshot metadata, content: { application/json: { schema: { $ref: "#/components/schemas/ReleaseScreenshot" } } } } }
+    delete:
+      operationId: adminDeleteReleaseScreenshot
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/ReleaseId" }, { $ref: "#/components/parameters/ScreenshotId" }]
+      responses: { "204": { description: Screenshot deleted } }
+  /v1/admin/releases/{releaseId}/screenshots/{screenshotId}/file:
+    get:
+      operationId: adminGetReleaseScreenshotFile
+      security: [{ adminCookie: [] }]
+      parameters: [{ $ref: "#/components/parameters/ReleaseId" }, { $ref: "#/components/parameters/ScreenshotId" }]
+      responses: { "200": { description: Sanitized screenshot preview, content: { image/jpeg: { schema: { type: string, format: binary } }, image/png: { schema: { type: string, format: binary } } } }, "404": { $ref: "#/components/responses/Error" } }
 components:
   securitySchemes:
     webCookie: { type: apiKey, in: cookie, name: vlt_web_session }
@@ -404,6 +530,12 @@ components:
     BugId: { name: bugId, in: path, required: true, schema: { type: string, format: uuid } }
     AttachmentId: { name: attachmentId, in: path, required: true, schema: { type: string, format: uuid } }
     CrashId: { name: crashId, in: path, required: true, schema: { type: string, format: uuid } }
+    ReleaseId: { name: releaseId, in: path, required: true, schema: { type: string, format: uuid } }
+    ReleaseVersion: { name: version, in: path, required: true, schema: { type: string, pattern: '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' } }
+    ScreenshotId: { name: screenshotId, in: path, required: true, schema: { type: string, format: uuid } }
+    ArtifactKind: { name: kind, in: path, required: true, schema: { $ref: "#/components/schemas/ArtifactKind" } }
+    Platform: { name: platform, in: query, required: true, schema: { type: string, enum: [windows, macos, linux] } }
+    Locale: { name: locale, in: query, required: false, schema: { type: string, enum: [ru, en], default: en } }
   requestBodies:
     Login:
       required: true
@@ -449,6 +581,9 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/AIModelWrite"
+    ReleaseWrite:
+      required: true
+      content: { application/json: { schema: { $ref: "#/components/schemas/ReleaseWrite" } } }
   responses:
     Error:
       description: Structured API error
@@ -468,6 +603,98 @@ components:
         message: { type: string }
         field_errors: { type: object, additionalProperties: { type: string } }
         request_id: { type: string }
+    ArtifactKind:
+      type: string
+      enum: [windows-exe, macos-dmg, linux-appimage, linux-deb, linux-rpm, linux-tar-gz, linux-tar-xz]
+    ReleaseArtifact:
+      type: object
+      required: [id, kind, platform, label, file_name, bytes, sha256, download_url, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/ArtifactKind" }
+        platform: { type: string, enum: [windows, macos, linux] }
+        label: { type: string }
+        file_name: { type: string }
+        bytes: { type: integer, format: int64 }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        download_url: { type: string }
+        updated_at: { type: string, format: date-time }
+    ReleaseScreenshot:
+      type: object
+      required: [id, sort_order, width, height, sha256, url]
+      properties:
+        id: { type: string, format: uuid }
+        caption: { type: string }
+        caption_ru: { type: string }
+        caption_en: { type: string }
+        sort_order: { type: integer }
+        width: { type: integer }
+        height: { type: integer }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        url: { type: string }
+    PublicRelease:
+      type: object
+      required: [id, version, summary, features, changes, fixes, artifacts, screenshots, page_url, published_at]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: string }
+        summary: { type: string }
+        features: { type: array, items: { type: string } }
+        changes: { type: array, items: { type: string } }
+        fixes: { type: array, items: { type: string } }
+        artifacts: { type: array, items: { $ref: "#/components/schemas/ReleaseArtifact" } }
+        screenshots: { type: array, items: { $ref: "#/components/schemas/ReleaseScreenshot" } }
+        page_url: { type: string, format: uri }
+        published_at: { type: string, format: date-time }
+    AdminRelease:
+      type: object
+      required: [id, version, status, summary_ru, summary_en, features_ru, features_en, changes_ru, changes_en, fixes_ru, fixes_en, artifacts, screenshots, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: string }
+        status: { type: string, enum: [draft, published] }
+        summary_ru: { type: string }
+        summary_en: { type: string }
+        features_ru: { type: array, items: { type: string } }
+        features_en: { type: array, items: { type: string } }
+        changes_ru: { type: array, items: { type: string } }
+        changes_en: { type: array, items: { type: string } }
+        fixes_ru: { type: array, items: { type: string } }
+        fixes_en: { type: array, items: { type: string } }
+        artifacts: { type: array, items: { $ref: "#/components/schemas/ReleaseArtifact" } }
+        screenshots: { type: array, items: { $ref: "#/components/schemas/ReleaseScreenshot" } }
+        published_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ReleaseWrite:
+      type: object
+      additionalProperties: false
+      required: [version, summary_ru, summary_en, features_ru, features_en, changes_ru, changes_en, fixes_ru, fixes_en]
+      properties:
+        version: { type: string }
+        summary_ru: { type: string, maxLength: 4000 }
+        summary_en: { type: string, maxLength: 4000 }
+        features_ru: { type: array, maxItems: 100, items: { type: string, maxLength: 1000 } }
+        features_en: { type: array, maxItems: 100, items: { type: string, maxLength: 1000 } }
+        changes_ru: { type: array, maxItems: 100, items: { type: string, maxLength: 1000 } }
+        changes_en: { type: array, maxItems: 100, items: { type: string, maxLength: 1000 } }
+        fixes_ru: { type: array, maxItems: 100, items: { type: string, maxLength: 1000 } }
+        fixes_en: { type: array, maxItems: 100, items: { type: string, maxLength: 1000 } }
+    ReleaseScreenshotWrite:
+      type: object
+      additionalProperties: false
+      required: [caption_ru, caption_en, sort_order]
+      properties:
+        caption_ru: { type: string, maxLength: 1000 }
+        caption_en: { type: string, maxLength: 1000 }
+        sort_order: { type: integer }
+    LatestRelease:
+      type: object
+      required: [version, published_at, page_url]
+      properties:
+        version: { type: string }
+        published_at: { type: string, format: date-time }
+        page_url: { type: string, format: uri }
     DesktopAIModel:
       type: object
       additionalProperties: false

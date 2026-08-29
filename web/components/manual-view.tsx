@@ -1,7 +1,6 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
 import {
   AudioLines,
   Bot,
@@ -139,11 +138,11 @@ export function ManualView({ locale }: { locale: "ru" | "en" }) {
 
     <details className="manual-mobile-toc">
       <summary>{t("toc")}</summary>
-      <Toc categories={toc} locale={locale} />
+      <Toc categories={toc} />
     </details>
 
     <div className="manual-layout" id="manual-content">
-      <aside className="manual-sidebar" aria-label={t("toc")}><span>{t("toc")}</span><Toc categories={toc} locale={locale} /></aside>
+      <aside className="manual-sidebar" aria-label={t("toc")}><span>{t("toc")}</span><Toc categories={toc} /></aside>
       <div className="manual-content">
         {shown.length === 0 ? <div className="manual-empty" role="status"><Search size={25} aria-hidden /><h2>{t("noResultsTitle")}</h2><p>{t("noResults")}</p><button type="button" onClick={() => setSearch("")}>{t("clearSearch")}</button></div> : shown.map((category) => <section
           className="manual-category"
@@ -179,6 +178,6 @@ export function ManualView({ locale }: { locale: "ru" | "en" }) {
   </main>;
 }
 
-function Toc({ categories, locale }: { categories: Category[]; locale: string }) {
-  return <nav>{categories.map((category) => <div key={category.id}><strong>{category.label}</strong>{category.chapters.map((chapter) => <Link key={chapter.id} href={`/${locale}/manual#${chapter.id}`}><ChevronRight size={13} aria-hidden />{chapter.title}</Link>)}</div>)}</nav>;
+function Toc({ categories }: { categories: Category[] }) {
+  return <nav>{categories.map((category) => <div key={category.id}><strong>{category.label}</strong>{category.chapters.map((chapter) => <a key={chapter.id} href={`#${chapter.id}`}><ChevronRight size={13} aria-hidden />{chapter.title}</a>)}</div>)}</nav>;
 }

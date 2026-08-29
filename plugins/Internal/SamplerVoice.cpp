@@ -187,12 +187,14 @@ float Svf::processLowpass(int channel, float input) noexcept {
 
 // ── Voice ──────────────────────────────────────────────────────────────────
 
-void Voice::start(int key, int channel, float velocity, const SamplerSettings& settings,
-                  const SampleData& sample, double sampleRate) noexcept {
+void Voice::start(int key, int channel, float velocity, float notePan,
+                  const SamplerSettings& settings, const SampleData& sample,
+                  double sampleRate) noexcept {
     m_active = true;
     m_key = key;
     m_channel = channel;
     m_velocity = velocity;
+    m_notePan = std::clamp(notePan, -1.0f, 1.0f);
     m_cutRemaining = -1;
     m_cutLength = std::max(1, int(sampleRate * 0.005));
 
@@ -455,8 +457,10 @@ void Voice::render(const SampleData& sample, const SamplerSettings& settings,
         const double semitones = keySemitones + settings.pitchSemitones +
                                  modulation[std::uint32_t(ModTarget::Pitch)] *
                                      settings.pitchRange;
-        const double pan = std::clamp(settings.pan + modulation[std::uint32_t(ModTarget::Pan)],
-                                      -1.0, 1.0);
+        const double pan = std::clamp(
+            settings.pan + double(m_notePan) +
+                modulation[std::uint32_t(ModTarget::Pan)],
+            -1.0, 1.0);
         const double angle = (pan + 1.0) * kPi * 0.25;
         const double gainLeft = std::cos(angle);
         const double gainRight = std::sin(angle);

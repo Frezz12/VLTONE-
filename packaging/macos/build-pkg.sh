@@ -8,8 +8,8 @@
 #           build-pkg/VLT-Studio-Pro-<version>.pkg — Installer package, and
 #           build-pkg/VLT-Studio-Pro-<version>.dmg — drag-to-Applications image.
 #
-# The bundle carries its own Qt, PortAudio and libsndfile (macdeployqt copies
-# every non-system dylib and rewrites the load commands), plus the two helper
+# The bundle carries its own Qt, PortAudio, RtMidi and libsndfile (macdeployqt
+# copies every non-system dylib and rewrites the load commands), plus the three helper
 # executables the app looks for *next to itself*: daw_scan, which loads
 # third-party plugins out of process, daw_guard, the network-free crash
 # watchdog, and daw_reporter, the restricted diagnostics courier.
@@ -75,6 +75,9 @@ for resource in qtwebengine_resources.pak icudtl.dat; do
     find "$STAGE/$APP_BUNDLE" -type f -name "$resource" -print -quit | grep -q . ||
         { echo "$resource is missing from the bundle"; exit 1; }
 done
+find "$STAGE/$APP_BUNDLE/Contents/Frameworks" -type f \
+    -name 'librtmidi*.dylib' -print -quit | grep -q . ||
+    { echo "RtMidi is missing from the bundle"; exit 1; }
 
 # Some Homebrew dylibs carry their Cellar/opt path as their own install ID.
 # macdeployqt normally rewrites these, but not every leaf library (brotli has

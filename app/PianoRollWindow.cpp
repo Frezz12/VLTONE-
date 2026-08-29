@@ -2673,7 +2673,11 @@ void PianoRollView::paintEvent(QPaintEvent* event) {
                     if (r.right() < keyWidth || r.left() > width()) continue;
                     if (!r.intersects(dirtyRect)) continue;
                     if (!event->region().intersects(r.toAlignedRect())) continue;
-                    p.drawRoundedRect(r, 3, 3);
+                    r = ui::pixelAlignedRect(r, devicePixelRatioF());
+                    if (px < 64.0 || r.width() < 12.0 || r.height() < 8.0)
+                        p.drawRect(r);
+                    else
+                        p.drawRoundedRect(r, 3, 3);
                 }
             }
         }
@@ -2877,27 +2881,66 @@ void PianoRollView::paintNoteShape(QPainter& p, const QRectF& r,
                                    const QColor& fill, bool selected,
                                    bool muted) const {
     const Theme& t = th();
-    const double radius = std::min(4.0, r.height() * 0.35);
+    const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
+    const qreal pixel = 1.0 / std::max<qreal>(1.0, dpr);
+    const QRectF shape = ui::pixelAlignedRect(r, dpr);
+    const bool compact = pxPerBeat() < 64.0 || shape.width() < 12.0 ||
+                         shape.height() < 8.0;
+
+    // At overview scale a rounded translucent rim occupies most of the note
+    // and reads as blur. Reduce it to two pixel-aligned fills: one physical
+    // pixel of outline, then the body. Musical geometry remains untouched.
+    if (compact) {
+        QColor body = fill;
+        if (m_noteStyle == NoteStyle::Outline)
+            body.setAlphaF(muted ? 0.18 : 0.42);
+        const bool bordered = selected || m_noteStyle != NoteStyle::Flat ||
+                              m_noteBorders;
+
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing, false);
+        p.setPen(Qt::NoPen);
+        if (bordered) {
+            const QColor border = selected
+                ? t.textPrimary
+                : m_noteStyle == NoteStyle::Outline
+                    ? fill
+                    : mixColors(fill, Qt::black, 0.58);
+            p.fillRect(shape, border);
+            const QRectF inner = shape.adjusted(pixel, pixel, -pixel, -pixel);
+            if (inner.width() > 0.0 && inner.height() > 0.0)
+                p.fillRect(inner, body);
+        } else {
+            p.fillRect(shape, body);
+        }
+        p.restore();
+        return;
+    }
+
+    const double radius = std::min(4.0, shape.height() * 0.35);
+    const auto outlinePen = [pixel](const QColor& color, bool strong) {
+        return QPen(color, pixel * (strong ? 2.0 : 1.0));
+    };
 
     switch (m_noteStyle) {
         case NoteStyle::Flat: {
             p.setBrush(fill);
             if (selected) {
-                p.setPen(QPen(t.textPrimary, 1.4));
+                p.setPen(outlinePen(t.textPrimary, true));
             } else if (m_noteBorders) {
-                p.setPen(QPen(mixColors(fill, Qt::black, 0.45), 1.0));
+                p.setPen(outlinePen(mixColors(fill, Qt::black, 0.45), false));
             } else {
                 p.setPen(Qt::NoPen);
             }
-            p.drawRoundedRect(r, radius, radius);
+            p.drawRoundedRect(shape, radius, radius);
             return;
         }
         case NoteStyle::Outline: {
             QColor body = fill;
             body.setAlphaF(muted ? 0.10 : 0.22);
             p.setBrush(body);
-            p.setPen(QPen(selected ? t.textPrimary : fill, selected ? 1.8 : 1.4));
-            p.drawRoundedRect(r, radius, radius);
+            p.setPen(outlinePen(selected ? t.textPrimary : fill, selected));
+            p.drawRoundedRect(shape, radius, radius);
             return;
         }
         case NoteStyle::Glass:
@@ -2905,14 +2948,14 @@ void PianoRollView::paintNoteShape(QPainter& p, const QRectF& r,
     }
 
     QPainterPath body;
-    body.addRoundedRect(r, radius, radius);
+    body.addRoundedRect(shape, radius, radius);
 
     // The body: brighter and more opaque at the top, where the light is.
     QColor top = fill.lighter(135);
     QColor bottom = fill.darker(125);
     top.setAlphaF(muted ? 0.35 : 0.92);
     bottom.setAlphaF(muted ? 0.22 : 0.66);
-    QLinearGradient glass(r.topLeft(), r.bottomLeft());
+    QLinearGradient glass(shape.topLeft(), shape.bottomLeft());
     glass.setColorAt(0.0, top);
     glass.setColorAt(0.48, fill);
     glass.setColorAt(1.0, bottom);
@@ -2922,20 +2965,22 @@ void PianoRollView::paintNoteShape(QPainter& p, const QRectF& r,
     p.setBrush(glass);
     p.drawPath(body);
 
-    if (r.height() >= 6.0 && r.width() >= 6.0) {
+    if (shape.height() >= 6.0 && shape.width() >= 6.0) {
         // The sheen: a soft band across the top, fading out before the middle.
         p.setClipPath(body, Qt::IntersectClip);
-        QLinearGradient sheen(r.topLeft(), QPointF(r.left(), r.center().y()));
+        QLinearGradient sheen(shape.topLeft(),
+                              QPointF(shape.left(), shape.center().y()));
         sheen.setColorAt(0.0, QColor(255, 255, 255, muted ? 40 : 150));
         sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
         p.setBrush(sheen);
-        p.drawRoundedRect(r.adjusted(1.0, 0.8, -1.0, -r.height() * 0.52),
+        p.drawRoundedRect(shape.adjusted(pixel, pixel, -pixel,
+                                         -shape.height() * 0.52),
                           radius, radius);
         // A thin bright line right under the top edge reads as the glass's own
         // thickness catching the light.
-        p.setPen(QPen(QColor(255, 255, 255, muted ? 30 : 110), 1.0));
-        p.drawLine(r.topLeft() + QPointF(radius, 1.2),
-                   r.topRight() + QPointF(-radius, 1.2));
+        p.setPen(outlinePen(QColor(255, 255, 255, muted ? 30 : 110), false));
+        p.drawLine(shape.topLeft() + QPointF(radius, pixel),
+                   shape.topRight() + QPointF(-radius, pixel));
         p.setClipping(false);
     }
 
@@ -2944,7 +2989,7 @@ void PianoRollView::paintNoteShape(QPainter& p, const QRectF& r,
     QColor rim = selected ? t.textPrimary : fill.lighter(160);
     rim.setAlphaF(selected ? 1.0 : (muted ? 0.35 : 0.75));
     p.setBrush(Qt::NoBrush);
-    p.setPen(QPen(rim, selected ? 1.6 : 1.0));
+    p.setPen(outlinePen(rim, selected));
     p.drawPath(body);
     p.restore();
 }
@@ -2957,7 +3002,7 @@ void PianoRollView::paintKeyboard(QPainter& p, double fieldBottom) {
     const Theme& t = th();
     const double keyWidth = keyboardWidth();
     const double gridTop = ui::kRulerHeight;
-    const PitchMask sounding = soundingPitches();
+    const PitchMask sounding = keyboardPitches();
 
     p.save();
     p.setClipRect(QRectF(0, gridTop, keyWidth,
@@ -4646,7 +4691,7 @@ void PianoRollView::refreshPlayheadFrame() {
         m_lastPlayheadPixel = currentPixel;
     }
 
-    const PitchMask sounding = soundingPitches();
+    const PitchMask sounding = keyboardPitches();
     if (sounding != m_lastSoundingPitches) {
         m_lastSoundingPitches = sounding;
         dirty += QRect(0, int(ui::kRulerHeight),
@@ -4654,6 +4699,16 @@ void PianoRollView::refreshPlayheadFrame() {
                        std::max(0, playheadBottom - int(ui::kRulerHeight)));
     }
     if (!dirty.isEmpty()) update(dirty);
+}
+
+void PianoRollView::setLivePitches(const PitchMask& pitches) {
+    if (m_livePitches == pitches) return;
+    m_livePitches = pitches;
+    m_lastSoundingPitches = keyboardPitches();
+    update(QRect(0, int(ui::kRulerHeight),
+                 int(std::ceil(keyboardWidth())) + 2,
+                 std::max(0, int(std::ceil(laneTop())) -
+                                 int(ui::kRulerHeight))));
 }
 
 void PianoRollView::auditionPitch(int pitch) {
@@ -6178,6 +6233,7 @@ void PianoRollWindow::setClip(const QString& trackId, const QString& clipId) {
     m_refreshPending = false;
     m_trackId = trackId;
     m_clipId = clipId;
+    m_view->setLivePitches({});
     m_view->setClip(trackId, clipId);
     m_previewOwner = nullptr;
     updateTitle();
@@ -6216,6 +6272,15 @@ void PianoRollWindow::refresh() {
 
 void PianoRollWindow::refreshPlayhead() {
     if (m_view) m_view->refreshPlayheadFrame();
+}
+
+void PianoRollWindow::setLivePitches(const std::bitset<128>& pitches) {
+    if (m_view) m_view->setLivePitches(pitches);
+}
+
+bool PianoRollWindow::livePitchHeldForTest(int pitch) const {
+    return m_view && pitch >= 0 && pitch < 128 &&
+           m_view->m_livePitches.test(std::size_t(pitch));
 }
 
 bool PianoRollWindow::checkInteractionGesturesForTest() {

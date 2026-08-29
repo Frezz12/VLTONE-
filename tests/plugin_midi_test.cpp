@@ -370,7 +370,7 @@ int main() {
         auto player = std::make_shared<MidiClipPlayerNode>();
         auto notes = std::make_shared<MidiClipPlayerNode::NoteList>();
         // 24000 samples per beat: a note at beat 0.001 starts at sample 24.
-        notes->push_back(MidiNote{0.001, 0.002, 64, 99, 0});
+        notes->push_back(MidiNote{0.001, 0.002, 64, 99, 0, 0.75f});
         player->setNotes(notes);
 
         AudioGraph graph;
@@ -390,8 +390,9 @@ int main() {
         check(recorder->received.size() == 2, "the note's on and off both arrive");
         if (recorder->received.size() == 2) {
             check(recorder->received[0].isNoteOn() &&
-                      recorder->received[0].frameOffset == 24,
-                  "the note-on lands on the sample the beat falls on");
+                      recorder->received[0].frameOffset == 24 &&
+                      std::abs(recorder->received[0].notePan - 0.75f) < 1e-6f,
+                  "the note-on lands on the sample with its per-note pan");
             check(recorder->received[1].isNoteOff() &&
                       recorder->received[1].frameOffset == 72,
                   "and the note-off at the end of its length");
@@ -457,6 +458,32 @@ int main() {
         check(recorder->received.size() == 1 && recorder->received[0].isNoteOff() &&
                   recorder->received[0].data1 == 67,
               "and the note ends");
+
+        check(player->sendLiveEvent(
+                  MidiEvent{0, std::uint8_t(MidiEvent::kControlChange | 9),
+                            1, 73}) &&
+              player->sendLiveEvent(
+                  MidiEvent{0, std::uint8_t(MidiEvent::kPitchBend | 4),
+                            12, 96}) &&
+              player->sendLiveEvent(
+                  MidiEvent{0, std::uint8_t(MidiEvent::kNoteOn | 5),
+                            70, 0}),
+              "live performance messages are queued");
+        processor.process(output.block(), kBlock, 0, false, true,
+                          transportAt(0.0));
+        check(recorder->received.size() == 3 &&
+                  recorder->received[0].type() == MidiEvent::kControlChange &&
+                  recorder->received[0].channel() == 9 &&
+                  recorder->received[0].data1 == 1 &&
+                  recorder->received[0].data2 == 73 &&
+                  recorder->received[1].type() == MidiEvent::kPitchBend &&
+                  recorder->received[1].channel() == 4 &&
+                  recorder->received[1].data1 == 12 &&
+                  recorder->received[1].data2 == 96 &&
+                  recorder->received[2].isNoteOff() &&
+                  recorder->received[2].channel() == 5 &&
+                  recorder->received[2].data1 == 70,
+              "live MIDI preserves status, channel and data bytes");
 
         // Ordinary live events are bounded and refuse rather than overwrite. A
         // release has a separate coalescing mailbox: once an on was accepted,

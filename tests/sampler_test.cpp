@@ -82,12 +82,14 @@ Output render(sampler::SamplerInstance& instance, std::uint32_t frames,
     return out;
 }
 
-PluginEvent noteOn(int key, double velocity, std::uint32_t offset = 0) {
+PluginEvent noteOn(int key, double velocity, std::uint32_t offset = 0,
+                   double pan = 0.0) {
     PluginEvent event;
     event.kind = PluginEvent::Kind::NoteOn;
     event.key = std::int16_t(key);
     event.value = velocity;
     event.frameOffset = offset;
+    event.notePan = pan;
     return event;
 }
 
@@ -192,13 +194,19 @@ int main() {
         PluginFactory* factory = factoryFor(Format::Internal);
         if (check(factory != nullptr, "there is an internal factory")) {
             const std::vector<PluginDescriptor> found = factory->inspect({});
-            check(found.size() == 1 && found[0].uid == "daw.sampler",
+            const auto samplerDescriptor = std::find_if(
+                found.begin(), found.end(), [](const PluginDescriptor& descriptor) {
+                    return descriptor.uid == "daw.sampler";
+                });
+            check(samplerDescriptor != found.end(),
                   "it advertises the sampler");
-            check(found[0].isInstrument && found[0].mainOutputChannels == 2,
+            check(samplerDescriptor != found.end() && samplerDescriptor->isInstrument &&
+                      samplerDescriptor->mainOutputChannels == 2,
                   "the sampler is a stereo instrument");
             check(factory->enumerateCandidates("/anywhere").empty(),
                   "a built-in is never a scan candidate");
-            auto instance = factory->create(found[0]);
+            auto instance = samplerDescriptor != found.end()
+                ? factory->create(*samplerDescriptor) : nullptr;
             check(instance != nullptr, "the factory instantiates it");
         }
         check(!builtinPlugins().empty(), "builtinPlugins() lists it for the menus");
@@ -364,6 +372,14 @@ int main() {
         const Output out = render(*instance, kBlock, {noteOn(60, 1.0)});
         check(std::abs(out.left[10]) < 1e-4f && out.right[10] > 0.3f,
               "pan hard right leaves nothing on the left");
+    }
+    {
+        auto instance = makeSampler();
+        set(*instance, Param::Volume, 1.0);
+        const Output out =
+            render(*instance, kBlock, {noteOn(60, 1.0, 0, 1.0)});
+        check(std::abs(out.left[10]) < 1e-4f && out.right[10] > 0.3f,
+              "Piano Roll note pan reaches the Sampler voice");
     }
 
     // ── The filter, driven by MOD X ──
@@ -652,6 +668,10 @@ int main() {
             check(controller.liveNoteOn(track, 60, 100) &&
                       controller.liveNoteOff(track, 60),
                   "a live note reaches the instrument");
+            check(controller.liveMidiEvent(track, 0xB3, 1, 64) &&
+                      !controller.liveMidiEvent(track, 0xF8, 0, 0) &&
+                      !controller.liveMidiEvent(track, 0x90, 128, 100),
+                  "generic live MIDI accepts channel voice data only");
             const std::string audio = controller.addTrack(TrackKind::Audio, "Audio");
             check(!controller.liveNoteOn(audio, 60, 100),
                   "an audio track takes no notes");

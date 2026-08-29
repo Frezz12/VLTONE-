@@ -203,6 +203,9 @@ struct ClipAutomationModel {
     /// The value held before the first breakpoint, and the whole curve while
     /// there are none — normalised, like every point.
     double defaultValue = 0.0;
+    /// A fresh curve follows its target without driving it. The first real
+    /// point edit activates playback; undoing that edit makes it passive again.
+    bool active = false;
     std::vector<AutomationPoint> points;   // kept sorted by `beats`
 };
 

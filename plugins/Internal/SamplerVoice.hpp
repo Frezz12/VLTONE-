@@ -160,8 +160,9 @@ struct SampleData {
 /// One sounding note.
 class Voice {
 public:
-    void start(int key, int channel, float velocity, const SamplerSettings& settings,
-               const SampleData& sample, double sampleRate) noexcept;
+    void start(int key, int channel, float velocity, float notePan,
+               const SamplerSettings& settings, const SampleData& sample,
+               double sampleRate) noexcept;
     /// `cutWhenEnvelopeOff` is the instance's answer to "would this note ever
     /// stop on its own" — true for a looping sample whose amplitude envelope is
     /// switched off, which otherwise sounds forever.
@@ -234,6 +235,7 @@ private:
     int m_key = 60;
     int m_channel = 0;
     float m_velocity = 1.0f;
+    float m_notePan = 0.0f;
     std::uint64_t m_startedAt = 0;
 
     double m_position = 0.0;

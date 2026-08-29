@@ -180,10 +180,10 @@
         <message>
             <source>The assistant wants to %1.
 
-Allow it?</source>
+    Allow it?</source>
             <translation>Помощник хочет %1.
 
-Разрешить?</translation>
+    Разрешить?</translation>
         </message>
         <message>
             <source>%1%</source>
@@ -242,7 +242,7 @@ Allow it?</source>
             <translation>Файл сохранен, но не удалось декодировать: %1</translation>
         </message>
         <message>
-            <source>Generated audio added on "%1"</source>
+            <source>Generated audio added on &quot;%1&quot;</source>
             <translation>Сгенерированный аудио добавлен %1</translation>
         </message>
         <message>
@@ -266,7 +266,7 @@ Allow it?</source>
             <translation>ИИ / МУЗЫКА</translation>
         </message>
         <message>
-            <source>added on "%1"</source>
+            <source>added on &quot;%1&quot;</source>
             <translation>добавлен %1</translation>
         </message>
         <message>
@@ -296,10 +296,10 @@ Allow it?</source>
         <message>
             <source>Put the project back to how it was before that request?
 
-Anything changed since — by the assistant or by you — is undone as well. One Ctrl+Z brings it all back.</source>
+    Anything changed since — by the assistant or by you — is undone as well. One Ctrl+Z brings it all back.</source>
             <translation>Вернуть проект в состояние до этого запроса?
 
-Всё, что изменилось с тех пор — либо помощником, либо вами — будет отменено. Одна Ctrl+Z вернёт всё обратно.</translation>
+    Всё, что изменилось с тех пор — либо помощником, либо вами — будет отменено. Одна Ctrl+Z вернёт всё обратно.</translation>
         </message>
         <message>
             <source>Reverted to before that request</source>
@@ -346,7 +346,7 @@ Anything changed since — by the assistant or by you — is undone as well. One
             <translation>STUDIO COPILOT</translation>
         </message>
         <message>
-            <source>Ask for a part and it gets made: "make a piano, write the chords, process the channel".</source>
+            <source>Ask for a part and it gets made: &quot;make a piano, write the chords, process the channel&quot;.</source>
             <translation>Попросите часть, и она будет создана: «сделать пианино, написать аккорды, обработать канал».</translation>
         </message>
         <message>
@@ -354,7 +354,7 @@ Anything changed since — by the assistant or by you — is undone as well. One
             <translation>Инструкции для этого проекта</translation>
         </message>
         <message>
-            <source>Rules the assistant follows for this project, in your own words — "always sidechain the bass", "keep it under 100 BPM", "no reverb on the drums". They are saved with the project and override the assistant's own defaults.</source>
+            <source>Rules the assistant follows for this project, in your own words — &quot;always sidechain the bass&quot;, &quot;keep it under 100 BPM&quot;, &quot;no reverb on the drums&quot;. They are saved with the project and override the assistant&apos;s own defaults.</source>
             <translation>Правила, которым следует помощник для этого проекта, вашими словами — «всегда делать сайдчейн на басе», «держать ниже 100 BPM», «без реверберации на барабанах». Они сохраняются с проектом и переопределяют собственные настройки помощника.</translation>
         </message>
         <message>
@@ -377,6 +377,106 @@ Anything changed since — by the assistant or by you — is undone as well. One
             <source>Forget</source>
             <translation>Забыть</translation>
         </message>
+        <message>
+            <source>LIB —</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>The sound-library index has not started</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>LIB SCAN</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Scanning browser folders: %1 files found</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>LIB %1%</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Reading sound metadata: %1 of %2</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>LIB STOP</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Stopping sound-library indexing</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>LIB %1</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>%1 browser files are ready for the assistant</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>LIB PAUSED</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Sound-library indexing was paused</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Assistant command</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>The assistant wants to run “%1”.
+
+    Risk: %2
+
+    Allow it?</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>YOU / %1</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>REPLAN</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>OPTION %1  ·  %2</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Harmony %1  ·  Rhythm %2  ·  Voice %3  ·  %4 notes</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>CHOOSE %1</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Apply this validated MIDI alternative to the selected track</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>/compose Apply composition candidate %1 to the currently selected instrument track.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>REGENERATE OPTIONS</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Ask for fresh candidates with a different seed</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>/compose Regenerate the same composition with a different seed and show new alternatives.</source>
+            <translation type="unfinished"></translation>
+        </message>
     </context>
     <context>
         <name>AiSettingsPage</name>
@@ -397,7 +497,7 @@ Anything changed since — by the assistant or by you — is undone as well. One
             <translation>Ваши модели</translation>
         </message>
         <message>
-            <source>Add as many OpenAI-compatible or Anthropic-compatible endpoints as you need. Their API keys stay in this computer's secure credential storage.</source>
+            <source>Add as many OpenAI-compatible or Anthropic-compatible endpoints as you need. Their API keys stay in this computer&apos;s secure credential storage.</source>
             <translation>Добавьте столько конечных точек, совместимых с OpenAI или Anthropic, сколько вам потребуется. Их ключи API хранятся в защищенном хранилище учетных данных этого компьютера.</translation>
         </message>
         <message>
@@ -525,7 +625,7 @@ Anything changed since — by the assistant or by you — is undone as well. One
             <translation>Генерация музыки</translation>
         </message>
         <message>
-            <source>The whole endpoint, not a base address. MiniMax's own is https://api.minimax.io/v1/music_generation; point this at your own server if the model runs there.</source>
+            <source>The whole endpoint, not a base address. MiniMax&apos;s own is https://api.minimax.io/v1/music_generation; point this at your own server if the model runs there.</source>
             <translation>Полный конечный узел, а не базовый адрес. Собственный MiniMax: https://api.minimax.io/v1/music_generation; укажите сюда адрес вашего сервера, если модель работает там.</translation>
         </message>
         <message>
@@ -589,7 +689,7 @@ Anything changed since — by the assistant or by you — is undone as well. One
             <translation>Таймаут</translation>
         </message>
         <message>
-            <source>The music mode sends the project's tempo, key, time signature and track names with the request, and puts what comes back on a new audio track at the playhead — one Ctrl+Z takes it away.</source>
+            <source>The music mode sends the project&apos;s tempo, key, time signature and track names with the request, and puts what comes back on a new audio track at the playhead — one Ctrl+Z takes it away.</source>
             <translation>Режим музыки отправляет темп проекта, тональность, размер и названия дорожек вместе с запросом и помещает полученное на новую аудиодорожку на курсор воспроизведения — один Ctrl+Z уберет его.</translation>
         </message>
         <message>
@@ -1397,11 +1497,11 @@ Anything changed since — by the assistant or by you — is undone as well. One
             <translation>Спрашивать каждый раз</translation>
         </message>
         <message>
-            <source>Keep the project's tempo</source>
+            <source>Keep the project&apos;s tempo</source>
             <translation>Сохранять темп проекта</translation>
         </message>
         <message>
-            <source>Use the file's tempo</source>
+            <source>Use the file&apos;s tempo</source>
             <translation>Использовать темп файла</translation>
         </message>
         <message>
@@ -1498,10 +1598,10 @@ Anything changed since — by the assistant or by you — is undone as well. One
         <message>
             <source>%1 could not be loaded.
 
-The plugin is still listed from an earlier scan but its module no longer offers it — it may have been moved, uninstalled, or its licence may have expired. Rescanning in the Plugin Manager will drop what is no longer there.</source>
+    The plugin is still listed from an earlier scan but its module no longer offers it — it may have been moved, uninstalled, or its licence may have expired. Rescanning in the Plugin Manager will drop what is no longer there.</source>
             <translation>%1 не удалось загрузить.
 
-Плагин все еще указан после более раннего сканирования, но его модуль больше не предлагает его — возможно, он был перемещен, удален или истекла его лицензия. Повторное сканирование в Плагинном менеджере удалит то, чего больше нет.</translation>
+    Плагин все еще указан после более раннего сканирования, но его модуль больше не предлагает его — возможно, он был перемещен, удален или истекла его лицензия. Повторное сканирование в Плагинном менеджере удалит то, чего больше нет.</translation>
         </message>
         <message>
             <source>INSERT %1</source>
@@ -1558,10 +1658,10 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <message>
             <source>%1 could not be loaded.
 
-%2</source>
+    %2</source>
             <translation>%1 не удалось загрузить.
 
-%2</translation>
+    %2</translation>
         </message>
         <message>
             <source>Applied %1</source>
@@ -1588,8 +1688,8 @@ The plugin is still listed from an earlier scan but its module no longer offers 
             <translation>Имя шаблона:</translation>
         </message>
         <message>
-            <source>Use a file-safe name without / \ : * ? " &lt; &gt; or |.</source>
-            <translation>Используйте имя файла, не содержащее / \ : * ? " &lt; &gt; или |.</translation>
+            <source>Use a file-safe name without / \ : * ? &quot; &lt; &gt; or |.</source>
+            <translation>Используйте имя файла, не содержащее / \ : * ? &quot; &lt; &gt; или |.</translation>
         </message>
         <message>
             <source>Replace Channel Strip Preset</source>
@@ -1602,10 +1702,10 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <message>
             <source>The template could not be saved.
 
-%1</source>
+    %1</source>
             <translation>Не удалось сохранить шаблон.
 
-%1</translation>
+    %1</translation>
         </message>
         <message>
             <source>Saved %1.vlts</source>
@@ -1676,7 +1776,7 @@ The plugin is still listed from an earlier scan but its module no longer offers 
             <translation>Инструмент</translation>
         </message>
         <message>
-            <source>What plays this track's notes — click to load one.</source>
+            <source>What plays this track&apos;s notes — click to load one.</source>
             <translation>Что воспроизводит ноты этой дорожки — нажмите, чтобы загрузить.</translation>
         </message>
         <message>
@@ -1716,11 +1816,11 @@ The plugin is still listed from an earlier scan but its module no longer offers 
             <translation>ПОСЛ</translation>
         </message>
         <message>
-            <source>Pre-fader: the send ignores this channel's fader. Click for post-fader.</source>
+            <source>Pre-fader: the send ignores this channel&apos;s fader. Click for post-fader.</source>
             <translation>До фейдера: посыл не зависит от фейдера этой дорожки. Нажмите, чтобы переключить после фейдера.</translation>
         </message>
         <message>
-            <source>Post-fader: the send follows this channel's fader. Click for pre-fader.</source>
+            <source>Post-fader: the send follows this channel&apos;s fader. Click for pre-fader.</source>
             <translation>После фейдера: посыл следует за фейдером этой дорожки. Нажмите, чтобы переключить до фейдера.</translation>
         </message>
         <message>
@@ -2476,6 +2576,408 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         </message>
     </context>
     <context>
+        <name>EqualizerGraph</name>
+        <message>
+            <source>Equalizer frequency response graph</source>
+            <translation>График амплитудно-частотной характеристики эквалайзера</translation>
+        </message>
+        <message>
+            <source>Double-click to add a band. Drag bands to change frequency and gain; use the mouse wheel for Q and Alt-drag for dynamic range.</source>
+            <translation>Двойной щелчок добавляет полосу. Перетаскивание меняет частоту и усиление; колесо мыши — Q, Alt+перетаскивание — динамический диапазон.</translation>
+        </message>
+        <message>
+            <source>Duplicate Band</source>
+            <translation>Дублировать полосу</translation>
+        </message>
+        <message>
+            <source>Invert Gain</source>
+            <translation>Инвертировать усиление</translation>
+        </message>
+        <message>
+            <source>Reset Band</source>
+            <translation>Сбросить полосу</translation>
+        </message>
+        <message>
+            <source>Delete Band</source>
+            <translation>Удалить полосу</translation>
+        </message>
+    </context>
+    <context>
+        <name>EqualizerPanel</name>
+        <message>
+            <source>VLT Equalizer editor</source>
+            <translation>Редактор VLT Equalizer</translation>
+        </message>
+        <message>
+            <source>VLT Equalizer</source>
+            <translation>VLT Equalizer</translation>
+        </message>
+        <message>
+            <source>Flat</source>
+            <translation>Без коррекции</translation>
+        </message>
+        <message>
+            <source>Equalizer preset browser</source>
+            <translation>Браузер пресетов эквалайзера</translation>
+        </message>
+        <message>
+            <source>Copy A/B</source>
+            <translation>Копировать A/B</translation>
+        </message>
+        <message>
+            <source>Use comparison A</source>
+            <translation>Использовать вариант A</translation>
+        </message>
+        <message>
+            <source>Use comparison B</source>
+            <translation>Использовать вариант B</translation>
+        </message>
+        <message>
+            <source>Copy active comparison to inactive comparison</source>
+            <translation>Копировать активный вариант в неактивный</translation>
+        </message>
+        <message>
+            <source>Processing mode</source>
+            <translation>Режим обработки</translation>
+        </message>
+        <message>
+            <source>Zero Latency</source>
+            <translation>Нулевая задержка</translation>
+        </message>
+        <message>
+            <source>Analog Phase</source>
+            <translation>Аналоговая фаза</translation>
+        </message>
+        <message>
+            <source>Linear Phase</source>
+            <translation>Линейная фаза</translation>
+        </message>
+        <message>
+            <source>Linear phase resolution</source>
+            <translation>Разрешение линейной фазы</translation>
+        </message>
+        <message>
+            <source>Low</source>
+            <translation>Низкое</translation>
+        </message>
+        <message>
+            <source>Medium</source>
+            <translation>Среднее</translation>
+        </message>
+        <message>
+            <source>High</source>
+            <translation>Высокое</translation>
+        </message>
+        <message>
+            <source>Graph gain range</source>
+            <translation>Диапазон усиления графика</translation>
+        </message>
+        <message>
+            <source>Selected band controls</source>
+            <translation>Параметры выбранной полосы</translation>
+        </message>
+        <message>
+            <source>No band selected</source>
+            <translation>Полоса не выбрана</translation>
+        </message>
+        <message>
+            <source>Filter type</source>
+            <translation>Тип фильтра</translation>
+        </message>
+        <message>
+            <source>Bell</source>
+            <translation>Колокол</translation>
+        </message>
+        <message>
+            <source>Low Shelf</source>
+            <translation>Низкая полка</translation>
+        </message>
+        <message>
+            <source>High Shelf</source>
+            <translation>Высокая полка</translation>
+        </message>
+        <message>
+            <source>Low Cut</source>
+            <translation>Срез НЧ</translation>
+        </message>
+        <message>
+            <source>High Cut</source>
+            <translation>Срез ВЧ</translation>
+        </message>
+        <message>
+            <source>Notch</source>
+            <translation>Режекторный</translation>
+        </message>
+        <message>
+            <source>Band Pass</source>
+            <translation>Полосовой</translation>
+        </message>
+        <message>
+            <source>Tilt</source>
+            <translation>Наклон</translation>
+        </message>
+        <message>
+            <source>All Pass</source>
+            <translation>Фазовый</translation>
+        </message>
+        <message>
+            <source>Filter slope</source>
+            <translation>Крутизна фильтра</translation>
+        </message>
+        <message>
+            <source>Band channel placement</source>
+            <translation>Размещение полосы по каналам</translation>
+        </message>
+        <message>
+            <source>Stereo</source>
+            <translation>Стерео</translation>
+        </message>
+        <message>
+            <source>Left</source>
+            <translation>Левый</translation>
+        </message>
+        <message>
+            <source>Right</source>
+            <translation>Правый</translation>
+        </message>
+        <message>
+            <source>Mid</source>
+            <translation>Центр</translation>
+        </message>
+        <message>
+            <source>Side</source>
+            <translation>Стороны</translation>
+        </message>
+        <message>
+            <source>Type</source>
+            <translation>Тип</translation>
+        </message>
+        <message>
+            <source>Slope</source>
+            <translation>Крутизна</translation>
+        </message>
+        <message>
+            <source>Placement</source>
+            <translation>Размещение</translation>
+        </message>
+        <message>
+            <source>Frequency</source>
+            <translation>Частота</translation>
+        </message>
+        <message>
+            <source>Gain</source>
+            <translation>Усиление</translation>
+        </message>
+        <message>
+            <source>Q</source>
+            <translation>Q</translation>
+        </message>
+        <message>
+            <source>Dynamics</source>
+            <translation>Динамика</translation>
+        </message>
+        <message>
+            <source>Enable dynamics for selected band</source>
+            <translation>Включить динамику выбранной полосы</translation>
+        </message>
+        <message>
+            <source>Selected band dynamics</source>
+            <translation>Динамика выбранной полосы</translation>
+        </message>
+        <message>
+            <source>Range</source>
+            <translation>Диапазон</translation>
+        </message>
+        <message>
+            <source>Threshold</source>
+            <translation>Порог</translation>
+        </message>
+        <message>
+            <source>Attack</source>
+            <translation>Атака</translation>
+        </message>
+        <message>
+            <source>Release</source>
+            <translation>Восстановление</translation>
+        </message>
+        <message>
+            <source>Detector Low</source>
+            <translation>Нижняя частота детектора</translation>
+        </message>
+        <message>
+            <source>Detector High</source>
+            <translation>Верхняя частота детектора</translation>
+        </message>
+        <message>
+            <source>Auto</source>
+            <translation>Авто</translation>
+        </message>
+        <message>
+            <source>External SC</source>
+            <translation>Внешний SC</translation>
+        </message>
+        <message>
+            <source>Band detector</source>
+            <translation>Детектор полосы</translation>
+        </message>
+        <message>
+            <source>Free detector</source>
+            <translation>Свободный детектор</translation>
+        </message>
+        <message>
+            <source>Automatic dynamics timing and threshold</source>
+            <translation>Автоматические время и порог динамики</translation>
+        </message>
+        <message>
+            <source>Use external sidechain</source>
+            <translation>Использовать внешний сайдчейн</translation>
+        </message>
+        <message>
+            <source>Dynamics detector range mode</source>
+            <translation>Режим частотного диапазона детектора</translation>
+        </message>
+        <message>
+            <source>Output</source>
+            <translation>Выход</translation>
+        </message>
+        <message>
+            <source>Balance</source>
+            <translation>Баланс</translation>
+        </message>
+        <message>
+            <source>Gain Scale</source>
+            <translation>Масштаб усиления</translation>
+        </message>
+        <message>
+            <source>Auto Gain</source>
+            <translation>Автоусиление</translation>
+        </message>
+        <message>
+            <source>Invert Polarity</source>
+            <translation>Инверсия полярности</translation>
+        </message>
+        <message>
+            <source>Automatic output gain compensation</source>
+            <translation>Автоматическая компенсация выходного усиления</translation>
+        </message>
+        <message>
+            <source>Invert output polarity</source>
+            <translation>Инвертировать полярность выхода</translation>
+        </message>
+        <message>
+            <source>Analyzer:</source>
+            <translation>Анализатор:</translation>
+        </message>
+        <message>
+            <source>Pre</source>
+            <translation>До</translation>
+        </message>
+        <message>
+            <source>Post</source>
+            <translation>После</translation>
+        </message>
+        <message>
+            <source>Sidechain</source>
+            <translation>Сайдчейн</translation>
+        </message>
+        <message>
+            <source>Freeze</source>
+            <translation>Заморозить</translation>
+        </message>
+        <message>
+            <source>Sidechain connection status</source>
+            <translation>Состояние подключения сайдчейна</translation>
+        </message>
+        <message>
+            <source>Custom</source>
+            <translation>Пользовательский</translation>
+        </message>
+        <message>
+            <source>Equalizer is full</source>
+            <translation>Эквалайзер заполнен</translation>
+        </message>
+        <message>
+            <source>All 24 equalizer bands are already in use.</source>
+            <translation>Все 24 полосы эквалайзера уже используются.</translation>
+        </message>
+        <message>
+            <source>Factory Presets</source>
+            <translation>Заводские пресеты</translation>
+        </message>
+        <message>
+            <source>User Presets</source>
+            <translation>Пользовательские пресеты</translation>
+        </message>
+        <message>
+            <source>Save Current as User Preset...</source>
+            <translation>Сохранить текущий пользовательский пресет...</translation>
+        </message>
+        <message>
+            <source>Rename User Preset...</source>
+            <translation>Переименовать пользовательский пресет...</translation>
+        </message>
+        <message>
+            <source>Delete User Preset...</source>
+            <translation>Удалить пользовательский пресет...</translation>
+        </message>
+        <message>
+            <source>Save Equalizer Preset</source>
+            <translation>Сохранить пресет эквалайзера</translation>
+        </message>
+        <message>
+            <source>Preset name:</source>
+            <translation>Название пресета:</translation>
+        </message>
+        <message>
+            <source>Invalid preset name</source>
+            <translation>Недопустимое название пресета</translation>
+        </message>
+        <message>
+            <source>Use 1-48 characters and a name not reserved by a factory preset.</source>
+            <translation>Используйте от 1 до 48 символов и название, не занятое заводским пресетом.</translation>
+        </message>
+        <message>
+            <source>Replace Equalizer Preset</source>
+            <translation>Заменить пресет эквалайзера</translation>
+        </message>
+        <message>
+            <source>Replace &quot;%1&quot;?</source>
+            <translation>Заменить &quot;%1&quot;?</translation>
+        </message>
+        <message>
+            <source>Preset library full</source>
+            <translation>Библиотека пресетов заполнена</translation>
+        </message>
+        <message>
+            <source>VLT Equalizer supports up to 128 user presets.</source>
+            <translation>VLT Equalizer поддерживает до 128 пользовательских пресетов.</translation>
+        </message>
+        <message>
+            <source>Rename Equalizer Preset</source>
+            <translation>Переименовать пресет эквалайзера</translation>
+        </message>
+        <message>
+            <source>Choose a unique name of 1-48 characters.</source>
+            <translation>Выберите уникальное название длиной от 1 до 48 символов.</translation>
+        </message>
+        <message>
+            <source>Delete Equalizer Preset</source>
+            <translation>Удалить пресет эквалайзера</translation>
+        </message>
+        <message>
+            <source>Delete &quot;%1&quot;? The current sound remains unchanged.</source>
+            <translation>Удалить &quot;%1&quot;? Текущее звучание не изменится.</translation>
+        </message>
+        <message>
+            <source>Band %1</source>
+            <translation>Полоса %1</translation>
+        </message>
+        <message>
+            <source>SC missing</source>
+            <translation>SC не подключён</translation>
+        </message>
+    </context>
+    <context>
         <name>ExportDialog</name>
         <message>
             <source>WAV</source>
@@ -2534,7 +3036,7 @@ The plugin is still listed from an earlier scan but its module no longer offers 
             <translation>Имя</translation>
         </message>
         <message>
-            <source>defaults to each file's name</source>
+            <source>defaults to each file&apos;s name</source>
             <translation>по умолчанию имя файла</translation>
         </message>
         <message>
@@ -2901,9 +3403,9 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         </message>
         <message>
             <source>Project templates, Channel Strip templates, and other presets
-%1</source>
+    %1</source>
             <translation>Шаблоны проектов, шаблоны канальных шин и другие пресеты
-%1</translation>
+    %1</translation>
         </message>
         <message>
             <source>Drag this Channel Strip preset onto a track or channel strip, or double-click to apply it to the selected channel.</source>
@@ -3010,6 +3512,376 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <message>
             <source>no limit</source>
             <translation>Без ограничений</translation>
+        </message>
+    </context>
+    <context>
+        <name>GravityField</name>
+        <message>
+            <source>Gravity pitch and size field</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Horizontal position controls pitch; vertical position controls size.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Drag to set Pitch and Size. Use arrow keys for precise changes.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Pitch %1 semitones, size %2 percent, linked attractors spread plus or minus %3 semitones.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Pitch %1 semitones and size %2 percent.</source>
+            <translation type="unfinished"></translation>
+        </message>
+    </context>
+    <context>
+        <name>GravityPanel</name>
+        <message>
+            <source>Gravity effect</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Intensity</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Pitch</source>
+            <translation type="unfinished">Высота тона</translation>
+        </message>
+        <message>
+            <source>Feedback</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Decay</source>
+            <translation type="unfinished">Затухание</translation>
+        </message>
+        <message>
+            <source>Size</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>ALGORITHM</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Orbit</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Fall</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Rise</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Void</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Collapse</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Zero G</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Gravity algorithm</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Gravity power</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Gravity advanced controls</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Advanced controls</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Freeze Gravity tail</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Freeze tail</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Clear Gravity tail</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Clear tail</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Previous Gravity preset</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Previous preset</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Gravity preset browser</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Next Gravity preset</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Next preset</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Choose Gravity preset</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Preset list</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Gravity advanced sections</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Density</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Motion</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Reverse</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Transient</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>CLOUD</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Diffusion</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Width</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Source Stereo</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Ducking</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>SPACE</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Mass</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Damping</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Drive</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Low Cut</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Pitch Spread</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Pitch snap</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Off</source>
+            <translation type="unfinished">Выкл.</translation>
+        </message>
+        <message>
+            <source>Chromatic</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Perfect</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Octave</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Detector source</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Main</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Sidechain</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Auto</source>
+            <translation type="unfinished">Авто</translation>
+        </message>
+        <message>
+            <source>Pitch Snap</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Detector</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>CHARACTER</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Gravity timing mode</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Sync to tempo</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Free delay</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Gravity sync division</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Mode</source>
+            <translation type="unfinished">Режим</translation>
+        </message>
+        <message>
+            <source>Division</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Free Delay</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>TIMING</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Save Gravity Preset</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Preset name:</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Invalid preset name</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Use 1–48 characters and a name not reserved by a factory preset.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Replace Gravity Preset</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Replace “%1”?</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Preset library full</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Gravity supports up to 128 user presets.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Rename Gravity Preset</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Choose a unique name of 1–48 characters.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Delete Gravity Preset</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Delete “%1”? The current sound will remain unchanged.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Factory Presets</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>User Presets</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Save Current as User Preset…</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Rename User Preset…</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Delete User Preset…</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Advanced controls expanded. Press Escape to close.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Advanced controls collapsed.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Hide Gravity advanced controls</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Show Gravity advanced controls</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>CUSTOM</source>
+            <translation type="unfinished"></translation>
         </message>
     </context>
     <context>
@@ -3130,10 +4002,10 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <message>
             <source>%1 could not be applied.
 
-%2</source>
+    %2</source>
             <translation>Не удалось применить %1.
 
-%2</translation>
+    %2</translation>
         </message>
         <message>
             <source>Applied Channel Strip preset “%1”</source>
@@ -3762,10 +4634,10 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <message>
             <source>The downloaded file was kept in Downloads, but could not be added to the project.
 
-%1</source>
+    %1</source>
             <translation>Загруженный файл был сохранен в папку «Загрузки», но не удалось добавить его в проект.
 
-%1</translation>
+    %1</translation>
         </message>
         <message>
             <source>Undo</source>
@@ -3818,14 +4690,14 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <message>
             <source>The template could not be opened.
 
-%1
+    %1
 
-Check that the package still contains Project.vlt, State, and any required Content files.</source>
+    Check that the package still contains Project.vlt, State, and any required Content files.</source>
             <translation>Не удалось открыть шаблон.
 
-%1
+    %1
 
-Убедитесь, что пакет все еще содержит Project.vlt, State и любые необходимые файлы контента.</translation>
+    Убедитесь, что пакет все еще содержит Project.vlt, State и любые необходимые файлы контента.</translation>
         </message>
         <message>
             <source>Created a new project from “%1”</source>
@@ -3842,14 +4714,14 @@ Check that the package still contains Project.vlt, State, and any required Conte
         <message>
             <source>No tracks were added.
 
-%1
+    %1
 
-The current project has not been changed.</source>
+    The current project has not been changed.</source>
             <translation>Не добавлено ни одной дорожки.
 
-%1
+    %1
 
-Текущий проект не изменен.</translation>
+    Текущий проект не изменен.</translation>
         </message>
         <message>
             <source>Open VLT Project</source>
@@ -3866,14 +4738,14 @@ The current project has not been changed.</source>
         <message>
             <source>Could not open the VLT project.
 
-%1
+    %1
 
-Make sure the package still contains Project.vlt and its Content folder.</source>
+    Make sure the package still contains Project.vlt and its Content folder.</source>
             <translation>Не удалось открыть проект VLT.
 
-%1
+    %1
 
-Убедитесь, что пакет по-прежнему содержит Project.vlt и его папку Content.</translation>
+    Убедитесь, что пакет по-прежнему содержит Project.vlt и его папку Content.</translation>
         </message>
         <message>
             <source>Opened %1</source>
@@ -3886,14 +4758,14 @@ Make sure the package still contains Project.vlt and its Content folder.</source
         <message>
             <source>The project was not saved.
 
-%1
+    %1
 
-Check free disk space, folder permissions, and missing referenced files, then try again.</source>
+    Check free disk space, folder permissions, and missing referenced files, then try again.</source>
             <translation>Проект не был сохранен.
 
-%1
+    %1
 
-Проверьте свободное место на диске, права доступа к папке и отсутствующие ссылки, затем повторите попытку.</translation>
+    Проверьте свободное место на диске, права доступа к папке и отсутствующие ссылки, затем повторите попытку.</translation>
         </message>
         <message>
             <source>Saved %1</source>
@@ -3912,8 +4784,8 @@ Check free disk space, folder permissions, and missing referenced files, then tr
             <translation>Недопустимое имя шаблона</translation>
         </message>
         <message>
-            <source>Choose a non-empty name without /, \, :, *, ?, ", &lt;, &gt;, or |.</source>
-            <translation>Выберите имя, не содержащее / \ : * ? " &lt; &gt; или |.</translation>
+            <source>Choose a non-empty name without /, \, :, *, ?, &quot;, &lt;, &gt;, or |.</source>
+            <translation>Выберите имя, не содержащее / \ : * ? &quot; &lt; &gt; или |.</translation>
         </message>
         <message>
             <source>Replace Project Template</source>
@@ -3934,14 +4806,14 @@ Check free disk space, folder permissions, and missing referenced files, then tr
         <message>
             <source>The template was not saved.
 
-%1
+    %1
 
-Check free disk space and folder permissions, then try again.</source>
+    Check free disk space and folder permissions, then try again.</source>
             <translation>Шаблон не был сохранен.
 
-%1
+    %1
 
-Проверьте свободное место на диске и права доступа к папке, затем повторите попытку.</translation>
+    Проверьте свободное место на диске и права доступа к папке, затем повторите попытку.</translation>
         </message>
         <message>
             <source>Saved template “%1”</source>
@@ -3998,6 +4870,258 @@ Check free disk space and folder permissions, then try again.</source>
         <message>
             <source>Untitled</source>
             <translation>Без названия</translation>
+        </message>
+        <message>
+            <source>Browser</source>
+            <translation type="unfinished">Браузер</translation>
+        </message>
+        <message>
+            <source>Editors</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Rewind One Bar</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Move the playhead backward by one bar.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Forward One Bar</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Move the playhead forward by one bar.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Show Position as Bars</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Display the transport and ruler position in bars and beats.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Show Position as Time</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Display the transport and ruler position as clock time.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Enable Snap</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Make arrangement edits snap to the current grid.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Disable Snap</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Allow free arrangement edits between grid lines.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Turn Grid Off</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Set Grid to %1</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Turn off the arrangement grid division.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Use %1 as the arrangement grid division.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Pointer</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Knife</source>
+            <translation type="unfinished">Ножницы</translation>
+        </message>
+        <message>
+            <source>Eraser</source>
+            <translation type="unfinished">Ластик</translation>
+        </message>
+        <message>
+            <source>Region</source>
+            <translation type="unfinished">Область</translation>
+        </message>
+        <message>
+            <source>Mute</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Draw</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Use %1 as Secondary Tool</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Choose the %1 tool used while the secondary-tool modifier is held.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Resume Playback from Stop Position</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Make Play continue from the current stopped position.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Restart Playback from Anchor</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Make Play restart from the anchored position.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Enable Play from Selected Clip</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Loop playback over the selected clip.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Disable Play from Selected Clip</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Stop constraining playback to the selected clip.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Show Automation for All Tracks</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Reveal automation lanes, creating a volume lane where needed.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Hide Automation for All Tracks</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Hide every track&apos;s automation lanes without deleting curves.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Enable Automation Creation Mode</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Latch the mode that creates automation from a control.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Disable Automation Creation Mode</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Release the latched automation-creation mode.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Unmute Every Track</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Clear the mute state from every track.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Add Browser Folder…</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Open the folder picker and grant the chosen folder to the browser.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Refresh Browser Folders</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Re-read the files in the browser&apos;s granted folders.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Open Browser Settings</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Open settings for browser folders, audition and placement.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Play or Stop Browser Selection</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Audition the selected audio file, or stop its current audition.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Loop Browser Preview</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Repeat browser auditions until they are stopped.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Play Browser Preview Once</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Play browser auditions once instead of looping.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Enable Browser Auto-preview</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Audition an audio file automatically when it is selected.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Disable Browser Auto-preview</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Select browser files silently until Play is requested.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Open Editor for Selection</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Open the Piano Roll, Sample, Automation or Pattern editor for the current selection.</source>
+            <translation type="unfinished"></translation>
+        </message>
+        <message>
+            <source>Select a MIDI, audio, automation or Pattern clip to open its editor</source>
+            <translation type="unfinished"></translation>
         </message>
     </context>
     <context>
@@ -4250,9 +5374,9 @@ Check free disk space and folder permissions, then try again.</source>
         </message>
         <message>
             <source>The following files could not be decoded or loaded into the Sampler:
-%1</source>
+    %1</source>
             <translation>Не удалось декодировать или загрузить следующие файлы в Sampler:
-%1</translation>
+    %1</translation>
         </message>
         <message>
             <source>Rename Pattern Source</source>
@@ -4733,7 +5857,7 @@ Check free disk space and folder permissions, then try again.</source>
             <translation>Цвет сетки</translation>
         </message>
         <message>
-            <source>Use the theme's colour</source>
+            <source>Use the theme&apos;s colour</source>
             <translation>Использовать цвет темы</translation>
         </message>
         <message>
@@ -5104,7 +6228,7 @@ Check free disk space and folder permissions, then try again.</source>
             <translation>Плагин включен</translation>
         </message>
         <message>
-            <source>Show this plugin's parameters — Alt/Option-double-click or right-click a knob to automate it</source>
+            <source>Show this plugin&apos;s parameters — Alt/Option-double-click or right-click a knob to automate it</source>
             <translation>Показать параметры плагина — Alt/Option-двойной клик или правый клик по ручке для автоматизации</translation>
         </message>
         <message>
@@ -5184,7 +6308,7 @@ Check free disk space and folder permissions, then try again.</source>
             <translation>Сайдчейн: отсутствует источник</translation>
         </message>
         <message>
-            <source>Choose the post-fader signal sent to the plugin's auxiliary input</source>
+            <source>Choose the post-fader signal sent to the plugin&apos;s auxiliary input</source>
             <translation>Выберите сигнал после фейдера, отправляемый на вспомогательный вход плагина</translation>
         </message>
         <message>
@@ -5790,10 +6914,10 @@ Check free disk space and folder permissions, then try again.</source>
         <message>
             <source>Last saved automatically at %1 — %2.
 
-Notes, clips, the mix and plugin settings come back as of that moment. Audio is read from your original files, not from copies inside the project.</source>
+    Notes, clips, the mix and plugin settings come back as of that moment. Audio is read from your original files, not from copies inside the project.</source>
             <translation>Последнее автоматическое сохранение: %1 — %2.
 
-Примечания, клипы, микс и настройки плагинов восстановлены на этот момент. Аудио считывается из ваших исходных файлов, а не из копий внутри проекта.</translation>
+    Примечания, клипы, микс и настройки плагинов восстановлены на этот момент. Аудио считывается из ваших исходных файлов, а не из копий внутри проекта.</translation>
         </message>
         <message>
             <source>Restore</source>
@@ -6034,9 +7158,9 @@ Notes, clips, the mix and plugin settings come back as of that moment. Audio is 
         </message>
         <message>
             <source>On: a layer covers only where signal was actually recorded.
-Off: it spans the whole clip, silent outside the recorded stretch.</source>
+    Off: it spans the whole clip, silent outside the recorded stretch.</source>
             <translation>Вкл: слой покрывает только ту область, где был фактически записан сигнал.
-Выкл: он охватывает весь клип, будучи тихим за пределами записанного участка.</translation>
+    Выкл: он охватывает весь клип, будучи тихим за пределами записанного участка.</translation>
         </message>
         <message>
             <source>Open the comp editor when recording stops</source>
@@ -6051,7 +7175,7 @@ Off: it spans the whole clip, silent outside the recorded stretch.</source>
             <translation>Применяется на каждом стыке сегментов компинга. Нулевое значение соединяет их вплотную, что может вызвать щелчок.</translation>
         </message>
         <message>
-            <source>Replace — the new take's notes stand alone</source>
+            <source>Replace — the new take&apos;s notes stand alone</source>
             <translation>Заменить — ноты нового дубля существуют отдельно</translation>
         </message>
         <message>
@@ -6071,7 +7195,7 @@ Off: it spans the whole clip, silent outside the recorded stretch.</source>
             <translation>R начинает запись самостоятельно (arm записи + старт)</translation>
         </message>
         <message>
-            <source>Off: the transport's Record button has to be engaged first, and R then starts the recording.</source>
+            <source>Off: the transport&apos;s Record button has to be engaged first, and R then starts the recording.</source>
             <translation>Выкл: сначала должна быть активирована кнопка записи транспортера, а затем R начинает запись.</translation>
         </message>
         <message>
@@ -6092,9 +7216,9 @@ Off: it spans the whole clip, silent outside the recorded stretch.</source>
         </message>
         <message>
             <source>On: the track being recorded is monitored for the take (and the count-in before it) and goes back to how it was on stop.
-Off: recording never touches monitoring — a track is only heard live if you switched its monitor on yourself.</source>
+    Off: recording never touches monitoring — a track is only heard live if you switched its monitor on yourself.</source>
             <translation>Вкл: дорожка, на которую записывается, мониторится для дубля (и для счета до него) и возвращается в исходное состояние после остановки.
-Выкл: запись никогда не затрагивает мониторинг — дорожка слышна вживую, только если вы сами включили ее мониторинг.</translation>
+    Выкл: запись никогда не затрагивает мониторинг — дорожка слышна вживую, только если вы сами включили ее мониторинг.</translation>
         </message>
         <message>
             <source>A manual monitor click stops automatic management for that track</source>
@@ -6125,12 +7249,12 @@ Off: recording never touches monitoring — a track is only heard live if you sw
             <translation>При остановке записи</translation>
         </message>
         <message>
-            <source>Input monitoring is decided per recording: if another track already monitors the same input, this one is left alone so you do not hear the source twice. Tracks whose monitor was set automatically show a small "A" on the button.
+            <source>Input monitoring is decided per recording: if another track already monitors the same input, this one is left alone so you do not hear the source twice. Tracks whose monitor was set automatically show a small &quot;A&quot; on the button.
 
-Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inverts the mode for that take only. E opens the comp editor on the selected clip; hold A and click a layer to audition it.</source>
+    Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inverts the mode for that take only. E opens the comp editor on the selected clip; hold A and click a layer to audition it.</source>
             <translation>Мониторинг входа определяется для каждой записи: если другая дорожка уже мониторит тот же вход, её настройка не меняется, чтобы источник не звучал дважды. На кнопках дорожек с автоматически включённым мониторингом отображается небольшая буква «A».
 
-Shift+L переключает послойную запись. Ctrl+Shift+L во время записи меняет режим только для текущего дубля. E открывает редактор компинга выбранного клипа; удерживайте A и щёлкните слой, чтобы прослушать его.</translation>
+    Shift+L переключает послойную запись. Ctrl+Shift+L во время записи меняет режим только для текущего дубля. E открывает редактор компинга выбранного клипа; удерживайте A и щёлкните слой, чтобы прослушать его.</translation>
         </message>
         <message>
             <source>&lt;b&gt;Recording start and monitoring&lt;/b&gt;</source>
@@ -6161,13 +7285,13 @@ Shift+L переключает послойную запись. Ctrl+Shift+L в�
         </message>
         <message>
             <source>• Notes, clips, tracks and the mix — as of the last automatic recovery save.
-• Plugin settings and presets — from that same recovery save. A plugin that refuses to provide state falls back to its host parameters or last manual project state.
-• Audio is read from your original files, not from the copies inside a saved project. A file you have since moved or deleted cannot come back.
-• Your project file is never overwritten automatically. Recovered work arrives unsaved, and it is yours to keep or discard.</source>
+    • Plugin settings and presets — from that same recovery save. A plugin that refuses to provide state falls back to its host parameters or last manual project state.
+    • Audio is read from your original files, not from the copies inside a saved project. A file you have since moved or deleted cannot come back.
+    • Your project file is never overwritten automatically. Recovered work arrives unsaved, and it is yours to keep or discard.</source>
             <translation>• Заметки, клипы, дорожки и микс — на момент последней автоматической точки восстановления.
-• Настройки плагинов и пресеты — с той же точки восстановления. Плагин, который отказывается предоставлять состояние, использует параметры хоста или последнее ручное состояние проекта.
-• Аудио считывается из ваших оригинальных файлов, а не из копий внутри сохраненного проекта. Файл, который вы с тех пор переместили или удалили, восстановить нельзя.
-• Ваш файл проекта никогда не перезаписывается автоматически. Восстановленная работа появляется несохраненной, и решать, сохранять ее или нет, — вам.</translation>
+    • Настройки плагинов и пресеты — с той же точки восстановления. Плагин, который отказывается предоставлять состояние, использует параметры хоста или последнее ручное состояние проекта.
+    • Аудио считывается из ваших оригинальных файлов, а не из копий внутри сохраненного проекта. Файл, который вы с тех пор переместили или удалили, восстановить нельзя.
+    • Ваш файл проекта никогда не перезаписывается автоматически. Восстановленная работа появляется несохраненной, и решать, сохранять ее или нет, — вам.</translation>
         </message>
         <message>
             <source>WATCHDOG</source>
@@ -6830,7 +7954,7 @@ Shift+L переключает послойную запись. Ctrl+Shift+L в�
             <translation>Выбранные дорожки</translation>
         </message>
         <message>
-            <source>Tint with the track's own colour</source>
+            <source>Tint with the track&apos;s own colour</source>
             <translation>Оттенок с цветом самой дорожки</translation>
         </message>
         <message>
@@ -6894,7 +8018,7 @@ Shift+L переключает послойную запись. Ctrl+Shift+L в�
             <translation>%1 не является действительным файлом темы</translation>
         </message>
         <message>
-            <source>Click a shortcut field and press the new keys. If a key is already used you'll be asked before reassigning it. Shortcuts follow the physical key, so they work in every keyboard layout. The same binding is shown as Command on macOS and Ctrl on Windows/Linux.</source>
+            <source>Click a shortcut field and press the new keys. If a key is already used you&apos;ll be asked before reassigning it. Shortcuts follow the physical key, so they work in every keyboard layout. The same binding is shown as Command on macOS and Ctrl on Windows/Linux.</source>
             <translation>Нажмите на поле сочетания клавиш и нажмите новые клавиши. Если клавиша уже используется, вас спросят перед переназначением. Сочетания клавиш следуют за физической клавишей, поэтому они работают в любой раскладке клавиатуры. Одинаковое назначение отображается как Command на macOS и Ctrl на Windows/Linux.</translation>
         </message>
         <message>
@@ -6914,12 +8038,12 @@ Shift+L переключает послойную запись. Ctrl+Shift+L в�
             <translation>Сочетание клавиш в использовании</translation>
         </message>
         <message>
-            <source>"%1" is already assigned to "%2".
+            <source>&quot;%1&quot; is already assigned to &quot;%2&quot;.
 
-Reassign it to "%3"?</source>
-            <translation>"%1" уже назначено на "%2".
+    Reassign it to &quot;%3&quot;?</source>
+            <translation>&quot;%1&quot; уже назначено на &quot;%2&quot;.
 
-Переназначить на "%3"?</translation>
+    Переназначить на &quot;%3&quot;?</translation>
         </message>
         <message>
             <source>Reset All to Defaults</source>
@@ -7341,12 +8465,12 @@ Reassign it to "%3"?</source>
             <translation>Удалить аудиофайл</translation>
         </message>
         <message>
-            <source>Delete "%1" and erase its audio file from disk?
+            <source>Delete &quot;%1&quot; and erase its audio file from disk?
 
-Undo will restore the take but not the file.</source>
-            <translation>Удалить "%1" и удалить его аудиофайл с диска?
+    Undo will restore the take but not the file.</source>
+            <translation>Удалить &quot;%1&quot; и удалить его аудиофайл с диска?
 
-Отмена восстановит дубль, но не файл.</translation>
+    Отмена восстановит дубль, но не файл.</translation>
         </message>
         <message>
             <source>Delete Point</source>
@@ -7531,22 +8655,22 @@ Undo will restore the take but not the file.</source>
         <message>
             <source>Turn this clip into a plain clip playing the comp?
 
-Its %1 takes are removed from the project and the clip can no longer be expanded. Their audio files are left on disk.</source>
+    Its %1 takes are removed from the project and the clip can no longer be expanded. Their audio files are left on disk.</source>
             <translation>Превратить этот клип в обычный клип с результатом компинга?
 
-Дубли клипа (%1) будут удалены из проекта, и клип больше нельзя будет развернуть. Их аудиофайлы останутся на диске.</translation>
+    Дубли клипа (%1) будут удалены из проекта, и клип больше нельзя будет развернуть. Их аудиофайлы останутся на диске.</translation>
         </message>
         <message>
             <source>Crop takes</source>
             <translation>Усечь дубли</translation>
         </message>
         <message>
-            <source>Trim the audio files of this clip's takes to what the comp plays?
+            <source>Trim the audio files of this clip&apos;s takes to what the comp plays?
 
-The files are rewritten on disk and the trimmed audio cannot be recovered.</source>
+    The files are rewritten on disk and the trimmed audio cannot be recovered.</source>
             <translation>Обрезать аудиофайлы дублей этого клипа до участков, используемых в компинге?
 
-Файлы будут перезаписаны на диске, и обрезанное аудио нельзя будет восстановить.</translation>
+    Файлы будут перезаписаны на диске, и обрезанное аудио нельзя будет восстановить.</translation>
         </message>
         <message>
             <source>Add MIDI Clip</source>
@@ -7559,6 +8683,10 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <message>
             <source>the clip</source>
             <translation>клип</translation>
+        </message>
+        <message>
+            <source>Duplicate Clips</source>
+            <translation type="unfinished"></translation>
         </message>
     </context>
     <context>
@@ -7942,9 +9070,9 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         </message>
         <message>
             <source>Typing keyboard — the computer keys play notes
-Z…M and Q…P, two octaves from C%1  ·  [ and ] shift the octave</source>
+    Z…M and Q…P, two octaves from C%1  ·  [ and ] shift the octave</source>
             <translation>Набор клавиш для набора текста — клавиши компьютера воспроизводят ноты
-Z…M и Q…P, две октавы от C%1 · [ и ] сдвигают октаву</translation>
+    Z…M и Q…P, две октавы от C%1 · [ и ] сдвигают октаву</translation>
         </message>
         <message>
             <source>Mixer is already open in its own window</source>
@@ -7991,9 +9119,9 @@ Z…M и Q…P, две октавы от C%1 · [ и ] сдвигают окта
         </message>
         <message>
             <source>Resume: each Space press toggles play and continues from the current position.
-Restart: when playback is paused, Space jumps back to the position where the current run started and plays from there.</source>
+    Restart: when playback is paused, Space jumps back to the position where the current run started and plays from there.</source>
             <translation>Возобновить: каждое нажатие Пробела переключает воспроизведение и продолжает с текущей позиции.
-Перезапустить: при остановке воспроизведения Пробел возвращает к начальной позиции текущей записи и воспроизводит с нее.</translation>
+    Перезапустить: при остановке воспроизведения Пробел возвращает к начальной позиции текущей записи и воспроизводит с нее.</translation>
         </message>
     </context>
     <context>
@@ -8694,9 +9822,9 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <name>ui::InlineNameEdit</name>
         <message>
             <source>%1
-Double-click to rename</source>
+    Double-click to rename</source>
             <translation>%1
-Двойной клик для переименования</translation>
+    Двойной клик для переименования</translation>
         </message>
     </context>
     <context>
@@ -8745,12 +9873,12 @@ Double-click to rename</source>
             <translation>В пакете отсутствует объект переводов.</translation>
         </message>
         <message>
-            <source>Translation context "%1" must be a JSON object.</source>
-            <translation>Контекст перевода "%1" должен быть объектом JSON.</translation>
+            <source>Translation context &quot;%1&quot; must be a JSON object.</source>
+            <translation>Контекст перевода &quot;%1&quot; должен быть объектом JSON.</translation>
         </message>
         <message>
-            <source>Translation for "%1" must be a string.</source>
-            <translation>Перевод для "%1" должен быть строкой.</translation>
+            <source>Translation for &quot;%1&quot; must be a string.</source>
+            <translation>Перевод для &quot;%1&quot; должен быть строкой.</translation>
         </message>
         <message>
             <source>The selected language is not installed.</source>
@@ -8809,8 +9937,8 @@ Double-click to rename</source>
             <translation>Файл не является корректным JSON в кодировке UTF-8.</translation>
         </message>
         <message>
-            <source>Translation for "%1" must preserve every numbered placeholder from the English source.</source>
-            <translation>Перевод для "%1" должен сохранить каждый нумерованный плейсхолдер из английского источника.</translation>
+            <source>Translation for &quot;%1&quot; must preserve every numbered placeholder from the English source.</source>
+            <translation>Перевод для &quot;%1&quot; должен сохранить каждый нумерованный плейсхолдер из английского источника.</translation>
         </message>
     </context>
     <context>
@@ -8895,6 +10023,29 @@ Double-click to rename</source>
         <message>
             <source>the prompt library sent back was not JSON</source>
             <translation>полученная библиотека подсказок не является JSON</translation>
+        </message>
+    </context>
+    <context>
+        <name>UpdateChecker</name>
+        <message>
+            <source>Update available</source>
+            <translation>Доступно обновление</translation>
+        </message>
+        <message>
+            <source>VLT Studio Pro %1 is available.</source>
+            <translation>Доступна версия VLT Studio Pro %1.</translation>
+        </message>
+        <message>
+            <source>You are using %1. The download button opens the release page in your browser.</source>
+            <translation>У вас установлена версия %1. Кнопка скачивания откроет страницу релиза в браузере.</translation>
+        </message>
+        <message>
+            <source>Download</source>
+            <translation>Скачать</translation>
+        </message>
+        <message>
+            <source>Later</source>
+            <translation>Позже</translation>
         </message>
     </context>
 </TS>

@@ -3292,6 +3292,7 @@ ToolResult callTool(EngineController& c, const std::string& name,
         if (!curve) return fail("that automation clip went missing");
         const double clipStartBars = secondsToBars(c, curve->startSeconds);
         const std::vector<AutomationPoint> before = curve->automation.points;
+        const bool activeBefore = curve->automation.active;
 
         std::vector<AutomationPoint> points;
         double lastBeat = -1.0;
@@ -3339,7 +3340,8 @@ ToolResult callTool(EngineController& c, const std::string& name,
         }
         c.setAutomationPoints(laneId, clipId, points);
         c.commitAutomationEdit(laneId, clipId, before,
-                               "AI: " + c.automationTargetName(wanted));
+                               "AI: " + c.automationTargetName(wanted),
+                               activeBefore);
         return done(json{{"laneTrackId", laneId},
                          {"clipId", clipId},
                          {"points", points.size()},

@@ -116,15 +116,15 @@ private:
     /// The curve as it was when the gesture started — the "before" half of the
     /// undo entry, and what a cancelled preview goes back to.
     daw::autotools::Points m_before;
+    bool m_beforeActive = false;
     bool m_gesture = false;
 
     daw::autotools::Points m_preview;
     bool m_previewing = false;
 
     int m_dragPoint = -1;
-    /// Stable source for a point drag. Rebuilding every mouse-move from this
-    /// snapshot lets a downward pull add/remove its guard point without ever
-    /// losing which handle the gesture originally picked up.
+    /// Stable source for a point drag, so every mouse move is computed from
+    /// the exact pickup state even when the handle crosses its neighbours.
     daw::autotools::Points m_dragPoints;
     int m_bendSegment = -1;
     double m_bendStartY = 0.0;
