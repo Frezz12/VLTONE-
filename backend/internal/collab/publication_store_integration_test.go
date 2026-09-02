@@ -26,6 +26,8 @@ type publicationObjectStore struct {
 	staged      map[string]objectstore.ExpectedObject
 	promoted    map[string]objectstore.ExpectedObject
 	verifyCalls int
+	deleteErr   error
+	deletes     []string
 }
 
 func newPublicationObjectStore() *publicationObjectStore {
@@ -98,6 +100,10 @@ func (s *publicationObjectStore) VerifyAndPromote(_ context.Context, stagingKey,
 }
 
 func (s *publicationObjectStore) Delete(_ context.Context, key string) error {
+	s.deletes = append(s.deletes, key)
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	delete(s.staged, key)
 	return nil
 }
@@ -157,6 +163,9 @@ func digestBytes(value []byte) string {
 func TestPostgresInitialPublicationLifecycle(t *testing.T) {
 	dsn := os.Getenv("VLT_COLLAB_TEST_DATABASE_URL")
 	if dsn == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("VLT_COLLAB_TEST_DATABASE_URL is required in CI")
+		}
 		t.Skip("set VLT_COLLAB_TEST_DATABASE_URL to run collaboration PostgreSQL tests")
 	}
 	db, err := database.Open(dsn, false)
@@ -230,7 +239,7 @@ func TestPostgresInitialPublicationLifecycle(t *testing.T) {
 		t.Fatalf("unexpected asset preparation: %#v", assetPreparation)
 	}
 
-	snapshotPayload := []byte(fmt.Sprintf(`{"formatVersion":6,"assetRefs":[{"assetId":%q}]}`,
+	snapshotPayload := []byte(fmt.Sprintf(`{"formatVersion":7,"assetRefs":[{"assetId":%q}]}`,
 		assetID.String()))
 	snapshotExpected := objectstore.ExpectedObject{
 		SHA256: digestBytes(snapshotPayload), Bytes: int64(len(snapshotPayload)),
@@ -298,6 +307,7 @@ func TestPostgresInitialPublicationLifecycle(t *testing.T) {
 		t.Fatalf("mismatched provider asset returned %v", err)
 	}
 	objects.stage(stagingObjectKey(projectID, assetUploadID), assetExpected)
+	objects.deleteErr = objectstore.ErrProvider
 	completedAsset, err := assets.CompleteAssetUpload(ctx, projectID, assetUploadID,
 		owner.user.ID, owner.device.ID, owner.session.ID, nil)
 	if err != nil {
@@ -309,6 +319,21 @@ func TestPostgresInitialPublicationLifecycle(t *testing.T) {
 		completedAsset.Blob.SHA256 != assetExpected.SHA256 ||
 		completedAsset.Blob.Bytes != assetExpected.Bytes {
 		t.Fatalf("verified asset was not linked exactly: %#v", completedAsset)
+	}
+	var stagedCleanup model.ObjectCleanupJob
+	if err := tx.Where("object_key = ?", stagingObjectKey(projectID, assetUploadID)).
+		First(&stagedCleanup).Error; err != nil || stagedCleanup.Status != objectCleanupPending ||
+		stagedCleanup.AttemptCount != 1 {
+		t.Fatalf("asset completion did not retain failed staging cleanup: job=%#v err=%v",
+			stagedCleanup, err)
+	}
+	objects.deleteErr = nil
+	if err := tx.Model(&model.ObjectCleanupJob{}).Where("id = ?", stagedCleanup.ID).
+		Update("retry_available_at", now).Error; err != nil {
+		t.Fatal(err)
+	}
+	if cleaned, err := assets.DrainObjectCleanupJobs(ctx, 8); err != nil || cleaned != 1 {
+		t.Fatalf("asset staging retry cleaned=%d err=%v", cleaned, err)
 	}
 	if err := tx.Model(&model.Blob{}).Where("id = ?", completedAsset.Blob.ID).
 		Update("status", BlobQuarantined).Error; err != nil {
@@ -365,6 +390,13 @@ func TestPostgresInitialPublicationLifecycle(t *testing.T) {
 		completedSnapshot.Blob.Status != BlobReady {
 		t.Fatalf("canonical exact-head snapshot was not completed: %#v", completedSnapshot)
 	}
+	var snapshotAssetRefs int64
+	if err := tx.Model(&model.ProjectSnapshotAsset{}).
+		Where("snapshot_id = ? AND project_id = ? AND asset_id = ?",
+			completedSnapshot.Snapshot.ID, projectID, assetID).
+		Count(&snapshotAssetRefs).Error; err != nil || snapshotAssetRefs != 1 {
+		t.Fatalf("snapshot asset refs = %d, err %v", snapshotAssetRefs, err)
+	}
 	if err := tx.Model(&model.Blob{}).Where("id = ?", completedAsset.Blob.ID).
 		Update("status", BlobQuarantined).Error; err != nil {
 		t.Fatal(err)
@@ -401,9 +433,23 @@ func TestPostgresInitialPublicationLifecycle(t *testing.T) {
 	if _, err := store.CompletePublication(ctx, projectID, owner.user.ID); !errors.Is(err, ErrConflict) {
 		t.Fatalf("publication ignored an open asset upload: %v", err)
 	}
+	objects.deleteErr = objectstore.ErrProvider
 	if err := assets.AbortUpload(ctx, projectID, extraUploadID, owner.user.ID,
 		owner.device.ID, owner.session.ID); err != nil {
 		t.Fatal(err)
+	}
+	var abortedCleanup model.ObjectCleanupJob
+	if err := tx.Where("object_key = ?", stagingObjectKey(projectID, extraUploadID)).
+		First(&abortedCleanup).Error; err != nil || abortedCleanup.Status != objectCleanupPending {
+		t.Fatalf("aborted upload cleanup was not durable: job=%#v err=%v", abortedCleanup, err)
+	}
+	objects.deleteErr = nil
+	if err := tx.Model(&model.ObjectCleanupJob{}).Where("id = ?", abortedCleanup.ID).
+		Update("retry_available_at", now).Error; err != nil {
+		t.Fatal(err)
+	}
+	if cleaned, err := assets.DrainObjectCleanupJobs(ctx, 8); err != nil || cleaned != 1 {
+		t.Fatalf("aborted staging retry cleaned=%d err=%v", cleaned, err)
 	}
 	extraReadySHA := digestBytes([]byte("ready but unreferenced sample"))
 	extraReadyBlob := model.Blob{

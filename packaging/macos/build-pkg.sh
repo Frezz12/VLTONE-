@@ -44,6 +44,8 @@ API_ORIGIN="${VLT_DEFAULT_API_ORIGIN:-https://vltstudio.ru/api/v1}"
 echo "── configure ─────────────────────────────────────────────"
 cmake -S "$ROOT" -B "$BUILD" -G Ninja \
     -DDAW_BUILD_APP=ON -DDAW_PACKAGE=ON -DDAW_BUILD_TESTS=OFF \
+    -DDAW_ENABLE_COLLABORATION=ON \
+    -DDAW_ENFORCE_COLLABORATION_RELEASE_GATES=ON \
     -DVLT_DEFAULT_API_ORIGIN="$API_ORIGIN" \
     -DCMAKE_BUILD_TYPE=Release
 

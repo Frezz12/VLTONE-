@@ -47,6 +47,14 @@ public:
     void hydrate(const QString& projectId,
                  const QList<daw::AssetRef>& assets,
                  const QStringList& priorityAssetIds = {});
+    /// Adds newly referenced assets to the current project's queue without
+    /// cancelling downloads started by the bootstrap generation.
+    void ensureMissing(const QString& projectId,
+                       const QList<daw::AssetRef>& assets,
+                       const QStringList& priorityAssetIds = {});
+    /// Retries the retryable failures from the current project generation.
+    /// These items keep their original progress slots, so total never grows.
+    void retryFailed();
     void cancel();
 
     CloudHydrationState state() const noexcept { return m_state; }
@@ -67,9 +75,12 @@ private:
     struct Item {
         daw::AssetRef asset;
         int attempts = 0;
+        quint64 generation = 0;
     };
 
     void setState(CloudHydrationState state);
+    void appendAssets(const QList<daw::AssetRef>& assets,
+                      const QStringList& priorityAssetIds);
     void pump();
     void finishIfSettled();
     void handleCompleted(quint64 transferId,
@@ -90,6 +101,7 @@ private:
     QHash<quint64, Item> m_active;
     QSet<QString> m_activeHashes;
     QHash<QString, QString> m_knownIdentities;
+    QHash<QString, Item> m_failed;
     quint64 m_generation = 0;
     qsizetype m_totalCount = 0;
     qsizetype m_completedCount = 0;

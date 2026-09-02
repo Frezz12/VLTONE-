@@ -10,6 +10,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -25,6 +26,7 @@ import (
 const (
 	UploadPending   = "pending"
 	UploadUploading = "uploading"
+	UploadVerifying = "verifying"
 	UploadCompleted = "completed"
 	UploadAborted   = "aborted"
 	UploadExpired   = "expired"
@@ -44,34 +46,64 @@ const (
 )
 
 var (
-	ErrUploadExpired    = errors.New("collaboration upload session has expired")
-	ErrUploadState      = errors.New("collaboration upload session cannot be changed")
-	ErrAssetUnavailable = errors.New("collaboration asset is not verified and ready")
+	ErrUploadExpired             = errors.New("collaboration upload session has expired")
+	ErrUploadState               = errors.New("collaboration upload session cannot be changed")
+	ErrAssetUnavailable          = errors.New("collaboration asset is not verified and ready")
+	ErrUploadVerifying           = errors.New("collaboration upload is already being verified")
+	ErrStorageQuotaExceeded      = errors.New("collaboration storage quota exceeded")
+	ErrUploadConcurrencyExceeded = errors.New("too many collaboration uploads are open")
 )
 
 type AssetService struct {
-	DB                      *gorm.DB
-	Objects                 objectstore.Store
-	Now                     func() time.Time
-	UploadURLTTL            time.Duration
-	DownloadURLTTL          time.Duration
-	UploadSessionTTL        time.Duration
-	MaximumBytes            int64
-	MultipartThresholdBytes int64
-	MultipartPartBytes      int64
-	MultipartURLBatch       int
+	DB                       *gorm.DB
+	Objects                  objectstore.Store
+	Now                      func() time.Time
+	UploadURLTTL             time.Duration
+	DownloadURLTTL           time.Duration
+	UploadSessionTTL         time.Duration
+	MaximumBytes             int64
+	MultipartThresholdBytes  int64
+	MultipartPartBytes       int64
+	MultipartURLBatch        int
+	ProjectQuotaBytes        int64
+	UserQuotaBytes           int64
+	MaxOpenUploadsPerUser    int
+	MaxOpenUploadsPerProject int
+	MaxVerifyPerUser         int
+	verifySlots              chan struct{}
+	verifyMu                 sync.Mutex
+	verifyingByUser          map[uuid.UUID]int
 }
 
 func NewAssetService(db *gorm.DB, objects objectstore.Store, uploadURLTTL,
 	downloadURLTTL, uploadSessionTTL time.Duration, maximumBytes,
 	multipartThresholdBytes, multipartPartBytes int64, multipartURLBatch int) *AssetService {
-	return &AssetService{
+	service := &AssetService{
 		DB: db, Objects: objects, Now: func() time.Time { return time.Now().UTC() },
 		UploadURLTTL: uploadURLTTL, DownloadURLTTL: downloadURLTTL,
 		UploadSessionTTL: uploadSessionTTL, MaximumBytes: maximumBytes,
 		MultipartThresholdBytes: multipartThresholdBytes,
 		MultipartPartBytes:      multipartPartBytes, MultipartURLBatch: multipartURLBatch,
 	}
+	service.ConfigureLimits(0, 0, 0, 0, 2, 1)
+	return service
+}
+
+func (s *AssetService) ConfigureLimits(projectQuotaBytes, userQuotaBytes int64,
+	maxOpenPerUser, maxOpenPerProject, verifyWorkers, maxVerifyPerUser int) {
+	s.ProjectQuotaBytes = projectQuotaBytes
+	s.UserQuotaBytes = userQuotaBytes
+	s.MaxOpenUploadsPerUser = maxOpenPerUser
+	s.MaxOpenUploadsPerProject = maxOpenPerProject
+	if verifyWorkers <= 0 {
+		verifyWorkers = 2
+	}
+	if maxVerifyPerUser <= 0 {
+		maxVerifyPerUser = 1
+	}
+	s.MaxVerifyPerUser = maxVerifyPerUser
+	s.verifySlots = make(chan struct{}, verifyWorkers)
+	s.verifyingByUser = make(map[uuid.UUID]int)
 }
 
 func (s *AssetService) now() time.Time {
@@ -111,6 +143,60 @@ func (s *AssetService) normalizedMultipartConfig() (int64, int64, int) {
 		batch = DefaultMultipartURLBatch
 	}
 	return threshold, partBytes, batch
+}
+
+func (s *AssetService) enforceUploadLimitsTx(tx *gorm.DB,
+	upload normalizedUpload) error {
+	// Serialize reservations across a user's projects without holding a table
+	// lock. PostgreSQL releases this advisory lock with the transaction.
+	if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+		"collab-upload:"+upload.ActorUserID.String()).Error; err != nil {
+		return err
+	}
+	openStatuses := []string{UploadPending, UploadUploading, UploadVerifying}
+	var userOpen, projectOpen int64
+	if err := tx.Model(&model.UploadSession{}).
+		Where("created_by = ? AND status IN ?", upload.ActorUserID, openStatuses).
+		Count(&userOpen).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&model.UploadSession{}).
+		Where("project_id = ? AND status IN ?", upload.ProjectID, openStatuses).
+		Count(&projectOpen).Error; err != nil {
+		return err
+	}
+	if s.MaxOpenUploadsPerUser > 0 && userOpen >= int64(s.MaxOpenUploadsPerUser) ||
+		s.MaxOpenUploadsPerProject > 0 && projectOpen >= int64(s.MaxOpenUploadsPerProject) {
+		return ErrUploadConcurrencyExceeded
+	}
+	var projectBytes, userBytes, userReserved, projectReserved int64
+	if err := tx.Raw(`SELECT COALESCE(SUM(blobs.bytes), 0) FROM blobs
+		WHERE blobs.id IN (
+			SELECT blob_id FROM project_assets WHERE project_id = ?
+			UNION SELECT blob_id FROM project_snapshots WHERE project_id = ?
+		)`, upload.ProjectID, upload.ProjectID).Scan(&projectBytes).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&model.Blob{}).
+		Where("created_by = ? AND status = ?", upload.ActorUserID, BlobReady).
+		Select("COALESCE(SUM(bytes), 0)").Scan(&userBytes).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&model.UploadSession{}).
+		Where("created_by = ? AND status IN ?", upload.ActorUserID, openStatuses).
+		Select("COALESCE(SUM(expected_bytes), 0)").Scan(&userReserved).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&model.UploadSession{}).
+		Where("project_id = ? AND status IN ?", upload.ProjectID, openStatuses).
+		Select("COALESCE(SUM(expected_bytes), 0)").Scan(&projectReserved).Error; err != nil {
+		return err
+	}
+	if s.ProjectQuotaBytes > 0 && upload.Bytes > s.ProjectQuotaBytes-projectBytes-projectReserved ||
+		s.UserQuotaBytes > 0 && upload.Bytes > s.UserQuotaBytes-userBytes-userReserved {
+		return ErrStorageQuotaExceeded
+	}
+	return nil
 }
 
 type PrepareAssetUploadInput struct {
@@ -324,7 +410,6 @@ func (s *AssetService) prepareUpload(ctx context.Context,
 				return err
 			}
 		}
-
 		now := s.now()
 		upload := model.UploadSession{
 			ID: normalized.UploadID, ProjectID: normalized.ProjectID,
@@ -372,6 +457,9 @@ func (s *AssetService) prepareUpload(ctx context.Context,
 			upload.Status = UploadCompleted
 			upload.CompletedAt = &now
 		} else {
+			if err := s.enforceUploadLimitsTx(tx, normalized); err != nil {
+				return err
+			}
 			threshold, preferredPartBytes, _ := s.normalizedMultipartConfig()
 			plan, err := planMultipart(upload.ExpectedBytes, threshold, preferredPartBytes)
 			if err != nil {
@@ -405,16 +493,40 @@ func (s *AssetService) CompleteAssetUpload(ctx context.Context, projectID, uploa
 	if upload.Status == UploadCompleted {
 		return s.completedAsset(ctx, upload)
 	}
+	claimed := false
+	if upload.UploadMode != UploadModeMultipart {
+		upload, err = s.claimUploadVerification(ctx, upload, actorUserID,
+			deviceID, actorSessionID, false)
+		if err != nil {
+			return CompletedAsset{}, err
+		}
+		claimed = true
+	}
+	completed := false
+	defer func() {
+		if claimed && !completed {
+			s.releaseUploadVerification(context.Background(), upload.ID)
+		}
+	}()
 	upload, alreadyVerified, err := s.assembleMultipart(ctx, upload, actorUserID,
 		deviceID, actorSessionID, false, parts)
 	if err != nil {
 		return CompletedAsset{}, err
 	}
 	if upload.Status == UploadCompleted {
+		completed = true
 		return s.completedAsset(ctx, upload)
 	}
+	if !claimed {
+		upload, err = s.claimUploadVerification(ctx, upload, actorUserID,
+			deviceID, actorSessionID, false)
+		if err != nil {
+			return CompletedAsset{}, err
+		}
+		claimed = true
+	}
 	if !alreadyVerified {
-		err = s.verifyAndPromote(ctx, upload)
+		err = s.verifyWithLimits(ctx, upload)
 	}
 	if err != nil {
 		if accessErr := s.activeActorProjectAccess(ctx, projectID, actorUserID,
@@ -429,6 +541,7 @@ func (s *AssetService) CompleteAssetUpload(ctx context.Context, projectID, uploa
 
 	stagingKey := upload.ObjectKey
 	var result CompletedAsset
+	var cleanupID uuid.UUID
 	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := s.lockActiveActorTx(tx, actorUserID, deviceID, actorSessionID); err != nil {
 			return err
@@ -445,7 +558,7 @@ func (s *AssetService) CompleteAssetUpload(ctx context.Context, projectID, uploa
 			upload = current
 			return nil
 		}
-		if err := validateOpenUpload(current, s.now()); err != nil {
+		if err := validateCompletableUpload(current, s.now()); err != nil {
 			return err
 		}
 		if err := s.authorizeUploadTx(tx, currentView, actorUserID, deviceID,
@@ -461,10 +574,14 @@ func (s *AssetService) CompleteAssetUpload(ctx context.Context, projectID, uploa
 			return err
 		}
 		now := s.now()
-		if err := tx.Model(&model.UploadSession{}).Where("id = ? AND status IN ?", current.ID,
-			[]string{UploadPending, UploadUploading}).Updates(map[string]any{
+		cleanupID, err = enqueueObjectCleanupTx(tx, stagingKey, "", false, true, now)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&model.UploadSession{}).Where("id = ? AND status = ?", current.ID,
+			UploadVerifying).Updates(map[string]any{
 			"blob_id": blob.ID, "object_key": blob.ObjectKey, "status": UploadCompleted,
-			"completed_at": now,
+			"completed_at": now, "verification_started_at": nil,
 		}).Error; err != nil {
 			return err
 		}
@@ -483,9 +600,11 @@ func (s *AssetService) CompleteAssetUpload(ctx context.Context, projectID, uploa
 			return CompletedAsset{}, err
 		}
 	}
-	// The durable row already references the server-controlled final key. A
-	// failed staging cleanup is harmless and remains eligible for object GC.
-	_ = s.Objects.Delete(ctx, stagingKey)
+	if cleanupErr := s.attemptObjectCleanup(ctx, cleanupID); cleanupErr != nil {
+		// Completion is already durable. The cleanup job retained the provider
+		// error and exact staging key for the maintenance worker.
+	}
+	completed = true
 	return result, nil
 }
 
@@ -504,16 +623,40 @@ func (s *AssetService) CompleteSnapshotUpload(ctx context.Context, projectID, up
 	if upload.Status == UploadCompleted {
 		return s.completedSnapshot(ctx, upload)
 	}
+	claimed := false
+	if upload.UploadMode != UploadModeMultipart {
+		upload, err = s.claimUploadVerification(ctx, upload, actorUserID,
+			deviceID, actorSessionID, true)
+		if err != nil {
+			return CompletedSnapshot{}, err
+		}
+		claimed = true
+	}
+	completed := false
+	defer func() {
+		if claimed && !completed {
+			s.releaseUploadVerification(context.Background(), upload.ID)
+		}
+	}()
 	upload, alreadyVerified, err := s.assembleMultipart(ctx, upload, actorUserID,
 		deviceID, actorSessionID, true, parts)
 	if err != nil {
 		return CompletedSnapshot{}, err
 	}
 	if upload.Status == UploadCompleted {
+		completed = true
 		return s.completedSnapshot(ctx, upload)
 	}
+	if !claimed {
+		upload, err = s.claimUploadVerification(ctx, upload, actorUserID,
+			deviceID, actorSessionID, true)
+		if err != nil {
+			return CompletedSnapshot{}, err
+		}
+		claimed = true
+	}
 	if !alreadyVerified {
-		err = s.verifyAndPromote(ctx, upload)
+		err = s.verifyWithLimits(ctx, upload)
 	}
 	if err != nil {
 		if accessErr := s.activeActorProjectAccess(ctx, projectID, actorUserID,
@@ -528,6 +671,7 @@ func (s *AssetService) CompleteSnapshotUpload(ctx context.Context, projectID, up
 
 	stagingKey := upload.ObjectKey
 	var result CompletedSnapshot
+	var cleanupID uuid.UUID
 	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := s.lockActiveActorTx(tx, actorUserID, deviceID, actorSessionID); err != nil {
 			return err
@@ -548,7 +692,7 @@ func (s *AssetService) CompleteSnapshotUpload(ctx context.Context, projectID, up
 			upload = current
 			return nil
 		}
-		if err := validateOpenUpload(current, s.now()); err != nil {
+		if err := validateCompletableUpload(current, s.now()); err != nil {
 			return err
 		}
 		if err := s.authorizeUploadTx(tx, view, actorUserID, deviceID,
@@ -576,10 +720,14 @@ func (s *AssetService) CompleteSnapshotUpload(ctx context.Context, projectID, up
 			return err
 		}
 		now := s.now()
-		if err := tx.Model(&model.UploadSession{}).Where("id = ? AND status IN ?", current.ID,
-			[]string{UploadPending, UploadUploading}).Updates(map[string]any{
+		cleanupID, err = enqueueObjectCleanupTx(tx, stagingKey, "", false, true, now)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&model.UploadSession{}).Where("id = ? AND status = ?", current.ID,
+			UploadVerifying).Updates(map[string]any{
 			"blob_id": blob.ID, "object_key": blob.ObjectKey, "status": UploadCompleted,
-			"completed_at": now,
+			"completed_at": now, "verification_started_at": nil,
 		}).Error; err != nil {
 			return err
 		}
@@ -615,13 +763,17 @@ func (s *AssetService) CompleteSnapshotUpload(ctx context.Context, projectID, up
 			return CompletedSnapshot{}, err
 		}
 	}
-	_ = s.Objects.Delete(ctx, stagingKey)
+	if cleanupErr := s.attemptObjectCleanup(ctx, cleanupID); cleanupErr != nil {
+		// The exact cleanup remains durable and retryable independently of the
+		// already-committed snapshot.
+	}
+	completed = true
 	return result, nil
 }
 
 func (s *AssetService) AbortUpload(ctx context.Context, projectID, uploadID,
 	actorUserID, deviceID, actorSessionID uuid.UUID) error {
-	var cleanup model.UploadSession
+	var cleanupID uuid.UUID
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := s.lockActiveActorTx(tx, actorUserID, deviceID, actorSessionID); err != nil {
 			return err
@@ -636,36 +788,29 @@ func (s *AssetService) AbortUpload(ctx context.Context, projectID, uploadID,
 		if upload.Status == UploadCompleted {
 			return ErrUploadState
 		}
-		cleanup = upload
+		abortMultipart := upload.UploadMode == UploadModeMultipart &&
+			upload.ProviderUploadID != "" && upload.MultipartState != MultipartStateAborted
+		providerUploadID := ""
+		if abortMultipart {
+			providerUploadID = upload.ProviderUploadID
+		}
+		cleanupID, err = enqueueObjectCleanupTx(tx, upload.ObjectKey,
+			providerUploadID, abortMultipart, true, s.now())
+		if err != nil {
+			return err
+		}
 		updates := map[string]any{"status": UploadAborted}
-		if upload.UploadMode == UploadModeMultipart && upload.ProviderUploadID != "" &&
-			upload.MultipartState != MultipartStateAborted {
+		if abortMultipart {
 			updates["multipart_state"] = MultipartStateAborting
-			cleanup.MultipartState = MultipartStateAborting
 		}
 		return tx.Model(&model.UploadSession{}).Where("id = ?", uploadID).Updates(updates).Error
 	})
 	if err != nil {
 		return err
 	}
-	if cleanup.ID == uuid.Nil {
-		return nil
-	}
-	if cleanup.UploadMode == UploadModeMultipart && cleanup.ProviderUploadID != "" {
-		if err := s.Objects.AbortMultipart(ctx, cleanup.ObjectKey,
-			cleanup.ProviderUploadID); err != nil {
-			return err
-		}
-	}
-	if err := s.Objects.Delete(ctx, cleanup.ObjectKey); err != nil {
-		return err
-	}
-	if cleanup.UploadMode == UploadModeMultipart && cleanup.ProviderUploadID != "" {
-		if err := s.DB.WithContext(ctx).Model(&model.UploadSession{}).
-			Where("id = ? AND status = ?", cleanup.ID, UploadAborted).
-			Update("multipart_state", MultipartStateAborted).Error; err != nil {
-			return err
-		}
+	if cleanupErr := s.attemptObjectCleanup(ctx, cleanupID); cleanupErr != nil {
+		// Abort is committed and cannot be resumed. Cleanup retries from the
+		// durable queue, so provider availability does not change this result.
 	}
 	return nil
 }
@@ -826,6 +971,9 @@ func (s *AssetService) loadUploadForWrite(ctx context.Context, projectID, upload
 	if upload.Status == UploadCompleted {
 		return upload, view, nil
 	}
+	if upload.Status == UploadVerifying {
+		return model.UploadSession{}, ProjectView{}, ErrUploadVerifying
+	}
 	if err := s.authorizeUploadTx(s.DB.WithContext(ctx), view, actorUserID,
 		deviceID, actorSessionID, snapshot); err != nil {
 		return model.UploadSession{}, ProjectView{}, err
@@ -913,6 +1061,94 @@ func (s *AssetService) activeActorProjectAccess(ctx context.Context, projectID,
 		_, err := s.projectAccess(tx, projectID, actorUserID, true)
 		return err
 	})
+}
+
+func (s *AssetService) claimUploadVerification(ctx context.Context,
+	upload model.UploadSession, actorUserID, deviceID, actorSessionID uuid.UUID,
+	snapshot bool) (model.UploadSession, error) {
+	var claimed model.UploadSession
+	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.lockActiveActorTx(tx, actorUserID, deviceID, actorSessionID); err != nil {
+			return err
+		}
+		view, err := s.projectAccess(tx, upload.ProjectID, actorUserID, true)
+		if err != nil {
+			return err
+		}
+		current, err := s.lockUploadTx(tx, upload.ProjectID, upload.ID,
+			actorUserID, deviceID)
+		if err != nil {
+			return err
+		}
+		if current.Status == UploadCompleted {
+			claimed = current
+			return nil
+		}
+		if current.Status == UploadVerifying {
+			return ErrUploadVerifying
+		}
+		if err := validateOpenUpload(current, s.now()); err != nil {
+			return err
+		}
+		if err := s.authorizeUploadTx(tx, view, actorUserID, deviceID,
+			actorSessionID, snapshot); err != nil {
+			return err
+		}
+		now := s.now()
+		result := tx.Model(&model.UploadSession{}).
+			Where("id = ? AND status IN ?", current.ID,
+				[]string{UploadPending, UploadUploading}).
+			Updates(map[string]any{"status": UploadVerifying,
+				"verification_started_at": now})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrUploadVerifying
+		}
+		current.Status = UploadVerifying
+		current.VerificationStartedAt = &now
+		claimed = current
+		return nil
+	})
+	return claimed, err
+}
+
+func (s *AssetService) releaseUploadVerification(ctx context.Context,
+	uploadID uuid.UUID) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_ = s.DB.WithContext(ctx).Model(&model.UploadSession{}).
+		Where("id = ? AND status = ?", uploadID, UploadVerifying).
+		Updates(map[string]any{"status": UploadUploading,
+			"verification_started_at": nil}).Error
+}
+
+func (s *AssetService) verifyWithLimits(ctx context.Context,
+	upload model.UploadSession) error {
+	if s.verifySlots == nil {
+		s.ConfigureLimits(s.ProjectQuotaBytes, s.UserQuotaBytes,
+			s.MaxOpenUploadsPerUser, s.MaxOpenUploadsPerProject, 2, 1)
+	}
+	s.verifyMu.Lock()
+	if s.verifyingByUser[upload.CreatedBy] >= s.MaxVerifyPerUser {
+		s.verifyMu.Unlock()
+		return ErrUploadVerifying
+	}
+	s.verifyingByUser[upload.CreatedBy]++
+	s.verifyMu.Unlock()
+	defer func() {
+		s.verifyMu.Lock()
+		s.verifyingByUser[upload.CreatedBy]--
+		s.verifyMu.Unlock()
+	}()
+	select {
+	case s.verifySlots <- struct{}{}:
+		defer func() { <-s.verifySlots }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.verifyAndPromote(ctx, upload)
 }
 
 func (s *AssetService) verifyAndPromote(ctx context.Context, upload model.UploadSession) error {
@@ -1041,6 +1277,13 @@ func (s *AssetService) linkSnapshotTx(tx *gorm.DB, project model.CloudProject,
 			!canonicalJSONEqual(existing.AssetIDs, upload.SnapshotAssetIDs) {
 			return model.ProjectSnapshot{}, ErrConflict
 		}
+		manifest, err := decodeSnapshotAssetManifest(existing.AssetIDs)
+		if err != nil {
+			return model.ProjectSnapshot{}, err
+		}
+		if err := retainSnapshotAssetReferencesTx(tx, existing, manifest); err != nil {
+			return model.ProjectSnapshot{}, err
+		}
 		return existing, nil
 	}
 	if !errors.Is(lookup.Error, gorm.ErrRecordNotFound) {
@@ -1054,6 +1297,13 @@ func (s *AssetService) linkSnapshotTx(tx *gorm.DB, project model.CloudProject,
 		CreatedBy: &createdBy, CreatedAt: s.now(),
 	}
 	if err := tx.Create(&item).Error; err != nil {
+		return model.ProjectSnapshot{}, err
+	}
+	manifest, err := decodeSnapshotAssetManifest(item.AssetIDs)
+	if err != nil {
+		return model.ProjectSnapshot{}, err
+	}
+	if err := retainSnapshotAssetReferencesTx(tx, item, manifest); err != nil {
 		return model.ProjectSnapshot{}, err
 	}
 	if preparing {
@@ -1222,6 +1472,16 @@ func validateOpenUpload(upload model.UploadSession, now time.Time) error {
 	default:
 		return ErrUploadState
 	}
+}
+
+func validateCompletableUpload(upload model.UploadSession, now time.Time) error {
+	if upload.Status != UploadVerifying {
+		return ErrUploadState
+	}
+	if !now.Before(upload.ExpiresAt) {
+		return ErrUploadExpired
+	}
+	return nil
 }
 
 func safeDisplayName(value string) (string, error) {

@@ -4,6 +4,7 @@
 
 #include <nlohmann/json_fwd.hpp>
 
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -17,6 +18,8 @@ std::optional<ProjectCommand> projectCommandFromJson(
 /// Canonical compact JSON. nlohmann::json uses sorted object keys, so the same
 /// command produces byte-identical output on every client.
 std::string serializeProjectCommand(const ProjectCommand& command);
+std::size_t serializedProjectCommandPayloadSize(
+    const ProjectCommand& command);
 std::optional<ProjectCommand> deserializeProjectCommand(
     std::string_view bytes, std::string* error = nullptr);
 

@@ -60,7 +60,9 @@ set_tests_properties(shared_mutation_sink_test PROPERTIES
 add_executable(collaboration_protocol_test collaboration_protocol_test.cpp)
 target_link_libraries(collaboration_protocol_test PRIVATE daw_controller)
 target_compile_definitions(collaboration_protocol_test PRIVATE
-    DAW_PROJECT_COMMAND_SCHEMA="${CMAKE_SOURCE_DIR}/protocol/schema/project-command-v1.schema.json")
+    DAW_PROJECT_COMMAND_SCHEMA="${CMAKE_SOURCE_DIR}/protocol/schema/project-command-v2.schema.json"
+    DAW_TAKE_MOVE_GOLDEN="${CMAKE_SOURCE_DIR}/tests/fixtures/collaboration_take_move_v2.json"
+    DAW_COMMAND_V2_GOLDEN="${CMAKE_SOURCE_DIR}/tests/fixtures/collaboration_command_v2_golden.json")
 
 add_test(NAME collaboration_protocol_test COMMAND collaboration_protocol_test)
 set_tests_properties(collaboration_protocol_test PROPERTIES

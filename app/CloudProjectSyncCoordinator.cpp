@@ -9,6 +9,7 @@
 #include "CollaborationService.hpp"
 #include "ProjectSerializer.hpp"
 #include "SnapshotRequestUploader.hpp"
+#include "collaboration/CommandJson.hpp"
 #include "collaboration/ProjectReducer.hpp"
 #include "collaboration/SharedProjectSnapshot.hpp"
 
@@ -17,6 +18,7 @@
 #include <QDir>
 #include <QFile>
 #include <QPointer>
+#include <QSet>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QThreadPool>
@@ -50,6 +52,66 @@ QString canonicalUuid(const QString& value) {
 bool provesNoActiveSession(const CloudClientError& error) {
     return error.httpStatus == 404 &&
            error.apiCode == QLatin1String("collaboration_not_found");
+}
+
+enum class JournalLookupDecision : quint8 {
+    Retire,
+    Resubmit,
+    Resync,
+};
+
+bool sameRecoveredCommand(
+    const daw::collab::ProjectCommand& journaled,
+    const CloudProjectOperation& committed) {
+    const QString projectId = canonicalUuid(committed.projectId);
+    if (projectId.isEmpty() ||
+        canonicalUuid(QString::fromStdString(journaled.meta.projectId)) !=
+            projectId ||
+        canonicalUuid(QString::fromStdString(
+            committed.command.meta.projectId)) != projectId ||
+        committed.serverSequence == 0 ||
+        committed.command.meta.serverSequence != committed.serverSequence ||
+        daw::collab::serializeProjectCommand(journaled) !=
+            daw::collab::serializeProjectCommand(committed.command)) {
+        return false;
+    }
+
+    const auto identityMatches = [](const std::string& journaledId,
+                                    const QString& committedId,
+                                    const std::string& commandId) {
+        const QString canonicalCommitted = canonicalUuid(committedId);
+        if (canonicalCommitted.isEmpty() ||
+            canonicalUuid(QString::fromStdString(commandId)) !=
+                canonicalCommitted) {
+            return false;
+        }
+        return journaledId.empty() ||
+               canonicalUuid(QString::fromStdString(journaledId)) ==
+                   canonicalCommitted;
+    };
+    return identityMatches(journaled.meta.actorId, committed.actorUserId,
+                           committed.command.meta.actorId) &&
+           identityMatches(journaled.meta.clientId, committed.actorDeviceId,
+                           committed.command.meta.clientId);
+}
+
+JournalLookupDecision decideJournalLookup(
+    const QString& expectedProjectId, quint64 expectedHead,
+    const daw::collab::ProjectCommand& journaled,
+    const CloudOperationLookup& lookup) {
+    const QString operationId =
+        QString::fromStdString(journaled.meta.operationId);
+    if (lookup.projectId != expectedProjectId ||
+        lookup.operationId != operationId ||
+        lookup.headSequence != expectedHead) {
+        return JournalLookupDecision::Resync;
+    }
+    if (!lookup.operation) return JournalLookupDecision::Resubmit;
+    if (lookup.operation->serverSequence > lookup.headSequence ||
+        !sameRecoveredCommand(journaled, *lookup.operation)) {
+        return JournalLookupDecision::Resync;
+    }
+    return JournalLookupDecision::Retire;
 }
 
 Materialization rejected(CloudSyncErrorCode code, const QString& message) {
@@ -206,16 +268,27 @@ struct CloudProjectSyncCoordinator::Impl {
     quint64 bootstrapRequest = 0;
     quint64 snapshotTransfer = 0;
     quint64 sessionRequest = 0;
+    quint64 journalLookupRequest = 0;
+    quint64 hashTaskGeneration = 0;
     bool connectIfLive = true;
     bool resumeConnectedRoom = false;
     std::shared_ptr<CloudProjectBootstrap> bootstrap;
     std::unique_ptr<SnapshotRequestUploader> snapshotRequests;
+    QVector<daw::collab::ProjectCommand> journalLookups;
+    QVector<daw::collab::ProjectCommand> recoveryCommands;
+    QSet<QString> recoveryOutstanding;
+    QSet<QString> recoverySubmitted;
+    qsizetype journalLookupIndex = 0;
+    QString installedCanonicalHash;
+    QList<daw::AssetRef> installedAssets;
+    CloudProjectRole installedRole = CloudProjectRole::Viewer;
+    bool installedOffline = false;
 
     explicit Impl(CloudProjectSyncCoordinator* owner) : q(owner) {
         snapshotDirectory = QDir(QStandardPaths::writableLocation(
                                      QStandardPaths::CacheLocation))
                                 .filePath(QStringLiteral(
-                                    "collaboration/snapshot-staging-v1"));
+                                    "collaboration/snapshot-staging-v2"));
         if (!QDir().mkpath(snapshotDirectory)) snapshotDirectory.clear();
         projectCacheRoot = CloudProjectCache::defaultRootDirectory();
     }
@@ -224,6 +297,7 @@ struct CloudProjectSyncCoordinator::Impl {
         return phase == CloudSyncPhase::FetchingBootstrap ||
                phase == CloudSyncPhase::DownloadingSnapshot ||
                phase == CloudSyncPhase::ReplayingOperations ||
+               phase == CloudSyncPhase::ReconcilingPending ||
                phase == CloudSyncPhase::CheckingLiveSession;
     }
 
@@ -234,16 +308,80 @@ struct CloudProjectSyncCoordinator::Impl {
     }
 
     void cancelRequests() {
+        ++hashTaskGeneration;
         if (projects && bootstrapRequest != 0)
             projects->cancel(bootstrapRequest);
         if (projects && sessionRequest != 0)
             projects->cancel(sessionRequest);
+        if (projects && journalLookupRequest != 0)
+            projects->cancel(journalLookupRequest);
         if (transfers && snapshotTransfer != 0)
             transfers->cancel(snapshotTransfer);
         bootstrapRequest = 0;
         snapshotTransfer = 0;
         sessionRequest = 0;
+        journalLookupRequest = 0;
         bootstrap.reset();
+        journalLookups.clear();
+        journalLookupIndex = 0;
+        recoveryCommands.clear();
+        recoveryOutstanding.clear();
+        recoverySubmitted.clear();
+    }
+
+    void computeRequestedHash(const QString& roundId,
+                              const QString& sessionId,
+                              quint64 serverSequence,
+                              qint64 deadlineMs) {
+        if (!bridge || !service || roundId.isEmpty() || sessionId.isEmpty() ||
+            service->projectId() != projectId ||
+            service->sessionId() != sessionId || deadlineMs <= 0) return;
+        auto snapshot = bridge->confirmedSnapshotAt(serverSequence);
+        if (!snapshot) {
+            bridge->requireResync(QStringLiteral(
+                "Hash verification requires an exact confirmed project"));
+            return;
+        }
+        const quint64 task = ++hashTaskGeneration;
+        const QString taskProject = projectId;
+        QPointer<CloudProjectSyncCoordinator> guard(q);
+        QThreadPool::globalInstance()->start(
+            [guard, task, taskProject, sessionId, serverSequence,
+             snapshot = std::move(*snapshot)]() mutable {
+                QString digest;
+                std::string bytes;
+                if (daw::collab::serializeSharedProjectSnapshot(snapshot,
+                                                                 bytes)) {
+                    digest = QString::fromLatin1(QCryptographicHash::hash(
+                        QByteArray(bytes.data(), qsizetype(bytes.size())),
+                        QCryptographicHash::Sha256).toHex());
+                }
+                QCoreApplication* application = QCoreApplication::instance();
+                if (!application) return;
+                QMetaObject::invokeMethod(
+                    application,
+                    [guard, task, taskProject, sessionId, serverSequence,
+                     digest] {
+                        if (!guard ||
+                            guard->m_impl->hashTaskGeneration != task ||
+                            !guard->m_impl->service ||
+                            guard->m_impl->service->projectId() != taskProject ||
+                            guard->m_impl->service->sessionId() != sessionId ||
+                            guard->m_impl->service->bootstrapServerSequence() !=
+                                serverSequence) {
+                            return;
+                        }
+                        if (digest.isEmpty() ||
+                            !guard->m_impl->service
+                                 ->installVerifiedBootstrapState(
+                                     taskProject, serverSequence, digest) ||
+                            !guard->m_impl->service->sendSnapshotHash()) {
+                            guard->m_impl->bridge->requireResync(QStringLiteral(
+                                "Project hash could not be verified"));
+                        }
+                    },
+                    Qt::QueuedConnection);
+            });
     }
 
     void fail(CloudSyncError error) {
@@ -263,15 +401,24 @@ struct CloudProjectSyncCoordinator::Impl {
                   false});
             return generation;
         }
-        if (active() && projectId == normalized) return generation;
+        if (active() && projectId == normalized && !fromResync)
+            return generation;
+
+        if (service->projectId() != normalized &&
+            bridge->pendingOperationCount() != 0) {
+            ++generation;
+            fail({CloudSyncErrorCode::InstallRejected,
+                  QStringLiteral(
+                      "Wait for pending cloud edits before opening another project"),
+                  true});
+            return generation;
+        }
 
         cancelRequests();
         ++generation;
         projectId = normalized;
         connectIfLive = shouldConnect;
         resumeConnectedRoom = fromResync;
-        if (service->projectId() != projectId)
-            service->setProjectId(projectId, false);
         setPhase(CloudSyncPhase::FetchingBootstrap);
         bootstrapRequest = projects->bootstrapProject(projectId, 0, 500);
         return generation;
@@ -382,6 +529,150 @@ struct CloudProjectSyncCoordinator::Impl {
             });
     }
 
+    void finishInstalledProject() {
+        emit q->synchronizedProject(
+            projectId, service->bootstrapServerSequence(),
+            installedCanonicalHash, installedRole);
+        if (!installedOffline)
+            emit q->projectAssetsDiscovered(projectId, installedAssets);
+
+        if (installedOffline) {
+            service->trustedOfflineProjectOpened();
+            setPhase(CloudSyncPhase::Ready);
+            emit q->noActiveSession(projectId);
+            return;
+        }
+
+        if (resumeConnectedRoom) {
+            setPhase(CloudSyncPhase::Ready);
+            service->sendSnapshotHash();
+            attemptRecoverySubmit();
+            return;
+        }
+        if (!connectIfLive) {
+            setPhase(CloudSyncPhase::Ready);
+            return;
+        }
+        setPhase(CloudSyncPhase::CheckingLiveSession);
+        sessionRequest = projects->getActiveSession(projectId);
+    }
+
+    void finishJournalLookups() {
+        journalLookupRequest = 0;
+        journalLookups.clear();
+        journalLookupIndex = 0;
+        recoveryOutstanding.clear();
+        recoverySubmitted.clear();
+        for (const daw::collab::ProjectCommand& command : recoveryCommands) {
+            recoveryOutstanding.insert(
+                QString::fromStdString(command.meta.operationId));
+        }
+        service->setPendingRecoveryBlocked(
+            !recoveryOutstanding.isEmpty());
+        finishInstalledProject();
+    }
+
+    void lookupNextJournalOperation() {
+        if (journalLookupIndex >= journalLookups.size()) {
+            finishJournalLookups();
+            return;
+        }
+        const daw::collab::ProjectCommand& command =
+            journalLookups.at(journalLookupIndex);
+        journalLookupRequest = projects->lookupOperation(
+            projectId, QString::fromStdString(command.meta.operationId));
+    }
+
+    void startJournalReconciliation() {
+        recoveryCommands.clear();
+        journalLookupIndex = 0;
+        if (journalLookups.isEmpty()) {
+            service->setPendingRecoveryBlocked(false);
+            finishInstalledProject();
+            return;
+        }
+        service->setPendingRecoveryBlocked(true);
+        setPhase(CloudSyncPhase::ReconcilingPending);
+        lookupNextJournalOperation();
+    }
+
+    void journalLookupReady(quint64 requestId,
+                            const CloudOperationLookup& lookup) {
+        if (requestId != journalLookupRequest ||
+            journalLookupIndex >= journalLookups.size()) return;
+        const daw::collab::ProjectCommand& command =
+            journalLookups.at(journalLookupIndex);
+        const QString operationId =
+            QString::fromStdString(command.meta.operationId);
+        journalLookupRequest = 0;
+        const JournalLookupDecision decision = decideJournalLookup(
+            projectId, service->bootstrapServerSequence(), command, lookup);
+        if (decision == JournalLookupDecision::Resync) {
+            bridge->requireResync(QStringLiteral(
+                "Recovered operation conflicts with the server log"));
+            return;
+        }
+        if (decision == JournalLookupDecision::Retire) {
+            if (!bridge->retireJournaledOperation(projectId, operationId)) {
+                fail({CloudSyncErrorCode::InstallRejected,
+                      QStringLiteral(
+                          "Confirmed pending operation could not be retired"),
+                      true});
+                return;
+            }
+        } else {
+            recoveryCommands.push_back(command);
+        }
+        ++journalLookupIndex;
+        lookupNextJournalOperation();
+    }
+
+    void journalLookupFailed(quint64 requestId,
+                             const CloudClientError& error) {
+        if (requestId != journalLookupRequest) return;
+        journalLookupRequest = 0;
+        fail({CloudSyncErrorCode::InstallRejected,
+              QStringLiteral("Pending cloud edits could not be verified"),
+              error.retryable});
+    }
+
+    void attemptRecoverySubmit() {
+        if (!service || !bridge || recoveryOutstanding.isEmpty() ||
+            !service->canSubmitRecoveryOperations()) return;
+        for (const daw::collab::ProjectCommand& command : recoveryCommands) {
+            const QString operationId =
+                QString::fromStdString(command.meta.operationId);
+            if (!recoveryOutstanding.contains(operationId) ||
+                recoverySubmitted.contains(operationId)) continue;
+            const LocalOperationResult submitted =
+                bridge->resubmitJournaled(command);
+            if (submitted.code == LocalOperationCode::Submitted ||
+                submitted.code == LocalOperationCode::Duplicate) {
+                recoverySubmitted.insert(operationId);
+                continue;
+            }
+            if (submitted.code == LocalOperationCode::TransportUnavailable)
+                return;
+            bridge->requireResync(QStringLiteral(
+                "A recovered pending edit requires project resync"));
+            return;
+        }
+    }
+
+    void recoveryObserved(const QString& operationId) {
+        if (!recoveryOutstanding.remove(operationId)) return;
+        recoverySubmitted.remove(operationId);
+        if (!recoveryOutstanding.isEmpty()) return;
+        recoveryCommands.clear();
+        service->setPendingRecoveryBlocked(false);
+    }
+
+    void recoveryRejected(const QString& operationId) {
+        if (!recoveryOutstanding.contains(operationId)) return;
+        bridge->requireResync(QStringLiteral(
+            "A recovered pending edit conflicted with the server"));
+    }
+
     void install(quint64 taskGeneration, Materialization result,
                  bool offline) {
         if (taskGeneration != generation ||
@@ -393,9 +684,36 @@ struct CloudProjectSyncCoordinator::Impl {
             fail(std::move(result.error));
             return;
         }
+        const QString previousProjectId = service->projectId();
+        const quint64 previousSequence = service->bootstrapServerSequence();
+        const QString previousHash = service->bootstrapStateHash();
+        const bool previousRecoveryBlocked =
+            service->pendingRecoveryBlocked();
+        const bool bindingChanged = previousProjectId != projectId;
+        const auto restorePreviousBinding = [&] {
+            if (bindingChanged) {
+                if (previousProjectId.isEmpty()) {
+                    service->clearProject();
+                } else {
+                    service->setProjectId(previousProjectId, false);
+                    if (!previousHash.isEmpty())
+                        service->installVerifiedBootstrapState(
+                            previousProjectId, previousSequence, previousHash);
+                    else
+                        service->installVerifiedBootstrapSequence(
+                            previousProjectId, previousSequence);
+                    service->reconnectNow();
+                }
+            }
+            service->setPendingRecoveryBlocked(previousRecoveryBlocked);
+        };
+        // The old binding and engine document remain untouched until the
+        // candidate bytes have passed snapshot/replay/hash validation above.
+        if (bindingChanged) service->setProjectId(projectId, false);
         if (!service->installVerifiedBootstrapState(
                 projectId, result.document.confirmedSequence,
                 result.canonicalHash)) {
+            restorePreviousBinding();
             fail({CloudSyncErrorCode::InstallRejected,
                   QStringLiteral("Cloud project changed during synchronization"),
                   true});
@@ -405,11 +723,22 @@ struct CloudProjectSyncCoordinator::Impl {
         const QList<daw::AssetRef> referencedAssets =
             offline ? QList<daw::AssetRef>{}
                     : collectCloudProjectAssets(result.document.project);
+        journalLookups = bridge->journaledOperations(projectId);
+        if (journalLookups.size() != bridge->journalEntryCount(projectId)) {
+            restorePreviousBinding();
+            fail({CloudSyncErrorCode::InstallRejected,
+                  QStringLiteral(
+                      "Pending operation journal is invalid or incomplete"),
+                  false});
+            return;
+        }
+        service->setPendingRecoveryBlocked(!journalLookups.isEmpty());
         const daw::collab::GatewayUpdate installed =
             bridge->replaceConfirmedSnapshot(
                 std::move(result.document),
                 service->bootstrapServerSequence());
         if (!installed.accepted()) {
+            restorePreviousBinding();
             fail({CloudSyncErrorCode::InstallRejected,
                   QStringLiteral("Cloud project could not be installed"), true});
             return;
@@ -434,31 +763,15 @@ struct CloudProjectSyncCoordinator::Impl {
                   true});
             return;
         }
-        emit q->synchronizedProject(
-            projectId, service->bootstrapServerSequence(),
-            result.canonicalHash,
-            offline ? CloudProjectRole::Viewer : bootstrapRole);
-        if (!offline)
-            emit q->projectAssetsDiscovered(projectId, referencedAssets);
-
+        installedCanonicalHash = result.canonicalHash;
+        installedAssets = referencedAssets;
+        installedRole = offline ? CloudProjectRole::Viewer : bootstrapRole;
+        installedOffline = offline;
         if (offline) {
-            service->trustedOfflineProjectOpened();
-            setPhase(CloudSyncPhase::Ready);
-            emit q->noActiveSession(projectId);
+            finishInstalledProject();
             return;
         }
-
-        if (resumeConnectedRoom) {
-            setPhase(CloudSyncPhase::Ready);
-            service->sendSnapshotHash();
-            return;
-        }
-        if (!connectIfLive) {
-            setPhase(CloudSyncPhase::Ready);
-            return;
-        }
-        setPhase(CloudSyncPhase::CheckingLiveSession);
-        sessionRequest = projects->getActiveSession(projectId);
+        startJournalReconciliation();
     }
 
     CloudProjectRole bootstrapRole = CloudProjectRole::Viewer;
@@ -489,6 +802,11 @@ CloudProjectSyncCoordinator::CloudProjectSyncCoordinator(
                 [this](quint64 requestId,
                        const CloudProjectBootstrap& bootstrap) {
             m_impl->bootstrapReady(requestId, bootstrap);
+        });
+        connect(projects, &CloudProjectClient::operationLookupReceived, this,
+                [this](quint64 requestId,
+                       const CloudOperationLookup& lookup) {
+            m_impl->journalLookupReady(requestId, lookup);
         });
         connect(projects, &CloudProjectClient::sessionStateReceived, this,
                 [this](quint64 requestId, CloudRequestKind kind,
@@ -531,6 +849,9 @@ CloudProjectSyncCoordinator::CloudProjectSyncCoordinator(
                         QStringLiteral("Active session could not be verified"),
                         error.retryable);
                 }
+            } else if (requestId == m_impl->journalLookupRequest &&
+                       kind == CloudRequestKind::LookupOperation) {
+                m_impl->journalLookupFailed(requestId, error);
             }
         });
     }
@@ -552,6 +873,16 @@ CloudProjectSyncCoordinator::CloudProjectSyncCoordinator(
         });
     }
     if (service) {
+        connect(service, &CollaborationService::hashRoundRequested, this,
+                [this](const QString& roundId, const QString& sessionId,
+                       quint64 serverSequence, qint64 deadlineMs) {
+            m_impl->computeRequestedHash(roundId, sessionId, serverSequence,
+                                         deadlineMs);
+        });
+        connect(service, &CollaborationService::stateChanged, this,
+                [this](CollaborationState, const QString&) {
+            m_impl->attemptRecoverySubmit();
+        });
         connect(service, &CollaborationService::resyncRequired, this,
                 [this](const QJsonObject&) {
             if (!m_impl->service || m_impl->service->projectId().isEmpty())
@@ -560,6 +891,26 @@ CloudProjectSyncCoordinator::CloudProjectSyncCoordinator(
         });
     }
     if (bridge) {
+        connect(bridge,
+                &CollaborationCommandBridge::operationDurablyObserved,
+                this, [this](const QString& operationId, quint64, bool) {
+            m_impl->recoveryObserved(operationId);
+        });
+        connect(bridge, &CollaborationCommandBridge::operationRejected,
+                this, [this](const QString& operationId, const QString&,
+                             const QString&) {
+            m_impl->recoveryRejected(operationId);
+        });
+        connect(bridge, &CollaborationCommandBridge::pendingOperationsDropped,
+                this, [this](const QStringList& operationIds) {
+            for (const QString& operationId : operationIds) {
+                if (!m_impl->recoveryOutstanding.contains(operationId))
+                    continue;
+                m_impl->bridge->requireResync(QStringLiteral(
+                    "Recovered pending edits require project resync"));
+                break;
+            }
+        });
         connect(bridge, &CollaborationCommandBridge::resyncRequired, this,
                 [this](quint64, quint64, const QString&) {
             if (!m_impl->service || m_impl->service->projectId().isEmpty())
@@ -712,6 +1063,78 @@ bool checkCloudProjectSyncCoordinatorForTest(QString* error) {
         result.canonicalHash.size() != 64) {
         return fail(QStringLiteral("verified bootstrap did not materialize"));
     }
+
+    // Crash before commit: an authoritative absence at the installed head
+    // resubmits the original opId. Crash after commit: only the exact command
+    // is retired. Reusing the id for any other command is a conflict.
+    daw::collab::ProjectCommand journaled = command;
+    journaled.meta.actorId.clear();
+    journaled.meta.clientId.clear();
+    journaled.meta.serverSequence = 0;
+    CloudOperationLookup lookup;
+    lookup.projectId = projectId;
+    lookup.operationId = operationId;
+    lookup.headSequence = 1;
+    if (decideJournalLookup(projectId, 1, journaled, lookup) !=
+        JournalLookupDecision::Resubmit) {
+        return fail(QStringLiteral(
+            "lost ACK before commit did not preserve the opId for resubmit"));
+    }
+    operation.actorUserId =
+        QString::fromStdString(command.meta.actorId);
+    operation.actorDeviceId =
+        QString::fromStdString(command.meta.clientId);
+    lookup.operation = operation;
+    if (decideJournalLookup(projectId, 1, journaled, lookup) !=
+        JournalLookupDecision::Retire) {
+        return fail(QStringLiteral(
+            "lost ACK after commit did not recognize the exact command"));
+    }
+    const auto conflicts = [&](daw::collab::ProjectCommand changed,
+                               const QString& label) {
+        CloudOperationLookup mismatched = lookup;
+        mismatched.operation->command = std::move(changed);
+        if (decideJournalLookup(projectId, 1, journaled, mismatched) ==
+            JournalLookupDecision::Resync) {
+            return true;
+        }
+        if (error)
+            *error = QStringLiteral("Recovered opId accepted changed %1")
+                         .arg(label);
+        return false;
+    };
+    daw::collab::ProjectCommand changed = command;
+    changed.body = daw::collab::SetProjectScalar{
+        daw::collab::ProjectScalar::Tempo, 138.0};
+    if (!conflicts(std::move(changed), QStringLiteral("payload")))
+        return false;
+    changed = command;
+    changed.meta.transactionId =
+        "99999999-9999-4999-8999-999999999999";
+    if (!conflicts(std::move(changed), QStringLiteral("transaction")))
+        return false;
+    changed = command;
+    changed.meta.baseServerSequence = 1;
+    if (!conflicts(std::move(changed), QStringLiteral("base sequence")))
+        return false;
+    changed = command;
+    changed.meta.schemaVersion += 1;
+    if (!conflicts(std::move(changed), QStringLiteral("schema")))
+        return false;
+    changed = command;
+    changed.conditions.push_back(daw::collab::FieldWriterIs{
+        "project:tempo", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"});
+    if (!conflicts(std::move(changed), QStringLiteral("preconditions")))
+        return false;
+    CloudOperationLookup wrongActor = lookup;
+    wrongActor.operation->actorUserId =
+        QStringLiteral("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    if (decideJournalLookup(projectId, 1, journaled, wrongActor) !=
+        JournalLookupDecision::Resync) {
+        return fail(QStringLiteral(
+            "Recovered opId accepted inconsistent actor identity"));
+    }
+
     bootstrap.snapshot->assetIds = QStringList{
         QStringLiteral("88888888-8888-4888-8888-888888888888")};
     if (materialize(bootstrap, path).accepted)

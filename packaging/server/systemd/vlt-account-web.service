@@ -1,0 +1,32 @@
+[Unit]
+Description=VLT public web application
+After=network-online.target vlt-account-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vltaccount
+Group=vltaccount
+WorkingDirectory=/opt/vlt-account-platform/current/web
+Environment=NODE_ENV=production
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3100
+Environment=VLT_API_ORIGIN=http://127.0.0.1:8080
+ExecStart=/opt/vlt-account-platform/current/web/start
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

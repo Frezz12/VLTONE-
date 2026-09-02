@@ -2,6 +2,7 @@
 #include "ChannelStripPreset.hpp"
 #include "ProjectSerializer.hpp"
 #include "collaboration/CollaborationState.hpp"
+#include "collaboration/ProjectReducer.hpp"
 #include "plugins/PluginConvert.hpp"
 
 #include "Internal/SampleDecoder.hpp"
@@ -15,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -279,6 +281,98 @@ constexpr double kMinNoteBeats = 1.0 / 32.0;
 constexpr int kMinPitch = 0;
 constexpr int kMaxPitch = 127;
 
+std::string lowercaseExtension(const fs::path& path) {
+    std::string extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char value) {
+                       return char(std::tolower(value));
+                   });
+    if (!extension.empty() && extension.front() == '.')
+        extension.erase(extension.begin());
+    return extension;
+}
+
+std::string audioContentType(const std::string& extension) {
+    if (extension == "wav" || extension == "wave") return "audio/wav";
+    if (extension == "flac") return "audio/flac";
+    if (extension == "aif" || extension == "aiff" || extension == "aifc")
+        return "audio/aiff";
+    if (extension == "mp3") return "audio/mpeg";
+    if (extension == "ogg" || extension == "oga" || extension == "opus")
+        return "audio/ogg";
+    if (extension == "caf") return "audio/x-caf";
+    if (extension == "w64") return "audio/wav";
+    return {};
+}
+
+std::optional<collab::SharedAssetMutationRequest> sharedAudioRequest(
+    const std::string& sourcePath) {
+    if (sourcePath.empty()) return std::nullopt;
+    std::error_code error;
+    fs::path path = platform::pathFromUtf8(sourcePath);
+    if (path.is_relative()) path = fs::absolute(path, error);
+    if (error) return std::nullopt;
+    const fs::path canonical = fs::weakly_canonical(path, error);
+    if (!error) path = canonical;
+    error.clear();
+    if (!fs::is_regular_file(path, error) || error) return std::nullopt;
+
+    audio::platform::AudioFileInfo info;
+    if (!audio::platform::probeAudioFile(platform::pathToUtf8(path), info) ||
+        info.sampleRate <= 0.0 || info.channels == 0 || info.frames == 0) {
+        return std::nullopt;
+    }
+    const std::string extension = lowercaseExtension(path);
+    const std::string contentType = audioContentType(extension);
+    const std::string displayName = platform::pathToUtf8(path.filename());
+    if (contentType.empty() || displayName.empty()) return std::nullopt;
+
+    collab::SharedAssetMutationRequest request;
+    request.requestId = newUuid();
+    request.assetId = newUuid();
+    request.sourcePath = platform::pathToUtf8(path);
+    request.displayName = displayName;
+    request.contentType = contentType;
+    request.codec = extension;
+    request.sampleRate = info.sampleRate;
+    request.channels = std::uint32_t(info.channels);
+    request.frames = std::uint64_t(info.frames);
+    return request;
+}
+
+AssetRef expectedSharedAudioAsset(
+    const collab::SharedAssetMutationRequest& request) {
+    AssetRef asset;
+    asset.assetId = request.assetId;
+    asset.kind = AssetKind::Audio;
+    asset.originalName = request.displayName;
+    asset.mimeType = request.contentType;
+    asset.codec = request.codec;
+    asset.sampleRate = request.sampleRate;
+    asset.channels = request.channels;
+    asset.frames = request.frames;
+    return asset;
+}
+
+bool completeSharedAudioAsset(const AssetRef& asset,
+                              const AssetRef& expected) {
+    const bool hashReady = asset.sha256.size() == 64 &&
+        std::all_of(asset.sha256.begin(), asset.sha256.end(),
+                    [](unsigned char value) {
+                        return (value >= '0' && value <= '9') ||
+                               (value >= 'a' && value <= 'f');
+                    });
+    return hashReady && asset.byteSize > 0 &&
+           asset.assetId == expected.assetId &&
+           asset.kind == AssetKind::Audio &&
+           asset.originalName == expected.originalName &&
+           asset.mimeType == expected.mimeType &&
+           asset.codec == expected.codec &&
+           asset.sampleRate == expected.sampleRate &&
+           asset.channels == expected.channels &&
+           asset.frames == expected.frames;
+}
+
 /// The subset of a clip's editor state that is baked into its audio.
 ///
 /// Everything a clip's editor can move that is *not* here — the stretch, the
@@ -296,6 +390,497 @@ plugins::sampler::PrecomputeSettings clipPrecomputeSettings(
     out.normalize = s.normalize; out.fadeStereo = s.fadeStereo;
     out.reverse = s.reverse; out.swapStereo = s.swapStereo;
     return out;
+}
+
+void appendCommand(const std::shared_ptr<collab::BatchCommand>& batch,
+                   collab::CommandBody body) {
+    collab::ProjectCommand child;
+    child.body = std::move(body);
+    batch->commands.push_back(std::move(child));
+}
+
+bool supportedSharedBuiltin(const InsertModel& insert) {
+    return insert.format == PluginFormat::Internal &&
+           (insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
+            insert.uid == "daw.gravity");
+}
+
+bool cleanSharedInsert(const InsertModel& source, InsertModel& copy,
+                       bool mintId) {
+    if (!source.isLoaded() || !supportedSharedBuiltin(source)) return false;
+    copy = source;
+    if (mintId) copy.id = newUuid();
+    copy.path.clear();
+    copy.stateFile.clear();
+    copy.rightStateFile.clear();
+    copy.editorChannel = PluginEditorChannel::Left;
+    copy.windowX = copy.windowY = copy.windowWidth = copy.windowHeight = 0;
+    copy.windowOpen = false;
+    return true;
+}
+
+void setSharedSampleBinding(InsertModel& insert, const AssetRef& asset) {
+    auto found = std::find_if(
+        insert.assetBindings.begin(), insert.assetBindings.end(),
+        [](const PluginAssetBinding& binding) {
+            return binding.key == "sample";
+        });
+    PluginAssetBinding binding{"sample", asset, true};
+    if (found == insert.assetBindings.end())
+        insert.assetBindings.push_back(std::move(binding));
+    else
+        *found = std::move(binding);
+}
+
+bool appendSharedPluginCopy(
+    const std::shared_ptr<collab::BatchCommand>& batch,
+    const collab::PluginLocation& location, const InsertModel& source,
+    const std::string& afterId, InsertModel* copied = nullptr) {
+    InsertModel clean;
+    if (!cleanSharedInsert(source, clean, true)) return false;
+    appendCommand(batch, collab::AddPluginInsert{location, clean, afterId});
+    if (copied) *copied = clean;
+    return true;
+}
+
+bool appendSharedChainReplacement(
+    const std::shared_ptr<collab::BatchCommand>& batch,
+    const collab::PluginLocation& location,
+    const std::vector<InsertModel>& current,
+    const std::vector<EngineController::ChainSlotSnapshot>& source) {
+    for (const InsertModel& insert : current) {
+        if (!insert.isLoaded() || !supportedSharedBuiltin(insert)) return false;
+        appendCommand(batch,
+                      collab::DeletePluginInsert{location, insert.id});
+    }
+    std::string anchor;
+    for (const EngineController::ChainSlotSnapshot& slot : source) {
+        InsertModel clean;
+        if (!appendSharedPluginCopy(batch, location, slot.model, anchor,
+                                    &clean)) {
+            return false;
+        }
+        anchor = clean.id;
+    }
+    return true;
+}
+
+bool appendSharedClip(
+    const std::shared_ptr<collab::BatchCommand>& batch,
+    const std::string& trackId, const ClipModel& clip,
+    const std::string& afterId) {
+    appendCommand(batch, collab::AddClip{
+        trackId, clip.id, clip.kind, clip.name, clip.startSeconds,
+        clip.durationSeconds, clip.color, afterId});
+    appendCommand(batch, collab::SetClipProperty{
+        trackId, clip.id, collab::ClipProperty::OffsetSeconds,
+        clip.offsetSeconds});
+    appendCommand(batch, collab::SetClipProperty{
+        trackId, clip.id, collab::ClipProperty::Gain, double(clip.gain)});
+    appendCommand(batch, collab::SetClipProperty{
+        trackId, clip.id, collab::ClipProperty::Pan, double(clip.pan)});
+    appendCommand(batch, collab::SetClipProperty{
+        trackId, clip.id, collab::ClipProperty::Muted, clip.muted});
+    appendCommand(batch, collab::SetClipProperty{
+        trackId, clip.id, collab::ClipProperty::CompCrossfadeMs,
+        clip.compCrossfadeMs});
+    appendCommand(batch, collab::SetClipFade{
+        trackId, clip.id, clip.fadeInSeconds, clip.fadeOutSeconds});
+    appendCommand(batch, collab::SetClipFadeCurve{
+        trackId, clip.id, collab::ClipEdge::In, clip.fadeInCurve});
+    appendCommand(batch, collab::SetClipFadeCurve{
+        trackId, clip.id, collab::ClipEdge::Out, clip.fadeOutCurve});
+    appendCommand(batch, collab::SetClipFadeMode{
+        trackId, clip.id, collab::ClipEdge::In, clip.fadeInMode});
+    appendCommand(batch, collab::SetClipFadeMode{
+        trackId, clip.id, collab::ClipEdge::Out, clip.fadeOutMode});
+    if (!clip.patternClipId.empty()) {
+        appendCommand(batch, collab::SetClipPatternOwner{
+            trackId, clip.id, clip.patternClipId});
+    }
+    if (clip.kind == ClipKind::Audio) {
+        appendCommand(batch, collab::SetClipMusicalAnalysis{
+            trackId, clip.id, clip.musicalAnalysis});
+        if (!clip.asset.empty()) {
+            appendCommand(batch,
+                          collab::SetClipAsset{trackId, clip.id, clip.asset});
+        }
+        appendCommand(batch, collab::SetClipSampleEdit{
+            trackId, clip.id, clip.sampleEdit});
+    }
+
+    std::string pluginAnchor;
+    for (const InsertModel& insert : clip.inserts) {
+        InsertModel clean;
+        if (!cleanSharedInsert(insert, clean, false)) return false;
+        appendCommand(batch, collab::AddPluginInsert{
+            {collab::PluginChain::Clip, trackId, clip.id}, clean,
+            pluginAnchor});
+        pluginAnchor = clean.id;
+    }
+
+    std::string noteAnchor;
+    for (const NoteModel& note : clip.notes) {
+        appendCommand(batch, collab::UpsertMidiNote{
+            trackId, clip.id, note, noteAnchor});
+        noteAnchor = note.id;
+    }
+    std::string laneAnchor;
+    for (const ControllerLane& lane : clip.lanes) {
+        appendCommand(batch, collab::AddControllerLane{
+            trackId, clip.id, lane.id, lane.name,
+            {lane.cc, lane.parameterId, lane.slotId}, lane.defaultValue,
+            laneAnchor});
+        laneAnchor = lane.id;
+        std::string pointAnchor;
+        for (const AutomationPoint& point : lane.points) {
+            appendCommand(batch, collab::UpsertAutomationPoint{
+                trackId, clip.id, lane.id, point, pointAnchor});
+            pointAnchor = point.id;
+        }
+    }
+    if (clip.kind == ClipKind::Automation) {
+        appendCommand(batch, collab::SetAutomationTarget{
+            trackId, clip.id, clip.automation.target});
+        appendCommand(batch, collab::SetAutomationDefault{
+            trackId, clip.id, clip.automation.defaultValue});
+        appendCommand(batch, collab::SetAutomationActive{
+            trackId, clip.id, clip.automation.active});
+        std::string pointAnchor;
+        for (const AutomationPoint& point : clip.automation.points) {
+            appendCommand(batch, collab::UpsertAutomationPoint{
+                trackId, clip.id, {}, point, pointAnchor});
+            pointAnchor = point.id;
+        }
+    }
+
+    std::string takeAnchor;
+    for (TakeModel take : clip.takes) {
+        if (!take.notes.empty()) return false;
+        take.filePath.clear();
+        appendCommand(batch,
+                      collab::AddTake{trackId, clip.id, take, takeAnchor});
+        takeAnchor = take.id;
+    }
+    std::string segmentAnchor;
+    for (const CompSegment& segment : clip.comp) {
+        appendCommand(batch, collab::UpsertCompSegment{
+            trackId, clip.id, segment, segmentAnchor});
+        segmentAnchor = segment.id;
+    }
+    return true;
+}
+
+bool appendMidiClipContentsDiff(
+    const std::shared_ptr<collab::BatchCommand>& batch,
+    const std::string& trackId, const ClipModel& before,
+    const ClipModel& after) {
+    if (before.kind != ClipKind::Midi || after.kind != ClipKind::Midi ||
+        before.id != after.id || before.lanes.size() != after.lanes.size()) {
+        return false;
+    }
+    std::unordered_set<std::string> noteIds;
+    for (const NoteModel& note : after.notes) noteIds.insert(note.id);
+    for (const NoteModel& note : before.notes) {
+        if (!noteIds.contains(note.id)) {
+            appendCommand(batch, collab::DeleteMidiNote{
+                trackId, before.id, note.id});
+        }
+    }
+    std::string noteAnchor;
+    for (const NoteModel& note : after.notes) {
+        appendCommand(batch, collab::UpsertMidiNote{
+            trackId, before.id, note, noteAnchor});
+        noteAnchor = note.id;
+    }
+    for (std::size_t lane = 0; lane < before.lanes.size(); ++lane) {
+        if (before.lanes[lane].id != after.lanes[lane].id) return false;
+        std::unordered_set<std::string> pointIds;
+        for (const AutomationPoint& point : after.lanes[lane].points)
+            pointIds.insert(point.id);
+        for (const AutomationPoint& point : before.lanes[lane].points) {
+            if (!pointIds.contains(point.id)) {
+                appendCommand(batch, collab::DeleteAutomationPoint{
+                    trackId, before.id, before.lanes[lane].id, point.id});
+            }
+        }
+        std::string pointAnchor;
+        for (const AutomationPoint& point : after.lanes[lane].points) {
+            appendCommand(batch, collab::UpsertAutomationPoint{
+                trackId, before.id, before.lanes[lane].id, point,
+                pointAnchor});
+            pointAnchor = point.id;
+        }
+    }
+    return true;
+}
+
+void mintClipIdentities(
+    ClipModel& clip,
+    const std::unordered_map<std::string, std::string>& trackSlotIds,
+    bool withInserts) {
+    clip.id = newUuid();
+    std::unordered_map<std::string, std::string> slotIds = trackSlotIds;
+    if (withInserts) {
+        for (InsertModel& insert : clip.inserts) {
+            const std::string before = insert.id;
+            insert.id = newUuid();
+            slotIds[before] = insert.id;
+        }
+    } else {
+        clip.inserts.clear();
+    }
+    for (NoteModel& note : clip.notes) note.id = newUuid();
+    for (ControllerLane& lane : clip.lanes) {
+        lane.id = newUuid();
+        if (const auto found = slotIds.find(lane.slotId);
+            found != slotIds.end()) {
+            lane.slotId = found->second;
+        }
+        for (AutomationPoint& point : lane.points) point.id = newUuid();
+    }
+    if (const auto found = slotIds.find(clip.automation.target.slotId);
+        found != slotIds.end()) {
+        clip.automation.target.slotId = found->second;
+    }
+    for (AutomationPoint& point : clip.automation.points)
+        point.id = newUuid();
+
+    std::unordered_map<std::string, std::string> takeIds;
+    for (TakeModel& take : clip.takes) {
+        const std::string before = take.id;
+        take.id = newUuid();
+        takeIds[before] = take.id;
+        take.filePath.clear();
+        for (NoteModel& note : take.notes) note.id = newUuid();
+    }
+    for (CompSegment& segment : clip.comp) {
+        segment.id = newUuid();
+        if (const auto found = takeIds.find(segment.takeId);
+            found != takeIds.end()) {
+            segment.takeId = found->second;
+        }
+    }
+}
+
+TrackModel mintTrackCopy(const TrackModel& source, bool withInserts) {
+    TrackModel copy = source;
+    copy.id = newUuid();
+    copy.soloed = false;
+    std::unordered_map<std::string, std::string> slotIds;
+    for (SendModel& send : copy.sends) send.id = newUuid();
+
+    if (copy.instrument.isLoaded()) {
+        const std::string before = copy.instrument.id;
+        copy.instrument.id = newUuid();
+        slotIds[before] = copy.instrument.id;
+    }
+    if (withInserts) {
+        const auto mintSlots = [&](std::vector<InsertModel>& inserts) {
+            for (InsertModel& insert : inserts) {
+                const std::string before = insert.id;
+                insert.id = newUuid();
+                slotIds[before] = insert.id;
+            }
+        };
+        mintSlots(copy.inserts);
+        mintSlots(copy.samplerFx.inserts);
+    } else {
+        copy.inserts.clear();
+        copy.samplerFx.inserts.clear();
+    }
+    if (const auto found = slotIds.find(copy.samplerFx.ownerInstrumentId);
+        found != slotIds.end()) {
+        copy.samplerFx.ownerInstrumentId = found->second;
+    }
+    for (ClipModel& clip : copy.clips)
+        mintClipIdentities(clip, slotIds, withInserts);
+    return copy;
+}
+
+bool appendSharedTrackContents(
+    const std::shared_ptr<collab::BatchCommand>& batch,
+    const TrackModel& track) {
+    appendCommand(batch, collab::SetTrackProperty{
+        track.id, collab::TrackProperty::Volume, double(track.volume)});
+    appendCommand(batch, collab::SetTrackProperty{
+        track.id, collab::TrackProperty::Pan, double(track.pan)});
+    appendCommand(batch, collab::SetTrackProperty{
+        track.id, collab::TrackProperty::Muted, track.muted});
+    appendCommand(batch, collab::SetTrackProperty{
+        track.id, collab::TrackProperty::Mono, track.mono});
+    if (track.kind == TrackKind::Folder) {
+        appendCommand(batch, collab::SetTrackProperty{
+            track.id, collab::TrackProperty::Summing, track.summing});
+    }
+    if (!track.outputBusId.empty()) {
+        appendCommand(batch,
+                      collab::SetTrackOutput{track.id, track.outputBusId});
+    }
+    std::string sendAnchor;
+    for (const SendModel& send : track.sends) {
+        appendCommand(batch,
+                      collab::AddSend{track.id, send, sendAnchor});
+        sendAnchor = send.id;
+    }
+    if (track.instrument.isLoaded()) {
+        InsertModel clean;
+        if (!cleanSharedInsert(track.instrument, clean, false)) return false;
+        appendCommand(batch, collab::AddPluginInsert{
+            {collab::PluginChain::Instrument, track.id, {}}, clean, {}});
+        appendCommand(batch, collab::SetSamplerFxLevels{
+            track.id, clean.id, double(track.samplerFx.volume),
+            double(track.samplerFx.pan)});
+    }
+    std::string pluginAnchor;
+    for (const InsertModel& insert : track.samplerFx.inserts) {
+        InsertModel clean;
+        if (!cleanSharedInsert(insert, clean, false)) return false;
+        appendCommand(batch, collab::AddPluginInsert{
+            {collab::PluginChain::SamplerFx, track.id, {}}, clean,
+            pluginAnchor});
+        pluginAnchor = clean.id;
+    }
+    pluginAnchor.clear();
+    for (const InsertModel& insert : track.inserts) {
+        InsertModel clean;
+        if (!cleanSharedInsert(insert, clean, false)) return false;
+        appendCommand(batch, collab::AddPluginInsert{
+            {collab::PluginChain::Track, track.id, {}}, clean,
+            pluginAnchor});
+        pluginAnchor = clean.id;
+    }
+    std::string clipAnchor;
+    for (const ClipModel& clip : track.clips) {
+        if (!appendSharedClip(batch, track.id, clip, clipAnchor)) return false;
+        clipAnchor = clip.id;
+    }
+    return true;
+}
+
+bool appendSharedTrack(
+    const std::shared_ptr<collab::BatchCommand>& batch,
+    const TrackModel& track, const std::string& afterId) {
+    appendCommand(batch, collab::AddTrack{
+        track.id, track.kind, track.name, track.color, track.parentId,
+        afterId});
+    return appendSharedTrackContents(batch, track);
+}
+
+bool sharedBatchApplies(const ProjectModel& project,
+                        const std::shared_ptr<collab::BatchCommand>& batch) {
+    collab::SharedProjectDocument scratch;
+    scratch.project = project;
+    collab::ProjectCommand command;
+    command.meta.operationId = newUuid();
+    command.body = batch;
+    return collab::ProjectReducer::apply(scratch, command).accepted();
+}
+
+void appendCompDiff(const std::shared_ptr<collab::BatchCommand>& batch,
+                    const std::string& trackId, const std::string& clipId,
+                    const std::vector<CompSegment>& before,
+                    const std::vector<CompSegment>& after);
+
+collab::PluginLocation channelPluginLocation(const std::string& channelId) {
+    if (channelId == EngineController::kMasterChannelId)
+        return {collab::PluginChain::Master, {}, {}};
+    return {collab::PluginChain::Track, channelId, {}};
+}
+
+std::string previousIdAt(const std::vector<InsertModel>& values,
+                         std::size_t index) {
+    return index == 0 || values.empty() ? std::string()
+                                        : values[std::min(index, values.size()) - 1].id;
+}
+
+bool sameInsertTopology(const InsertModel& left, const InsertModel& right) {
+    return left.id == right.id && left.format == right.format &&
+           left.uid == right.uid && left.channelMode == right.channelMode &&
+           left.sidechainTrackId == right.sidechainTrackId;
+}
+
+bool sameInsertChainTopology(const std::vector<InsertModel>& left,
+                             const std::vector<InsertModel>& right) {
+    return left.size() == right.size() &&
+           std::equal(left.begin(), left.end(), right.begin(),
+                      sameInsertTopology);
+}
+
+bool hasLoadedInsert(const TrackModel& track) {
+    const auto anyLoaded = [](const std::vector<InsertModel>& slots) {
+        return std::any_of(slots.begin(), slots.end(),
+                           [](const InsertModel& slot) {
+                               return slot.isLoaded();
+                           });
+    };
+    if (track.instrument.isLoaded() || anyLoaded(track.samplerFx.inserts) ||
+        anyLoaded(track.inserts)) {
+        return true;
+    }
+    return std::any_of(track.clips.begin(), track.clips.end(),
+                       [&](const ClipModel& clip) {
+                           return anyLoaded(clip.inserts);
+                       });
+}
+
+bool sameTrackTopology(const TrackModel& left, const TrackModel& right) {
+    if (left.id != right.id || left.kind != right.kind ||
+        left.summing != right.summing || left.parentId != right.parentId ||
+        left.outputBusId != right.outputBusId ||
+        left.samplerFx.ownerInstrumentId !=
+            right.samplerFx.ownerInstrumentId ||
+        !sameInsertTopology(left.instrument, right.instrument) ||
+        !sameInsertChainTopology(left.samplerFx.inserts,
+                                 right.samplerFx.inserts) ||
+        !sameInsertChainTopology(left.inserts, right.inserts) ||
+        left.sends.size() != right.sends.size()) {
+        return false;
+    }
+    if ((hasLoadedInsert(left) || hasLoadedInsert(right)) &&
+        left.mono != right.mono) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.sends.size(); ++index) {
+        const SendModel& a = left.sends[index];
+        const SendModel& b = right.sends[index];
+        if (a.id != b.id || a.destinationTrackId != b.destinationTrackId ||
+            a.preFader != b.preFader) {
+            return false;
+        }
+    }
+
+    const auto clipFx = [](const TrackModel& track) {
+        std::vector<const ClipModel*> result;
+        for (const ClipModel& clip : track.clips) {
+            if (!clip.inserts.empty()) result.push_back(&clip);
+        }
+        return result;
+    };
+    const auto leftFx = clipFx(left);
+    const auto rightFx = clipFx(right);
+    if (leftFx.size() != rightFx.size()) return false;
+    for (std::size_t index = 0; index < leftFx.size(); ++index) {
+        if (leftFx[index]->id != rightFx[index]->id ||
+            !sameInsertChainTopology(leftFx[index]->inserts,
+                                     rightFx[index]->inserts)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool sameCollaborationTopology(const ProjectModel& left,
+                               const ProjectModel& right) {
+    if (!sameInsertChainTopology(left.masterInserts, right.masterInserts) ||
+        left.tracks.size() != right.tracks.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.tracks.size(); ++index) {
+        if (!sameTrackTopology(left.tracks[index], right.tracks[index]))
+            return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -398,7 +983,85 @@ EngineController::EngineController()
         });
 }
 
-EngineController::~EngineController() { shutdown(); }
+collab::SharedMutationResult EngineController::submitSharedMutation(
+    collab::CommandBody body, std::string undoLabel,
+    std::optional<std::string> transactionId) {
+    if (!m_sharedMutationSink)
+        return collab::SharedMutationResult::LocalFallback;
+    return m_sharedMutationSink->submit(collab::SharedMutationRequest{
+        std::move(body), std::move(undoLabel), std::move(transactionId)});
+}
+
+collab::SharedMutationResult EngineController::prepareSharedAssetMutation(
+    collab::SharedAssetMutationRequest request,
+    PendingSharedAssetMutation pending) {
+    if (!cloudProjectBound() || !m_sharedAssetMutationSink ||
+        request.requestId.empty() || request.assetId.empty() ||
+        request.sourcePath.empty() || !pending.complete ||
+        pending.expected.assetId != request.assetId) {
+        return collab::SharedMutationResult::Blocked;
+    }
+
+    const std::string requestId = request.requestId;
+    const auto [_, inserted] = m_pendingSharedAssetMutations.emplace(
+        requestId, std::move(pending));
+    if (!inserted) return collab::SharedMutationResult::Blocked;
+
+    const auto result = m_sharedAssetMutationSink->prepare(std::move(request));
+    if (result == collab::SharedMutationResult::Submitted) return result;
+
+    // A sink is allowed to reject synchronously. It may also complete
+    // synchronously in a deterministic test, hence the second lookup.
+    const auto found = m_pendingSharedAssetMutations.find(requestId);
+    if (found != m_pendingSharedAssetMutations.end()) {
+        if (!found->second.cleanupPath.empty()) {
+            std::error_code error;
+            fs::remove(platform::pathFromUtf8(found->second.cleanupPath), error);
+        }
+        m_pendingSharedAssetMutations.erase(found);
+    }
+    return collab::SharedMutationResult::Blocked;
+}
+
+collab::SharedMutationResult EngineController::completeSharedAssetMutation(
+    const std::string& requestId, const AssetRef& verifiedAsset) {
+    const auto found = m_pendingSharedAssetMutations.find(requestId);
+    if (found == m_pendingSharedAssetMutations.end())
+        return collab::SharedMutationResult::Blocked;
+
+    PendingSharedAssetMutation pending = std::move(found->second);
+    m_pendingSharedAssetMutations.erase(found);
+    const bool valid = completeSharedAudioAsset(verifiedAsset, pending.expected);
+    const auto result = valid
+        ? pending.complete(*this, verifiedAsset)
+        : collab::SharedMutationResult::Blocked;
+    if (!pending.cleanupPath.empty()) {
+        std::error_code error;
+        fs::remove(platform::pathFromUtf8(pending.cleanupPath), error);
+    }
+    return result;
+}
+
+void EngineController::cancelSharedAssetMutation(
+    const std::string& requestId) {
+    const auto found = m_pendingSharedAssetMutations.find(requestId);
+    if (found == m_pendingSharedAssetMutations.end()) return;
+    if (!found->second.cleanupPath.empty()) {
+        std::error_code error;
+        fs::remove(platform::pathFromUtf8(found->second.cleanupPath), error);
+    }
+    m_pendingSharedAssetMutations.erase(found);
+}
+
+bool EngineController::cloudProjectBound() {
+    return m_sharedMutationSink && m_sharedMutationSink->handlesCloudBinding();
+}
+
+EngineController::~EngineController() {
+    while (!m_pendingSharedAssetMutations.empty())
+        cancelSharedAssetMutation(m_pendingSharedAssetMutations.begin()->first);
+    shutdown();
+}
 
 audio::Result EngineController::initialize(double sampleRate,
                                            uint32_t bufferSize,
@@ -630,6 +1293,10 @@ bool EngineController::setClipMusicalAnalysis(
     const ClipMusicalAnalysisModel& analysis, const std::string& label) {
     ClipModel* clip = findClip(trackId, clipId);
     if (!clip || clip->kind != ClipKind::Audio) return false;
+    const auto shared = submitSharedMutation(
+        collab::SetClipMusicalAnalysis{trackId, clipId, analysis}, label);
+    if (shared == collab::SharedMutationResult::Submitted) return true;
+    if (shared == collab::SharedMutationResult::Blocked) return false;
     const ClipMusicalAnalysisModel before = clip->musicalAnalysis;
     clip->musicalAnalysis = analysis;
     auto apply = [this, trackId, clipId](const ClipMusicalAnalysisModel& value) {
@@ -1927,6 +2594,7 @@ plugins::PluginNode* EngineController::editorInsertNode(
 // ── Graph construction ─────────────────────────────────────────────────────
 
 audio::Result EngineController::rebuildGraph(bool reconfigurePlugins) {
+    ++m_graphRebuildCount;
     engine::AudioGraph& graph = m_engine.graph();
 
     // A fresh topology every time, but the *same node objects* wherever the
@@ -2404,6 +3072,15 @@ void EngineController::newProject() {
     rebuildGraph();
 }
 
+void EngineController::setProjectName(std::string name) {
+    if (m_project.name == name) return;
+    const auto shared = submitSharedMutation(
+        collab::SetProjectScalar{collab::ProjectScalar::Name, name},
+        "Rename Project");
+    if (shared != collab::SharedMutationResult::LocalFallback) return;
+    m_project.name = std::move(name);
+}
+
 audio::Result EngineController::saveProject(const std::string& packageDir) {
     m_project.sampleRate = m_sampleRate;
     const audio::Result stateResult = writePluginState(m_project, packageDir);
@@ -2632,9 +3309,11 @@ cloud::CloudPublicationCapture EngineController::captureCloudPublicationV1(
                               return binding.key == "sample";
                           });
             AssetRef sampleAsset;
-            (void)capture.bindLocalFile(
-                sampleAsset, preferredSample, state.samplerPath,
-                AssetKind::Audio, state.location + "/binding:sample");
+            if (!state.samplerPath.empty()) {
+                (void)capture.bindLocalFile(
+                    sampleAsset, preferredSample, state.samplerPath,
+                    AssetKind::Audio, state.location + "/binding:sample");
+            }
             if (!sampleAsset.empty()) {
                 slot.assetBindings.push_back(
                     PluginAssetBinding{"sample", sampleAsset, true});
@@ -3371,6 +4050,236 @@ audio::Result EngineController::materializeCollaborationProject(
     return built;
 }
 
+audio::Result EngineController::projectCollaborationChange(
+    ProjectModel runtimeDocument, const collab::ChangeImpact& impact) {
+    ProjectModel previousProject = std::move(m_project);
+    const bool topologyChanged =
+        !sameCollaborationTopology(previousProject, runtimeDocument);
+    bool pluginLayoutChanged = std::any_of(
+        impact.fieldKeys.begin(), impact.fieldKeys.end(),
+        [](const std::string& key) { return key.ends_with(":channelMode"); });
+    if (!pluginLayoutChanged) {
+        for (const std::string& trackId : impact.trackIds) {
+            const TrackModel* before = previousProject.findTrack(trackId);
+            const TrackModel* after = runtimeDocument.findTrack(trackId);
+            if (before && after && before->mono != after->mono &&
+                (hasLoadedInsert(*before) || hasLoadedInsert(*after))) {
+                pluginLayoutChanged = true;
+                break;
+            }
+        }
+    }
+    const auto previousChannels =
+        topologyChanged ? m_channels : decltype(m_channels){};
+    m_project = std::move(runtimeDocument);
+    inheritAutomationLaneColors(m_project);
+
+    const auto syncTransport = [this] {
+        engine::Transport& transport = m_engine.transport();
+        transport.setTempo(m_project.tempo);
+        transport.setTimeSignature(m_project.timeSigNumerator,
+                                   m_project.timeSigDenominator);
+    };
+    if (impact.transportProjectionChanged) syncTransport();
+
+    if (topologyChanged) {
+        // One outer reducer batch owns one topology publication.  Built-in V1
+        // plugins expose their state through the inline parameter mirror, so
+        // no second latency/reconciliation rebuild is required here.
+        audio::Result built = rebuildGraph(pluginLayoutChanged);
+        if (!built) {
+            m_project = std::move(previousProject);
+            m_channels = previousChannels;
+            syncTransport();
+            (void)rebuildGraph(pluginLayoutChanged);
+            return built;
+        }
+    } else {
+        if (impact.masterGainChanged && m_masterFader) {
+            m_masterFader->setGain(m_project.masterVolume);
+            m_masterFader->setPan(m_project.masterPan);
+        }
+
+        const bool clipsChanged =
+            !impact.clipIds.empty() || !impact.takeIds.empty() ||
+            !impact.compSegmentIds.empty() ||
+            (impact.transportProjectionChanged && impact.timelineChanged);
+        const bool notesChanged =
+            !impact.noteIds.empty() || !impact.controllerLaneIds.empty() ||
+            clipsChanged;
+        const bool automationChanged =
+            !impact.automationPointIds.empty() ||
+            !impact.controllerLaneIds.empty() || clipsChanged;
+
+        const SoloState solo = soloState();
+        for (const std::string& trackId : impact.trackIds) {
+            const TrackModel* track = m_project.findTrack(trackId);
+            if (!track) continue;
+            syncTrackGain(*track, solo);
+
+            auto live = m_channels.find(trackId);
+            if (live != m_channels.end()) {
+                const std::size_t sendCount =
+                    std::min(track->sends.size(), live->second.sends.size());
+                for (std::size_t index = 0; index < sendCount; ++index) {
+                    if (live->second.sends[index]) {
+                        const SendModel& send = track->sends[index];
+                        live->second.sends[index]->setLevel(
+                            send.enabled ? send.level : 0.0f);
+                    }
+                }
+                if (live->second.samplerFader) {
+                    live->second.samplerFader->setGain(track->samplerFx.volume);
+                    live->second.samplerFader->setPan(track->samplerFx.pan);
+                }
+            }
+
+            if (clipsChanged) syncTrackClips(*track);
+            if (clipsChanged && live != m_channels.end()) {
+                for (const ClipModel& clip : track->clips) {
+                    if (!impact.clipIds.contains(clip.id)) continue;
+                    const auto clipFx = live->second.clipFx.find(clip.id);
+                    if (clipFx == live->second.clipFx.end() ||
+                        !clipFx->second.fader) {
+                        continue;
+                    }
+                    clipFx->second.fader->setGain(clip.gain);
+                    clipFx->second.fader->setPan(clip.pan);
+                }
+            }
+            if (notesChanged) syncTrackNotes(*track);
+            if (automationChanged) {
+                syncTrackAutomation(*track);
+                syncTrackLevelAutomation(*track);
+            }
+        }
+        if (impact.timelineChanged) updateTimelineDuration();
+    }
+
+    const auto locateInsert = [](const ProjectModel& project,
+                                 const std::string& insertId)
+        -> std::pair<std::string, const InsertModel*> {
+        const auto findIn = [&](const std::vector<InsertModel>& slots)
+            -> const InsertModel* {
+            const auto found = std::find_if(
+                slots.begin(), slots.end(), [&](const InsertModel& slot) {
+                    return slot.id == insertId;
+                });
+            return found == slots.end() ? nullptr : &*found;
+        };
+        if (const InsertModel* slot = findIn(project.masterInserts))
+            return {std::string(kMasterChannelId), slot};
+        for (const TrackModel& track : project.tracks) {
+            if (track.instrument.id == insertId)
+                return {track.id, &track.instrument};
+            if (const InsertModel* slot = findIn(track.samplerFx.inserts))
+                return {track.id, slot};
+            for (const ClipModel& clip : track.clips) {
+                if (const InsertModel* slot = findIn(clip.inserts))
+                    return {track.id, slot};
+            }
+            if (const InsertModel* slot = findIn(track.inserts))
+                return {track.id, slot};
+        }
+        return {};
+    };
+
+    std::set<std::string> pluginIds = impact.pluginInsertIds;
+    if (topologyChanged) {
+        const auto appendIds = [&](const std::vector<InsertModel>& slots) {
+            for (const InsertModel& slot : slots) {
+                if (!slot.id.empty()) pluginIds.insert(slot.id);
+            }
+        };
+        appendIds(m_project.masterInserts);
+        for (const TrackModel& track : m_project.tracks) {
+            if (!track.instrument.id.empty())
+                pluginIds.insert(track.instrument.id);
+            appendIds(track.samplerFx.inserts);
+            for (const ClipModel& clip : track.clips) appendIds(clip.inserts);
+            appendIds(track.inserts);
+        }
+    }
+
+    struct PluginRuntimeProjection {
+        std::string channelId;
+        const InsertModel* slot = nullptr;
+        bool loadLeft = false;
+        bool loadRight = false;
+        std::vector<std::uint8_t> leftState;
+        std::vector<std::uint8_t> rightState;
+    };
+    std::vector<PluginRuntimeProjection> pluginProjections;
+    pluginProjections.reserve(pluginIds.size());
+    constexpr std::uintmax_t kMaximumStateBytes = 64u * 1024u * 1024u;
+    const auto readState = [&](const std::string& path,
+                               std::vector<std::uint8_t>& bytes) {
+        if (path.empty()) return;
+        const fs::path source = platform::pathFromUtf8(path);
+        if (!source.is_absolute()) return;
+        std::error_code error;
+        const std::uintmax_t size = fs::file_size(source, error);
+        if (error || size == 0 || size > kMaximumStateBytes) return;
+        std::ifstream input(source, std::ios::binary);
+        if (!input) return;
+        bytes.resize(static_cast<std::size_t>(size));
+        input.read(reinterpret_cast<char*>(bytes.data()),
+                   std::streamsize(bytes.size()));
+        if (!input.good() && !input.eof()) bytes.clear();
+    };
+    for (const std::string& insertId : pluginIds) {
+        const auto [channelId, slot] = locateInsert(m_project, insertId);
+        if (!slot) continue;
+        const auto [previousChannelId, before] =
+            locateInsert(previousProject, insertId);
+        PluginRuntimeProjection projection;
+        projection.channelId = channelId;
+        projection.slot = slot;
+        projection.loadLeft = topologyChanged || !before ||
+                              previousChannelId != channelId ||
+                              before->stateFile != slot->stateFile;
+        projection.loadRight = topologyChanged || !before ||
+                               previousChannelId != channelId ||
+                               before->rightStateFile != slot->rightStateFile;
+        if (projection.loadLeft) readState(slot->stateFile, projection.leftState);
+        if (projection.loadRight)
+            readState(slot->rightStateFile, projection.rightState);
+        pluginProjections.push_back(std::move(projection));
+    }
+
+    if (!pluginProjections.empty()) {
+        const engine::RealtimeEngine::RenderGate gate(m_engine);
+        for (const PluginRuntimeProjection& projection : pluginProjections) {
+            InsertSlot* live =
+                liveInsertSlot(projection.channelId, projection.slot->id);
+            if (!live) continue;
+            const InsertModel& slot = *projection.slot;
+            const auto apply = [&](plugins::PluginNode* node,
+                                   bool loadState,
+                                   const std::vector<std::uint8_t>& state,
+                                   const std::vector<InsertParameter>& values) {
+                if (!node || !node->instance()) return;
+                node->setBypassed(slot.bypassed);
+                node->setMix(slot.mix);
+                if (loadState && !state.empty())
+                    (void)node->instance()->loadState(state);
+                applyStoredParameters(*node, values);
+            };
+            apply(live->node.get(), projection.loadLeft,
+                  projection.leftState, slot.parameters);
+            if (slot.channelMode == PluginChannelMode::DualMono) {
+                apply(live->rightNode.get(), projection.loadRight,
+                      projection.rightState,
+                      slot.rightParameters.empty() ? slot.parameters
+                                                   : slot.rightParameters);
+            }
+        }
+        m_recoveryPluginStateCache.clear();
+        m_recoveryPluginCaptureCursor = 0;
+    }
+    return audio::Result::ok();
+}
+
 audio::Result EngineController::restoreRecoveryProject(
     ProjectModel snapshot, const std::string& recoveryDir,
     const std::string& originalPackageDir) {
@@ -3499,6 +4408,84 @@ audio::Result EngineController::importProjectTemplateTracks(
                                    "template contains no tracks");
     }
     remapTemplateTrackIds(imported);
+
+    if (cloudProjectBound()) {
+        const double bar = beatsToSeconds(
+            double(std::max(1, m_project.timeSigNumerator)) * 4.0 /
+                double(std::max(1, m_project.timeSigDenominator)),
+            m_project.tempo);
+        for (TrackModel& track : imported.tracks) {
+            if (track.kind != TrackKind::Pattern) continue;
+            ClipModel owner;
+            owner.id = newUuid();
+            owner.name = track.name;
+            owner.kind = ClipKind::Pattern;
+            owner.durationSeconds = bar;
+            owner.color = track.color;
+            track.clips.push_back(std::move(owner));
+        }
+        inheritAutomationLaneColors(imported);
+
+        const auto hasUnstagedState = [](const InsertModel& insert) {
+            return insert.isLoaded() &&
+                   ((!insert.stateFile.empty() && insert.stateAsset.empty()) ||
+                    (!insert.rightStateFile.empty() &&
+                     insert.rightStateAsset.empty()));
+        };
+        for (const TrackModel& track : imported.tracks) {
+            if (hasUnstagedState(track.instrument) ||
+                std::any_of(track.samplerFx.inserts.begin(),
+                            track.samplerFx.inserts.end(), hasUnstagedState) ||
+                std::any_of(track.inserts.begin(), track.inserts.end(),
+                            hasUnstagedState)) {
+                outTrackIds.clear();
+                return audio::Result::fail(
+                    audio::EngineError::InvalidArgument,
+                    "template plugin state must be uploaded before cloud import");
+            }
+        }
+
+        auto batch = std::make_shared<collab::BatchCommand>();
+        std::string anchor = m_project.tracks.empty()
+                                 ? std::string()
+                                 : m_project.tracks.back().id;
+        outTrackIds.reserve(imported.tracks.size());
+        for (const TrackModel& track : imported.tracks) {
+            appendCommand(batch, collab::AddTrack{
+                track.id, track.kind, track.name, track.color, {}, anchor});
+            anchor = track.id;
+            outTrackIds.push_back(track.id);
+        }
+        for (const TrackModel& track : imported.tracks) {
+            if (!appendSharedTrackContents(batch, track)) {
+                outTrackIds.clear();
+                return audio::Result::fail(
+                    audio::EngineError::InvalidArgument,
+                    "template contains unsupported shared plugin state");
+            }
+        }
+        for (const TrackModel& track : imported.tracks) {
+            if (!track.parentId.empty()) {
+                appendCommand(batch,
+                              collab::SetTrackParent{track.id,
+                                                     track.parentId});
+            }
+        }
+        if (!sharedBatchApplies(m_project, batch)) {
+            outTrackIds.clear();
+            return audio::Result::fail(
+                audio::EngineError::InvalidArgument,
+                "template cannot be represented as one shared batch");
+        }
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)},
+            "Add Tracks from Template");
+        if (result == collab::SharedMutationResult::Submitted)
+            return audio::Result::ok();
+        outTrackIds.clear();
+        return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                   "cloud template import was blocked");
+    }
 
     const ProjectModel before = m_project;
     outTrackIds.reserve(imported.tracks.size());
@@ -3711,6 +4698,10 @@ double EngineController::durationSeconds() const {
 // change over on the same block instead of whenever each was told separately.
 void EngineController::setTempo(double bpm) {
     if (bpm <= 0.0 || m_project.tempo == bpm) return;
+    const auto shared = submitSharedMutation(
+        collab::SetProjectScalar{collab::ProjectScalar::Tempo, bpm},
+        "Set Tempo");
+    if (shared != collab::SharedMutationResult::LocalFallback) return;
     const double previous = m_project.tempo;
     m_project.tempo = bpm;
     m_engine.transport().setTempo(bpm);
@@ -3811,7 +4802,8 @@ collab::SharedMutationResult EngineController::setTimeSignature(
 }
 
 void EngineController::restoreProject(const ProjectModel& snapshot,
-                                      const std::string& label) {
+                                       const std::string& label) {
+    if (cloudProjectBound()) return;
     const ProjectModel before = m_project;
     auto apply = [this](const ProjectModel& state) {
         m_project = state;
@@ -3829,8 +4821,9 @@ void EngineController::restoreProject(const ProjectModel& snapshot,
 }
 
 void EngineController::commitProjectGesture(const ProjectModel& before,
-                                            std::size_t undoDepthBefore,
-                                            const std::string& label) {
+                                             std::size_t undoDepthBefore,
+                                             const std::string& label) {
+    if (cloudProjectBound()) return;
     // Some complex gestures use ordinary commands while live (region splitting
     // and the eraser are the two examples). Their internal entries are not the
     // user's actions, so replace them with the exact document endpoints.
@@ -3925,6 +4918,15 @@ std::string EngineController::addTrack(TrackKind kind, const std::string& name) 
     model.kind = kind;
     model.name = name.empty() ? defaultTrackName(kind) : name;
     model.color = defaultTrackColor(kind);
+    const std::string afterId = m_project.tracks.empty()
+        ? std::string()
+        : m_project.tracks.back().id;
+    const auto shared = submitSharedMutation(
+        collab::AddTrack{model.id, model.kind, model.name, model.color, {},
+                         afterId},
+        "Add Track");
+    if (shared == collab::SharedMutationResult::Submitted) return model.id;
+    if (shared == collab::SharedMutationResult::Blocked) return {};
     return appendTrack(std::move(model));
 }
 
@@ -3938,6 +4940,21 @@ std::string EngineController::addFolder(bool summing, const std::string& name) {
     model.name = !name.empty() ? name : (summing ? "Group" : "Folder");
     model.color = defaultTrackColor(summing ? TrackKind::Group
                                             : TrackKind::Folder);
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        appendCommand(batch, collab::AddTrack{
+            model.id, model.kind, model.name, model.color, {},
+            m_project.tracks.empty() ? std::string()
+                                     : m_project.tracks.back().id});
+        if (summing) {
+            appendCommand(batch, collab::SetTrackProperty{
+                model.id, collab::TrackProperty::Summing, true});
+        }
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Add Folder");
+        return result == collab::SharedMutationResult::Submitted ? model.id
+                                                                 : std::string{};
+    }
     return appendTrack(std::move(model));
 }
 
@@ -3963,6 +4980,22 @@ std::string EngineController::addPattern(const std::string& name) {
         m_project.tempo);
     clip.color = model.color;
     model.clips.push_back(std::move(clip));
+    if (cloudProjectBound()) {
+        const ClipModel& patternClip = model.clips.front();
+        auto batch = std::make_shared<collab::BatchCommand>();
+        appendCommand(batch, collab::AddTrack{
+            model.id, model.kind, model.name, model.color, {},
+            m_project.tracks.empty() ? std::string()
+                                     : m_project.tracks.back().id});
+        appendCommand(batch, collab::AddClip{
+            model.id, patternClip.id, patternClip.kind, patternClip.name,
+            patternClip.startSeconds, patternClip.durationSeconds,
+            patternClip.color, {}});
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Add Pattern");
+        return result == collab::SharedMutationResult::Submitted ? model.id
+                                                                 : std::string{};
+    }
     return appendTrack(std::move(model));
 }
 
@@ -3986,6 +5019,14 @@ std::string EngineController::addPatternClip(const std::string& patternTrackId,
                                              1, m_project.timeSigDenominator)),
                                      m_project.tempo);
     clip.color = pattern->color;
+    const auto shared = submitSharedMutation(
+        collab::AddClip{patternTrackId, clip.id, clip.kind, clip.name,
+                        clip.startSeconds, clip.durationSeconds, clip.color,
+                        pattern->clips.empty() ? std::string()
+                                               : pattern->clips.back().id},
+        "Add Pattern Clip");
+    if (shared == collab::SharedMutationResult::Submitted) return clip.id;
+    if (shared == collab::SharedMutationResult::Blocked) return {};
     pattern->clips.push_back(clip);
     updateTimelineDuration();
 
@@ -4012,6 +5053,85 @@ std::string EngineController::addPatternInstrument(
         return {};
     }
 
+    if (cloudProjectBound()) {
+        InsertModel instrument;
+        instrument.id = newUuid();
+        applyDescriptor(instrument, descriptor);
+        InsertModel clean;
+        if (!cleanSharedInsert(instrument, clean, false) ||
+            clean.uid != "daw.sampler") {
+            return {};
+        }
+
+        const double resolvedStart = std::max(0.0, startSeconds);
+        double resolvedLength = beatsToSeconds(
+            double(std::max(1, m_project.timeSigNumerator)), m_project.tempo);
+        auto batch = std::make_shared<collab::BatchCommand>();
+        std::string patternClipId;
+        for (const ClipModel& candidate : pattern->clips) {
+            if (candidate.kind != ClipKind::Pattern) continue;
+            const double end = candidate.startSeconds +
+                               candidate.durationSeconds;
+            if (resolvedStart + 1e-9 < candidate.startSeconds ||
+                resolvedStart >= end - 1e-9) {
+                continue;
+            }
+            patternClipId = candidate.id;
+            resolvedLength = std::max(kMinClipSeconds, end - resolvedStart);
+            break;
+        }
+        if (patternClipId.empty()) {
+            ClipModel owner;
+            owner.id = newUuid();
+            owner.name = pattern->name;
+            owner.kind = ClipKind::Pattern;
+            owner.startSeconds = resolvedStart;
+            owner.durationSeconds = resolvedLength;
+            owner.color = pattern->color;
+            patternClipId = owner.id;
+            if (!appendSharedClip(
+                    batch, patternId, owner,
+                    pattern->clips.empty() ? std::string()
+                                           : pattern->clips.back().id)) {
+                return {};
+            }
+        }
+
+        TrackModel lane;
+        lane.id = newUuid();
+        lane.kind = TrackKind::Instrument;
+        lane.name = descriptor.name.empty() ? std::string("Instrument")
+                                             : descriptor.name;
+        lane.color = defaultTrackColor(lane.kind);
+        lane.parentId = patternId;
+        lane.outputBusId = patternId;
+        lane.instrument = std::move(clean);
+        lane.samplerFx.ownerInstrumentId = lane.instrument.id;
+        ClipModel clip;
+        clip.id = newUuid();
+        clip.name = lane.name;
+        clip.kind = ClipKind::Midi;
+        clip.patternClipId = patternClipId;
+        clip.startSeconds = resolvedStart;
+        clip.durationSeconds = resolvedLength;
+        clip.color = lane.color;
+        lane.clips.push_back(std::move(clip));
+
+        const std::vector<std::string> descendants =
+            subtreeOf(m_project, patternId);
+        const std::string anchor = descendants.empty()
+                                       ? patternId
+                                       : descendants.back();
+        if (!appendSharedTrack(batch, lane, anchor) ||
+            !sharedBatchApplies(m_project, batch)) {
+            return {};
+        }
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Add Pattern Instrument");
+        return result == collab::SharedMutationResult::Submitted ? lane.id
+                                                                 : std::string{};
+    }
+
     const std::size_t undoStart = m_undo.depth();
     const std::string trackId = addTrack(
         TrackKind::Instrument,
@@ -4036,6 +5156,110 @@ std::string EngineController::addPatternSample(const std::string& patternId,
     if (!pattern || pattern->kind != TrackKind::Pattern || filePath.empty())
         return {};
 
+    if (cloudProjectBound()) {
+        const auto sampler =
+            m_pluginManager.find(plugins::Format::Internal, "daw.sampler");
+        auto request = sharedAudioRequest(filePath);
+        if (!sampler || !request) return {};
+
+        InsertModel instrument;
+        instrument.id = newUuid();
+        applyDescriptor(instrument, *sampler);
+        InsertModel clean;
+        if (!cleanSharedInsert(instrument, clean, false) ||
+            clean.uid != "daw.sampler") {
+            return {};
+        }
+
+        const double resolvedStart = std::max(0.0, startSeconds);
+        double resolvedLength = beatsToSeconds(
+            double(std::max(1, m_project.timeSigNumerator)),
+            m_project.tempo);
+        std::optional<ClipModel> owner;
+        std::string patternClipId;
+        for (const ClipModel& candidate : pattern->clips) {
+            if (candidate.kind != ClipKind::Pattern) continue;
+            const double end = candidate.startSeconds +
+                               candidate.durationSeconds;
+            if (resolvedStart + 1e-9 < candidate.startSeconds ||
+                resolvedStart >= end - 1e-9) {
+                continue;
+            }
+            patternClipId = candidate.id;
+            resolvedLength = std::max(kMinClipSeconds,
+                                      end - resolvedStart);
+            break;
+        }
+        const std::string ownerAfterId = pattern->clips.empty()
+            ? std::string()
+            : pattern->clips.back().id;
+        if (patternClipId.empty()) {
+            owner.emplace();
+            owner->id = newUuid();
+            owner->name = pattern->name;
+            owner->kind = ClipKind::Pattern;
+            owner->startSeconds = resolvedStart;
+            owner->durationSeconds = resolvedLength;
+            owner->color = pattern->color;
+            patternClipId = owner->id;
+        }
+
+        TrackModel lane;
+        lane.id = newUuid();
+        lane.kind = TrackKind::Instrument;
+        lane.name = platform::pathToUtf8(
+            platform::pathFromUtf8(filePath).stem());
+        if (lane.name.empty()) lane.name = "Sample";
+        lane.color = defaultTrackColor(lane.kind);
+        lane.parentId = patternId;
+        lane.outputBusId = patternId;
+        lane.instrument = std::move(clean);
+        lane.samplerFx.ownerInstrumentId = lane.instrument.id;
+        ClipModel clip;
+        clip.id = newUuid();
+        clip.name = lane.name;
+        clip.kind = ClipKind::Midi;
+        clip.patternClipId = patternClipId;
+        clip.startSeconds = resolvedStart;
+        clip.durationSeconds = resolvedLength;
+        clip.color = lane.color;
+        lane.clips.push_back(std::move(clip));
+        const std::string laneId = lane.id;
+        const std::vector<std::string> descendants =
+            subtreeOf(m_project, patternId);
+        const std::string trackAnchor = descendants.empty()
+            ? patternId
+            : descendants.back();
+
+        PendingSharedAssetMutation pending;
+        pending.expected = expectedSharedAudioAsset(*request);
+        pending.complete =
+            [patternId, lane = std::move(lane), owner = std::move(owner),
+             ownerAfterId, trackAnchor](
+                EngineController& controller,
+                const AssetRef& verifiedAsset) mutable {
+                setSharedSampleBinding(lane.instrument, verifiedAsset);
+                auto batch = std::make_shared<collab::BatchCommand>();
+                if (owner &&
+                    !appendSharedClip(batch, patternId, *owner,
+                                      ownerAfterId)) {
+                    return collab::SharedMutationResult::Blocked;
+                }
+                if (!appendSharedTrack(batch, lane, trackAnchor) ||
+                    !sharedBatchApplies(controller.m_project, batch)) {
+                    return collab::SharedMutationResult::Blocked;
+                }
+                return controller.submitSharedMutation(
+                    collab::CommandBody{std::move(batch)},
+                    "Add Pattern Sample");
+            };
+        return prepareSharedAssetMutation(std::move(*request),
+                                          std::move(pending)) ==
+                       collab::SharedMutationResult::Submitted
+                   ? laneId
+                   : std::string{};
+    }
+
     const std::size_t undoStart = m_undo.depth();
     std::string name =
         platform::pathToUtf8(platform::pathFromUtf8(filePath).stem());
@@ -4052,6 +5276,9 @@ std::string EngineController::addPatternSample(const std::string& patternId,
 }
 
 std::string EngineController::appendTrack(TrackModel model) {
+    // Complex constructors must expand their complete model into a typed batch
+    // before reaching this legacy local helper.
+    if (cloudProjectBound()) return {};
     const std::string id = model.id;
     m_project.tracks.push_back(model);
     rebuildGraph();
@@ -4068,6 +5295,44 @@ std::string EngineController::appendTrack(TrackModel model) {
 void EngineController::removeTrack(const std::string& trackId) {
     const TrackModel* requested = m_project.findTrack(trackId);
     if (!requested) return;
+    if (cloudProjectBound()) {
+        std::vector<std::string> deleting;
+        if (requested->kind == TrackKind::Pattern)
+            deleting = subtreeOf(m_project, trackId);
+        deleting.push_back(trackId);
+        const std::unordered_set<std::string> deletingSet(
+            deleting.begin(), deleting.end());
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const TrackModel& candidate : m_project.tracks) {
+            if (deletingSet.contains(candidate.id)) continue;
+            if (deletingSet.contains(candidate.outputBusId)) {
+                collab::ProjectCommand child;
+                child.body = collab::SetTrackOutput{candidate.id, {}};
+                batch->commands.push_back(std::move(child));
+            }
+            if (deletingSet.contains(candidate.parentId)) {
+                collab::ProjectCommand child;
+                child.body = collab::SetTrackParent{candidate.id, {}};
+                batch->commands.push_back(std::move(child));
+            }
+            for (const SendModel& send : candidate.sends) {
+                if (!deletingSet.contains(send.destinationTrackId)) continue;
+                collab::ProjectCommand child;
+                child.body = collab::DeleteSend{candidate.id, send.id};
+                batch->commands.push_back(std::move(child));
+            }
+        }
+        for (const std::string& deletingId : deleting) {
+            collab::ProjectCommand child;
+            child.body = collab::DeleteTrack{deletingId};
+            batch->commands.push_back(std::move(child));
+        }
+        (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                   requested->kind == TrackKind::Pattern
+                                       ? "Remove Pattern"
+                                       : "Remove Track");
+        return;
+    }
     const bool removePatternTree = requested->kind == TrackKind::Pattern;
     const std::size_t compoundUndoStart = m_undo.depth();
     if (removePatternTree) {
@@ -4236,6 +5501,13 @@ void EngineController::setTrackVolume(const std::string& trackId, float volume) 
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     const float previous = track->volume;
+    const float requested = std::clamp(volume, 0.0f, 2.0f);
+    if (requested == previous) return;
+    const auto shared = submitSharedMutation(
+        collab::SetTrackProperty{trackId, collab::TrackProperty::Volume,
+                                 double(requested)},
+        "Set Volume");
+    if (shared != collab::SharedMutationResult::LocalFallback) return;
     setTrackVolumeLive(trackId, volume);
     const float applied = track->volume;
     if (applied == previous) return;
@@ -4253,6 +5525,13 @@ void EngineController::setTrackPan(const std::string& trackId, float pan) {
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     const float previous = track->pan;
+    const float requested = std::clamp(pan, -1.0f, 1.0f);
+    if (requested == previous) return;
+    const auto shared = submitSharedMutation(
+        collab::SetTrackProperty{trackId, collab::TrackProperty::Pan,
+                                 double(requested)},
+        "Set Pan");
+    if (shared != collab::SharedMutationResult::LocalFallback) return;
     setTrackPanLive(trackId, pan);
     const float applied = track->pan;
     if (applied == previous) return;
@@ -4305,6 +5584,21 @@ void EngineController::commitTrackVolumeEdit(
         for (const auto& [trackId, value] : values)
             setTrackVolumeLive(trackId, value);
     };
+    auto batch = std::make_shared<collab::BatchCommand>();
+    batch->commands.reserve(to.size());
+    for (const auto& [trackId, value] : to) {
+        collab::ProjectCommand child;
+        child.body = collab::SetTrackProperty{
+            trackId, collab::TrackProperty::Volume, double(value)};
+        batch->commands.push_back(std::move(child));
+    }
+    const auto shared = submitSharedMutation(
+        collab::CommandBody{std::move(batch)}, label);
+    if (shared == collab::SharedMutationResult::Blocked) {
+        apply(from);
+        return;
+    }
+    if (shared == collab::SharedMutationResult::Submitted) return;
     m_undo.push(label, [apply, from] { apply(from); },
                 [apply, to] { apply(to); });
 }
@@ -4325,6 +5619,21 @@ void EngineController::commitTrackPanEdit(
         for (const auto& [trackId, value] : values)
             setTrackPanLive(trackId, value);
     };
+    auto batch = std::make_shared<collab::BatchCommand>();
+    batch->commands.reserve(to.size());
+    for (const auto& [trackId, value] : to) {
+        collab::ProjectCommand child;
+        child.body = collab::SetTrackProperty{
+            trackId, collab::TrackProperty::Pan, double(value)};
+        batch->commands.push_back(std::move(child));
+    }
+    const auto shared = submitSharedMutation(
+        collab::CommandBody{std::move(batch)}, label);
+    if (shared == collab::SharedMutationResult::Blocked) {
+        apply(from);
+        return;
+    }
+    if (shared == collab::SharedMutationResult::Submitted) return;
     m_undo.push(label, [apply, from] { apply(from); },
                 [apply, to] { apply(to); });
 }
@@ -4332,6 +5641,10 @@ void EngineController::commitTrackPanEdit(
 void EngineController::setTrackMono(const std::string& trackId, bool mono) {
     auto* track = m_project.findTrack(trackId);
     if (!track || track->mono == mono) return;
+    const auto shared = submitSharedMutation(
+        collab::SetTrackProperty{trackId, collab::TrackProperty::Mono, mono},
+        mono ? "Track Mono" : "Track Stereo");
+    if (shared != collab::SharedMutationResult::LocalFallback) return;
     const bool previous = track->mono;
     track->mono = mono;
     // The fader fold and every plugin's main-bus arrangement have to change as
@@ -4471,6 +5784,38 @@ float EngineController::inputPeak(uint32_t channel) const {
 void EngineController::setTrackColor(const std::string& trackId, uint32_t color) {
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
+    if (cloudProjectBound()) {
+        std::vector<std::string> affected{trackId};
+        for (const TrackModel& child : m_project.tracks) {
+            if (isAutomationLane(child) && child.parentId == trackId)
+                affected.push_back(child.id);
+        }
+        if (isFolder(*track)) {
+            for (const std::string& childId : subtreeOf(m_project, trackId)) {
+                if (std::find(affected.begin(), affected.end(), childId) ==
+                    affected.end()) {
+                    affected.push_back(childId);
+                }
+            }
+        }
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const std::string& id : affected) {
+            const TrackModel* affectedTrack = m_project.findTrack(id);
+            if (!affectedTrack) continue;
+            appendCommand(batch, collab::SetTrackProperty{
+                id, collab::TrackProperty::Color, std::int64_t(color)});
+            for (const ClipModel& clip : affectedTrack->clips) {
+                appendCommand(batch, collab::SetClipProperty{
+                    id, clip.id, collab::ClipProperty::Color,
+                    std::int64_t(color)});
+            }
+        }
+        if (!batch->commands.empty()) {
+            (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                       "Set Track Color");
+        }
+        return;
+    }
     const auto paint = [color](TrackModel& t) {
         t.color = color;
         // A clip's colour is its track's colour — clips get one at import and
@@ -4525,6 +5870,20 @@ std::string EngineController::duplicateTrack(const std::string& trackId,
                                              bool withInserts) {
     const size_t index = m_project.indexOf(trackId);
     if (index == std::string::npos) return {};
+
+    if (cloudProjectBound()) {
+        TrackModel copy = mintTrackCopy(m_project.tracks[index], withInserts);
+        copy.name += " copy";
+        auto batch = std::make_shared<collab::BatchCommand>();
+        if (!appendSharedTrack(batch, copy, trackId) ||
+            !sharedBatchApplies(m_project, batch)) {
+            return {};
+        }
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Duplicate Track");
+        return result == collab::SharedMutationResult::Submitted ? copy.id
+                                                                 : std::string{};
+    }
 
     TrackModel copy = m_project.tracks[index];
     copy.id = newUuid();
@@ -4619,6 +5978,51 @@ std::string EngineController::duplicateTrack(const std::string& trackId,
 std::string EngineController::duplicatePattern(const std::string& patternId) {
     const TrackModel* pattern = m_project.findTrack(patternId);
     if (!pattern || pattern->kind != TrackKind::Pattern) return {};
+
+    if (cloudProjectBound()) {
+        TrackModel patternCopy = mintTrackCopy(*pattern, true);
+        patternCopy.name += " copy";
+        std::unordered_map<std::string, std::string> patternClipIds;
+        for (std::size_t index = 0;
+             index < pattern->clips.size() &&
+             index < patternCopy.clips.size();
+             ++index) {
+            if (pattern->clips[index].kind == ClipKind::Pattern)
+                patternClipIds[pattern->clips[index].id] =
+                    patternCopy.clips[index].id;
+        }
+
+        std::vector<TrackModel> children;
+        for (const TrackModel& source : m_project.tracks) {
+            if (source.parentId != patternId) continue;
+            TrackModel child = mintTrackCopy(source, true);
+            child.name = source.name;
+            child.parentId = patternCopy.id;
+            if (child.outputBusId == patternId)
+                child.outputBusId = patternCopy.id;
+            for (ClipModel& clip : child.clips) {
+                if (const auto found = patternClipIds.find(clip.patternClipId);
+                    found != patternClipIds.end()) {
+                    clip.patternClipId = found->second;
+                }
+            }
+            children.push_back(std::move(child));
+        }
+
+        auto batch = std::make_shared<collab::BatchCommand>();
+        if (!appendSharedTrack(batch, patternCopy, patternId)) return {};
+        std::string anchor = patternCopy.id;
+        for (const TrackModel& child : children) {
+            if (!appendSharedTrack(batch, child, anchor)) return {};
+            anchor = child.id;
+        }
+        if (!sharedBatchApplies(m_project, batch)) return {};
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Duplicate Pattern");
+        return result == collab::SharedMutationResult::Submitted
+                   ? patternCopy.id
+                   : std::string{};
+    }
 
     std::vector<std::string> originalPatternClips;
     for (const ClipModel& clip : pattern->clips) {
@@ -4725,6 +6129,32 @@ void EngineController::retargetCaptureInput(const TrackModel& track) {
 void EngineController::moveTrackToFolder(const std::string& trackId,
                                          const std::string& parentId) {
     if (isDescendantOf(m_project, parentId, trackId)) return;
+    TrackModel* moving = m_project.findTrack(trackId);
+    if (!moving || moving->parentId == parentId) return;
+    if (cloudProjectBound()) {
+        ProjectModel scratch = m_project;
+        TrackModel* candidate = scratch.findTrack(trackId);
+        if (!candidate) return;
+        candidate->parentId = parentId;
+        auto batch = std::make_shared<collab::BatchCommand>();
+        appendCommand(batch, collab::SetTrackParent{trackId, parentId});
+        for (const TrackModel& before : m_project.tracks) {
+            if (!carriesAudio(before)) continue;
+            const TrackModel* current = before.outputBusId.empty()
+                                            ? nullptr
+                                            : m_project.findTrack(before.outputBusId);
+            if (!before.outputBusId.empty() &&
+                !(current && isFolder(*current))) {
+                continue;
+            }
+            const std::string desired = summingParent(scratch, before.id);
+            if (desired != before.outputBusId)
+                appendCommand(batch, collab::SetTrackOutput{before.id, desired});
+        }
+        (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                   "Move Track to Folder");
+        return;
+    }
     if (auto* d = m_project.findTrack(trackId)) d->parentId = parentId;
     syncFolderRouting();
 }
@@ -4741,6 +6171,55 @@ bool EngineController::moveTrack(const std::string& trackId, size_t targetIndex,
         return false;
     }
     if (!newParentId.empty() && !m_project.findTrack(newParentId)) return false;
+
+    if (cloudProjectBound()) {
+        const std::vector<std::string> childIds = subtreeOf(m_project, trackId);
+        std::vector<std::string> blockIds{trackId};
+        blockIds.insert(blockIds.end(), childIds.begin(), childIds.end());
+        std::vector<std::string> remaining;
+        remaining.reserve(m_project.tracks.size() - blockIds.size());
+        std::size_t removedBefore = 0;
+        for (std::size_t index = 0; index < m_project.tracks.size(); ++index) {
+            const std::string& id = m_project.tracks[index].id;
+            if (std::find(blockIds.begin(), blockIds.end(), id) !=
+                blockIds.end()) {
+                if (index < targetIndex) ++removedBefore;
+            } else {
+                remaining.push_back(id);
+            }
+        }
+        const std::size_t insertAt = std::min(
+            targetIndex >= removedBefore ? targetIndex - removedBefore : 0,
+            remaining.size());
+        std::string anchor = insertAt == 0 ? std::string()
+                                           : remaining[insertAt - 1];
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const std::string& id : blockIds) {
+            appendCommand(batch, collab::MoveTrack{id, anchor});
+            anchor = id;
+        }
+        appendCommand(batch, collab::SetTrackParent{trackId, newParentId});
+
+        ProjectModel scratch = m_project;
+        if (TrackModel* candidate = scratch.findTrack(trackId))
+            candidate->parentId = newParentId;
+        for (const TrackModel& before : m_project.tracks) {
+            if (!carriesAudio(before)) continue;
+            const TrackModel* current = before.outputBusId.empty()
+                                            ? nullptr
+                                            : m_project.findTrack(before.outputBusId);
+            if (!before.outputBusId.empty() &&
+                !(current && isFolder(*current))) {
+                continue;
+            }
+            const std::string desired = summingParent(scratch, before.id);
+            if (desired != before.outputBusId)
+                appendCommand(batch, collab::SetTrackOutput{before.id, desired});
+        }
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Move Track");
+        return result == collab::SharedMutationResult::Submitted;
+    }
 
     const std::vector<std::string> childIds = subtreeOf(m_project, trackId);
     std::vector<TrackModel> block;
@@ -4828,6 +6307,31 @@ void EngineController::setFolderSumming(const std::string& folderId,
                                         bool summing) {
     auto* folder = m_project.findTrack(folderId);
     if (!folder || !isFolder(*folder) || folder->summing == summing) return;
+    if (cloudProjectBound()) {
+        ProjectModel scratch = m_project;
+        TrackModel* candidate = scratch.findTrack(folderId);
+        if (!candidate) return;
+        candidate->summing = summing;
+        auto batch = std::make_shared<collab::BatchCommand>();
+        appendCommand(batch, collab::SetTrackProperty{
+            folderId, collab::TrackProperty::Summing, summing});
+        for (const TrackModel& before : m_project.tracks) {
+            if (!carriesAudio(before)) continue;
+            const TrackModel* current = before.outputBusId.empty()
+                                            ? nullptr
+                                            : m_project.findTrack(before.outputBusId);
+            if (!before.outputBusId.empty() &&
+                !(current && isFolder(*current))) {
+                continue;
+            }
+            const std::string desired = summingParent(scratch, before.id);
+            if (desired != before.outputBusId)
+                appendCommand(batch, collab::SetTrackOutput{before.id, desired});
+        }
+        (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                   "Folder Summing");
+        return;
+    }
     folder->summing = summing;
     // Its children follow it: into the new bus, or back out to whatever
     // encloses the folder now that there is nothing here to sum into.
@@ -4863,6 +6367,98 @@ std::string EngineController::packIntoFolder(
     if (origins.empty()) return {};
 
     const std::string parentId = m_project.tracks[firstIndex].parentId;
+    if (cloudProjectBound()) {
+        std::unordered_set<std::string> requested;
+        for (const Origin& origin : origins) requested.insert(origin.id);
+        std::vector<std::string> roots;
+        for (const Origin& origin : origins) {
+            bool nested = false;
+            const TrackModel* current = m_project.findTrack(origin.id);
+            for (std::string cursor = current ? current->parentId : std::string();
+                 !cursor.empty();) {
+                if (requested.contains(cursor)) {
+                    nested = true;
+                    break;
+                }
+                const TrackModel* ancestor = m_project.findTrack(cursor);
+                cursor = ancestor ? ancestor->parentId : std::string();
+            }
+            if (!nested &&
+                std::find(roots.begin(), roots.end(), origin.id) == roots.end()) {
+                roots.push_back(origin.id);
+            }
+        }
+        if (roots.empty()) return {};
+
+        TrackModel folder;
+        folder.id = newUuid();
+        folder.kind = TrackKind::Folder;
+        folder.summing = summing;
+        folder.name = !name.empty() ? name : (summing ? "Group" : "Folder");
+        folder.color = defaultTrackColor(summing ? TrackKind::Group
+                                                 : TrackKind::Folder);
+        folder.parentId = parentId;
+        auto batch = std::make_shared<collab::BatchCommand>();
+        const std::string beforeFirst = firstIndex == 0
+                                            ? std::string()
+                                            : m_project.tracks[firstIndex - 1].id;
+        appendCommand(batch, collab::AddTrack{
+            folder.id, folder.kind, folder.name, folder.color,
+            folder.parentId, beforeFirst});
+        if (summing) {
+            appendCommand(batch, collab::SetTrackProperty{
+                folder.id, collab::TrackProperty::Summing, true});
+        }
+
+        std::string anchor = folder.id;
+        for (const std::string& root : roots) {
+            std::vector<std::string> block{root};
+            const auto children = subtreeOf(m_project, root);
+            block.insert(block.end(), children.begin(), children.end());
+            for (const std::string& id : block) {
+                appendCommand(batch, collab::MoveTrack{id, anchor});
+                anchor = id;
+            }
+            appendCommand(batch,
+                          collab::SetTrackParent{root, folder.id});
+        }
+
+        ProjectModel planned = m_project;
+        planned.tracks.push_back(folder);
+        for (const std::string& root : roots) {
+            if (TrackModel* moved = planned.findTrack(root))
+                moved->parentId = folder.id;
+        }
+        for (const TrackModel& before : m_project.tracks) {
+            if (!carriesAudio(before)) continue;
+            const TrackModel* current = before.outputBusId.empty()
+                                            ? nullptr
+                                            : m_project.findTrack(before.outputBusId);
+            if (!before.outputBusId.empty() &&
+                !(current && isFolder(*current))) {
+                continue;
+            }
+            const std::string desired = summingParent(planned, before.id);
+            if (desired != before.outputBusId) {
+                appendCommand(batch,
+                              collab::SetTrackOutput{before.id, desired});
+            }
+        }
+        if (carriesAudio(folder)) {
+            const std::string desired = summingParent(planned, folder.id);
+            if (!desired.empty()) {
+                appendCommand(batch,
+                              collab::SetTrackOutput{folder.id, desired});
+            }
+        }
+        if (!sharedBatchApplies(m_project, batch)) return {};
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Pack into Folder");
+        return result == collab::SharedMutationResult::Submitted
+                   ? folder.id
+                   : std::string{};
+    }
+
     std::string folderId;
     {
         UndoStack::Suspend quiet(m_undo);
@@ -4902,6 +6498,12 @@ std::string EngineController::addSend(const std::string& trackId,
     SendModel send;
     send.id = newUuid();
     send.destinationTrackId = destinationTrackId;
+    const std::string afterId =
+        track->sends.empty() ? std::string() : track->sends.back().id;
+    const auto shared = submitSharedMutation(
+        collab::AddSend{trackId, send, afterId}, "Add Send");
+    if (shared == collab::SharedMutationResult::Submitted) return send.id;
+    if (shared == collab::SharedMutationResult::Blocked) return {};
     track->sends.push_back(send);
 
     if (!rebuildGraph()) {                 // a send can close a loop too
@@ -4916,6 +6518,12 @@ void EngineController::removeSend(const std::string& trackId,
                                   const std::string& sendId) {
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
+    if (std::none_of(track->sends.begin(), track->sends.end(),
+                     [&](const SendModel& send) { return send.id == sendId; }))
+        return;
+    const auto shared = submitSharedMutation(
+        collab::DeleteSend{trackId, sendId}, "Remove Send");
+    if (shared != collab::SharedMutationResult::LocalFallback) return;
     const size_t before = track->sends.size();
     std::erase_if(track->sends, [&](const SendModel& s) { return s.id == sendId; });
     if (track->sends.size() != before) rebuildGraph();
@@ -4958,6 +6566,15 @@ void EngineController::commitSendLevelEdit(const std::string& trackId,
     const auto* send = findSend(m_project.findTrack(trackId), sendId);
     if (!send || send->level == before) return;
     const float after = send->level;
+    const auto shared = submitSharedMutation(
+        collab::SetSendProperty{trackId, sendId,
+                                collab::SendProperty::Level, double(after)},
+        label);
+    if (shared == collab::SharedMutationResult::Blocked) {
+        setSendLevel(trackId, sendId, before);
+        return;
+    }
+    if (shared == collab::SharedMutationResult::Submitted) return;
     m_undo.push(label,
                 [this, trackId, sendId, before] {
                     setSendLevel(trackId, sendId, before);
@@ -4971,6 +6588,11 @@ void EngineController::setSendPreFader(const std::string& trackId,
                                        const std::string& sendId, bool preFader) {
     auto* send = findSend(m_project.findTrack(trackId), sendId);
     if (!send || send->preFader == preFader) return;
+    const auto shared = submitSharedMutation(
+        collab::SetSendProperty{trackId, sendId,
+                                collab::SendProperty::PreFader, preFader},
+        "Set Send Tap");
+    if (shared != collab::SharedMutationResult::LocalFallback) return;
     send->preFader = preFader;
     rebuildGraph();               // the tap point is an edge, so recompile
 }
@@ -4979,7 +6601,12 @@ void EngineController::setSendEnabled(const std::string& trackId,
                                       const std::string& sendId, bool enabled) {
     auto* track = m_project.findTrack(trackId);
     auto* send = findSend(track, sendId);
-    if (!send) return;
+    if (!send || send->enabled == enabled) return;
+    const auto shared = submitSharedMutation(
+        collab::SetSendProperty{trackId, sendId,
+                                collab::SendProperty::Enabled, enabled},
+        enabled ? "Enable Send" : "Disable Send");
+    if (shared != collab::SharedMutationResult::LocalFallback) return;
     send->enabled = enabled;
     setSendLevel(trackId, sendId, send->level);
 }
@@ -4988,6 +6615,11 @@ bool EngineController::setTrackOutputBus(const std::string& trackId,
                                          const std::string& busTrackId) {
     auto* track = m_project.findTrack(trackId);
     if (!track || trackId == busTrackId) return false;
+    if (track->outputBusId == busTrackId) return true;
+    const auto shared = submitSharedMutation(
+        collab::SetTrackOutput{trackId, busTrackId}, "Set Track Output");
+    if (shared == collab::SharedMutationResult::Submitted) return true;
+    if (shared == collab::SharedMutationResult::Blocked) return false;
 
     const std::string previous = track->outputBusId;
     track->outputBusId = busTrackId;
@@ -5007,7 +6639,8 @@ void EngineController::setTrackInputEnabled(const std::string& trackId,
 }
 
 void EngineController::ensureInsertSlots(const std::string& trackId,
-                                         size_t count) {
+                                          size_t count) {
+    if (cloudProjectBound()) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     while (track->inserts.size() < count) {
@@ -5018,6 +6651,7 @@ void EngineController::ensureInsertSlots(const std::string& trackId,
 }
 
 void EngineController::ensureMasterInsertSlots(size_t count) {
+    if (cloudProjectBound()) return;
     while (m_project.masterInserts.size() < count) {
         InsertModel slot;
         slot.id = newUuid();
@@ -5044,6 +6678,15 @@ std::string EngineController::addInsert(const std::string& channelId,
     applyDescriptor(slot, descriptor);
 
     const size_t at = std::min(index, slots->size());
+    if (cloudProjectBound()) {
+        if (slot.format != PluginFormat::Internal) return {};
+        const auto result = submitSharedMutation(
+            collab::AddPluginInsert{channelPluginLocation(channelId), slot,
+                                    previousIdAt(*slots, at)},
+            "Add " + descriptor.name);
+        return result == collab::SharedMutationResult::Submitted ? slot.id
+                                                                 : std::string{};
+    }
     slots->insert(slots->begin() + std::ptrdiff_t(at), slot);
     rebuildGraph();
 
@@ -5078,6 +6721,15 @@ void EngineController::removeInsert(const std::string& channelId,
                               [&](const InsertModel& s) { return s.id == insertId; });
     if (found == slots->end()) return;
 
+    if (cloudProjectBound()) {
+        if (found->format != PluginFormat::Internal) return;
+        (void)submitSharedMutation(
+            collab::DeletePluginInsert{channelPluginLocation(channelId),
+                                       insertId},
+            "Remove " + found->name);
+        return;
+    }
+
     // Capture the slot before erasing so redo can put back exactly what was
     // there, state file reference included.
     const InsertModel removed = *found;
@@ -5110,6 +6762,20 @@ void EngineController::moveInsert(const std::string& channelId,
     const size_t to = std::min(targetIndex, slots->size() - 1);
     if (from == to) return;
 
+    if (cloudProjectBound()) {
+        if (found->format != PluginFormat::Internal) return;
+        std::vector<InsertModel> scratch = *slots;
+        InsertModel moved = scratch[from];
+        scratch.erase(scratch.begin() + std::ptrdiff_t(from));
+        scratch.insert(scratch.begin() + std::ptrdiff_t(to), moved);
+        (void)submitSharedMutation(
+            collab::MovePluginInsert{
+                channelPluginLocation(channelId), insertId,
+                previousIdAt(scratch, to)},
+            "Reorder " + moved.name);
+        return;
+    }
+
     const InsertModel moved = *found;
     slots->erase(found);
     slots->insert(slots->begin() + std::ptrdiff_t(to), moved);
@@ -5136,7 +6802,20 @@ bool EngineController::replaceInsert(const std::string& channelId,
     const InsertModel before = *found;
     // The slot id survives on purpose: automation lanes address a parameter as
     // "<insertId>:<parameterId>", and an open editor window is keyed on it too.
-    applyDescriptor(*found, descriptor);
+    InsertModel replacement = before;
+    applyDescriptor(replacement, descriptor);
+    if (cloudProjectBound()) {
+        if (before.format != PluginFormat::Internal ||
+            replacement.format != PluginFormat::Internal) {
+            return false;
+        }
+        const auto result = submitSharedMutation(
+            collab::ReplacePluginInsert{channelPluginLocation(channelId),
+                                        insertId, replacement},
+            "Replace " + before.name);
+        return result == collab::SharedMutationResult::Submitted;
+    }
+    *found = replacement;
     rebuildGraph();
 
     // The same guard `addInsert` and `setTrackInstrumentPlugin` have, and for
@@ -5180,6 +6859,11 @@ void EngineController::setInsertBypassed(const std::string& channelId,
                                          bool bypassed) {
     InsertModel* slot = mutableInsertSlot(channelId, insertId);
     if (!slot || slot->bypassed == bypassed) return;
+    const auto shared = submitSharedMutation(
+        collab::SetPluginProperty{channelPluginLocation(channelId), insertId,
+                                  collab::PluginProperty::Bypassed, bypassed},
+        bypassed ? "Bypass " + slot->name : "Enable " + slot->name);
+    if (shared != collab::SharedMutationResult::LocalFallback) return;
     slot->bypassed = bypassed;
 
     // Straight to the node: bypass is a crossfade inside PluginNode and
@@ -5201,6 +6885,22 @@ void EngineController::setAllInsertsBypassed(const std::string& channelId,
                                              bool bypassed) {
     std::vector<InsertModel>* slots = mutableChannelInserts(channelId);
     if (!slots) return;
+
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const InsertModel& slot : *slots) {
+            if (slot.bypassed == bypassed) continue;
+            if (slot.format != PluginFormat::Internal) return;
+            appendCommand(batch, collab::SetPluginProperty{
+                channelPluginLocation(channelId), slot.id,
+                collab::PluginProperty::Bypassed, bypassed});
+        }
+        if (!batch->commands.empty()) {
+            (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                       bypassed ? "Bypass All" : "Enable All");
+        }
+        return;
+    }
 
     // Remember which slots this actually changes, so undo can put back the
     // hand-set flags rather than enabling everything indiscriminately.
@@ -5251,6 +6951,16 @@ void EngineController::commitInsertMixEdit(const std::string& channelId,
     if (!slot) return;
     const float afterMix = slot->mix;
     if (std::abs(afterMix - beforeMix) < 1e-6f) return;
+    const auto shared = submitSharedMutation(
+        collab::SetPluginProperty{channelPluginLocation(channelId), insertId,
+                                  collab::PluginProperty::Mix,
+                                  double(afterMix)},
+        label);
+    if (shared != collab::SharedMutationResult::LocalFallback) {
+        if (shared == collab::SharedMutationResult::Blocked)
+            setInsertMix(channelId, insertId, beforeMix);
+        return;
+    }
     m_undo.push(label,
                 [this, channelId, insertId, beforeMix] {
                     setInsertMix(channelId, insertId, beforeMix);
@@ -5275,6 +6985,14 @@ bool EngineController::setInsertChannelMode(const std::string& channelId,
     }
     const PluginChannelMode before = slot->channelMode;
     const std::string name = slot->name;
+    const auto shared = submitSharedMutation(
+        collab::SetPluginProperty{
+            channelPluginLocation(channelId), insertId,
+            collab::PluginProperty::ChannelMode,
+            toString(mode)},
+        "Change " + name + " Channel Mode");
+    if (shared != collab::SharedMutationResult::LocalFallback)
+        return shared == collab::SharedMutationResult::Submitted;
     slot->channelMode = mode;
     const bool rebuilt = bool(rebuildGraph(/*reconfigurePlugins=*/true));
     const InsertSlot* live = liveInsertSlot(channelId, insertId);
@@ -5364,6 +7082,13 @@ bool EngineController::setInsertSidechainSource(
 
     const std::string before = slot->sidechainTrackId;
     const std::string name = slot->name;
+    const auto shared = submitSharedMutation(
+        collab::SetPluginProperty{channelPluginLocation(channelId), insertId,
+                                  collab::PluginProperty::SidechainTrackId,
+                                  sourceTrackId},
+        "Change " + name + " Sidechain");
+    if (shared != collab::SharedMutationResult::LocalFallback)
+        return shared == collab::SharedMutationResult::Submitted;
     slot->sidechainTrackId = sourceTrackId;
     if (!rebuildGraph()) {
         slot = mutableInsertSlot(channelId, insertId);
@@ -5402,6 +7127,16 @@ std::string EngineController::addSamplerFxInsert(
     slot.id = newUuid();
     applyDescriptor(slot, descriptor);
     const size_t at = std::min(index, slots->size());
+    if (cloudProjectBound()) {
+        if (slot.format != PluginFormat::Internal) return {};
+        const auto result = submitSharedMutation(
+            collab::AddPluginInsert{
+                {collab::PluginChain::SamplerFx, trackId, {}}, slot,
+                previousIdAt(*slots, at)},
+            "Add Sampler FX " + descriptor.name);
+        return result == collab::SharedMutationResult::Submitted ? slot.id
+                                                                 : std::string{};
+    }
     slots->insert(slots->begin() + std::ptrdiff_t(at), slot);
     rebuildGraph();
 
@@ -5442,6 +7177,14 @@ void EngineController::removeSamplerFxInsert(const std::string& trackId,
                                         return value.id == insertId;
                                     });
     if (found == slots->end()) return;
+    if (cloudProjectBound()) {
+        if (found->format != PluginFormat::Internal) return;
+        (void)submitSharedMutation(
+            collab::DeletePluginInsert{
+                {collab::PluginChain::SamplerFx, trackId, {}}, insertId},
+            "Remove Sampler FX " + found->name);
+        return;
+    }
     const InsertModel removed = *found;
     const size_t at = size_t(found - slots->begin());
     slots->erase(found);
@@ -5475,6 +7218,19 @@ void EngineController::moveSamplerFxInsert(const std::string& trackId,
     const size_t from = size_t(found - slots->begin());
     const size_t to = std::min(targetIndex, slots->size() - 1);
     if (from == to) return;
+    if (cloudProjectBound()) {
+        if (found->format != PluginFormat::Internal) return;
+        std::vector<InsertModel> scratch = *slots;
+        InsertModel moved = scratch[from];
+        scratch.erase(scratch.begin() + std::ptrdiff_t(from));
+        scratch.insert(scratch.begin() + std::ptrdiff_t(to), moved);
+        (void)submitSharedMutation(
+            collab::MovePluginInsert{
+                {collab::PluginChain::SamplerFx, trackId, {}}, insertId,
+                previousIdAt(scratch, to)},
+            "Reorder Sampler FX");
+        return;
+    }
     const InsertModel moved = *found;
     slots->erase(found);
     slots->insert(slots->begin() + std::ptrdiff_t(to), moved);
@@ -5501,7 +7257,19 @@ bool EngineController::replaceSamplerFxInsert(
                               });
     if (found == slots->end()) return false;
     const InsertModel before = *found;
-    applyDescriptor(*found, descriptor);
+    InsertModel replacement = before;
+    applyDescriptor(replacement, descriptor);
+    if (cloudProjectBound()) {
+        if (before.format != PluginFormat::Internal ||
+            replacement.format != PluginFormat::Internal) return false;
+        const auto result = submitSharedMutation(
+            collab::ReplacePluginInsert{
+                {collab::PluginChain::SamplerFx, trackId, {}}, insertId,
+                replacement},
+            "Replace Sampler FX " + before.name);
+        return result == collab::SharedMutationResult::Submitted;
+    }
+    *found = replacement;
     rebuildGraph();
     if (!insertNode(trackId, insertId)) {
         slots = mutableSamplerFxInserts(trackId, samplerSlotId);
@@ -5533,6 +7301,22 @@ void EngineController::setAllSamplerFxBypassed(const std::string& trackId,
                                                 bool bypassed) {
     auto* slots = mutableSamplerFxInserts(trackId, samplerSlotId);
     if (!slots) return;
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const InsertModel& slot : *slots) {
+            if (slot.bypassed == bypassed) continue;
+            if (slot.format != PluginFormat::Internal) return;
+            appendCommand(batch, collab::SetPluginProperty{
+                {collab::PluginChain::SamplerFx, trackId, {}}, slot.id,
+                collab::PluginProperty::Bypassed, bypassed});
+        }
+        if (!batch->commands.empty()) {
+            (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                       bypassed ? "Bypass Sampler FX"
+                                                : "Enable Sampler FX");
+        }
+        return;
+    }
     std::vector<std::string> changed;
     for (InsertModel& slot : *slots) {
         if (slot.bypassed == bypassed) continue;
@@ -5592,6 +7376,17 @@ void EngineController::commitSamplerFxLevelEdit(
     const float afterVolume = model->volume;
     const float afterPan = model->pan;
     if (beforeVolume == afterVolume && beforePan == afterPan) return;
+    const auto shared = submitSharedMutation(
+        collab::SetSamplerFxLevels{trackId, samplerSlotId,
+                                   double(afterVolume), double(afterPan)},
+        label);
+    if (shared != collab::SharedMutationResult::LocalFallback) {
+        if (shared == collab::SharedMutationResult::Blocked) {
+            setSamplerFxVolume(trackId, samplerSlotId, beforeVolume);
+            setSamplerFxPan(trackId, samplerSlotId, beforePan);
+        }
+        return;
+    }
     auto apply = [this, trackId, samplerSlotId](float volume, float pan) {
         setSamplerFxVolume(trackId, samplerSlotId, volume);
         setSamplerFxPan(trackId, samplerSlotId, pan);
@@ -5616,6 +7411,16 @@ std::string EngineController::addClipFxInsert(
     slot.id = newUuid();
     applyDescriptor(slot, descriptor);
     const size_t at = std::min(index, slots->size());
+    if (cloudProjectBound()) {
+        if (slot.format != PluginFormat::Internal) return {};
+        const auto result = submitSharedMutation(
+            collab::AddPluginInsert{
+                {collab::PluginChain::Clip, trackId, clipId}, slot,
+                previousIdAt(*slots, at)},
+            "Add Clip FX " + descriptor.name);
+        return result == collab::SharedMutationResult::Submitted ? slot.id
+                                                                 : std::string{};
+    }
     slots->insert(slots->begin() + std::ptrdiff_t(at), slot);
     rebuildGraph();
     if (!insertNode(trackId, slot.id)) {
@@ -5652,6 +7457,14 @@ void EngineController::removeClipFxInsert(const std::string& trackId,
                                         return value.id == insertId;
                                     });
     if (found == slots->end()) return;
+    if (cloudProjectBound()) {
+        if (found->format != PluginFormat::Internal) return;
+        (void)submitSharedMutation(
+            collab::DeletePluginInsert{
+                {collab::PluginChain::Clip, trackId, clipId}, insertId},
+            "Remove Clip FX " + found->name);
+        return;
+    }
     const InsertModel removed = *found;
     const size_t at = size_t(found - slots->begin());
     slots->erase(found);
@@ -5683,6 +7496,19 @@ void EngineController::moveClipFxInsert(const std::string& trackId,
     const size_t from = size_t(found - slots->begin());
     const size_t to = std::min(targetIndex, slots->size() - 1);
     if (from == to) return;
+    if (cloudProjectBound()) {
+        if (found->format != PluginFormat::Internal) return;
+        std::vector<InsertModel> scratch = *slots;
+        InsertModel moved = scratch[from];
+        scratch.erase(scratch.begin() + std::ptrdiff_t(from));
+        scratch.insert(scratch.begin() + std::ptrdiff_t(to), moved);
+        (void)submitSharedMutation(
+            collab::MovePluginInsert{
+                {collab::PluginChain::Clip, trackId, clipId}, insertId,
+                previousIdAt(scratch, to)},
+            "Reorder Clip FX");
+        return;
+    }
     const InsertModel moved = *found;
     slots->erase(found);
     slots->insert(slots->begin() + std::ptrdiff_t(to), moved);
@@ -5708,7 +7534,19 @@ bool EngineController::replaceClipFxInsert(
                               });
     if (found == slots->end()) return false;
     const InsertModel before = *found;
-    applyDescriptor(*found, descriptor);
+    InsertModel replacement = before;
+    applyDescriptor(replacement, descriptor);
+    if (cloudProjectBound()) {
+        if (before.format != PluginFormat::Internal ||
+            replacement.format != PluginFormat::Internal) return false;
+        const auto result = submitSharedMutation(
+            collab::ReplacePluginInsert{
+                {collab::PluginChain::Clip, trackId, clipId}, insertId,
+                replacement},
+            "Replace Clip FX " + before.name);
+        return result == collab::SharedMutationResult::Submitted;
+    }
+    *found = replacement;
     rebuildGraph();
     if (!insertNode(trackId, insertId)) {
         if (auto* current = mutableClipFxInserts(trackId, clipId)) {
@@ -5739,6 +7577,22 @@ void EngineController::setAllClipFxBypassed(const std::string& trackId,
                                              bool bypassed) {
     auto* slots = mutableClipFxInserts(trackId, clipId);
     if (!slots) return;
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const InsertModel& slot : *slots) {
+            if (slot.bypassed == bypassed) continue;
+            if (slot.format != PluginFormat::Internal) return;
+            appendCommand(batch, collab::SetPluginProperty{
+                {collab::PluginChain::Clip, trackId, clipId}, slot.id,
+                collab::PluginProperty::Bypassed, bypassed});
+        }
+        if (!batch->commands.empty()) {
+            (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                       bypassed ? "Bypass Clip FX"
+                                                : "Enable Clip FX");
+        }
+        return;
+    }
     std::vector<std::string> changed;
     for (InsertModel& slot : *slots) {
         if (slot.bypassed == bypassed) continue;
@@ -5813,6 +7667,20 @@ void EngineController::commitClipFxLevelEdit(
     const float afterVolume = clip->gain;
     const float afterPan = clip->pan;
     if (beforeVolume == afterVolume && beforePan == afterPan) return;
+    auto batch = std::make_shared<collab::BatchCommand>();
+    appendCommand(batch, collab::SetClipProperty{
+        trackId, clipId, collab::ClipProperty::Gain, double(afterVolume)});
+    appendCommand(batch, collab::SetClipProperty{
+        trackId, clipId, collab::ClipProperty::Pan, double(afterPan)});
+    const auto shared = submitSharedMutation(
+        collab::CommandBody{std::move(batch)}, label);
+    if (shared != collab::SharedMutationResult::LocalFallback) {
+        if (shared == collab::SharedMutationResult::Blocked) {
+            setClipFxVolume(trackId, clipId, beforeVolume);
+            setClipFxPan(trackId, clipId, beforePan);
+        }
+        return;
+    }
     auto apply = [this, trackId, clipId](float volume, float pan) {
         setClipFxVolume(trackId, clipId, volume);
         setClipFxPan(trackId, clipId, pan);
@@ -5889,6 +7757,18 @@ void EngineController::commitInsertParameterEdit(const std::string& channelId,
                                                  const std::string& label) {
     const double after = insertParameter(channelId, insertId, parameterId);
     if (after == beforeValue) return;
+    const InsertModel* slot = insertModel(channelId, insertId);
+    const bool right = slot && slot->channelMode == PluginChannelMode::DualMono &&
+                       slot->editorChannel == PluginEditorChannel::Right;
+    const auto shared = submitSharedMutation(
+        collab::SetPluginParameter{channelPluginLocation(channelId), insertId,
+                                   parameterId, after, right},
+        label);
+    if (shared != collab::SharedMutationResult::LocalFallback) {
+        if (shared == collab::SharedMutationResult::Blocked)
+            setInsertParameter(channelId, insertId, parameterId, beforeValue);
+        return;
+    }
     m_undo.push(label,
                 [this, channelId, insertId, parameterId, beforeValue] {
                     setInsertParameter(channelId, insertId, parameterId, beforeValue);
@@ -6027,8 +7907,22 @@ std::vector<EngineController::ChainSlotSnapshot> mintChain(
 
 bool EngineController::pasteChannelInserts(const std::string& channelId,
                                            const ChannelSnapshot& what) {
-    if (!mutableChannelInserts(channelId)) return false;
+    const std::vector<InsertModel>* current = channelInserts(channelId);
+    if (!current) return false;
     const ChannelSnapshot before = copyChannelStrip(channelId, /*withSettings=*/false);
+    if (cloudProjectBound()) {
+        if (before.inserts.empty() && what.inserts.empty()) return false;
+        auto batch = std::make_shared<collab::BatchCommand>();
+        if (!appendSharedChainReplacement(
+                batch, channelPluginLocation(channelId), *current,
+                what.inserts) ||
+            !sharedBatchApplies(m_project, batch)) {
+            return false;
+        }
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Paste Plugins");
+        return result == collab::SharedMutationResult::Submitted;
+    }
     const std::vector<ChainSlotSnapshot> next = mintChain(what.inserts);
     if (before.inserts.empty() && next.empty()) return false;
 
@@ -6043,10 +7937,64 @@ bool EngineController::pasteChannelInserts(const std::string& channelId,
 bool EngineController::pasteChannelStrip(const std::string& channelId,
                                          const ChannelSnapshot& what) {
     if (!what.hasSettings) return pasteChannelInserts(channelId, what);
-    if (!mutableChannelInserts(channelId)) return false;
+    const std::vector<InsertModel>* current = channelInserts(channelId);
+    if (!current) return false;
 
     const bool master = channelId == kMasterChannelId;
     if (!master && !m_project.findTrack(channelId)) return false;
+
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        if (!appendSharedChainReplacement(
+                batch, channelPluginLocation(channelId), *current,
+                what.inserts)) {
+            return false;
+        }
+        if (master) {
+            appendCommand(batch, collab::SetProjectScalar{
+                collab::ProjectScalar::MasterVolume,
+                double(std::clamp(what.volume, 0.0f, 2.0f))});
+            appendCommand(batch, collab::SetProjectScalar{
+                collab::ProjectScalar::MasterPan,
+                double(std::clamp(what.pan, -1.0f, 1.0f))});
+        } else {
+            const TrackModel* target = m_project.findTrack(channelId);
+            appendCommand(batch, collab::SetTrackProperty{
+                channelId, collab::TrackProperty::Volume,
+                double(std::clamp(what.volume, 0.0f, 2.0f))});
+            appendCommand(batch, collab::SetTrackProperty{
+                channelId, collab::TrackProperty::Pan,
+                double(std::clamp(what.pan, -1.0f, 1.0f))});
+            appendCommand(batch, collab::SetTrackProperty{
+                channelId, collab::TrackProperty::Muted, what.muted});
+            appendCommand(batch, collab::SetTrackProperty{
+                channelId, collab::TrackProperty::Mono, what.mono});
+            const bool routable = !what.outputBusId.empty() &&
+                                  what.outputBusId != channelId &&
+                                  m_project.findTrack(what.outputBusId);
+            appendCommand(batch, collab::SetTrackOutput{
+                channelId, routable ? what.outputBusId : std::string()});
+            for (const SendModel& send : target->sends) {
+                appendCommand(batch,
+                              collab::DeleteSend{channelId, send.id});
+            }
+            std::string anchor;
+            for (SendModel send : what.sends) {
+                if (send.destinationTrackId == channelId ||
+                    !m_project.findTrack(send.destinationTrackId)) {
+                    continue;
+                }
+                send.id = newUuid();
+                appendCommand(batch,
+                              collab::AddSend{channelId, send, anchor});
+                anchor = send.id;
+            }
+        }
+        if (!sharedBatchApplies(m_project, batch)) return false;
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Paste Channel Strip");
+        return result == collab::SharedMutationResult::Submitted;
+    }
 
     const ChannelSnapshot before = copyChannelStrip(channelId, /*withSettings=*/true);
     const std::vector<ChainSlotSnapshot> next = mintChain(what.inserts);
@@ -6104,10 +8052,40 @@ bool EngineController::pasteChannelStrip(const std::string& channelId,
 
 bool EngineController::pasteChannelStripPreset(const std::string& channelId,
                                                const ChannelSnapshot& what) {
-    if (!what.hasSettings || !mutableChannelInserts(channelId)) return false;
+    const std::vector<InsertModel>* current = channelInserts(channelId);
+    if (!what.hasSettings || !current) return false;
 
     const bool master = channelId == kMasterChannelId;
     if (!master && !m_project.findTrack(channelId)) return false;
+
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        if (!appendSharedChainReplacement(
+                batch, channelPluginLocation(channelId), *current,
+                what.inserts)) {
+            return false;
+        }
+        if (master) {
+            appendCommand(batch, collab::SetProjectScalar{
+                collab::ProjectScalar::MasterVolume,
+                double(std::clamp(what.volume, 0.0f, 2.0f))});
+            appendCommand(batch, collab::SetProjectScalar{
+                collab::ProjectScalar::MasterPan,
+                double(std::clamp(what.pan, -1.0f, 1.0f))});
+        } else {
+            appendCommand(batch, collab::SetTrackProperty{
+                channelId, collab::TrackProperty::Volume,
+                double(std::clamp(what.volume, 0.0f, 2.0f))});
+            appendCommand(batch, collab::SetTrackProperty{
+                channelId, collab::TrackProperty::Pan,
+                double(std::clamp(what.pan, -1.0f, 1.0f))});
+        }
+        if (!sharedBatchApplies(m_project, batch)) return false;
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)},
+            "Apply Channel Strip Preset");
+        return result == collab::SharedMutationResult::Submitted;
+    }
 
     const ChannelSnapshot before =
         copyChannelStrip(channelId, /*withSettings=*/true);
@@ -6180,6 +8158,29 @@ bool EngineController::moveInsertBetweenChannels(const std::string& fromChannel,
         [&](const ChainSlotSnapshot& slot) { return slot.model.id == insertId; });
     if (moved == source.inserts.end()) return false;
 
+    if (cloudProjectBound()) {
+        const std::vector<InsertModel>* destination = channelInserts(toChannel);
+        if (!destination) return false;
+        auto batch = std::make_shared<collab::BatchCommand>();
+        if (!copy) {
+            appendCommand(batch, collab::DeletePluginInsert{
+                channelPluginLocation(fromChannel), insertId});
+        }
+        InsertModel clean;
+        if (!appendSharedPluginCopy(
+                batch, channelPluginLocation(toChannel), moved->model,
+                previousIdAt(*destination,
+                             std::min(index, destination->size())),
+                &clean) ||
+            !sharedBatchApplies(m_project, batch)) {
+            return false;
+        }
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)},
+            copy ? "Copy Plugin" : "Move Plugin");
+        return result == collab::SharedMutationResult::Submitted;
+    }
+
     std::vector<ChainSlotSnapshot> nextTarget = target.inserts;
     ChainSlotSnapshot landed = *moved;
     landed.model.id = newUuid();     // a slot id belongs to one chain only
@@ -6226,6 +8227,31 @@ bool EngineController::copySendsTo(const std::string& fromTrackId,
     }
     if (next.empty() && !move) return false;
 
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const SendModel& send : beforeTo) {
+            appendCommand(batch,
+                          collab::DeleteSend{toTrackId, send.id});
+        }
+        if (move) {
+            for (const SendModel& send : beforeFrom) {
+                appendCommand(batch,
+                              collab::DeleteSend{fromTrackId, send.id});
+            }
+        }
+        std::string anchor;
+        for (const SendModel& send : next) {
+            appendCommand(batch, collab::AddSend{toTrackId, send, anchor});
+            anchor = send.id;
+        }
+        if (batch->commands.empty() || !sharedBatchApplies(m_project, batch))
+            return false;
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)},
+            move ? "Move Sends" : "Copy Sends");
+        return result == collab::SharedMutationResult::Submitted;
+    }
+
     auto put = [this, fromTrackId, toTrackId](const std::vector<SendModel>& source,
                                               const std::vector<SendModel>& target) {
         if (TrackModel* a = m_project.findTrack(fromTrackId)) a->sends = source;
@@ -6254,6 +8280,38 @@ plugins::sampler::SamplerInstance* EngineController::samplerInstance(
 bool EngineController::loadSamplerSample(const std::string& channelId,
                                          const std::string& slotId,
                                          const std::string& filePath) {
+    if (cloudProjectBound()) {
+        const TrackModel* track = m_project.findTrack(channelId);
+        if (!track || track->instrument.id != slotId ||
+            track->instrument.uid != "daw.sampler" ||
+            track->instrument.format != PluginFormat::Internal) {
+            return false;
+        }
+        auto request = sharedAudioRequest(filePath);
+        if (!request) return false;
+
+        PendingSharedAssetMutation pending;
+        pending.expected = expectedSharedAudioAsset(*request);
+        pending.complete =
+            [channelId, slotId](EngineController& controller,
+                                const AssetRef& verifiedAsset) {
+                const TrackModel* current =
+                    controller.m_project.findTrack(channelId);
+                if (!current || current->instrument.id != slotId ||
+                    current->instrument.uid != "daw.sampler") {
+                    return collab::SharedMutationResult::Blocked;
+                }
+                return controller.submitSharedMutation(
+                    collab::SetPluginAssetBinding{
+                        {collab::PluginChain::Instrument, channelId, {}},
+                        slotId,
+                        PluginAssetBinding{"sample", verifiedAsset, true}},
+                    "Load Sample");
+            };
+        return prepareSharedAssetMutation(std::move(*request),
+                                          std::move(pending)) ==
+               collab::SharedMutationResult::Submitted;
+    }
     plugins::sampler::SamplerInstance* sampler = samplerInstance(channelId, slotId);
     if (!sampler) return false;
 
@@ -6287,6 +8345,75 @@ bool EngineController::loadInstrumentSampler(const std::string& trackId,
     const auto sampler =
         m_pluginManager.find(plugins::Format::Internal, "daw.sampler");
     if (!sampler) return false;
+
+    if (cloudProjectBound()) {
+        auto request = sharedAudioRequest(filePath);
+        if (!request) return false;
+        const InsertModel before = track->instrument;
+        if (!before.id.empty() &&
+            (before.format != PluginFormat::Internal ||
+             !supportedSharedBuiltin(before))) {
+            return false;
+        }
+
+        PendingSharedAssetMutation pending;
+        pending.expected = expectedSharedAudioAsset(*request);
+        if (before.uid == "daw.sampler") {
+            const std::string slotId = before.id;
+            pending.complete =
+                [trackId, slotId](EngineController& controller,
+                                  const AssetRef& verifiedAsset) {
+                    const TrackModel* current =
+                        controller.m_project.findTrack(trackId);
+                    if (!current || current->instrument.id != slotId ||
+                        current->instrument.uid != "daw.sampler") {
+                        return collab::SharedMutationResult::Blocked;
+                    }
+                    return controller.submitSharedMutation(
+                        collab::SetPluginAssetBinding{
+                            {collab::PluginChain::Instrument, trackId, {}},
+                            slotId,
+                            PluginAssetBinding{"sample", verifiedAsset, true}},
+                        "Load Sampler with File");
+                };
+        } else {
+            InsertModel candidate;
+            candidate.id = before.id.empty() ? newUuid() : before.id;
+            candidate.bypassed = before.bypassed;
+            applyDescriptor(candidate, *sampler);
+            InsertModel replacement;
+            if (!cleanSharedInsert(candidate, replacement, false) ||
+                replacement.uid != "daw.sampler") {
+                return false;
+            }
+            pending.complete =
+                [trackId, beforeId = before.id,
+                 replacement = std::move(replacement)](
+                    EngineController& controller,
+                    const AssetRef& verifiedAsset) mutable {
+                    const TrackModel* current =
+                        controller.m_project.findTrack(trackId);
+                    if (!current || current->instrument.id != beforeId)
+                        return collab::SharedMutationResult::Blocked;
+                    setSharedSampleBinding(replacement, verifiedAsset);
+                    const collab::PluginLocation location{
+                        collab::PluginChain::Instrument, trackId, {}};
+                    collab::CommandBody body;
+                    if (beforeId.empty()) {
+                        body = collab::AddPluginInsert{location, replacement,
+                                                       {}};
+                    } else {
+                        body = collab::ReplacePluginInsert{
+                            location, beforeId, replacement};
+                    }
+                    return controller.submitSharedMutation(
+                        std::move(body), "Load Sampler with File");
+                };
+        }
+        return prepareSharedAssetMutation(std::move(*request),
+                                          std::move(pending)) ==
+               collab::SharedMutationResult::Submitted;
+    }
 
     const InsertModel before = track->instrument;
     const SamplerFxModel beforeFx = track->samplerFx;
@@ -6350,6 +8477,26 @@ void EngineController::clearSamplerSampleSilently(
 
 void EngineController::clearSamplerSample(const std::string& channelId,
                                           const std::string& slotId) {
+    if (cloudProjectBound()) {
+        const TrackModel* track = m_project.findTrack(channelId);
+        if (!track || track->instrument.id != slotId ||
+            track->instrument.uid != "daw.sampler") {
+            return;
+        }
+        const bool hasSample = std::any_of(
+            track->instrument.assetBindings.begin(),
+            track->instrument.assetBindings.end(),
+            [](const PluginAssetBinding& binding) {
+                return binding.key == "sample";
+            });
+        if (!hasSample) return;
+        (void)submitSharedMutation(
+            collab::RemovePluginAssetBinding{
+                {collab::PluginChain::Instrument, channelId, {}}, slotId,
+                "sample"},
+            "Clear Sample");
+        return;
+    }
     plugins::sampler::SamplerInstance* sampler = samplerInstance(channelId, slotId);
     if (!sampler) return;
     const std::string previous = sampler->samplePath();
@@ -6549,6 +8696,63 @@ std::string EngineController::importAudioToNewTrack(
     const ClipMusicalAnalysisModel& analysis) {
     if (filePath.empty()) return {};
 
+    if (cloudProjectBound()) {
+        auto request = sharedAudioRequest(filePath);
+        if (!request) return {};
+
+        std::string name = trackName;
+        if (name.empty()) {
+            name = platform::pathToUtf8(
+                platform::pathFromUtf8(filePath).stem());
+        }
+        if (name.empty()) name = "Audio";
+
+        TrackModel track;
+        track.id = newUuid();
+        track.kind = TrackKind::Audio;
+        track.name = std::move(name);
+        track.color = defaultTrackColor(track.kind);
+        ClipModel clip;
+        clip.id = newUuid();
+        clip.kind = ClipKind::Audio;
+        clip.name = platform::pathToUtf8(
+            platform::pathFromUtf8(filePath).stem());
+        if (clip.name.empty()) clip.name = "Audio";
+        clip.startSeconds = startSeconds;
+        clip.durationSeconds = double(request->frames) / request->sampleRate;
+        clip.channels = int(request->channels);
+        clip.color = track.color;
+        clip.musicalAnalysis = analysis;
+        clip.asset = expectedSharedAudioAsset(*request);
+        track.clips.push_back(clip);
+        const std::string trackId = track.id;
+        const std::string afterId = m_project.tracks.empty()
+            ? std::string()
+            : m_project.tracks.back().id;
+
+        PendingSharedAssetMutation pending;
+        pending.expected = clip.asset;
+        pending.complete =
+            [track = std::move(track), afterId](
+                EngineController& controller,
+                const AssetRef& verifiedAsset) mutable {
+                track.clips.front().asset = verifiedAsset;
+                auto batch = std::make_shared<collab::BatchCommand>();
+                if (!appendSharedTrack(batch, track, afterId) ||
+                    !sharedBatchApplies(controller.m_project, batch)) {
+                    return collab::SharedMutationResult::Blocked;
+                }
+                return controller.submitSharedMutation(
+                    collab::CommandBody{std::move(batch)},
+                    "Import Audio to New Track");
+            };
+        return prepareSharedAssetMutation(std::move(*request),
+                                          std::move(pending)) ==
+                       collab::SharedMutationResult::Submitted
+                   ? trackId
+                   : std::string{};
+    }
+
     const std::size_t undoStart = m_undo.depth();
     std::string name = trackName;
     if (name.empty()) {
@@ -6580,6 +8784,49 @@ std::string EngineController::importAudio(const std::string& filePath,
                                           const ClipMusicalAnalysisModel& analysis) {
     auto* track = m_project.findTrack(trackId);
     if (!track || !trackAccepts(track->kind, ClipKind::Audio)) return {};
+
+    if (cloudProjectBound()) {
+        auto request = sharedAudioRequest(filePath);
+        if (!request) return {};
+
+        ClipModel clip;
+        clip.id = newUuid();
+        clip.kind = ClipKind::Audio;
+        clip.name = platform::pathToUtf8(
+            platform::pathFromUtf8(filePath).stem());
+        if (clip.name.empty()) clip.name = "Audio";
+        clip.startSeconds = startSeconds;
+        clip.durationSeconds = double(request->frames) / request->sampleRate;
+        clip.channels = int(request->channels);
+        clip.color = track->color;
+        clip.musicalAnalysis = analysis;
+        clip.asset = expectedSharedAudioAsset(*request);
+        const std::string clipId = clip.id;
+        const std::string afterId = track->clips.empty()
+            ? std::string()
+            : track->clips.back().id;
+
+        PendingSharedAssetMutation pending;
+        pending.expected = clip.asset;
+        pending.complete =
+            [trackId, clip = std::move(clip), afterId](
+                EngineController& controller,
+                const AssetRef& verifiedAsset) mutable {
+                clip.asset = verifiedAsset;
+                auto batch = std::make_shared<collab::BatchCommand>();
+                if (!appendSharedClip(batch, trackId, clip, afterId) ||
+                    !sharedBatchApplies(controller.m_project, batch)) {
+                    return collab::SharedMutationResult::Blocked;
+                }
+                return controller.submitSharedMutation(
+                    collab::CommandBody{std::move(batch)}, "Import Audio");
+            };
+        return prepareSharedAssetMutation(std::move(*request),
+                                          std::move(pending)) ==
+                       collab::SharedMutationResult::Submitted
+                   ? clipId
+                   : std::string{};
+    }
 
     auto samples = loadSamples(filePath);
     if (!samples) return {};
@@ -6863,6 +9110,43 @@ void EngineController::endClipPositionEdit(const std::string& label) {
     // deferred realtime state and duration cache. A transient private-chain
     // crossing also deferred ordinary audio placements after that crossing.
     apply(true, edit.graphDirty);
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const PositionDelta& change : *delta) {
+            const TrackModel* owner = m_project.findTrack(change.afterTrackId);
+            std::string afterId;
+            if (owner) {
+                const auto found = std::find_if(
+                    owner->clips.begin(), owner->clips.end(),
+                    [&](const ClipModel& clip) {
+                        return clip.id == change.clipId;
+                    });
+                if (found != owner->clips.end() && found != owner->clips.begin())
+                    afterId = std::prev(found)->id;
+            }
+            if (change.beforeTrackId != change.afterTrackId ||
+                change.beforeIndex != change.afterIndex) {
+                appendCommand(batch, collab::MoveClip{
+                    change.clipId, change.beforeTrackId,
+                    change.afterTrackId, afterId});
+            }
+            if (std::abs(change.beforeStartSeconds -
+                         change.afterStartSeconds) >= 1e-12) {
+                appendCommand(batch, collab::SetClipProperty{
+                    change.afterTrackId, change.clipId,
+                    collab::ClipProperty::StartSeconds,
+                    change.afterStartSeconds});
+            }
+        }
+        if (!batch->commands.empty()) {
+            const auto result = submitSharedMutation(
+                collab::CommandBody{std::move(batch)}, label);
+            if (result == collab::SharedMutationResult::Blocked)
+                apply(false, true);
+            if (result != collab::SharedMutationResult::LocalFallback)
+                return;
+        }
+    }
     if (!label.empty()) {
         m_undo.push(label,
                     [apply] { apply(false, true); },
@@ -6872,6 +9156,35 @@ void EngineController::endClipPositionEdit(const std::string& label) {
 
 void EngineController::setClipStartsSeconds(
     std::span<const ClipStartChange> changes) {
+    if (cloudProjectBound() && !m_clipPositionEdit.active) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const ClipStartChange& change : changes) {
+            const TrackModel* track = m_project.findTrack(change.trackId);
+            const ClipModel* clip = findClip(change.trackId, change.clipId);
+            if (!track || !clip) continue;
+            const double next = std::max(0.0, change.startSeconds);
+            const double delta = next - clip->startSeconds;
+            if (std::abs(delta) < 1e-12) continue;
+            appendCommand(batch, collab::SetClipProperty{
+                change.trackId, change.clipId,
+                collab::ClipProperty::StartSeconds, next});
+            if (clip->kind != ClipKind::Pattern) continue;
+            for (const TrackModel& memberTrack : m_project.tracks) {
+                for (const ClipModel& member : memberTrack.clips) {
+                    if (member.patternClipId != clip->id) continue;
+                    appendCommand(batch, collab::SetClipProperty{
+                        memberTrack.id, member.id,
+                        collab::ClipProperty::StartSeconds,
+                        std::max(0.0, member.startSeconds + delta)});
+                }
+            }
+        }
+        if (!batch->commands.empty()) {
+            (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                       "Move Clip");
+        }
+        return;
+    }
     std::unordered_set<std::string> audioTracks;
     std::unordered_set<std::string> midiTracks;
     bool automationMoved = false;
@@ -7163,6 +9476,21 @@ void EngineController::commitClipSampleParameterEdit(
     }
     if (ClipModel* edited = findClip(trackId, clipId))
         edited->musicalAnalysis = analysisAfter;
+    if (cloudProjectBound() && current) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        appendCommand(batch, collab::SetClipSampleEdit{
+            trackId, clipId, current->sampleEdit});
+        appendCommand(batch, collab::SetClipMusicalAnalysis{
+            trackId, clipId, analysisAfter});
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, label);
+        if (result == collab::SharedMutationResult::Blocked) {
+            setClipSampleParameter(trackId, clipId, parameterId, before);
+            if (ClipModel* target = findClip(trackId, clipId))
+                target->musicalAnalysis = analysisBefore;
+        }
+        if (result != collab::SharedMutationResult::LocalFallback) return;
+    }
     const auto apply = [this, trackId, clipId, parameterId](
                            double value,
                            const ClipMusicalAnalysisModel& analysis) {
@@ -7225,6 +9553,14 @@ void EngineController::commitClipFadeEdit(const std::string& trackId,
     const double afterOut = clip->fadeOutSeconds;
     if (beforeIn == afterIn && beforeOut == afterOut) return;
 
+    const auto shared = submitSharedMutation(
+        collab::SetClipFade{trackId, clipId, afterIn, afterOut}, label);
+    if (shared != collab::SharedMutationResult::LocalFallback) {
+        if (shared == collab::SharedMutationResult::Blocked)
+            setClipFade(trackId, clipId, beforeIn, beforeOut);
+        return;
+    }
+
     auto apply = [this, trackId, clipId](double fadeIn, double fadeOut) {
         setClipFade(trackId, clipId, fadeIn, fadeOut);
     };
@@ -7259,6 +9595,18 @@ void EngineController::commitClipFadeCurveEdit(
     const double afterCurve = fadeIn ? clip->fadeInCurve : clip->fadeOutCurve;
     if (beforeCurve == afterCurve) return;
 
+    const auto shared = submitSharedMutation(
+        collab::SetClipFadeCurve{trackId, clipId,
+                                 fadeIn ? collab::ClipEdge::In
+                                        : collab::ClipEdge::Out,
+                                 afterCurve},
+        label);
+    if (shared != collab::SharedMutationResult::LocalFallback) {
+        if (shared == collab::SharedMutationResult::Blocked)
+            setClipFadeCurve(trackId, clipId, fadeIn, beforeCurve);
+        return;
+    }
+
     auto apply = [this, trackId, clipId, fadeIn](double curve) {
         setClipFadeCurve(trackId, clipId, fadeIn, curve);
     };
@@ -7276,6 +9624,13 @@ void EngineController::setClipFadeMode(const std::string& trackId,
         ClipFadeMode& value = fadeIn ? clip.fadeInMode : clip.fadeOutMode;
         if (value == mode) return;
         const ClipFadeMode before = value;
+        const auto shared = submitSharedMutation(
+            collab::SetClipFadeMode{trackId, clipId,
+                                    fadeIn ? collab::ClipEdge::In
+                                           : collab::ClipEdge::Out,
+                                    mode},
+            mode == ClipFadeMode::Tape ? "Set Tape Fade" : "Set Gain Fade");
+        if (shared != collab::SharedMutationResult::LocalFallback) return;
         value = mode;
         syncTrackClips(*track);
         auto apply = [this, trackId, clipId, fadeIn](ClipFadeMode next) {
@@ -7529,6 +9884,99 @@ void EngineController::endClipTrimEdit(const std::string& label) {
     // The document is already at the after endpoint. Publish it without
     // assigning any captured payload back into the live clip.
     publish();
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        ProjectModel scratch = m_project;
+        for (const TrimItem& item : delta->items) {
+            ClipModel* beforeClip = nullptr;
+            if (TrackModel* owner = scratch.findTrack(item.trackId)) {
+                const auto found = std::find_if(
+                    owner->clips.begin(), owner->clips.end(),
+                    [&](const ClipModel& clip) { return clip.id == item.clipId; });
+                if (found != owner->clips.end()) beforeClip = &*found;
+            }
+            if (!beforeClip) {
+                apply(false);
+                return;
+            }
+            beforeClip->startSeconds = item.before.startSeconds;
+            beforeClip->offsetSeconds = item.before.offsetSeconds;
+            beforeClip->durationSeconds = item.before.durationSeconds;
+            beforeClip->musicalAnalysis = item.before.musicalAnalysis;
+            if (item.kind == ClipKind::Automation)
+                beforeClip->automation = item.before.automation;
+
+            if (item.before.startSeconds != item.after.startSeconds) {
+                appendCommand(batch, collab::SetClipProperty{
+                    item.trackId, item.clipId,
+                    collab::ClipProperty::StartSeconds,
+                    item.after.startSeconds});
+            }
+            if (item.before.offsetSeconds != item.after.offsetSeconds) {
+                appendCommand(batch, collab::SetClipProperty{
+                    item.trackId, item.clipId,
+                    collab::ClipProperty::OffsetSeconds,
+                    item.after.offsetSeconds});
+            }
+            if (item.before.durationSeconds != item.after.durationSeconds) {
+                appendCommand(batch, collab::SetClipProperty{
+                    item.trackId, item.clipId,
+                    collab::ClipProperty::DurationSeconds,
+                    item.after.durationSeconds});
+            }
+            if (item.kind == ClipKind::Audio) {
+                appendCommand(batch, collab::SetClipMusicalAnalysis{
+                    item.trackId, item.clipId, item.after.musicalAnalysis});
+            }
+            if (item.kind != ClipKind::Automation) continue;
+
+            const ClipAutomationModel& before = item.before.automation;
+            const ClipAutomationModel& after = item.after.automation;
+            if (before.target != after.target) {
+                appendCommand(batch, collab::SetAutomationTarget{
+                    item.trackId, item.clipId, after.target});
+            }
+            if (before.defaultValue != after.defaultValue) {
+                appendCommand(batch, collab::SetAutomationDefault{
+                    item.trackId, item.clipId, after.defaultValue});
+            }
+            if (before.active != after.active) {
+                appendCommand(batch, collab::SetAutomationActive{
+                    item.trackId, item.clipId, after.active});
+            }
+            std::unordered_set<std::string> afterIds;
+            afterIds.reserve(after.points.size());
+            for (const AutomationPoint& point : after.points)
+                afterIds.insert(point.id);
+            for (const AutomationPoint& point : before.points) {
+                if (!afterIds.contains(point.id)) {
+                    appendCommand(batch, collab::DeleteAutomationPoint{
+                        item.trackId, item.clipId, {}, point.id});
+                }
+            }
+            std::unordered_map<std::string, const AutomationPoint*> beforeById;
+            beforeById.reserve(before.points.size());
+            for (const AutomationPoint& point : before.points)
+                beforeById.emplace(point.id, &point);
+            for (std::size_t index = 0; index < after.points.size(); ++index) {
+                const AutomationPoint& point = after.points[index];
+                const auto old = beforeById.find(point.id);
+                if (old != beforeById.end() && *old->second == point) continue;
+                appendCommand(batch, collab::UpsertAutomationPoint{
+                    item.trackId, item.clipId, {}, point,
+                    index == 0 ? std::string() : after.points[index - 1].id});
+            }
+        }
+        if (batch->commands.empty() || !sharedBatchApplies(scratch, batch)) {
+            apply(false);
+            return;
+        }
+        const auto shared = submitSharedMutation(
+            collab::CommandBody{std::move(batch)},
+            label.empty() ? "Trim Clip" : label);
+        if (shared == collab::SharedMutationResult::Blocked) apply(false);
+        if (shared != collab::SharedMutationResult::LocalFallback) return;
+    }
     if (!label.empty()) {
         m_undo.push(label, [apply] { apply(false); },
                     [apply] { apply(true); });
@@ -7784,6 +10232,323 @@ std::string EngineController::splitClip(const std::string& trackId,
                                         double atSeconds) {
     auto* track = m_project.findTrack(trackId);
     if (!track) return {};
+
+    if (cloudProjectBound()) {
+        const auto found = std::find_if(
+            track->clips.begin(), track->clips.end(),
+            [&](const ClipModel& clip) { return clip.id == clipId; });
+        if (found == track->clips.end()) return {};
+        if (found->kind == ClipKind::Pattern) {
+            const ClipModel original = *found;
+            const double clipEnd =
+                original.startSeconds + original.durationSeconds;
+            if (original.durationSeconds <= 0.0 ||
+                atSeconds <= original.startSeconds + kMinClipSeconds ||
+                atSeconds >= clipEnd - kMinClipSeconds) {
+                return {};
+            }
+            for (const TrackModel& memberTrack : m_project.tracks) {
+                for (const ClipModel& member : memberTrack.clips) {
+                    if (member.patternClipId == clipId &&
+                        member.kind != ClipKind::Midi) {
+                        return {};
+                    }
+                }
+            }
+
+            const double leftDuration = atSeconds - original.startSeconds;
+            ClipModel rightPattern = original;
+            rightPattern.startSeconds = atSeconds;
+            rightPattern.durationSeconds = clipEnd - atSeconds;
+            rightPattern.offsetSeconds = original.offsetSeconds + leftDuration;
+            rightPattern.patternClipId.clear();
+            mintClipIdentities(rightPattern, {}, true);
+
+            auto batch = std::make_shared<collab::BatchCommand>();
+            appendCommand(batch, collab::SetClipProperty{
+                trackId, clipId, collab::ClipProperty::DurationSeconds,
+                leftDuration});
+            if (!appendSharedClip(
+                    batch, trackId, rightPattern,
+                    track->clips.empty() ? std::string()
+                                         : track->clips.back().id)) {
+                return {};
+            }
+
+            std::unordered_map<std::string, std::string> anchors;
+            for (const TrackModel& memberTrack : m_project.tracks) {
+                anchors[memberTrack.id] = memberTrack.clips.empty()
+                                              ? std::string()
+                                              : memberTrack.clips.back().id;
+                for (const ClipModel& member : memberTrack.clips) {
+                    if (member.patternClipId != clipId) continue;
+                    const double memberEnd =
+                        member.startSeconds + member.durationSeconds;
+                    if (memberEnd <= atSeconds) continue;
+                    if (member.startSeconds >= atSeconds) {
+                        appendCommand(batch, collab::SetClipPatternOwner{
+                            memberTrack.id, member.id, rightPattern.id});
+                        continue;
+                    }
+
+                    const double memberLeftDuration =
+                        atSeconds - member.startSeconds;
+                    const double cutBeats = secondsToBeats(
+                        memberLeftDuration, m_project.tempo);
+                    ClipModel leftMember = member;
+                    ClipModel rightMember = member;
+                    leftMember.durationSeconds = memberLeftDuration;
+                    leftMember.notes.clear();
+                    rightMember.notes.clear();
+                    for (const NoteModel& note : member.notes) {
+                        const double noteEnd =
+                            note.startBeats + note.lengthBeats;
+                        if (note.startBeats >= cutBeats) {
+                            NoteModel moved = note;
+                            moved.startBeats -= cutBeats;
+                            rightMember.notes.push_back(std::move(moved));
+                        } else if (noteEnd <= cutBeats) {
+                            leftMember.notes.push_back(note);
+                        } else {
+                            NoteModel leftNote = note;
+                            leftNote.lengthBeats =
+                                cutBeats - note.startBeats;
+                            if (leftNote.lengthBeats > 0.0)
+                                leftMember.notes.push_back(
+                                    std::move(leftNote));
+                            NoteModel rightNote = note;
+                            rightNote.startBeats = 0.0;
+                            rightNote.lengthBeats = noteEnd - cutBeats;
+                            if (rightNote.lengthBeats > 0.0)
+                                rightMember.notes.push_back(
+                                    std::move(rightNote));
+                        }
+                    }
+                    for (std::size_t lane = 0; lane < member.lanes.size();
+                         ++lane) {
+                        leftMember.lanes[lane].points.clear();
+                        rightMember.lanes[lane].points.clear();
+                        for (const AutomationPoint& point :
+                             member.lanes[lane].points) {
+                            if (point.beats < cutBeats) {
+                                leftMember.lanes[lane].points.push_back(point);
+                            } else {
+                                AutomationPoint moved = point;
+                                moved.beats -= cutBeats;
+                                rightMember.lanes[lane].points.push_back(
+                                    std::move(moved));
+                            }
+                        }
+                    }
+                    rightMember.patternClipId = rightPattern.id;
+                    rightMember.startSeconds = atSeconds;
+                    rightMember.durationSeconds =
+                        memberEnd - atSeconds;
+                    rightMember.offsetSeconds = member.offsetSeconds +
+                        memberLeftDuration /
+                            std::max(member.sampleEdit.stretchTime, 0.01);
+                    mintClipIdentities(rightMember, {}, true);
+
+                    appendCommand(batch, collab::SetClipProperty{
+                        memberTrack.id, member.id,
+                        collab::ClipProperty::DurationSeconds,
+                        memberLeftDuration});
+                    if (!appendMidiClipContentsDiff(
+                            batch, memberTrack.id, member, leftMember) ||
+                        !appendSharedClip(batch, memberTrack.id, rightMember,
+                                          anchors[memberTrack.id])) {
+                        return {};
+                    }
+                    anchors[memberTrack.id] = rightMember.id;
+                }
+            }
+            if (!sharedBatchApplies(m_project, batch)) return {};
+            const auto result = submitSharedMutation(
+                collab::CommandBody{std::move(batch)},
+                "Split Pattern Clip");
+            return result == collab::SharedMutationResult::Submitted
+                       ? rightPattern.id
+                       : std::string{};
+        }
+        const ClipModel original = *found;
+        double effectiveDuration = original.durationSeconds;
+        if (effectiveDuration <= 0.0 && original.asset.sampleRate > 0.0 &&
+            original.asset.frames > 0) {
+            effectiveDuration =
+                double(original.asset.frames) / original.asset.sampleRate -
+                original.offsetSeconds;
+        }
+        if (effectiveDuration <= 0.0) return {};
+        const double clipEnd = original.startSeconds + effectiveDuration;
+        if (atSeconds <= original.startSeconds + kMinClipSeconds ||
+            atSeconds >= clipEnd - kMinClipSeconds) {
+            return {};
+        }
+
+        const double leftDuration = atSeconds - original.startSeconds;
+        ClipModel left = original;
+        ClipModel right = original;
+        left.durationSeconds = leftDuration;
+        right.startSeconds = atSeconds;
+        right.offsetSeconds = original.offsetSeconds +
+            leftDuration / std::max(original.sampleEdit.stretchTime, 0.01);
+        right.durationSeconds = effectiveDuration - leftDuration;
+        if (original.kind == ClipKind::Audio) {
+            left.musicalAnalysis = {};
+            right.musicalAnalysis = {};
+        }
+
+        if (original.kind == ClipKind::Midi) {
+            const double cutBeats =
+                secondsToBeats(leftDuration, m_project.tempo);
+            left.notes.clear();
+            right.notes.clear();
+            for (const NoteModel& note : original.notes) {
+                const double noteEnd = note.startBeats + note.lengthBeats;
+                if (note.startBeats >= cutBeats) {
+                    NoteModel moved = note;
+                    moved.startBeats -= cutBeats;
+                    right.notes.push_back(std::move(moved));
+                } else if (noteEnd <= cutBeats) {
+                    left.notes.push_back(note);
+                } else {
+                    NoteModel leftNote = note;
+                    leftNote.lengthBeats = cutBeats - note.startBeats;
+                    if (leftNote.lengthBeats > 0.0)
+                        left.notes.push_back(std::move(leftNote));
+                    NoteModel rightNote = note;
+                    rightNote.startBeats = 0.0;
+                    rightNote.lengthBeats = noteEnd - cutBeats;
+                    if (rightNote.lengthBeats > 0.0)
+                        right.notes.push_back(std::move(rightNote));
+                }
+            }
+            for (std::size_t lane = 0; lane < original.lanes.size(); ++lane) {
+                left.lanes[lane].points.clear();
+                right.lanes[lane].points.clear();
+                for (const AutomationPoint& point :
+                     original.lanes[lane].points) {
+                    if (point.beats < cutBeats) {
+                        left.lanes[lane].points.push_back(point);
+                    } else {
+                        AutomationPoint moved = point;
+                        moved.beats -= cutBeats;
+                        right.lanes[lane].points.push_back(std::move(moved));
+                    }
+                }
+            }
+        }
+
+        if (original.kind == ClipKind::Automation) {
+            const double cutBeats =
+                secondsToBeats(leftDuration, m_project.tempo);
+            const double atCut = automationValueAt(
+                original.automation.points, cutBeats,
+                original.automation.defaultValue);
+            left.automation.points.clear();
+            right.automation.points.clear();
+            right.automation.defaultValue = atCut;
+            for (const AutomationPoint& point : original.automation.points) {
+                if (point.beats < cutBeats) {
+                    left.automation.points.push_back(point);
+                } else {
+                    AutomationPoint moved = point;
+                    moved.beats -= cutBeats;
+                    right.automation.points.push_back(std::move(moved));
+                }
+            }
+            AutomationPoint seam;
+            seam.id = newUuid();
+            seam.beats = cutBeats;
+            seam.value = atCut;
+            if (!left.automation.points.empty())
+                seam.shape = left.automation.points.back().shape;
+            left.automation.points.push_back(seam);
+            AutomationPoint head = seam;
+            head.id = newUuid();
+            head.beats = 0.0;
+            right.automation.points.insert(right.automation.points.begin(),
+                                           std::move(head));
+            normalizeAutomation(left.automation.points);
+            normalizeAutomation(right.automation.points);
+        }
+
+        mintClipIdentities(right, {}, true);
+        auto batch = std::make_shared<collab::BatchCommand>();
+        appendCommand(batch, collab::SetClipProperty{
+            trackId, clipId, collab::ClipProperty::DurationSeconds,
+            leftDuration});
+        if (original.kind == ClipKind::Audio) {
+            appendCommand(batch, collab::SetClipMusicalAnalysis{
+                trackId, clipId, {}});
+        }
+        if (original.kind == ClipKind::Midi) {
+            const std::unordered_set<std::string> leftNoteIds = [&] {
+                std::unordered_set<std::string> ids;
+                for (const NoteModel& note : left.notes) ids.insert(note.id);
+                return ids;
+            }();
+            for (const NoteModel& note : original.notes) {
+                if (!leftNoteIds.contains(note.id)) {
+                    appendCommand(batch, collab::DeleteMidiNote{
+                        trackId, clipId, note.id});
+                }
+            }
+            std::string noteAnchor;
+            for (const NoteModel& note : left.notes) {
+                appendCommand(batch, collab::UpsertMidiNote{
+                    trackId, clipId, note, noteAnchor});
+                noteAnchor = note.id;
+            }
+            for (std::size_t lane = 0; lane < original.lanes.size(); ++lane) {
+                const std::string& laneId = original.lanes[lane].id;
+                std::unordered_set<std::string> leftPointIds;
+                for (const AutomationPoint& point : left.lanes[lane].points)
+                    leftPointIds.insert(point.id);
+                for (const AutomationPoint& point :
+                     original.lanes[lane].points) {
+                    if (!leftPointIds.contains(point.id)) {
+                        appendCommand(batch, collab::DeleteAutomationPoint{
+                            trackId, clipId, laneId, point.id});
+                    }
+                }
+                std::string pointAnchor;
+                for (const AutomationPoint& point : left.lanes[lane].points) {
+                    appendCommand(batch, collab::UpsertAutomationPoint{
+                        trackId, clipId, laneId, point, pointAnchor});
+                    pointAnchor = point.id;
+                }
+            }
+        }
+        if (original.kind == ClipKind::Automation) {
+            std::unordered_set<std::string> leftPointIds;
+            for (const AutomationPoint& point : left.automation.points)
+                leftPointIds.insert(point.id);
+            for (const AutomationPoint& point : original.automation.points) {
+                if (!leftPointIds.contains(point.id)) {
+                    appendCommand(batch, collab::DeleteAutomationPoint{
+                        trackId, clipId, {}, point.id});
+                }
+            }
+            std::string pointAnchor;
+            for (const AutomationPoint& point : left.automation.points) {
+                appendCommand(batch, collab::UpsertAutomationPoint{
+                    trackId, clipId, {}, point, pointAnchor});
+                pointAnchor = point.id;
+            }
+        }
+        if (!appendSharedClip(
+                batch, trackId, right,
+                track->clips.empty() ? std::string()
+                                     : track->clips.back().id) ||
+            !sharedBatchApplies(m_project, batch)) {
+            return {};
+        }
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Split Clip");
+        return result == collab::SharedMutationResult::Submitted ? right.id
+                                                                 : std::string{};
+    }
 
     auto patternIt = std::find_if(track->clips.begin(), track->clips.end(),
                                   [&](const ClipModel& clip) {
@@ -8195,6 +10960,26 @@ void EngineController::removeClip(const std::string& trackId,
     }
     if (!found) return;
 
+    if (cloudProjectBound()) {
+        if (snapshot.kind != ClipKind::Pattern) {
+            (void)submitSharedMutation(collab::DeleteClip{trackId, clipId},
+                                       "Remove Clip");
+            return;
+        }
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const TrackModel& memberTrack : m_project.tracks) {
+            for (const ClipModel& member : memberTrack.clips) {
+                if (member.patternClipId == clipId)
+                    appendCommand(batch, collab::DeleteClip{
+                        memberTrack.id, member.id});
+            }
+        }
+        appendCommand(batch, collab::DeleteClip{trackId, clipId});
+        (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                   "Remove Pattern Clip");
+        return;
+    }
+
     if (snapshot.kind == ClipKind::Pattern) {
         struct PatternRemoveDelta {
             PatternClipEndpointDelta clips;
@@ -8298,6 +11083,32 @@ void EngineController::setClipMuted(const std::string& trackId,
                                      [&](const ClipModel& clip) {
                                          return clip.id == clipId;
                                      });
+    if (target == track->clips.end() || target->muted == muted) return;
+    if (cloudProjectBound()) {
+        if (target->kind != ClipKind::Pattern) {
+            (void)submitSharedMutation(
+                collab::SetClipProperty{trackId, clipId,
+                                        collab::ClipProperty::Muted, muted},
+                muted ? "Mute Clip" : "Unmute Clip");
+            return;
+        }
+        auto batch = std::make_shared<collab::BatchCommand>();
+        appendCommand(batch, collab::SetClipProperty{
+            trackId, clipId, collab::ClipProperty::Muted, muted});
+        for (const TrackModel& memberTrack : m_project.tracks) {
+            for (const ClipModel& member : memberTrack.clips) {
+                if (member.patternClipId == clipId) {
+                    appendCommand(batch, collab::SetClipProperty{
+                        memberTrack.id, member.id,
+                        collab::ClipProperty::Muted, muted});
+                }
+            }
+        }
+        (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                   muted ? "Mute Pattern Clip"
+                                         : "Unmute Pattern Clip");
+        return;
+    }
     if (target != track->clips.end() && target->kind == ClipKind::Pattern) {
         if (target->muted == muted) return;
         struct PatternMuteChange {
@@ -8385,6 +11196,11 @@ void EngineController::setClipName(const std::string& trackId,
     for (auto& clip : track->clips) {
         if (clip.id != clipId) continue;
         if (clip.name == name) return;
+        const auto shared = submitSharedMutation(
+            collab::SetClipProperty{trackId, clipId,
+                                    collab::ClipProperty::Name, name},
+            "Rename Clip");
+        if (shared != collab::SharedMutationResult::LocalFallback) return;
         const std::string before = clip.name;
         clip.name = name;
 
@@ -8418,6 +11234,11 @@ std::string EngineController::duplicateClip(const std::string& trackId,
     // duplicate reads as a repeat. A stored duration of 0 means "to end of
     // file", so resolve the real length first.
     double length = source->durationSeconds;
+    if (length <= 0.0 && source->asset.sampleRate > 0.0 &&
+        source->asset.frames > 0) {
+        length = double(source->asset.frames) / source->asset.sampleRate -
+                 source->offsetSeconds;
+    }
     if (length <= 0.0) {
         if (auto samples = loadSamples(source->filePath);
             samples && samples->sampleRate() > 0.0) {
@@ -8440,6 +11261,72 @@ std::string EngineController::duplicateClipAt(const std::string& trackId,
         if (clip.id == clipId) { source = &clip; break; }
     }
     if (!source) return {};
+    if (cloudProjectBound()) {
+        const double targetStart = std::max(0.0, startSeconds);
+        auto batch = std::make_shared<collab::BatchCommand>();
+        ClipModel parentCopy = *source;
+        mintClipIdentities(parentCopy, {}, true);
+        parentCopy.startSeconds = targetStart;
+        if (source->kind != ClipKind::Pattern) {
+            const std::string anchor = track->clips.empty()
+                                           ? std::string()
+                                           : track->clips.back().id;
+            if (!appendSharedClip(batch, trackId, parentCopy, anchor) ||
+                !sharedBatchApplies(m_project, batch)) {
+                return {};
+            }
+            const auto result = submitSharedMutation(
+                collab::CommandBody{std::move(batch)}, "Duplicate Clip");
+            return result == collab::SharedMutationResult::Submitted
+                       ? parentCopy.id
+                       : std::string{};
+        }
+
+        if (track->kind != TrackKind::Pattern) return {};
+        parentCopy.patternClipId.clear();
+        parentCopy.name = source->name.empty() ? track->name : source->name;
+        const double delta = targetStart - source->startSeconds;
+        const std::unordered_set<std::string> descendants = [&] {
+            const auto ids = subtreeOf(m_project, trackId);
+            return std::unordered_set<std::string>(ids.begin(), ids.end());
+        }();
+        if (!appendSharedClip(
+                batch, trackId, parentCopy,
+                track->clips.empty() ? std::string()
+                                     : track->clips.back().id)) {
+            return {};
+        }
+        std::unordered_map<std::string, std::string> anchors;
+        for (const TrackModel& memberTrack : m_project.tracks) {
+            if (!descendants.contains(memberTrack.id)) continue;
+            anchors[memberTrack.id] = memberTrack.clips.empty()
+                                          ? std::string()
+                                          : memberTrack.clips.back().id;
+            for (const ClipModel& member : memberTrack.clips) {
+                if (member.patternClipId != source->id ||
+                    member.kind != ClipKind::Midi) {
+                    continue;
+                }
+                ClipModel memberCopy = member;
+                mintClipIdentities(memberCopy, {}, true);
+                memberCopy.patternClipId = parentCopy.id;
+                memberCopy.startSeconds =
+                    std::max(0.0, member.startSeconds + delta);
+                if (!appendSharedClip(batch, memberTrack.id, memberCopy,
+                                      anchors[memberTrack.id])) {
+                    return {};
+                }
+                anchors[memberTrack.id] = memberCopy.id;
+            }
+        }
+        if (!sharedBatchApplies(m_project, batch)) return {};
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)},
+            "Duplicate Pattern Clip");
+        return result == collab::SharedMutationResult::Submitted
+                   ? parentCopy.id
+                   : std::string{};
+    }
     if (source->kind == ClipKind::Pattern) {
         PatternClipMembers members;
         for (const TrackModel& memberTrack : m_project.tracks) {
@@ -8664,6 +11551,29 @@ bool EngineController::setTrackInstrumentPlugin(
         afterFx.ownerInstrumentId = after.id;
     }
 
+    if (cloudProjectBound()) {
+        const collab::PluginLocation location{
+            collab::PluginChain::Instrument, trackId, {}};
+        collab::CommandBody body;
+        if (before.id.empty() && after.id.empty()) return true;
+        if (after.id.empty()) {
+            body = collab::DeletePluginInsert{location, before.id};
+        } else if (before.id.empty()) {
+            if (after.format != PluginFormat::Internal ||
+                after.uid != "daw.sampler") return false;
+            body = collab::AddPluginInsert{location, after, {}};
+        } else {
+            if (before.format != PluginFormat::Internal ||
+                after.format != PluginFormat::Internal ||
+                after.uid != "daw.sampler") return false;
+            body = collab::ReplacePluginInsert{location, before.id, after};
+        }
+        const auto result = submitSharedMutation(
+            std::move(body), after.name.empty() ? "Remove Instrument"
+                                                : "Load Instrument");
+        return result == collab::SharedMutationResult::Submitted;
+    }
+
     auto apply = [this, trackId](const InsertModel& value,
                                  const SamplerFxModel& fx) {
         if (auto* target = m_project.findTrack(trackId)) {
@@ -8688,7 +11598,8 @@ bool EngineController::setTrackInstrumentPlugin(
 }
 
 void EngineController::setTrackInstrument(const std::string& trackId,
-                                          const std::string& name) {
+                                           const std::string& name) {
+    if (cloudProjectBound()) return;
     auto* track = m_project.findTrack(trackId);
     if (!track || !trackAccepts(track->kind, ClipKind::Midi)) return;
 
@@ -8739,6 +11650,74 @@ std::string EngineController::addMidiClip(const std::string& trackId,
             ? lengthSeconds
             : beatsToSeconds(double(std::max(1, m_project.timeSigNumerator)),
                              m_project.tempo);
+
+    if (cloudProjectBound()) {
+        std::string patternTrackId;
+        for (std::string parentId = track->parentId; !parentId.empty();) {
+            const TrackModel* parent = m_project.findTrack(parentId);
+            if (!parent) break;
+            if (parent->kind == TrackKind::Pattern) {
+                patternTrackId = parent->id;
+                break;
+            }
+            parentId = parent->parentId;
+        }
+        auto batch = std::make_shared<collab::BatchCommand>();
+        std::string patternClipId;
+        if (!patternTrackId.empty()) {
+            const TrackModel* pattern = m_project.findTrack(patternTrackId);
+            if (pattern) {
+                for (const ClipModel& candidate : pattern->clips) {
+                    if (candidate.kind != ClipKind::Pattern) continue;
+                    const double end = candidate.startSeconds +
+                                       candidate.durationSeconds;
+                    if (resolvedStart + 1e-9 < candidate.startSeconds ||
+                        resolvedStart >= end - 1e-9) continue;
+                    patternClipId = candidate.id;
+                    if (lengthSeconds <= 0.0)
+                        resolvedLength = std::max(kMinClipSeconds,
+                                                  end - resolvedStart);
+                    const double memberEnd = resolvedStart + resolvedLength;
+                    if (memberEnd > end) {
+                        appendCommand(batch, collab::SetClipProperty{
+                            patternTrackId, patternClipId,
+                            collab::ClipProperty::DurationSeconds,
+                            memberEnd - candidate.startSeconds});
+                    }
+                    break;
+                }
+                if (patternClipId.empty()) {
+                    patternClipId = newUuid();
+                    appendCommand(batch, collab::AddClip{
+                        patternTrackId, patternClipId, ClipKind::Pattern,
+                        pattern->name, resolvedStart, resolvedLength,
+                        pattern->color,
+                        pattern->clips.empty() ? std::string()
+                                               : pattern->clips.back().id});
+                }
+            }
+        }
+        ClipModel created;
+        created.id = newUuid();
+        created.name = track->name;
+        created.kind = ClipKind::Midi;
+        created.patternClipId = patternClipId;
+        created.startSeconds = resolvedStart;
+        created.durationSeconds = resolvedLength;
+        created.color = track->color;
+        appendCommand(batch, collab::AddClip{
+            trackId, created.id, created.kind, created.name,
+            created.startSeconds, created.durationSeconds, created.color,
+            track->clips.empty() ? std::string() : track->clips.back().id});
+        if (!patternClipId.empty()) {
+            appendCommand(batch, collab::SetClipPatternOwner{
+                trackId, created.id, patternClipId});
+        }
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Add MIDI Clip");
+        return result == collab::SharedMutationResult::Submitted ? created.id
+                                                                 : std::string{};
+    }
 
     // A MIDI source nested in a Pattern belongs to the Pattern clip covering
     // the drop point. The explicit link is what lets later arrangement edits
@@ -9001,6 +11980,15 @@ std::string EngineController::addNote(const std::string& trackId,
     note.startBeats = std::max(0.0, startBeats);
     note.lengthBeats = std::max(kMinNoteBeats, lengthBeats);
     note.velocity = std::clamp(velocity, 1, 127);
+    if (cloudProjectBound() && !noteEditTargets(trackId, clipId)) {
+        const auto result = submitSharedMutation(
+            collab::UpsertMidiNote{
+                trackId, clipId, note,
+                clip->notes.empty() ? std::string() : clip->notes.back().id},
+            "Add Note");
+        return result == collab::SharedMutationResult::Submitted ? note.id
+                                                                 : std::string{};
+    }
     captureNoteEditBeforeMutation(trackId, clipId, *clip);
     clip->notes.push_back(note);
     if (const TrackModel* track = m_project.findTrack(trackId))
@@ -9051,6 +12039,12 @@ void EngineController::removeNote(const std::string& trackId,
         }
     }
     if (!found) return;
+
+    if (cloudProjectBound() && !noteEditTargets(trackId, clipId)) {
+        (void)submitSharedMutation(
+            collab::DeleteMidiNote{trackId, clipId, noteId}, "Remove Note");
+        return;
+    }
 
     captureNoteEditBeforeMutation(trackId, clipId, *clip);
     std::erase_if(clip->notes,
@@ -9109,6 +12103,19 @@ void EngineController::setNote(const std::string& trackId,
         const double nextLength = std::max(kMinNoteBeats, lengthBeats);
         if (note.pitch == nextPitch && note.startBeats == nextStart &&
             note.lengthBeats == nextLength) {
+            return;
+        }
+        if (cloudProjectBound()) {
+            NoteModel next = note;
+            next.pitch = nextPitch;
+            next.startBeats = nextStart;
+            next.lengthBeats = nextLength;
+            const std::size_t index = std::size_t(&note - clip->notes.data());
+            (void)submitSharedMutation(
+                collab::UpsertMidiNote{
+                    trackId, clipId, next,
+                    index == 0 ? std::string() : clip->notes[index - 1].id},
+                "Edit Note");
             return;
         }
         captureNoteEditBeforeMutation(trackId, clipId, *clip);
@@ -9171,6 +12178,31 @@ void EngineController::setNoteStates(const std::string& trackId,
         if (!update.id.empty()) byId.insert_or_assign(update.id, &update);
     }
 
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (std::size_t index = 0; index < clip->notes.size(); ++index) {
+            const NoteModel& note = clip->notes[index];
+            const auto found = byId.find(note.id);
+            if (found == byId.end()) continue;
+            NoteModel next = *found->second;
+            next.id = note.id;
+            next.pitch = std::clamp(next.pitch, kMinPitch, kMaxPitch);
+            next.startBeats = std::max(0.0, next.startBeats);
+            next.lengthBeats = std::max(kMinNoteBeats, next.lengthBeats);
+            next.velocity = std::clamp(next.velocity, 1, 127);
+            next.pan = std::clamp(next.pan, -1.0f, 1.0f);
+            if (next == note) continue;
+            appendCommand(batch, collab::UpsertMidiNote{
+                trackId, clipId, next,
+                index == 0 ? std::string() : clip->notes[index - 1].id});
+        }
+        if (!batch->commands.empty()) {
+            (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                       "Edit Notes");
+        }
+        return;
+    }
+
     bool changed = false;
     bool playbackChanged = false;
     bool geometryChanged = false;
@@ -9208,6 +12240,17 @@ void EngineController::removeNotes(const std::string& trackId,
         clip->notes.begin(), clip->notes.end(),
         [&](const NoteModel& note) { return ids.contains(note.id); });
     if (!removesAny) return;
+    if (cloudProjectBound() && !noteEditTargets(trackId, clipId)) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const NoteModel& note : clip->notes) {
+            if (ids.contains(note.id))
+                appendCommand(batch, collab::DeleteMidiNote{
+                    trackId, clipId, note.id});
+        }
+        (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                   "Remove Notes");
+        return;
+    }
     captureNoteEditBeforeMutation(trackId, clipId, *clip);
     std::erase_if(clip->notes, [&](const NoteModel& note) {
         return ids.contains(note.id);
@@ -9237,6 +12280,17 @@ void EngineController::setNoteVelocity(const std::string& trackId,
         if (note.id != noteId) continue;
         const int next = std::clamp(velocity, 1, 127);
         if (note.velocity == next) return;
+        if (cloudProjectBound()) {
+            NoteModel changed = note;
+            changed.velocity = next;
+            const std::size_t index = std::size_t(&note - clip->notes.data());
+            (void)submitSharedMutation(
+                collab::UpsertMidiNote{
+                    trackId, clipId, changed,
+                    index == 0 ? std::string() : clip->notes[index - 1].id},
+                "Set Note Velocity");
+            return;
+        }
         captureNoteEditBeforeMutation(trackId, clipId, *clip);
         note.velocity = next;
         if (const TrackModel* track = m_project.findTrack(trackId))
@@ -9263,6 +12317,17 @@ void EngineController::setNoteMuted(const std::string& trackId,
     for (auto& note : clip->notes) {
         if (note.id != noteId) continue;
         if (note.muted == muted) return;
+        if (cloudProjectBound()) {
+            NoteModel changed = note;
+            changed.muted = muted;
+            const std::size_t index = std::size_t(&note - clip->notes.data());
+            (void)submitSharedMutation(
+                collab::UpsertMidiNote{
+                    trackId, clipId, changed,
+                    index == 0 ? std::string() : clip->notes[index - 1].id},
+                muted ? "Mute Note" : "Unmute Note");
+            return;
+        }
         captureNoteEditBeforeMutation(trackId, clipId, *clip);
         note.muted = muted;
         if (const TrackModel* track = m_project.findTrack(trackId))
@@ -9292,6 +12357,17 @@ void EngineController::setNotePan(const std::string& trackId,
         if (note.id != noteId) continue;
         const float next = std::clamp(pan, -1.0f, 1.0f);
         if (note.pan == next) return;
+        if (cloudProjectBound()) {
+            NoteModel changed = note;
+            changed.pan = next;
+            const std::size_t index = std::size_t(&note - clip->notes.data());
+            (void)submitSharedMutation(
+                collab::UpsertMidiNote{
+                    trackId, clipId, changed,
+                    index == 0 ? std::string() : clip->notes[index - 1].id},
+                "Set Note Pan");
+            return;
+        }
         captureNoteEditBeforeMutation(trackId, clipId, *clip);
         note.pan = next;
         if (const TrackModel* track = m_project.findTrack(trackId))
@@ -9328,6 +12404,38 @@ void EngineController::endNoteEdit(const std::string& label) {
         if (edit.playbackDirty && playbackChanged) {
             if (const TrackModel* track = m_project.findTrack(edit.trackId))
                 syncTrackNotes(*track, geometryChanged);
+        }
+        if (cloudProjectBound()) {
+            std::unordered_map<std::string, const NoteModel*> beforeById;
+            beforeById.reserve(edit.structuralBefore.size());
+            for (const NoteModel& note : edit.structuralBefore)
+                beforeById.emplace(note.id, &note);
+            std::unordered_set<std::string> afterIds;
+            afterIds.reserve(after.size());
+            for (const NoteModel& note : after) afterIds.insert(note.id);
+            auto batch = std::make_shared<collab::BatchCommand>();
+            for (const NoteModel& note : edit.structuralBefore) {
+                if (!afterIds.contains(note.id))
+                    appendCommand(batch, collab::DeleteMidiNote{
+                        edit.trackId, edit.clipId, note.id});
+            }
+            for (std::size_t index = 0; index < after.size(); ++index) {
+                const NoteModel& note = after[index];
+                const auto before = beforeById.find(note.id);
+                if (before != beforeById.end() && *before->second == note)
+                    continue;
+                appendCommand(batch, collab::UpsertMidiNote{
+                    edit.trackId, edit.clipId, note,
+                    index == 0 ? std::string() : after[index - 1].id});
+            }
+            const auto result = submitSharedMutation(
+                collab::CommandBody{std::move(batch)}, label);
+            if (result == collab::SharedMutationResult::Blocked) {
+                clip->notes = edit.structuralBefore;
+                if (const TrackModel* track = m_project.findTrack(edit.trackId))
+                    syncTrackNotes(*track, geometryChanged);
+            }
+            if (result != collab::SharedMutationResult::LocalFallback) return;
         }
         m_undo.push(
             label,
@@ -9421,6 +12529,25 @@ void EngineController::endNoteEdit(const std::string& label) {
                 syncTrackNotes(*track, geometryChanged);
         }
     };
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const NotePropertyDelta& change : *delta) {
+            const auto found = std::find_if(
+                clip->notes.begin(), clip->notes.end(),
+                [&](const NoteModel& note) {
+                    return note.id == change.after.id;
+                });
+            if (found == clip->notes.end()) continue;
+            const std::size_t index = std::size_t(found - clip->notes.begin());
+            appendCommand(batch, collab::UpsertMidiNote{
+                edit.trackId, edit.clipId, change.after,
+                index == 0 ? std::string() : clip->notes[index - 1].id});
+        }
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, label);
+        if (result == collab::SharedMutationResult::Blocked) apply(false);
+        if (result != collab::SharedMutationResult::LocalFallback) return;
+    }
     m_undo.push(label, [apply] { apply(false); },
                 [apply] { apply(true); });
 }
@@ -9553,6 +12680,127 @@ std::vector<std::string> EngineController::importMidiFile(
         patternTrackId.empty()
             ? originalTrackCount
             : std::min(targetTrackIndex + 1, originalTrackCount);
+
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        std::string patternClipId;
+        if (const TrackModel* pattern = patternTrackId.empty()
+                                            ? nullptr
+                                            : m_project.findTrack(patternTrackId)) {
+            const double memberEnd = resolvedStart + longestLengthSeconds;
+            for (const ClipModel& candidate : pattern->clips) {
+                if (candidate.kind != ClipKind::Pattern) continue;
+                const double end =
+                    candidate.startSeconds + candidate.durationSeconds;
+                if (resolvedStart + 1e-9 < candidate.startSeconds ||
+                    resolvedStart >= end - 1e-9) {
+                    continue;
+                }
+                patternClipId = candidate.id;
+                if (memberEnd > end) {
+                    appendCommand(batch, collab::SetClipProperty{
+                        patternTrackId, patternClipId,
+                        collab::ClipProperty::DurationSeconds,
+                        memberEnd - candidate.startSeconds});
+                }
+                break;
+            }
+            if (patternClipId.empty()) {
+                ClipModel owner;
+                owner.id = newUuid();
+                owner.name = pattern->name;
+                owner.kind = ClipKind::Pattern;
+                owner.startSeconds = resolvedStart;
+                owner.durationSeconds = longestLengthSeconds;
+                owner.color = pattern->color;
+                patternClipId = owner.id;
+                if (!appendSharedClip(
+                        batch, patternTrackId, owner,
+                        pattern->clips.empty() ? std::string()
+                                               : pattern->clips.back().id)) {
+                    return {};
+                }
+            }
+        }
+
+        std::vector<std::string> clipIds;
+        clipIds.reserve(sources.size());
+        std::string trackAnchor =
+            patternTrackId.empty()
+                ? (m_project.tracks.empty() ? std::string()
+                                            : m_project.tracks.back().id)
+                : trackId;
+        for (std::size_t index = 0; index < sources.size(); ++index) {
+            const int source = sources[index];
+            const auto grouped = notesByTrack.find(source);
+            if (grouped == notesByTrack.end() || grouped->second.empty())
+                continue;
+
+            std::vector<NoteModel> notes;
+            notes.reserve(grouped->second.size());
+            double lastEnd = 0.0;
+            for (const midifile::Note* sourceNote : grouped->second) {
+                NoteModel note;
+                note.id = newUuid();
+                note.pitch = std::clamp(sourceNote->pitch, 0, 127);
+                note.startBeats = sourceNote->startBeats;
+                note.lengthBeats = sourceNote->lengthBeats;
+                note.velocity = std::clamp(sourceNote->velocity, 1, 127);
+                notes.push_back(note);
+                lastEnd = std::max(
+                    lastEnd,
+                    sourceNote->startBeats + sourceNote->lengthBeats);
+            }
+            const double bars = std::ceil(lastEnd / beatsPerBar);
+            const double lengthBeats =
+                std::max(1.0, bars * beatsPerBar);
+            ClipModel clip;
+            clip.id = newUuid();
+            clip.kind = ClipKind::Midi;
+            clip.name = index == 0 && sources.size() == 1
+                            ? stem
+                            : stem + " В· " + std::to_string(index + 1);
+            clip.startSeconds = resolvedStart;
+            clip.durationSeconds =
+                beatsToSeconds(lengthBeats, m_project.tempo);
+            clip.patternClipId = patternClipId;
+            clip.notes = std::move(notes);
+            if (index == 0) {
+                clip.color = target->color;
+                if (!appendSharedClip(
+                        batch, trackId, clip,
+                        target->clips.empty() ? std::string()
+                                              : target->clips.back().id)) {
+                    return {};
+                }
+            } else {
+                TrackModel lane;
+                lane.id = newUuid();
+                lane.kind = TrackKind::Instrument;
+                lane.name = source < int(file.trackNames.size())
+                                ? file.trackNames[std::size_t(source)]
+                                : std::string();
+                if (lane.name.empty())
+                    lane.name = stem + " " + std::to_string(index + 1);
+                if (lane.name.empty()) lane.name = defaultTrackName(lane.kind);
+                lane.color = defaultTrackColor(lane.kind);
+                lane.parentId = importedParentId;
+                lane.outputBusId = importedOutputBusId;
+                clip.color = lane.color;
+                lane.clips.push_back(std::move(clip));
+                if (!appendSharedTrack(batch, lane, trackAnchor)) return {};
+                trackAnchor = lane.id;
+                clip.id = lane.clips.front().id;
+            }
+            clipIds.push_back(clip.id);
+        }
+        if (clipIds.empty() || !sharedBatchApplies(m_project, batch)) return {};
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Import MIDI File");
+        return result == collab::SharedMutationResult::Submitted
+                   ? clipIds
+                   : std::vector<std::string>{};
+    }
 
     // Keep only the imported delta alive for undo. Copying the whole project
     // before and after a file import made the GUI pause in an otherwise busy
@@ -10173,6 +13421,16 @@ std::string EngineController::addAutomationLane(const std::string& trackId,
         at = m_project.indexOf(trackId) + 1 + subtreeOf(m_project, trackId).size();
     }
     at = std::min(at, m_project.tracks.size());
+    if (cloudProjectBound()) {
+        const std::string afterId = at == 0 ? std::string()
+                                             : m_project.tracks[at - 1].id;
+        const auto result = submitSharedMutation(
+            collab::AddTrack{model.id, model.kind, model.name, model.color,
+                             model.parentId, afterId},
+            "Add Automation Lane");
+        return result == collab::SharedMutationResult::Submitted ? laneId
+                                                                 : std::string{};
+    }
     m_project.tracks.insert(m_project.tracks.begin() + std::ptrdiff_t(at),
                             std::move(model));
     // A lane nobody can see is not what asking for one means.
@@ -10235,6 +13493,29 @@ std::string EngineController::addAutomationClip(const std::string& laneTrackId,
     };
     clip.name = automationTargetName(target);
 
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        appendCommand(batch, collab::AddClip{
+            laneTrackId, clip.id, clip.kind, clip.name, clip.startSeconds,
+            clip.durationSeconds, clip.color,
+            lane->clips.empty() ? std::string() : lane->clips.back().id});
+        appendCommand(batch, collab::SetAutomationTarget{
+            laneTrackId, clip.id, clip.automation.target});
+        appendCommand(batch, collab::SetAutomationDefault{
+            laneTrackId, clip.id, clip.automation.defaultValue});
+        for (std::size_t index = 0; index < clip.automation.points.size();
+             ++index) {
+            appendCommand(batch, collab::UpsertAutomationPoint{
+                laneTrackId, clip.id, {}, clip.automation.points[index],
+                index == 0 ? std::string()
+                           : clip.automation.points[index - 1].id});
+        }
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Add Automation Clip");
+        return result == collab::SharedMutationResult::Submitted ? clip.id
+                                                                 : std::string{};
+    }
+
     const ClipModel created = clip;
     lane->clips.push_back(std::move(clip));
     syncAllAutomation();
@@ -10294,6 +13575,31 @@ void EngineController::setAutomationTarget(const std::string& trackId,
     if (!clip || clip->automation.target == target) return;
     const AutomationTarget before = clip->automation.target;
     const std::string beforeName = clip->name;
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        appendCommand(batch, collab::SetAutomationTarget{
+            trackId, clipId, target});
+        appendCommand(batch, collab::SetClipProperty{
+            trackId, clipId, collab::ClipProperty::Name,
+            automationTargetName(target)});
+        if (!clip->automation.active) {
+            const double value = defaultAutomationValue(target);
+            appendCommand(batch, collab::SetAutomationDefault{
+                trackId, clipId, value});
+            for (std::size_t index = 0;
+                 index < clip->automation.points.size(); ++index) {
+                AutomationPoint point = clip->automation.points[index];
+                point.value = value;
+                appendCommand(batch, collab::UpsertAutomationPoint{
+                    trackId, clipId, {}, point,
+                    index == 0 ? std::string()
+                               : clip->automation.points[index - 1].id});
+            }
+        }
+        (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                   "Retarget Automation");
+        return;
+    }
     clip->automation.target = target;
     clip->name = automationTargetName(target);
     if (!clip->automation.active) {
@@ -10354,6 +13660,36 @@ void EngineController::commitAutomationEdit(const std::string& trackId,
         return;
     }
 
+    if (cloudProjectBound()) {
+        std::unordered_set<std::string> afterIds;
+        for (const AutomationPoint& point : after) afterIds.insert(point.id);
+        std::unordered_map<std::string, const AutomationPoint*> beforeById;
+        for (const AutomationPoint& point : before)
+            beforeById.emplace(point.id, &point);
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const AutomationPoint& point : before) {
+            if (!afterIds.contains(point.id))
+                appendCommand(batch, collab::DeleteAutomationPoint{
+                    trackId, clipId, {}, point.id});
+        }
+        for (std::size_t index = 0; index < after.size(); ++index) {
+            const AutomationPoint& point = after[index];
+            const auto old = beforeById.find(point.id);
+            if (old != beforeById.end() && *old->second == point) continue;
+            appendCommand(batch, collab::UpsertAutomationPoint{
+                trackId, clipId, {}, point,
+                index == 0 ? std::string() : after[index - 1].id});
+        }
+        if (activeAfter != activeBefore)
+            appendCommand(batch, collab::SetAutomationActive{
+                trackId, clipId, activeAfter});
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, label);
+        if (result == collab::SharedMutationResult::Blocked)
+            setAutomationPoints(trackId, clipId, before, activeBefore);
+        if (result != collab::SharedMutationResult::LocalFallback) return;
+    }
+
     m_undo.push(label,
                 [this, trackId, clipId, before, activeBefore] {
                     setAutomationPoints(trackId, clipId, before, activeBefore);
@@ -10373,6 +13709,20 @@ std::string EngineController::addControllerLane(const std::string& trackId,
     lane.id = newUuid();
     lane.name = name.empty() ? "CC" : name;
     lane.cc = cc;
+    if (cloudProjectBound()) {
+        collab::ControllerLaneTarget target;
+        target.cc = lane.cc;
+        target.parameterId = lane.parameterId;
+        target.slotId = lane.slotId;
+        const auto result = submitSharedMutation(
+            collab::AddControllerLane{
+                trackId, clipId, lane.id, lane.name, target,
+                lane.defaultValue,
+                clip->lanes.empty() ? std::string() : clip->lanes.back().id},
+            "Add Controller Lane");
+        return result == collab::SharedMutationResult::Submitted ? lane.id
+                                                                 : std::string{};
+    }
     clip->lanes.push_back(lane);
 
     m_undo.push("Add Controller Lane",
@@ -10399,6 +13749,13 @@ void EngineController::removeControllerLane(const std::string& trackId,
     if (!lane) return;
     const ControllerLane snapshot = *lane;
     const bool pluginTarget = isPluginTargetLane(snapshot);
+
+    if (cloudProjectBound()) {
+        (void)submitSharedMutation(
+            collab::DeleteControllerLane{trackId, clipId, laneId},
+            "Remove Controller Lane");
+        return;
+    }
 
     std::erase_if(clip->lanes,
                   [&](const ControllerLane& l) { return l.id == laneId; });
@@ -10439,6 +13796,12 @@ void EngineController::setLaneTarget(const std::string& trackId,
     if (!lane) return;
 
     const ControllerLane before = *lane;
+    const collab::ControllerLaneTarget next{
+        parameterId.empty() ? 1 : -1, parameterId, slotId};
+    const auto shared = submitSharedMutation(
+        collab::SetControllerLaneTarget{trackId, clipId, laneId, next},
+        "Retarget Lane");
+    if (shared != collab::SharedMutationResult::LocalFallback) return;
     lane->parameterId = parameterId;
     lane->slotId = slotId;
     // −1 is what marks a lane as addressing a plugin rather than a controller;
@@ -10494,6 +13857,39 @@ void EngineController::commitLaneEdit(const std::string& trackId,
     if (!lane) return;
     normalizeAutomation(before);
     if (before == lane->points) return;   // nothing actually moved
+
+    if (cloudProjectBound()) {
+        const std::vector<AutomationPoint> after = lane->points;
+        std::unordered_set<std::string> afterIds;
+        for (const AutomationPoint& point : after) afterIds.insert(point.id);
+        std::unordered_map<std::string, const AutomationPoint*> beforeById;
+        for (const AutomationPoint& point : before)
+            beforeById.emplace(point.id, &point);
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const AutomationPoint& point : before) {
+            if (!afterIds.contains(point.id))
+                appendCommand(batch, collab::DeleteAutomationPoint{
+                    trackId, clipId, laneId, point.id});
+        }
+        for (std::size_t index = 0; index < after.size(); ++index) {
+            const AutomationPoint& point = after[index];
+            const auto old = beforeById.find(point.id);
+            if (old != beforeById.end() && *old->second == point) continue;
+            appendCommand(batch, collab::UpsertAutomationPoint{
+                trackId, clipId, laneId, point,
+                index == 0 ? std::string() : after[index - 1].id});
+        }
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, label);
+        if (result == collab::SharedMutationResult::Blocked) {
+            lane->points = before;
+            if (isPluginTargetLane(*lane)) {
+                if (TrackModel* track = m_project.findTrack(trackId))
+                    syncTrackAutomation(*track);
+            }
+        }
+        if (result != collab::SharedMutationResult::LocalFallback) return;
+    }
 
     m_undo.push(label,
                 [this, trackId, clipId, laneId, before] {
@@ -10553,6 +13949,30 @@ void EngineController::setClipNotes(const std::string& trackId,
         return;
     }
 
+    if (cloudProjectBound()) {
+        std::unordered_set<std::string> afterIds;
+        for (const NoteModel& note : notes) afterIds.insert(note.id);
+        std::unordered_map<std::string, const NoteModel*> beforeById;
+        for (const NoteModel& note : clip->notes)
+            beforeById.emplace(note.id, &note);
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const NoteModel& note : clip->notes) {
+            if (!afterIds.contains(note.id))
+                appendCommand(batch, collab::DeleteMidiNote{
+                    trackId, clipId, note.id});
+        }
+        for (std::size_t index = 0; index < notes.size(); ++index) {
+            const NoteModel& note = notes[index];
+            const auto before = beforeById.find(note.id);
+            if (before != beforeById.end() && *before->second == note) continue;
+            appendCommand(batch, collab::UpsertMidiNote{
+                trackId, clipId, note,
+                index == 0 ? std::string() : notes[index - 1].id});
+        }
+        (void)submitSharedMutation(collab::CommandBody{std::move(batch)}, label);
+        return;
+    }
+
     std::vector<NoteModel> before = clip->notes;
     clip->notes = notes;
     if (playbackChanged) {
@@ -10600,6 +14020,13 @@ void EngineController::setClipNotes(const std::string& trackId,
 
 void EngineController::setMasterVolume(float volume) {
     const float before = m_project.masterVolume;
+    const float requested = std::clamp(volume, 0.0f, 2.0f);
+    if (requested == before) return;
+    const auto shared = submitSharedMutation(
+        collab::SetProjectScalar{collab::ProjectScalar::MasterVolume,
+                                 double(requested)},
+        "Set Master Volume");
+    if (shared != collab::SharedMutationResult::LocalFallback) return;
     setMasterVolumeLive(volume);
     const float after = m_project.masterVolume;
     if (after == before) return;
@@ -10610,6 +14037,13 @@ void EngineController::setMasterVolume(float volume) {
 
 void EngineController::setMasterPan(float pan) {
     const float before = m_project.masterPan;
+    const float requested = std::clamp(pan, -1.0f, 1.0f);
+    if (requested == before) return;
+    const auto shared = submitSharedMutation(
+        collab::SetProjectScalar{collab::ProjectScalar::MasterPan,
+                                 double(requested)},
+        "Set Master Pan");
+    if (shared != collab::SharedMutationResult::LocalFallback) return;
     setMasterPanLive(pan);
     const float after = m_project.masterPan;
     if (after == before) return;
@@ -10629,6 +14063,15 @@ void EngineController::commitMasterVolumeEdit(float before,
                                               const std::string& label) {
     const float after = m_project.masterVolume;
     if (after == before) return;
+    const auto shared = submitSharedMutation(
+        collab::SetProjectScalar{collab::ProjectScalar::MasterVolume,
+                                 double(after)},
+        label);
+    if (shared == collab::SharedMutationResult::Blocked) {
+        setMasterVolumeLive(before);
+        return;
+    }
+    if (shared == collab::SharedMutationResult::Submitted) return;
     m_undo.push(label, [this, before] { setMasterVolumeLive(before); },
                 [this, after] { setMasterVolumeLive(after); });
 }
@@ -10644,6 +14087,15 @@ void EngineController::commitMasterPanEdit(float before,
                                            const std::string& label) {
     const float after = m_project.masterPan;
     if (after == before) return;
+    const auto shared = submitSharedMutation(
+        collab::SetProjectScalar{collab::ProjectScalar::MasterPan,
+                                 double(after)},
+        label);
+    if (shared == collab::SharedMutationResult::Blocked) {
+        setMasterPanLive(before);
+        return;
+    }
+    if (shared == collab::SharedMutationResult::Submitted) return;
     m_undo.push(label, [this, before] { setMasterPanLive(before); },
                 [this, after] { setMasterPanLive(after); });
 }
@@ -10809,6 +14261,9 @@ bool EngineController::startRecordingTracksExactly(
 
 bool EngineController::startRecordingTracksImpl(
     const std::vector<std::string>& trackIds, bool requireEveryTarget) {
+    // Production V1 deliberately keeps recording local-only.  This boundary
+    // also protects non-UI callers and stale shortcuts.
+    if (cloudProjectBound()) return false;
     if (isRecording() || trackIds.empty()) return false;
     if (requireEveryTarget && !canStartRecordingTracksExactly(trackIds))
         return false;
@@ -10952,6 +14407,7 @@ bool EngineController::armCountInExactly(
 bool EngineController::armCountInImpl(
     const std::vector<std::string>& trackIds, int beats,
     bool requireEveryTarget) {
+    if (cloudProjectBound()) return false;
     if (isRecording() || trackIds.empty()) return false;
     if (requireEveryTarget && !canStartRecordingTracksExactly(trackIds))
         return false;
@@ -11004,6 +14460,10 @@ bool EngineController::armCountInImpl(
 }
 
 bool EngineController::tickCountIn(double deltaSeconds) {
+    if (cloudProjectBound()) {
+        cancelCountIn();
+        return false;
+    }
     if (m_countInBeatsLeft <= 0) return false;
     m_countInToNextBeat -= std::max(0.0, deltaSeconds);
     while (m_countInToNextBeat <= 0.0 && m_countInBeatsLeft > 0) {
@@ -11713,7 +15173,7 @@ void EngineController::beginCompEdit(const std::string& trackId,
     if (m_compEdit.active) return;
     const ClipModel* clip = findClip(trackId, clipId);
     if (!clip) return;
-    m_compEdit = {true, trackId, clipId, clip->comp};
+    m_compEdit = {true, trackId, clipId, clip->comp, clip->comp};
 }
 
 void EngineController::endCompEdit() {
@@ -11723,7 +15183,8 @@ void EngineController::endCompEdit() {
 
     const ClipModel* clip = findClip(edit.trackId, edit.clipId);
     if (!clip) return;
-    std::vector<CompSegment> after = clip->comp;
+    std::vector<CompSegment> after =
+        cloudProjectBound() ? std::move(edit.after) : clip->comp;
     if (after.size() == edit.before.size()) {
         bool same = true;
         for (size_t i = 0; i < after.size() && same; ++i) {
@@ -11743,6 +15204,15 @@ void EngineController::endCompEdit() {
             syncClipOwner(trackId);
         }
     };
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        appendCompDiff(batch, trackId, clipId, edit.before, after);
+        if (batch->commands.empty() ||
+            !sharedBatchApplies(m_project, batch)) return;
+        (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                   "Comp");
+        return;
+    }
     m_undo.push("Comp", [apply, before = std::move(edit.before)] { apply(before); },
                 [apply, after = std::move(after)] { apply(after); });
 }
@@ -11753,6 +15223,26 @@ void EngineController::setCompSegment(const std::string& trackId,
                                       double fromSeconds, double toSeconds) {
     auto* clip = findClip(trackId, clipId);
     if (!clip) return;
+    if (cloudProjectBound()) {
+        ClipModel draft = *clip;
+        const bool inGesture = m_compEdit.active &&
+                               m_compEdit.trackId == trackId &&
+                               m_compEdit.clipId == clipId;
+        if (inGesture) draft.comp = m_compEdit.after;
+        const std::vector<CompSegment> before = draft.comp;
+        setCompRange(draft, takeId, fromSeconds, toSeconds);
+        if (inGesture) {
+            m_compEdit.after = std::move(draft.comp);
+            return;
+        }
+        auto batch = std::make_shared<collab::BatchCommand>();
+        appendCompDiff(batch, trackId, clipId, before, draft.comp);
+        if (!batch->commands.empty() && sharedBatchApplies(m_project, batch)) {
+            (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                       "Comp");
+        }
+        return;
+    }
     setCompRange(*clip, takeId, fromSeconds, toSeconds);
     syncClipOwner(trackId);
 }
@@ -11763,6 +15253,17 @@ void EngineController::selectTake(const std::string& trackId,
     auto* clip = findClip(trackId, clipId);
     if (!clip || !findTake(*clip, takeId)) return;
     std::vector<CompSegment> before = clip->comp;
+    if (cloudProjectBound()) {
+        ClipModel draft = *clip;
+        selectWholeTake(draft, takeId);
+        auto batch = std::make_shared<collab::BatchCommand>();
+        appendCompDiff(batch, trackId, clipId, before, draft.comp);
+        if (!batch->commands.empty() && sharedBatchApplies(m_project, batch)) {
+            (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                       "Select Take");
+        }
+        return;
+    }
     selectWholeTake(*clip, takeId);
     std::vector<CompSegment> after = clip->comp;
     syncClipOwner(trackId);
@@ -11784,6 +15285,93 @@ namespace {
 bool sameTake(const TakeModel& a, const TakeModel& b) {
     return a.name == b.name && a.color == b.color && a.muted == b.muted &&
            a.gain == b.gain;
+}
+
+bool matchesTakeCompBaseline(const ClipModel* current,
+                             const std::vector<TakeModel>& takes,
+                             const std::vector<CompSegment>& comp) {
+    if (!current || current->takes.size() != takes.size() ||
+        current->comp.size() != comp.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < takes.size(); ++index) {
+        if (current->takes[index].id != takes[index].id) return false;
+    }
+    for (std::size_t index = 0; index < comp.size(); ++index) {
+        const CompSegment& actual = current->comp[index];
+        const CompSegment& expected = comp[index];
+        if (actual.id != expected.id || actual.takeId != expected.takeId ||
+            actual.startSeconds != expected.startSeconds ||
+            actual.endSeconds != expected.endSeconds) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void appendCompDiff(const std::shared_ptr<collab::BatchCommand>& batch,
+                    const std::string& trackId, const std::string& clipId,
+                    const std::vector<CompSegment>& before,
+                    const std::vector<CompSegment>& after) {
+    std::unordered_set<std::string> afterIds;
+    for (const CompSegment& segment : after) afterIds.insert(segment.id);
+    std::unordered_map<std::string, const CompSegment*> beforeById;
+    for (const CompSegment& segment : before)
+        beforeById.emplace(segment.id, &segment);
+    for (const CompSegment& segment : before) {
+        if (!afterIds.contains(segment.id))
+            appendCommand(batch, collab::DeleteCompSegment{
+                trackId, clipId, segment.id});
+    }
+
+    // A swipe can insert a new segment before a retained right-hand fragment.
+    // Shrink/move retained fragments first, using their current surviving
+    // predecessor, so no intermediate child overlaps the old geometry. The
+    // final pass below then inserts new entities and establishes final order.
+    std::string survivingAnchor;
+    for (const CompSegment& current : before) {
+        if (!afterIds.contains(current.id)) continue;
+        const auto replacement = std::find_if(
+            after.begin(), after.end(), [&](const CompSegment& segment) {
+                return segment.id == current.id;
+            });
+        if (replacement != after.end() &&
+            (replacement->takeId != current.takeId ||
+             replacement->startSeconds != current.startSeconds ||
+             replacement->endSeconds != current.endSeconds)) {
+            appendCommand(batch, collab::UpsertCompSegment{
+                trackId, clipId, *replacement, survivingAnchor});
+        }
+        survivingAnchor = current.id;
+    }
+
+    for (std::size_t index = 0; index < after.size(); ++index) {
+        const CompSegment& segment = after[index];
+        const auto old = beforeById.find(segment.id);
+        const bool existing = old != beforeById.end();
+        if (existing) {
+            const std::string finalAnchor =
+                index == 0 ? std::string() : after[index - 1].id;
+            const auto currentIndex = std::find_if(
+                before.begin(), before.end(), [&](const CompSegment& value) {
+                    return value.id == segment.id;
+                });
+            std::string oldAnchor;
+            if (currentIndex != before.end()) {
+                for (auto at = before.begin(); at != currentIndex; ++at) {
+                    if (afterIds.contains(at->id)) oldAnchor = at->id;
+                }
+            }
+            const bool changed = old->second->takeId != segment.takeId ||
+                                 old->second->startSeconds !=
+                                     segment.startSeconds ||
+                                 old->second->endSeconds != segment.endSeconds;
+            if (!changed && oldAnchor == finalAnchor) continue;
+        }
+        appendCommand(batch, collab::UpsertCompSegment{
+            trackId, clipId, segment,
+            index == 0 ? std::string() : after[index - 1].id});
+    }
 }
 
 /// Position of a take in its clip, or npos.
@@ -11808,9 +15396,32 @@ void EngineController::editTake(const char* label, const std::string& trackId,
     if (!take) return;
 
     const TakeModel before = *take;
-    mutate(*take);
-    if (sameTake(before, *take)) return;
-    const TakeModel after = *take;
+    TakeModel after = before;
+    mutate(after);
+    if (sameTake(before, after)) return;
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        if (before.name != after.name)
+            appendCommand(batch, collab::SetTakeProperty{
+                trackId, clipId, takeId, collab::TakeProperty::Name,
+                after.name});
+        if (before.color != after.color)
+            appendCommand(batch, collab::SetTakeProperty{
+                trackId, clipId, takeId, collab::TakeProperty::Color,
+                std::int64_t(after.color)});
+        if (before.muted != after.muted)
+            appendCommand(batch, collab::SetTakeProperty{
+                trackId, clipId, takeId, collab::TakeProperty::Muted,
+                after.muted});
+        if (before.gain != after.gain)
+            appendCommand(batch, collab::SetTakeProperty{
+                trackId, clipId, takeId, collab::TakeProperty::Gain,
+                double(after.gain)});
+        (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                   label);
+        return;
+    }
+    *take = after;
     syncClipOwner(trackId);
 
     auto apply = [this, trackId, clipId, takeId](const TakeModel& state) {
@@ -11881,6 +15492,19 @@ std::string EngineController::duplicateTake(const std::string& trackId,
     const size_t at = source + 1;
     const std::string newId = copy.id;
     const TakeModel state = copy;
+    if (cloudProjectBound()) {
+        copy.filePath.clear();
+        copy.notes.clear();
+        if (copy.asset.empty()) return {};
+        const auto result = submitSharedMutation(
+            collab::AddTake{
+                trackId, clipId, copy,
+                source < clip->takes.size() ? clip->takes[source].id
+                                            : std::string()},
+            "Duplicate Take");
+        return result == collab::SharedMutationResult::Submitted ? newId
+                                                                 : std::string{};
+    }
     clip->takes.insert(clip->takes.begin() + long(at), std::move(copy));
     syncClipOwner(trackId);
 
@@ -11906,9 +15530,104 @@ std::string EngineController::addTakeFromFile(const std::string& trackId,
                                               const std::string& clipId,
                                               const std::string& filePath,
                                               double clipOffsetSeconds,
-                                              const std::string& name) {
+    const std::string& name) {
     auto* clip = findClip(trackId, clipId);
     if (!clip) return {};
+
+    if (cloudProjectBound()) {
+        if (clip->kind != ClipKind::Audio) return {};
+        auto request = sharedAudioRequest(filePath);
+        if (!request) return {};
+
+        const std::vector<TakeModel> takesBefore = clip->takes;
+        const std::vector<CompSegment> compBefore = clip->comp;
+        ClipModel draft = *clip;
+        if (draft.takes.empty()) {
+            if (draft.asset.assetId.empty() ||
+                !completeSharedAudioAsset(draft.asset, draft.asset)) {
+                return {};
+            }
+            TakeModel base;
+            base.id = newUuid();
+            base.name = "Take 1";
+            base.offsetSeconds = draft.offsetSeconds;
+            base.lengthSeconds = draft.durationSeconds;
+            base.channels = draft.channels;
+            base.color = draft.color;
+            base.asset = draft.asset;
+            draft.takes.push_back(std::move(base));
+            selectWholeTake(draft, draft.takes.front().id);
+        }
+
+        TakeModel take;
+        take.id = newUuid();
+        take.name = name.empty()
+            ? "Take " + std::to_string(draft.takes.size() + 1)
+            : name;
+        take.lengthSeconds = double(request->frames) / request->sampleRate;
+        take.clipOffsetSeconds = std::max(0.0, clipOffsetSeconds);
+        take.channels = int(request->channels);
+        take.color = takeColor(draft.color, draft.takes.size());
+        take.asset = expectedSharedAudioAsset(*request);
+        const std::string takeId = take.id;
+        const double from = take.clipOffsetSeconds;
+        const double to = from + take.lengthSeconds;
+        draft.takes.push_back(std::move(take));
+        setCompRange(draft, takeId, from, to);
+        std::vector<TakeModel> takesAfter = std::move(draft.takes);
+        const std::vector<CompSegment> compAfter = std::move(draft.comp);
+
+        PendingSharedAssetMutation pending;
+        pending.expected = expectedSharedAudioAsset(*request);
+        pending.complete =
+            [trackId, clipId, takesBefore,
+             takesAfter = std::move(takesAfter), compBefore,
+             compAfter](EngineController& controller,
+                        const AssetRef& verifiedAsset) mutable {
+                if (!matchesTakeCompBaseline(
+                        controller.findClip(trackId, clipId), takesBefore,
+                        compBefore)) {
+                    return collab::SharedMutationResult::Blocked;
+                }
+                auto readyTake = std::find_if(
+                    takesAfter.begin(), takesAfter.end(),
+                    [&](const TakeModel& candidate) {
+                        return candidate.asset.assetId ==
+                               verifiedAsset.assetId;
+                    });
+                if (readyTake == takesAfter.end())
+                    return collab::SharedMutationResult::Blocked;
+                readyTake->asset = verifiedAsset;
+
+                auto batch = std::make_shared<collab::BatchCommand>();
+                std::unordered_set<std::string> existing;
+                for (const TakeModel& before : takesBefore)
+                    existing.insert(before.id);
+                std::string anchor = takesBefore.empty()
+                    ? std::string()
+                    : takesBefore.back().id;
+                for (const TakeModel& candidate : takesAfter) {
+                    if (existing.contains(candidate.id)) continue;
+                    TakeModel added = candidate;
+                    added.filePath.clear();
+                    appendCommand(batch, collab::AddTake{
+                        trackId, clipId, std::move(added), anchor});
+                    anchor = candidate.id;
+                }
+                appendCompDiff(batch, trackId, clipId, compBefore,
+                               compAfter);
+                if (!sharedBatchApplies(controller.m_project, batch))
+                    return collab::SharedMutationResult::Blocked;
+                return controller.submitSharedMutation(
+                    collab::CommandBody{std::move(batch)}, "Add Take");
+            };
+        return prepareSharedAssetMutation(std::move(*request),
+                                          std::move(pending)) ==
+                       collab::SharedMutationResult::Submitted
+                   ? takeId
+                   : std::string{};
+    }
+
     auto samples = loadSamples(filePath);
     if (!samples) return {};
     // Decoded here rather than from a paint handler, same as importAudio.
@@ -11969,6 +15688,11 @@ void EngineController::removeTake(const std::string& trackId,
     const size_t at = takeIndex(*clip, takeId);
     if (at == std::string::npos) return;
     const TakeModel take = clip->takes[at];
+    if (cloudProjectBound()) {
+        (void)submitSharedMutation(
+            collab::DeleteTake{trackId, clipId, takeId}, "Delete Take");
+        return;
+    }
 
     // Deleting a take's file is only safe when this was the last reference to
     // it: loop recording points every pass at the same capture.
@@ -12030,6 +15754,19 @@ void EngineController::moveTake(const std::string& trackId,
     if (from == clip->takes.size()) return;
     const size_t to = std::min(targetIndex, clip->takes.size() - 1);
     if (from == to) return;
+    if (cloudProjectBound()) {
+        std::vector<std::string> remaining;
+        remaining.reserve(clip->takes.size() - 1);
+        for (const TakeModel& take : clip->takes) {
+            if (take.id != takeId) remaining.push_back(take.id);
+        }
+        const size_t insertAt = std::min(to, remaining.size());
+        const std::string afterId =
+            insertAt == 0 ? std::string() : remaining[insertAt - 1];
+        (void)submitSharedMutation(
+            collab::MoveTake{trackId, clipId, takeId, afterId}, "Move Take");
+        return;
+    }
 
     // Display order only: nothing in the comp or the graph reads the position,
     // so there is no re-sync and no undo entry worth spending.
@@ -12041,6 +15778,7 @@ void EngineController::moveTake(const std::string& trackId,
 std::string EngineController::flattenComp(const std::string& trackId,
                                           const std::string& clipId,
                                           bool recordUndo) {
+    const bool shared = cloudProjectBound();
     auto* clip = findClip(trackId, clipId);
     if (!clip || clip->comp.empty()) return {};
     if (clip->kind != ClipKind::Audio) return {};   // MIDI bake is a note merge
@@ -12099,6 +15837,64 @@ std::string EngineController::flattenComp(const std::string& trackId,
     if (!m_recorder->writeWAVFile(path, baked, m_sampleRate)) return {};
     m_waveforms.peaks(path);
 
+    if (shared) {
+        auto request = sharedAudioRequest(path);
+        if (!request) {
+            std::error_code removeError;
+            fs::remove(platform::pathFromUtf8(path), removeError);
+            return {};
+        }
+
+        TakeModel take;
+        take.id = newUuid();
+        take.name = "Comp " + std::to_string(clip->takes.size() + 1);
+        take.lengthSeconds = double(request->frames) / request->sampleRate;
+        take.channels = int(request->channels);
+        take.color = clip->color;
+        take.asset = expectedSharedAudioAsset(*request);
+        const std::string newId = take.id;
+        const std::vector<TakeModel> takesBefore = clip->takes;
+        const std::vector<CompSegment> compBefore = clip->comp;
+        ClipModel draft = *clip;
+        draft.takes.push_back(take);
+        selectWholeTake(draft, newId);
+        const std::vector<CompSegment> compAfter = std::move(draft.comp);
+        const std::string takeAnchor = takesBefore.empty()
+            ? std::string()
+            : takesBefore.back().id;
+
+        PendingSharedAssetMutation pending;
+        pending.expected = take.asset;
+        pending.cleanupPath = path;
+        pending.complete =
+            [trackId, clipId, take = std::move(take), takeAnchor,
+             takesBefore, compBefore,
+             compAfter](EngineController& controller,
+                        const AssetRef& verifiedAsset) mutable {
+                if (!matchesTakeCompBaseline(
+                        controller.findClip(trackId, clipId), takesBefore,
+                        compBefore)) {
+                    return collab::SharedMutationResult::Blocked;
+                }
+                take.asset = verifiedAsset;
+                take.filePath.clear();
+                auto batch = std::make_shared<collab::BatchCommand>();
+                appendCommand(batch, collab::AddTake{
+                    trackId, clipId, take, takeAnchor});
+                appendCompDiff(batch, trackId, clipId, compBefore,
+                               compAfter);
+                if (!sharedBatchApplies(controller.m_project, batch))
+                    return collab::SharedMutationResult::Blocked;
+                return controller.submitSharedMutation(
+                    collab::CommandBody{std::move(batch)}, "Flatten Comp");
+            };
+        return prepareSharedAssetMutation(std::move(*request),
+                                          std::move(pending)) ==
+                       collab::SharedMutationResult::Submitted
+                   ? newId
+                   : std::string{};
+    }
+
     TakeModel take;
     take.id = newUuid();
     take.name = "Comp " + std::to_string(clip->takes.size() + 1);
@@ -12137,6 +15933,10 @@ std::string EngineController::flattenComp(const std::string& trackId,
 
 void EngineController::commitComp(const std::string& trackId,
                                   const std::string& clipId) {
+    // A non-trivial commit first renders an asset. Until that verified-asset
+    // pipeline exists, block every cloud entry consistently before even the
+    // single-whole-take shortcut can mutate the local projection.
+    if (cloudProjectBound()) return;
     auto* clip = findClip(trackId, clipId);
     if (!clip || clip->takes.empty()) return;
 
@@ -12206,6 +16006,29 @@ void EngineController::commitComp(const std::string& trackId,
 }
 
 size_t EngineController::deleteUnusedTakes(bool deleteFiles) {
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        std::size_t removed = 0;
+        for (const TrackModel& track : m_project.tracks) {
+            for (const ClipModel& clip : track.clips) {
+                for (const TakeModel& take : clip.takes) {
+                    const bool used = std::any_of(
+                        clip.comp.begin(), clip.comp.end(),
+                        [&](const CompSegment& segment) {
+                            return segment.takeId == take.id;
+                        });
+                    if (used) continue;
+                    appendCommand(batch, collab::DeleteTake{
+                        track.id, clip.id, take.id});
+                    ++removed;
+                }
+            }
+        }
+        if (removed == 0 || !sharedBatchApplies(m_project, batch)) return 0;
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Delete Unused Takes");
+        return result == collab::SharedMutationResult::Submitted ? removed : 0;
+    }
     // Which files the project still needs after the sweep, so a take that shares
     // a loop capture with a kept take cannot take the file down with it.
     std::set<std::string> keptFiles;
@@ -12284,6 +16107,9 @@ size_t EngineController::deleteUnusedTakes(bool deleteFiles) {
 
 size_t EngineController::cropToComp(const std::string& trackId,
                                     const std::string& clipId) {
+    // Cropping creates replacement files; cloud mutation must wait for the
+    // upload/verify planner that can attach durable AssetRefs atomically.
+    if (cloudProjectBound()) return 0;
     auto* clip = findClip(trackId, clipId);
     if (!clip || clip->comp.empty()) return 0;
 
@@ -12357,6 +16183,16 @@ size_t EngineController::cropToComp(const std::string& trackId,
 }
 
 // ── Offline export ─────────────────────────────────────────────────────────
+
+void EngineController::undo() {
+    if (cloudProjectBound()) return;
+    m_undo.undo();
+}
+
+void EngineController::redo() {
+    if (cloudProjectBound()) return;
+    m_undo.redo();
+}
 
 audio::Result EngineController::analyzeChannel(const std::string& channelId,
                                               double fromSeconds,

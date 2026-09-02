@@ -329,6 +329,85 @@ bool sampleEditFromJson(const json& value, ClipSampleEditModel& edit) {
     return true;
 }
 
+json musicalAnalysisToJson(const ClipMusicalAnalysisModel& analysis) {
+    return json{
+        {"version", analysis.algorithmVersion},
+        {"offsetSeconds", analysis.analyzedOffsetSeconds},
+        {"durationSeconds", analysis.analyzedDurationSeconds},
+        {"tempo", json{{"status", int(analysis.tempo.status)},
+                       {"bpm", analysis.tempo.bpm},
+                       {"confidence", analysis.tempo.confidence},
+                       {"stability", analysis.tempo.stability},
+                       {"alternatives", analysis.tempo.alternatives},
+                       {"variable", analysis.tempo.variable}}},
+        {"key", json{{"status", int(analysis.key.status)},
+                     {"root", analysis.key.root},
+                     {"scale", analysis.key.scale},
+                     {"confidence", analysis.key.confidence},
+                     {"alternateRoot", analysis.key.alternateRoot},
+                     {"alternateScale", analysis.key.alternateScale},
+                     {"tuningCents", analysis.key.tuningCents}}}};
+}
+
+bool musicalAnalysisFromJson(const json& value,
+                             ClipMusicalAnalysisModel& analysis) {
+    if (!hasExactKeys(value, {"version", "offsetSeconds", "durationSeconds",
+                              "tempo", "key"}) ||
+        !value.at("version").is_number_integer() ||
+        !value.at("offsetSeconds").is_number() ||
+        !value.at("durationSeconds").is_number()) {
+        return false;
+    }
+    const json& tempo = value.at("tempo");
+    const json& key = value.at("key");
+    if (!hasExactKeys(tempo, {"status", "bpm", "confidence", "stability",
+                              "alternatives", "variable"}) ||
+        !tempo.at("status").is_number_integer() ||
+        !tempo.at("bpm").is_number() ||
+        !tempo.at("confidence").is_number() ||
+        !tempo.at("stability").is_number() ||
+        !tempo.at("alternatives").is_array() ||
+        tempo.at("alternatives").size() > 3 ||
+        !tempo.at("variable").is_boolean() ||
+        !hasExactKeys(key, {"status", "root", "scale", "confidence",
+                            "alternateRoot", "alternateScale",
+                            "tuningCents"}) ||
+        !key.at("status").is_number_integer() ||
+        !key.at("root").is_number_integer() ||
+        !key.at("scale").is_string() ||
+        !key.at("confidence").is_number() ||
+        !key.at("alternateRoot").is_number_integer() ||
+        !key.at("alternateScale").is_string() ||
+        !key.at("tuningCents").is_number()) {
+        return false;
+    }
+    for (const json& alternative : tempo.at("alternatives"))
+        if (!alternative.is_number()) return false;
+    analysis = {};
+    analysis.algorithmVersion = value.at("version").get<int>();
+    analysis.analyzedOffsetSeconds = value.at("offsetSeconds").get<double>();
+    analysis.analyzedDurationSeconds =
+        value.at("durationSeconds").get<double>();
+    analysis.tempo.status =
+        static_cast<MusicalAnalysisStatus>(tempo.at("status").get<int>());
+    analysis.tempo.bpm = tempo.at("bpm").get<double>();
+    analysis.tempo.confidence = tempo.at("confidence").get<double>();
+    analysis.tempo.stability = tempo.at("stability").get<double>();
+    analysis.tempo.alternatives =
+        tempo.at("alternatives").get<std::vector<double>>();
+    analysis.tempo.variable = tempo.at("variable").get<bool>();
+    analysis.key.status =
+        static_cast<MusicalAnalysisStatus>(key.at("status").get<int>());
+    analysis.key.root = key.at("root").get<int>();
+    analysis.key.scale = key.at("scale").get<std::string>();
+    analysis.key.confidence = key.at("confidence").get<double>();
+    analysis.key.alternateRoot = key.at("alternateRoot").get<int>();
+    analysis.key.alternateScale =
+        key.at("alternateScale").get<std::string>();
+    analysis.key.tuningCents = key.at("tuningCents").get<double>();
+    return true;
+}
+
 json parameterToJson(const InsertParameter& parameter) {
     return json{{"id", parameter.id}, {"value", parameter.value}};
 }
@@ -613,6 +692,7 @@ json bodyToJson(const ProjectCommand& command) {
                         {"deleteOperationId", body.deleteOperationId}};
         } else if constexpr (std::is_same_v<T, MoveClip>) {
             return json{{"clipId", body.clipId},
+                        {"sourceTrackId", body.sourceTrackId},
                         {"trackId", body.trackId},
                         {"afterId", body.afterId}};
         } else if constexpr (std::is_same_v<T, SetClipProperty>) {
@@ -628,6 +708,31 @@ json bodyToJson(const ProjectCommand& command) {
             return json{{"trackId", body.trackId},
                         {"clipId", body.clipId},
                         {"sampleEdit", sampleEditToJson(body.sampleEdit)}};
+        } else if constexpr (std::is_same_v<T, SetClipFade>) {
+            return json{{"trackId", body.trackId},
+                        {"clipId", body.clipId},
+                        {"fadeInSeconds", body.fadeInSeconds},
+                        {"fadeOutSeconds", body.fadeOutSeconds}};
+        } else if constexpr (std::is_same_v<T, SetClipFadeCurve>) {
+            return json{{"trackId", body.trackId},
+                        {"clipId", body.clipId},
+                        {"edge", clipEdgeName(body.edge)},
+                        {"curve", body.curve}};
+        } else if constexpr (std::is_same_v<T, SetClipFadeMode>) {
+            return json{{"trackId", body.trackId},
+                        {"clipId", body.clipId},
+                        {"edge", clipEdgeName(body.edge)},
+                        {"mode", body.mode == ClipFadeMode::Tape ? "tape"
+                                                                  : "gain"}};
+        } else if constexpr (std::is_same_v<T, SetClipPatternOwner>) {
+            return json{{"trackId", body.trackId},
+                        {"clipId", body.clipId},
+                        {"patternClipId", body.patternClipId}};
+        } else if constexpr (std::is_same_v<T,
+                                             SetClipMusicalAnalysis>) {
+            return json{{"trackId", body.trackId},
+                        {"clipId", body.clipId},
+                        {"analysis", musicalAnalysisToJson(body.analysis)}};
         } else if constexpr (std::is_same_v<T, AddPluginInsert>) {
             return json{{"location", pluginLocationToJson(body.location)},
                         {"insert", sharedInsertToJson(body.insert)},
@@ -643,6 +748,10 @@ json bodyToJson(const ProjectCommand& command) {
             return json{{"location", pluginLocationToJson(body.location)},
                         {"insertId", body.insertId},
                         {"afterId", body.afterId}};
+        } else if constexpr (std::is_same_v<T, ReplacePluginInsert>) {
+            return json{{"location", pluginLocationToJson(body.location)},
+                        {"insertId", body.insertId},
+                        {"replacement", sharedInsertToJson(body.replacement)}};
         } else if constexpr (std::is_same_v<T, SetPluginProperty>) {
             return json{{"location", pluginLocationToJson(body.location)},
                         {"insertId", body.insertId},
@@ -680,6 +789,11 @@ json bodyToJson(const ProjectCommand& command) {
             return json{{"location", pluginLocationToJson(body.location)},
                         {"insertId", body.insertId},
                         {"key", body.key}};
+        } else if constexpr (std::is_same_v<T, SetSamplerFxLevels>) {
+            return json{{"trackId", body.trackId},
+                        {"instrumentId", body.instrumentId},
+                        {"volume", body.volume},
+                        {"pan", body.pan}};
         } else if constexpr (std::is_same_v<T, UpsertMidiNote>) {
             return json{{"trackId", body.trackId},
                         {"clipId", body.clipId},
@@ -764,6 +878,17 @@ json bodyToJson(const ProjectCommand& command) {
                         {"clipId", body.clipId},
                         {"takeId", body.takeId},
                         {"deleteOperationId", body.deleteOperationId}};
+        } else if constexpr (std::is_same_v<T, MoveTake>) {
+            return json{{"trackId", body.trackId},
+                        {"clipId", body.clipId},
+                        {"takeId", body.takeId},
+                        {"afterId", body.afterId}};
+        } else if constexpr (std::is_same_v<T, SetTakeProperty>) {
+            return json{{"trackId", body.trackId},
+                        {"clipId", body.clipId},
+                        {"takeId", body.takeId},
+                        {"property", takePropertyName(body.property)},
+                        {"value", scalarToJson(body.value)}};
         } else if constexpr (std::is_same_v<T, UpsertCompSegment>) {
             return json{{"trackId", body.trackId},
                         {"clipId", body.clipId},
@@ -1002,7 +1127,14 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
         return true;
     }
     if (kind == "clip.move") {
+        if (!hasExactKeys(payload,
+                          {"clipId", "sourceTrackId", "trackId",
+                           "afterId"})) {
+            error = "invalid clip move payload";
+            return false;
+        }
         out = MoveClip{payload.value("clipId", std::string()),
+                       payload.value("sourceTrackId", std::string()),
                        payload.value("trackId", std::string()),
                        payload.value("afterId", std::string())};
         return true;
@@ -1046,6 +1178,88 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
         body.clipId = payload.value("clipId", std::string());
         if (!sampleEditFromJson(payload.at("sampleEdit"), body.sampleEdit)) {
             error = "invalid clip sample edit value";
+            return false;
+        }
+        out = std::move(body);
+        return true;
+    }
+    if (kind == "clip.setFade") {
+        if (!hasExactKeys(payload, {"trackId", "clipId", "fadeInSeconds",
+                                    "fadeOutSeconds"}) ||
+            !payload.at("fadeInSeconds").is_number() ||
+            !payload.at("fadeOutSeconds").is_number()) {
+            error = "invalid clip fade payload";
+            return false;
+        }
+        out = SetClipFade{payload.value("trackId", std::string()),
+                          payload.value("clipId", std::string()),
+                          payload.at("fadeInSeconds").get<double>(),
+                          payload.at("fadeOutSeconds").get<double>()};
+        return true;
+    }
+    if (kind == "clip.setFadeCurve") {
+        if (!hasExactKeys(payload, {"trackId", "clipId", "edge", "curve"}) ||
+            !payload.at("edge").is_string() ||
+            !payload.at("curve").is_number()) {
+            error = "invalid clip fade curve payload";
+            return false;
+        }
+        SetClipFadeCurve body;
+        body.trackId = payload.value("trackId", std::string());
+        body.clipId = payload.value("clipId", std::string());
+        body.curve = payload.at("curve").get<double>();
+        if (!clipEdgeFromName(payload.at("edge").get<std::string>(),
+                              body.edge)) {
+            error = "invalid clip fade edge";
+            return false;
+        }
+        out = std::move(body);
+        return true;
+    }
+    if (kind == "clip.setFadeMode") {
+        if (!hasExactKeys(payload, {"trackId", "clipId", "edge", "mode"}) ||
+            !payload.at("edge").is_string() ||
+            !payload.at("mode").is_string()) {
+            error = "invalid clip fade mode payload";
+            return false;
+        }
+        SetClipFadeMode body;
+        body.trackId = payload.value("trackId", std::string());
+        body.clipId = payload.value("clipId", std::string());
+        const std::string mode = payload.at("mode").get<std::string>();
+        if (!clipEdgeFromName(payload.at("edge").get<std::string>(),
+                              body.edge) ||
+            (mode != "gain" && mode != "tape")) {
+            error = "invalid clip fade mode";
+            return false;
+        }
+        body.mode = mode == "tape" ? ClipFadeMode::Tape : ClipFadeMode::Gain;
+        out = std::move(body);
+        return true;
+    }
+    if (kind == "clip.setPatternOwner") {
+        if (!hasExactKeys(payload,
+                          {"trackId", "clipId", "patternClipId"}) ||
+            !payload.at("patternClipId").is_string()) {
+            error = "invalid clip pattern owner payload";
+            return false;
+        }
+        out = SetClipPatternOwner{
+            payload.value("trackId", std::string()),
+            payload.value("clipId", std::string()),
+            payload.at("patternClipId").get<std::string>()};
+        return true;
+    }
+    if (kind == "clip.setMusicalAnalysis") {
+        if (!hasExactKeys(payload, {"trackId", "clipId", "analysis"})) {
+            error = "invalid clip musical analysis payload";
+            return false;
+        }
+        SetClipMusicalAnalysis body;
+        body.trackId = payload.value("trackId", std::string());
+        body.clipId = payload.value("clipId", std::string());
+        if (!musicalAnalysisFromJson(payload.at("analysis"), body.analysis)) {
+            error = "invalid clip musical analysis value";
             return false;
         }
         out = std::move(body);
@@ -1107,6 +1321,23 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
         body.afterId = payload.value("afterId", std::string());
         if (!pluginLocationFromJson(payload.at("location"), body.location)) {
             error = "invalid plugin location";
+            return false;
+        }
+        out = std::move(body);
+        return true;
+    }
+    if (kind == "plugin.replace") {
+        if (!hasExactKeys(payload,
+                          {"location", "insertId", "replacement"})) {
+            error = "invalid plugin replacement payload";
+            return false;
+        }
+        ReplacePluginInsert body;
+        body.insertId = payload.value("insertId", std::string());
+        if (!pluginLocationFromJson(payload.at("location"), body.location) ||
+            !sharedInsertFromJson(payload.at("replacement"),
+                                  body.replacement)) {
+            error = "invalid plugin replacement value";
             return false;
         }
         out = std::move(body);
@@ -1236,6 +1467,21 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
             return false;
         }
         out = std::move(body);
+        return true;
+    }
+    if (kind == "samplerFx.setLevels") {
+        if (!hasExactKeys(payload,
+                          {"trackId", "instrumentId", "volume", "pan"}) ||
+            !payload.at("volume").is_number() ||
+            !payload.at("pan").is_number()) {
+            error = "invalid sampler FX levels payload";
+            return false;
+        }
+        out = SetSamplerFxLevels{
+            payload.value("trackId", std::string()),
+            payload.value("instrumentId", std::string()),
+            payload.at("volume").get<double>(),
+            payload.at("pan").get<double>()};
         return true;
     }
     if (kind == "note.upsert") {
@@ -1453,6 +1699,38 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
                           payload.value("deleteOperationId", std::string())};
         return true;
     }
+    if (kind == "take.move") {
+        if (!hasExactKeys(payload,
+                          {"trackId", "clipId", "takeId", "afterId"})) {
+            error = "invalid take move payload shape";
+            return false;
+        }
+        out = MoveTake{payload.value("trackId", std::string()),
+                       payload.value("clipId", std::string()),
+                       payload.value("takeId", std::string()),
+                       payload.value("afterId", std::string())};
+        return true;
+    }
+    if (kind == "take.setProperty") {
+        if (!hasExactKeys(payload,
+                          {"trackId", "clipId", "takeId", "property",
+                           "value"})) {
+            error = "invalid take property payload";
+            return false;
+        }
+        SetTakeProperty body;
+        body.trackId = payload.value("trackId", std::string());
+        body.clipId = payload.value("clipId", std::string());
+        body.takeId = payload.value("takeId", std::string());
+        if (!takePropertyFromName(payload.value("property", std::string()),
+                                  body.property) ||
+            !scalarFromJson(payload.at("value"), body.value)) {
+            error = "invalid take property value";
+            return false;
+        }
+        out = std::move(body);
+        return true;
+    }
     if (kind == "compSegment.upsert") {
         if (!hasExactKeys(payload,
                           {"trackId", "clipId", "segment", "afterId"})) {
@@ -1658,6 +1936,14 @@ std::optional<ProjectCommand> projectCommandFromJson(const nlohmann::json& value
             if (!value.contains(key))
                 return fail(std::string("missing command field: ") + key);
         }
+        if (value.at("kind").is_string()) {
+            const std::string kind = value.at("kind").get<std::string>();
+            if ((kind == "batch" || kind == "recording.commit") &&
+                value.at("payload").dump().size() >
+                    kMaxProjectCommandBatchBytes) {
+                return fail("batch command exceeds the 1 MiB payload limit");
+            }
+        }
         ProjectCommand command;
         command.meta = metaFromJson(value);
         if (command.meta.schemaVersion != kProjectCommandSchemaVersion)
@@ -1709,6 +1995,11 @@ std::optional<ProjectCommand> projectCommandFromJson(const nlohmann::json& value
 
 std::string serializeProjectCommand(const ProjectCommand& command) {
     return projectCommandToJson(command).dump();
+}
+
+std::size_t serializedProjectCommandPayloadSize(
+    const ProjectCommand& command) {
+    return bodyToJson(command).dump().size();
 }
 
 std::optional<ProjectCommand> deserializeProjectCommand(std::string_view bytes,

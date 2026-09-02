@@ -1126,8 +1126,8 @@ func (s *Store) evictSessionMembersTx(tx *gorm.DB, userID, deviceID,
 	projects := tx.Table("project_session_members AS members").
 		Select("DISTINCT sessions.project_id").
 		Joins("JOIN project_live_sessions AS sessions ON sessions.id = members.session_id").
-		Where("sessions.status = ? AND members.left_at IS NULL",
-			model.ProjectSessionActive)
+		Where("sessions.status IN ? AND members.left_at IS NULL",
+			[]string{model.ProjectSessionActive, model.ProjectSessionEnding})
 	if userID != uuid.Nil {
 		projects = projects.Where("members.user_id = ?", userID)
 	}
@@ -1150,8 +1150,8 @@ func (s *Store) evictSessionMembersTx(tx *gorm.DB, userID, deviceID,
 		}
 		var sessions []model.ProjectSession
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("project_id = ? AND status = ?", projectID,
-				model.ProjectSessionActive).
+			Where("project_id = ? AND status IN ?", projectID,
+				[]string{model.ProjectSessionActive, model.ProjectSessionEnding}).
 			Order("id").Find(&sessions).Error; err != nil {
 			return err
 		}

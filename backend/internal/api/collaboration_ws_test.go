@@ -37,8 +37,8 @@ func TestSessionCompatibilityBodyIsRequiredAndCamelCase(t *testing.T) {
 	validRequest := httptest.NewRequest(http.MethodPost, "/join", strings.NewReader(`{
 		"appVersion":"1.2.3",
 		"engineVersion":"engine-42",
-		"commandSchemaVersion":1,
-		"projectFormatVersion":6
+		"commandSchemaVersion":2,
+		"projectFormatVersion":7
 	}`))
 	validResponse := httptest.NewRecorder()
 	var valid joinProjectSessionRequest
@@ -46,7 +46,8 @@ func TestSessionCompatibilityBodyIsRequiredAndCamelCase(t *testing.T) {
 		t.Fatalf("valid compatibility body was rejected: %s", validResponse.Body.String())
 	}
 	if valid.AppVersion != "1.2.3" || valid.EngineVersion != "engine-42" ||
-		valid.CommandSchemaVersion != 1 || valid.ProjectFormatVersion != 6 {
+		valid.CommandSchemaVersion != collab.CollaborationCommandSchemaVersion ||
+		valid.ProjectFormatVersion != collab.CollaborationProjectFormatVersion {
 		t.Fatalf("compatibility body decoded incorrectly: %#v", valid)
 	}
 }
@@ -97,7 +98,7 @@ func TestCollaborationEnvelopePreventsParticipantSpoofing(t *testing.T) {
 func TestCollaborationCommandRequiresLockedEightFieldShape(t *testing.T) {
 	opID := uuid.NewString()
 	valid := json.RawMessage(`{
-		"schemaVersion":1,
+		"schemaVersion":2,
 		"opId":"` + opID + `",
 		"transactionId":null,
 		"baseServerSeq":0,

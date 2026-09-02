@@ -51,9 +51,12 @@ class MidiInputManager;
 namespace collab {
 class CollaborationService;
 class CollaborationCommandBridge;
+class AssetCache;
 class CloudProjectClient;
+class CloudProjectAssetHydrator;
 class CloudProjectPublisher;
 class CloudProjectSyncCoordinator;
+class CloudSharedAssetMutationBridge;
 class CloudSessionLifecycleController;
 class RecordingLeaseCoordinator;
 class PresenceInputRouter;
@@ -102,7 +105,11 @@ public:
         collab::CloudSessionLifecycleController* sessionLifecycle,
         collab::CollaborationCommandBridge* commandBridge,
         collab::CloudProjectClient* projectClient,
-        collab::RecordingLeaseCoordinator* recordingLeases);
+        collab::RecordingLeaseCoordinator* recordingLeases,
+        collab::CloudProjectAssetHydrator* assetHydrator,
+        collab::AssetCache* assetCache);
+    void setCloudSharedAssetMutationBridge(
+        collab::CloudSharedAssetMutationBridge* bridge);
 #endif
 
     /// Populate a few coloured tracks (used for screenshots / demos).
@@ -688,10 +695,18 @@ private:
                                            const QString& ownerId,
                                            const QString& objectId);
     void onPublishCloudProject();
+    void onOpenCloudProjects();
     void onInvitePeople();
+    void onSessionSettings();
+    bool openCloudProject(const QString& projectId,
+                          const QString& localBackupPath = {});
+    void persistCloudBinding();
+    void restoreCloudBinding();
+    void onMakeLocalCopy();
     void updateCloudPublicationAction();
     void updateCloudSessionActions();
     bool canInvitePeople() const;
+    bool canOpenSessionSettings() const;
     void clearCloudProjectBinding(bool cancelPublication);
     void startCloudRecording(const std::vector<std::string>& targets);
     void stopCloudRecordingNow(bool interactiveError = true);
@@ -732,17 +747,27 @@ private:
     collab::CloudSessionLifecycleController* m_cloudSessionLifecycle = nullptr;
     collab::CollaborationCommandBridge* m_collaborationCommandBridge = nullptr;
     QPointer<collab::CloudProjectClient> m_cloudProjectClient;
+    QPointer<collab::CloudProjectAssetHydrator> m_cloudAssetHydrator;
+    QPointer<collab::CloudSharedAssetMutationBridge>
+        m_cloudSharedAssetMutationBridge;
+    QPointer<collab::AssetCache> m_collaborationAssetCache;
     QPointer<collab::RecordingLeaseCoordinator> m_recordingLeases;
     struct CloudRecordingRuntime;
     std::unique_ptr<CloudRecordingRuntime> m_cloudRecording;
     quint64 m_cloudRecordingGeneration = 0;
     bool m_preserveCloudRecoverySession = false;
     QAction* m_publishProjectAction = nullptr;
+    QAction* m_cloudProjectsAction = nullptr;
     QAction* m_startSessionAction = nullptr;
     QAction* m_invitePeopleAction = nullptr;
+    QAction* m_sessionSettingsAction = nullptr;
     QAction* m_endSessionAction = nullptr;
     QAction* m_leaveSessionAction = nullptr;
+    QAction* m_retryAssetMutationAction = nullptr;
+    QAction* m_cancelAssetMutationAction = nullptr;
     QString m_cloudProjectId;
+    QString m_candidateCloudProjectId;
+    QString m_candidateCloudBackupPath;
     /// The local package published into the cloud is retained as an immutable
     /// backup.  Save/Save As may create a different local copy, but may never
     /// target this path while the document remains cloud-bound.

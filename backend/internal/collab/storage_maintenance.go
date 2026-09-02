@@ -32,9 +32,9 @@ func validateStorageBatch(limit int) error {
 	return nil
 }
 
-// ReapExpiredUploads first makes open rows non-writable under a database lock,
-// then performs provider cleanup without holding that lock. Failed cleanups
-// retain an expired/aborted row and are retried on a later bounded pass.
+// ReapExpiredUploads atomically replaces expired/aborted upload rows with exact
+// provider cleanup jobs. Provider failure cannot lose the object identifiers:
+// the leased cleanup queue owns every retry after the transaction commits.
 func (s *AssetService) ReapExpiredUploads(ctx context.Context, limit int) (int, error) {
 	if s == nil || s.DB == nil || s.Objects == nil {
 		return 0, invalidf("asset maintenance is not configured")
@@ -43,31 +43,41 @@ func (s *AssetService) ReapExpiredUploads(ctx context.Context, limit int) (int, 
 		return 0, err
 	}
 	now := s.now()
+	if err := s.DB.WithContext(ctx).Model(&model.UploadSession{}).
+		Where("status = ? AND verification_started_at <= ? AND expires_at > ?",
+			UploadVerifying, now.Add(-30*time.Minute), now).
+		Updates(map[string]any{"status": UploadUploading,
+			"verification_started_at": nil}).Error; err != nil {
+		return 0, err
+	}
 	var candidates []model.UploadSession
+	cleanupIDs := make([]uuid.UUID, 0, limit)
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
 			Where(`(status IN ? AND expires_at <= ?) OR status IN ?`,
-				[]string{UploadPending, UploadUploading}, now,
+				[]string{UploadPending, UploadUploading, UploadVerifying}, now,
 				[]string{UploadExpired, UploadAborted}).
 			Order("expires_at, id").Limit(limit).Find(&candidates).Error; err != nil {
 			return err
 		}
 		for index := range candidates {
 			candidate := &candidates[index]
-			if candidate.Status != UploadPending && candidate.Status != UploadUploading {
-				continue
+			abortMultipart := candidate.UploadMode == UploadModeMultipart &&
+				candidate.ProviderUploadID != "" && candidate.MultipartState != MultipartStateAborted
+			providerUploadID := ""
+			if abortMultipart {
+				providerUploadID = candidate.ProviderUploadID
 			}
-			updates := map[string]any{"status": UploadExpired}
-			candidate.Status = UploadExpired
-			if candidate.UploadMode == UploadModeMultipart &&
-				candidate.ProviderUploadID != "" &&
-				candidate.MultipartState != MultipartStateAborted {
-				updates["multipart_state"] = MultipartStateAborting
-				candidate.MultipartState = MultipartStateAborting
+			cleanupID, err := enqueueObjectCleanupTx(tx, candidate.ObjectKey,
+				providerUploadID, abortMultipart, true, now)
+			if err != nil {
+				return err
 			}
-			result := tx.Model(&model.UploadSession{}).
-				Where("id = ? AND status IN ?", candidate.ID,
-					[]string{UploadPending, UploadUploading}).Updates(updates)
+			cleanupIDs = append(cleanupIDs, cleanupID)
+			result := tx.Where(`id = ? AND ((status IN ? AND expires_at <= ?)
+				OR status IN ?)`, candidate.ID,
+				[]string{UploadPending, UploadUploading, UploadVerifying}, now,
+				[]string{UploadExpired, UploadAborted}).Delete(&model.UploadSession{})
 			if result.Error != nil {
 				return result.Error
 			}
@@ -81,51 +91,23 @@ func (s *AssetService) ReapExpiredUploads(ctx context.Context, limit int) (int, 
 		return 0, err
 	}
 
-	removed := 0
 	var cleanupErrors []error
-	for _, upload := range candidates {
+	for _, cleanupID := range cleanupIDs {
 		if err := ctx.Err(); err != nil {
 			cleanupErrors = append(cleanupErrors, err)
 			break
 		}
-		if err := cleanupUploadObject(ctx, s.Objects, upload); err != nil {
+		if err := s.attemptObjectCleanup(ctx, cleanupID); err != nil {
 			cleanupErrors = append(cleanupErrors, err)
-			continue
-		}
-		result := s.DB.WithContext(ctx).Where("id = ? AND object_key = ? AND status IN ?",
-			upload.ID, upload.ObjectKey, []string{UploadExpired, UploadAborted}).
-			Delete(&model.UploadSession{})
-		if result.Error != nil {
-			cleanupErrors = append(cleanupErrors, result.Error)
-			continue
-		}
-		if result.RowsAffected == 1 {
-			removed++
 		}
 	}
-	return removed, errors.Join(cleanupErrors...)
-}
-
-func cleanupUploadObject(ctx context.Context, objects objectstore.Store,
-	upload model.UploadSession) error {
-	if upload.UploadMode == UploadModeMultipart && upload.ProviderUploadID != "" &&
-		upload.MultipartState != MultipartStateAborted {
-		if err := objects.AbortMultipart(ctx, upload.ObjectKey,
-			upload.ProviderUploadID); err != nil &&
-			!errors.Is(err, objectstore.ErrMultipartNotFound) {
-			return err
-		}
-	}
-	if err := objects.Delete(ctx, upload.ObjectKey); err != nil &&
-		!errors.Is(err, objectstore.ErrObjectNotFound) {
-		return err
-	}
-	return nil
+	return len(cleanupIDs), errors.Join(cleanupErrors...)
 }
 
 // RefreshUnreferencedBlobs begins the retention clock for verified blobs that
-// are no longer reachable from a project asset or one of the retained
-// snapshots. Reference creation resets this field through retainReadyBlobTx.
+// are no longer reachable from an operation newer than the latest snapshot or
+// one of the retained snapshots. The project_assets table is an immutable
+// catalog, not a reachability root. Reference creation resets this field.
 func (s *AssetService) RefreshUnreferencedBlobs(ctx context.Context,
 	limit int) (int64, error) {
 	if s == nil || s.DB == nil {
@@ -140,8 +122,19 @@ func (s *AssetService) RefreshUnreferencedBlobs(ctx context.Context,
 		FROM blobs
 		WHERE blobs.status = ? AND blobs.unreferenced_at IS NOT NULL
 		  AND (
-		    EXISTS (SELECT 1 FROM project_assets WHERE project_assets.blob_id = blobs.id)
-		    OR EXISTS (SELECT 1 FROM project_snapshots WHERE project_snapshots.blob_id = blobs.id)
+		    EXISTS (SELECT 1 FROM project_snapshots WHERE project_snapshots.blob_id = blobs.id)
+		    OR EXISTS (
+		      SELECT 1 FROM project_operation_assets AS refs
+		      JOIN project_assets AS assets
+		        ON assets.project_id = refs.project_id AND assets.asset_id = refs.asset_id
+		      WHERE assets.blob_id = blobs.id
+		    )
+		    OR EXISTS (
+		      SELECT 1 FROM project_snapshot_assets AS refs
+		      JOIN project_assets AS assets
+		        ON assets.project_id = refs.project_id AND assets.asset_id = refs.asset_id
+		      WHERE assets.blob_id = blobs.id
+		    )
 		  )
 		ORDER BY blobs.id
 		FOR UPDATE SKIP LOCKED
@@ -157,9 +150,20 @@ func (s *AssetService) RefreshUnreferencedBlobs(ctx context.Context,
 		SELECT blobs.id
 		FROM blobs
 		WHERE blobs.status = ? AND blobs.unreferenced_at IS NULL
-		  AND NOT EXISTS (SELECT 1 FROM project_assets WHERE project_assets.blob_id = blobs.id)
 		  AND NOT EXISTS (SELECT 1 FROM project_snapshots WHERE project_snapshots.blob_id = blobs.id)
-		ORDER BY blobs.created_at, blobs.id
+		  AND NOT EXISTS (
+		    SELECT 1 FROM project_operation_assets AS refs
+		    JOIN project_assets AS assets
+		      ON assets.project_id = refs.project_id AND assets.asset_id = refs.asset_id
+		    WHERE assets.blob_id = blobs.id
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1 FROM project_snapshot_assets AS refs
+		    JOIN project_assets AS assets
+		      ON assets.project_id = refs.project_id AND assets.asset_id = refs.asset_id
+		    WHERE assets.blob_id = blobs.id
+		  )
+		ORDER BY blobs.id
 		FOR UPDATE SKIP LOCKED
 		LIMIT ?
 	)
@@ -189,10 +193,21 @@ func (s *AssetService) GarbageCollectUnreferencedBlobs(ctx context.Context,
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
 			Where(`(status = ? OR (status = ? AND unreferenced_at IS NOT NULL
 				AND unreferenced_at <= ?))
-				AND NOT EXISTS (SELECT 1 FROM project_assets WHERE project_assets.blob_id = blobs.id)
-				AND NOT EXISTS (SELECT 1 FROM project_snapshots WHERE project_snapshots.blob_id = blobs.id)`,
+				AND NOT EXISTS (SELECT 1 FROM project_snapshots WHERE project_snapshots.blob_id = blobs.id)
+				AND NOT EXISTS (
+				  SELECT 1 FROM project_operation_assets AS refs
+				  JOIN project_assets AS assets
+				    ON assets.project_id = refs.project_id AND assets.asset_id = refs.asset_id
+				  WHERE assets.blob_id = blobs.id
+				)
+				AND NOT EXISTS (
+				  SELECT 1 FROM project_snapshot_assets AS refs
+				  JOIN project_assets AS assets
+				    ON assets.project_id = refs.project_id AND assets.asset_id = refs.asset_id
+				  WHERE assets.blob_id = blobs.id
+				)`,
 				BlobDeleting, BlobReady, cutoff).
-			Order("unreferenced_at NULLS FIRST, created_at, id").Limit(limit).
+			Order("id").Limit(limit).
 			Find(&candidates).Error; err != nil {
 			return err
 		}
@@ -215,6 +230,23 @@ func (s *AssetService) GarbageCollectUnreferencedBlobs(ctx context.Context,
 					}
 				}
 				continue
+			}
+			// Keep the immutable catalog available for idempotent completion and
+			// downloads throughout the retention window. Once GC owns the blob,
+			// remove only catalog rows with no exact operation/snapshot root.
+			if err := tx.Exec(`DELETE FROM project_assets AS assets
+				WHERE assets.blob_id = ?
+				  AND NOT EXISTS (
+				    SELECT 1 FROM project_operation_assets AS refs
+				    WHERE refs.project_id = assets.project_id
+				      AND refs.asset_id = assets.asset_id
+				  )
+				  AND NOT EXISTS (
+				    SELECT 1 FROM project_snapshot_assets AS refs
+				    WHERE refs.project_id = assets.project_id
+				      AND refs.asset_id = assets.asset_id
+				  )`, blob.ID).Error; err != nil {
+				return err
 			}
 			claimed = append(claimed, blob)
 			if blob.Status == BlobReady {
@@ -254,7 +286,19 @@ func (s *AssetService) GarbageCollectUnreferencedBlobs(ctx context.Context,
 		}
 		result := s.DB.WithContext(ctx).Where(`id = ? AND status = ?
 			AND NOT EXISTS (SELECT 1 FROM project_assets WHERE project_assets.blob_id = blobs.id)
-			AND NOT EXISTS (SELECT 1 FROM project_snapshots WHERE project_snapshots.blob_id = blobs.id)`,
+			AND NOT EXISTS (SELECT 1 FROM project_snapshots WHERE project_snapshots.blob_id = blobs.id)
+			AND NOT EXISTS (
+			  SELECT 1 FROM project_operation_assets AS refs
+			  JOIN project_assets AS assets
+			    ON assets.project_id = refs.project_id AND assets.asset_id = refs.asset_id
+			  WHERE assets.blob_id = blobs.id
+			)
+			AND NOT EXISTS (
+			  SELECT 1 FROM project_snapshot_assets AS refs
+			  JOIN project_assets AS assets
+			    ON assets.project_id = refs.project_id AND assets.asset_id = refs.asset_id
+			  WHERE assets.blob_id = blobs.id
+			)`,
 			blob.ID, BlobDeleting).Delete(&model.Blob{})
 		if result.Error != nil {
 			cleanupErrors = append(cleanupErrors, result.Error)
@@ -272,9 +316,19 @@ func (s *AssetService) GarbageCollectUnreferencedBlobs(ctx context.Context,
 func blobReferencedTx(tx *gorm.DB, blobID uuid.UUID) (bool, error) {
 	var referenced bool
 	err := tx.Raw(`SELECT EXISTS (
-		SELECT 1 FROM project_assets WHERE blob_id = ?
-		UNION ALL
 		SELECT 1 FROM project_snapshots WHERE blob_id = ?
-	)`, blobID, blobID).Scan(&referenced).Error
+		UNION ALL
+		SELECT 1
+		FROM project_operation_assets AS refs
+		JOIN project_assets AS assets
+		  ON assets.project_id = refs.project_id AND assets.asset_id = refs.asset_id
+		WHERE assets.blob_id = ?
+		UNION ALL
+		SELECT 1
+		FROM project_snapshot_assets AS refs
+		JOIN project_assets AS assets
+		  ON assets.project_id = refs.project_id AND assets.asset_id = refs.asset_id
+		WHERE assets.blob_id = ?
+	)`, blobID, blobID, blobID).Scan(&referenced).Error
 	return referenced, err
 }

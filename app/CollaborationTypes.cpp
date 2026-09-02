@@ -194,6 +194,8 @@ QString wireTypeName(WireType type) {
             return enumName("snapshot.requested");
         case WireType::SessionEnded: return enumName("session.ended");
         case WireType::ResyncRequired: return enumName("resync.required");
+        case WireType::HashRequested: return enumName("hash.requested");
+        case WireType::HashVerified: return enumName("hash.verified");
         case WireType::SnapshotHash: return enumName("snapshot.hash");
     }
     return enumName("unknown");

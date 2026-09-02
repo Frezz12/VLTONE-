@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPointer>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -297,6 +298,12 @@ struct CloudProjectInviteDialog::Impl {
     QPushButton* copy = nullptr;
     QPushButton* create = nullptr;
     QPushButton* cancel = nullptr;
+    QPointer<CloudProjectClient> projects;
+    QListWidget* invitations = nullptr;
+    QPushButton* refreshInvitations = nullptr;
+    QPushButton* revokeInvitation = nullptr;
+    quint64 listRequestId = 0;
+    quint64 revokeRequestId = 0;
 
     Impl(CloudProjectInviteDialog* owner, const QString& projectId,
          InviteRequestState::Ports ports)
@@ -359,7 +366,54 @@ struct CloudProjectInviteDialog::Impl {
         status->show();
     }
 
+    void reloadInvitations() {
+        if (!projects || request.projectId().isEmpty()) return;
+        if (listRequestId != 0) projects->cancel(listRequestId);
+        if (invitations) {
+            invitations->clear();
+            invitations->addItem(q->tr("Loading…"));
+        }
+        listRequestId = projects->listInvites(request.projectId());
+    }
+
+    void showInvitations(quint64 requestId,
+                         const QVector<CloudProjectInvite>& values) {
+        if (requestId != listRequestId || !invitations) return;
+        listRequestId = 0;
+        invitations->clear();
+        for (const CloudProjectInvite& invite : values) {
+            const QString role = invite.role == CloudMemberRole::Editor
+                ? q->tr("Editor") : q->tr("Viewer");
+            const QString expiry = invite.expiresAt.isValid()
+                ? invite.expiresAt.toLocalTime().toString(
+                      QStringLiteral("yyyy-MM-dd HH:mm"))
+                : q->tr("unknown expiry");
+            auto* item = new QListWidgetItem(
+                q->tr("%1 — expires %2").arg(role, expiry), invitations);
+            item->setData(Qt::UserRole, invite.id);
+        }
+        if (invitations->count() == 0)
+            invitations->addItem(q->tr("No active invitations"));
+        if (revokeInvitation) revokeInvitation->setEnabled(false);
+    }
+
+    void revokeSelectedInvitation() {
+        if (!projects || !invitations || revokeRequestId != 0) return;
+        QListWidgetItem* item = invitations->currentItem();
+        const QString inviteId = item
+            ? item->data(Qt::UserRole).toString() : QString();
+        if (inviteId.isEmpty()) return;
+        revokeRequestId =
+            projects->revokeInvite(request.projectId(), inviteId);
+        if (revokeInvitation) revokeInvitation->setEnabled(false);
+    }
+
     void shutdown() {
+        if (projects && listRequestId != 0) projects->cancel(listRequestId);
+        if (projects && revokeRequestId != 0)
+            projects->cancel(revokeRequestId);
+        listRequestId = 0;
+        revokeRequestId = 0;
         request.shutdown();
         if (token) token->clear();
         if (email) email->clear();
@@ -380,6 +434,7 @@ CloudProjectInviteDialog::CloudProjectInviteDialog(
         return guard && guard->cancel(requestId);
     };
     m_impl = std::make_unique<Impl>(this, canonicalProjectId, std::move(ports));
+    m_impl->projects = projects;
 
     setWindowTitle(tr("Invite People"));
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
@@ -436,6 +491,19 @@ CloudProjectInviteDialog::CloudProjectInviteDialog(
     tokenRow->addWidget(m_impl->token, 1);
     tokenRow->addWidget(m_impl->copy);
 
+    auto* invitationsTitle =
+        new QLabel(tr("Active invitations"), this);
+    m_impl->invitations = new QListWidget(this);
+    m_impl->invitations->setMinimumHeight(110);
+    m_impl->refreshInvitations = new QPushButton(tr("Refresh"), this);
+    m_impl->revokeInvitation =
+        new QPushButton(tr("Revoke selected"), this);
+    m_impl->revokeInvitation->setEnabled(false);
+    auto* invitationButtons = new QHBoxLayout;
+    invitationButtons->addWidget(m_impl->refreshInvitations);
+    invitationButtons->addWidget(m_impl->revokeInvitation);
+    invitationButtons->addStretch(1);
+
     m_impl->create = new QPushButton(tr("Create invitation"), this);
     m_impl->create->setDefault(true);
     m_impl->cancel = new QPushButton(tr("Cancel"), this);
@@ -453,6 +521,9 @@ CloudProjectInviteDialog::CloudProjectInviteDialog(
     column->addWidget(m_impl->status);
     column->addWidget(m_impl->tokenLabel);
     column->addLayout(tokenRow);
+    column->addWidget(invitationsTitle);
+    column->addWidget(m_impl->invitations);
+    column->addLayout(invitationButtons);
     column->addLayout(buttons);
 
     connect(m_impl->create, &QPushButton::clicked, this,
@@ -461,6 +532,17 @@ CloudProjectInviteDialog::CloudProjectInviteDialog(
             &CloudProjectInviteDialog::reject);
     connect(m_impl->copy, &QPushButton::clicked, this,
             [this] { m_impl->copyToken(); });
+    connect(m_impl->refreshInvitations, &QPushButton::clicked, this,
+            [this] { m_impl->reloadInvitations(); });
+    connect(m_impl->revokeInvitation, &QPushButton::clicked, this,
+            [this] { m_impl->revokeSelectedInvitation(); });
+    connect(m_impl->invitations, &QListWidget::itemSelectionChanged, this,
+            [this] {
+        const QListWidgetItem* item = m_impl->invitations->currentItem();
+        m_impl->revokeInvitation->setEnabled(
+            item && !item->data(Qt::UserRole).toString().isEmpty() &&
+            m_impl->revokeRequestId == 0);
+    });
     connect(m_impl->email, &QLineEdit::textChanged, this,
             [this] { m_impl->refresh(); });
     connect(m_impl->role, &QComboBox::currentIndexChanged, this,
@@ -475,14 +557,46 @@ CloudProjectInviteDialog::CloudProjectInviteDialog(
         connect(projects, &CloudProjectClient::inviteCreated, this,
                 [this](quint64 requestId,
                        const CreatedCloudProjectInvite& result) {
-                    if (m_impl->request.onCreated(requestId, result))
+                    if (m_impl->request.onCreated(requestId, result)) {
                         m_impl->refresh();
+                        m_impl->reloadInvitations();
+                    }
                 });
+        connect(projects, &CloudProjectClient::invitesListed, this,
+                [this](quint64 requestId,
+                       const QVector<CloudProjectInvite>& invites) {
+            m_impl->showInvitations(requestId, invites);
+        });
+        connect(projects, &CloudProjectClient::operationCompleted, this,
+                [this](quint64 requestId, CloudRequestKind kind,
+                       const QString&) {
+            if (requestId != m_impl->revokeRequestId ||
+                kind != CloudRequestKind::RevokeInvite) return;
+            m_impl->revokeRequestId = 0;
+            m_impl->reloadInvitations();
+        });
         connect(projects, &CloudProjectClient::requestFailed, this,
                 [this](quint64 requestId, CloudRequestKind kind,
                        const CloudClientError& error) {
-                    if (kind != CloudRequestKind::CreateInvite) return;
-                    if (m_impl->request.onFailed(requestId,
+                    if (kind == CloudRequestKind::ListInvites &&
+                        requestId == m_impl->listRequestId) {
+                        m_impl->listRequestId = 0;
+                        m_impl->status->setText(boundedSafeMessage(
+                            error.safeMessage,
+                            tr("Could not load invitations.")));
+                        return;
+                    }
+                    if (kind == CloudRequestKind::RevokeInvite &&
+                        requestId == m_impl->revokeRequestId) {
+                        m_impl->revokeRequestId = 0;
+                        m_impl->status->setText(boundedSafeMessage(
+                            error.safeMessage,
+                            tr("Could not revoke the invitation.")));
+                        m_impl->refresh();
+                        return;
+                    }
+                    if (kind == CloudRequestKind::CreateInvite &&
+                        m_impl->request.onFailed(requestId,
                                                  error.safeMessage)) {
                         m_impl->refresh();
                     }
@@ -495,6 +609,7 @@ CloudProjectInviteDialog::CloudProjectInviteDialog(
         m_impl->request.clientUnavailable();
     }
     m_impl->refresh();
+    m_impl->reloadInvitations();
 }
 
 CloudProjectInviteDialog::~CloudProjectInviteDialog() {

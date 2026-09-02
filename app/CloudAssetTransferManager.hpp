@@ -92,7 +92,7 @@ struct CloudSnapshotUploadInput {
     QString uploadId;
     QString sourcePath;
     quint64 sequence = 0;
-    int schemaVersion = 6;
+    int schemaVersion = 7;
     QString sha256;
     quint64 byteSize = 0;
     QString contentType = QStringLiteral("application/vnd.vlt.project+json");

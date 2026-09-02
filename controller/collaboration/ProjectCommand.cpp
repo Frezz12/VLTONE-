@@ -11,6 +11,7 @@ std::string projectScalarName(ProjectScalar field) {
         case ProjectScalar::Name: return "name";
         case ProjectScalar::Tempo: return "tempo";
         case ProjectScalar::AiInstructions: return "aiInstructions";
+        case ProjectScalar::RenderSampleRate: return "renderSampleRate";
         case ProjectScalar::MasterVolume: return "masterVolume";
         case ProjectScalar::MasterPan: return "masterPan";
     }
@@ -21,6 +22,7 @@ bool projectScalarFromName(const std::string& name, ProjectScalar& out) {
     if (name == "name") out = ProjectScalar::Name;
     else if (name == "tempo") out = ProjectScalar::Tempo;
     else if (name == "aiInstructions") out = ProjectScalar::AiInstructions;
+    else if (name == "renderSampleRate") out = ProjectScalar::RenderSampleRate;
     else if (name == "masterVolume") out = ProjectScalar::MasterVolume;
     else if (name == "masterPan") out = ProjectScalar::MasterPan;
     else return false;
@@ -35,6 +37,7 @@ std::string trackPropertyName(TrackProperty property) {
         case TrackProperty::Pan: return "pan";
         case TrackProperty::Muted: return "muted";
         case TrackProperty::Mono: return "mono";
+        case TrackProperty::Summing: return "summing";
     }
     return "name";
 }
@@ -46,6 +49,7 @@ bool trackPropertyFromName(const std::string& name, TrackProperty& out) {
     else if (name == "pan") out = TrackProperty::Pan;
     else if (name == "muted") out = TrackProperty::Muted;
     else if (name == "mono") out = TrackProperty::Mono;
+    else if (name == "summing") out = TrackProperty::Summing;
     else return false;
     return true;
 }
@@ -75,6 +79,42 @@ bool clipPropertyFromName(const std::string& name, ClipProperty& out) {
     else if (name == "muted") out = ClipProperty::Muted;
     else if (name == "color") out = ClipProperty::Color;
     else if (name == "compCrossfadeMs") out = ClipProperty::CompCrossfadeMs;
+    else return false;
+    return true;
+}
+
+std::string clipEdgeName(ClipEdge edge) {
+    return edge == ClipEdge::In ? "in" : "out";
+}
+
+bool clipEdgeFromName(const std::string& name, ClipEdge& out) {
+    if (name == "in") out = ClipEdge::In;
+    else if (name == "out") out = ClipEdge::Out;
+    else return false;
+    return true;
+}
+
+std::string takePropertyName(TakeProperty property) {
+    switch (property) {
+        case TakeProperty::Name: return "name";
+        case TakeProperty::OffsetSeconds: return "offsetSeconds";
+        case TakeProperty::LengthSeconds: return "lengthSeconds";
+        case TakeProperty::ClipOffsetSeconds: return "clipOffsetSeconds";
+        case TakeProperty::Gain: return "gain";
+        case TakeProperty::Muted: return "muted";
+        case TakeProperty::Color: return "color";
+    }
+    return "name";
+}
+
+bool takePropertyFromName(const std::string& name, TakeProperty& out) {
+    if (name == "name") out = TakeProperty::Name;
+    else if (name == "offsetSeconds") out = TakeProperty::OffsetSeconds;
+    else if (name == "lengthSeconds") out = TakeProperty::LengthSeconds;
+    else if (name == "clipOffsetSeconds") out = TakeProperty::ClipOffsetSeconds;
+    else if (name == "gain") out = TakeProperty::Gain;
+    else if (name == "muted") out = TakeProperty::Muted;
+    else if (name == "color") out = TakeProperty::Color;
     else return false;
     return true;
 }
@@ -187,6 +227,16 @@ std::string commandKind(const ProjectCommand& command) {
             return "clip.setAsset";
         else if constexpr (std::is_same_v<T, SetClipSampleEdit>)
             return "clip.setSampleEdit";
+        else if constexpr (std::is_same_v<T, SetClipFade>)
+            return "clip.setFade";
+        else if constexpr (std::is_same_v<T, SetClipFadeCurve>)
+            return "clip.setFadeCurve";
+        else if constexpr (std::is_same_v<T, SetClipFadeMode>)
+            return "clip.setFadeMode";
+        else if constexpr (std::is_same_v<T, SetClipPatternOwner>)
+            return "clip.setPatternOwner";
+        else if constexpr (std::is_same_v<T, SetClipMusicalAnalysis>)
+            return "clip.setMusicalAnalysis";
         else if constexpr (std::is_same_v<T, AddPluginInsert>)
             return "plugin.add";
         else if constexpr (std::is_same_v<T, DeletePluginInsert>)
@@ -195,6 +245,8 @@ std::string commandKind(const ProjectCommand& command) {
             return "plugin.restore";
         else if constexpr (std::is_same_v<T, MovePluginInsert>)
             return "plugin.move";
+        else if constexpr (std::is_same_v<T, ReplacePluginInsert>)
+            return "plugin.replace";
         else if constexpr (std::is_same_v<T, SetPluginProperty>)
             return "plugin.setProperty";
         else if constexpr (std::is_same_v<T, SetPluginState>)
@@ -207,6 +259,8 @@ std::string commandKind(const ProjectCommand& command) {
             return "plugin.setAssetBinding";
         else if constexpr (std::is_same_v<T, RemovePluginAssetBinding>)
             return "plugin.removeAssetBinding";
+        else if constexpr (std::is_same_v<T, SetSamplerFxLevels>)
+            return "samplerFx.setLevels";
         else if constexpr (std::is_same_v<T, UpsertMidiNote>)
             return "note.upsert";
         else if constexpr (std::is_same_v<T, DeleteMidiNote>)
@@ -241,6 +295,10 @@ std::string commandKind(const ProjectCommand& command) {
             return "take.delete";
         else if constexpr (std::is_same_v<T, RestoreTake>)
             return "take.restore";
+        else if constexpr (std::is_same_v<T, MoveTake>)
+            return "take.move";
+        else if constexpr (std::is_same_v<T, SetTakeProperty>)
+            return "take.setProperty";
         else if constexpr (std::is_same_v<T, UpsertCompSegment>)
             return "compSegment.upsert";
         else if constexpr (std::is_same_v<T, DeleteCompSegment>)
@@ -386,10 +444,16 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                                    "deleteOperationId");
             } else if constexpr (std::is_same_v<T, MoveClip>) {
                 return requireUuid(body.clipId, "clipId") &&
+                       requireUuid(body.sourceTrackId, "sourceTrackId") &&
                        requireUuid(body.trackId, "trackId") &&
                        requireOptionalUuid(body.afterId, "afterId");
             } else if constexpr (std::is_same_v<T, SetClipAsset> ||
-                                 std::is_same_v<T, SetClipSampleEdit>) {
+                                 std::is_same_v<T, SetClipSampleEdit> ||
+                                 std::is_same_v<T, SetClipFade> ||
+                                 std::is_same_v<T, SetClipFadeCurve> ||
+                                 std::is_same_v<T, SetClipFadeMode> ||
+                                 std::is_same_v<T,
+                                                SetClipMusicalAnalysis>) {
                 if (!requireUuid(body.trackId, "trackId") ||
                     !requireUuid(body.clipId, "clipId")) {
                     return false;
@@ -397,6 +461,12 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                 if constexpr (std::is_same_v<T, SetClipAsset>)
                     return requireAssetId(body.asset, "asset.assetId", true);
                 return true;
+            } else if constexpr (std::is_same_v<T,
+                                               SetClipPatternOwner>) {
+                return requireUuid(body.trackId, "trackId") &&
+                       requireUuid(body.clipId, "clipId") &&
+                       requireOptionalUuid(body.patternClipId,
+                                           "patternClipId");
             } else if constexpr (std::is_same_v<T, AddPluginInsert>) {
                 if (!requireLocationIds(body.location) ||
                     !requireUuid(body.insert.id, "insert.id") ||
@@ -426,6 +496,25 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                 return requireLocationIds(body.location) &&
                        requireUuid(body.insertId, "insertId") &&
                        requireOptionalUuid(body.afterId, "afterId");
+            } else if constexpr (std::is_same_v<T,
+                                               ReplacePluginInsert>) {
+                if (!requireLocationIds(body.location) ||
+                    !requireUuid(body.insertId, "insertId") ||
+                    !requireUuid(body.replacement.id, "replacement.id") ||
+                    !requireOptionalUuid(body.replacement.sidechainTrackId,
+                                         "replacement.sidechainTrackId") ||
+                    !requireAssetId(body.replacement.stateAsset,
+                                    "replacement.stateAsset.assetId", true) ||
+                    !requireAssetId(body.replacement.rightStateAsset,
+                                    "replacement.rightStateAsset.assetId",
+                                    true)) {
+                    return false;
+                }
+                for (const PluginAssetBinding& binding :
+                     body.replacement.assetBindings) {
+                    if (!requireBindingAsset(binding)) return false;
+                }
+                return true;
             } else if constexpr (std::is_same_v<T, SetPluginProperty>) {
                 if (!requireLocationIds(body.location) ||
                     !requireUuid(body.insertId, "insertId")) {
@@ -468,6 +557,10 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                 return requireLocationIds(body.location) &&
                        requireUuid(body.insertId, "insertId") &&
                        (!body.key.empty() || fail("binding key must not be empty"));
+            } else if constexpr (std::is_same_v<T,
+                                               SetSamplerFxLevels>) {
+                return requireUuid(body.trackId, "trackId") &&
+                       requireUuid(body.instrumentId, "instrumentId");
             } else if constexpr (std::is_same_v<T, UpsertMidiNote>) {
                 return requireUuid(body.trackId, "trackId") &&
                        requireUuid(body.clipId, "clipId") &&
@@ -556,6 +649,15 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                        requireUuid(body.takeId, "takeId") &&
                        requireUuid(body.deleteOperationId,
                                    "deleteOperationId");
+            } else if constexpr (std::is_same_v<T, MoveTake>) {
+                return requireUuid(body.trackId, "trackId") &&
+                       requireUuid(body.clipId, "clipId") &&
+                       requireUuid(body.takeId, "takeId") &&
+                       requireOptionalUuid(body.afterId, "afterId");
+            } else if constexpr (std::is_same_v<T, SetTakeProperty>) {
+                return requireUuid(body.trackId, "trackId") &&
+                       requireUuid(body.clipId, "clipId") &&
+                       requireUuid(body.takeId, "takeId");
             } else if constexpr (std::is_same_v<T, UpsertCompSegment>) {
                 return requireUuid(body.trackId, "trackId") &&
                        requireUuid(body.clipId, "clipId") &&
@@ -691,11 +793,16 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
     const auto addTrackClipLandingHead = [&](const std::string& trackId) {
         fields.insert("track:" + trackId + ":clipLanding");
     };
+    const auto addPluginGenerationHead = [&](const std::string& insertId) {
+        fields.insert("plugin:" + insertId + ":generation");
+    };
     const auto collect = [&](const auto& self, const ProjectCommand& value) -> void {
         std::visit([&](const auto& body) {
             using T = std::decay_t<decltype(body)>;
             if constexpr (std::is_same_v<T, SetProjectScalar>) {
                 fields.insert("project:" + projectScalarName(body.field));
+                if (body.field == ProjectScalar::Tempo)
+                    fields.insert("project:tempoCascade");
             } else if constexpr (std::is_same_v<T, SetTimeSignature>) {
                 fields.insert("project:timeSignature");
             } else if constexpr (std::is_same_v<T, SetProjectKey>) {
@@ -704,8 +811,11 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
                                  std::is_same_v<T, RestoreTrack>) {
                 fields.insert("track:" + body.trackId + ":lifecycle");
                 fields.insert("track:" + body.trackId + ":position");
+                if constexpr (std::is_same_v<T, RestoreTrack>)
+                    fields.insert("project:tempoCascade");
             } else if constexpr (std::is_same_v<T, DeleteTrack>) {
                 fields.insert("track:" + body.trackId + ":lifecycle");
+                fields.insert("project:tempoCascade");
             } else if constexpr (std::is_same_v<T, MoveTrack>) {
                 fields.insert("track:" + body.trackId + ":position");
             } else if constexpr (std::is_same_v<T, SetTrackProperty>) {
@@ -741,34 +851,41 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
                 fields.insert(prefix + "color");
                 fields.insert(prefix + "compCrossfadeMs");
                 fields.insert(prefix + "durationSeconds");
+                fields.insert(prefix + "fadeInSeconds");
+                fields.insert(prefix + "fadeOutSeconds");
+                fields.insert(prefix + "fadeInCurve");
+                fields.insert(prefix + "fadeOutCurve");
+                fields.insert(prefix + "fadeInMode");
+                fields.insert(prefix + "fadeOutMode");
                 fields.insert(prefix + "gain");
                 fields.insert(prefix + "lifecycle");
                 fields.insert(prefix + "muted");
                 fields.insert(prefix + "name");
                 fields.insert(prefix + "offsetSeconds");
                 fields.insert(prefix + "pan");
+                fields.insert(prefix + "patternClipId");
                 fields.insert(prefix + "position");
+                fields.insert(prefix + "musicalAnalysis");
                 fields.insert(prefix + "sampleEdit");
                 fields.insert(prefix + "startSeconds");
                 addClipDescendants(body.clipId);
                 addTrackClipLandingHead(body.trackId);
+                fields.insert("project:tempoCascade");
             } else if constexpr (std::is_same_v<T, RestoreClip>) {
                 fields.insert("clip:" + body.clipId + ":lifecycle");
                 fields.insert("clip:" + body.clipId + ":position");
                 addClipDescendants(body.clipId);
                 addTrackClipLandingHead(body.trackId);
+                fields.insert("project:tempoCascade");
             } else if constexpr (std::is_same_v<T, DeleteClip>) {
                 fields.insert("clip:" + body.clipId + ":lifecycle");
                 addClipDescendants(body.clipId);
                 addTrackClipLandingHead(body.trackId);
+                fields.insert("project:tempoCascade");
             } else if constexpr (std::is_same_v<T, MoveClip>) {
                 fields.insert("clip:" + body.clipId + ":position");
+                addTrackClipLandingHead(body.sourceTrackId);
                 addTrackClipLandingHead(body.trackId);
-                // MoveClip v1 names only its destination track. This global
-                // assignment head is the conservative source-track fallback:
-                // a move-out must invalidate a stale landing plan even though
-                // the authority cannot derive the source track from payload.
-                fields.insert("project:clipTrackAssignments");
             } else if constexpr (std::is_same_v<T, SetClipProperty>) {
                 fields.insert("clip:" + body.clipId + ":" +
                               clipPropertyName(body.property));
@@ -777,12 +894,36 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
                     body.property == ClipProperty::OffsetSeconds) {
                     addTrackClipLandingHead(body.trackId);
                 }
+                if (body.property == ClipProperty::StartSeconds ||
+                    body.property == ClipProperty::DurationSeconds) {
+                    fields.insert("project:tempoCascade");
+                }
             } else if constexpr (std::is_same_v<T, SetClipAsset>) {
                 fields.insert("clip:" + body.clipId + ":asset");
                 addTrackClipLandingHead(body.trackId);
             } else if constexpr (std::is_same_v<T, SetClipSampleEdit>) {
                 fields.insert("clip:" + body.clipId + ":sampleEdit");
                 addTrackClipLandingHead(body.trackId);
+            } else if constexpr (std::is_same_v<T, SetClipFade>) {
+                fields.insert("clip:" + body.clipId + ":fadeInSeconds");
+                fields.insert("clip:" + body.clipId + ":fadeOutSeconds");
+                addTrackClipLandingHead(body.trackId);
+                fields.insert("project:tempoCascade");
+            } else if constexpr (std::is_same_v<T, SetClipFadeCurve>) {
+                fields.insert("clip:" + body.clipId + ":fade" +
+                              (body.edge == ClipEdge::In ? "In" : "Out") +
+                              "Curve");
+            } else if constexpr (std::is_same_v<T, SetClipFadeMode>) {
+                fields.insert("clip:" + body.clipId + ":fade" +
+                              (body.edge == ClipEdge::In ? "In" : "Out") +
+                              "Mode");
+            } else if constexpr (std::is_same_v<T,
+                                               SetClipPatternOwner>) {
+                fields.insert("clip:" + body.clipId + ":patternClipId");
+                addClipDescendants(body.clipId);
+            } else if constexpr (std::is_same_v<T,
+                                               SetClipMusicalAnalysis>) {
+                fields.insert("clip:" + body.clipId + ":musicalAnalysis");
             } else if constexpr (std::is_same_v<T, AddPluginInsert> ||
                                  std::is_same_v<T, RestorePluginInsert>) {
                 const std::string& id = [&]() -> const std::string& {
@@ -793,23 +934,34 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
                 }();
                 fields.insert("plugin:" + id + ":lifecycle");
                 fields.insert("plugin:" + id + ":position");
+                addPluginGenerationHead(id);
                 if (!body.location.clipId.empty())
                     addClipDescendants(body.location.clipId);
             } else if constexpr (std::is_same_v<T, DeletePluginInsert>) {
                 fields.insert("plugin:" + body.insertId + ":lifecycle");
+                addPluginGenerationHead(body.insertId);
                 if (!body.location.clipId.empty())
                     addClipDescendants(body.location.clipId);
             } else if constexpr (std::is_same_v<T, MovePluginInsert>) {
                 fields.insert("plugin:" + body.insertId + ":position");
+                addPluginGenerationHead(body.insertId);
+                if (!body.location.clipId.empty())
+                    addClipDescendants(body.location.clipId);
+            } else if constexpr (std::is_same_v<T,
+                                               ReplacePluginInsert>) {
+                addPluginGenerationHead(body.insertId);
+                fields.insert("plugin:" + body.insertId + ":state");
                 if (!body.location.clipId.empty())
                     addClipDescendants(body.location.clipId);
             } else if constexpr (std::is_same_v<T, SetPluginProperty>) {
                 fields.insert("plugin:" + body.insertId + ":" +
                               pluginPropertyName(body.property));
+                addPluginGenerationHead(body.insertId);
                 if (!body.location.clipId.empty())
                     addClipDescendants(body.location.clipId);
             } else if constexpr (std::is_same_v<T, SetPluginState>) {
                 fields.insert("plugin:" + body.insertId + ":state");
+                addPluginGenerationHead(body.insertId);
                 if (!body.location.clipId.empty())
                     addClipDescendants(body.location.clipId);
             } else if constexpr (std::is_same_v<T, SetPluginParameter> ||
@@ -819,6 +971,7 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
                 fields.insert("plugin:" + body.insertId + ":parameter:" +
                               (body.rightChannel ? "right:" : "left:") +
                               body.parameterId);
+                addPluginGenerationHead(body.insertId);
                 if (!body.location.clipId.empty())
                     addClipDescendants(body.location.clipId);
             } else if constexpr (std::is_same_v<T,
@@ -826,6 +979,7 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
                 fields.insert("plugin:" + body.insertId + ":state");
                 fields.insert("plugin:" + body.insertId + ":assetBinding:" +
                               body.binding.key);
+                addPluginGenerationHead(body.insertId);
                 if (!body.location.clipId.empty())
                     addClipDescendants(body.location.clipId);
             } else if constexpr (std::is_same_v<T,
@@ -833,8 +987,13 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
                 fields.insert("plugin:" + body.insertId + ":state");
                 fields.insert("plugin:" + body.insertId + ":assetBinding:" +
                               body.key);
+                addPluginGenerationHead(body.insertId);
                 if (!body.location.clipId.empty())
                     addClipDescendants(body.location.clipId);
+            } else if constexpr (std::is_same_v<T,
+                                               SetSamplerFxLevels>) {
+                fields.insert("samplerFx:" + body.instrumentId + ":volume");
+                fields.insert("samplerFx:" + body.instrumentId + ":pan");
             } else if constexpr (std::is_same_v<T, UpsertMidiNote>) {
                 addNoteFields(body.note.id);
                 addClipDescendants(body.clipId);
@@ -893,9 +1052,23 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
                 }();
                 fields.insert("take:" + id + ":lifecycle");
                 fields.insert("take:" + id + ":position");
+                fields.insert("take:" + id + ":name");
+                fields.insert("take:" + id + ":offsetSeconds");
+                fields.insert("take:" + id + ":lengthSeconds");
+                fields.insert("take:" + id + ":clipOffsetSeconds");
+                fields.insert("take:" + id + ":gain");
+                fields.insert("take:" + id + ":muted");
+                fields.insert("take:" + id + ":color");
                 addClipDescendants(body.clipId);
             } else if constexpr (std::is_same_v<T, DeleteTake>) {
                 fields.insert("take:" + body.takeId + ":lifecycle");
+                addClipDescendants(body.clipId);
+            } else if constexpr (std::is_same_v<T, MoveTake>) {
+                fields.insert("take:" + body.takeId + ":position");
+                addClipDescendants(body.clipId);
+            } else if constexpr (std::is_same_v<T, SetTakeProperty>) {
+                fields.insert("take:" + body.takeId + ":" +
+                              takePropertyName(body.property));
                 addClipDescendants(body.clipId);
             } else if constexpr (std::is_same_v<T, UpsertCompSegment>) {
                 addCompSegmentFields(body.segment.id);

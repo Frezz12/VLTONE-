@@ -89,8 +89,11 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 			return nil, nil, err
 		}
 		switch field {
-		case "name", "tempo", "aiInstructions", "masterVolume", "masterPan":
+		case "name", "tempo", "aiInstructions", "renderSampleRate", "masterVolume", "masterPan":
 			add("project:" + field)
+			if field == "tempo" {
+				add("project:tempoCascade")
+			}
 		default:
 			return nil, nil, invalidf("project scalar field is unsupported")
 		}
@@ -127,9 +130,9 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 			if _, err := requiredPayloadUUID(body, "deleteOperationId"); err != nil {
 				return nil, nil, err
 			}
-			add(prefix+"lifecycle", prefix+"position")
+			add(prefix+"lifecycle", prefix+"position", "project:tempoCascade")
 		case "track.delete":
-			add(prefix + "lifecycle")
+			add(prefix+"lifecycle", "project:tempoCascade")
 		case "track.move":
 			if err := optionalPayloadUUID(body, "afterId"); err != nil {
 				return nil, nil, err
@@ -141,7 +144,7 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 				return nil, nil, err
 			}
 			switch property {
-			case "name", "color", "volume", "pan", "muted", "mono":
+			case "name", "color", "volume", "pan", "muted", "mono", "summing":
 				add(prefix + property)
 			default:
 				return nil, nil, invalidf("track property is unsupported")
@@ -185,7 +188,7 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 				return nil, nil, invalidf("send property is unsupported")
 			}
 		}
-	case "clip.add", "clip.restore", "clip.delete", "clip.move", "clip.setProperty", "clip.setAsset", "clip.setSampleEdit":
+	case "clip.add", "clip.restore", "clip.delete", "clip.move", "clip.setProperty", "clip.setAsset", "clip.setSampleEdit", "clip.setFade", "clip.setFadeCurve", "clip.setFadeMode", "clip.setPatternOwner", "clip.setMusicalAnalysis":
 		body, err := commandPayloadObject(payload)
 		if err != nil {
 			return nil, nil, err
@@ -216,17 +219,26 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 				prefix+"color",
 				prefix+"compCrossfadeMs",
 				prefix+"durationSeconds",
+				prefix+"fadeInSeconds",
+				prefix+"fadeOutSeconds",
+				prefix+"fadeInCurve",
+				prefix+"fadeOutCurve",
+				prefix+"fadeInMode",
+				prefix+"fadeOutMode",
 				prefix+"gain",
 				prefix+"lifecycle",
 				prefix+"muted",
 				prefix+"name",
 				prefix+"offsetSeconds",
 				prefix+"pan",
+				prefix+"patternClipId",
 				prefix+"position",
+				prefix+"musicalAnalysis",
 				prefix+"sampleEdit",
 				prefix+"startSeconds")
 			addClipDescendants(clipID)
 			addTrackClipLandingHead(trackID)
+			add("project:tempoCascade")
 		case "clip.restore":
 			if _, err := requiredPayloadUUID(body, "deleteOperationId"); err != nil {
 				return nil, nil, err
@@ -234,19 +246,23 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 			add(prefix+"lifecycle", prefix+"position")
 			addClipDescendants(clipID)
 			addTrackClipLandingHead(trackID)
+			add("project:tempoCascade")
 		case "clip.delete":
 			add(prefix + "lifecycle")
 			addClipDescendants(clipID)
 			addTrackClipLandingHead(trackID)
+			add("project:tempoCascade")
 		case "clip.move":
 			if err := optionalPayloadUUIDIfPresent(body, "afterId"); err != nil {
 				return nil, nil, err
 			}
 			add(prefix + "position")
+			sourceTrackID, err := requiredPayloadUUID(body, "sourceTrackId")
+			if err != nil {
+				return nil, nil, err
+			}
+			addTrackClipLandingHead(sourceTrackID)
 			addTrackClipLandingHead(trackID)
-			// The v1 move payload declares only the destination. Keep a
-			// global assignment head as a safe source-track fallback.
-			add(recordingClipTrackAssignmentHead)
 		case "clip.setProperty":
 			property, err := requiredPayloadString(body, "property")
 			if err != nil {
@@ -258,6 +274,9 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 				if property == "startSeconds" || property == "durationSeconds" || property == "offsetSeconds" {
 					addTrackClipLandingHead(trackID)
 				}
+				if property == "startSeconds" || property == "durationSeconds" {
+					add("project:tempoCascade")
+				}
 			default:
 				return nil, nil, invalidf("clip property is unsupported")
 			}
@@ -267,8 +286,30 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 		case "clip.setSampleEdit":
 			add(prefix + "sampleEdit")
 			addTrackClipLandingHead(trackID)
+		case "clip.setFade":
+			add(prefix+"fadeInSeconds", prefix+"fadeOutSeconds")
+			addTrackClipLandingHead(trackID)
+			add("project:tempoCascade")
+		case "clip.setFadeCurve":
+			edge, _ := requiredPayloadString(body, "edge")
+			if edge == "in" {
+				add(prefix + "fadeInCurve")
+			} else {
+				add(prefix + "fadeOutCurve")
+			}
+		case "clip.setFadeMode":
+			edge, _ := requiredPayloadString(body, "edge")
+			if edge == "in" {
+				add(prefix + "fadeInMode")
+			} else {
+				add(prefix + "fadeOutMode")
+			}
+		case "clip.setPatternOwner":
+			add(prefix+"patternClipId", "clip:"+clipID+":descendants")
+		case "clip.setMusicalAnalysis":
+			add(prefix + "musicalAnalysis")
 		}
-	case "plugin.add", "plugin.restore", "plugin.delete", "plugin.move", "plugin.setProperty", "plugin.setState", "plugin.setParameter", "plugin.removeParameter", "plugin.setAssetBinding", "plugin.removeAssetBinding":
+	case "plugin.add", "plugin.restore", "plugin.delete", "plugin.move", "plugin.replace", "plugin.setProperty", "plugin.setState", "plugin.setParameter", "plugin.removeParameter", "plugin.setAssetBinding", "plugin.removeAssetBinding":
 		body, err := commandPayloadObject(payload)
 		if err != nil {
 			return nil, nil, err
@@ -289,11 +330,13 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 		prefix := "plugin:" + insertID + ":"
 		switch kind {
 		case "plugin.add", "plugin.restore":
-			add(prefix+"lifecycle", prefix+"position")
+			add(prefix+"lifecycle", prefix+"position", prefix+"generation")
 		case "plugin.delete":
-			add(prefix + "lifecycle")
+			add(prefix+"lifecycle", prefix+"generation")
 		case "plugin.move":
-			add(prefix + "position")
+			add(prefix+"position", prefix+"generation")
+		case "plugin.replace":
+			add(prefix+"generation", prefix+"state")
 		case "plugin.setProperty":
 			property, err := requiredPayloadString(body, "property")
 			if err != nil {
@@ -301,12 +344,12 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 			}
 			switch property {
 			case "name", "bypassed", "mix", "channelMode", "sidechainTrackId":
-				add(prefix + property)
+				add(prefix+property, prefix+"generation")
 			default:
 				return nil, nil, invalidf("plugin property is unsupported")
 			}
 		case "plugin.setState":
-			add(prefix + "state")
+			add(prefix+"state", prefix+"generation")
 		case "plugin.setParameter", "plugin.removeParameter":
 			parameterID, err := payloadString(body, "parameterId", maximumPluginParameterIDBytes, false)
 			if err != nil {
@@ -320,7 +363,7 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 			if right {
 				channel = "right:"
 			}
-			add(prefix+"state", prefix+"parameter:"+channel+parameterID)
+			add(prefix+"state", prefix+"parameter:"+channel+parameterID, prefix+"generation")
 		case "plugin.setAssetBinding":
 			binding, err := commandPayloadObject(body["binding"])
 			if err != nil {
@@ -330,17 +373,27 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 			if err != nil {
 				return nil, nil, err
 			}
-			add(prefix+"state", prefix+"assetBinding:"+key)
+			add(prefix+"state", prefix+"assetBinding:"+key, prefix+"generation")
 		case "plugin.removeAssetBinding":
 			key, err := payloadString(body, "key", 96, false)
 			if err != nil {
 				return nil, nil, err
 			}
-			add(prefix+"state", prefix+"assetBinding:"+key)
+			add(prefix+"state", prefix+"assetBinding:"+key, prefix+"generation")
 		}
 		if location.ClipID != "" {
 			addClipDescendants(location.ClipID)
 		}
+	case "samplerFx.setLevels":
+		body, err := commandPayloadObject(payload)
+		if err != nil {
+			return nil, nil, err
+		}
+		instrumentID, err := requiredPayloadUUID(body, "instrumentId")
+		if err != nil {
+			return nil, nil, err
+		}
+		add("samplerFx:"+instrumentID+":volume", "samplerFx:"+instrumentID+":pan")
 	case "note.upsert", "note.restore", "note.delete":
 		body, err := commandPayloadObject(payload)
 		if err != nil {
@@ -472,7 +525,7 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 			field = "automationActive"
 		}
 		add("clip:" + clipID + ":" + field)
-	case "take.add", "take.restore", "take.delete":
+	case "take.add", "take.restore", "take.delete", "take.move", "take.setProperty":
 		body, err := commandPayloadObject(payload)
 		if err != nil {
 			return nil, nil, err
@@ -493,8 +546,19 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 		prefix := "take:" + takeID + ":"
 		if kind == "take.delete" {
 			add(prefix + "lifecycle")
+		} else if kind == "take.move" {
+			add(prefix + "position")
+		} else if kind == "take.setProperty" {
+			property, err := requiredPayloadString(body, "property")
+			if err != nil {
+				return nil, nil, err
+			}
+			add(prefix + property)
 		} else {
-			add(prefix+"lifecycle", prefix+"position")
+			add(prefix+"lifecycle", prefix+"position", prefix+"name",
+				prefix+"offsetSeconds", prefix+"lengthSeconds",
+				prefix+"clipOffsetSeconds", prefix+"gain", prefix+"muted",
+				prefix+"color")
 		}
 		addClipDescendants(clipID)
 	case "compSegment.upsert", "compSegment.restore", "compSegment.delete":
@@ -554,7 +618,7 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 			}
 		}
 	default:
-		return nil, nil, invalidf("operation kind is unsupported by command schema version 1")
+		return nil, nil, invalidf("operation kind is unsupported by command schema version 2")
 	}
 
 	result := make([]string, 0, len(fields))
@@ -610,6 +674,16 @@ func deriveCommandLeasePolicy(kind string, payload json.RawMessage, allowBatch b
 				parsed, _ := uuid.Parse(location.TrackID)
 				policy.RoutedTrackIDs = []uuid.UUID{parsed}
 			}
+		}
+	case "plugin.replace":
+		body, _ := commandPayloadObject(payload)
+		location, err := validatePluginLocation(body["location"])
+		if err != nil {
+			return commandLeasePolicy{}, err
+		}
+		if location.TrackID != "" {
+			parsed, _ := uuid.Parse(location.TrackID)
+			policy.RoutedTrackIDs = []uuid.UUID{parsed}
 		}
 	case "batch", "recording.commit":
 		var body struct {
@@ -850,14 +924,22 @@ func deriveLifecycleSteps(kind string, payload json.RawMessage, allowBatch bool)
 		if err := parents(false); err != nil {
 			return nil, err
 		}
+		sourceTrackID, _ := identifier("sourceTrackId")
 		clipID, _ := identifier("clipId")
 		afterID, _ := optionalIdentifier("afterId")
+		addLive("track:", sourceTrackID)
 		addLive("clip:", clipID)
 		addLive("clip:", afterID)
-	case "clip.setProperty", "clip.setAsset", "clip.setSampleEdit", "automation.setDefault", "automation.setActive":
+	case "clip.setProperty", "clip.setAsset", "clip.setSampleEdit", "clip.setFade", "clip.setFadeCurve", "clip.setFadeMode", "clip.setMusicalAnalysis", "automation.setDefault", "automation.setActive":
 		if err := parents(false); err != nil {
 			return nil, err
 		}
+	case "clip.setPatternOwner":
+		if err := parents(false); err != nil {
+			return nil, err
+		}
+		patternID, _ := optionalIdentifier("patternClipId")
+		addLive("clip:", patternID)
 	case "plugin.add":
 		location, err := pluginParents()
 		if err != nil {
@@ -908,12 +990,26 @@ func deriveLifecycleSteps(kind string, payload json.RawMessage, allowBatch bool)
 			sidechainID, _ := optionalPayloadUUIDValue(body, "value")
 			addLive("track:", sidechainID)
 		}
+	case "plugin.replace":
+		if _, err := pluginParents(); err != nil {
+			return nil, err
+		}
+		insertID, _ := identifier("insertId")
+		addLive("plugin:", insertID)
+		replacement, _ := commandPayloadObject(body["replacement"])
+		sidechainID, _ := optionalPayloadUUIDValue(replacement, "sidechainTrackId")
+		addLive("track:", sidechainID)
 	case "plugin.setState", "plugin.setParameter", "plugin.removeParameter", "plugin.setAssetBinding", "plugin.removeAssetBinding":
 		if _, err := pluginParents(); err != nil {
 			return nil, err
 		}
 		insertID, _ := identifier("insertId")
 		addLive("plugin:", insertID)
+	case "samplerFx.setLevels":
+		trackID, _ := identifier("trackId")
+		instrumentID, _ := identifier("instrumentId")
+		addLive("track:", trackID)
+		addLive("plugin:", instrumentID)
 	case "note.upsert":
 		if err := parents(false); err != nil {
 			return nil, err
@@ -1021,6 +1117,20 @@ func deriveLifecycleSteps(kind string, payload json.RawMessage, allowBatch bool)
 			return nil, err
 		}
 		addMutation("take:", takeID, lifecycleAlive)
+	case "take.move":
+		if err := parents(false); err != nil {
+			return nil, err
+		}
+		takeID, _ := identifier("takeId")
+		afterID, _ := optionalIdentifier("afterId")
+		addLive("take:", takeID)
+		addLive("take:", afterID)
+	case "take.setProperty":
+		if err := parents(false); err != nil {
+			return nil, err
+		}
+		takeID, _ := identifier("takeId")
+		addLive("take:", takeID)
 	case "compSegment.upsert":
 		if err := parents(false); err != nil {
 			return nil, err

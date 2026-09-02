@@ -326,11 +326,10 @@ struct CloudRecordingAssetCoordinator::Impl {
         recording.displayName = safeBasename(recording.displayName);
         recording.contentType = recording.contentType.trimmed().toLower();
         recording.codec = recording.codec.trimmed();
-        const bool wavContentType =
-            recording.contentType == QLatin1String("audio/wav") ||
-            recording.contentType == QLatin1String("audio/x-wav") ||
-            recording.contentType == QLatin1String("audio/vnd.wave");
-        if (recording.displayName.isEmpty() || !wavContentType ||
+        const bool audioContentType =
+            recording.contentType.startsWith(QLatin1String("audio/")) &&
+            recording.contentType.size() > qsizetype(sizeof("audio/") - 1);
+        if (recording.displayName.isEmpty() || !audioContentType ||
             !safeText(recording.contentType, 160) ||
             !safeText(recording.codec, 255) ||
             !std::isfinite(recording.sampleRate) ||

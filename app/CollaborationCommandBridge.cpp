@@ -6,7 +6,12 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QPointer>
+#include <QSaveFile>
+#include <QStandardPaths>
 #include <QUuid>
 #include <QVector>
 
@@ -29,6 +34,70 @@ using daw::collab::GatewayCode;
 using daw::collab::ProjectCommand;
 
 constexpr double kLargestExactJsonInteger = 9007199254740991.0;
+constexpr qsizetype kMaximumJournaledCommandBytes = 1024 * 1024;
+constexpr qsizetype kMaximumJournaledCommands = 1024;
+
+QString pendingJournalDirectory(const CollaborationService* service,
+                                const QString& projectId) {
+    if (!service) return {};
+    const QString userId = service->accountUserId();
+    const QUuid projectUuid(projectId);
+    if (userId.isEmpty() || projectUuid.isNull()) return {};
+    const QString normalizedProject =
+        projectUuid.toString(QUuid::WithoutBraces).toLower();
+    return QDir(QStandardPaths::writableLocation(
+                    QStandardPaths::AppLocalDataLocation))
+        .filePath(QStringLiteral("collaboration/pending-v2/%1/%2")
+                      .arg(userId, normalizedProject));
+}
+
+QString pendingJournalPath(const CollaborationService* service,
+                           const QString& projectId,
+                           const QString& operationId) {
+    const QString directory = pendingJournalDirectory(service, projectId);
+    const QUuid operationUuid(operationId);
+    if (directory.isEmpty() || operationUuid.isNull()) return {};
+    const QString normalizedOperation =
+        operationUuid.toString(QUuid::WithoutBraces).toLower();
+    return QDir(directory).filePath(normalizedOperation +
+                                    QStringLiteral(".json"));
+}
+
+bool persistPendingCommand(const CollaborationService* service,
+                           const ProjectCommand& command) {
+    // Dependency-injected/state-machine fixtures have no authenticated account
+    // namespace. Production cannot reach a writable service in that state;
+    // authenticated cloud submits always take the durable path below.
+    if (!service || service->accountUserId().isEmpty()) return true;
+    const QString projectId = QString::fromStdString(command.meta.projectId);
+    const QString operationId =
+        QString::fromStdString(command.meta.operationId);
+    const QString path = pendingJournalPath(service, projectId, operationId);
+    if (path.isEmpty()) return false;
+    const QString directory = QFileInfo(path).absolutePath();
+    QDir dir(directory);
+    if (!dir.exists() && !QDir().mkpath(directory)) return false;
+    if (!QFileInfo::exists(path) &&
+        dir.entryList({QStringLiteral("*.json")}, QDir::Files).size() >=
+            kMaximumJournaledCommands) return false;
+    const QByteArray bytes = QByteArray::fromStdString(
+        daw::collab::projectCommandToJson(command).dump());
+    if (bytes.isEmpty() || bytes.size() > kMaximumJournaledCommandBytes)
+        return false;
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() ||
+        !file.commit()) return false;
+    QFile::setPermissions(path, QFileDevice::ReadOwner |
+                                    QFileDevice::WriteOwner);
+    return true;
+}
+
+bool removePendingCommand(const CollaborationService* service,
+                          const QString& projectId,
+                          const QString& operationId) {
+    const QString path = pendingJournalPath(service, projectId, operationId);
+    return path.isEmpty() || !QFileInfo::exists(path) || QFile::remove(path);
+}
 
 bool hasExactKeys(const QJsonObject& object,
                   std::initializer_list<const char*> keys) {
@@ -106,11 +175,14 @@ std::optional<QJsonObject> commandToQt(const ProjectCommand& command,
 }
 
 bool supportedRejectionCode(const QString& code) {
-    static constexpr std::array<const char*, 14> codes{
+    static constexpr std::array<const char*, 19> codes{
         "invalid_message", "forbidden", "read_only", "session_inactive",
         "version_mismatch", "stale_precondition", "entity_deleted",
         "asset_incomplete", "lease_required", "lease_conflict",
-        "sequence_gap", "operation_id_reused", "conflict", "rate_limited"};
+        "sequence_gap", "operation_id_reused", "conflict", "rate_limited",
+        "collaboration_not_enabled", "hash_consensus_required",
+        "cloud_recording_disabled", "storage_quota_exceeded",
+        "upload_concurrency_exceeded"};
     return std::any_of(codes.begin(), codes.end(), [&](const char* candidate) {
         return code == QLatin1String(candidate);
     });
@@ -328,6 +400,8 @@ void CollaborationCommandBridge::observeDurableOperation(
                                   viaVerifiedSnapshot)) {
         return;
     }
+    removePendingCommand(m_service, m_boundProjectId,
+                         QString::fromStdString(operationId));
     emit operationDurablyObserved(QString::fromStdString(operationId),
                                   serverSequence, viaVerifiedSnapshot);
 }
@@ -383,6 +457,76 @@ CollaborationCommandBridge::watchDurableOperation(
 bool CollaborationCommandBridge::handlesCloudBinding() {
     refreshProjectBinding();
     return !m_boundProjectId.isEmpty();
+}
+
+daw::collab::SharedMutationResult CollaborationCommandBridge::submit(
+    daw::collab::SharedMutationRequest request) {
+    return submitShared(std::move(request.body),
+                        std::move(request.undoLabel),
+                        std::move(request.transactionId));
+}
+
+qsizetype CollaborationCommandBridge::pendingOperationCount() const {
+    const qsizetype optimistic =
+        m_gateway ? qsizetype(m_gateway->pending().size()) : 0;
+    // Counting both is intentional: overlap is harmless for a non-zero gate,
+    // while a crash-recovered command exists only in the durable journal.
+    return optimistic + journalEntryCount(m_boundProjectId);
+}
+
+qsizetype CollaborationCommandBridge::journalEntryCount(
+    const QString& projectId) const {
+    const QString directory = pendingJournalDirectory(m_service, projectId);
+    if (directory.isEmpty()) return 0;
+    return QDir(directory)
+        .entryList({QStringLiteral("*.json")}, QDir::Files)
+        .size();
+}
+
+QVector<daw::collab::ProjectCommand>
+CollaborationCommandBridge::journaledOperations(
+    const QString& requestedProjectId) const {
+    QVector<daw::collab::ProjectCommand> result;
+    const QUuid projectUuid(requestedProjectId);
+    if (projectUuid.isNull()) return result;
+    const QString projectId =
+        projectUuid.toString(QUuid::WithoutBraces).toLower();
+    const QString directory = pendingJournalDirectory(m_service, projectId);
+    if (directory.isEmpty()) return result;
+    const QFileInfoList files = QDir(directory).entryInfoList(
+        {QStringLiteral("*.json")}, QDir::Files,
+        QDir::Time | QDir::Reversed | QDir::Name);
+    result.reserve(std::min<qsizetype>(files.size(),
+                                      kMaximumJournaledCommands));
+    for (qsizetype index = 0;
+         index < files.size() && index < kMaximumJournaledCommands; ++index) {
+        QFile file(files.at(index).absoluteFilePath());
+        if (!file.open(QIODevice::ReadOnly)) continue;
+        const QByteArray bytes = file.read(kMaximumJournaledCommandBytes + 1);
+        if (bytes.isEmpty() || bytes.size() > kMaximumJournaledCommandBytes)
+            continue;
+        const nlohmann::json json = nlohmann::json::parse(
+            bytes.constData(), bytes.constData() + bytes.size(), nullptr,
+            false);
+        if (json.is_discarded()) continue;
+        std::string error;
+        auto command = daw::collab::projectCommandFromJson(json, &error);
+        if (!command || command->meta.projectId != projectId ||
+            QString::fromStdString(command->meta.operationId) !=
+                files.at(index).completeBaseName().toLower()) {
+            continue;
+        }
+        result.push_back(std::move(*command));
+    }
+    return result;
+}
+
+bool CollaborationCommandBridge::retireJournaledOperation(
+    const QString& projectId, const QString& operationId) {
+    const bool removed =
+        removePendingCommand(m_service, projectId, operationId);
+    if (removed) forgetPending(operationId.toStdString());
+    return removed;
 }
 
 bool CollaborationCommandBridge::canUndo() {
@@ -611,6 +755,16 @@ void CollaborationCommandBridge::clearPendingBookkeeping() {
 
 LocalOperationResult CollaborationCommandBridge::submitLocal(
     ProjectCommand command) {
+    return submitLocalImpl(std::move(command), false);
+}
+
+LocalOperationResult CollaborationCommandBridge::resubmitJournaled(
+    ProjectCommand command) {
+    return submitLocalImpl(std::move(command), true);
+}
+
+LocalOperationResult CollaborationCommandBridge::submitLocalImpl(
+    ProjectCommand command, bool journalRecovery) {
     LocalOperationResult result;
     result.operationId = QString::fromStdString(command.meta.operationId);
     if (!m_gateway) {
@@ -622,13 +776,22 @@ LocalOperationResult CollaborationCommandBridge::submitLocal(
         result.message = QStringLiteral("Project resync is required");
         return result;
     }
-    if (!m_available || !m_available()) {
+    const bool available = journalRecovery
+        ? m_service && m_service->canSubmitRecoveryOperations()
+        : m_available && m_available();
+    if (!available) {
         result.code = LocalOperationCode::TransportUnavailable;
         result.message = QStringLiteral("Collaboration session is not writable");
         return result;
     }
 
     const std::string operationId = command.meta.operationId;
+    if (!persistPendingCommand(m_service, command)) {
+        result.code = LocalOperationCode::Rejected;
+        result.message = QStringLiteral(
+            "Pending operation could not be stored safely");
+        return result;
+    }
     const daw::collab::GatewayUpdate submitted = m_gateway->submit(command);
     if (submitted.code == GatewayCode::Duplicate) {
         result.code = LocalOperationCode::Duplicate;
@@ -636,6 +799,9 @@ LocalOperationResult CollaborationCommandBridge::submitLocal(
         return result;
     }
     if (submitted.code != GatewayCode::Accepted) {
+        removePendingCommand(m_service,
+                             QString::fromStdString(command.meta.projectId),
+                             QString::fromStdString(operationId));
         result.code = LocalOperationCode::Rejected;
         result.message = QString::fromStdString(submitted.apply.message);
         return result;
@@ -650,7 +816,11 @@ LocalOperationResult CollaborationCommandBridge::submitLocal(
     const auto wire = pending == m_gateway->pending().end()
         ? std::optional<QJsonObject>()
         : commandToQt(*pending, &encodeError);
-    if (!wire || !m_sender || !m_sender(*wire)) {
+    const bool sent = wire &&
+        (journalRecovery
+             ? m_service && m_service->submitRecoveryOperation(*wire)
+             : m_sender && m_sender(*wire));
+    if (!sent) {
         const daw::collab::GatewayUpdate rolledBack =
             m_gateway->rejectPending(operationId,
                                      "operation was not sent");
@@ -1011,6 +1181,8 @@ void CollaborationCommandBridge::receiveRejected(const QJsonObject& payload) {
             QStringLiteral("Sequence-gap rejection omitted the server head"));
         return;
     }
+    const bool retryable =
+        payload.value(QStringLiteral("retryable")).toBool(false);
 
     if (!operationId.isEmpty() && m_gateway) {
         const daw::collab::GatewayUpdate rejected = m_gateway->rejectPending(
@@ -1021,18 +1193,26 @@ void CollaborationCommandBridge::receiveRejected(const QJsonObject& payload) {
         // independent generic drops and must retire their own watches.
         reportDropped(rejected.droppedPendingOperationIds,
                       operationId.toStdString());
-        forgetPending(operationId.toStdString());
+        if (!retryable) {
+            forgetPending(operationId.toStdString());
+            removePendingCommand(m_service, m_boundProjectId, operationId);
+        }
     }
     const QString message = safeServerMessage(
         payload.value(QStringLiteral("message")).toString());
-    if (!operationId.isEmpty())
+    if (!operationId.isEmpty() && !retryable)
         failDurableOperationWatch(operationId.toStdString(), code, message);
     emit operationRejected(operationId, code, message);
-    if (code == QLatin1String("sequence_gap")) {
+    if (retryable || code == QLatin1String("sequence_gap")) {
         const quint64 expected =
             m_gateway ? m_gateway->confirmed().confirmedSequence + 1 : 1;
-        markResync(expected, *headSequence,
-                   QStringLiteral("Server rejected an operation after a sequence gap"));
+        markResync(
+            expected, headSequence.value_or(0),
+            code == QLatin1String("hash_consensus_required")
+                ? QStringLiteral(
+                      "Server requires project hash consensus before editing")
+                : QStringLiteral(
+                      "Server requested recovery before retrying an operation"));
     }
 }
 
@@ -1056,6 +1236,8 @@ void CollaborationCommandBridge::reportDropped(
     for (const std::string& id : operationIds) {
         ids.push_back(QString::fromStdString(id));
         forgetPending(id);
+        removePendingCommand(m_service, m_boundProjectId,
+                             QString::fromStdString(id));
         if (id != durableWatchExclusion &&
             m_watchedDurableOperationIds.erase(id) > 0) {
             failedWatchIds.push_back(QString::fromStdString(id));
@@ -1316,6 +1498,33 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
     int serviceOutbound = 0;
     QObject::connect(&service, &CollaborationService::outboundTextMessage,
                      [&](const QString&) { ++serviceOutbound; });
+    const QString serviceSessionId =
+        QStringLiteral("dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+    service.m_sessionId = serviceSessionId;
+    const auto verifyServiceRound =
+        [&](const QString& roundId, quint64 serverSequence) {
+        service.m_bootstrapStateHash = QString(64, QLatin1Char('a'));
+        WireEnvelope requested;
+        requested.type = WireType::HashRequested;
+        requested.payload = {
+            {QStringLiteral("roundId"), roundId},
+            {QStringLiteral("sessionId"), serviceSessionId},
+            {QStringLiteral("serverSeq"), double(serverSequence)},
+            {QStringLiteral("deadlineMs"), 4102444800000.0},
+        };
+        service.handleEnvelope(requested);
+        if (service.state() != CollaborationState::Joining ||
+            service.canSubmitOperations()) return false;
+        WireEnvelope verified;
+        verified.type = WireType::HashVerified;
+        verified.payload = {
+            {QStringLiteral("roundId"), roundId},
+            {QStringLiteral("serverSeq"), double(serverSequence)},
+        };
+        service.handleEnvelope(verified);
+        return service.state() == CollaborationState::Synced &&
+               service.canSubmitOperations();
+    };
 
     ProjectCommand serviceLocal = scalarCommand(
         "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -1343,8 +1552,10 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
         return fail(QStringLiteral("sequence-gap rejection left service writable"));
     }
     serviceBridge.replaceConfirmedSnapshot(serviceGateway.confirmed(), 5);
-    if (service.state() != CollaborationState::Synced ||
-        !service.canSubmitOperations() || serviceBridge.resyncPending()) {
+    if (service.state() != CollaborationState::Joining ||
+        service.canSubmitOperations() || serviceBridge.resyncPending() ||
+        !verifyServiceRound(
+            QStringLiteral("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"), 5)) {
         return fail(QStringLiteral("verified snapshot did not restore writable state"));
     }
 
@@ -1353,9 +1564,19 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
     welcomeAhead.payload = {
         {QStringLiteral("projectId"), projectId},
         {QStringLiteral("sessionId"),
-         QStringLiteral("dddddddd-dddd-4ddd-8ddd-dddddddddddd")},
+         serviceSessionId},
         {QStringLiteral("headSeq"), 6.0},
         {QStringLiteral("readOnly"), false},
+        {QStringLiteral("writeBlockedReason"),
+         QStringLiteral("hash_consensus_required")},
+        {QStringLiteral("hashRound"),
+         QJsonObject{
+             {QStringLiteral("roundId"),
+              QStringLiteral("ffffffff-ffff-4fff-8fff-ffffffffffff")},
+             {QStringLiteral("sessionId"), serviceSessionId},
+             {QStringLiteral("serverSeq"), 6.0},
+             {QStringLiteral("deadlineMs"), 4102444800000.0},
+         }},
         {QStringLiteral("participants"), QJsonArray{}},
         {QStringLiteral("limits"),
          QJsonObject{{QStringLiteral("maxMessageBytes"), 1024 * 1024}}},
@@ -1367,8 +1588,10 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
     }
     serviceBridge.replaceConfirmedSnapshot(serviceGateway.confirmed(), 6);
     if (service.bootstrapServerSequence() != 6 ||
-        service.state() != CollaborationState::Synced ||
-        serviceBridge.resyncPending()) {
+        service.state() != CollaborationState::Joining ||
+        serviceBridge.resyncPending() ||
+        !verifyServiceRound(
+            QStringLiteral("ffffffff-ffff-4fff-8fff-ffffffffffff"), 6)) {
         return fail(QStringLiteral("welcome head bootstrap was not installed"));
     }
 
@@ -1386,8 +1609,10 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
         return fail(QStringLiteral("hash mismatch left service writable"));
     }
     serviceBridge.replaceConfirmedSnapshot(serviceGateway.confirmed(), 5);
-    if (service.state() != CollaborationState::Synced ||
-        !service.canSubmitOperations()) {
+    if (service.state() != CollaborationState::Joining ||
+        service.canSubmitOperations() ||
+        !verifyServiceRound(
+            QStringLiteral("abababab-abab-4bab-8bab-abababababab"), 5)) {
         return fail(QStringLiteral("hash resync did not restore synced state"));
     }
 
@@ -1476,7 +1701,8 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
 
     const auto validFreshEnvelope = [&](const QJsonObject& command) {
         return command.size() == 8 &&
-               command.value(QStringLiteral("schemaVersion")).toInt() == 1 &&
+                command.value(QStringLiteral("schemaVersion")).toInt() ==
+                    daw::collab::kProjectCommandSchemaVersion &&
                uuidString(command.value(QStringLiteral("opId"))) &&
                uuidString(command.value(QStringLiteral("transactionId"))) &&
                command.value(QStringLiteral("baseServerSeq")).toDouble(-1) ==
@@ -1971,7 +2197,7 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
         {QStringLiteral("opId"), capacityOperationId(1)},
         {QStringLiteral("code"), QStringLiteral("rate_limited")},
         {QStringLiteral("message"), QStringLiteral("Try again later")},
-        {QStringLiteral("retryable"), true},
+        {QStringLiteral("retryable"), false},
     };
     terminalWatchBridge.receiveDurableEnvelope(capacityRejection);
     if (durableFailures.size() != 3 ||

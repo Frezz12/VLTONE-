@@ -264,6 +264,67 @@ func (s *Server) adminSetUserStatus(w http.ResponseWriter, r *http.Request, stat
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type collaborationAccessInput struct {
+	Enabled *bool `json:"enabled"`
+}
+
+func (s *Server) adminSetCollaborationAccess(w http.ResponseWriter,
+	r *http.Request) {
+	id, ok := parseUUIDParam(w, r, "userID")
+	if !ok {
+		return
+	}
+	var input collaborationAccessInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.Enabled == nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request",
+			"The enabled boolean is required.", nil)
+		return
+	}
+	enabled := *input.Enabled
+	now := time.Now().UTC()
+	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		var user model.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&user, "id = ?", id).Error; err != nil {
+			return err
+		}
+		if !enabled {
+			if err := s.Collab.EvictUserSessionsTx(tx, id, now); err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&user).
+			Update("collaboration_enabled", enabled).Error; err != nil {
+			return err
+		}
+		action := "collaboration_access.enable"
+		if !enabled {
+			action = "collaboration_access.disable"
+		}
+		return s.audit(tx, r, action, "user", id,
+			map[string]any{"enabled": enabled})
+	})
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeError(w, r, http.StatusNotFound, "user_not_found",
+				"User was not found.", nil)
+			return
+		}
+		writeError(w, r, http.StatusServiceUnavailable,
+			"collaboration_access_unavailable",
+			"Collaboration access could not be updated.", nil)
+		return
+	}
+	if !enabled {
+		s.disconnectCollaborationUser(id, "collaboration_access_disabled")
+	}
+	writeJSON(w, http.StatusOK,
+		map[string]any{"collaboration_enabled": enabled})
+}
+
 type tokenAddInput struct {
 	Amount int64 `json:"amount"`
 }

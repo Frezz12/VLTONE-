@@ -36,19 +36,26 @@ const (
 	webCookie   = "vlt_web_session"
 	adminCookie = "vlt_admin_session"
 	maxJSONBody = 2 << 20
+	// This is a protocol/product capability, not a runtime feature flag. V1
+	// rejects every recording entry point even when a Config is constructed
+	// directly by a test or an embedding process.
+	cloudRecordingEnabledV1 = false
 )
 
 type Server struct {
-	Config         config.Config
-	DB             *gorm.DB
-	Signer         *auth.Signer
-	Quota          quota.Service
-	Collab         *collab.Store
-	CollabAssets   *collab.AssetService
-	Rooms          collab.RoomBus
-	Hashes         *collab.HashCoordinator
-	limiter        *rateLimiter
-	trustedProxies []*net.IPNet
+	Config             config.Config
+	DB                 *gorm.DB
+	Signer             *auth.Signer
+	Quota              quota.Service
+	Collab             *collab.Store
+	CollabAssets       *collab.AssetService
+	Rooms              collab.RoomBus
+	Hashes             *collab.HashCoordinator
+	operationSequence  *operationSequencer
+	metrics            *collaborationMetrics
+	collabAllowedUsers map[uuid.UUID]bool
+	limiter            *rateLimiter
+	trustedProxies     []*net.IPNet
 }
 
 func New(cfg config.Config, db *gorm.DB) (*Server, error) {
@@ -92,15 +99,26 @@ func New(cfg config.Config, db *gorm.DB) (*Server, error) {
 			time.Duration(cfg.CollabUploadSessionSeconds)*time.Second,
 			cfg.CollabMaximumObjectBytes, cfg.CollabMultipartThresholdBytes,
 			cfg.CollabMultipartPartBytes, cfg.CollabMultipartURLBatch)
+		collaborationAssets.ConfigureLimits(cfg.CollabProjectQuotaBytes,
+			cfg.CollabUserQuotaBytes, cfg.CollabMaxOpenUploadsPerUser,
+			cfg.CollabMaxOpenUploadsPerProject, cfg.CollabVerifyWorkers,
+			cfg.CollabMaxVerifyPerUser)
+	}
+	allowedUsers := make(map[uuid.UUID]bool, len(cfg.CollabAllowedUserIDs))
+	for _, userID := range cfg.CollabAllowedUserIDs {
+		allowedUsers[userID] = true
 	}
 	return &Server{
 		Config: cfg, DB: db, Signer: auth.NewSigner(cfg.SigningSeed),
 		Quota: quota.Service{DB: db, GlobalMonthlyLimit: cfg.AIGlobalMonthlyLimit}, limiter: newRateLimiter(),
-		Collab:         collab.NewStore(db, cfg.CollabMaxParticipants),
-		CollabAssets:   collaborationAssets,
-		Rooms:          collab.NewInProcessRoomBus(),
-		Hashes:         collab.NewHashCoordinator(),
-		trustedProxies: trustedProxies,
+		Collab:             collab.NewStore(db, cfg.CollabMaxParticipants),
+		CollabAssets:       collaborationAssets,
+		Rooms:              collab.NewInProcessRoomBus(),
+		Hashes:             collab.NewHashCoordinator(),
+		operationSequence:  newOperationSequencer(),
+		metrics:            &collaborationMetrics{},
+		collabAllowedUsers: allowedUsers,
+		trustedProxies:     trustedProxies,
 	}, nil
 }
 
@@ -114,6 +132,8 @@ func (s *Server) Router() http.Handler {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	})
+	r.Get("/readyz", s.ready)
+	r.Get("/metrics", s.collaborationMetrics)
 	r.Get("/v1/meta", s.meta)
 	r.Get("/v1/releases", s.publicReleases)
 	r.Get("/v1/releases/latest", s.latestRelease)
@@ -150,7 +170,9 @@ func (s *Server) Router() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.desktopAuth)
 		r.Get("/v1/desktop/me", s.desktopMe)
-		if s.Config.CollaborationEnabled {
+		r.Get("/v1/desktop/capabilities", s.desktopCapabilities)
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireCollaborationAccess)
 			r.Post("/v1/desktop/project-invites/accept", s.acceptProjectInvite)
 			r.Get("/v1/desktop/projects", s.cloudProjects)
 			r.Post("/v1/desktop/projects", s.createCloudProject)
@@ -164,6 +186,7 @@ func (s *Server) Router() http.Handler {
 				r.Put("/{projectID}/members/{userID}", s.putProjectMember)
 				r.Delete("/{projectID}/members/{userID}", s.removeProjectMember)
 				r.Post("/{projectID}/ownership", s.transferProjectOwnership)
+				r.Get("/{projectID}/invites", s.projectInvites)
 				r.Post("/{projectID}/invites", s.createProjectInvite)
 				r.Delete("/{projectID}/invites/{inviteID}", s.revokeProjectInvite)
 				r.Post("/{projectID}/ops", s.appendProjectOperation)
@@ -187,7 +210,7 @@ func (s *Server) Router() http.Handler {
 				r.Patch("/{projectID}/sessions/{sessionID}/leases/{leaseID}", s.renewTrackLease)
 				r.Delete("/{projectID}/sessions/{sessionID}/leases/{leaseID}", s.releaseTrackLease)
 			})
-		}
+		})
 		r.Get("/v1/desktop/ai/models", s.desktopAIModels)
 		r.Post("/v1/desktop/ai/models/{modelID}/lease", s.leaseAIModel)
 		r.Post("/v1/desktop/ai/reservations/{reservationID}/settle", s.settleAIReservation)
@@ -211,6 +234,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/v1/admin/users/{userID}", s.adminUser)
 		r.Get("/v1/admin/users/{userID}/telemetry", s.adminUserTelemetry)
 		r.Get("/v1/admin/users/{userID}/ledger", s.adminUserLedger)
+		r.With(s.adminCSRF).Put("/v1/admin/users/{userID}/collaboration-access", s.adminSetCollaborationAccess)
 		r.With(s.adminCSRF).Post("/v1/admin/users/{userID}/suspend", s.adminSuspendUser)
 		r.With(s.adminCSRF).Post("/v1/admin/users/{userID}/activate", s.adminActivateUser)
 		r.With(s.adminCSRF).Post("/v1/admin/users/{userID}/tokens/add", s.adminAddTokens)
@@ -322,6 +346,7 @@ func (s *Server) meta(w http.ResponseWriter, _ *http.Request) {
 			"project_format":   collab.CollaborationProjectFormatVersion,
 			"command_schema":   collab.CollaborationCommandSchemaVersion,
 			"max_participants": s.Config.CollabMaxParticipants,
+			"recording":        cloudRecordingEnabledV1,
 		},
 	})
 }

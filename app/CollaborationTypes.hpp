@@ -12,8 +12,8 @@
 
 namespace collab {
 
-inline constexpr int kProtocolVersion = 1;
-inline constexpr auto kProtocolName = "vlt-collab-v1";
+inline constexpr int kProtocolVersion = 2;
+inline constexpr auto kProtocolName = "vlt-collab-v2";
 
 enum class CollaborationState {
     LocalOnly,
@@ -164,6 +164,8 @@ enum class WireType {
     SnapshotRequested,
     SessionEnded,
     ResyncRequired,
+    HashRequested,
+    HashVerified,
     SnapshotHash,
 };
 

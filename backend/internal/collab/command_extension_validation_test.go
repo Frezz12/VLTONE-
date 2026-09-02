@@ -3,11 +3,85 @@ package collab
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 )
+
+func TestTakeMoveV2GoldenFixture(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "collaboration_take_move_v2.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Kind          string          `json:"kind"`
+		Payload       json.RawMessage `json:"payload"`
+		TouchedFields []string        `json:"touchedFields"`
+	}
+	if err := json.Unmarshal(contents, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	fields, _, err := deriveCommandMetadata(fixture.Kind, fixture.Payload, true)
+	if err != nil {
+		t.Fatalf("golden take.move was rejected: %v", err)
+	}
+	if !equalStrings(fields, fixture.TouchedFields) {
+		t.Fatalf("fields = %v, want %v", fields, fixture.TouchedFields)
+	}
+	steps, err := deriveLifecycleSteps(fixture.Kind, fixture.Payload, true)
+	if err != nil || len(steps) != 1 || len(steps[0].Requirements) != 4 || len(steps[0].Mutations) != 0 {
+		t.Fatalf("take.move lifecycle = %#v, %v", steps, err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(fixture.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["afterId"] = payload["takeId"]
+	selfAnchor, _ := json.Marshal(payload)
+	if err := validateCommandPayloadShape("take.move", selfAnchor, true); !errors.Is(err, ErrValidation) {
+		t.Fatalf("self-anchored take.move returned %v", err)
+	}
+	delete(payload, "afterId")
+	missingAnchor, _ := json.Marshal(payload)
+	if err := validateCommandPayloadShape("take.move", missingAnchor, true); !errors.Is(err, ErrValidation) {
+		t.Fatalf("take.move without afterId returned %v", err)
+	}
+}
+
+func TestCommandV2FocusedGoldenFixture(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "collaboration_command_v2_golden.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Commands []struct {
+			Kind          string          `json:"kind"`
+			Payload       json.RawMessage `json:"payload"`
+			TouchedFields []string        `json:"touchedFields"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal(contents, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture.Commands) == 0 {
+		t.Fatal("focused command golden fixture is empty")
+	}
+	for _, command := range fixture.Commands {
+		t.Run(command.Kind, func(t *testing.T) {
+			fields, _, err := deriveCommandMetadata(command.Kind, command.Payload, true)
+			if err != nil {
+				t.Fatalf("golden command was rejected: %v", err)
+			}
+			if !equalStrings(fields, command.TouchedFields) {
+				t.Fatalf("fields = %v, want %v", fields, command.TouchedFields)
+			}
+		})
+	}
+}
 
 func extensionAsset(id uuid.UUID, kind, digest string) map[string]any {
 	return map[string]any{
@@ -51,8 +125,38 @@ func extensionSampleEdit() map[string]any {
 	}
 }
 
+func TestEmptySamplerBindingLifecycleValidation(t *testing.T) {
+	trackID, insertID, sampleID := uuid.New(), uuid.New(), uuid.New()
+	location := extensionLocation("instrument", trackID, uuid.Nil)
+	tests := []struct {
+		kind    string
+		payload map[string]any
+	}{
+		{"plugin.add", map[string]any{
+			"location": location, "insert": extensionInsert(insertID, "daw.sampler", []any{}), "afterId": "",
+		}},
+		{"plugin.setAssetBinding", map[string]any{
+			"location": location, "insertId": insertID.String(),
+			"binding": map[string]any{"key": "sample", "asset": extensionAsset(sampleID, "audio", "e"), "required": true},
+		}},
+		{"plugin.removeAssetBinding", map[string]any{
+			"location": location, "insertId": insertID.String(), "key": "sample",
+		}},
+	}
+	for _, test := range tests {
+		raw, err := json.Marshal(test.payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateCommandPayloadShape(test.kind, raw, true); err != nil {
+			t.Fatalf("valid empty-Sampler lifecycle %s was rejected: %v", test.kind, err)
+		}
+	}
+}
+
 func TestMixerPluginAndClipCommandsStayInValidationLockstep(t *testing.T) {
 	trackID, destinationID, clipID := uuid.New(), uuid.New(), uuid.New()
+	sourceTrackID := uuid.MustParse("00000000-0000-4000-8000-000000000001")
 	sendID, insertID, operationID, assetID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	location := extensionLocation("track", trackID, uuid.Nil)
 	clipLocation := extensionLocation("clip", trackID, clipID)
@@ -70,19 +174,20 @@ func TestMixerPluginAndClipCommandsStayInValidationLockstep(t *testing.T) {
 		{"send.setProperty", map[string]any{"trackId": trackID.String(), "sendId": sendID.String(), "property": "destinationTrackId", "value": destinationID.String()}, []string{"send:" + sendID.String() + ":destinationTrackId"}},
 		{"clip.setAsset", map[string]any{"trackId": trackID.String(), "clipId": clipID.String(), "asset": extensionAsset(assetID, "audio", "a")}, []string{"clip:" + clipID.String() + ":asset", "track:" + trackID.String() + ":clipLanding"}},
 		{"clip.setSampleEdit", map[string]any{"trackId": trackID.String(), "clipId": clipID.String(), "sampleEdit": extensionSampleEdit()}, []string{"clip:" + clipID.String() + ":sampleEdit", "track:" + trackID.String() + ":clipLanding"}},
-		{"clip.setProperty", map[string]any{"trackId": trackID.String(), "clipId": clipID.String(), "property": "startSeconds", "value": 1.5}, []string{"clip:" + clipID.String() + ":startSeconds", "track:" + trackID.String() + ":clipLanding"}},
-		{"clip.move", map[string]any{"trackId": trackID.String(), "clipId": clipID.String(), "afterId": ""}, []string{"clip:" + clipID.String() + ":position", recordingClipTrackAssignmentHead, "track:" + trackID.String() + ":clipLanding"}},
-		{"plugin.add", map[string]any{"location": location, "insert": extensionInsert(insertID, "daw.equalizer", []any{}), "afterId": ""}, []string{"plugin:" + insertID.String() + ":lifecycle", "plugin:" + insertID.String() + ":position"}},
-		{"plugin.delete", map[string]any{"location": location, "insertId": insertID.String()}, []string{"plugin:" + insertID.String() + ":lifecycle"}},
-		{"plugin.restore", map[string]any{"location": location, "insertId": insertID.String(), "deleteOperationId": operationID.String()}, []string{"plugin:" + insertID.String() + ":lifecycle", "plugin:" + insertID.String() + ":position"}},
-		{"plugin.move", map[string]any{"location": location, "insertId": insertID.String(), "afterId": ""}, []string{"plugin:" + insertID.String() + ":position"}},
-		{"plugin.setProperty", map[string]any{"location": location, "insertId": insertID.String(), "property": "mix", "value": 0.25}, []string{"plugin:" + insertID.String() + ":mix"}},
-		{"plugin.setProperty", map[string]any{"location": clipLocation, "insertId": insertID.String(), "property": "mix", "value": 0.25}, []string{"clip:" + clipID.String() + ":descendants", "plugin:" + insertID.String() + ":mix"}},
-		{"plugin.setState", map[string]any{"location": location, "insertId": insertID.String(), "pluginVersion": "1.1.0", "stateSchemaVersion": 2, "stateAsset": nil, "rightStateAsset": nil, "parameters": []any{}, "rightParameters": []any{}, "assetBindings": []any{}}, []string{"plugin:" + insertID.String() + ":state"}},
-		{"plugin.setParameter", map[string]any{"location": location, "insertId": insertID.String(), "parameterId": "gain", "value": 0.75, "rightChannel": false}, []string{"plugin:" + insertID.String() + ":parameter:left:gain", "plugin:" + insertID.String() + ":state"}},
-		{"plugin.removeParameter", map[string]any{"location": location, "insertId": insertID.String(), "parameterId": "gain", "rightChannel": true}, []string{"plugin:" + insertID.String() + ":parameter:right:gain", "plugin:" + insertID.String() + ":state"}},
-		{"plugin.setAssetBinding", map[string]any{"location": location, "insertId": insertID.String(), "binding": map[string]any{"key": "impulse", "asset": extensionAsset(assetID, "plugin-resource", "a"), "required": false}}, []string{"plugin:" + insertID.String() + ":assetBinding:impulse", "plugin:" + insertID.String() + ":state"}},
-		{"plugin.removeAssetBinding", map[string]any{"location": location, "insertId": insertID.String(), "key": "impulse"}, []string{"plugin:" + insertID.String() + ":assetBinding:impulse", "plugin:" + insertID.String() + ":state"}},
+		{"clip.setProperty", map[string]any{"trackId": trackID.String(), "clipId": clipID.String(), "property": "startSeconds", "value": 1.5}, []string{"clip:" + clipID.String() + ":startSeconds", "project:tempoCascade", "track:" + trackID.String() + ":clipLanding"}},
+		{"clip.move", map[string]any{"sourceTrackId": sourceTrackID.String(), "trackId": trackID.String(), "clipId": clipID.String(), "afterId": ""}, []string{"clip:" + clipID.String() + ":position", "track:" + sourceTrackID.String() + ":clipLanding", "track:" + trackID.String() + ":clipLanding"}},
+		{"plugin.add", map[string]any{"location": location, "insert": extensionInsert(insertID, "daw.equalizer", []any{}), "afterId": ""}, []string{"plugin:" + insertID.String() + ":generation", "plugin:" + insertID.String() + ":lifecycle", "plugin:" + insertID.String() + ":position"}},
+		{"plugin.add", map[string]any{"location": extensionLocation("instrument", trackID, uuid.Nil), "insert": extensionInsert(insertID, "daw.sampler", []any{}), "afterId": ""}, []string{"plugin:" + insertID.String() + ":generation", "plugin:" + insertID.String() + ":lifecycle", "plugin:" + insertID.String() + ":position"}},
+		{"plugin.delete", map[string]any{"location": location, "insertId": insertID.String()}, []string{"plugin:" + insertID.String() + ":generation", "plugin:" + insertID.String() + ":lifecycle"}},
+		{"plugin.restore", map[string]any{"location": location, "insertId": insertID.String(), "deleteOperationId": operationID.String()}, []string{"plugin:" + insertID.String() + ":generation", "plugin:" + insertID.String() + ":lifecycle", "plugin:" + insertID.String() + ":position"}},
+		{"plugin.move", map[string]any{"location": location, "insertId": insertID.String(), "afterId": ""}, []string{"plugin:" + insertID.String() + ":generation", "plugin:" + insertID.String() + ":position"}},
+		{"plugin.setProperty", map[string]any{"location": location, "insertId": insertID.String(), "property": "mix", "value": 0.25}, []string{"plugin:" + insertID.String() + ":generation", "plugin:" + insertID.String() + ":mix"}},
+		{"plugin.setProperty", map[string]any{"location": clipLocation, "insertId": insertID.String(), "property": "mix", "value": 0.25}, []string{"clip:" + clipID.String() + ":descendants", "plugin:" + insertID.String() + ":generation", "plugin:" + insertID.String() + ":mix"}},
+		{"plugin.setState", map[string]any{"location": location, "insertId": insertID.String(), "pluginVersion": "1.1.0", "stateSchemaVersion": 2, "stateAsset": nil, "rightStateAsset": nil, "parameters": []any{}, "rightParameters": []any{}, "assetBindings": []any{}}, []string{"plugin:" + insertID.String() + ":generation", "plugin:" + insertID.String() + ":state"}},
+		{"plugin.setParameter", map[string]any{"location": location, "insertId": insertID.String(), "parameterId": "gain", "value": 0.75, "rightChannel": false}, []string{"plugin:" + insertID.String() + ":generation", "plugin:" + insertID.String() + ":parameter:left:gain", "plugin:" + insertID.String() + ":state"}},
+		{"plugin.removeParameter", map[string]any{"location": location, "insertId": insertID.String(), "parameterId": "gain", "rightChannel": true}, []string{"plugin:" + insertID.String() + ":generation", "plugin:" + insertID.String() + ":parameter:right:gain", "plugin:" + insertID.String() + ":state"}},
+		{"plugin.setAssetBinding", map[string]any{"location": location, "insertId": insertID.String(), "binding": map[string]any{"key": "impulse", "asset": extensionAsset(assetID, "plugin-resource", "a"), "required": false}}, []string{"plugin:" + insertID.String() + ":assetBinding:impulse", "plugin:" + insertID.String() + ":generation", "plugin:" + insertID.String() + ":state"}},
+		{"plugin.removeAssetBinding", map[string]any{"location": location, "insertId": insertID.String(), "key": "impulse"}, []string{"plugin:" + insertID.String() + ":assetBinding:impulse", "plugin:" + insertID.String() + ":generation", "plugin:" + insertID.String() + ":state"}},
 	}
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {
@@ -109,7 +214,7 @@ func TestExtendedCommandValidationRejectsDivergentPayloads(t *testing.T) {
 		payload map[string]any
 	}{
 		{"track.setOutput", map[string]any{"trackId": trackID.String(), "outputTrackId": trackID.String()}},
-		{"send.setProperty", map[string]any{"trackId": trackID.String(), "sendId": uuid.NewString(), "property": "level", "value": 1.5}},
+		{"send.setProperty", map[string]any{"trackId": trackID.String(), "sendId": uuid.NewString(), "property": "level", "value": 2.0}},
 		{"clip.setSampleEdit", func() map[string]any {
 			edit := extensionSampleEdit()
 			edit["loopMode"] = 0.5
@@ -124,7 +229,23 @@ func TestExtendedCommandValidationRejectsDivergentPayloads(t *testing.T) {
 			insert := extensionInsert(insertID, "com.vendor.external", []any{})
 			return map[string]any{"location": validLocation, "insert": insert, "afterId": ""}
 		}()},
-		{"plugin.add", map[string]any{"location": extensionLocation("instrument", trackID, uuid.Nil), "insert": extensionInsert(insertID, "daw.sampler", []any{}), "afterId": ""}},
+		{"plugin.add", map[string]any{"location": extensionLocation("instrument", trackID, uuid.Nil), "insert": extensionInsert(insertID, "daw.sampler", []any{
+			map[string]any{"key": "sample", "asset": extensionAsset(uuid.New(), "audio", "d"), "required": false},
+		}), "afterId": ""}},
+		{"plugin.setState", map[string]any{
+			"location": extensionLocation("instrument", trackID, uuid.Nil), "insertId": insertID.String(),
+			"pluginVersion": "1.0.0", "stateSchemaVersion": 1, "stateAsset": nil,
+			"rightStateAsset": nil, "parameters": []any{}, "rightParameters": []any{},
+			"assetBindings": []any{map[string]any{
+				"key": "sample", "asset": extensionAsset(uuid.New(), "audio", "d"), "required": false,
+			}},
+		}},
+		{"plugin.setAssetBinding", map[string]any{
+			"location": extensionLocation("instrument", trackID, uuid.Nil), "insertId": insertID.String(),
+			"binding": map[string]any{
+				"key": "sample", "asset": extensionAsset(uuid.New(), "audio", "d"), "required": false,
+			},
+		}},
 		{"plugin.setParameter", map[string]any{"location": validLocation, "insertId": insertID.String(), "parameterId": strings.Repeat("x", maximumPluginParameterIDBytes+1), "value": 1.0, "rightChannel": false}},
 		{"plugin.delete", map[string]any{"location": extensionLocation("clip", trackID, uuid.Nil), "insertId": insertID.String()}},
 	}

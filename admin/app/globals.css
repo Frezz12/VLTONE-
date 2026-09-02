@@ -65,6 +65,19 @@ body { background: var(--vlt-bg); }
 .admin-search .vlt-button { flex: 0 0 46px; width: 46px; padding: 0; }
 .status-dot { display: inline-block; flex: 0 0 auto; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--vlt-success); }
 .status-dot.off { background: var(--vlt-danger); }
+.collaboration-access { display: grid; min-width: 150px; gap: 3px; }
+.collaboration-access-row { display: flex; min-height: 44px; align-items: center; gap: 7px; }
+.collaboration-access-switch { display: grid; flex: 0 0 52px; width: 52px; min-height: 44px; padding: 0; place-items: center; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }
+.collaboration-access-switch:focus-visible { outline: 2px solid var(--vlt-focus); outline-offset: 1px; }
+.collaboration-access-switch:disabled { cursor: wait; opacity: .65; }
+.collaboration-access-track { display: flex; width: 42px; height: 24px; align-items: center; padding: 2px; border: 1px solid var(--vlt-border-strong); border-radius: 999px; background: var(--vlt-surface-raised); transition: background .15s ease, border-color .15s ease; }
+.collaboration-access-track > span { width: 18px; height: 18px; border-radius: 50%; background: var(--vlt-text-muted); transition: transform .15s ease, background .15s ease; }
+.collaboration-access-switch[aria-checked="true"] .collaboration-access-track { border-color: var(--vlt-accent); background: var(--vlt-accent-soft); }
+.collaboration-access-switch[aria-checked="true"] .collaboration-access-track > span { background: var(--vlt-accent); transform: translateX(18px); }
+.collaboration-access-state { color: var(--vlt-text-muted); font-size: 12px; white-space: nowrap; }
+.collaboration-access-error { max-width: 240px; color: var(--vlt-danger); font-size: 12px; line-height: 1.35; }
+.collaboration-access-setting { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 18px; padding-top: 16px; border-top: 1px solid var(--vlt-border-muted); }
+.collaboration-access-setting p { max-width: 660px; margin: 5px 0 0; }
 .detail-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, .8fr); gap: 14px; }
 .definition-list { display: grid; grid-template-columns: minmax(100px, auto) 1fr; gap: 10px 20px; margin: 0; }
 .definition-list dt { color: var(--vlt-text-muted); font-size: 12px; }
@@ -159,6 +172,7 @@ body { background: var(--vlt-bg); }
   .admin-page-head > .vlt-button { width: 100%; }
   .admin-search { width: 100%; }
   .admin-search .vlt-button { flex: 0 0 46px; }
+  .collaboration-access-setting { grid-template-columns: 1fr; gap: 8px; }
   .definition-list { grid-template-columns: 1fr; gap: 4px; }
   .definition-list dd { margin-bottom: 8px; }
   .release-paired-fields, .release-screenshot-card, .screenshot-upload-form { grid-template-columns: 1fr; }

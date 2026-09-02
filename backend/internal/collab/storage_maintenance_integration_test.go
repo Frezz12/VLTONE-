@@ -2,6 +2,7 @@ package collab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -13,11 +14,15 @@ import (
 
 	"vltstudio/backend/internal/database"
 	"vltstudio/backend/internal/model"
+	"vltstudio/backend/internal/objectstore"
 )
 
 func TestPostgresSnapshotRetentionAndStorageMaintenance(t *testing.T) {
 	dsn := os.Getenv("VLT_COLLAB_TEST_DATABASE_URL")
 	if dsn == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("VLT_COLLAB_TEST_DATABASE_URL is required in CI")
+		}
 		t.Skip("set VLT_COLLAB_TEST_DATABASE_URL to run collaboration PostgreSQL tests")
 	}
 	db, err := database.Open(dsn, false)
@@ -57,7 +62,7 @@ func TestPostgresSnapshotRetentionAndStorageMaintenance(t *testing.T) {
 	for seq := int64(1); seq <= project.HeadSeq; seq++ {
 		operation := model.ProjectOperation{
 			ProjectID: project.ID, Seq: seq, OpID: uuid.New(), Kind: "track.set_name",
-			SchemaVersion: 1, BaseSeq: seq - 1,
+			SchemaVersion: CollaborationCommandSchemaVersion, BaseSeq: seq - 1,
 			Payload:       datatypes.JSON([]byte(`{"trackId":"11111111-1111-4111-8111-111111111111","name":"x"}`)),
 			Preconditions: datatypes.JSON([]byte(`[]`)),
 			TouchedFields: datatypes.JSON([]byte(`[]`)),
@@ -83,8 +88,9 @@ func TestPostgresSnapshotRetentionAndStorageMaintenance(t *testing.T) {
 		}
 		snapshots[index] = model.ProjectSnapshot{
 			ID: uuid.New(), ProjectID: project.ID, Seq: int64(index + 1),
-			BlobID: snapshotBlobs[index].ID, SchemaVersion: 6,
-			CreatedAt: now.Add(time.Duration(index) * time.Second),
+			BlobID:        snapshotBlobs[index].ID,
+			SchemaVersion: CollaborationProjectFormatVersion,
+			CreatedAt:     now.Add(time.Duration(index) * time.Second),
 		}
 		if err := tx.Create(&snapshots[index]).Error; err != nil {
 			t.Fatal(err)
@@ -148,17 +154,61 @@ func TestPostgresSnapshotRetentionAndStorageMaintenance(t *testing.T) {
 	if err := tx.Create(&upload).Error; err != nil {
 		t.Fatal(err)
 	}
-	fake := &maintenanceFakeStore{}
+	fake := &maintenanceFakeStore{abortErr: objectstore.ErrProvider}
 	assets := NewAssetService(tx, fake, time.Minute, time.Minute, time.Hour,
 		1<<30, 64<<20, 16<<20, 100)
 	assets.Now = func() time.Time { return now }
 	removedUploads, err := assets.ReapExpiredUploads(context.Background(), 8)
-	if err != nil || removedUploads != 1 {
+	if !errors.Is(err, objectstore.ErrProvider) || removedUploads != 1 {
 		t.Fatalf("expired upload cleanup removed=%d err=%v", removedUploads, err)
 	}
 	if !slices.Contains(fake.aborts, upload.ObjectKey+":"+upload.ProviderUploadID) ||
-		!slices.Contains(fake.deletes, upload.ObjectKey) {
+		slices.Contains(fake.deletes, upload.ObjectKey) {
 		t.Fatalf("provider cleanup missing: aborts=%v deletes=%v", fake.aborts, fake.deletes)
+	}
+	var uploadCount int64
+	if err := tx.Model(&model.UploadSession{}).Where("id = ?", upload.ID).
+		Count(&uploadCount).Error; err != nil || uploadCount != 0 {
+		t.Fatalf("expired upload row was not replaced by cleanup job: count=%d err=%v",
+			uploadCount, err)
+	}
+	var cleanupJob model.ObjectCleanupJob
+	if err := tx.Where("object_key = ?", upload.ObjectKey).First(&cleanupJob).Error; err != nil ||
+		cleanupJob.Status != objectCleanupPending || cleanupJob.AttemptCount != 1 ||
+		cleanupJob.LastError == "" {
+		t.Fatalf("failed provider cleanup was not retained: job=%#v err=%v", cleanupJob, err)
+	}
+	if pending, running, err := assets.ObjectCleanupQueueDepth(context.Background()); err != nil || pending != 1 || running != 0 {
+		t.Fatalf("cleanup queue depth pending=%d running=%d err=%v", pending, running, err)
+	}
+	if err := tx.Model(&model.ObjectCleanupJob{}).Where("id = ?", cleanupJob.ID).
+		Update("retry_available_at", now.Add(-time.Second)).Error; err != nil {
+		t.Fatal(err)
+	}
+	fake.abortErr = objectstore.ErrMultipartNotFound
+	cleaned, err := assets.DrainObjectCleanupJobs(context.Background(), 8)
+	if err != nil || cleaned != 1 || !slices.Contains(fake.deletes, upload.ObjectKey) {
+		t.Fatalf("durable upload cleanup retry cleaned=%d err=%v deletes=%v",
+			cleaned, err, fake.deletes)
+	}
+	if pending, running, err := assets.ObjectCleanupQueueDepth(context.Background()); err != nil || pending != 0 || running != 0 {
+		t.Fatalf("drained cleanup queue depth pending=%d running=%d err=%v", pending, running, err)
+	}
+
+	claimToken := uuid.New()
+	expiredLease := now.Add(-time.Minute)
+	leaseJob := model.ObjectCleanupJob{
+		ID: uuid.New(), ObjectKey: "uploads/startup/lease", DeleteObject: true,
+		Status: objectCleanupRunning, AttemptCount: 1, RetryAvailableAt: now,
+		LeaseExpiresAt: &expiredLease, ClaimToken: &claimToken,
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
+	}
+	if err := tx.Create(&leaseJob).Error; err != nil {
+		t.Fatal(err)
+	}
+	cleaned, err = assets.DrainObjectCleanupJobs(context.Background(), 8)
+	if err != nil || cleaned != 1 || !slices.Contains(fake.deletes, leaseJob.ObjectKey) {
+		t.Fatalf("expired cleanup lease was not recovered: cleaned=%d err=%v", cleaned, err)
 	}
 
 	oldUnreferenced := now.Add(-2 * time.Hour)
@@ -182,8 +232,21 @@ func TestPostgresSnapshotRetentionAndStorageMaintenance(t *testing.T) {
 	if err := tx.Create(&[]model.Blob{oldBlob, referencedBlob, freshBlob}).Error; err != nil {
 		t.Fatal(err)
 	}
+	referencedAssetID := uuid.New()
 	if err := tx.Create(&model.ProjectAsset{
-		ProjectID: project.ID, AssetID: uuid.New(), BlobID: referencedBlob.ID,
+		ProjectID: project.ID, AssetID: referencedAssetID, BlobID: referencedBlob.ID,
+		Kind: "audio", CreatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Create(&model.ProjectOperationAsset{
+		ProjectID: project.ID, OperationSeq: project.HeadSeq, AssetID: referencedAssetID,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	orphanAssetID := uuid.New()
+	if err := tx.Create(&model.ProjectAsset{
+		ProjectID: project.ID, AssetID: orphanAssetID, BlobID: oldBlob.ID,
 		Kind: "audio", CreatedAt: now,
 	}).Error; err != nil {
 		t.Fatal(err)
@@ -205,5 +268,11 @@ func TestPostgresSnapshotRetentionAndStorageMaintenance(t *testing.T) {
 	_ = tx.Model(&model.Blob{}).Where("id = ?", referencedBlob.ID).Count(&referencedCount).Error
 	if oldCount != 0 || referencedCount != 1 {
 		t.Fatalf("GC reachability old=%d referenced=%d", oldCount, referencedCount)
+	}
+	var orphanCatalogCount int64
+	if err := tx.Model(&model.ProjectAsset{}).
+		Where("project_id = ? AND asset_id = ?", project.ID, orphanAssetID).
+		Count(&orphanCatalogCount).Error; err != nil || orphanCatalogCount != 0 {
+		t.Fatalf("unreachable asset catalog count=%d err=%v", orphanCatalogCount, err)
 	}
 }

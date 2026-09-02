@@ -693,7 +693,7 @@ json documentToJson(const ProjectModel& project, MediaPaths media) {
     root["loopStart"] = project.loopStartSeconds;
     root["loopEnd"] = project.loopEndSeconds;
     root["loopEnabled"] = project.loopEnabled;
-    root["sampleRate"] = project.sampleRate;
+    root["renderSampleRate"] = project.sampleRate;
     root["masterVolume"] = project.masterVolume;
     root["masterPan"] = project.masterPan;
     root["masterInserts"] = insertsToJson(project.masterInserts);
@@ -727,7 +727,10 @@ audio::Result documentFromJson(ProjectModel& out, const json& root,
         out.loopStartSeconds = std::max(0.0, root.value("loopStart", 0.0));
         out.loopEndSeconds = std::max(0.0, root.value("loopEnd", 0.0));
         out.loopEnabled = root.value("loopEnabled", false);
-        out.sampleRate = root.value("sampleRate", 48000.0);
+        // v1-v6 called this durable render target `sampleRate`. The engine's
+        // actual device rate is session state and is not represented here.
+        out.sampleRate = root.value("renderSampleRate",
+                                    root.value("sampleRate", 48000.0));
         out.masterVolume = root.value("masterVolume", 1.0f);
         out.masterPan = root.value("masterPan", 0.0f);
         out.masterInserts = insertsFromJson(root, "masterInserts");

@@ -7,11 +7,48 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestNewS3SweepsOnlyStaleVerificationFiles(t *testing.T) {
+	directory := t.TempDir()
+	stale := filepath.Join(directory, ".collab-object-stale")
+	recent := filepath.Join(directory, ".collab-object-recent")
+	unrelated := filepath.Join(directory, "keep-me")
+	for _, name := range []string{stale, recent, unrelated} {
+		if err := os.WriteFile(name, []byte("verification"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(stale, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(recent, now.Add(-time.Minute), now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewS3(S3Config{
+		Endpoint: "https://s3.example.test", Region: "us-east-1", Bucket: "vlt-test",
+		AccessKeyID: "access", SecretAccessKey: "secret", TempDirectory: directory,
+		MaximumBytes: 1024, Now: func() time.Time { return now },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale verification file was not removed: %v", err)
+	}
+	for _, name := range []string{recent, unrelated} {
+		if _, err := os.Stat(name); err != nil {
+			t.Fatalf("non-stale file %q was removed: %v", name, err)
+		}
+	}
+}
 
 const testSHA256 = "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
 

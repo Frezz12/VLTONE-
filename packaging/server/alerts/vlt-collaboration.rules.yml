@@ -1,0 +1,33 @@
+groups:
+  - name: vlt-collaboration-production-v1
+    rules:
+      - alert: VLTCollaborationSessionStuckEnding
+        expr: vlt_collaboration_stuck_ending_sessions > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Collaboration session is stuck waiting for its final snapshot
+
+      - alert: VLTCollaborationSnapshotRetries
+        expr: increase(vlt_collaboration_snapshot_retries_total[10m]) >= 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Collaboration snapshot uploads are repeatedly retrying
+
+      - alert: VLTCollaborationStorageFailure
+        expr: increase(vlt_collaboration_storage_failures_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Collaboration storage maintenance failed
+
+      - alert: VLTCollaborationCleanupBacklog
+        expr: vlt_collaboration_object_cleanup_pending > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Collaboration staging-object cleanup queue is not draining

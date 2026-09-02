@@ -3,55 +3,62 @@ package collab
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
 
-func TestHashConsensusBlocksResyncAndEscalatesRepeatedMismatch(t *testing.T) {
+func TestHashConsensusBlocksUntilServerOpenedRoundIsVerified(t *testing.T) {
 	coordinator := NewHashCoordinator()
 	projectID, sessionID := uuid.New(), uuid.New()
 	hostID, editorID := uuid.New(), uuid.New()
 	good := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	bad := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	participants := []uuid.UUID{hostID, editorID}
-	if decision := coordinator.Report(projectID, sessionID, hostID, hostID,
-		12, good, participants); decision != HashNoChange {
-		t.Fatalf("host-only decision = %q", decision)
-	}
-	if decision := coordinator.Report(projectID, sessionID, editorID, hostID,
-		12, bad, participants); decision != HashResync {
-		t.Fatalf("first mismatch decision = %q", decision)
-	}
+	round := coordinator.Begin(projectID, sessionID, 12,
+		[]uuid.UUID{hostID, editorID}, time.Minute)
 	if _, err := coordinator.AcquireAppendPermit(projectID); !errors.Is(err, ErrHashConsensusBlocked) {
-		t.Fatalf("append was not blocked: %v", err)
+		t.Fatalf("unverified round admitted append: %v", err)
 	}
-	if decision := coordinator.Report(projectID, sessionID, hostID, hostID,
-		12, good, participants); decision != HashNoChange {
-		t.Fatalf("recovery host decision = %q", decision)
+	if result := coordinator.Report(projectID, round.RoundID, sessionID,
+		hostID, 12, good); result.Decision != HashNoChange {
+		t.Fatalf("first report decision = %q", result.Decision)
 	}
-	if decision := coordinator.Report(projectID, sessionID, editorID, hostID,
-		12, bad, participants); decision != HashConflict {
-		t.Fatalf("second mismatch decision = %q", decision)
-	}
-}
-
-func TestHashConsensusVerifiedReplayReopensWrites(t *testing.T) {
-	coordinator := NewHashCoordinator()
-	projectID, sessionID := uuid.New(), uuid.New()
-	hostID, editorID := uuid.New(), uuid.New()
-	good := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	bad := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	participants := []uuid.UUID{hostID, editorID}
-	coordinator.Report(projectID, sessionID, hostID, hostID, 3, good, participants)
-	coordinator.Report(projectID, sessionID, editorID, hostID, 3, bad, participants)
-	coordinator.Report(projectID, sessionID, hostID, hostID, 3, good, participants)
-	if decision := coordinator.Report(projectID, sessionID, editorID, hostID,
-		3, good, participants); decision != HashVerified {
-		t.Fatalf("verified replay decision = %q", decision)
+	if result := coordinator.Report(projectID, round.RoundID, sessionID,
+		editorID, 12, good); result.Decision != HashVerified {
+		t.Fatalf("verified decision = %q", result.Decision)
 	}
 	release, err := coordinator.AcquireAppendPermit(projectID)
 	if err != nil {
-		t.Fatalf("writes stayed blocked: %v", err)
+		t.Fatalf("verified round kept writes blocked: %v", err)
 	}
 	release()
+}
+
+func TestHashConsensusEscalatesSecondMismatch(t *testing.T) {
+	coordinator := NewHashCoordinator()
+	projectID, sessionID := uuid.New(), uuid.New()
+	hostID, editorID := uuid.New(), uuid.New()
+	good := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	bad := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	round := coordinator.Begin(projectID, sessionID, 3,
+		[]uuid.UUID{hostID, editorID}, time.Minute)
+	coordinator.Report(projectID, round.RoundID, sessionID, hostID, 3, good)
+	result := coordinator.Report(projectID, round.RoundID, sessionID, editorID, 3, bad)
+	if result.Decision != HashResync || result.Round.RoundID == round.RoundID {
+		t.Fatalf("first mismatch result = %#v", result)
+	}
+	coordinator.Report(projectID, result.Round.RoundID, sessionID, hostID, 3, good)
+	result = coordinator.Report(projectID, result.Round.RoundID, sessionID, editorID, 3, bad)
+	if result.Decision != HashConflict {
+		t.Fatalf("second mismatch decision = %q", result.Decision)
+	}
+	if _, err := coordinator.AcquireAppendPermit(projectID); !errors.Is(err, ErrHashConsensusBlocked) {
+		t.Fatalf("conflicted round admitted append: %v", err)
+	}
+}
+
+func TestHashConsensusFailsClosedWithoutRound(t *testing.T) {
+	coordinator := NewHashCoordinator()
+	if _, err := coordinator.AcquireAppendPermit(uuid.New()); !errors.Is(err, ErrHashConsensusBlocked) {
+		t.Fatalf("missing round admitted append: %v", err)
+	}
 }

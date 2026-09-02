@@ -20,6 +20,7 @@ enum class CloudSyncPhase : quint8 {
     FetchingBootstrap,
     DownloadingSnapshot,
     ReplayingOperations,
+    ReconcilingPending,
     CheckingLiveSession,
     Ready,
     Failed,

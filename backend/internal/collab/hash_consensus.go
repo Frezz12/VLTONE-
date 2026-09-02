@@ -3,6 +3,7 @@ package collab
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -18,22 +19,30 @@ const (
 	HashConflict HashDecision = "conflict"
 )
 
+type HashRoundView struct {
+	RoundID   uuid.UUID
+	SessionID uuid.UUID
+	ServerSeq int64
+	Deadline  time.Time
+}
+
+type HashResult struct {
+	Decision HashDecision
+	Round    HashRoundView
+}
+
 type hashRound struct {
-	sessionID     uuid.UUID
-	serverSeq     int64
-	hostID        uuid.UUID
+	HashRoundView
 	expectedHash  string
 	expected      map[uuid.UUID]bool
 	reports       map[uuid.UUID]string
 	blocked       bool
-	roundFailed   bool
 	mismatchCount int
 }
 
-// HashCoordinator is intentionally in-memory in v1, matching the single Go
-// API instance. It guards operation appends while clients replay after a hash
-// mismatch. Its API does not depend on WebSockets so a distributed coordinator
-// can replace it together with RoomBus later.
+// HashCoordinator is deliberately in-memory: collaboration v2 is restricted
+// to one API process. Every live project must complete a server-opened round
+// before writes are admitted.
 type HashCoordinator struct {
 	mu     sync.RWMutex
 	rounds map[uuid.UUID]*hashRound
@@ -43,84 +52,106 @@ func NewHashCoordinator() *HashCoordinator {
 	return &HashCoordinator{rounds: make(map[uuid.UUID]*hashRound)}
 }
 
-// AcquireAppendPermit holds a read lock until release, so a mismatch cannot be
-// declared concurrently between the guard check and the durable DB commit.
+func (coordinator *HashCoordinator) Begin(projectID, sessionID uuid.UUID,
+	serverSeq int64, expectedParticipants []uuid.UUID, timeout time.Duration) HashRoundView {
+	if projectID == uuid.Nil || sessionID == uuid.Nil || serverSeq < 0 {
+		return HashRoundView{}
+	}
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	mismatches := 0
+	if current := coordinator.rounds[projectID]; current != nil &&
+		current.SessionID == sessionID && current.blocked {
+		mismatches = current.mismatchCount
+	}
+	round := newHashRound(sessionID, serverSeq, expectedParticipants,
+		mismatches, time.Now().UTC().Add(timeout))
+	coordinator.rounds[projectID] = round
+	return round.HashRoundView
+}
+
+func (coordinator *HashCoordinator) Current(projectID uuid.UUID) (HashRoundView, bool) {
+	coordinator.mu.RLock()
+	defer coordinator.mu.RUnlock()
+	round := coordinator.rounds[projectID]
+	if round == nil {
+		return HashRoundView{}, false
+	}
+	return round.HashRoundView, true
+}
+
+// AcquireAppendPermit holds a read lock through the durable commit and room
+// publication. Absence of a verified round is fail-closed after server restart.
 func (coordinator *HashCoordinator) AcquireAppendPermit(
 	projectID uuid.UUID) (release func(), err error) {
 	coordinator.mu.RLock()
 	round := coordinator.rounds[projectID]
-	if round != nil && round.blocked {
+	if round == nil || round.blocked {
 		coordinator.mu.RUnlock()
 		return nil, ErrHashConsensusBlocked
 	}
 	return coordinator.mu.RUnlock, nil
 }
 
-func (coordinator *HashCoordinator) Report(projectID, sessionID, reporterID,
-	hostID uuid.UUID, serverSeq int64, sha256 string,
-	expectedParticipants []uuid.UUID) HashDecision {
-	if projectID == uuid.Nil || sessionID == uuid.Nil || reporterID == uuid.Nil ||
-		hostID == uuid.Nil || serverSeq < 0 || len(sha256) != 64 {
-		return HashNoChange
+func (coordinator *HashCoordinator) Report(projectID, roundID, sessionID,
+	reporterID uuid.UUID, serverSeq int64, sha256 string) HashResult {
+	if projectID == uuid.Nil || roundID == uuid.Nil || sessionID == uuid.Nil ||
+		reporterID == uuid.Nil || serverSeq < 0 || len(sha256) != 64 {
+		return HashResult{Decision: HashNoChange}
 	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 	round := coordinator.rounds[projectID]
-	if round == nil || round.sessionID != sessionID || round.serverSeq != serverSeq {
-		if reporterID != hostID {
-			return HashNoChange
-		}
-		round = newHashRound(sessionID, serverSeq, hostID, sha256,
-			expectedParticipants, 0)
-		coordinator.rounds[projectID] = round
-	} else if reporterID == hostID && round.blocked {
-		// The host starts the one allowed recovery replay round. A second
-		// mismatch before a verified quorum escalates to conflict/read-only.
-		round = newHashRound(sessionID, serverSeq, hostID, sha256,
-			expectedParticipants, round.mismatchCount)
-		round.blocked = true
-		coordinator.rounds[projectID] = round
-	} else if reporterID == hostID && round.expectedHash != sha256 {
-		// A new host canonical state at the same sequence is a fresh round.
-		round = newHashRound(sessionID, serverSeq, hostID, sha256,
-			expectedParticipants, round.mismatchCount)
-		coordinator.rounds[projectID] = round
-	}
-	if round.hostID != hostID {
-		if reporterID != hostID {
-			return HashNoChange
-		}
-		round.hostID = hostID
-		round.expectedHash = sha256
-	}
-	if !round.expected[reporterID] {
-		return HashNoChange
+	if round == nil || round.RoundID != roundID || round.SessionID != sessionID ||
+		round.ServerSeq != serverSeq || !round.expected[reporterID] || !round.blocked {
+		return HashResult{Decision: HashNoChange}
 	}
 	round.reports[reporterID] = sha256
+	if round.expectedHash == "" {
+		round.expectedHash = sha256
+	}
 	if sha256 != round.expectedHash {
-		if round.roundFailed {
-			if round.mismatchCount >= 2 {
-				return HashConflict
-			}
-			return HashResync
-		}
-		round.roundFailed = true
-		round.blocked = true
 		round.mismatchCount++
 		if round.mismatchCount >= 2 {
-			return HashConflict
+			return HashResult{Decision: HashConflict, Round: round.HashRoundView}
 		}
-		return HashResync
+		next := newHashRound(round.SessionID, round.ServerSeq,
+			participantKeys(round.expected), round.mismatchCount,
+			time.Now().UTC().Add(15*time.Second))
+		coordinator.rounds[projectID] = next
+		return HashResult{Decision: HashResync, Round: next.HashRoundView}
 	}
 	for participantID := range round.expected {
 		if round.reports[participantID] != round.expectedHash {
-			return HashNoChange
+			return HashResult{Decision: HashNoChange, Round: round.HashRoundView}
 		}
 	}
 	round.blocked = false
-	round.roundFailed = false
 	round.mismatchCount = 0
-	return HashVerified
+	return HashResult{Decision: HashVerified, Round: round.HashRoundView}
+}
+
+// Expire returns only participants that failed to report for this exact epoch.
+// The caller disconnects them and opens a fresh round for remaining editors.
+func (coordinator *HashCoordinator) Expire(projectID, roundID uuid.UUID) []uuid.UUID {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	round := coordinator.rounds[projectID]
+	if round == nil || round.RoundID != roundID || !round.blocked ||
+		time.Now().UTC().Before(round.Deadline) {
+		return nil
+	}
+	missing := make([]uuid.UUID, 0, len(round.expected))
+	for participantID := range round.expected {
+		if _, reported := round.reports[participantID]; !reported {
+			missing = append(missing, participantID)
+		}
+	}
+	delete(coordinator.rounds, projectID)
+	return missing
 }
 
 func (coordinator *HashCoordinator) ClearProject(projectID uuid.UUID) {
@@ -129,18 +160,26 @@ func (coordinator *HashCoordinator) ClearProject(projectID uuid.UUID) {
 	coordinator.mu.Unlock()
 }
 
-func newHashRound(sessionID uuid.UUID, serverSeq int64, hostID uuid.UUID,
-	sha256 string, participants []uuid.UUID, mismatchCount int) *hashRound {
-	expected := make(map[uuid.UUID]bool, len(participants)+1)
-	expected[hostID] = true
+func newHashRound(sessionID uuid.UUID, serverSeq int64,
+	participants []uuid.UUID, mismatchCount int, deadline time.Time) *hashRound {
+	expected := make(map[uuid.UUID]bool, len(participants))
 	for _, participantID := range participants {
 		if participantID != uuid.Nil {
 			expected[participantID] = true
 		}
 	}
 	return &hashRound{
-		sessionID: sessionID, serverSeq: serverSeq, hostID: hostID,
-		expectedHash: sha256, expected: expected,
-		reports: make(map[uuid.UUID]string), mismatchCount: mismatchCount,
+		HashRoundView: HashRoundView{RoundID: uuid.New(), SessionID: sessionID,
+			ServerSeq: serverSeq, Deadline: deadline},
+		expected: expected, reports: make(map[uuid.UUID]string), blocked: true,
+		mismatchCount: mismatchCount,
 	}
+}
+
+func participantKeys(values map[uuid.UUID]bool) []uuid.UUID {
+	result := make([]uuid.UUID, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	return result
 }

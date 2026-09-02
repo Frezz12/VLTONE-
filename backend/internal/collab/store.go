@@ -721,6 +721,10 @@ func (s *Store) AppendOperation(ctx context.Context, input AppendOperationInput)
 		if err := tx.Create(&operation).Error; err != nil {
 			return err
 		}
+		if err := retainOperationAssetReferencesTx(tx, normalized.ProjectID,
+			operation.Seq, normalized.Kind, normalized.Payload); err != nil {
+			return err
+		}
 		if err := tx.Model(&model.CloudProject{}).Where("id = ?", normalized.ProjectID).Updates(map[string]any{
 			"head_seq": operation.Seq, "updated_at": now,
 		}).Error; err != nil {

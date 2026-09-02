@@ -6,11 +6,13 @@
 // diff.
 #include "EngineController.hpp"
 #include "MidiFile.hpp"
+#include "collaboration/SharedMutationSink.hpp"
 
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -116,6 +118,35 @@ void trackName(Bytes& out, const std::string& name) {
 bool parse(const Bytes& bytes, mf::File& out, std::string& error) {
     return mf::parseBytes(bytes.data(), bytes.size(), out, error);
 }
+
+class CaptureMutationSink final : public daw::collab::SharedMutationSink {
+public:
+    daw::collab::SharedMutationResult result =
+        daw::collab::SharedMutationResult::Submitted;
+    std::vector<daw::collab::CommandBody> bodies;
+
+    bool handlesCloudBinding() override { return true; }
+    daw::collab::SharedMutationResult submit(
+        daw::collab::SharedMutationRequest request) override {
+        bodies.push_back(std::move(request.body));
+        return result;
+    }
+    daw::collab::SharedMutationResult setTimeSignature(int, int) override {
+        return result;
+    }
+    daw::collab::SharedMutationResult setProjectKey(
+        int, std::string_view) override { return result; }
+    daw::collab::SharedMutationResult setAiInstructions(
+        std::string_view) override { return result; }
+    daw::collab::SharedMutationResult renameTrack(
+        std::string_view, std::string_view) override { return result; }
+    daw::collab::SharedMutationResult setTrackMuted(
+        std::string_view, bool) override { return result; }
+    daw::collab::SharedMutationResult setTracksMuted(
+        std::span<const std::string>, bool) override { return result; }
+    daw::collab::SharedMutationResult clearAllMutes(
+        std::span<const std::string>) override { return result; }
+};
 
 } // namespace
 
@@ -378,6 +409,40 @@ int main() {
         controller.undo();
         model = controller.project().findTrack(trackId);
         check(model && model->clips.empty(), "one undo takes the whole import back");
+
+        for (const auto outcome : {
+                 daw::collab::SharedMutationResult::Submitted,
+                 daw::collab::SharedMutationResult::Blocked}) {
+            daw::EngineController shared;
+            check(shared.initialize(48000, 512, false).isOk(),
+                  "shared MIDI import fixture initializes");
+            const std::string sharedTrack =
+                shared.addTrack(daw::TrackKind::Instrument, "Shared Keys");
+            const std::size_t undoDepth = shared.undoDepth();
+            CaptureMutationSink sink;
+            sink.result = outcome;
+            shared.attachSharedMutationSink(sink);
+            const std::vector<std::string> sharedClips =
+                shared.importMidiFile(path, sharedTrack, 2.0);
+            const bool submitted =
+                outcome == daw::collab::SharedMutationResult::Submitted;
+            const auto* batch = sink.bodies.size() == 1
+                                    ? std::get_if<std::shared_ptr<
+                                          daw::collab::BatchCommand>>(
+                                          &sink.bodies.front())
+                                    : nullptr;
+            check(batch && *batch && !(*batch)->commands.empty(),
+                  "shared MIDI import submits exactly one outer batch");
+            check((submitted ? sharedClips.size() == 1
+                             : sharedClips.empty()) &&
+                      shared.project().findTrack(sharedTrack)->clips.empty() &&
+                      shared.undoDepth() == undoDepth,
+                  submitted
+                      ? "submitted MIDI import avoids local mutation and undo"
+                      : "blocked MIDI import avoids local mutation and undo");
+            check(shared.detachSharedMutationSink(sink),
+                  "shared MIDI import sink detaches");
+        }
     }
 
     // ── A larger multi-track file spreads over lanes as one edit ──
@@ -535,6 +600,53 @@ int main() {
             check(controller.project().tracks.back().clips.front().notes.back().velocity ==
                       80 + ((kParts - 1) % 20),
                   "redo also preserves the final source note's properties");
+        }
+
+        for (const auto outcome : {
+                 daw::collab::SharedMutationResult::Submitted,
+                 daw::collab::SharedMutationResult::Blocked}) {
+            daw::EngineController shared;
+            shared.initialize(48000, 512, false);
+            const std::string pattern = shared.addPattern("Cloud Pattern");
+            const std::string target =
+                shared.addTrack(daw::TrackKind::Instrument, "Cloud Target");
+            shared.moveTrackToFolder(target, pattern);
+            const std::size_t tracksBefore = shared.project().tracks.size();
+            const std::size_t undoBefore = shared.undoDepth();
+            CaptureMutationSink sink;
+            sink.result = outcome;
+            shared.attachSharedMutationSink(sink);
+            const std::vector<std::string> imported =
+                shared.importMidiFile(path, target, 0.0);
+            const auto* batch = sink.bodies.size() == 1
+                                    ? std::get_if<std::shared_ptr<
+                                          daw::collab::BatchCommand>>(
+                                          &sink.bodies.front())
+                                    : nullptr;
+            bool routesNewLanesToPattern = false;
+            if (batch && *batch) {
+                for (const daw::collab::ProjectCommand& child :
+                     (*batch)->commands) {
+                    const auto* output =
+                        std::get_if<daw::collab::SetTrackOutput>(&child.body);
+                    routesNewLanesToPattern |=
+                        output && output->outputTrackId == pattern;
+                }
+            }
+            const bool submitted =
+                outcome == daw::collab::SharedMutationResult::Submitted;
+            check(batch && *batch && routesNewLanesToPattern &&
+                      (submitted ? imported.size() == kParts
+                                 : imported.empty()),
+                  "shared multi-track MIDI import routes new lanes into its Pattern");
+            check(shared.project().tracks.size() == tracksBefore &&
+                      shared.project().findTrack(target)->clips.empty() &&
+                      shared.undoDepth() == undoBefore,
+                  submitted
+                      ? "submitted Pattern import avoids local mutation and undo"
+                      : "blocked Pattern import avoids local mutation and undo");
+            check(shared.detachSharedMutationSink(sink),
+                  "shared Pattern import sink detaches");
         }
     }
 

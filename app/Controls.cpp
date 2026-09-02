@@ -2582,10 +2582,13 @@ void InlineNameEdit::endEditing() {
     setReadOnly(true);
     setFocusPolicy(Qt::NoFocus);
     deselect();
-    setCursorPosition(0);
-    setToolTip(tr("%1\nDouble-click to rename").arg(text()));
     clearFocus();
     emit editingFinished();
+    // Synchronous model listeners may normalize the text with setText(),
+    // which moves QLineEdit's cursor back to the end.
+    deselect();
+    setCursorPosition(0);
+    setToolTip(tr("%1\nDouble-click to rename").arg(text()));
 }
 
 // ── helpers ──

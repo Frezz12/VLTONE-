@@ -83,6 +83,14 @@ if(DAW_BUILD_TESTS)
     set_tests_properties(collaboration_client_selftest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         TIMEOUT 30)
+    if(WIN32)
+        # CTest does not inherit the Qt SDK's bin directory on clean Windows
+        # runners. Without this, the loader opens an invisible error dialog for
+        # a missing Qt6Core.dll and the headless test appears to time out.
+        set_tests_properties(collaboration_client_selftest PROPERTIES
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
 endif()
 if(APPLE)
     target_link_libraries(daw PRIVATE "-framework Security")

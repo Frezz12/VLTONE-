@@ -344,6 +344,19 @@ func (s *Server) revokeProjectInvite(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) projectInvites(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := parseUUIDParam(w, r, "projectID")
+	if !ok {
+		return
+	}
+	invites, err := s.Collab.ListInvites(r.Context(), projectID, userFrom(r).ID)
+	if err != nil {
+		s.writeCollaborationError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"invites": invites})
+}
+
 func (s *Server) acceptProjectInvite(w http.ResponseWriter, r *http.Request) {
 	var input acceptProjectInviteRequest
 	if !decodeJSON(w, r, &input) {
@@ -387,20 +400,13 @@ func (s *Server) appendProjectOperation(w http.ResponseWriter, r *http.Request) 
 			Kind: precondition.Kind, FieldKey: precondition.FieldKey, OperationID: *operationID,
 		})
 	}
-	releasePermit, permitErr := s.Hashes.AcquireAppendPermit(projectID)
-	if permitErr != nil {
-		writeError(w, r, http.StatusConflict, "hash_consensus_pending",
-			"Project writes are paused while clients resynchronize.", nil)
-		return
-	}
-	operation, duplicate, err := s.Collab.AppendOperation(r.Context(), collab.AppendOperationInput{
+	operation, duplicate, err := s.appendCollaborationOperation(r.Context(), collab.AppendOperationInput{
 		ProjectID: projectID, ActorUserID: userFrom(r).ID, ActorDeviceID: deviceFrom(r).ID,
 		ActorSessionID: collaborationActorSessionID(r),
 		OpID:           *opID, TransactionID: transactionID, Kind: input.Kind,
 		SchemaVersion: input.SchemaVersion, BaseSeq: input.BaseSeq, Payload: input.Payload,
 		Preconditions: preconditions, TouchedFields: input.TouchedFields,
 	})
-	releasePermit()
 	if err != nil {
 		s.writeCollaborationError(w, r, err)
 		return
@@ -408,10 +414,6 @@ func (s *Server) appendProjectOperation(w http.ResponseWriter, r *http.Request) 
 	status := http.StatusCreated
 	if duplicate {
 		status = http.StatusOK
-	} else if s.Rooms != nil {
-		s.Rooms.Publish(projectID, uuid.Nil, collab.RoomMessage{
-			Data: collaborationCommittedEnvelope(operation),
-		})
 	}
 	writeJSON(w, status, map[string]any{"operation": operation, "duplicate": duplicate})
 }
@@ -470,6 +472,7 @@ func (s *Server) startProjectSession(w http.ResponseWriter, r *http.Request) {
 		s.writeCollaborationError(w, r, err)
 		return
 	}
+	s.Hashes.ClearProject(projectID)
 	writeJSON(w, http.StatusCreated, state)
 }
 
@@ -546,6 +549,9 @@ func (s *Server) handoffProjectSessionHost(w http.ResponseWriter, r *http.Reques
 		})
 		s.Rooms.Publish(projectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelope("session.host_changed", payload, uuid.Nil, nil, 0)})
 	}
+	if round, roundErr := s.prepareHashRound(r.Context(), projectID, state); roundErr == nil {
+		s.publishHashRound(projectID, round)
+	}
 	writeJSON(w, http.StatusOK, state)
 }
 
@@ -576,6 +582,9 @@ func (s *Server) endProjectSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) acquireTrackLease(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCloudRecording(w, r) {
+		return
+	}
 	projectID, sessionID, ok := collaborationSessionIDs(w, r)
 	if !ok {
 		return
@@ -598,6 +607,9 @@ func (s *Server) acquireTrackLease(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renewTrackLease(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCloudRecording(w, r) {
+		return
+	}
 	projectID, sessionID, ok := collaborationSessionIDs(w, r)
 	if !ok {
 		return
@@ -624,6 +636,9 @@ func (s *Server) renewTrackLease(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) releaseTrackLease(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCloudRecording(w, r) {
+		return
+	}
 	projectID, sessionID, ok := collaborationSessionIDs(w, r)
 	if !ok {
 		return
@@ -638,6 +653,15 @@ func (s *Server) releaseTrackLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) requireCloudRecording(w http.ResponseWriter, r *http.Request) bool {
+	if cloudRecordingEnabledV1 {
+		return true
+	}
+	writeError(w, r, http.StatusConflict, "cloud_recording_disabled",
+		"Recording is not available in cloud projects.", nil)
+	return false
 }
 
 func collaborationActorSessionID(r *http.Request) uuid.UUID {
@@ -703,6 +727,12 @@ func (s *Server) writeCollaborationError(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	switch {
+	case errors.Is(err, collab.ErrHashConsensusBlocked):
+		writeError(w, r, http.StatusConflict, "hash_consensus_required",
+			"Complete the current state hash round before editing.", nil)
+	case errors.Is(err, collab.ErrCloudRecordingDisabled):
+		writeError(w, r, http.StatusConflict, "cloud_recording_disabled",
+			"Recording is not available in cloud projects.", nil)
 	case errors.Is(err, collab.ErrValidation):
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_failed", err.Error(), nil)
 	case errors.Is(err, collab.ErrVersionMismatch):

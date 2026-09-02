@@ -85,7 +85,7 @@ func TestNormalizeOperationCanonicalizesRetryHash(t *testing.T) {
 	base := AppendOperationInput{
 		ProjectID: uuid.New(), ActorUserID: uuid.New(), ActorDeviceID: uuid.New(),
 		ActorSessionID: uuid.New(),
-		OpID:           uuid.New(), Kind: "track.move", SchemaVersion: 1, BaseSeq: 7,
+		OpID:           uuid.New(), Kind: "track.move", SchemaVersion: CollaborationCommandSchemaVersion, BaseSeq: 7,
 		Payload: json.RawMessage(`{"trackId":"` + trackID.String() + `","afterId":""}`),
 		Preconditions: []FieldPrecondition{
 			{Kind: "fieldWriterIs", FieldKey: entityField, OperationID: uuid.New()},
@@ -113,12 +113,12 @@ func TestNormalizeOperationAcceptsLockedCommandShape(t *testing.T) {
 	input := AppendOperationInput{
 		ProjectID: uuid.New(), ActorUserID: uuid.New(), ActorDeviceID: uuid.New(),
 		ActorSessionID: uuid.New(),
-		OpID:           uuid.New(), Kind: "project.setScalar", SchemaVersion: 1,
+		OpID:           uuid.New(), Kind: "project.setScalar", SchemaVersion: CollaborationCommandSchemaVersion,
 		Payload: json.RawMessage(`{"field":"tempo","value":132}`),
 		Preconditions: []FieldPrecondition{
 			{Kind: "fieldWriterIs", FieldKey: "project:tempo", OperationID: uuid.New()},
 		},
-		TouchedFields: []string{"project:tempo"},
+		TouchedFields: []string{"project:tempo", "project:tempoCascade"},
 	}
 	if _, err := normalizeOperation(input); err != nil {
 		t.Fatalf("locked command shape was rejected: %v", err)
@@ -155,8 +155,8 @@ func TestNormalizeOperationRejectsUnsafeShapes(t *testing.T) {
 	valid := AppendOperationInput{
 		ProjectID: uuid.New(), ActorUserID: uuid.New(), ActorDeviceID: uuid.New(),
 		ActorSessionID: uuid.New(), OpID: uuid.New(),
-		Kind: "project.setScalar", SchemaVersion: 1,
-		Payload: json.RawMessage(`{"field":"tempo","value":120}`), TouchedFields: []string{"project:tempo"},
+		Kind: "project.setScalar", SchemaVersion: CollaborationCommandSchemaVersion,
+		Payload: json.RawMessage(`{"field":"tempo","value":120}`), TouchedFields: []string{"project:tempo", "project:tempoCascade"},
 	}
 	tests := []AppendOperationInput{
 		func() AppendOperationInput { value := valid; value.Kind = "Track Rename"; return value }(),
@@ -202,10 +202,11 @@ func TestNormalizeOperationDerivesBatchFieldsAndGuards(t *testing.T) {
 	input := AppendOperationInput{
 		ProjectID: uuid.New(), ActorUserID: uuid.New(), ActorDeviceID: uuid.New(),
 		ActorSessionID: uuid.New(), OpID: uuid.New(),
-		Kind: "batch", SchemaVersion: 1, Payload: payload,
+		Kind: "batch", SchemaVersion: CollaborationCommandSchemaVersion, Payload: payload,
 		TouchedFields: []string{
 			"track:" + trackID.String() + ":lifecycle",
 			"project:tempo",
+			"project:tempoCascade",
 		},
 	}
 	normalized, err := normalizeOperation(input)
@@ -274,7 +275,14 @@ func TestDeriveRecordingCommitLeasePolicy(t *testing.T) {
 	fields, _, err := deriveCommandMetadata("recording.commit", commitPayload, true)
 	if err != nil || !equalStrings(fields, []string{
 		"clip:" + clipID.String() + ":descendants",
+		"take:" + takeID.String() + ":clipOffsetSeconds",
+		"take:" + takeID.String() + ":color",
+		"take:" + takeID.String() + ":gain",
+		"take:" + takeID.String() + ":lengthSeconds",
 		"take:" + takeID.String() + ":lifecycle",
+		"take:" + takeID.String() + ":muted",
+		"take:" + takeID.String() + ":name",
+		"take:" + takeID.String() + ":offsetSeconds",
 		"take:" + takeID.String() + ":position",
 		"track:" + trackID.String() + ":clipLanding",
 	}) {
@@ -385,12 +393,20 @@ func TestRecordingCommitPayloadIsStrictAndTrackComplete(t *testing.T) {
 		"clip:" + clipID.String() + ":compCrossfadeMs",
 		"clip:" + clipID.String() + ":descendants",
 		"clip:" + clipID.String() + ":durationSeconds",
+		"clip:" + clipID.String() + ":fadeInCurve",
+		"clip:" + clipID.String() + ":fadeInMode",
+		"clip:" + clipID.String() + ":fadeInSeconds",
+		"clip:" + clipID.String() + ":fadeOutCurve",
+		"clip:" + clipID.String() + ":fadeOutMode",
+		"clip:" + clipID.String() + ":fadeOutSeconds",
 		"clip:" + clipID.String() + ":gain",
 		"clip:" + clipID.String() + ":lifecycle",
+		"clip:" + clipID.String() + ":musicalAnalysis",
 		"clip:" + clipID.String() + ":muted",
 		"clip:" + clipID.String() + ":name",
 		"clip:" + clipID.String() + ":offsetSeconds",
 		"clip:" + clipID.String() + ":pan",
+		"clip:" + clipID.String() + ":patternClipId",
 		"clip:" + clipID.String() + ":position",
 		"clip:" + clipID.String() + ":sampleEdit",
 		"clip:" + clipID.String() + ":startSeconds",
@@ -398,7 +414,15 @@ func TestRecordingCommitPayloadIsStrictAndTrackComplete(t *testing.T) {
 		"compSegment:" + segmentID.String() + ":position",
 		"compSegment:" + segmentID.String() + ":startSeconds",
 		"compSegment:" + segmentID.String() + ":takeId",
+		"project:tempoCascade",
+		"take:" + takeID.String() + ":clipOffsetSeconds",
+		"take:" + takeID.String() + ":color",
+		"take:" + takeID.String() + ":gain",
+		"take:" + takeID.String() + ":lengthSeconds",
 		"take:" + takeID.String() + ":lifecycle",
+		"take:" + takeID.String() + ":muted",
+		"take:" + takeID.String() + ":name",
+		"take:" + takeID.String() + ":offsetSeconds",
 		"take:" + takeID.String() + ":position",
 		"track:" + trackA.String() + ":clipLanding",
 	}
@@ -646,15 +670,24 @@ func TestDeriveExtendedCommandFields(t *testing.T) {
 				"clip:" + clipID.String() + ":compCrossfadeMs",
 				"clip:" + clipID.String() + ":descendants",
 				"clip:" + clipID.String() + ":durationSeconds",
+				"clip:" + clipID.String() + ":fadeInCurve",
+				"clip:" + clipID.String() + ":fadeInMode",
+				"clip:" + clipID.String() + ":fadeInSeconds",
+				"clip:" + clipID.String() + ":fadeOutCurve",
+				"clip:" + clipID.String() + ":fadeOutMode",
+				"clip:" + clipID.String() + ":fadeOutSeconds",
 				"clip:" + clipID.String() + ":gain",
 				"clip:" + clipID.String() + ":lifecycle",
+				"clip:" + clipID.String() + ":musicalAnalysis",
 				"clip:" + clipID.String() + ":muted",
 				"clip:" + clipID.String() + ":name",
 				"clip:" + clipID.String() + ":offsetSeconds",
 				"clip:" + clipID.String() + ":pan",
+				"clip:" + clipID.String() + ":patternClipId",
 				"clip:" + clipID.String() + ":position",
 				"clip:" + clipID.String() + ":sampleEdit",
 				"clip:" + clipID.String() + ":startSeconds",
+				"project:tempoCascade",
 				"track:" + trackID.String() + ":clipLanding",
 			},
 		},
@@ -673,6 +706,7 @@ func TestDeriveExtendedCommandFields(t *testing.T) {
 			expected: []string{
 				"clip:" + clipID.String() + ":descendants",
 				"clip:" + clipID.String() + ":lifecycle",
+				"project:tempoCascade",
 				"track:" + trackID.String() + ":clipLanding",
 			},
 		},
@@ -686,6 +720,7 @@ func TestDeriveExtendedCommandFields(t *testing.T) {
 				"clip:" + clipID.String() + ":descendants",
 				"clip:" + clipID.String() + ":lifecycle",
 				"clip:" + clipID.String() + ":position",
+				"project:tempoCascade",
 				"track:" + trackID.String() + ":clipLanding",
 			},
 		},
@@ -966,7 +1001,14 @@ func TestDerivePhaseTwoCommandFields(t *testing.T) {
 			},
 			expected: []string{
 				"clip:" + clipID.String() + ":descendants",
+				"take:" + takeID.String() + ":clipOffsetSeconds",
+				"take:" + takeID.String() + ":color",
+				"take:" + takeID.String() + ":gain",
+				"take:" + takeID.String() + ":lengthSeconds",
 				"take:" + takeID.String() + ":lifecycle",
+				"take:" + takeID.String() + ":muted",
+				"take:" + takeID.String() + ":name",
+				"take:" + takeID.String() + ":offsetSeconds",
 				"take:" + takeID.String() + ":position",
 			},
 		},
@@ -1005,7 +1047,7 @@ func TestDerivePhaseTwoCommandFields(t *testing.T) {
 func TestCollaborationV1ScaleLimits(t *testing.T) {
 	if MaxOperationPayloadBytes != 1<<20 || MaxOperationPreconditions != 1024 ||
 		MaxOperationTouchedFields != 8192 || maxBatchCommands != 1024 {
-		t.Fatalf("unexpected collaboration v1 limits: payload=%d preconditions=%d fields=%d batch=%d",
+		t.Fatalf("unexpected collaboration v2 limits: payload=%d preconditions=%d fields=%d batch=%d",
 			MaxOperationPayloadBytes, MaxOperationPreconditions, MaxOperationTouchedFields, maxBatchCommands)
 	}
 }

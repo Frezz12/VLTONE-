@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	CollaborationProtocol             = "vlt-collab-v1"
-	CollaborationProjectFormatVersion = 6
-	CollaborationCommandSchemaVersion = 1
+	CollaborationProtocol             = "vlt-collab-v2"
+	CollaborationProjectFormatVersion = 7
+	CollaborationCommandSchemaVersion = 2
 	MaxOperationPayloadBytes          = 1 << 20
 	MaxOperationPreconditions         = 1024
 	MaxOperationTouchedFields         = 8192
@@ -34,24 +34,25 @@ const (
 var operationKindPattern = regexp.MustCompile(`^(batch|[a-z][A-Za-z0-9_]*(\.[a-z][A-Za-z0-9_]*)+)$`)
 
 var (
-	ErrNotFound            = errors.New("collaboration resource not found")
-	ErrValidation          = errors.New("collaboration validation failed")
-	ErrVersionMismatch     = errors.New("collaboration client version mismatch")
-	ErrForbidden           = errors.New("collaboration action forbidden")
-	ErrConflict            = errors.New("collaboration conflict")
-	ErrProjectInactive     = errors.New("cloud project is not active")
-	ErrOperationIDReuse    = errors.New("operation id was reused with different content")
-	ErrBaseSeqAhead        = errors.New("operation base sequence is ahead of the project")
-	ErrBaseSeqMismatch     = errors.New("recording commit base sequence does not match the project head")
-	ErrLiveSessionRequired = errors.New("an active collaboration session membership is required")
-	ErrEntityDeleted       = errors.New("collaboration entity is deleted")
-	ErrSessionEnded        = errors.New("collaboration session has ended")
-	ErrSessionFull         = errors.New("collaboration session is full")
-	ErrLeaseHeld           = errors.New("track lease is held by another participant")
-	ErrLeaseRequired       = errors.New("an active track lease held by this participant is required")
-	ErrLeaseExpired        = errors.New("track lease has expired")
-	ErrInviteExpired       = errors.New("project invitation has expired")
-	ErrInviteUsed          = errors.New("project invitation is no longer available")
+	ErrNotFound               = errors.New("collaboration resource not found")
+	ErrValidation             = errors.New("collaboration validation failed")
+	ErrVersionMismatch        = errors.New("collaboration client version mismatch")
+	ErrForbidden              = errors.New("collaboration action forbidden")
+	ErrConflict               = errors.New("collaboration conflict")
+	ErrProjectInactive        = errors.New("cloud project is not active")
+	ErrOperationIDReuse       = errors.New("operation id was reused with different content")
+	ErrBaseSeqAhead           = errors.New("operation base sequence is ahead of the project")
+	ErrBaseSeqMismatch        = errors.New("recording commit base sequence does not match the project head")
+	ErrLiveSessionRequired    = errors.New("an active collaboration session membership is required")
+	ErrEntityDeleted          = errors.New("collaboration entity is deleted")
+	ErrSessionEnded           = errors.New("collaboration session has ended")
+	ErrSessionFull            = errors.New("collaboration session is full")
+	ErrLeaseHeld              = errors.New("track lease is held by another participant")
+	ErrLeaseRequired          = errors.New("an active track lease held by this participant is required")
+	ErrLeaseExpired           = errors.New("track lease has expired")
+	ErrInviteExpired          = errors.New("project invitation has expired")
+	ErrInviteUsed             = errors.New("project invitation is no longer available")
+	ErrCloudRecordingDisabled = errors.New("cloud recording is disabled")
 )
 
 type ValidationError struct{ Message string }

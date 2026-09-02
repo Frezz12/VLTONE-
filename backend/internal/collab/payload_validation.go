@@ -20,9 +20,12 @@ var lowercaseSHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // Field heads include the parameter id. Keeping this comfortably below the
 // 512-character field-key ceiling makes every accepted command representable
 // by both PostgreSQL and the desktop snapshot codec.
-const maximumPluginParameterIDBytes = 400
+const (
+	maximumPluginParameterIDBytes = 400
+	maximumSendLevel              = 1.9953 // +6 dB, desktop parity
+)
 
-// validateCommandPayloadShape is the server-side copy of the locked v1
+// validateCommandPayloadShape is the server-side copy of the locked v2
 // payload schema. Committing a command that the desktop cannot decode/apply
 // would permanently diverge replicas, so shape and reducer-level scalar
 // bounds are checked before sequence allocation.
@@ -45,7 +48,7 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 		if err := exactPayloadKeys(body, []string{"field", "value"}, nil); err != nil {
 			return err
 		}
-		field, err := payloadEnum(body, "field", "name", "tempo", "aiInstructions", "masterVolume", "masterPan")
+		field, err := payloadEnum(body, "field", "name", "tempo", "aiInstructions", "renderSampleRate", "masterVolume", "masterPan")
 		if err != nil {
 			return err
 		}
@@ -54,6 +57,8 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 			_, err = payloadString(body, "value", 65536, true)
 		case "tempo":
 			_, err = payloadNumber(body, "value", 0, 999, true)
+		case "renderSampleRate":
+			_, err = payloadNumber(body, "value", 8000, 768000, false)
 		case "masterVolume":
 			_, err = payloadNumber(body, "value", 0, 2, false)
 		case "masterPan":
@@ -137,7 +142,7 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 		if err := requireIDs("trackId"); err != nil {
 			return err
 		}
-		property, err := payloadEnum(body, "property", "name", "color", "volume", "pan", "muted", "mono")
+		property, err := payloadEnum(body, "property", "name", "color", "volume", "pan", "muted", "mono", "summing")
 		if err != nil {
 			return err
 		}
@@ -255,10 +260,10 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 		}
 		return requireIDs("trackId", "clipId", "deleteOperationId")
 	case "clip.move":
-		if err := exactPayloadKeys(body, []string{"clipId", "trackId"}, []string{"afterId"}); err != nil {
+		if err := exactPayloadKeys(body, []string{"clipId", "sourceTrackId", "trackId", "afterId"}, nil); err != nil {
 			return err
 		}
-		if err := requireIDs("clipId", "trackId"); err != nil {
+		if err := requireIDs("clipId", "sourceTrackId", "trackId"); err != nil {
 			return err
 		}
 		if err := optionalPayloadUUIDIfPresent(body, "afterId"); err != nil {
@@ -298,6 +303,58 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 			return err
 		}
 		return validateClipSampleEdit(body["sampleEdit"])
+	case "clip.setFade":
+		if err := exactPayloadKeys(body, []string{"trackId", "clipId", "fadeInSeconds", "fadeOutSeconds"}, nil); err != nil {
+			return err
+		}
+		if err := requireIDs("trackId", "clipId"); err != nil {
+			return err
+		}
+		if _, err := payloadNumber(body, "fadeInSeconds", 0, math.MaxFloat64, false); err != nil {
+			return err
+		}
+		_, err := payloadNumber(body, "fadeOutSeconds", 0, math.MaxFloat64, false)
+		return err
+	case "clip.setFadeCurve":
+		if err := exactPayloadKeys(body, []string{"trackId", "clipId", "edge", "curve"}, nil); err != nil {
+			return err
+		}
+		if err := requireIDs("trackId", "clipId"); err != nil {
+			return err
+		}
+		if _, err := payloadEnum(body, "edge", "in", "out"); err != nil {
+			return err
+		}
+		_, err := payloadNumber(body, "curve", -1, 1, false)
+		return err
+	case "clip.setFadeMode":
+		if err := exactPayloadKeys(body, []string{"trackId", "clipId", "edge", "mode"}, nil); err != nil {
+			return err
+		}
+		if err := requireIDs("trackId", "clipId"); err != nil {
+			return err
+		}
+		if _, err := payloadEnum(body, "edge", "in", "out"); err != nil {
+			return err
+		}
+		_, err := payloadEnum(body, "mode", "gain", "tape")
+		return err
+	case "clip.setPatternOwner":
+		if err := exactPayloadKeys(body, []string{"trackId", "clipId", "patternClipId"}, nil); err != nil {
+			return err
+		}
+		if err := requireIDs("trackId", "clipId"); err != nil {
+			return err
+		}
+		return optionalPayloadUUID(body, "patternClipId")
+	case "clip.setMusicalAnalysis":
+		if err := exactPayloadKeys(body, []string{"trackId", "clipId", "analysis"}, nil); err != nil {
+			return err
+		}
+		if err := requireIDs("trackId", "clipId"); err != nil {
+			return err
+		}
+		return validateMusicalAnalysis(body["analysis"])
 	case "plugin.add":
 		if err := exactPayloadKeys(body, []string{"location", "insert", "afterId"}, nil); err != nil {
 			return err
@@ -329,6 +386,26 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 		return validatePluginReferencePayload(body, true, false)
 	case "plugin.move":
 		return validatePluginReferencePayload(body, false, true)
+	case "plugin.replace":
+		if err := exactPayloadKeys(body, []string{"location", "insertId", "replacement"}, nil); err != nil {
+			return err
+		}
+		location, err := validatePluginLocation(body["location"])
+		if err != nil {
+			return err
+		}
+		insertID, err := requiredPayloadUUID(body, "insertId")
+		if err != nil {
+			return err
+		}
+		replacementID, uid, err := validateSharedInsert(body["replacement"])
+		if err != nil || replacementID != insertID {
+			return invalidf("command payload replacement must preserve insertId")
+		}
+		if (location.Chain == "instrument") != (uid == "daw.sampler") {
+			return invalidf("command payload plugin kind is unsupported for its chain")
+		}
+		return nil
 	case "plugin.setProperty":
 		if err := exactPayloadKeys(body, []string{"location", "insertId", "property", "value"}, nil); err != nil {
 			return err
@@ -348,7 +425,8 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 		if err := exactPayloadKeys(body, []string{"location", "insertId", "pluginVersion", "stateSchemaVersion", "stateAsset", "rightStateAsset", "parameters", "rightParameters", "assetBindings"}, nil); err != nil {
 			return err
 		}
-		if _, err := validatePluginLocation(body["location"]); err != nil {
+		location, err := validatePluginLocation(body["location"])
+		if err != nil {
 			return err
 		}
 		if err := requireIDs("insertId"); err != nil {
@@ -373,7 +451,7 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 		if err := validatePluginParameters(body["rightParameters"], 4096); err != nil {
 			return err
 		}
-		return validatePluginBindings(body["assetBindings"], false)
+		return validatePluginBindings(body["assetBindings"], location.Chain == "instrument")
 	case "plugin.setParameter":
 		if err := exactPayloadKeys(body, []string{"location", "insertId", "parameterId", "value", "rightChannel"}, nil); err != nil {
 			return err
@@ -411,13 +489,21 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 		if err := exactPayloadKeys(body, []string{"location", "insertId", "binding"}, nil); err != nil {
 			return err
 		}
-		if _, err := validatePluginLocation(body["location"]); err != nil {
+		location, err := validatePluginLocation(body["location"])
+		if err != nil {
 			return err
 		}
 		if err := requireIDs("insertId"); err != nil {
 			return err
 		}
-		return validatePluginBinding(body["binding"])
+		key, required, err := validatedPluginBinding(body["binding"])
+		if err != nil {
+			return err
+		}
+		if location.Chain == "instrument" && key == "sample" && !required {
+			return invalidf("command payload Sampler sample binding must be required")
+		}
+		return nil
 	case "plugin.removeAssetBinding":
 		if err := exactPayloadKeys(body, []string{"location", "insertId", "key"}, nil); err != nil {
 			return err
@@ -429,6 +515,18 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 			return err
 		}
 		_, err := payloadString(body, "key", 96, false)
+		return err
+	case "samplerFx.setLevels":
+		if err := exactPayloadKeys(body, []string{"trackId", "instrumentId", "volume", "pan"}, nil); err != nil {
+			return err
+		}
+		if err := requireIDs("trackId", "instrumentId"); err != nil {
+			return err
+		}
+		if _, err := payloadNumber(body, "volume", 0, 2, false); err != nil {
+			return err
+		}
+		_, err := payloadNumber(body, "pan", -1, 1, false)
 		return err
 	case "note.upsert":
 		if err := exactPayloadKeys(body, []string{"trackId", "clipId", "note"}, []string{"afterId"}); err != nil {
@@ -588,6 +686,30 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 			return err
 		}
 		return requireIDs("trackId", "clipId", "takeId", "deleteOperationId")
+	case "take.move":
+		if err := exactPayloadKeys(body, []string{"trackId", "clipId", "takeId", "afterId"}, nil); err != nil {
+			return err
+		}
+		if err := requireIDs("trackId", "clipId", "takeId"); err != nil {
+			return err
+		}
+		if err := optionalPayloadUUID(body, "afterId"); err != nil {
+			return err
+		}
+		takeID, _ := requiredPayloadUUID(body, "takeId")
+		return rejectSelfReferences(body, takeID, "afterId")
+	case "take.setProperty":
+		if err := exactPayloadKeys(body, []string{"trackId", "clipId", "takeId", "property", "value"}, nil); err != nil {
+			return err
+		}
+		if err := requireIDs("trackId", "clipId", "takeId"); err != nil {
+			return err
+		}
+		property, err := payloadEnum(body, "property", "name", "offsetSeconds", "lengthSeconds", "clipOffsetSeconds", "gain", "muted", "color")
+		if err != nil {
+			return err
+		}
+		return validateTakePropertyValue(body, property)
 	case "compSegment.upsert":
 		if err := exactPayloadKeys(body, []string{"trackId", "clipId", "segment", "afterId"}, nil); err != nil {
 			return err
@@ -624,7 +746,7 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 		}
 		return validateRecordingCommitPayload(body)
 	default:
-		return invalidf("operation kind is unsupported by command schema version 1")
+		return invalidf("operation kind is unsupported by command schema version 2")
 	}
 }
 
@@ -642,7 +764,7 @@ func validateTrackPropertyValue(body map[string]json.RawMessage, property string
 	case "pan":
 		_, err := payloadNumber(body, "value", -1, 1, false)
 		return err
-	case "muted", "mono":
+	case "muted", "mono", "summing":
 		_, err := payloadBool(body, "value")
 		return err
 	default:
@@ -678,6 +800,108 @@ func validateClipPropertyValue(body map[string]json.RawMessage, property string)
 	}
 }
 
+func validateTakePropertyValue(body map[string]json.RawMessage, property string) error {
+	switch property {
+	case "name":
+		_, err := payloadString(body, "value", 4096, true)
+		return err
+	case "offsetSeconds", "lengthSeconds", "clipOffsetSeconds":
+		_, err := payloadNumber(body, "value", 0, math.MaxFloat64, false)
+		return err
+	case "gain":
+		_, err := payloadNumber(body, "value", 0, 4, false)
+		return err
+	case "muted":
+		_, err := payloadBool(body, "value")
+		return err
+	case "color":
+		_, err := payloadInteger(body, "value", 0, math.MaxUint32)
+		return err
+	default:
+		return invalidf("take property is unsupported")
+	}
+}
+
+func validateMusicalAnalysis(raw json.RawMessage) error {
+	body, err := commandPayloadObject(raw)
+	if err != nil {
+		return invalidf("command payload musical analysis must be an object")
+	}
+	if err := exactPayloadKeys(body,
+		[]string{"version", "offsetSeconds", "durationSeconds", "tempo", "key"}, nil); err != nil {
+		return err
+	}
+	if _, err := payloadInteger(body, "version", 0, 1000000); err != nil {
+		return err
+	}
+	if _, err := payloadNumber(body, "offsetSeconds", 0, math.MaxFloat64, false); err != nil {
+		return err
+	}
+	if _, err := payloadNumber(body, "durationSeconds", 0, math.MaxFloat64, false); err != nil {
+		return err
+	}
+	tempo, err := commandPayloadObject(body["tempo"])
+	if err != nil {
+		return invalidf("command payload tempo analysis must be an object")
+	}
+	if err := exactPayloadKeys(tempo,
+		[]string{"status", "bpm", "confidence", "stability", "alternatives", "variable"}, nil); err != nil {
+		return err
+	}
+	if _, err := payloadInteger(tempo, "status", 0, 2); err != nil {
+		return err
+	}
+	for name, bounds := range map[string][2]float64{
+		"bpm": {0, 300}, "confidence": {0, 1}, "stability": {0, 1},
+	} {
+		if _, err := payloadNumber(tempo, name, bounds[0], bounds[1], false); err != nil {
+			return err
+		}
+	}
+	var alternatives []json.RawMessage
+	if err := json.Unmarshal(tempo["alternatives"], &alternatives); err != nil ||
+		alternatives == nil || len(alternatives) > 3 {
+		return invalidf("command payload tempo alternatives are invalid")
+	}
+	for _, alternative := range alternatives {
+		candidate := map[string]json.RawMessage{"value": alternative}
+		if _, err := payloadNumber(candidate, "value", 0, 300, true); err != nil {
+			return err
+		}
+	}
+	if _, err := payloadBool(tempo, "variable"); err != nil {
+		return err
+	}
+	key, err := commandPayloadObject(body["key"])
+	if err != nil {
+		return invalidf("command payload key analysis must be an object")
+	}
+	if err := exactPayloadKeys(key,
+		[]string{"status", "root", "scale", "confidence", "alternateRoot", "alternateScale", "tuningCents"}, nil); err != nil {
+		return err
+	}
+	if _, err := payloadInteger(key, "status", 0, 2); err != nil {
+		return err
+	}
+	if _, err := payloadInteger(key, "root", -1, 11); err != nil {
+		return err
+	}
+	if _, err := payloadString(key, "scale", 128, true); err != nil {
+		return err
+	}
+	if _, err := payloadNumber(key, "confidence", 0, 1, false); err != nil {
+		return err
+	}
+	if _, err := payloadInteger(key, "alternateRoot", -1, 11); err != nil {
+		return err
+	}
+	if _, err := payloadString(key, "alternateScale", 128, true); err != nil {
+		return err
+	}
+	_, err = payloadNumber(key, "tuningCents", -200, 200, false)
+	return err
+}
+
 func validateSendPayload(raw json.RawMessage) error {
 	body, err := commandPayloadObject(raw)
 	if err != nil {
@@ -692,7 +916,7 @@ func validateSendPayload(raw json.RawMessage) error {
 	if _, err := requiredPayloadUUID(body, "destinationTrackId"); err != nil {
 		return err
 	}
-	if _, err := payloadNumber(body, "level", 0, 1, false); err != nil {
+	if _, err := payloadNumber(body, "level", 0, maximumSendLevel, false); err != nil {
 		return err
 	}
 	if _, err := payloadBool(body, "preFader"); err != nil {
@@ -708,7 +932,7 @@ func validateSendPropertyValue(body map[string]json.RawMessage, property string)
 		_, err := requiredPayloadUUID(body, "value")
 		return err
 	case "level":
-		_, err := payloadNumber(body, "value", 0, 1, false)
+		_, err := payloadNumber(body, "value", 0, maximumSendLevel, false)
 		return err
 	case "preFader", "enabled":
 		_, err := payloadBool(body, "value")
@@ -968,7 +1192,6 @@ func validatePluginBindings(raw json.RawMessage, sampler bool) error {
 		return invalidf("command payload plugin bindings must be an array with at most 1024 items")
 	}
 	seen := make(map[string]struct{}, len(values))
-	hasRequiredSample := false
 	for _, rawValue := range values {
 		key, required, err := validatedPluginBinding(rawValue)
 		if err != nil {
@@ -978,19 +1201,11 @@ func validatePluginBindings(raw json.RawMessage, sampler bool) error {
 			return invalidf("command payload plugin binding keys must be unique")
 		}
 		seen[key] = struct{}{}
-		if key == "sample" && required {
-			hasRequiredSample = true
+		if sampler && key == "sample" && !required {
+			return invalidf("command payload Sampler sample binding must be required")
 		}
 	}
-	if sampler && !hasRequiredSample {
-		return invalidf("command payload Sampler requires its sample binding")
-	}
 	return nil
-}
-
-func validatePluginBinding(raw json.RawMessage) error {
-	_, _, err := validatedPluginBinding(raw)
-	return err
 }
 
 func validatedPluginBinding(raw json.RawMessage) (string, bool, error) {

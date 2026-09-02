@@ -12,6 +12,7 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "generate:api": "pnpm --filter @vlt/api-client generate",
+    "check:collaboration-contracts": "node scripts/check-collaboration-contracts.mjs",
     "check:release-security": "node scripts/check-next-security.mjs"
   },
   "devDependencies": {

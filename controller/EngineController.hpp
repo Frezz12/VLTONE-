@@ -9,6 +9,7 @@
 #include "AudioMusicalAnalysis.hpp"
 #include "WaveformCache.hpp"
 #include "cloud/CloudPublicationCapture.hpp"
+#include "collaboration/SharedAssetMutationSink.hpp"
 #include "collaboration/SharedMutationSink.hpp"
 #include "plugins/PluginManager.hpp"
 
@@ -45,6 +46,10 @@
 #include <vector>
 
 namespace daw {
+
+namespace collab {
+struct ChangeImpact;
+}
 
 /// The framework-agnostic application controller: it owns the graph engine and
 /// the document model, keeps them in sync, and exposes a clean C++ API that any
@@ -117,6 +122,21 @@ public:
     const collab::SharedMutationSink* sharedMutationSink() const noexcept {
         return m_sharedMutationSink;
     }
+    /// Asset-producing cloud actions remain local-only requests until the app
+    /// returns a verified immutable AssetRef through completeSharedAssetMutation.
+    void attachSharedAssetMutationSink(
+        collab::SharedAssetMutationSink& sink) noexcept {
+        m_sharedAssetMutationSink = &sink;
+    }
+    bool detachSharedAssetMutationSink(
+        const collab::SharedAssetMutationSink& sink) noexcept {
+        if (m_sharedAssetMutationSink != &sink) return false;
+        m_sharedAssetMutationSink = nullptr;
+        return true;
+    }
+    collab::SharedMutationResult completeSharedAssetMutation(
+        const std::string& requestId, const AssetRef& verifiedAsset);
+    void cancelSharedAssetMutation(const std::string& requestId);
 
     /// Handles of the engine nodes that make up one channel. Exposed so tools
     /// and tests can look at what the routing actually compiled to.
@@ -175,7 +195,7 @@ public:
     void newProject();
     const ProjectModel& project() const { return m_project; }
     const std::string& projectName() const { return m_project.name; }
-    void setProjectName(std::string name) { m_project.name = std::move(name); }
+    void setProjectName(std::string name);
 
     audio::Result saveProject(const std::string& packageDir);
     audio::Result openProject(const std::string& packageDir);
@@ -201,6 +221,18 @@ public:
     /// authoritative for the session.
     audio::Result materializeCollaborationProject(
         ProjectModel runtimeDocument, bool clearLegacyUndo);
+    /// Apply a reducer delta to the already materialized collaboration
+    /// document.  Topology changes publish one graph; scalar, clip, MIDI,
+    /// automation and plugin-parameter deltas update only their live nodes.
+    /// The local transport, recording state and legacy undo stack are not
+    /// touched.
+    audio::Result projectCollaborationChange(
+        ProjectModel runtimeDocument, const collab::ChangeImpact& impact);
+    /// Narrow acceptance-test seam: collaboration projection must not turn a
+    /// knob/note/hydration update into a full graph publication.
+    std::uint64_t graphRebuildCountForTest() const noexcept {
+        return m_graphRebuildCount;
+    }
     /// Capture a complete crash-recovery generation. Must be called on the
     /// message/control thread: plugin formats require saveState there.
     /// Limit opaque plugin serialization when polling native editors. Cached
@@ -1498,8 +1530,8 @@ public:
     // History closures publish the exact realtime state they mutate. Keeping
     // undo/redo as a pure dispatcher is important: a one-note edit must not
     // rebuild every MIDI track in a large project after its own targeted sync.
-    void undo() { m_undo.undo(); }
-    void redo() { m_undo.redo(); }
+    void undo();
+    void redo();
     bool canUndo() const { return m_undo.canUndo(); }
     bool canRedo() const { return m_undo.canRedo(); }
     /// What the next undo/redo would actually do, for menu items that name it
@@ -1532,6 +1564,7 @@ public:
     /// that cannot hold an `UndoStack::Suspend` because it spans waits the user
     /// can edit through — see `UndoStack::collapse`.
     void collapseUndo(std::size_t sinceDepth, const std::string& label) {
+        if (cloudProjectBound()) return;
         const std::size_t now = m_undo.depth();
         if (now > sinceDepth) m_undo.collapse(now - sinceDepth, label);
     }
@@ -1541,11 +1574,16 @@ public:
     /// primitive entries are folded first and the limit is applied once, so a
     /// full stack still retains one complete undo for the user's action.
     using UndoGroup = UndoStack::Group;
-    UndoGroup beginUndoGroup() { return m_undo.beginGroup(); }
+    UndoGroup beginUndoGroup() {
+        return cloudProjectBound() ? UndoGroup{} : m_undo.beginGroup();
+    }
     void collapseUndo(UndoGroup group, const std::string& label) {
+        if (cloudProjectBound()) return;
         m_undo.collapseGroup(group, label);
     }
-    void releaseUndoGroup(UndoGroup group) { m_undo.releaseGroup(group); }
+    void releaseUndoGroup(UndoGroup group) {
+        if (!cloudProjectBound()) m_undo.releaseGroup(group);
+    }
 
     // ── Devices ──
     std::vector<audio::DeviceInfo> enumerateOutputDevices();
@@ -1575,6 +1613,11 @@ public:
 
 private:
     class DeviceCallback;   // bridges the PortAudio callback to the engine
+
+    collab::SharedMutationResult submitSharedMutation(
+        collab::CommandBody body, std::string undoLabel,
+        std::optional<std::string> transactionId = std::nullopt);
+    bool cloudProjectBound();
 
     /// Rebuild the whole node graph from the document and publish it.
     audio::Result rebuildGraph(bool reconfigurePlugins = false);
@@ -1668,6 +1711,10 @@ private:
     /// Decode a file once and keep it; clips reference the result.
     std::shared_ptr<const engine::SampleBuffer> loadSamples(const std::string& path);
     void pruneDecodedSampleCache();
+    struct PendingSharedAssetMutation;
+    collab::SharedMutationResult prepareSharedAssetMutation(
+        collab::SharedAssetMutationRequest request,
+        PendingSharedAssetMutation pending);
 
     engine::SamplePos toSamples(double seconds) const;
     double toSeconds(engine::SamplePos samples) const;
@@ -1683,6 +1730,15 @@ private:
 
     ProjectModel m_project;
     collab::SharedMutationSink* m_sharedMutationSink = nullptr;
+    collab::SharedAssetMutationSink* m_sharedAssetMutationSink = nullptr;
+    struct PendingSharedAssetMutation {
+        AssetRef expected;
+        std::string cleanupPath;
+        std::function<collab::SharedMutationResult(
+            EngineController&, const AssetRef&)> complete;
+    };
+    std::unordered_map<std::string, PendingSharedAssetMutation>
+        m_pendingSharedAssetMutations;
     UndoStack m_undo;
     WaveformCache m_waveforms;
     PluginManager m_pluginManager;
@@ -1768,6 +1824,7 @@ private:
 
     /// Keyed by track uuid, plus `kMasterChannelId` for the master bus.
     std::unordered_map<std::string, TrackChannel> m_channels;
+    std::uint64_t m_graphRebuildCount = 0;
     std::unordered_map<std::string, std::uint64_t> m_midiNotesRevisions;
     std::uint64_t m_midiNotesRevisionCounter = 0;
 
@@ -2063,6 +2120,7 @@ private:
         std::string trackId;
         std::string clipId;
         std::vector<CompSegment> before;
+        std::vector<CompSegment> after;
     };
     CompEdit m_compEdit;
 

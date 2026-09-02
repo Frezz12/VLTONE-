@@ -42,7 +42,7 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_64
-          modules: "qtwebengine qtserialport"
+          modules: "qtwebengine qtserialport qtwebsockets"
           cache: true
 
       - name: Locate Qt and Inno Setup

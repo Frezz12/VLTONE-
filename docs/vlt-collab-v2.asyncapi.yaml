@@ -1,8 +1,8 @@
 asyncapi: 2.6.0
-id: urn:vltstudio:collaboration:v1
+id: urn:vltstudio:collaboration:v2
 info:
   title: VLTONE Collaboration Protocol
-  version: 1.0.0
+  version: 2.0.0
   description: |
     Versioned WebSocket protocol for durable project operations and ephemeral
     presence, transport, and lease traffic. Durable project state is always
@@ -18,7 +18,9 @@ servers:
       - desktopBearer: []
     description: |
       The access token is sent in the Authorization header. Tokens in the URL
-      or query string are forbidden.
+      or query string are forbidden. Clients must negotiate the
+      `vlt-collab-v2` WebSocket subprotocol; older clients are rejected with a
+      protocol compatibility error before joining the room.
 
 channels:
   /v1/desktop/projects/{projectId}/live:
@@ -28,6 +30,14 @@ channels:
         schema:
           type: string
           format: uuid
+    bindings:
+      ws:
+        headers:
+          type: object
+          properties:
+            Sec-WebSocket-Protocol: { const: vlt-collab-v2 }
+          required: [Sec-WebSocket-Protocol]
+        bindingVersion: 0.1.0
     publish:
       operationId: receiveClientMessage
       summary: Messages submitted by one authenticated desktop client.
@@ -68,6 +78,8 @@ channels:
           - $ref: '#/components/messages/SessionEnding'
           - $ref: '#/components/messages/SnapshotRequested'
           - $ref: '#/components/messages/SessionEnded'
+          - $ref: '#/components/messages/HashRequested'
+          - $ref: '#/components/messages/HashVerified'
           - $ref: '#/components/messages/ResyncRequired'
 
 components:
@@ -110,7 +122,7 @@ components:
                 type: object
                 properties:
                   command:
-                    $ref: '../protocol/schema/project-command-v1.schema.json'
+                    $ref: '../protocol/schema/project-command-v2.schema.json'
                 required: [command]
                 additionalProperties: false
             required: [type, payload]
@@ -386,9 +398,38 @@ components:
               payload:
                 type: object
                 properties:
+                  roundId: { type: string, format: uuid }
                   serverSeq: { type: integer, minimum: 0 }
                   sha256: { $ref: '#/components/schemas/Sha256' }
-                required: [serverSeq, sha256]
+                required: [roundId, serverSeq, sha256]
+                additionalProperties: false
+            required: [type, payload]
+    HashRequested:
+      name: hash.requested
+      description: Opens a mandatory consensus epoch for every active writable connection.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: hash.requested }
+              payload: { $ref: '#/components/schemas/HashRound' }
+            required: [type, payload]
+    HashVerified:
+      name: hash.verified
+      description: All active writable connections agreed on the canonical shared-document hash.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: hash.verified }
+              payload:
+                type: object
+                properties:
+                  roundId: { type: string, format: uuid }
+                  serverSeq: { type: integer, minimum: 0 }
+                required: [roundId, serverSeq]
                 additionalProperties: false
             required: [type, payload]
     ResyncRequired:
@@ -414,7 +455,7 @@ components:
     ClientEnvelope:
       type: object
       properties:
-        protocol: { const: vlt-collab-v1 }
+        protocol: { const: vlt-collab-v2 }
         type: { type: string, maxLength: 64 }
         messageId: { type: string, format: uuid }
         sentAtMs: { type: integer, minimum: 0 }
@@ -422,7 +463,7 @@ components:
     ServerEnvelope:
       type: object
       properties:
-        protocol: { const: vlt-collab-v1 }
+        protocol: { const: vlt-collab-v2 }
         type: { type: string, maxLength: 64 }
         messageId: { type: string, format: uuid }
         serverTimeMs: { type: integer, minimum: 0 }
@@ -443,8 +484,8 @@ components:
       properties:
         appVersion: { type: string, maxLength: 64 }
         engineVersion: { type: string, maxLength: 64 }
-        commandSchemaVersion: { const: 1 }
-        projectFormatVersion: { const: 6 }
+        commandSchemaVersion: { const: 2 }
+        projectFormatVersion: { const: 7 }
         afterServerSeq: { type: integer, minimum: 0 }
         stateHash:
           oneOf:
@@ -464,6 +505,12 @@ components:
             - { type: 'null' }
         headSeq: { type: integer, minimum: 0 }
         readOnly: { type: boolean }
+        hashRound:
+          oneOf:
+            - $ref: '#/components/schemas/HashRound'
+            - { type: 'null' }
+        writeBlockedReason:
+          enum: [hash_consensus_required, role_read_only]
         participants:
           type: array
           maxItems: 8
@@ -478,7 +525,16 @@ components:
             roomQueueBytes: { type: integer, minimum: 2097152, maximum: 67108864 }
           required: [maxParticipants, cursorHz, transportHz, maxMessageBytes, roomQueueBytes]
           additionalProperties: false
-      required: [projectId, sessionId, participant, headSeq, readOnly, participants, limits]
+      required: [projectId, sessionId, participant, headSeq, readOnly, hashRound, writeBlockedReason, participants, limits]
+      additionalProperties: false
+    HashRound:
+      type: object
+      properties:
+        roundId: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        serverSeq: { type: integer, minimum: 0 }
+        deadlineMs: { type: integer, minimum: 0 }
+      required: [roundId, sessionId, serverSeq, deadlineMs]
       additionalProperties: false
     Participant:
       type: object
@@ -501,7 +557,7 @@ components:
         actorDeviceId: { type: string, format: uuid }
         committedAtMs: { type: integer, minimum: 0 }
         command:
-          $ref: '../protocol/schema/project-command-v1.schema.json'
+          $ref: '../protocol/schema/project-command-v2.schema.json'
       required: [projectId, serverSeq, actorUserId, actorDeviceId, committedAtMs, command]
       additionalProperties: false
     Rejection:
@@ -516,6 +572,8 @@ components:
             - read_only
             - session_inactive
             - version_mismatch
+            - hash_consensus_required
+            - cloud_recording_disabled
             - stale_precondition
             - entity_deleted
             - asset_incomplete

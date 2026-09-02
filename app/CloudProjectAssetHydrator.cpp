@@ -150,6 +150,7 @@ void CloudProjectAssetHydrator::cancel() {
     m_active.clear();
     m_activeHashes.clear();
     m_knownIdentities.clear();
+    m_failed.clear();
     m_projectId.clear();
     m_totalCount = 0;
     m_completedCount = 0;
@@ -176,6 +177,45 @@ void CloudProjectAssetHydrator::hydrate(
     cancel();
     m_projectId = normalizedProject;
     ++m_generation;
+
+    appendAssets(assets, priorityAssetIds);
+}
+
+void CloudProjectAssetHydrator::ensureMissing(
+    const QString& requestedProjectId,
+    const QList<daw::AssetRef>& assets,
+    const QStringList& priorityAssetIds) {
+    const QString normalizedProject = normalizedProjectId(requestedProjectId);
+    if (normalizedProject.isEmpty() || normalizedProject != m_projectId) {
+        hydrate(requestedProjectId, assets, priorityAssetIds);
+        return;
+    }
+    appendAssets(assets, priorityAssetIds);
+}
+
+void CloudProjectAssetHydrator::retryFailed() {
+    if (m_projectId.isEmpty() || m_failed.isEmpty()) return;
+    QList<Item> retrying;
+    retrying.reserve(m_failed.size());
+    for (Item item : std::as_const(m_failed)) {
+        if (item.generation != m_generation) continue;
+        item.attempts = 0;
+        retrying.push_back(std::move(item));
+    }
+    if (retrying.isEmpty()) return;
+    m_failed.clear();
+    m_failedCount = std::max<qsizetype>(
+        0, m_failedCount - retrying.size());
+    for (Item& item : retrying) m_queue.push_back(std::move(item));
+    emit progressChanged(m_completedCount, m_totalCount);
+    pump();
+    finishIfSettled();
+}
+
+void CloudProjectAssetHydrator::appendAssets(
+    const QList<daw::AssetRef>& assets,
+    const QStringList& priorityAssetIds) {
+    if (m_projectId.isEmpty()) return;
 
     QHash<QString, int> priority;
     for (int index = 0; index < priorityAssetIds.size(); ++index) {
@@ -219,7 +259,7 @@ void CloudProjectAssetHydrator::hydrate(
         }
         m_knownIdentities.insert(assetId, identity);
         if (m_cache && m_cache->contains(asset)) continue;
-        discovered.push_back(Item{std::move(asset), 0});
+        discovered.push_back(Item{std::move(asset), 0, m_generation});
     }
     if (assets.size() > kMaximumAssetsPerProject) {
         ++m_totalCount;
@@ -249,7 +289,8 @@ void CloudProjectAssetHydrator::pump() {
         while (!m_queue.isEmpty()) {
             const Item item = m_queue.takeFirst();
             const QString assetId = normalizedAssetId(item.asset);
-            m_knownIdentities.remove(assetId);
+            if (item.generation != m_generation) continue;
+            m_failed.insert(assetId, item);
             ++m_failedCount;
             emit assetUnavailable(
                 assetId,
@@ -268,8 +309,10 @@ void CloudProjectAssetHydrator::pump() {
         // hit instead of a second network transfer.
         if (candidate == m_queue.end()) break;
         Item item = m_queue.takeAt(candidate - m_queue.begin());
+        if (item.generation != m_generation) continue;
         if (m_cache->contains(item.asset)) {
             m_knownIdentities.remove(normalizedAssetId(item.asset));
+            m_failed.remove(normalizedAssetId(item.asset));
             ++m_completedCount;
             emit progressChanged(m_completedCount, m_totalCount);
             continue;
@@ -278,7 +321,7 @@ void CloudProjectAssetHydrator::pump() {
         const quint64 transferId =
             m_transfers->downloadAsset(m_projectId, item.asset);
         if (transferId == 0) {
-            m_knownIdentities.remove(normalizedAssetId(item.asset));
+            m_failed.insert(normalizedAssetId(item.asset), item);
             ++m_failedCount;
             emit assetUnavailable(
                 normalizedAssetId(item.asset),
@@ -302,6 +345,7 @@ void CloudProjectAssetHydrator::handleCompleted(
     const Item expected = found.value();
     m_active.erase(found);
     m_activeHashes.remove(normalizedHash(expected.asset));
+    if (expected.generation != m_generation) return;
     const QString assetId = normalizedAssetId(expected.asset);
     const bool accepted = normalizedAssetId(asset) == assetId &&
                           normalizedHash(asset) ==
@@ -310,8 +354,11 @@ void CloudProjectAssetHydrator::handleCompleted(
                           m_cache->contains(expected.asset);
     m_knownIdentities.remove(assetId);
     if (accepted) {
+        m_failed.remove(assetId);
         ++m_completedCount;
     } else {
+        m_knownIdentities.insert(assetId, assetIdentity(expected.asset));
+        m_failed.insert(assetId, expected);
         ++m_failedCount;
         emit assetUnavailable(assetId,
                               QStringLiteral("Downloaded asset is unavailable"),
@@ -331,6 +378,7 @@ void CloudProjectAssetHydrator::handleFailed(
     Item item = found.value();
     m_active.erase(found);
     m_activeHashes.remove(normalizedHash(item.asset));
+    if (item.generation != m_generation) return;
     const QString assetId = normalizedAssetId(item.asset);
     if (error.retryable && item.attempts < kMaximumAttempts) {
         const quint64 taskGeneration = m_generation;
@@ -349,7 +397,10 @@ void CloudProjectAssetHydrator::handleFailed(
             pump();
         });
     } else {
-        m_knownIdentities.remove(assetId);
+        if (error.retryable)
+            m_failed.insert(assetId, item);
+        else
+            m_knownIdentities.remove(assetId);
         ++m_failedCount;
         emit assetUnavailable(
             assetId,
@@ -437,11 +488,18 @@ bool checkCloudProjectAssetHydratorForTest(QString* error) {
     AssetCache cache(QDir(temporary.path()).filePath(QStringLiteral("cache")));
     CloudProjectAssetHydrator hydrator(nullptr, &cache);
     bool invalidReported = false;
+    qsizetype reportedTotal = 0;
     QObject::connect(&hydrator,
                      &CloudProjectAssetHydrator::assetUnavailable,
                      &hydrator,
                      [&](const QString&, const QString&, bool) {
         invalidReported = true;
+    });
+    QObject::connect(&hydrator,
+                     &CloudProjectAssetHydrator::progressChanged,
+                     &hydrator,
+                     [&](qsizetype, qsizetype total) {
+        reportedTotal = total;
     });
     daw::AssetRef invalid = audio;
     invalid.sha256 = "ABC";
@@ -459,9 +517,27 @@ bool checkCloudProjectAssetHydratorForTest(QString* error) {
         QStringLiteral("77777777-7777-4777-8777-777777777777"), {audio});
     if (!invalidReported || hydrator.pendingCount() != 0 ||
         hydrator.failedCount() != 1 ||
-        hydrator.state() != CloudHydrationState::Degraded) {
+        hydrator.state() != CloudHydrationState::Degraded ||
+        reportedTotal != 1) {
         return fail(QStringLiteral(
             "Unavailable download service left hydration pending"));
+    }
+    invalidReported = false;
+    hydrator.ensureMissing(
+        QStringLiteral("77777777-7777-4777-8777-777777777777"), {audio});
+    hydrator.retryFailed();
+    if (!invalidReported || hydrator.pendingCount() != 0 ||
+        hydrator.failedCount() != 1 || reportedTotal != 1 ||
+        hydrator.state() != CloudHydrationState::Degraded) {
+        return fail(QStringLiteral(
+            "Retrying failed hydration changed progress totals"));
+    }
+    hydrator.cancel();
+    hydrator.retryFailed();
+    if (hydrator.state() != CloudHydrationState::Idle ||
+        hydrator.pendingCount() != 0 || hydrator.failedCount() != 0) {
+        return fail(QStringLiteral(
+            "Cancelled hydration generation was retried"));
     }
     return true;
 }

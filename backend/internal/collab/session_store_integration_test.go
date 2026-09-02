@@ -19,6 +19,9 @@ import (
 func TestPostgresReapStaleSessionMembers(t *testing.T) {
 	dsn := os.Getenv("VLT_COLLAB_TEST_DATABASE_URL")
 	if dsn == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("VLT_COLLAB_TEST_DATABASE_URL is required in CI")
+		}
 		t.Skip("set VLT_COLLAB_TEST_DATABASE_URL to run collaboration PostgreSQL tests")
 	}
 	db, err := database.Open(dsn, false)

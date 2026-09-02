@@ -27,7 +27,7 @@ $stageDirectory = Join-Path $BuildDirectory "stage"
 $distributionDirectory = $stageDirectory
 $binaryDirectory = Join-Path $stageDirectory "bin"
 $artifactDirectory = Join-Path $BuildDirectory "artifacts"
-$expectedWindowsTestCount = 22
+$expectedWindowsTestCount = 33
 
 $cmakeSource = Get-Content -LiteralPath (Join-Path $repository "CMakeLists.txt") -Raw
 $versionMatch = [Regex]::Match(
@@ -122,7 +122,7 @@ function Resolve-QtRoot {
     if ($actualVersion -ne "6.8.3") {
         throw "Qt $actualVersion was found at '$QtRoot'; the release requires exactly Qt 6.8.3."
     }
-    foreach ($module in "Qt6WebEngineWidgets", "Qt6SerialPort") {
+    foreach ($module in "Qt6WebEngineWidgets", "Qt6SerialPort", "Qt6WebSockets") {
         $config = Join-Path $QtRoot "lib\cmake\$module\${module}Config.cmake"
         if (-not (Test-Path -LiteralPath $config -PathType Leaf)) {
             throw "Required Qt module '$module' is missing from '$QtRoot'."
@@ -218,6 +218,8 @@ Invoke-Checked cmake --preset windows-vcpkg -B $BuildDirectory `
     "-DCMAKE_BUILD_TYPE=$Configuration" `
     "-DCMAKE_INSTALL_PREFIX:PATH=$stageDirectory" `
     "-DCMAKE_PREFIX_PATH:PATH=$QtRoot" `
+    "-DDAW_ENABLE_COLLABORATION=ON" `
+    "-DDAW_ENFORCE_COLLABORATION_RELEASE_GATES=ON" `
     "-DVLT_DEFAULT_API_ORIGIN=$ApiOrigin" `
     "-DCMAKE_SYSTEM_VERSION=$WindowsSdkVersion"
 Invoke-Checked cmake --build $BuildDirectory --config $Configuration --parallel

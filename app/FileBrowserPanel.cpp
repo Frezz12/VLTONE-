@@ -653,6 +653,13 @@ bool FileBrowserPanel::showFolderForTest(const QString& folder,
     return false;
 }
 
+bool FileBrowserPanel::reloadSelectedPreviewForTest() {
+    if (!hasPreviewableSelection()) return false;
+    const QString path = m_selectedPath;
+    selectFile(path);
+    return true;
+}
+
 bool FileBrowserPanel::hasPreviewWaveformForTest() const {
     return m_strip && m_strip->hasWaveform();
 }

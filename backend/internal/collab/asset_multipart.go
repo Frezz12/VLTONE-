@@ -78,7 +78,10 @@ func (s *AssetService) ensureMultipartCreated(ctx context.Context, upload model.
 		return nil
 	})
 	if err != nil || !persisted {
-		abortProviderMultipart(candidate.ObjectKey, createdProviderID, s.Objects)
+		if cleanupErr := s.queueUnclaimedMultipartCleanup(candidate.ObjectKey,
+			createdProviderID); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
 	}
 	return result, err
 }
@@ -118,13 +121,34 @@ func (s *AssetService) authorizedMultipartCreationTx(tx *gorm.DB,
 	return current, nil
 }
 
-func abortProviderMultipart(objectKey, providerUploadID string, objects objectstore.Store) {
+func (s *AssetService) queueUnclaimedMultipartCleanup(objectKey,
+	providerUploadID string) error {
 	if providerUploadID == "" {
-		return
+		return nil
 	}
 	cleanupContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	_ = objects.AbortMultipart(cleanupContext, objectKey, providerUploadID)
-	cancel()
+	defer cancel()
+	var cleanupID uuid.UUID
+	err := s.DB.WithContext(cleanupContext).Transaction(func(tx *gorm.DB) error {
+		var enqueueErr error
+		cleanupID, enqueueErr = enqueueObjectCleanupTx(tx, objectKey,
+			providerUploadID, true, false, s.now())
+		return enqueueErr
+	})
+	if err == nil {
+		// A provider failure is already captured by the durable job and must not
+		// fail the successful prepare that won the database race.
+		if cleanupErr := s.attemptObjectCleanup(cleanupContext, cleanupID); cleanupErr != nil {
+		}
+		return nil
+	}
+	// If the database itself is unavailable, make one best-effort synchronous
+	// abort and surface both failures only when the provider also cannot clean up.
+	abortErr := s.Objects.AbortMultipart(cleanupContext, objectKey, providerUploadID)
+	if abortErr == nil || errors.Is(abortErr, objectstore.ErrMultipartNotFound) {
+		return nil
+	}
+	return errors.Join(err, abortErr)
 }
 
 func (s *AssetService) multipartPreparation(ctx context.Context, upload model.UploadSession,
@@ -403,7 +427,11 @@ func (s *AssetService) assembleMultipart(ctx context.Context, upload model.Uploa
 		// Recovery for a crash after the provider assembled the staging object but
 		// before the database state advanced. Only a full independent hash/size
 		// verification is accepted as proof that completion actually succeeded.
-		if verifyErr := s.verifyAndPromote(ctx, upload); verifyErr != nil {
+		// This crash-recovery proof is still a full verification job. Route it
+		// through the same global/per-user semaphore as the ordinary completion
+		// path; otherwise repeated provider-not-found retries could bypass both
+		// V1 verification limits.
+		if verifyErr := s.verifyWithLimits(ctx, upload); verifyErr != nil {
 			return model.UploadSession{}, false, verifyErr
 		}
 		current, stateErr := s.markMultipartAssembled(ctx, upload, actorUserID,

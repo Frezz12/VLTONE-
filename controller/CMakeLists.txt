@@ -23,7 +23,10 @@ if(WIN32)
 endif()
 
 if(MSVC)
-    target_compile_options(daw_controller PRIVATE /W3)
+    # EngineController and the command-v2 reducer intentionally instantiate a
+    # large std::variant visitor surface; release/PDB builds exceed COFF's
+    # default section count without the extended object format.
+    target_compile_options(daw_controller PRIVATE /W3 /bigobj)
 else()
     target_compile_options(daw_controller PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()

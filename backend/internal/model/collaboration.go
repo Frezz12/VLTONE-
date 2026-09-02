@@ -126,6 +126,22 @@ type ProjectAsset struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
+type ProjectOperationAsset struct {
+	ProjectID    uuid.UUID `gorm:"type:uuid;primaryKey" json:"-"`
+	OperationSeq int64     `gorm:"primaryKey" json:"-"`
+	AssetID      uuid.UUID `gorm:"type:uuid;primaryKey" json:"-"`
+}
+
+func (ProjectOperationAsset) TableName() string { return "project_operation_assets" }
+
+type ProjectSnapshotAsset struct {
+	SnapshotID uuid.UUID `gorm:"type:uuid;primaryKey" json:"-"`
+	ProjectID  uuid.UUID `gorm:"type:uuid;index;not null" json:"-"`
+	AssetID    uuid.UUID `gorm:"type:uuid;primaryKey" json:"-"`
+}
+
+func (ProjectSnapshotAsset) TableName() string { return "project_snapshot_assets" }
+
 type UploadSession struct {
 	ID                    uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
 	ProjectID             uuid.UUID      `gorm:"type:uuid;index;not null" json:"project_id"`
@@ -153,7 +169,26 @@ type UploadSession struct {
 	ExpiresAt             time.Time      `gorm:"index;not null" json:"expires_at"`
 	CreatedAt             time.Time      `json:"created_at"`
 	CompletedAt           *time.Time     `json:"completed_at,omitempty"`
+	VerificationStartedAt *time.Time     `json:"-"`
 }
+
+type ObjectCleanupJob struct {
+	ID               uuid.UUID  `gorm:"type:uuid;primaryKey" json:"-"`
+	ObjectKey        string     `gorm:"not null" json:"-"`
+	ProviderUploadID string     `gorm:"not null;default:''" json:"-"`
+	AbortMultipart   bool       `gorm:"not null;default:false" json:"-"`
+	DeleteObject     bool       `gorm:"not null" json:"-"`
+	Status           string     `gorm:"not null;default:pending" json:"-"`
+	AttemptCount     int        `gorm:"not null;default:0" json:"-"`
+	RetryAvailableAt time.Time  `gorm:"not null" json:"-"`
+	LeaseExpiresAt   *time.Time `json:"-"`
+	ClaimToken       *uuid.UUID `gorm:"type:uuid" json:"-"`
+	LastError        string     `gorm:"not null;default:''" json:"-"`
+	CreatedAt        time.Time  `json:"-"`
+	UpdatedAt        time.Time  `json:"-"`
+}
+
+func (ObjectCleanupJob) TableName() string { return "object_cleanup_jobs" }
 
 type ProjectSnapshot struct {
 	ID            uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`

@@ -48,6 +48,11 @@ public:
                         const daw::collab::ChangeImpact& impact,
                         daw::collab::ProjectionOrigin origin) override;
 
+    /// Detaches the last cloud document without touching the engine's current
+    /// local project.  Late AssetCache completions are ignored until another
+    /// verified snapshot is projected.
+    void clearDocument();
+
     std::vector<MissingRuntimeAsset> missingAssets() const;
     QStringList missingAssetIds() const;
     QString lastError() const;
@@ -64,6 +69,7 @@ signals:
     void projectionSucceeded();
     void projectionFailed(const QString& message);
     void missingAssetsChanged(const QStringList& assetIds);
+    void missingAssetRefsChanged(const QList<daw::AssetRef>& assets);
 
 private:
     class Impl;

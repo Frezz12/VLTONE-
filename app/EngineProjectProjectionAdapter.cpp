@@ -349,12 +349,69 @@ public:
         sortMissing(next);
         if (sameMissing(missing, next)) return;
         missing = std::move(next);
+        QList<daw::AssetRef> refs;
+        refs.reserve(qsizetype(missing.size()));
+        for (const MissingRuntimeAsset& item : missing)
+            refs.push_back(item.asset);
         emit q->missingAssetsChanged(missingIds(missing));
+        emit q->missingAssetRefsChanged(refs);
     }
 
-    static daw::collab::ChangeImpact hydrationImpact() {
+    void clear() {
+        const bool hadMissing = !missing.empty();
+        latest = {};
+        hasDocument = false;
+        projecting = false;
+        draining = false;
+        projectionPending = false;
+        hydrationPending = false;
+        hydrationPendingImpact = {};
+        reentrancyFault = false;
+        hasProjectionAttempt = false;
+        latestImpact = {};
+        lastImpact = {};
+        lastProjectionError.clear();
+        missing.clear();
+        trackLocal.clear();
+        clipExpanded.clear();
+        pluginLocal.clear();
+        if (hadMissing) {
+            emit q->missingAssetsChanged({});
+            emit q->missingAssetRefsChanged({});
+        }
+    }
+
+    daw::collab::ChangeImpact hydrationImpact(const QString& assetId,
+                                               const QString& sha256) const {
         daw::collab::ChangeImpact impact;
-        impact.fullProjection = true;
+        const auto matches = [&](const daw::AssetRef& asset) {
+            return (!assetId.isEmpty() &&
+                    QString::fromStdString(asset.assetId) == assetId) ||
+                   (!sha256.isEmpty() &&
+                    QString::fromStdString(asset.sha256) == sha256);
+        };
+        for (const daw::TrackModel& track : latest.project.tracks) {
+            for (const daw::ClipModel& clip : track.clips) {
+                bool clipMatched = matches(clip.asset);
+                for (const daw::TakeModel& take : clip.takes)
+                    clipMatched = clipMatched || matches(take.asset);
+                if (!clipMatched) continue;
+                impact.trackIds.insert(track.id);
+                impact.clipIds.insert(clip.id);
+            }
+        }
+        visitInserts(latest.project,
+                     [&](const std::string& channelId,
+                         const daw::InsertModel& slot, const QString&) {
+            bool slotMatched = matches(slot.stateAsset) ||
+                               matches(slot.rightStateAsset);
+            for (const daw::PluginAssetBinding& binding : slot.assetBindings)
+                slotMatched = slotMatched || matches(binding.asset);
+            if (!slotMatched || slot.id.empty()) return;
+            impact.pluginInsertIds.insert(slot.id);
+            if (channelId != daw::EngineController::kMasterChannelId)
+                impact.trackIds.insert(channelId);
+        });
         return impact;
     }
 
@@ -375,8 +432,14 @@ public:
 
         const bool initialSnapshot =
             origin == daw::collab::ProjectionOrigin::Snapshot;
-        const audio::Result applied = engine->materializeCollaborationProject(
-            std::move(runtime), initialSnapshot);
+        const bool requiresFullMaterialization =
+            initialSnapshot ||
+            (origin == daw::collab::ProjectionOrigin::Rebase &&
+             impact.fullProjection);
+        const audio::Result applied = requiresFullMaterialization
+            ? engine->materializeCollaborationProject(std::move(runtime),
+                                                      initialSnapshot)
+            : engine->projectCollaborationChange(std::move(runtime), impact);
         if (!applied) {
             lastProjectionError = QString::fromStdString(applied.message());
             publishMissing(std::move(nextMissing));
@@ -419,7 +482,10 @@ public:
         const daw::collab::ChangeImpact& impact,
         daw::collab::ProjectionOrigin origin) {
         latest = document;
-        latestImpact = impact;
+        if (projectionPending)
+            latestImpact.merge(impact);
+        else
+            latestImpact = impact;
         latestOrigin = origin;
         hasDocument = true;
         projectionPending = true;
@@ -438,7 +504,10 @@ public:
                        daw::collab::ChangeImpact impact) {
         if (!hasDocument) return;
         latestOrigin = origin;
-        latestImpact = std::move(impact);
+        if (projectionPending)
+            latestImpact.merge(impact);
+        else
+            latestImpact = std::move(impact);
         projectionPending = true;
         if (!reentrancyFault) drainProjections();
     }
@@ -461,11 +530,14 @@ public:
             // document update is waiting.
             if (hydrationPending) {
                 hydrationPending = false;
-                if (!projectionPending) {
+                if (projectionPending) {
+                    latestImpact.merge(hydrationPendingImpact);
+                } else {
                     latestOrigin = daw::collab::ProjectionOrigin::Rebase;
-                    latestImpact = hydrationImpact();
+                    latestImpact = hydrationPendingImpact;
                     projectionPending = true;
                 }
+                hydrationPendingImpact = {};
             }
         }
 
@@ -497,12 +569,14 @@ public:
                         QString::fromStdString(item.asset.sha256) == sha256);
             });
         if (!awaited) return;
+        daw::collab::ChangeImpact impact = hydrationImpact(assetId, sha256);
         if (projecting || draining) {
             hydrationPending = true;
+            hydrationPendingImpact.merge(impact);
             return;
         }
         requestLatest(daw::collab::ProjectionOrigin::Rebase,
-                      hydrationImpact());
+                      std::move(impact));
     }
 
     EngineProjectProjectionAdapter* q = nullptr;
@@ -514,6 +588,7 @@ public:
     bool draining = false;
     bool projectionPending = false;
     bool hydrationPending = false;
+    daw::collab::ChangeImpact hydrationPendingImpact;
     bool reentrancyFault = false;
     bool hasProjectionAttempt = false;
     daw::collab::ChangeImpact latestImpact;
@@ -564,6 +639,15 @@ void EngineProjectProjectionAdapter::projectChanged(
         return;
     }
     m_impl->requestProjection(document, impact, origin);
+}
+
+void EngineProjectProjectionAdapter::clearDocument() {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this] { clearDocument(); },
+                                  Qt::QueuedConnection);
+        return;
+    }
+    m_impl->clear();
 }
 
 std::vector<MissingRuntimeAsset>
@@ -724,6 +808,8 @@ bool checkEngineProjectProjectionForTest(QString* error) {
     if (!missingSampler || missingSampler->rawSample())
         return fail(QStringLiteral("missing sampler binding was not silenced"));
 
+    const std::uint64_t rebuildsAfterSnapshot =
+        engine.graphRebuildCountForTest();
     const AssetCacheResult imported = cache.importFile(asset, source);
     runtimeAudio = engine.project().findTrack(audioTrack);
     runtimeInstrument = engine.project().findTrack(instrument);
@@ -736,21 +822,100 @@ bool checkEngineProjectProjectionForTest(QString* error) {
         !adapter.missingAssets().empty() || engine.undoDepth() != 0 ||
         !runtimeAudio->soloed || !runtimeAudio->armed ||
         !engine.isPlaying() || !readySampler || !readySampler->rawSample() ||
-        readySampler->samplePath() != imported.localPath.toStdString()) {
+        readySampler->samplePath() != imported.localPath.toStdString() ||
+        engine.graphRebuildCountForTest() != rebuildsAfterSnapshot) {
         return fail(QStringLiteral(
-            "assetReady did not hydrate clips/sampler without losing local state"));
+            "assetReady did not hydrate targeted entities without a graph rebuild"));
     }
 
     // A non-snapshot projection neither clears nor appends legacy history.
     engine.setProjectKey(5, "minor");
     const std::size_t historyBefore = engine.undoDepth();
     shared.project.name = "Remote rename";
-    adapter.projectChanged(shared, full,
+    daw::collab::ChangeImpact renameImpact;
+    renameImpact.documentChanged = true;
+    renameImpact.fieldKeys.insert("project:name");
+    const std::uint64_t rebuildsBeforeRename =
+        engine.graphRebuildCountForTest();
+    adapter.projectChanged(shared, renameImpact,
                            daw::collab::ProjectionOrigin::ConfirmedRemote);
     if (engine.project().name != "Remote rename" ||
-        engine.undoDepth() != historyBefore || !engine.isPlaying()) {
+        engine.undoDepth() != historyBefore || !engine.isPlaying() ||
+        engine.graphRebuildCountForTest() != rebuildsBeforeRename) {
         return fail(QStringLiteral(
-            "remote projection changed legacy history or local transport"));
+            "scalar projection rebuilt the graph or changed local history/transport"));
+    }
+
+    const std::vector<daw::plugins::ParameterInfo> samplerParameters =
+        engine.insertParameters(instrument,
+                                sharedInstrument->instrument.id);
+    const auto adjustable = std::find_if(
+        samplerParameters.begin(), samplerParameters.end(),
+        [](const daw::plugins::ParameterInfo& parameter) {
+            return parameter.maxValue > parameter.minValue;
+        });
+    if (adjustable == samplerParameters.end())
+        return fail(QStringLiteral("sampler parameter fixture is unavailable"));
+    const double parameterValue =
+        adjustable->minValue +
+        (adjustable->maxValue - adjustable->minValue) * 0.37;
+    sharedInstrument->instrument.parameters = {
+        daw::InsertParameter{adjustable->id, parameterValue},
+    };
+    daw::collab::ChangeImpact parameterImpact;
+    parameterImpact.documentChanged = true;
+    // The reducer currently keeps this conservative bit for plugin state
+    // compatibility.  The controller's topology comparison is the final gate.
+    parameterImpact.graphRebuild = true;
+    parameterImpact.trackIds.insert(instrument);
+    parameterImpact.pluginInsertIds.insert(sharedInstrument->instrument.id);
+    parameterImpact.fieldKeys.insert(
+        "plugin:" + sharedInstrument->instrument.id + ":parameter:left:" +
+        adjustable->id);
+    const std::uint64_t rebuildsBeforeParameter =
+        engine.graphRebuildCountForTest();
+    adapter.projectChanged(shared, parameterImpact,
+                           daw::collab::ProjectionOrigin::ConfirmedRemote);
+    if (engine.graphRebuildCountForTest() != rebuildsBeforeParameter ||
+        std::fabs(engine.insertParameter(instrument,
+                                         sharedInstrument->instrument.id,
+                                         adjustable->id) -
+                  parameterValue) > 0.0001) {
+        return fail(QStringLiteral(
+            "plugin parameter projection rebuilt the graph or missed the live node"));
+    }
+
+    // A structural outer batch publishes one graph, even though its document
+    // can contain many model changes.
+    daw::collab::SharedProjectDocument structural = shared;
+    daw::TrackModel added;
+    added.id = daw::newUuid();
+    added.kind = daw::TrackKind::Audio;
+    added.name = "Remote structural track";
+    structural.project.tracks.push_back(added);
+    daw::collab::ChangeImpact structuralImpact;
+    structuralImpact.documentChanged = true;
+    structuralImpact.graphRebuild = true;
+    structuralImpact.timelineChanged = true;
+    structuralImpact.trackIds.insert(added.id);
+    const std::uint64_t rebuildsBeforeStructure =
+        engine.graphRebuildCountForTest();
+    adapter.projectChanged(structural, structuralImpact,
+                           daw::collab::ProjectionOrigin::ConfirmedRemote);
+    if (!engine.project().findTrack(added.id) ||
+        engine.graphRebuildCountForTest() != rebuildsBeforeStructure + 1) {
+        return fail(QStringLiteral(
+            "structural collaboration batch did not publish exactly one graph"));
+    }
+    const std::uint64_t rebuildsBeforeStructuralRestore =
+        engine.graphRebuildCountForTest();
+    adapter.projectChanged(shared, structuralImpact,
+                           daw::collab::ProjectionOrigin::ConfirmedRemote);
+    if (engine.project().findTrack(added.id) ||
+        engine.graphRebuildCountForTest() !=
+            rebuildsBeforeStructuralRestore + 1) {
+        return fail(QStringLiteral(
+            "structural collaboration rollback did not publish exactly one graph"));
     }
 
     // A callback can synchronously produce more reducer materializations while

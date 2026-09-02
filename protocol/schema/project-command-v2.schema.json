@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vlt.studio/protocol/schema/project-command-v1.schema.json",
-  "title": "VLT Project Command v1",
+  "$id": "https://vlt.studio/protocol/schema/project-command-v2.schema.json",
+  "title": "VLT Project Command v2",
   "description": "Durable deterministic command for the shared project document. Presence, transport and local UI state are excluded.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "opId", "transactionId", "baseServerSeq", "kind", "payload", "preconditions", "touchedFields"],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "opId": { "$ref": "#/$defs/id" },
     "transactionId": { "$ref": "#/$defs/optionalId" },
     "baseServerSeq": { "type": "integer", "minimum": 0 },
@@ -40,7 +40,7 @@
       ]
     },
     "kind": {
-      "enum": ["project.setScalar", "project.setTimeSignature", "project.setKey", "track.add", "track.delete", "track.restore", "track.move", "track.setProperty", "track.setParent", "track.setOutput", "send.add", "send.delete", "send.restore", "send.move", "send.setProperty", "clip.add", "clip.delete", "clip.restore", "clip.move", "clip.setProperty", "clip.setAsset", "clip.setSampleEdit", "plugin.add", "plugin.delete", "plugin.restore", "plugin.move", "plugin.setProperty", "plugin.setState", "plugin.setParameter", "plugin.removeParameter", "plugin.setAssetBinding", "plugin.removeAssetBinding", "note.upsert", "note.delete", "note.restore", "automationPoint.upsert", "automationPoint.delete", "automationPoint.restore", "controllerLane.add", "controllerLane.delete", "controllerLane.restore", "controllerLane.setTarget", "controllerLane.setDefault", "automation.setTarget", "automation.setDefault", "automation.setActive", "take.add", "take.delete", "take.restore", "compSegment.upsert", "compSegment.delete", "compSegment.restore", "recording.commit", "batch"]
+      "enum": ["project.setScalar", "project.setTimeSignature", "project.setKey", "track.add", "track.delete", "track.restore", "track.move", "track.setProperty", "track.setParent", "track.setOutput", "send.add", "send.delete", "send.restore", "send.move", "send.setProperty", "clip.add", "clip.delete", "clip.restore", "clip.move", "clip.setProperty", "clip.setAsset", "clip.setSampleEdit", "clip.setFade", "clip.setFadeCurve", "clip.setFadeMode", "clip.setPatternOwner", "clip.setMusicalAnalysis", "plugin.add", "plugin.delete", "plugin.restore", "plugin.move", "plugin.replace", "plugin.setProperty", "plugin.setState", "plugin.setParameter", "plugin.removeParameter", "plugin.setAssetBinding", "plugin.removeAssetBinding", "samplerFx.setLevels", "note.upsert", "note.delete", "note.restore", "automationPoint.upsert", "automationPoint.delete", "automationPoint.restore", "controllerLane.add", "controllerLane.delete", "controllerLane.restore", "controllerLane.setTarget", "controllerLane.setDefault", "automation.setTarget", "automation.setDefault", "automation.setActive", "take.add", "take.delete", "take.restore", "take.move", "take.setProperty", "compSegment.upsert", "compSegment.delete", "compSegment.restore", "recording.commit", "batch"]
     },
     "scalarValue": { "type": ["string", "number", "integer", "boolean"] },
     "precondition": {
@@ -58,9 +58,17 @@
       "additionalProperties": false,
       "required": ["field", "value"],
       "properties": {
-        "field": { "enum": ["name", "tempo", "aiInstructions", "masterVolume", "masterPan"] },
+        "field": { "enum": ["name", "tempo", "aiInstructions", "renderSampleRate", "masterVolume", "masterPan"] },
         "value": { "$ref": "#/$defs/scalarValue" }
-      }
+      },
+      "oneOf": [
+        { "properties": { "field": { "const": "name" }, "value": { "type": "string", "maxLength": 65536 } } },
+        { "properties": { "field": { "const": "aiInstructions" }, "value": { "type": "string", "maxLength": 65536 } } },
+        { "properties": { "field": { "const": "tempo" }, "value": { "type": "number", "exclusiveMinimum": 0, "maximum": 999 } } },
+        { "properties": { "field": { "const": "renderSampleRate" }, "value": { "type": "number", "minimum": 8000, "maximum": 768000 } } },
+        { "properties": { "field": { "const": "masterVolume" }, "value": { "type": "number", "minimum": 0, "maximum": 2 } } },
+        { "properties": { "field": { "const": "masterPan" }, "value": { "type": "number", "minimum": -1, "maximum": 1 } } }
+      ]
     },
     "timeSignaturePayload": {
       "type": "object",
@@ -76,7 +84,7 @@
       "additionalProperties": false,
       "required": ["root", "scale"],
       "properties": {
-        "root": { "type": "integer" },
+        "root": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 },
         "scale": { "type": "string", "minLength": 1, "maxLength": 128 }
       }
     },
@@ -123,9 +131,16 @@
       "required": ["trackId", "property", "value"],
       "properties": {
         "trackId": { "$ref": "#/$defs/id" },
-        "property": { "enum": ["name", "color", "volume", "pan", "muted", "mono"] },
+        "property": { "enum": ["name", "color", "volume", "pan", "muted", "mono", "summing"] },
         "value": { "$ref": "#/$defs/scalarValue" }
-      }
+      },
+      "oneOf": [
+        { "properties": { "property": { "const": "name" }, "value": { "type": "string", "maxLength": 4096 } } },
+        { "properties": { "property": { "const": "color" }, "value": { "type": "integer", "minimum": 0, "maximum": 4294967295 } } },
+        { "properties": { "property": { "const": "volume" }, "value": { "type": "number", "minimum": 0, "maximum": 2 } } },
+        { "properties": { "property": { "const": "pan" }, "value": { "type": "number", "minimum": -1, "maximum": 1 } } },
+        { "properties": { "property": { "enum": ["muted", "mono", "summing"] }, "value": { "type": "boolean" } } }
+      ]
     },
     "trackParentPayload": {
       "type": "object",
@@ -152,7 +167,7 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "destinationTrackId": { "$ref": "#/$defs/id" },
-        "level": { "type": "number", "minimum": 0, "maximum": 1 },
+        "level": { "type": "number", "minimum": 0, "maximum": 1.9953 },
         "preFader": { "type": "boolean" },
         "enabled": { "type": "boolean" }
       }
@@ -205,7 +220,13 @@
         "sendId": { "$ref": "#/$defs/id" },
         "property": { "enum": ["destinationTrackId", "level", "preFader", "enabled"] },
         "value": { "$ref": "#/$defs/scalarValue" }
-      }
+      },
+      "oneOf": [
+        { "properties": { "property": { "const": "destinationTrackId" }, "value": { "$ref": "#/$defs/id" } } },
+        { "properties": { "property": { "const": "level" }, "value": { "type": "number", "minimum": 0, "maximum": 1.9953 } } },
+        { "properties": { "property": { "const": "preFader" }, "value": { "type": "boolean" } } },
+        { "properties": { "property": { "const": "enabled" }, "value": { "type": "boolean" } } }
+      ]
     },
     "clipAddPayload": {
       "type": "object",
@@ -244,9 +265,10 @@
     "clipMovePayload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["clipId", "trackId"],
+      "required": ["clipId", "sourceTrackId", "trackId", "afterId"],
       "properties": {
         "clipId": { "$ref": "#/$defs/id" },
+        "sourceTrackId": { "$ref": "#/$defs/id" },
         "trackId": { "$ref": "#/$defs/id" },
         "afterId": { "$ref": "#/$defs/optionalId" }
       }
@@ -260,7 +282,16 @@
         "clipId": { "$ref": "#/$defs/id" },
         "property": { "enum": ["name", "startSeconds", "durationSeconds", "offsetSeconds", "gain", "pan", "muted", "color", "compCrossfadeMs"] },
         "value": { "$ref": "#/$defs/scalarValue" }
-      }
+      },
+      "oneOf": [
+        { "properties": { "property": { "const": "name" }, "value": { "type": "string", "maxLength": 4096 } } },
+        { "properties": { "property": { "enum": ["startSeconds", "durationSeconds", "offsetSeconds"] }, "value": { "type": "number", "minimum": 0 } } },
+        { "properties": { "property": { "const": "gain" }, "value": { "type": "number", "minimum": 0, "maximum": 4 } } },
+        { "properties": { "property": { "const": "pan" }, "value": { "type": "number", "minimum": -1, "maximum": 1 } } },
+        { "properties": { "property": { "const": "muted" }, "value": { "type": "boolean" } } },
+        { "properties": { "property": { "const": "color" }, "value": { "type": "integer", "minimum": 0, "maximum": 4294967295 } } },
+        { "properties": { "property": { "const": "compCrossfadeMs" }, "value": { "type": "number", "minimum": 0, "maximum": 20 } } }
+      ]
     },
     "assetRef": {
       "type": "object",
@@ -279,6 +310,18 @@
       "oneOf": [
         { "type": "null" },
         { "$ref": "#/$defs/assetRef" }
+      ]
+    },
+    "pluginStateAssetRef": {
+      "allOf": [
+        { "$ref": "#/$defs/assetRef" },
+        { "properties": { "kind": { "const": "plugin-state" } } }
+      ]
+    },
+    "optionalPluginStateAssetRef": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/pluginStateAssetRef" }
       ]
     },
     "clipAssetPayload": {
@@ -334,6 +377,96 @@
         "sampleEdit": { "$ref": "#/$defs/sampleEdit" }
       }
     },
+    "clipFadePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trackId", "clipId", "fadeInSeconds", "fadeOutSeconds"],
+      "properties": {
+        "trackId": { "$ref": "#/$defs/id" },
+        "clipId": { "$ref": "#/$defs/id" },
+        "fadeInSeconds": { "type": "number", "minimum": 0 },
+        "fadeOutSeconds": { "type": "number", "minimum": 0 }
+      }
+    },
+    "clipFadeCurvePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trackId", "clipId", "edge", "curve"],
+      "properties": {
+        "trackId": { "$ref": "#/$defs/id" },
+        "clipId": { "$ref": "#/$defs/id" },
+        "edge": { "enum": ["in", "out"] },
+        "curve": { "type": "number", "minimum": -1, "maximum": 1 }
+      }
+    },
+    "clipFadeModePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trackId", "clipId", "edge", "mode"],
+      "properties": {
+        "trackId": { "$ref": "#/$defs/id" },
+        "clipId": { "$ref": "#/$defs/id" },
+        "edge": { "enum": ["in", "out"] },
+        "mode": { "enum": ["gain", "tape"] }
+      }
+    },
+    "clipPatternOwnerPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trackId", "clipId", "patternClipId"],
+      "properties": {
+        "trackId": { "$ref": "#/$defs/id" },
+        "clipId": { "$ref": "#/$defs/id" },
+        "patternClipId": { "$ref": "#/$defs/optionalId" }
+      }
+    },
+    "musicalAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "offsetSeconds", "durationSeconds", "tempo", "key"],
+      "properties": {
+        "version": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "offsetSeconds": { "type": "number", "minimum": 0 },
+        "durationSeconds": { "type": "number", "minimum": 0 },
+        "tempo": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "bpm", "confidence", "stability", "alternatives", "variable"],
+          "properties": {
+            "status": { "type": "integer", "minimum": 0, "maximum": 2 },
+            "bpm": { "type": "number", "minimum": 0, "maximum": 300 },
+            "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "stability": { "type": "number", "minimum": 0, "maximum": 1 },
+            "alternatives": { "type": "array", "maxItems": 3, "items": { "type": "number", "exclusiveMinimum": 0, "maximum": 300 } },
+            "variable": { "type": "boolean" }
+          }
+        },
+        "key": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "root", "scale", "confidence", "alternateRoot", "alternateScale", "tuningCents"],
+          "properties": {
+            "status": { "type": "integer", "minimum": 0, "maximum": 2 },
+            "root": { "type": "integer", "minimum": -1, "maximum": 11 },
+            "scale": { "type": "string", "maxLength": 128 },
+            "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "alternateRoot": { "type": "integer", "minimum": -1, "maximum": 11 },
+            "alternateScale": { "type": "string", "maxLength": 128 },
+            "tuningCents": { "type": "number", "minimum": -200, "maximum": 200 }
+          }
+        }
+      }
+    },
+    "clipMusicalAnalysisPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trackId", "clipId", "analysis"],
+      "properties": {
+        "trackId": { "$ref": "#/$defs/id" },
+        "clipId": { "$ref": "#/$defs/id" },
+        "analysis": { "$ref": "#/$defs/musicalAnalysis" }
+      }
+    },
     "pluginLocation": {
       "type": "object",
       "additionalProperties": false,
@@ -342,7 +475,12 @@
         "chain": { "enum": ["master", "track", "instrument", "samplerFx", "clip"] },
         "trackId": { "$ref": "#/$defs/optionalId" },
         "clipId": { "$ref": "#/$defs/optionalId" }
-      }
+      },
+      "oneOf": [
+        { "properties": { "chain": { "const": "master" }, "trackId": { "const": "" }, "clipId": { "const": "" } } },
+        { "properties": { "chain": { "enum": ["track", "instrument", "samplerFx"] }, "trackId": { "$ref": "#/$defs/id" }, "clipId": { "const": "" } } },
+        { "properties": { "chain": { "const": "clip" }, "trackId": { "$ref": "#/$defs/id" }, "clipId": { "$ref": "#/$defs/id" } } }
+      ]
     },
     "insertParameter": {
       "type": "object",
@@ -361,7 +499,22 @@
         "key": { "type": "string", "minLength": 1, "maxLength": 96 },
         "asset": { "$ref": "#/$defs/assetRef" },
         "required": { "type": "boolean" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "key": { "const": "sample" } }, "required": ["key"] },
+          "then": { "properties": { "asset": { "$ref": "#/$defs/audioAssetRef" } } }
+        }
+      ]
+    },
+    "samplerAssetBinding": {
+      "allOf": [
+        { "$ref": "#/$defs/pluginAssetBinding" },
+        {
+          "if": { "properties": { "key": { "const": "sample" } }, "required": ["key"] },
+          "then": { "properties": { "required": { "const": true } } }
+        }
+      ]
     },
     "sharedInsert": {
       "type": "object",
@@ -379,12 +532,18 @@
         "mix": { "type": "number", "minimum": 0, "maximum": 1 },
         "channelMode": { "enum": ["auto", "mono", "stereo", "dual-mono"] },
         "sidechainTrackId": { "$ref": "#/$defs/optionalId" },
-        "stateAsset": { "$ref": "#/$defs/optionalAssetRef" },
-        "rightStateAsset": { "$ref": "#/$defs/optionalAssetRef" },
+        "stateAsset": { "$ref": "#/$defs/optionalPluginStateAssetRef" },
+        "rightStateAsset": { "$ref": "#/$defs/optionalPluginStateAssetRef" },
         "parameters": { "type": "array", "maxItems": 16384, "items": { "$ref": "#/$defs/insertParameter" } },
         "rightParameters": { "type": "array", "maxItems": 16384, "items": { "$ref": "#/$defs/insertParameter" } },
         "assetBindings": { "type": "array", "maxItems": 1024, "items": { "$ref": "#/$defs/pluginAssetBinding" } }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "uid": { "const": "daw.sampler" } }, "required": ["uid"] },
+          "then": { "properties": { "assetBindings": { "items": { "$ref": "#/$defs/samplerAssetBinding" } } } }
+        }
+      ]
     },
     "pluginAddPayload": {
       "type": "object",
@@ -394,7 +553,11 @@
         "location": { "$ref": "#/$defs/pluginLocation" },
         "insert": { "$ref": "#/$defs/sharedInsert" },
         "afterId": { "$ref": "#/$defs/optionalId" }
-      }
+      },
+      "oneOf": [
+        { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } }, "insert": { "properties": { "uid": { "const": "daw.sampler" } } }, "afterId": { "const": "" } } },
+        { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "insert": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity"] } } } } }
+      ]
     },
     "pluginRefPayload": {
       "type": "object",
@@ -423,7 +586,22 @@
         "location": { "$ref": "#/$defs/pluginLocation" },
         "insertId": { "$ref": "#/$defs/id" },
         "afterId": { "$ref": "#/$defs/optionalId" }
-      }
+      },
+      "not": { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } } } }
+    },
+    "pluginReplacePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["location", "insertId", "replacement"],
+      "properties": {
+        "location": { "$ref": "#/$defs/pluginLocation" },
+        "insertId": { "$ref": "#/$defs/id" },
+        "replacement": { "$ref": "#/$defs/sharedInsert" }
+      },
+      "oneOf": [
+        { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } }, "replacement": { "properties": { "uid": { "const": "daw.sampler" } } } } },
+        { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "replacement": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity"] } } } } }
+      ]
     },
     "pluginPropertyPayload": {
       "type": "object",
@@ -434,7 +612,14 @@
         "insertId": { "$ref": "#/$defs/id" },
         "property": { "enum": ["name", "bypassed", "mix", "channelMode", "sidechainTrackId"] },
         "value": { "$ref": "#/$defs/scalarValue" }
-      }
+      },
+      "oneOf": [
+        { "properties": { "property": { "const": "name" }, "value": { "type": "string", "maxLength": 4096 } } },
+        { "properties": { "property": { "const": "bypassed" }, "value": { "type": "boolean" } } },
+        { "properties": { "property": { "const": "mix" }, "value": { "type": "number", "minimum": 0, "maximum": 1 } } },
+        { "properties": { "property": { "const": "channelMode" }, "value": { "enum": ["auto", "mono", "stereo", "dual-mono"] } } },
+        { "properties": { "property": { "const": "sidechainTrackId" }, "value": { "$ref": "#/$defs/optionalId" } } }
+      ]
     },
     "pluginStatePayload": {
       "type": "object",
@@ -445,12 +630,18 @@
         "insertId": { "$ref": "#/$defs/id" },
         "pluginVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
         "stateSchemaVersion": { "type": "integer", "minimum": 1 },
-        "stateAsset": { "$ref": "#/$defs/optionalAssetRef" },
-        "rightStateAsset": { "$ref": "#/$defs/optionalAssetRef" },
+        "stateAsset": { "$ref": "#/$defs/optionalPluginStateAssetRef" },
+        "rightStateAsset": { "$ref": "#/$defs/optionalPluginStateAssetRef" },
         "parameters": { "type": "array", "maxItems": 16384, "items": { "$ref": "#/$defs/insertParameter" } },
         "rightParameters": { "type": "array", "maxItems": 16384, "items": { "$ref": "#/$defs/insertParameter" } },
         "assetBindings": { "type": "array", "maxItems": 1024, "items": { "$ref": "#/$defs/pluginAssetBinding" } }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } } } },
+          "then": { "properties": { "assetBindings": { "items": { "$ref": "#/$defs/samplerAssetBinding" } } } }
+        }
+      ]
     },
     "pluginParameterPayload": {
       "type": "object",
@@ -483,7 +674,13 @@
         "location": { "$ref": "#/$defs/pluginLocation" },
         "insertId": { "$ref": "#/$defs/id" },
         "binding": { "$ref": "#/$defs/pluginAssetBinding" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } } } },
+          "then": { "properties": { "binding": { "$ref": "#/$defs/samplerAssetBinding" } } }
+        }
+      ]
     },
     "pluginRemoveBindingPayload": {
       "type": "object",
@@ -493,6 +690,17 @@
         "location": { "$ref": "#/$defs/pluginLocation" },
         "insertId": { "$ref": "#/$defs/id" },
         "key": { "type": "string", "minLength": 1, "maxLength": 96 }
+      }
+    },
+    "samplerFxLevelsPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trackId", "instrumentId", "volume", "pan"],
+      "properties": {
+        "trackId": { "$ref": "#/$defs/id" },
+        "instrumentId": { "$ref": "#/$defs/id" },
+        "volume": { "type": "number", "minimum": 0, "maximum": 2 },
+        "pan": { "type": "number", "minimum": -1, "maximum": 1 }
       }
     },
     "note": {
@@ -771,6 +979,36 @@
         "deleteOperationId": { "$ref": "#/$defs/id" }
       }
     },
+    "takeMovePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trackId", "clipId", "takeId", "afterId"],
+      "properties": {
+        "trackId": { "$ref": "#/$defs/id" },
+        "clipId": { "$ref": "#/$defs/id" },
+        "takeId": { "$ref": "#/$defs/id" },
+        "afterId": { "$ref": "#/$defs/optionalId" }
+      }
+    },
+    "takePropertyPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trackId", "clipId", "takeId", "property", "value"],
+      "properties": {
+        "trackId": { "$ref": "#/$defs/id" },
+        "clipId": { "$ref": "#/$defs/id" },
+        "takeId": { "$ref": "#/$defs/id" },
+        "property": { "enum": ["name", "offsetSeconds", "lengthSeconds", "clipOffsetSeconds", "gain", "muted", "color"] },
+        "value": { "$ref": "#/$defs/scalarValue" }
+      },
+      "oneOf": [
+        { "properties": { "property": { "const": "name" }, "value": { "type": "string", "maxLength": 4096 } } },
+        { "properties": { "property": { "enum": ["offsetSeconds", "lengthSeconds", "clipOffsetSeconds"] }, "value": { "type": "number", "minimum": 0 } } },
+        { "properties": { "property": { "const": "gain" }, "value": { "type": "number", "minimum": 0, "maximum": 4 } } },
+        { "properties": { "property": { "const": "muted" }, "value": { "type": "boolean" } } },
+        { "properties": { "property": { "const": "color" }, "value": { "type": "integer", "minimum": 0, "maximum": 4294967295 } } }
+      ]
+    },
     "compSegment": {
       "type": "object",
       "additionalProperties": false,
@@ -838,16 +1076,23 @@
         { "properties": { "kind": { "const": "clip.setProperty" }, "payload": { "$ref": "#/$defs/clipPropertyPayload" } } },
         { "properties": { "kind": { "const": "clip.setAsset" }, "payload": { "$ref": "#/$defs/clipAssetPayload" } } },
         { "properties": { "kind": { "const": "clip.setSampleEdit" }, "payload": { "$ref": "#/$defs/clipSampleEditPayload" } } },
+        { "properties": { "kind": { "const": "clip.setFade" }, "payload": { "$ref": "#/$defs/clipFadePayload" } } },
+        { "properties": { "kind": { "const": "clip.setFadeCurve" }, "payload": { "$ref": "#/$defs/clipFadeCurvePayload" } } },
+        { "properties": { "kind": { "const": "clip.setFadeMode" }, "payload": { "$ref": "#/$defs/clipFadeModePayload" } } },
+        { "properties": { "kind": { "const": "clip.setPatternOwner" }, "payload": { "$ref": "#/$defs/clipPatternOwnerPayload" } } },
+        { "properties": { "kind": { "const": "clip.setMusicalAnalysis" }, "payload": { "$ref": "#/$defs/clipMusicalAnalysisPayload" } } },
         { "properties": { "kind": { "const": "plugin.add" }, "payload": { "$ref": "#/$defs/pluginAddPayload" } } },
         { "properties": { "kind": { "const": "plugin.delete" }, "payload": { "$ref": "#/$defs/pluginRefPayload" } } },
         { "properties": { "kind": { "const": "plugin.restore" }, "payload": { "$ref": "#/$defs/pluginRestorePayload" } } },
         { "properties": { "kind": { "const": "plugin.move" }, "payload": { "$ref": "#/$defs/pluginMovePayload" } } },
+        { "properties": { "kind": { "const": "plugin.replace" }, "payload": { "$ref": "#/$defs/pluginReplacePayload" } } },
         { "properties": { "kind": { "const": "plugin.setProperty" }, "payload": { "$ref": "#/$defs/pluginPropertyPayload" } } },
         { "properties": { "kind": { "const": "plugin.setState" }, "payload": { "$ref": "#/$defs/pluginStatePayload" } } },
         { "properties": { "kind": { "const": "plugin.setParameter" }, "payload": { "$ref": "#/$defs/pluginParameterPayload" } } },
         { "properties": { "kind": { "const": "plugin.removeParameter" }, "payload": { "$ref": "#/$defs/pluginRemoveParameterPayload" } } },
         { "properties": { "kind": { "const": "plugin.setAssetBinding" }, "payload": { "$ref": "#/$defs/pluginBindingPayload" } } },
         { "properties": { "kind": { "const": "plugin.removeAssetBinding" }, "payload": { "$ref": "#/$defs/pluginRemoveBindingPayload" } } },
+        { "properties": { "kind": { "const": "samplerFx.setLevels" }, "payload": { "$ref": "#/$defs/samplerFxLevelsPayload" } } },
         { "properties": { "kind": { "const": "note.upsert" }, "payload": { "$ref": "#/$defs/noteUpsertPayload" } } },
         { "properties": { "kind": { "const": "note.delete" }, "payload": { "$ref": "#/$defs/noteRefPayload" } } },
         { "properties": { "kind": { "const": "note.restore" }, "payload": { "$ref": "#/$defs/noteRestorePayload" } } },
@@ -865,6 +1110,8 @@
         { "properties": { "kind": { "const": "take.add" }, "payload": { "$ref": "#/$defs/takeAddPayload" } } },
         { "properties": { "kind": { "const": "take.delete" }, "payload": { "$ref": "#/$defs/takeRefPayload" } } },
         { "properties": { "kind": { "const": "take.restore" }, "payload": { "$ref": "#/$defs/takeRestorePayload" } } },
+        { "properties": { "kind": { "const": "take.move" }, "payload": { "$ref": "#/$defs/takeMovePayload" } } },
+        { "properties": { "kind": { "const": "take.setProperty" }, "payload": { "$ref": "#/$defs/takePropertyPayload" } } },
         { "properties": { "kind": { "const": "compSegment.upsert" }, "payload": { "$ref": "#/$defs/compSegmentUpsertPayload" } } },
         { "properties": { "kind": { "const": "compSegment.delete" }, "payload": { "$ref": "#/$defs/compSegmentRefPayload" } } },
         { "properties": { "kind": { "const": "compSegment.restore" }, "payload": { "$ref": "#/$defs/compSegmentRestorePayload" } } }

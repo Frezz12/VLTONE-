@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestProductionRequiresSMTPAndGlobalBudget(t *testing.T) {
@@ -153,5 +155,35 @@ func TestCollaborationStorageConfigurationIsFailClosed(t *testing.T) {
 	t.Setenv("COLLAB_OBJECT_ENDPOINT", "https://objects.vlt.example")
 	if _, err := Load(); err != nil {
 		t.Fatalf("valid production object storage was rejected: %v", err)
+	}
+}
+
+func TestCollaborationAllowlistIsDefaultDenyAndValidatesUUIDs(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("COLLAB_ALLOWED_USER_IDS", "")
+	loaded, err := Load()
+	if err != nil || len(loaded.CollabAllowedUserIDs) != 0 {
+		t.Fatalf("empty allowlist was not default-deny: ids=%v err=%v",
+			loaded.CollabAllowedUserIDs, err)
+	}
+	first, second := uuid.New(), uuid.New()
+	t.Setenv("COLLAB_ALLOWED_USER_IDS", first.String()+", "+second.String())
+	loaded, err = Load()
+	if err != nil || len(loaded.CollabAllowedUserIDs) != 2 ||
+		loaded.CollabAllowedUserIDs[0] != first || loaded.CollabAllowedUserIDs[1] != second {
+		t.Fatalf("valid allowlist was not parsed: ids=%v err=%v",
+			loaded.CollabAllowedUserIDs, err)
+	}
+	t.Setenv("COLLAB_ALLOWED_USER_IDS", "not-a-uuid")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "COLLAB_ALLOWED_USER_IDS") {
+		t.Fatalf("invalid collaboration allowlist was accepted: %v", err)
+	}
+}
+
+func TestCloudRecordingCannotBeEnabledInV1(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("COLLAB_RECORDING_ENABLED", "true")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "must remain false") {
+		t.Fatalf("cloud recording was enabled in V1: %v", err)
 	}
 }

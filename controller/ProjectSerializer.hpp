@@ -44,13 +44,14 @@ public:
     static constexpr const char* kTemplateExtension = "vltt";
     /// 2 added plugin inserts, 3 added Sampler FX, 4 per-audio-clip Sample
     /// Editor state, 5 the persisted BPM/key analysis, and 6 content-addressed
-    /// assets, plugin compatibility fields, and stable automation/comp ids.
+    /// assets, plugin compatibility fields, and stable automation/comp ids;
+    /// 7 names the durable render sample rate separately from device state.
     /// Never enforced on
     /// load and deliberately so: the
     /// reader defaults every field, which makes the format additive-tolerant in
-    /// both directions — a v1 file loads here, and a v2 file loads in a v1
-    /// build as free insert slots rather than failing.
-    static constexpr int kFormatVersion = 6;
+    /// both directions — v1-v6 files load here, while additive fields remain
+    /// ignorable by older readers.
+    static constexpr int kFormatVersion = 7;
 
     /// Write `project` into the package directory `packageDir` (created if
     /// needed). Referenced audio is copied into `<packageDir>/Content/`.
@@ -79,7 +80,7 @@ public:
                                       const std::string& filePath,
                                       const std::string& mediaDir);
 
-    /// Canonical in-memory v6 document codec used by cloud snapshots. Compact
+    /// Canonical in-memory v7 document codec used by cloud snapshots. Compact
     /// output has deterministic object-key ordering and performs no filesystem
     /// access; cloud callers must project away local paths before invoking it.
     static audio::Result serializeDocument(const ProjectModel& project,

@@ -35,6 +35,14 @@ type RoomClose struct {
 	Reason string
 }
 
+// RoomBusStats contains only aggregate transport state. It is safe to expose
+// through process metrics because it contains no project or participant IDs.
+type RoomBusStats struct {
+	Rooms       int
+	Sockets     int
+	QueuedBytes int64
+}
+
 type RoomBus interface {
 	Subscribe(projectID, userID, deviceID, desktopSessionID, participantID uuid.UUID,
 		durableCapacity int, queueByteCapacity int64) (*RoomSubscription, error)
@@ -43,6 +51,8 @@ type RoomBus interface {
 	// participant. Snapshot requests contain no document data, but must not ask
 	// every editor to upload the host's canonical state.
 	DeliverParticipant(projectID, participantID uuid.UUID, message RoomMessage) bool
+	ConnectedParticipants(projectID uuid.UUID) []uuid.UUID
+	Stats() RoomBusStats
 	// PublishFinal atomically detaches a room and drains one final durable
 	// protocol message before each socket observes the close. Revocations and
 	// server shutdown continue to use immediate ShutdownProject/Shutdown.
@@ -56,12 +66,36 @@ type RoomBus interface {
 	Shutdown(close RoomClose)
 }
 
+func (b *InProcessRoomBus) Stats() RoomBusStats {
+	b.mu.RLock()
+	rooms := len(b.subscriptions)
+	b.mu.RUnlock()
+	return RoomBusStats{Rooms: rooms, Sockets: int(b.socketCount.Load()),
+		QueuedBytes: b.queuedBytes.Load()}
+}
+
+func (b *InProcessRoomBus) ConnectedParticipants(projectID uuid.UUID) []uuid.UUID {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	room := b.subscriptions[projectID]
+	participants := make([]uuid.UUID, 0, len(room))
+	for _, subscription := range room {
+		participants = append(participants, subscription.participantID)
+	}
+	sort.Slice(participants, func(i, j int) bool {
+		return participants[i].String() < participants[j].String()
+	})
+	return participants
+}
+
 // InProcessRoomBus is the v1 single-instance room fanout. Durable messages use
 // bounded FIFO queues; a slow consumer is disconnected instead of being
 // allowed to exhaust server memory. Ephemeral values are latest-only per key.
 type InProcessRoomBus struct {
 	mu            sync.RWMutex
 	subscriptions map[uuid.UUID]map[uuid.UUID]*RoomSubscription
+	socketCount   atomic.Int64
+	queuedBytes   atomic.Int64
 	closed        bool
 }
 
@@ -143,6 +177,7 @@ func (b *InProcessRoomBus) Subscribe(projectID, userID, deviceID,
 		}
 	}
 	room[subscription.id] = subscription
+	b.socketCount.Add(1)
 	b.mu.Unlock()
 	for _, existing := range replaced {
 		existing.markClosed(RoomClose{
@@ -443,6 +478,9 @@ func (s *RoomSubscription) adjustQueuedBytes(delta int64) bool {
 			next = 0
 		}
 		if s.queuedBytes.CompareAndSwap(current, next) {
+			if s.bus != nil {
+				s.bus.queuedBytes.Add(next - current)
+			}
 			return true
 		}
 	}
@@ -469,6 +507,11 @@ func (s *RoomSubscription) markClosed(closeInfo RoomClose) {
 	}
 	s.closed = true
 	s.closeInfo = closeInfo
+	queuedBytes := s.queuedBytes.Swap(0)
+	if s.bus != nil {
+		s.bus.queuedBytes.Add(-queuedBytes)
+		s.bus.socketCount.Add(-1)
+	}
 	close(s.done)
 	s.mu.Unlock()
 }

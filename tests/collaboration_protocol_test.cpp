@@ -43,6 +43,10 @@ std::string trackId(std::string_view label) {
     return testUuid("collaboration-test-track", label);
 }
 
+std::string clipId(std::string_view label) {
+    return testUuid("collaboration-test-clip", label);
+}
+
 CommandMeta meta(std::string label, std::uint64_t clientSequence = 1) {
     CommandMeta value;
     value.projectId = testUuid("collaboration-test", "project");
@@ -278,7 +282,7 @@ json readJson(const fs::path& file) {
     return value;
 }
 
-void serializerV6AndLegacyMigration(const fs::path& dir) {
+void serializerV7AndLegacyMigration(const fs::path& dir) {
     const fs::path legacyFile = dir / "legacy-v5.json";
     const std::string legacyTrackId = trackId("legacy");
     json compClip{{"id", "clip-comp"},
@@ -314,6 +318,7 @@ void serializerV6AndLegacyMigration(const fs::path& dir) {
     const json legacy{{"format", "vlt-project"},
                       {"version", 5},
                       {"name", "Legacy"},
+                      {"sampleRate", 44100.0},
                       {"tracks", json::array({std::move(legacyTrack)})}};
     {
         std::ofstream stream(legacyFile);
@@ -332,12 +337,33 @@ void serializerV6AndLegacyMigration(const fs::path& dir) {
     const std::string automationId =
         first.tracks[0].clips[1].automation.points[0].id;
     const std::string laneId = first.tracks[0].clips[2].lanes[0].points[0].id;
-    check(!compId.empty() && !automationId.empty() && !laneId.empty(),
+    check(!compId.empty() && !automationId.empty() && !laneId.empty() &&
+              first.sampleRate == 44100.0,
           "v5 migration assigns point and comp ids");
     check(compId == second.tracks[0].clips[0].comp[0].id &&
               automationId == second.tracks[0].clips[1].automation.points[0].id &&
               laneId == second.tracks[0].clips[2].lanes[0].points[0].id,
           "v5 migration ids are deterministic across clients");
+    bool allLegacyVersionsLoad = true;
+    for (int version = 1; version <= 6; ++version) {
+        json versioned = legacy;
+        versioned["version"] = version;
+        const fs::path file =
+            dir / ("legacy-v" + std::to_string(version) + ".json");
+        {
+            std::ofstream stream(file);
+            stream << versioned.dump();
+        }
+        ProjectModel migrated;
+        allLegacyVersionsLoad =
+            allLegacyVersionsLoad &&
+            ProjectSerializer::loadDocument(migrated, file.string(),
+                                             dir.string())
+                .isOk() &&
+            migrated.sampleRate == 44100.0;
+    }
+    check(allLegacyVersionsLoad,
+          "v1-v6 local projects remain readable with their render rate");
 
     ProjectModel project;
     project.name = "Assets";
@@ -370,29 +396,33 @@ void serializerV6AndLegacyMigration(const fs::path& dir) {
     track.inserts.push_back(insert);
     project.tracks.push_back(track);
 
-    const fs::path v6File = dir / "project-v6.json";
-    check(ProjectSerializer::saveDocument(project, v6File.string(),
+    project.sampleRate = 96000.0;
+    const fs::path v7File = dir / "project-v7.json";
+    check(ProjectSerializer::saveDocument(project, v7File.string(),
                                           MediaPaths::Absolute)
               .isOk(),
-          "writes v6 project document");
-    const json saved = readJson(v6File);
-    check(saved.value("version", 0) == 6, "v6 writer publishes format version 6");
+          "writes v7 project document");
+    const json saved = readJson(v7File);
+    check(saved.value("version", 0) == 7 &&
+              saved.value("renderSampleRate", 0.0) == 96000.0 &&
+              !saved.contains("sampleRate"),
+          "v7 writer publishes a durable render sample rate");
     const json& savedInsert = saved["tracks"][0]["inserts"][0];
     check(savedInsert.value("pluginVersion", "") == "1.0" &&
               savedInsert.value("stateSchemaVersion", 0) == 1,
-          "v6 writes plugin product and state schema versions");
+          "v7 writes plugin product and state schema versions");
     check(savedInsert["stateAsset"].value("assetId", "") == "asset-state" &&
               !savedInsert["stateAsset"].contains("audioMetadata"),
-          "v6 writes content-addressed plugin state");
+          "v7 writes content-addressed plugin state");
     check(saved["tracks"][0]["clips"][0]["asset"]["audioMetadata"]
                   .value("sampleRate", 0.0) == 48000.0 &&
               savedInsert["assetBindings"][0].value("key", "") == "sample",
-          "v6 nests audio metadata and writes plugin binding keys");
+          "v7 nests audio metadata and writes plugin binding keys");
 
     ProjectModel loaded;
-    check(ProjectSerializer::loadDocument(loaded, v6File.string(), dir.string())
+    check(ProjectSerializer::loadDocument(loaded, v7File.string(), dir.string())
               .isOk(),
-          "loads v6 project document");
+          "loads v7 project document");
     const InsertModel& loadedInsert = loaded.tracks[0].inserts[0];
     check(loaded.tracks[0].clips[0].asset == clip.asset &&
               loadedInsert.pluginVersion == "1.0" &&
@@ -400,7 +430,7 @@ void serializerV6AndLegacyMigration(const fs::path& dir) {
               loadedInsert.stateAsset == insert.stateAsset &&
               loadedInsert.assetBindings.size() == 1 &&
               loadedInsert.assetBindings[0].key == "sample",
-          "v6 asset and plugin compatibility fields round-trip");
+          "v7 asset and plugin compatibility fields round-trip");
 
     std::string memoryBytes;
     ProjectModel memoryLoaded;
@@ -412,13 +442,13 @@ void serializerV6AndLegacyMigration(const fs::path& dir) {
                   .isOk() &&
               memoryLoaded.tracks.size() == 1 &&
               memoryLoaded.tracks[0].clips[0].asset == clip.asset,
-          "in-memory v6 codec round-trips without filesystem access");
+          "in-memory v7 codec round-trips without filesystem access");
     std::string memoryBytesAgain;
     check(ProjectSerializer::serializeDocument(memoryLoaded,
                                                memoryBytesAgain)
                   .isOk() &&
               memoryBytesAgain == memoryBytes,
-          "in-memory v6 codec is canonical across replay");
+          "in-memory v7 codec is canonical across replay");
 }
 
 void commandWireRoundTrip() {
@@ -430,11 +460,12 @@ void commandWireRoundTrip() {
         FieldWriterIs{"project:tempo", operationId("before-tempo")});
     const std::string wire = serializeProjectCommand(setTempo);
     const json encoded = json::parse(wire);
-    check(!encoded.contains("meta") && encoded.value("schemaVersion", 0) == 1 &&
+    check(!encoded.contains("meta") && encoded.value("schemaVersion", 0) == 2 &&
               encoded.value("opId", "") == operationId("tempo") &&
               encoded.value("baseServerSeq", 0) == 41 &&
               encoded.contains("preconditions") &&
-              encoded["touchedFields"] == json::array({"project:tempo"}),
+              encoded["touchedFields"] ==
+                  json::array({"project:tempo", "project:tempoCascade"}),
           "wire command uses the flat locked envelope");
     std::string error;
     auto parsed = deserializeProjectCommand(wire, &error);
@@ -458,6 +489,21 @@ void commandWireRoundTrip() {
           "batch children contain bodies, not nested envelopes");
     check(projectCommandFromJson(batchJson, &error).has_value(),
           "batch command parses from wire JSON");
+    auto oversizedBody = std::make_shared<BatchCommand>();
+    oversizedBody->commands.push_back(command(
+        {}, SetProjectScalar{ProjectScalar::AiInstructions,
+                             std::string(kMaxProjectCommandBatchBytes, 'x')}));
+    ProjectCommand oversized = command("oversized-batch", oversizedBody);
+    const std::string oversizedWire = serializeProjectCommand(oversized);
+    SharedProjectDocument oversizedState;
+    check(serializedProjectCommandPayloadSize(oversized) >
+                  kMaxProjectCommandBatchBytes &&
+              oversizedWire.size() > kMaxProjectCommandBatchBytes &&
+              !deserializeProjectCommand(oversizedWire, &error).has_value() &&
+              ProjectReducer::apply(oversizedState, oversized).code ==
+                  ApplyCode::InvalidCommand &&
+              oversizedState.project.aiInstructions.empty(),
+          "batch over 1 MiB is rejected before mutation");
     json mismatchedTouched = encoded;
     mismatchedTouched["touchedFields"] = json::array({"project:name"});
     check(!projectCommandFromJson(mismatchedTouched, &error).has_value(),
@@ -486,6 +532,7 @@ void commandWireRoundTrip() {
               hasRequired("transactionId") && hasRequired("baseServerSeq") &&
               hasRequired("kind") && hasRequired("payload") &&
               hasRequired("preconditions") && hasRequired("touchedFields") &&
+              schema["properties"]["schemaVersion"].value("const", 0) == 2 &&
               schema["$defs"]["id"].value("format", "") == "uuid" &&
               schema["$defs"]["id"].value("pattern", "") ==
                   "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" &&
@@ -516,8 +563,180 @@ void commandWireRoundTrip() {
                       .value("pattern", "") == "^[0-9a-f]{64}$" &&
               schema["$defs"]["takeAddPayload"]["required"].size() == 4 &&
               schema["$defs"]["controllerLaneAddPayload"]["required"]
-                      .size() == 7,
+                      .size() == 7 &&
+              schema["$defs"]["clipMovePayload"]["required"] ==
+                  json::array({"clipId", "sourceTrackId", "trackId",
+                               "afterId"}) &&
+              schema["$defs"].contains("pluginReplacePayload") &&
+              schema["$defs"].contains("takePropertyPayload") &&
+              schema["$defs"]["takeMovePayload"]["required"] ==
+                  json::array({"trackId", "clipId", "takeId", "afterId"}),
           "checked-in schema locks the command envelope");
+#endif
+}
+
+void takeMoveV2Contract() {
+#ifdef DAW_TAKE_MOVE_GOLDEN
+    const json golden = readJson(DAW_TAKE_MOVE_GOLDEN);
+    std::string error;
+    const auto decoded = projectCommandFromJson(golden, &error);
+    check(decoded.has_value() && error.empty() &&
+              commandKind(*decoded) == "take.move" &&
+              projectCommandToJson(*decoded) == golden,
+          "take.move shared golden fixture round-trips exactly");
+    if (!decoded) return;
+
+    const auto makeState = [] {
+        SharedProjectDocument state;
+        TrackModel track;
+        track.id = "11111111-1111-4111-8111-111111111111";
+        track.kind = TrackKind::Audio;
+        ClipModel clip;
+        clip.id = "22222222-2222-4222-8222-222222222222";
+        clip.kind = ClipKind::Audio;
+        TakeModel target;
+        target.id = "33333333-3333-4333-8333-333333333333";
+        target.name = "Target";
+        TakeModel anchor;
+        anchor.id = "44444444-4444-4444-8444-444444444444";
+        anchor.name = "Anchor";
+        TakeModel tail;
+        tail.id = "66666666-6666-4666-8666-666666666666";
+        tail.name = "Tail";
+        clip.takes = {target, anchor, tail};
+        track.clips.push_back(std::move(clip));
+        state.project.tracks.push_back(std::move(track));
+        return state;
+    };
+
+    SharedProjectDocument state = makeState();
+    ApplyResult moved = ProjectReducer::apply(state, *decoded);
+    const auto& movedTakes = state.project.tracks[0].clips[0].takes;
+    check(moved.changed() && moved.inverse &&
+              movedTakes[0].id ==
+                  "44444444-4444-4444-8444-444444444444" &&
+              movedTakes[1].id ==
+                  "33333333-3333-4333-8333-333333333333" &&
+              moved.impact.graphRebuild && moved.impact.timelineChanged &&
+              moved.impact.takeIds.contains(
+                  "33333333-3333-4333-8333-333333333333") &&
+              moved.inverse->conditions.size() == 1 &&
+              moved.inverse->conditions[0].fieldKey ==
+                  "take:33333333-3333-4333-8333-333333333333:position",
+          "take.move reorders one clip and creates a position-guarded inverse");
+
+    ProjectCommand undo = *moved.inverse;
+    undo.meta = meta("undo-take-move");
+    check(ProjectReducer::apply(state, undo).changed() &&
+              state.project.tracks[0].clips[0].takes[0].id ==
+                  "33333333-3333-4333-8333-333333333333",
+          "take.move conditional inverse restores the prior position");
+
+    check(ProjectReducer::apply(
+              state, command("take-move-no-change",
+                             MoveTake{
+                                 "11111111-1111-4111-8111-111111111111",
+                                 "22222222-2222-4222-8222-222222222222",
+                                 "33333333-3333-4333-8333-333333333333",
+                                 {}}))
+              .code == ApplyCode::NoChange &&
+              ProjectReducer::apply(
+                  state, command("take-move-missing-anchor",
+                                 MoveTake{
+                                     "11111111-1111-4111-8111-111111111111",
+                                     "22222222-2222-4222-8222-222222222222",
+                                     "33333333-3333-4333-8333-333333333333",
+                                     "77777777-7777-4777-8777-777777777777"}))
+                      .code == ApplyCode::MissingAnchor,
+          "take.move detects no-op positions and missing same-clip anchors");
+
+    SharedProjectDocument staleState = makeState();
+    ApplyResult firstMove = ProjectReducer::apply(staleState, *decoded);
+    check(firstMove.changed() && firstMove.inverse &&
+              ProjectReducer::apply(
+                  staleState,
+                  command("later-take-move",
+                          MoveTake{
+                              "11111111-1111-4111-8111-111111111111",
+                              "22222222-2222-4222-8222-222222222222",
+                              "33333333-3333-4333-8333-333333333333",
+                              "66666666-6666-4666-8666-666666666666"}))
+                  .changed(),
+          "later take move advances the position head");
+    ProjectCommand staleUndo = *firstMove.inverse;
+    staleUndo.meta = meta("stale-take-move-undo");
+    check(ProjectReducer::apply(staleState, staleUndo).code ==
+              ApplyCode::PreconditionsFailed,
+          "stale take.move undo cannot overwrite a later reorder");
+
+    SharedProjectDocument batchState = makeState();
+    auto transaction = std::make_shared<BatchCommand>();
+    transaction->commands.push_back(command(
+        {}, MoveTake{"11111111-1111-4111-8111-111111111111",
+                     "22222222-2222-4222-8222-222222222222",
+                     "33333333-3333-4333-8333-333333333333",
+                     "44444444-4444-4444-8444-444444444444"}));
+    transaction->commands.push_back(command(
+        {}, SetTakeProperty{"11111111-1111-4111-8111-111111111111",
+                            "22222222-2222-4222-8222-222222222222",
+                            "44444444-4444-4444-8444-444444444444",
+                            TakeProperty::Name,
+                            std::string("Renamed anchor")}));
+    ApplyResult batchApplied = ProjectReducer::apply(
+        batchState, command("take-move-batch", transaction));
+    ProjectCommand batchUndo = *batchApplied.inverse;
+    batchUndo.meta = meta("undo-take-move-batch");
+    check(batchApplied.changed() && batchApplied.inverse &&
+              ProjectReducer::apply(batchState, batchUndo).changed() &&
+              batchState.project.tracks[0].clips[0].takes[0].id ==
+                  "33333333-3333-4333-8333-333333333333" &&
+              batchState.project.tracks[0].clips[0].takes[1].name ==
+                  "Anchor",
+          "batch undo restores take order and properties atomically");
+
+    SharedProjectDocument deletedState = makeState();
+    check(ProjectReducer::apply(
+              deletedState,
+              command("delete-before-take-move",
+                      DeleteTake{
+                          "11111111-1111-4111-8111-111111111111",
+                          "22222222-2222-4222-8222-222222222222",
+                          "33333333-3333-4333-8333-333333333333"}))
+              .changed() &&
+              ProjectReducer::apply(
+                  deletedState,
+                  command("move-deleted-take",
+                          MoveTake{
+                              "11111111-1111-4111-8111-111111111111",
+                              "22222222-2222-4222-8222-222222222222",
+                              "33333333-3333-4333-8333-333333333333",
+                              {}}))
+                      .code == ApplyCode::DeletedEntity,
+          "take deletion wins over a later move");
+#endif
+}
+
+void commandV2GoldenContract() {
+#ifdef DAW_COMMAND_V2_GOLDEN
+    const json golden = readJson(DAW_COMMAND_V2_GOLDEN);
+    const std::set<std::string> expectedKinds{
+        "project.setScalar", "track.setParent", "plugin.add",
+        "plugin.setAssetBinding", "plugin.replace", "take.setProperty",
+        "batch"};
+    std::set<std::string> decodedKinds;
+    bool canonical = golden.contains("commands") &&
+                     golden.at("commands").is_array();
+    if (canonical) {
+        for (const json& item : golden.at("commands")) {
+            std::string error;
+            const auto decoded = projectCommandFromJson(item, &error);
+            canonical = canonical && decoded.has_value() && error.empty() &&
+                        projectCommandToJson(*decoded) == item;
+            if (decoded) decodedKinds.insert(commandKind(*decoded));
+        }
+    }
+    check(canonical && decodedKinds == expectedKinds,
+          "v2 focused shared golden commands round-trip exactly");
 #endif
 }
 
@@ -564,6 +783,90 @@ void reducerReplayBatchDeleteAndUndo() {
               undoneBatch.changed() &&
               batchState.project.findTrack(batchTrack) == nullptr,
           "batch add inverse uses fieldWriterIs lifecycle guards atomically");
+
+    SharedProjectDocument tempoCascade;
+    tempoCascade.project.tempo = 120.0;
+    TrackModel tempoTrack;
+    tempoTrack.id = trackId("tempo-cascade");
+    ClipModel audioClip;
+    audioClip.id = clipId("tempo-audio");
+    audioClip.kind = ClipKind::Audio;
+    audioClip.startSeconds = 8.0;
+    audioClip.durationSeconds = 4.0;
+    audioClip.fadeInSeconds = 0.5;
+    audioClip.fadeOutSeconds = 0.75;
+    ClipModel midiClip;
+    midiClip.id = clipId("tempo-midi");
+    midiClip.kind = ClipKind::Midi;
+    midiClip.startSeconds = 12.0;
+    midiClip.durationSeconds = 3.0;
+    midiClip.fadeInSeconds = 0.25;
+    midiClip.fadeOutSeconds = 0.5;
+    tempoTrack.clips = {audioClip, midiClip};
+    tempoCascade.project.tracks.push_back(std::move(tempoTrack));
+    ApplyResult tempoChanged = ProjectReducer::apply(
+        tempoCascade, command("tempo-cascade", SetProjectScalar{
+            ProjectScalar::Tempo, 60.0}));
+    const TrackModel& retimedTrack = tempoCascade.project.tracks.front();
+    check(tempoChanged.changed() && tempoChanged.inverse &&
+              retimedTrack.clips[0].startSeconds == 16.0 &&
+              retimedTrack.clips[0].durationSeconds == 4.0 &&
+              retimedTrack.clips[0].fadeInSeconds == 0.5 &&
+              retimedTrack.clips[1].startSeconds == 24.0 &&
+              retimedTrack.clips[1].durationSeconds == 6.0 &&
+              retimedTrack.clips[1].fadeInSeconds == 0.5 &&
+              tempoChanged.impact.trackIds.contains(retimedTrack.id),
+          "tempo reducer preserves audio time and MIDI beats deterministically");
+    ProjectCommand undoTempoCascade = *tempoChanged.inverse;
+    undoTempoCascade.meta = meta("undo-tempo-cascade");
+    const ApplyResult tempoRestored =
+        ProjectReducer::apply(tempoCascade, undoTempoCascade);
+    const auto& restoredClips =
+        tempoCascade.project.tracks.front().clips;
+    check(tempoRestored.changed() && restoredClips.size() == 2 &&
+              restoredClips[0].startSeconds == audioClip.startSeconds &&
+              restoredClips[0].durationSeconds ==
+                  audioClip.durationSeconds &&
+              restoredClips[0].fadeInSeconds == audioClip.fadeInSeconds &&
+              restoredClips[1].startSeconds == midiClip.startSeconds &&
+              restoredClips[1].durationSeconds ==
+                  midiClip.durationSeconds &&
+              restoredClips[1].fadeInSeconds == midiClip.fadeInSeconds,
+          "tempo conditional inverse restores the full cascade");
+
+    ApplyResult unrelatedTempo = ProjectReducer::apply(
+        tempoCascade, command("tempo-unrelated", SetProjectScalar{
+            ProjectScalar::Tempo, 60.0}));
+    check(unrelatedTempo.changed() && unrelatedTempo.inverse &&
+              ProjectReducer::apply(
+                  tempoCascade,
+                  command("tempo-unrelated-name", SetTrackProperty{
+                      tempoCascade.project.tracks.front().id,
+                      TrackProperty::Name,
+                      std::string("Renamed")}))
+                  .changed(),
+          "unrelated edit can follow a tempo cascade");
+    ProjectCommand undoAfterUnrelated = *unrelatedTempo.inverse;
+    undoAfterUnrelated.meta = meta("undo-tempo-after-unrelated");
+    check(ProjectReducer::apply(tempoCascade, undoAfterUnrelated).changed(),
+          "unrelated edit survives tempo undo");
+
+    ApplyResult guardedTempo = ProjectReducer::apply(
+        tempoCascade, command("tempo-guarded", SetProjectScalar{
+            ProjectScalar::Tempo, 60.0}));
+    check(guardedTempo.changed() && guardedTempo.inverse &&
+              ProjectReducer::apply(
+                  tempoCascade,
+                  command("tempo-later-geometry", SetClipProperty{
+                      tempoCascade.project.tracks.front().id, audioClip.id,
+                      ClipProperty::StartSeconds, 19.0}))
+                  .changed(),
+          "clip geometry advances the tempo cascade writer head");
+    ProjectCommand staleTempoUndo = *guardedTempo.inverse;
+    staleTempoUndo.meta = meta("undo-stale-tempo-cascade");
+    check(ProjectReducer::apply(tempoCascade, staleTempoUndo).code ==
+              ApplyCode::PreconditionsFailed,
+          "tempo undo cannot overwrite later clip geometry");
 
     const std::string trackA = trackId("a");
     const std::string trackBId = trackId("b");
@@ -761,15 +1064,24 @@ void clipNoteAutomationReducerAndWire() {
         clipPrefix + "compCrossfadeMs",
         clipPrefix + "descendants",
         clipPrefix + "durationSeconds",
+        clipPrefix + "fadeInCurve",
+        clipPrefix + "fadeInMode",
+        clipPrefix + "fadeInSeconds",
+        clipPrefix + "fadeOutCurve",
+        clipPrefix + "fadeOutMode",
+        clipPrefix + "fadeOutSeconds",
         clipPrefix + "gain",
         clipPrefix + "lifecycle",
+        clipPrefix + "musicalAnalysis",
         clipPrefix + "muted",
         clipPrefix + "name",
         clipPrefix + "offsetSeconds",
         clipPrefix + "pan",
+        clipPrefix + "patternClipId",
         clipPrefix + "position",
         clipPrefix + "sampleEdit",
         clipPrefix + "startSeconds",
+        "project:tempoCascade",
         "track:" + midiTrack + ":clipLanding",
     };
     check(commandTouchedFields(setup[2]) == completeClipAddFields &&
@@ -782,19 +1094,21 @@ void clipNoteAutomationReducerAndWire() {
               "delete-clip-shape", DeleteClip{midiTrack, midiClip})) ==
               std::vector<std::string>{
                   clipPrefix + "descendants", clipPrefix + "lifecycle",
-                  midiLandingHead} &&
+                  "project:tempoCascade", midiLandingHead} &&
               commandTouchedFields(command(
                   "restore-clip-shape",
                   RestoreClip{midiTrack, midiClip,
                               operationId("delete-clip-shape")})) ==
                   std::vector<std::string>{
                       clipPrefix + "descendants", clipPrefix + "lifecycle",
-                      clipPrefix + "position", midiLandingHead} &&
+                      clipPrefix + "position", "project:tempoCascade",
+                      midiLandingHead} &&
               commandTouchedFields(command(
                   "retime-clip-shape",
                   SetClipProperty{midiTrack, midiClip,
                                   ClipProperty::StartSeconds, 1.0})) ==
                   std::vector<std::string>{clipPrefix + "startSeconds",
+                                           "project:tempoCascade",
                                            midiLandingHead} &&
               commandTouchedFields(command(
                   "asset-clip-shape",
@@ -813,15 +1127,18 @@ void clipNoteAutomationReducerAndWire() {
           "locked project command rejects committed-envelope metadata");
 
     ProjectCommand move =
-        command("move-second-clip", MoveClip{secondClip, midiTrack, {}});
+        command("move-second-clip",
+                MoveClip{secondClip, midiTrack, midiTrack, {}});
     const std::vector<std::string> moveFields = commandTouchedFields(move);
     ApplyResult moved = ProjectReducer::apply(state, move);
     TrackModel* midi = state.project.findTrack(midiTrack);
+    const std::set<std::string> moveFieldSet(moveFields.begin(),
+                                             moveFields.end());
     check(moved.changed() && midi->clips.front().id == secondClip &&
               moveFields == std::vector<std::string>{
                                 "clip:" + secondClip + ":position",
-                                "project:clipTrackAssignments",
                                 "track:" + midiTrack + ":clipLanding"} &&
+              moved.impact.fieldKeys == moveFieldSet &&
               moved.inverse &&
               moved.inverse->conditions.front().fieldKey ==
                   ProjectReducer::clipPositionKey(secondClip),
@@ -1576,7 +1893,7 @@ void laneTakeCompReducerAndRecordingBatch() {
               projectCommandFromJson(
                   projectCommandToJson(simpleRecordingCommit), &wireError)
                   .has_value(),
-          "recording.commit accepts the v1 clip.add/property/asset landing path");
+          "recording.commit accepts the v2 clip.add/property/asset landing path");
     ProjectCommand undoSimpleRecording = *simpleRecorded.inverse;
     undoSimpleRecording.meta = meta("undo-simple-recording-commit");
     check(ProjectReducer::apply(simpleRecordingState, undoSimpleRecording)
@@ -1600,7 +1917,7 @@ void laneTakeCompReducerAndRecordingBatch() {
                    operationId("recording-commit");
         });
     check(recordedLeft.changed() && recordedRight.changed() &&
-              recordingFields.size() == 8 && recordingWritersUseOuter &&
+              recordingFields.size() == 15 && recordingWritersUseOuter &&
               recordedLeft.inverse &&
               commandKind(*recordedLeft.inverse) == "batch" &&
               recordingLeft.project.findTrack(audioTrack)
@@ -1880,6 +2197,7 @@ void routingPluginAssetReducerAndWire() {
     const std::string sourceId = trackId("routing-source");
     const std::string busId = trackId("routing-bus");
     const std::string folderId = trackId("routing-folder");
+    const std::string patternId = trackId("routing-pattern");
     const std::string instrumentTrackId = trackId("routing-instrument");
     const std::string clipId = testUuid("routing-clip", "audio");
     const std::string sendId = testUuid("routing-send", "reverb");
@@ -1910,19 +2228,38 @@ void routingPluginAssetReducerAndWire() {
               apply("routing-bus-add",
                     AddTrack{busId, TrackKind::Bus, "Bus", 3, {}, sourceId})
                   .changed() &&
+              apply("routing-pattern-add",
+                    AddTrack{patternId, TrackKind::Pattern, "Pattern", 4, {},
+                             busId})
+                  .changed() &&
               apply("routing-instrument-add",
                     AddTrack{instrumentTrackId, TrackKind::Instrument,
-                             "Instrument", 4, {}, busId})
+                             "Instrument", 5, {}, patternId})
                   .changed() &&
               apply("routing-clip-add",
                     AddClip{sourceId, clipId, ClipKind::Audio, "Audio", 0.0,
-                            4.0, 5, {}})
+                            4.0, 6, {}})
                   .changed(),
           "routing/plugin fixture uses only typed creation commands");
 
-    check(apply("routing-parent", SetTrackParent{sourceId, folderId}).changed() &&
-              apply("routing-output", SetTrackOutput{sourceId, busId}).changed(),
-          "track parent and output routing use independent scalar heads");
+    check(apply("routing-parent", SetTrackParent{sourceId, patternId}).changed() &&
+              apply("routing-pattern-output",
+                    SetTrackOutput{sourceId, patternId})
+                  .changed(),
+          "Pattern is an intrinsic summing parent and routing destination");
+    check(ProjectReducer::apply(
+              state,
+              command("routing-plain-folder-output",
+                      SetTrackOutput{sourceId, folderId}))
+                  .code == ApplyCode::InvalidCommand &&
+              ProjectReducer::apply(
+                  state,
+                  command("routing-plain-track-output",
+                          SetTrackOutput{sourceId, instrumentTrackId}))
+                      .code == ApplyCode::InvalidCommand,
+          "routing reducer rejects plain folders and non-summing tracks");
+    check(apply("routing-output", SetTrackOutput{sourceId, busId}).changed(),
+          "track output can move from a Pattern to an explicit bus");
     check(ProjectReducer::apply(
               state,
               command("routing-cycle", SetTrackOutput{busId, sourceId}))
@@ -1975,7 +2312,7 @@ void routingPluginAssetReducerAndWire() {
     undoClipBypass.meta = meta("undo-plugin-clip-equalizer-bypass");
     check(addClipEqualizer.changed() && bypassClipEqualizer.changed() &&
               addClipGravity.changed() &&
-              addClipEqualizer.inverse->conditions.size() == 1 &&
+              addClipEqualizer.inverse->conditions.size() == 2 &&
               state.lastWriterByField.at(
                   ProjectReducer::clipDescendantsKey(clipId)) ==
                   operationId("plugin-clip-gravity-add") &&
@@ -2009,7 +2346,7 @@ void routingPluginAssetReducerAndWire() {
                           PluginProperty::Bypassed, true});
     check(addEqualizer.changed() && parameter.changed() && binding.changed() &&
               bypass.changed() && bypass.inverse &&
-              bypass.inverse->conditions.size() == 1 &&
+              bypass.inverse->conditions.size() == 2 &&
               state.project.findTrack(sourceId)->inserts.front().parameters
                       .front()
                       .id == "band.1.gain" &&
@@ -2053,6 +2390,8 @@ void routingPluginAssetReducerAndWire() {
           "plugin chain ordering uses stable afterId anchors");
 
     InsertModel sampler = builtinInsert("sampler", "daw.sampler");
+    const PluginAssetBinding sample = sampler.assetBindings.front();
+    sampler.assetBindings.clear();
     const PluginLocation instrumentChain{PluginChain::Instrument,
                                          instrumentTrackId, {}};
     check(apply("plugin-sampler-add",
@@ -2060,8 +2399,14 @@ void routingPluginAssetReducerAndWire() {
                   .changed() &&
               state.project.findTrack(instrumentTrackId)->instrument.id ==
                   sampler.id,
-          "Sampler is available as a built-in instrument with explicit sample binding");
-    PluginAssetBinding weakenedSample = sampler.assetBindings.front();
+          "an empty Sampler is a valid built-in instrument");
+    check(apply("plugin-sampler-set-binding",
+                SetPluginAssetBinding{instrumentChain, sampler.id, sample})
+                  .changed() &&
+              state.project.findTrack(instrumentTrackId)
+                      ->instrument.assetBindings.size() == 1,
+          "Sampler accepts a complete required Audio sample binding");
+    PluginAssetBinding weakenedSample = sample;
     weakenedSample.required = false;
     check(ProjectReducer::apply(
               state,
@@ -2070,6 +2415,13 @@ void routingPluginAssetReducerAndWire() {
                                             weakenedSample}))
                   .code == ApplyCode::InvalidCommand,
           "Sampler sample binding remains required after targeted updates");
+    check(apply("plugin-sampler-remove-binding",
+                RemovePluginAssetBinding{instrumentChain, sampler.id,
+                                         "sample"})
+                  .changed() &&
+              state.project.findTrack(instrumentTrackId)
+                  ->instrument.assetBindings.empty(),
+          "removing a Sampler sample returns it to a valid empty state");
 
     ProjectCommand oversizedParameter = command(
         "plugin-oversized-parameter",
@@ -2141,6 +2493,181 @@ struct RecordingAdapter final : ProjectProjectionAdapter {
         origins.push_back(origin);
     }
 };
+
+void commandV2Contracts() {
+    SharedProjectDocument state;
+    const std::string folderId = trackId("v2-folder");
+    const std::string audioTrackId = trackId("v2-audio");
+    const std::string midiTrackId = trackId("v2-midi");
+    const std::string instrumentTrackId = trackId("v2-instrument");
+    const std::string audioClipId = testUuid("v2-clip", "audio");
+    const std::string midiClipId = testUuid("v2-clip", "midi");
+    const std::string patternClipId = testUuid("v2-clip", "pattern");
+    const std::string takeId = testUuid("v2-take", "one");
+
+    TrackModel folder;
+    folder.id = folderId;
+    folder.kind = TrackKind::Folder;
+    TrackModel audio;
+    audio.id = audioTrackId;
+    audio.kind = TrackKind::Audio;
+    ClipModel audioClip;
+    audioClip.id = audioClipId;
+    audioClip.kind = ClipKind::Audio;
+    audioClip.durationSeconds = 8.0;
+    TakeModel take;
+    take.id = takeId;
+    take.name = "Take 1";
+    take.lengthSeconds = 8.0;
+    take.channels = 2;
+    take.asset = testAsset("v2-take", AssetKind::Audio, 'd');
+    audioClip.takes.push_back(take);
+    audio.clips.push_back(audioClip);
+
+    TrackModel midi;
+    midi.id = midiTrackId;
+    midi.kind = TrackKind::Midi;
+    ClipModel midiClip;
+    midiClip.id = midiClipId;
+    midiClip.kind = ClipKind::Midi;
+    midiClip.durationSeconds = 4.0;
+    ClipModel patternClip;
+    patternClip.id = patternClipId;
+    patternClip.kind = ClipKind::Pattern;
+    midi.clips = {midiClip, patternClip};
+
+    TrackModel instrument;
+    instrument.id = instrumentTrackId;
+    instrument.kind = TrackKind::Instrument;
+    instrument.instrument = builtinInsert("v2-sampler", "daw.sampler");
+    instrument.samplerFx.ownerInstrumentId = instrument.instrument.id;
+    InsertModel insert = builtinInsert("v2-insert", "daw.equalizer");
+    instrument.inserts.push_back(insert);
+    state.project.tracks = {folder, audio, midi, instrument};
+
+    const auto apply = [&](std::string label, CommandBody body) {
+        ProjectCommand value = command(std::move(label), std::move(body));
+        const std::string wire = serializeProjectCommand(value);
+        std::string error;
+        check(deserializeProjectCommand(wire, &error).has_value() &&
+                  error.empty(),
+              "v2 command JSON round-trips");
+        return ProjectReducer::apply(state, value);
+    };
+
+    check(apply("v2-render-rate",
+                SetProjectScalar{ProjectScalar::RenderSampleRate, 96000.0})
+                  .changed() &&
+              state.project.sampleRate == 96000.0,
+          "render sample rate is a durable project scalar");
+    check(apply("v2-folder-summing",
+                SetTrackProperty{folderId, TrackProperty::Summing, true})
+                  .changed() &&
+              state.project.findTrack(folderId)->summing,
+          "folder summing has a typed shared property");
+    check(apply("v2-clip-fade",
+                SetClipFade{audioTrackId, audioClipId, 0.25, 0.5})
+                  .changed() &&
+              state.project.findTrack(audioTrackId)->clips[0].fadeOutSeconds ==
+                  0.5 &&
+              apply("v2-clip-curve",
+                    SetClipFadeCurve{audioTrackId, audioClipId,
+                                     ClipEdge::In, -0.5})
+                  .changed() &&
+              apply("v2-clip-mode",
+                    SetClipFadeMode{audioTrackId, audioClipId,
+                                    ClipEdge::Out, ClipFadeMode::Tape})
+                  .changed(),
+          "fade geometry, curve and mode are typed commands");
+    check(apply("v2-pattern-owner",
+                SetClipPatternOwner{midiTrackId, midiClipId, patternClipId})
+                  .changed() &&
+              state.project.findTrack(midiTrackId)->clips[0].patternClipId ==
+                  patternClipId,
+          "Pattern ownership is a stable clip relation");
+
+    ClipMusicalAnalysisModel analysis;
+    analysis.algorithmVersion = 1;
+    analysis.analyzedDurationSeconds = 8.0;
+    analysis.tempo.status = MusicalAnalysisStatus::Available;
+    analysis.tempo.bpm = 128.0;
+    analysis.tempo.confidence = 0.9;
+    analysis.tempo.stability = 0.8;
+    analysis.tempo.alternatives = {64.0};
+    analysis.key.status = MusicalAnalysisStatus::Available;
+    analysis.key.root = 9;
+    analysis.key.scale = "minor";
+    analysis.key.confidence = 0.75;
+    check(apply("v2-analysis",
+                SetClipMusicalAnalysis{audioTrackId, audioClipId, analysis})
+                  .changed(),
+          "clip musical analysis is deterministic shared data");
+    check(apply("v2-sampler-levels",
+                SetSamplerFxLevels{instrumentTrackId,
+                                   instrument.instrument.id, 1.25, -0.2})
+                  .changed() &&
+              state.project.findTrack(instrumentTrackId)->samplerFx.volume ==
+                  1.25f,
+          "Sampler FX post levels have a typed command");
+    check(apply("v2-take-name",
+                SetTakeProperty{audioTrackId, audioClipId, takeId,
+                                TakeProperty::Name,
+                                std::string("Lead take")})
+                  .changed() &&
+              state.project.findTrack(audioTrackId)->clips[0].takes[0].name ==
+                  "Lead take",
+          "take properties use field-level conditional history");
+
+    ProjectCommand preReplacementEdit = command(
+        "v2-plugin-before-replace",
+        SetPluginProperty{PluginLocation{PluginChain::Track,
+                                         instrumentTrackId, {}},
+                          insert.id, PluginProperty::Bypassed, true});
+    ApplyResult preReplacementEdited =
+        ProjectReducer::apply(state, preReplacementEdit);
+    check(preReplacementEdited.changed() && preReplacementEdited.inverse,
+          "plugin edit creates a generation-guarded inverse");
+
+    InsertModel replacement = builtinInsert("ignored", "daw.gravity");
+    replacement.id = insert.id;
+    ProjectCommand replace = command(
+        "v2-plugin-replace",
+        ReplacePluginInsert{PluginLocation{PluginChain::Track,
+                                           instrumentTrackId, {}},
+                            insert.id, replacement});
+    ApplyResult replaced = ProjectReducer::apply(state, replace);
+    const std::vector<std::string> replaceFields =
+        commandTouchedFields(replace);
+    check(replaced.changed() && replaced.inverse &&
+              state.project.findTrack(instrumentTrackId)->inserts[0].uid ==
+                  "daw.gravity" &&
+              std::find(replaceFields.begin(), replaceFields.end(),
+                        "plugin:" + insert.id + ":generation") !=
+                  replaceFields.end(),
+          "plugin replacement preserves insertId and advances generation");
+    ProjectCommand stalePreReplacementUndo = *preReplacementEdited.inverse;
+    stalePreReplacementUndo.meta = meta("v2-stale-pre-replace-undo");
+    check(ProjectReducer::apply(state, stalePreReplacementUndo).code ==
+              ApplyCode::PreconditionsFailed,
+          "replacement invalidates inverses from the previous generation");
+    check(apply("v2-plugin-later-edit",
+                SetPluginProperty{PluginLocation{PluginChain::Track,
+                                                 instrumentTrackId, {}},
+                                  insert.id, PluginProperty::Bypassed, true})
+                  .changed(),
+          "later plugin edit advances the same generation field-head");
+    ProjectCommand staleUndo = *replaced.inverse;
+    staleUndo.meta = meta("v2-stale-replace-undo");
+    check(ProjectReducer::apply(state, staleUndo).code ==
+              ApplyCode::PreconditionsFailed,
+          "replacement undo cannot overwrite a later plugin edit");
+
+    const std::string otherTrack = trackId("v2-wrong-source");
+    check(apply("v2-wrong-source-move",
+                MoveClip{midiClipId, otherTrack, midiTrackId, {}})
+                  .code == ApplyCode::PreconditionsFailed,
+          "clip move validates the explicit source track");
+}
 
 void gatewayOptimisticConfirmedReplay() {
     RecordingAdapter adapter;
@@ -2254,13 +2781,16 @@ int main() {
     fs::remove_all(dir, error);
     fs::create_directories(dir, error);
 
-    serializerV6AndLegacyMigration(dir);
+    serializerV7AndLegacyMigration(dir);
     commandWireRoundTrip();
+    takeMoveV2Contract();
+    commandV2GoldenContract();
     reducerReplayBatchDeleteAndUndo();
     clipNoteAutomationReducerAndWire();
     laneTakeCompReducerAndRecordingBatch();
     sharedSnapshotMetadataRoundTrip();
     routingPluginAssetReducerAndWire();
+    commandV2Contracts();
     gatewayOptimisticConfirmedReplay();
 
     fs::remove_all(dir, error);

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 type Config struct {
@@ -25,6 +27,8 @@ type Config struct {
 	AIEnabled                       bool
 	AIGlobalMonthlyLimit            int64
 	CollaborationEnabled            bool
+	CollabRecordingEnabled          bool
+	CollabAllowedUserIDs            []uuid.UUID
 	CollabMaxParticipants           int
 	CollabSnapshotOps               int64
 	CollabSnapshotSeconds           int
@@ -51,6 +55,12 @@ type Config struct {
 	CollabMultipartThresholdBytes   int64
 	CollabMultipartPartBytes        int64
 	CollabMultipartURLBatch         int
+	CollabProjectQuotaBytes         int64
+	CollabUserQuotaBytes            int64
+	CollabMaxOpenUploadsPerUser     int
+	CollabMaxOpenUploadsPerProject  int
+	CollabVerifyWorkers             int
+	CollabMaxVerifyPerUser          int
 	SMTPHost                        string
 	SMTPPort                        int
 	SMTPUsername                    string
@@ -75,7 +85,11 @@ func Load() (Config, error) {
 		// production acceptance suite are complete. Keeping all operational
 		// limits in configuration also lets a single-instance dogfood deploy be
 		// tuned without changing the wire protocol.
-		CollaborationEnabled:            boolEnv("COLLABORATION_ENABLED", false),
+		CollaborationEnabled: boolEnv("COLLABORATION_ENABLED", false),
+		// Cloud recording is a deliberately unavailable V1 capability. Keep
+		// this value false even in non-production builds so an old client can
+		// never turn the backend recording path back on by configuration.
+		CollabRecordingEnabled:          false,
 		CollabMaxParticipants:           int(boundedInt64Env("COLLAB_MAX_PARTICIPANTS", 8, 1, 8)),
 		CollabSnapshotOps:               boundedInt64Env("COLLAB_SNAPSHOT_OPS", 500, 1, 100000),
 		CollabSnapshotSeconds:           int(boundedInt64Env("COLLAB_SNAPSHOT_SECONDS", 300, 30, 86400)),
@@ -102,12 +116,28 @@ func Load() (Config, error) {
 		CollabMultipartThresholdBytes:   boundedInt64Env("COLLAB_MULTIPART_THRESHOLD_BYTES", 64<<20, 10<<20, 5<<30),
 		CollabMultipartPartBytes:        boundedInt64Env("COLLAB_MULTIPART_PART_BYTES", 16<<20, 5<<20, 5<<30),
 		CollabMultipartURLBatch:         int(boundedInt64Env("COLLAB_MULTIPART_URL_BATCH", 100, 1, 200)),
+		CollabProjectQuotaBytes:         boundedInt64Env("COLLAB_PROJECT_QUOTA_BYTES", 50<<30, 1<<20, 8<<40),
+		CollabUserQuotaBytes:            boundedInt64Env("COLLAB_USER_QUOTA_BYTES", 100<<30, 1<<20, 8<<40),
+		CollabMaxOpenUploadsPerUser:     int(boundedInt64Env("COLLAB_MAX_OPEN_UPLOADS_PER_USER", 4, 1, 64)),
+		CollabMaxOpenUploadsPerProject:  int(boundedInt64Env("COLLAB_MAX_OPEN_UPLOADS_PER_PROJECT", 8, 1, 128)),
+		CollabVerifyWorkers:             int(boundedInt64Env("COLLAB_VERIFY_WORKERS", 2, 1, 32)),
+		CollabMaxVerifyPerUser:          int(boundedInt64Env("COLLAB_MAX_VERIFY_PER_USER", 1, 1, 8)),
 		SMTPHost:                        os.Getenv("SMTP_HOST"),
 		SMTPPort:                        int(int64Env("SMTP_PORT", 587)),
 		SMTPUsername:                    os.Getenv("SMTP_USERNAME"),
 		SMTPPassword:                    os.Getenv("SMTP_PASSWORD"),
 		SMTPFrom:                        env("SMTP_FROM", "VLT Studio <no-reply@example.com>"),
 		TrustedProxyCIDRs:               csv(env("TRUSTED_PROXY_CIDRS", "")),
+	}
+	if boolEnv("COLLAB_RECORDING_ENABLED", false) {
+		return Config{}, errors.New("COLLAB_RECORDING_ENABLED must remain false for V1")
+	}
+	for _, raw := range csv(os.Getenv("COLLAB_ALLOWED_USER_IDS")) {
+		id, parseErr := uuid.Parse(raw)
+		if parseErr != nil || id == uuid.Nil {
+			return Config{}, fmt.Errorf("COLLAB_ALLOWED_USER_IDS contains invalid UUID %q", raw)
+		}
+		c.CollabAllowedUserIDs = append(c.CollabAllowedUserIDs, id)
 	}
 	root, err := filepath.Abs(c.StorageRoot)
 	if err != nil {

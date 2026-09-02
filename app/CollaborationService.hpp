@@ -29,6 +29,7 @@ public:
     QString localParticipantId() const {
         return m_presenceStore.localParticipantId();
     }
+    QString accountUserId() const;
     QString hostParticipantId() const {
         return m_localSessionState.hostParticipantId();
     }
@@ -88,10 +89,18 @@ public:
     void receiveTrustedTextMessage(const QString& message);
 
     bool canSubmitOperations() const;
+    /// Recovery commands are the only durable writes allowed while the
+    /// bootstrap coordinator is resolving the account-scoped pending journal.
+    bool canSubmitRecoveryOperations() const;
+    void setPendingRecoveryBlocked(bool blocked);
+    bool pendingRecoveryBlocked() const noexcept {
+        return m_pendingRecoveryBlocked;
+    }
     /// Sends one already validated locked project-command object. The command
     /// bridge owns typed validation and optimistic state; this service only
     /// wraps it in the versioned op.submit envelope.
     bool submitOperation(const QJsonObject& command);
+    bool submitRecoveryOperation(const QJsonObject& command);
     void sendPresence(const PresencePacket& packet);
     void sendTransport(const TransportFrame& frame);
     bool sendSnapshotHash();
@@ -106,6 +115,13 @@ signals:
     void protocolWarning(const QString& message);
     void durableEnvelopeReceived(const collab::WireEnvelope& envelope);
     void resyncRequired(const QJsonObject& payload);
+    /// Requests canonical hashing of the exact confirmed reducer document.
+    /// The coordinator performs serialization off the UI/audio threads and
+    /// installs the digest only if this round is still current.
+    void hashRoundRequested(const QString& roundId,
+                            const QString& sessionId,
+                            quint64 serverSequence,
+                            qint64 deadlineMs);
     /// Emitted only after the server-control payload has been strictly
     /// validated against this socket's current session and local host identity.
     void snapshotRequested(const collab::SnapshotRequest& request);
@@ -127,6 +143,8 @@ private:
     bool sendEnvelope(WireType type, const QJsonObject& payload,
                       bool ephemeral = false);
     void handleEnvelope(const WireEnvelope& envelope);
+    bool acceptHashRound(const QJsonObject& payload);
+    void requestOrSendRoundHash();
 
     account::Service* m_account = nullptr;
     PresenceStore m_presenceStore;
@@ -137,11 +155,16 @@ private:
     QString m_sessionId;
     quint64 m_bootstrapServerSequence = 0;
     QString m_bootstrapStateHash;
+    QString m_hashRoundId;
+    QString m_hashRoundSessionId;
+    quint64 m_hashRoundServerSequence = 0;
+    qint64 m_hashRoundDeadlineMs = 0;
     quint64 m_ephemeralSequence = 0;
     int m_maxMessageBytes = 1024 * 1024;
     bool m_shouldConnect = false;
     bool m_transportConnected = false;
     bool m_sessionReadOnly = false;
+    bool m_pendingRecoveryBlocked = false;
     bool m_resyncPending = false;
     bool m_authorizationRequested = false;
     bool m_transportSent = false;

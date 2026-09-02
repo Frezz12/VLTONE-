@@ -73,11 +73,12 @@ func TestSnapshotRequestIsTargetedAndFinalEventDrains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &Server{Rooms: bus, Hashes: collab.NewHashCoordinator()}
+	server := &Server{Rooms: bus, Hashes: collab.NewHashCoordinator(),
+		metrics: &collaborationMetrics{}}
 	server.publishSnapshotDispatch(collab.SnapshotDispatch{
 		RequestID: uuid.New(), ProjectID: projectID, SessionID: sessionID,
 		HostMemberID: hostID, TargetSeq: 501, Reason: "session_end",
-		Attempt: 1, RetryAtMs: time.Now().Add(time.Second).UnixMilli(),
+		Attempt: 2, RetryAtMs: time.Now().Add(time.Second).UnixMilli(),
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	message, err := host.Next(ctx)
@@ -92,6 +93,10 @@ func TestSnapshotRequestIsTargetedAndFinalEventDrains(t *testing.T) {
 	if envelope.Type != "snapshot.requested" {
 		t.Fatalf("targeted event type = %q", envelope.Type)
 	}
+	if server.metrics.snapshotRequests.Load() != 1 ||
+		server.metrics.snapshotRetries.Load() != 1 {
+		t.Fatal("snapshot retry metrics were not recorded")
+	}
 	notTargetContext, cancelNotTarget := context.WithTimeout(context.Background(),
 		10*time.Millisecond)
 	_, notTargetErr := editor.Next(notTargetContext)
@@ -103,6 +108,9 @@ func TestSnapshotRequestIsTargetedAndFinalEventDrains(t *testing.T) {
 	server.publishSnapshotFinalization(&collab.SnapshotFinalization{
 		ProjectID: projectID, SessionID: sessionID, FinalSeq: 501,
 	})
+	if server.metrics.sessionEnded.Load() != 1 {
+		t.Fatal("session finalization metric was not recorded")
+	}
 	for name, subscription := range map[string]*collab.RoomSubscription{
 		"host": host, "editor": editor,
 	} {

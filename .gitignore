@@ -38,6 +38,7 @@ next-env.d.ts
 
 # CMake / C++ build output
 /build*/
+/package-[0-9]*/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt

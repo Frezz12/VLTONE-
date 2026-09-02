@@ -1,0 +1,185 @@
+{
+  "commands": [
+    {
+      "schemaVersion": 2,
+      "opId": "10000000-0000-4000-8000-000000000001",
+      "transactionId": "",
+      "baseServerSeq": 0,
+      "kind": "project.setScalar",
+      "payload": { "field": "tempo", "value": 128.0 },
+      "preconditions": [],
+      "touchedFields": ["project:tempo", "project:tempoCascade"]
+    },
+    {
+      "schemaVersion": 2,
+      "opId": "10000000-0000-4000-8000-000000000002",
+      "transactionId": "",
+      "baseServerSeq": 1,
+      "kind": "track.setParent",
+      "payload": {
+        "trackId": "20000000-0000-4000-8000-000000000001",
+        "parentId": "20000000-0000-4000-8000-000000000002"
+      },
+      "preconditions": [],
+      "touchedFields": ["track:20000000-0000-4000-8000-000000000001:parentId"]
+    },
+    {
+      "schemaVersion": 2,
+      "opId": "10000000-0000-4000-8000-000000000003",
+      "transactionId": "",
+      "baseServerSeq": 2,
+      "kind": "plugin.add",
+      "payload": {
+        "location": {
+          "chain": "instrument",
+          "trackId": "20000000-0000-4000-8000-000000000001",
+          "clipId": ""
+        },
+        "insert": {
+          "id": "30000000-0000-4000-8000-000000000001",
+          "name": "Sampler",
+          "bypassed": false,
+          "format": "internal",
+          "uid": "daw.sampler",
+          "vendor": "VLTONE",
+          "pluginVersion": "1.0.0",
+          "stateSchemaVersion": 1,
+          "mix": 1.0,
+          "channelMode": "auto",
+          "sidechainTrackId": "",
+          "stateAsset": null,
+          "rightStateAsset": null,
+          "parameters": [],
+          "rightParameters": [],
+          "assetBindings": []
+        },
+        "afterId": ""
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "plugin:30000000-0000-4000-8000-000000000001:generation",
+        "plugin:30000000-0000-4000-8000-000000000001:lifecycle",
+        "plugin:30000000-0000-4000-8000-000000000001:position"
+      ]
+    },
+    {
+      "schemaVersion": 2,
+      "opId": "10000000-0000-4000-8000-000000000004",
+      "transactionId": "",
+      "baseServerSeq": 3,
+      "kind": "plugin.setAssetBinding",
+      "payload": {
+        "location": {
+          "chain": "instrument",
+          "trackId": "20000000-0000-4000-8000-000000000001",
+          "clipId": ""
+        },
+        "insertId": "30000000-0000-4000-8000-000000000001",
+        "binding": {
+          "key": "sample",
+          "asset": {
+            "assetId": "70000000-0000-4000-8000-000000000001",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "kind": "audio",
+            "byteSize": 4096,
+            "originalName": "sample.wav"
+          },
+          "required": true
+        }
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "plugin:30000000-0000-4000-8000-000000000001:assetBinding:sample",
+        "plugin:30000000-0000-4000-8000-000000000001:generation",
+        "plugin:30000000-0000-4000-8000-000000000001:state"
+      ]
+    },
+    {
+      "schemaVersion": 2,
+      "opId": "10000000-0000-4000-8000-000000000005",
+      "transactionId": "",
+      "baseServerSeq": 4,
+      "kind": "plugin.replace",
+      "payload": {
+        "location": {
+          "chain": "instrument",
+          "trackId": "20000000-0000-4000-8000-000000000001",
+          "clipId": ""
+        },
+        "insertId": "30000000-0000-4000-8000-000000000001",
+        "replacement": {
+          "id": "30000000-0000-4000-8000-000000000001",
+          "name": "Sampler reset",
+          "bypassed": false,
+          "format": "internal",
+          "uid": "daw.sampler",
+          "vendor": "VLTONE",
+          "pluginVersion": "1.0.0",
+          "stateSchemaVersion": 1,
+          "mix": 1.0,
+          "channelMode": "auto",
+          "sidechainTrackId": "",
+          "stateAsset": null,
+          "rightStateAsset": null,
+          "parameters": [],
+          "rightParameters": [],
+          "assetBindings": []
+        }
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "plugin:30000000-0000-4000-8000-000000000001:generation",
+        "plugin:30000000-0000-4000-8000-000000000001:state"
+      ]
+    },
+    {
+      "schemaVersion": 2,
+      "opId": "10000000-0000-4000-8000-000000000006",
+      "transactionId": "",
+      "baseServerSeq": 5,
+      "kind": "take.setProperty",
+      "payload": {
+        "trackId": "20000000-0000-4000-8000-000000000001",
+        "clipId": "40000000-0000-4000-8000-000000000001",
+        "takeId": "50000000-0000-4000-8000-000000000001",
+        "property": "gain",
+        "value": 0.75
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "clip:40000000-0000-4000-8000-000000000001:descendants",
+        "take:50000000-0000-4000-8000-000000000001:gain"
+      ]
+    },
+    {
+      "schemaVersion": 2,
+      "opId": "10000000-0000-4000-8000-000000000007",
+      "transactionId": "10000000-0000-4000-8000-000000000008",
+      "baseServerSeq": 6,
+      "kind": "batch",
+      "payload": {
+        "commands": [
+          {
+            "kind": "project.setScalar",
+            "payload": { "field": "renderSampleRate", "value": 48000.0 },
+            "preconditions": []
+          },
+          {
+            "kind": "track.setProperty",
+            "payload": {
+              "trackId": "20000000-0000-4000-8000-000000000002",
+              "property": "summing",
+              "value": true
+            },
+            "preconditions": []
+          }
+        ]
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "project:renderSampleRate",
+        "track:20000000-0000-4000-8000-000000000002:summing"
+      ]
+    }
+  ]
+}

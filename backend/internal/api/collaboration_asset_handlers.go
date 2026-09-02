@@ -76,8 +76,14 @@ func (s *Server) completeProjectAssetUpload(w http.ResponseWriter, r *http.Reque
 	completed, err := s.CollabAssets.CompleteAssetUpload(r.Context(), projectID, uploadID,
 		userFrom(r).ID, deviceFrom(r).ID, collaborationActorSessionID(r), input.Parts)
 	if err != nil {
+		if s.metrics != nil {
+			s.metrics.uploadVerificationFailure.Add(1)
+		}
 		s.writeCollaborationStorageError(w, r, err)
 		return
+	}
+	if s.metrics != nil {
+		s.metrics.uploadVerificationSuccess.Add(1)
 	}
 	writeJSON(w, http.StatusOK, completed)
 }
@@ -139,8 +145,14 @@ func (s *Server) completeProjectSnapshotUpload(w http.ResponseWriter, r *http.Re
 	completed, err := s.CollabAssets.CompleteSnapshotUpload(r.Context(), projectID, uploadID,
 		userFrom(r).ID, deviceFrom(r).ID, collaborationActorSessionID(r), input.Parts)
 	if err != nil {
+		if s.metrics != nil {
+			s.metrics.uploadVerificationFailure.Add(1)
+		}
 		s.writeCollaborationStorageError(w, r, err)
 		return
+	}
+	if s.metrics != nil {
+		s.metrics.uploadVerificationSuccess.Add(1)
 	}
 	writeJSON(w, http.StatusOK, completed)
 	s.publishSnapshotFinalization(completed.Finalization)
@@ -219,7 +231,20 @@ func decodeOptionalCompleteUpload(w http.ResponseWriter, r *http.Request) (compl
 }
 
 func (s *Server) writeCollaborationStorageError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, objectstore.ErrProvider) ||
+		errors.Is(err, objectstore.ErrInvalidMultipart) {
+		s.recordCollaborationStorageError("request", err)
+	}
 	switch {
+	case errors.Is(err, collab.ErrStorageQuotaExceeded):
+		writeError(w, r, http.StatusConflict, "storage_quota_exceeded",
+			"Cloud collaboration storage quota has been reached.", nil)
+	case errors.Is(err, collab.ErrUploadConcurrencyExceeded):
+		writeError(w, r, http.StatusTooManyRequests, "upload_concurrency_exceeded",
+			"Too many uploads are already open.", nil)
+	case errors.Is(err, collab.ErrUploadVerifying):
+		writeError(w, r, http.StatusConflict, "upload_verifying",
+			"Upload verification is already in progress.", nil)
 	case errors.Is(err, objectstore.ErrInvalidObject), errors.Is(err, objectstore.ErrObjectNotFound):
 		writeError(w, r, http.StatusUnprocessableEntity, "upload_verification_failed",
 			"Uploaded bytes do not match the declared checksum and size.", nil)

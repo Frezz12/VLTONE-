@@ -4,6 +4,40 @@
  */
 
 export interface paths {
+    "/healthz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Process liveness only */
+        get: operations["getProcessHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/readyz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** PostgreSQL, schema-version and writable-temp readiness */
+        get: operations["getReadiness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/meta": {
         parameters: {
             query?: never;
@@ -324,6 +358,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/desktop/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Return account-scoped collaboration entitlement and effective storage limits */
+        get: operations["getDesktopCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/desktop/telemetry/batch": {
         parameters: {
             query?: never;
@@ -446,6 +497,557 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List cloud projects visible to the signed-in desktop user */
+        get: operations["listCloudProjects"];
+        put?: never;
+        /** Create an uploading cloud-project shell */
+        post: operations["createCloudProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get: operations["getCloudProject"];
+        put?: never;
+        post?: never;
+        /** Archive the project after any live session has an exact-head snapshot */
+        delete: operations["archiveCloudProject"];
+        options?: never;
+        head?: never;
+        patch: operations["updateCloudProject"];
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Atomically activate an uploading project after a verified head snapshot and assets exist */
+        post: operations["completeCloudProjectPublication"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/bootstrap": {
+        parameters: {
+            query?: {
+                after_seq?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** Fetch the newest snapshot plus the ordered operation page after a sequence */
+        get: operations["bootstrapCloudProject"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/ops": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sequence one durable command for an editor joined from this device */
+        post: operations["appendCloudProjectOperation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/ops/{opId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                opId: components["parameters"]["OpId"];
+            };
+            cookie?: never;
+        };
+        /** Authoritatively check whether an operation identifier is durable at the current project head */
+        get: operations["getCloudProjectOperationStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/asset-uploads/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deduplicate an asset or prepare bounded single/multipart staging PUTs
+         * @description Large objects use provider-side multipart upload. partNumberStart explicitly pages missing part URLs without changing uploadId idempotency. Returned URLs are sensitive delegated access and must never be logged; the opaque provider upload identifier is never returned separately. Object keys contain UUIDs only, never client filenames or paths.
+         */
+        post: operations["prepareCloudProjectAssetUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/asset-uploads/{uploadId}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                uploadId: components["parameters"]["UploadId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stream, hash, seal and atomically link an uploaded asset
+         * @description The server independently verifies exact SHA-256 and byte size, promotes into immutable content-addressed storage, then creates the project asset. Client checksum metadata alone is never trusted.
+         */
+        post: operations["completeCloudProjectAssetUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/uploads/{uploadId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                uploadId: components["parameters"]["UploadId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Idempotently abort an open asset or snapshot staging upload */
+        delete: operations["abortCloudProjectUpload"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/snapshot-uploads/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deduplicate or prepare a resumable canonical v7 snapshot at the exact requested head
+         * @description Initial publication is owner-authorized. During a live session, only the server-assigned host for a pending snapshot.requested target may prepare the upload; an ending session keeps that target frozen. assetIds is the exact set of AssetRefs parsed from the canonical snapshot; the server normalizes it and verifies every declared project asset before prepare and complete.
+         */
+        post: operations["prepareCloudProjectSnapshotUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/snapshot-uploads/{uploadId}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                uploadId: components["parameters"]["UploadId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify a canonical snapshot and attach it only at the exact requested current head
+         * @description Provider bytes are verified before the database transaction. For session_end, linking the exact snapshot, completing the request, and changing the live session from ending to ended are one transaction.
+         */
+        post: operations["completeCloudProjectSnapshotUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/assets/{assetId}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                assetId: string;
+            };
+            cookie?: never;
+        };
+        /** Issue an authorized short-lived GET for a verified asset */
+        get: operations["prepareCloudProjectAssetDownload"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/snapshots/{snapshotId}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                snapshotId: string;
+            };
+            cookie?: never;
+        };
+        /** Issue an authorized short-lived GET for a verified bootstrap snapshot */
+        get: operations["prepareCloudProjectSnapshotDownload"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get: operations["listCloudProjectMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/members/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                userId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["putCloudProjectMember"];
+        post?: never;
+        delete: operations["removeCloudProjectMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/ownership": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["transferCloudProjectOwnership"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** List invitations for owner project management; invitation tokens are never returned */
+        get: operations["listCloudProjectInvites"];
+        put?: never;
+        post: operations["createCloudProjectInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/invites/{inviteId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                inviteId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["revokeCloudProjectInvite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/project-invites/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["acceptCloudProjectInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Owner-only live-session start */
+        post: operations["startCloudProjectSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get: operations["getActiveCloudProjectSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Freeze and end a session as its host or project owner
+         * @description If head_seq is not yet snapshotted, the session enters ending and remains recoverable until the assigned host uploads a verified exact-head snapshot. The WebSocket session.ended event is emitted only after that commit.
+         */
+        delete: operations["endCloudProjectSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["joinCloudProjectSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/leave": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["leaveCloudProjectSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["heartbeatCloudProjectSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/host": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["handoffCloudProjectSessionHost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["acquireProjectRecordingLease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/leases/{leaseId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+                leaseId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["releaseProjectRecordingLease"];
+        options?: never;
+        head?: never;
+        patch: operations["renewProjectRecordingLease"];
         trace?: never;
     };
     "/v1/admin/ai/prompts": {
@@ -642,6 +1244,23 @@ export interface paths {
         put?: never;
         post?: never;
         delete: operations["adminDeleteUser"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/collaboration-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Enable or immediately revoke cloud collaboration for one account */
+        put: operations["adminSetUserCollaborationAccess"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1011,6 +1630,435 @@ export interface components {
             };
             request_id: string;
         };
+        /**
+         * @description Stable machine-readable release errors that desktop clients may branch on.
+         * @enum {string}
+         */
+        StableCollaborationErrorCode: "collaboration_not_enabled" | "collaboration_access_unavailable" | "hash_consensus_required" | "cloud_recording_disabled" | "storage_quota_exceeded" | "upload_concurrency_exceeded";
+        DesktopCapabilities: {
+            collaboration: {
+                enabled: boolean;
+                entitled: boolean;
+                /** @constant */
+                recording: false;
+                maxParticipants: number;
+                storage: {
+                    /** Format: int64 */
+                    maximumObjectBytes: number;
+                    /** Format: int64 */
+                    projectQuotaBytes: number;
+                    /** Format: int64 */
+                    userQuotaBytes: number;
+                };
+            };
+        };
+        CloudProject: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            owner_user_id: string;
+            title: string;
+            /** @enum {unknown} */
+            status: "uploading" | "active" | "read_only" | "conflict" | "archived";
+            /** @constant */
+            format_version: 7;
+            engine_version: string;
+            minimum_app_version: string;
+            /** Format: int64 */
+            head_seq: number;
+            /** Format: int64 */
+            snapshot_seq: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            archived_at?: string | null;
+        };
+        CloudProjectView: {
+            project: components["schemas"]["CloudProject"];
+            /** @enum {unknown} */
+            role: "owner" | "editor" | "viewer";
+        };
+        CreateCloudProjectRequest: {
+            title: string;
+            /** @constant */
+            format_version: 7;
+            engine_version: string;
+            minimum_app_version: string;
+        };
+        UpdateCloudProjectRequest: {
+            title?: string;
+            engine_version?: string;
+            minimum_app_version?: string;
+        };
+        ProjectMember: {
+            /** Format: uuid */
+            project_id: string;
+            /** Format: uuid */
+            user_id: string;
+            /** @enum {unknown} */
+            role: "editor" | "viewer";
+            color_index: number;
+            /** Format: uuid */
+            invited_by?: string | null;
+            /** Format: date-time */
+            joined_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CreateProjectInviteRequest: {
+            /** @enum {unknown} */
+            role: "editor" | "viewer";
+            /** Format: email */
+            targetEmail?: string;
+            /**
+             * Format: int64
+             * @default 604800
+             */
+            expiresInSeconds: number;
+        };
+        ProjectInvite: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            project_id: string;
+            /** Format: uuid */
+            invited_by?: string | null;
+            /** @enum {unknown} */
+            role: "editor" | "viewer";
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: uuid */
+            accepted_by?: string | null;
+            /** Format: date-time */
+            accepted_at?: string | null;
+            /** Format: date-time */
+            revoked_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        CreatedProjectInvite: {
+            invite: components["schemas"]["ProjectInvite"];
+            token: string;
+        };
+        ProjectSnapshot: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            project_id: string;
+            /** Format: int64 */
+            seq: number;
+            /** Format: uuid */
+            blob_id: string;
+            /** @constant */
+            schema_version: 7;
+            /** @description Exact normalized lexicographically sorted manifest; clients must compare it with AssetRefs parsed from the downloaded canonical snapshot. */
+            asset_ids: string[];
+            /** Format: uuid */
+            created_by?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        PrepareAssetUploadRequest: {
+            /**
+             * Format: uuid
+             * @description Client-generated idempotency identifier
+             */
+            uploadId: string;
+            /**
+             * Format: uuid
+             * @description Stable document asset identifier
+             */
+            assetId: string;
+            sha256: string;
+            /** Format: int64 */
+            byteSize: number;
+            /** @enum {unknown} */
+            kind: "audio" | "sample" | "plugin_state" | "other";
+            contentType: string;
+            /** @description Basename only; directory components are discarded */
+            displayName: string;
+            /** @description Explicit first part considered for this missing-URL page; omitted means 1 and is excluded from the upload idempotency hash */
+            partNumberStart?: number;
+        };
+        PrepareSnapshotUploadRequest: {
+            /**
+             * Format: uuid
+             * @description Client-generated idempotency identifier
+             */
+            uploadId: string;
+            /** Format: int64 */
+            seq: number;
+            /** @constant */
+            schemaVersion: 7;
+            sha256: string;
+            /** Format: int64 */
+            byteSize: number;
+            contentType: string;
+            /** @description Exact AssetRef identifiers in the canonical snapshot. Input order is arbitrary; the server canonicalizes it for upload idempotency. Use an empty array when there are no assets. */
+            assetIds: string[];
+            /** @description Explicit first part considered for this missing-URL page; omitted means 1 and is excluded from the upload idempotency hash */
+            partNumberStart?: number;
+        };
+        CompleteMultipartPart: {
+            partNumber: number;
+            /** @description Exact ETag response header */
+            eTag: string;
+        };
+        CompleteMultipartUploadRequest: {
+            /** @description Strictly ordered contiguous parts 1..N; the server compares every ETag and byte size with provider ListParts before signing completion */
+            parts: components["schemas"]["CompleteMultipartPart"][];
+        };
+        PresignedRequest: {
+            /** @enum {unknown} */
+            method: "PUT" | "GET";
+            /**
+             * Format: uri
+             * @description Delegated URL; redact it from all logs and telemetry
+             */
+            url: string;
+            /** @description Every returned header must be sent exactly; no storage credentials are included */
+            headers: {
+                [key: string]: string;
+            };
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        UploadPreparation: {
+            /** Format: uuid */
+            uploadId: string;
+            /** Format: uuid */
+            assetId?: string;
+            /** Format: int64 */
+            snapshotSeq?: number;
+            /** @enum {unknown} */
+            status: "uploading" | "verifying" | "completed";
+            /** @enum {unknown} */
+            uploadMode: "single" | "multipart";
+            alreadyAvailable: boolean;
+            request?: components["schemas"]["PresignedRequest"];
+            /** Format: int64 */
+            multipartPartSize?: number;
+            multipartPartCount?: number;
+            /** @description Provider-observed resumable state; ETags are opaque and are not treated as checksums */
+            uploadedParts?: {
+                partNumber: number;
+                /** Format: int64 */
+                byteSize: number;
+                eTag: string;
+            }[];
+            /** @description Missing provider parts in the explicit page, each with an independently expiring delegated PUT */
+            parts?: {
+                partNumber: number;
+                /** Format: int64 */
+                byteSize: number;
+                request: components["schemas"]["PresignedRequest"];
+            }[];
+            /** @description Explicit cursor for the next missing-URL page */
+            nextPartNumberStart?: number;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        BlobDescriptor: {
+            /** Format: uuid */
+            id: string;
+            sha256: string;
+            /** Format: int64 */
+            bytes: number;
+            content_type: string;
+            /** @enum {unknown} */
+            kind: "audio" | "sample" | "plugin_state" | "project_snapshot" | "other";
+            /** @constant */
+            status: "ready";
+            /** Format: uuid */
+            created_by?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            verified_at?: string | null;
+        };
+        ProjectAsset: {
+            /** Format: uuid */
+            project_id: string;
+            /** Format: uuid */
+            asset_id: string;
+            /** Format: uuid */
+            blob_id: string;
+            /** @enum {unknown} */
+            kind: "audio" | "sample" | "plugin_state" | "other";
+            display_name: string;
+            /** Format: uuid */
+            created_by?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        CompletedProjectAsset: {
+            asset: components["schemas"]["ProjectAsset"];
+            blob: components["schemas"]["BlobDescriptor"];
+        };
+        CompletedProjectSnapshot: {
+            snapshot: components["schemas"]["ProjectSnapshot"];
+            blob: components["schemas"]["BlobDescriptor"];
+        };
+        PresignedDownload: {
+            request: components["schemas"]["PresignedRequest"];
+            sha256: string;
+            /** Format: int64 */
+            byteSize: number;
+            contentType: string;
+        };
+        ProjectFieldHead: {
+            /** Format: uuid */
+            project_id: string;
+            field_key: string;
+            /** Format: int64 */
+            head_seq: number;
+            /** Format: uuid */
+            headOpId: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ProjectOperation: {
+            /** Format: uuid */
+            project_id: string;
+            /** Format: int64 */
+            serverSeq: number;
+            /** Format: uuid */
+            opId: string;
+            /** Format: uuid */
+            transactionId?: string | null;
+            /** Format: uuid */
+            actor_user_id?: string | null;
+            /** Format: uuid */
+            actor_device_id?: string | null;
+            kind: string;
+            /** @constant */
+            schemaVersion: 2;
+            /** Format: int64 */
+            baseServerSeq: number;
+            /** @description Canonical command payload; the complete submitted command is limited to 1 MiB of JSON. */
+            payload: Record<string, never>;
+            preconditions: Record<string, never>[];
+            touchedFields: string[];
+            /** Format: date-time */
+            created_at: string;
+        };
+        AppendOperationResult: {
+            operation: components["schemas"]["ProjectOperation"];
+            duplicate: boolean;
+        };
+        OperationStatus: {
+            found: boolean;
+            /** Format: int64 */
+            head_seq: number;
+            operation: components["schemas"]["ProjectOperation"] | null;
+        };
+        CloudProjectBootstrap: {
+            project: components["schemas"]["CloudProject"];
+            /** @enum {unknown} */
+            role: "owner" | "editor" | "viewer";
+            snapshot?: components["schemas"]["ProjectSnapshot"] | null;
+            operations: components["schemas"]["ProjectOperation"][];
+            field_heads: components["schemas"]["ProjectFieldHead"][];
+            /** Format: int64 */
+            head_seq: number;
+            /** Format: int64 */
+            next_after_seq: number;
+            has_more: boolean;
+        };
+        ProjectLiveSession: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            project_id: string;
+            /** Format: uuid */
+            created_by?: string | null;
+            /** Format: uuid */
+            host_member_id?: string | null;
+            /** @enum {unknown} */
+            mode: "independent" | "follow_host" | "synchronized";
+            /** @enum {unknown} */
+            status: "starting" | "active" | "ending" | "ended";
+            /** Format: int64 */
+            version: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            started_at?: string | null;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            ended_at?: string | null;
+        };
+        SessionCompatibilityRequest: {
+            /** @description SemVer 2.0.0 application version */
+            appVersion: string;
+            engineVersion: string;
+            /** @constant */
+            commandSchemaVersion: 2;
+            /** @constant */
+            projectFormatVersion: 7;
+        };
+        StartProjectSessionRequest: {
+            /** @description SemVer 2.0.0 application version */
+            appVersion: string;
+            engineVersion: string;
+            /** @constant */
+            commandSchemaVersion: 2;
+            /** @constant */
+            projectFormatVersion: 7;
+            /**
+             * @default independent
+             * @enum {unknown}
+             */
+            mode: "independent" | "follow_host" | "synchronized";
+        };
+        ProjectSessionMember: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            session_id: string;
+            /** Format: uuid */
+            user_id: string;
+            /** Format: uuid */
+            device_id: string;
+            /** Format: date-time */
+            joined_at: string;
+            /** Format: date-time */
+            last_seen_at: string;
+            /** Format: date-time */
+            left_at?: string | null;
+        };
+        ProjectSessionState: {
+            session: components["schemas"]["ProjectLiveSession"];
+            members: components["schemas"]["ProjectSessionMember"][];
+        };
+        TrackLeaseRequest: {
+            /** Format: uuid */
+            track_id: string;
+            ttl_seconds?: number;
+        };
+        ProjectTrackLease: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            project_id: string;
+            /** Format: uuid */
+            session_id: string;
+            /** Format: uuid */
+            track_id: string;
+            /** @constant */
+            lease_kind: "record";
+            /** Format: uuid */
+            holder_member_id: string;
+            /** Format: date-time */
+            acquired_at: string;
+            /** Format: date-time */
+            renewed_at: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
         /** @enum {string} */
         ArtifactKind: "windows-exe" | "macos-dmg" | "linux-appimage" | "linux-deb" | "linux-rpm" | "linux-tar-gz" | "linux-tar-xz";
         ReleaseArtifact: {
@@ -1142,15 +2190,27 @@ export interface components {
         };
         Meta: {
             /** @constant */
-            service?: "vlt-studio";
+            service: "vlt-studio";
             /** @constant */
-            api_version?: "v1";
-            consent_version?: string;
+            api_version: "v1";
+            consent_version: string;
             /** @constant */
-            offline_hours?: 72;
+            offline_hours: 72;
             /** @constant */
-            access_token_minutes?: 15;
-            public_key?: string;
+            access_token_minutes: 15;
+            public_key: string;
+            collaboration: {
+                enabled: boolean;
+                /** @constant */
+                protocol: "vlt-collab-v2";
+                /** @constant */
+                project_format: 7;
+                /** @constant */
+                command_schema: 2;
+                /** @constant */
+                recording: false;
+                max_participants: number;
+            };
         };
         LoginRequest: {
             /** Format: email */
@@ -1184,6 +2244,7 @@ export interface components {
             locale: "ru" | "en";
             /** @enum {string} */
             status: "active" | "suspended";
+            collaboration_enabled: boolean;
             consent_version?: string;
             /** Format: date-time */
             consent_accepted_at?: string;
@@ -1326,6 +2387,2059 @@ export interface components {
             status: "new" | "triage" | "in_progress" | "fixed" | "duplicate" | "wont_fix";
             internal_note: string;
         };
+        /** Format: uuid */
+        id: string;
+        scalarValue: string | number | boolean;
+        optionalId: "" | components["schemas"]["id"];
+        send: {
+            id: components["schemas"]["id"];
+            destinationTrackId: components["schemas"]["id"];
+            level: number;
+            preFader: boolean;
+            enabled: boolean;
+        };
+        audioMetadata: {
+            mimeType?: string;
+            codec?: string;
+            sampleRate?: number;
+            channels?: number;
+            frames?: number;
+        };
+        assetRef: {
+            assetId: components["schemas"]["id"];
+            sha256: string;
+            /** @enum {unknown} */
+            kind: "audio" | "plugin-state" | "plugin-resource" | "freeze";
+            byteSize: number;
+            originalName: string;
+            audioMetadata?: components["schemas"]["audioMetadata"];
+        };
+        pluginStateAssetRef: components["schemas"]["assetRef"] & {
+            /** @constant */
+            kind?: "plugin-state";
+        };
+        optionalAssetRef: null | components["schemas"]["assetRef"];
+        sampleEdit: {
+            loopMode: number;
+            loopStart: number;
+            loopEnd: number;
+            stretchMode: number;
+            stretchTime: number;
+            stretchPitch: number;
+            formant: number;
+            rootNote: number;
+            boost: number;
+            eqLow: number;
+            eqMid: number;
+            eqHigh: number;
+            ringMix: number;
+            ringFreq: number;
+            cut: number;
+            res: number;
+            reverbType: number;
+            reverb: number;
+            stereoDelay: number;
+            pogo: number;
+            removeDc: boolean;
+            reversePolarity: boolean;
+            normalize: boolean;
+            fadeStereo: boolean;
+            reverse: boolean;
+            swapStereo: boolean;
+        };
+        musicalAnalysis: {
+            version: number;
+            offsetSeconds: number;
+            durationSeconds: number;
+            tempo: {
+                status: number;
+                bpm: number;
+                confidence: number;
+                stability: number;
+                alternatives: number[];
+                variable: boolean;
+            };
+            key: {
+                status: number;
+                root: number;
+                scale: string;
+                confidence: number;
+                alternateRoot: number;
+                alternateScale: string;
+                tuningCents: number;
+            };
+        };
+        audioAssetRef: {
+            assetId: components["schemas"]["id"];
+            sha256: string;
+            /** @constant */
+            kind: "audio";
+            byteSize: number;
+            originalName: string;
+            audioMetadata?: components["schemas"]["audioMetadata"];
+        };
+        pluginAssetBinding: {
+            key: string;
+            asset: components["schemas"]["assetRef"];
+            required: boolean;
+        } & unknown;
+        samplerAssetBinding: components["schemas"]["pluginAssetBinding"] & unknown;
+        optionalPluginStateAssetRef: null | components["schemas"]["pluginStateAssetRef"];
+        insertParameter: {
+            id: string;
+            value: number;
+        };
+        pluginLocation: {
+            /** @enum {unknown} */
+            chain: "master" | "track" | "instrument" | "samplerFx" | "clip";
+            trackId: components["schemas"]["optionalId"];
+            clipId: components["schemas"]["optionalId"];
+        } & ({
+            /** @constant */
+            chain?: "master";
+            /** @constant */
+            trackId?: "";
+            /** @constant */
+            clipId?: "";
+        } | {
+            /** @enum {unknown} */
+            chain?: "track" | "instrument" | "samplerFx";
+            trackId?: components["schemas"]["id"];
+            /** @constant */
+            clipId?: "";
+        } | {
+            /** @constant */
+            chain?: "clip";
+            trackId?: components["schemas"]["id"];
+            clipId?: components["schemas"]["id"];
+        });
+        sharedInsert: {
+            id: components["schemas"]["id"];
+            name: string;
+            bypassed: boolean;
+            /** @constant */
+            format: "internal";
+            /** @enum {unknown} */
+            uid: "daw.sampler" | "daw.equalizer" | "daw.gravity";
+            vendor: string;
+            pluginVersion: string;
+            stateSchemaVersion: number;
+            mix: number;
+            /** @enum {unknown} */
+            channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+            sidechainTrackId: components["schemas"]["optionalId"];
+            stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            parameters: components["schemas"]["insertParameter"][];
+            rightParameters: components["schemas"]["insertParameter"][];
+            assetBindings: components["schemas"]["pluginAssetBinding"][];
+        } & unknown;
+        note: {
+            id: components["schemas"]["id"];
+            pitch: number;
+            startBeats: number;
+            lengthBeats: number;
+            velocity: number;
+            muted: boolean;
+            color: number;
+            pan: number;
+        };
+        automationPoint: {
+            id: components["schemas"]["id"];
+            beats: number;
+            value: number;
+            /** @enum {unknown} */
+            shape: "linear" | "hold" | "scurve";
+            curve: number;
+        };
+        controllerLaneTarget: {
+            cc: number;
+            parameterId: string;
+            slotId: components["schemas"]["optionalId"];
+        };
+        automationTarget: {
+            /** @enum {unknown} */
+            kind: "volume" | "pan" | "mute" | "send" | "parameter";
+            channelId: components["schemas"]["id"];
+            slotId: components["schemas"]["optionalId"];
+            parameterId: string;
+            sendId: components["schemas"]["optionalId"];
+        };
+        take: {
+            id: components["schemas"]["id"];
+            name: string;
+            offsetSeconds: number;
+            lengthSeconds: number;
+            clipOffsetSeconds: number;
+            gain: number;
+            muted: boolean;
+            channels: number;
+            color: number;
+            asset: components["schemas"]["audioAssetRef"];
+        };
+        compSegment: {
+            id: components["schemas"]["id"];
+            takeId: components["schemas"]["id"];
+            startSeconds: number;
+            endSeconds: number;
+        };
+        setScalarPayload: {
+            /** @enum {unknown} */
+            field: "name" | "tempo" | "aiInstructions" | "renderSampleRate" | "masterVolume" | "masterPan";
+            value: components["schemas"]["scalarValue"];
+        } & ({
+            /** @constant */
+            field?: "name";
+            value?: string;
+        } | {
+            /** @constant */
+            field?: "aiInstructions";
+            value?: string;
+        } | {
+            /** @constant */
+            field?: "tempo";
+            value?: number;
+        } | {
+            /** @constant */
+            field?: "renderSampleRate";
+            value?: number;
+        } | {
+            /** @constant */
+            field?: "masterVolume";
+            value?: number;
+        } | {
+            /** @constant */
+            field?: "masterPan";
+            value?: number;
+        });
+        timeSignaturePayload: {
+            numerator: number;
+            /** @enum {unknown} */
+            denominator: 1 | 2 | 4 | 8 | 16 | 32;
+        };
+        projectKeyPayload: {
+            root: number;
+            scale: string;
+        };
+        trackAddPayload: {
+            trackId: components["schemas"]["id"];
+            /** @enum {unknown} */
+            trackKind: "audio" | "instrument" | "midi" | "pattern" | "automation" | "bus" | "aux" | "group" | "master" | "folder";
+            name: string;
+            color: number;
+            parentId: components["schemas"]["optionalId"];
+            afterId: components["schemas"]["optionalId"];
+        };
+        trackIdPayload: {
+            trackId: components["schemas"]["id"];
+        };
+        trackRestorePayload: {
+            trackId: components["schemas"]["id"];
+            deleteOperationId: components["schemas"]["id"];
+        };
+        trackMovePayload: {
+            trackId: components["schemas"]["id"];
+            afterId: components["schemas"]["optionalId"];
+        };
+        trackPropertyPayload: {
+            trackId: components["schemas"]["id"];
+            /** @enum {unknown} */
+            property: "name" | "color" | "volume" | "pan" | "muted" | "mono" | "summing";
+            value: components["schemas"]["scalarValue"];
+        } & ({
+            /** @constant */
+            property?: "name";
+            value?: string;
+        } | {
+            /** @constant */
+            property?: "color";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "volume";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "pan";
+            value?: number;
+        } | {
+            /** @enum {unknown} */
+            property?: "muted" | "mono" | "summing";
+            value?: boolean;
+        });
+        trackParentPayload: {
+            trackId: components["schemas"]["id"];
+            parentId: components["schemas"]["optionalId"];
+        };
+        trackOutputPayload: {
+            trackId: components["schemas"]["id"];
+            outputTrackId: components["schemas"]["optionalId"];
+        };
+        sendAddPayload: {
+            trackId: components["schemas"]["id"];
+            send: components["schemas"]["send"];
+            afterId: components["schemas"]["optionalId"];
+        };
+        sendRefPayload: {
+            trackId: components["schemas"]["id"];
+            sendId: components["schemas"]["id"];
+        };
+        sendRestorePayload: {
+            trackId: components["schemas"]["id"];
+            sendId: components["schemas"]["id"];
+            deleteOperationId: components["schemas"]["id"];
+        };
+        sendMovePayload: {
+            trackId: components["schemas"]["id"];
+            sendId: components["schemas"]["id"];
+            afterId: components["schemas"]["optionalId"];
+        };
+        sendPropertyPayload: {
+            trackId: components["schemas"]["id"];
+            sendId: components["schemas"]["id"];
+            /** @enum {unknown} */
+            property: "destinationTrackId" | "level" | "preFader" | "enabled";
+            value: components["schemas"]["scalarValue"];
+        } & ({
+            /** @constant */
+            property?: "destinationTrackId";
+            value?: components["schemas"]["id"];
+        } | {
+            /** @constant */
+            property?: "level";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "preFader";
+            value?: boolean;
+        } | {
+            /** @constant */
+            property?: "enabled";
+            value?: boolean;
+        });
+        clipAddPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            /** @enum {unknown} */
+            clipKind: "audio" | "midi" | "pattern" | "automation";
+            name: string;
+            startSeconds: number;
+            durationSeconds: number;
+            color: number;
+            afterId?: components["schemas"]["optionalId"];
+        };
+        clipRefPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+        };
+        clipRestorePayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            deleteOperationId: components["schemas"]["id"];
+        };
+        clipMovePayload: {
+            clipId: components["schemas"]["id"];
+            sourceTrackId: components["schemas"]["id"];
+            trackId: components["schemas"]["id"];
+            afterId: components["schemas"]["optionalId"];
+        };
+        clipPropertyPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            /** @enum {unknown} */
+            property: "name" | "startSeconds" | "durationSeconds" | "offsetSeconds" | "gain" | "pan" | "muted" | "color" | "compCrossfadeMs";
+            value: components["schemas"]["scalarValue"];
+        } & ({
+            /** @constant */
+            property?: "name";
+            value?: string;
+        } | {
+            /** @enum {unknown} */
+            property?: "startSeconds" | "durationSeconds" | "offsetSeconds";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "gain";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "pan";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "muted";
+            value?: boolean;
+        } | {
+            /** @constant */
+            property?: "color";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "compCrossfadeMs";
+            value?: number;
+        });
+        clipAssetPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            asset: components["schemas"]["optionalAssetRef"];
+        };
+        clipSampleEditPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            sampleEdit: components["schemas"]["sampleEdit"];
+        };
+        clipFadePayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            fadeInSeconds: number;
+            fadeOutSeconds: number;
+        };
+        clipFadeCurvePayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            /** @enum {unknown} */
+            edge: "in" | "out";
+            curve: number;
+        };
+        clipFadeModePayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            /** @enum {unknown} */
+            edge: "in" | "out";
+            /** @enum {unknown} */
+            mode: "gain" | "tape";
+        };
+        clipPatternOwnerPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            patternClipId: components["schemas"]["optionalId"];
+        };
+        clipMusicalAnalysisPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            analysis: components["schemas"]["musicalAnalysis"];
+        };
+        pluginAddPayload: {
+            location: components["schemas"]["pluginLocation"];
+            insert: components["schemas"]["sharedInsert"];
+            afterId: components["schemas"]["optionalId"];
+        } & ({
+            location?: {
+                /** @constant */
+                chain?: "instrument";
+            };
+            insert?: {
+                /** @constant */
+                uid?: "daw.sampler";
+            };
+            /** @constant */
+            afterId?: "";
+        } | {
+            location?: {
+                /** @enum {unknown} */
+                chain?: "master" | "track" | "samplerFx" | "clip";
+            };
+            insert?: {
+                /** @enum {unknown} */
+                uid?: "daw.equalizer" | "daw.gravity";
+            };
+        });
+        pluginRefPayload: {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+        };
+        pluginRestorePayload: {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            deleteOperationId: components["schemas"]["id"];
+        };
+        pluginMovePayload: {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            afterId: components["schemas"]["optionalId"];
+        };
+        pluginReplacePayload: {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            replacement: components["schemas"]["sharedInsert"];
+        } & ({
+            location?: {
+                /** @constant */
+                chain?: "instrument";
+            };
+            replacement?: {
+                /** @constant */
+                uid?: "daw.sampler";
+            };
+        } | {
+            location?: {
+                /** @enum {unknown} */
+                chain?: "master" | "track" | "samplerFx" | "clip";
+            };
+            replacement?: {
+                /** @enum {unknown} */
+                uid?: "daw.equalizer" | "daw.gravity";
+            };
+        });
+        pluginPropertyPayload: {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            /** @enum {unknown} */
+            property: "name" | "bypassed" | "mix" | "channelMode" | "sidechainTrackId";
+            value: components["schemas"]["scalarValue"];
+        } & ({
+            /** @constant */
+            property?: "name";
+            value?: string;
+        } | {
+            /** @constant */
+            property?: "bypassed";
+            value?: boolean;
+        } | {
+            /** @constant */
+            property?: "mix";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "channelMode";
+            /** @enum {unknown} */
+            value?: "auto" | "mono" | "stereo" | "dual-mono";
+        } | {
+            /** @constant */
+            property?: "sidechainTrackId";
+            value?: components["schemas"]["optionalId"];
+        });
+        pluginStatePayload: {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            pluginVersion: string;
+            stateSchemaVersion: number;
+            stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            parameters: components["schemas"]["insertParameter"][];
+            rightParameters: components["schemas"]["insertParameter"][];
+            assetBindings: components["schemas"]["pluginAssetBinding"][];
+        } & unknown;
+        pluginParameterPayload: {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            parameterId: string;
+            value: number;
+            rightChannel: boolean;
+        };
+        pluginRemoveParameterPayload: {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            parameterId: string;
+            rightChannel: boolean;
+        };
+        pluginBindingPayload: {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            binding: components["schemas"]["pluginAssetBinding"];
+        } & unknown;
+        pluginRemoveBindingPayload: {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            key: string;
+        };
+        samplerFxLevelsPayload: {
+            trackId: components["schemas"]["id"];
+            instrumentId: components["schemas"]["id"];
+            volume: number;
+            pan: number;
+        };
+        noteUpsertPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            note: components["schemas"]["note"];
+            afterId?: components["schemas"]["optionalId"];
+        };
+        noteRefPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            noteId: components["schemas"]["id"];
+        };
+        noteRestorePayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            noteId: components["schemas"]["id"];
+            deleteOperationId: components["schemas"]["id"];
+        };
+        automationPointUpsertPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            laneId?: components["schemas"]["optionalId"];
+            point: components["schemas"]["automationPoint"];
+            afterId?: components["schemas"]["optionalId"];
+        };
+        automationPointRefPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            laneId?: components["schemas"]["optionalId"];
+            pointId: components["schemas"]["id"];
+        };
+        automationPointRestorePayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            laneId?: components["schemas"]["optionalId"];
+            pointId: components["schemas"]["id"];
+            deleteOperationId: components["schemas"]["id"];
+        };
+        controllerLaneAddPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            laneId: components["schemas"]["id"];
+            name: string;
+            target: components["schemas"]["controllerLaneTarget"];
+            defaultValue: number;
+            afterId: components["schemas"]["optionalId"];
+        };
+        controllerLaneRefPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            laneId: components["schemas"]["id"];
+        };
+        controllerLaneRestorePayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            laneId: components["schemas"]["id"];
+            deleteOperationId: components["schemas"]["id"];
+        };
+        controllerLaneTargetPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            laneId: components["schemas"]["id"];
+            target: components["schemas"]["controllerLaneTarget"];
+        };
+        controllerLaneDefaultPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            laneId: components["schemas"]["id"];
+            defaultValue: number;
+        };
+        automationTargetPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            target: components["schemas"]["automationTarget"];
+        };
+        automationDefaultPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            defaultValue: number;
+        };
+        automationActivePayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            active: boolean;
+        };
+        takeAddPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            take: components["schemas"]["take"];
+            afterId: components["schemas"]["optionalId"];
+        };
+        takeRefPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            takeId: components["schemas"]["id"];
+        };
+        takeRestorePayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            takeId: components["schemas"]["id"];
+            deleteOperationId: components["schemas"]["id"];
+        };
+        takeMovePayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            takeId: components["schemas"]["id"];
+            afterId: components["schemas"]["optionalId"];
+        };
+        takePropertyPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            takeId: components["schemas"]["id"];
+            /** @enum {unknown} */
+            property: "name" | "offsetSeconds" | "lengthSeconds" | "clipOffsetSeconds" | "gain" | "muted" | "color";
+            value: components["schemas"]["scalarValue"];
+        } & ({
+            /** @constant */
+            property?: "name";
+            value?: string;
+        } | {
+            /** @enum {unknown} */
+            property?: "offsetSeconds" | "lengthSeconds" | "clipOffsetSeconds";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "gain";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "muted";
+            value?: boolean;
+        } | {
+            /** @constant */
+            property?: "color";
+            value?: number;
+        });
+        compSegmentUpsertPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            segment: components["schemas"]["compSegment"];
+            afterId: components["schemas"]["optionalId"];
+        };
+        compSegmentRefPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            segmentId: components["schemas"]["id"];
+        };
+        compSegmentRestorePayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            segmentId: components["schemas"]["id"];
+            deleteOperationId: components["schemas"]["id"];
+        };
+        nonBatchBody: {
+            /** @constant */
+            kind?: "project.setScalar";
+            payload?: components["schemas"]["setScalarPayload"];
+        } | {
+            /** @constant */
+            kind?: "project.setTimeSignature";
+            payload?: components["schemas"]["timeSignaturePayload"];
+        } | {
+            /** @constant */
+            kind?: "project.setKey";
+            payload?: components["schemas"]["projectKeyPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.add";
+            payload?: components["schemas"]["trackAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.delete";
+            payload?: components["schemas"]["trackIdPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.restore";
+            payload?: components["schemas"]["trackRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "track.move";
+            payload?: components["schemas"]["trackMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "track.setProperty";
+            payload?: components["schemas"]["trackPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.setParent";
+            payload?: components["schemas"]["trackParentPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.setOutput";
+            payload?: components["schemas"]["trackOutputPayload"];
+        } | {
+            /** @constant */
+            kind?: "send.add";
+            payload?: components["schemas"]["sendAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "send.delete";
+            payload?: components["schemas"]["sendRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "send.restore";
+            payload?: components["schemas"]["sendRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "send.move";
+            payload?: components["schemas"]["sendMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "send.setProperty";
+            payload?: components["schemas"]["sendPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.add";
+            payload?: components["schemas"]["clipAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.delete";
+            payload?: components["schemas"]["clipRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.restore";
+            payload?: components["schemas"]["clipRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.move";
+            payload?: components["schemas"]["clipMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setProperty";
+            payload?: components["schemas"]["clipPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setAsset";
+            payload?: components["schemas"]["clipAssetPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setSampleEdit";
+            payload?: components["schemas"]["clipSampleEditPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setFade";
+            payload?: components["schemas"]["clipFadePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setFadeCurve";
+            payload?: components["schemas"]["clipFadeCurvePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setFadeMode";
+            payload?: components["schemas"]["clipFadeModePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setPatternOwner";
+            payload?: components["schemas"]["clipPatternOwnerPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setMusicalAnalysis";
+            payload?: components["schemas"]["clipMusicalAnalysisPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.add";
+            payload?: components["schemas"]["pluginAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.delete";
+            payload?: components["schemas"]["pluginRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.restore";
+            payload?: components["schemas"]["pluginRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.move";
+            payload?: components["schemas"]["pluginMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.replace";
+            payload?: components["schemas"]["pluginReplacePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setProperty";
+            payload?: components["schemas"]["pluginPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setState";
+            payload?: components["schemas"]["pluginStatePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setParameter";
+            payload?: components["schemas"]["pluginParameterPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.removeParameter";
+            payload?: components["schemas"]["pluginRemoveParameterPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setAssetBinding";
+            payload?: components["schemas"]["pluginBindingPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.removeAssetBinding";
+            payload?: components["schemas"]["pluginRemoveBindingPayload"];
+        } | {
+            /** @constant */
+            kind?: "samplerFx.setLevels";
+            payload?: components["schemas"]["samplerFxLevelsPayload"];
+        } | {
+            /** @constant */
+            kind?: "note.upsert";
+            payload?: components["schemas"]["noteUpsertPayload"];
+        } | {
+            /** @constant */
+            kind?: "note.delete";
+            payload?: components["schemas"]["noteRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "note.restore";
+            payload?: components["schemas"]["noteRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "automationPoint.upsert";
+            payload?: components["schemas"]["automationPointUpsertPayload"];
+        } | {
+            /** @constant */
+            kind?: "automationPoint.delete";
+            payload?: components["schemas"]["automationPointRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "automationPoint.restore";
+            payload?: components["schemas"]["automationPointRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.add";
+            payload?: components["schemas"]["controllerLaneAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.delete";
+            payload?: components["schemas"]["controllerLaneRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.restore";
+            payload?: components["schemas"]["controllerLaneRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.setTarget";
+            payload?: components["schemas"]["controllerLaneTargetPayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.setDefault";
+            payload?: components["schemas"]["controllerLaneDefaultPayload"];
+        } | {
+            /** @constant */
+            kind?: "automation.setTarget";
+            payload?: components["schemas"]["automationTargetPayload"];
+        } | {
+            /** @constant */
+            kind?: "automation.setDefault";
+            payload?: components["schemas"]["automationDefaultPayload"];
+        } | {
+            /** @constant */
+            kind?: "automation.setActive";
+            payload?: components["schemas"]["automationActivePayload"];
+        } | {
+            /** @constant */
+            kind?: "take.add";
+            payload?: components["schemas"]["takeAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "take.delete";
+            payload?: components["schemas"]["takeRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "take.restore";
+            payload?: components["schemas"]["takeRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "take.move";
+            payload?: components["schemas"]["takeMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "take.setProperty";
+            payload?: components["schemas"]["takePropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.upsert";
+            payload?: components["schemas"]["compSegmentUpsertPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.delete";
+            payload?: components["schemas"]["compSegmentRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.restore";
+            payload?: components["schemas"]["compSegmentRestorePayload"];
+        };
+        /** @enum {unknown} */
+        kind: "project.setScalar" | "project.setTimeSignature" | "project.setKey" | "track.add" | "track.delete" | "track.restore" | "track.move" | "track.setProperty" | "track.setParent" | "track.setOutput" | "send.add" | "send.delete" | "send.restore" | "send.move" | "send.setProperty" | "clip.add" | "clip.delete" | "clip.restore" | "clip.move" | "clip.setProperty" | "clip.setAsset" | "clip.setSampleEdit" | "clip.setFade" | "clip.setFadeCurve" | "clip.setFadeMode" | "clip.setPatternOwner" | "clip.setMusicalAnalysis" | "plugin.add" | "plugin.delete" | "plugin.restore" | "plugin.move" | "plugin.replace" | "plugin.setProperty" | "plugin.setState" | "plugin.setParameter" | "plugin.removeParameter" | "plugin.setAssetBinding" | "plugin.removeAssetBinding" | "samplerFx.setLevels" | "note.upsert" | "note.delete" | "note.restore" | "automationPoint.upsert" | "automationPoint.delete" | "automationPoint.restore" | "controllerLane.add" | "controllerLane.delete" | "controllerLane.restore" | "controllerLane.setTarget" | "controllerLane.setDefault" | "automation.setTarget" | "automation.setDefault" | "automation.setActive" | "take.add" | "take.delete" | "take.restore" | "take.move" | "take.setProperty" | "compSegment.upsert" | "compSegment.delete" | "compSegment.restore" | "recording.commit" | "batch";
+        precondition: {
+            /** @constant */
+            kind: "fieldWriterIs";
+            fieldKey: string;
+            operationId: components["schemas"]["id"];
+        };
+        batchItem: {
+            kind: components["schemas"]["kind"];
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+        } & components["schemas"]["nonBatchBody"];
+        recordingLease: {
+            trackId: components["schemas"]["id"];
+            leaseId: components["schemas"]["id"];
+        };
+        recordingCommitItem: {
+            /** @enum {unknown} */
+            kind: "clip.add" | "clip.setProperty" | "clip.setAsset" | "take.add" | "compSegment.upsert";
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+        } & ({
+            /** @constant */
+            kind?: "clip.add";
+            payload?: components["schemas"]["clipAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setProperty";
+            payload?: components["schemas"]["clipPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setAsset";
+            payload?: components["schemas"]["clipAssetPayload"];
+        } | {
+            /** @constant */
+            kind?: "take.add";
+            payload?: components["schemas"]["takeAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.upsert";
+            payload?: components["schemas"]["compSegmentUpsertPayload"];
+        });
+        recordingCommitPayload: {
+            leases: components["schemas"]["recordingLease"][];
+            commands: components["schemas"]["recordingCommitItem"][];
+        };
+        batchPayload: {
+            commands: components["schemas"]["batchItem"][];
+        };
+        bodyShape: components["schemas"]["nonBatchBody"] | {
+            /** @constant */
+            kind?: "recording.commit";
+            payload?: components["schemas"]["recordingCommitPayload"];
+        } | {
+            /** @constant */
+            kind?: "batch";
+            payload?: components["schemas"]["batchPayload"];
+        };
+        /**
+         * VLT Project Command v2
+         * @description Durable deterministic command for the shared project document. Presence, transport and local UI state are excluded.
+         */
+        "project-command-v2.schema": {
+            /** @constant */
+            schemaVersion: 2;
+            opId: components["schemas"]["id"];
+            transactionId: components["schemas"]["optionalId"];
+            baseServerSeq: number;
+            kind: components["schemas"]["kind"];
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+            touchedFields: string[];
+            $defs: {
+                /** Format: uuid */
+                id: string;
+                optionalId: "" | components["schemas"]["id"];
+                /** @enum {unknown} */
+                kind: "project.setScalar" | "project.setTimeSignature" | "project.setKey" | "track.add" | "track.delete" | "track.restore" | "track.move" | "track.setProperty" | "track.setParent" | "track.setOutput" | "send.add" | "send.delete" | "send.restore" | "send.move" | "send.setProperty" | "clip.add" | "clip.delete" | "clip.restore" | "clip.move" | "clip.setProperty" | "clip.setAsset" | "clip.setSampleEdit" | "clip.setFade" | "clip.setFadeCurve" | "clip.setFadeMode" | "clip.setPatternOwner" | "clip.setMusicalAnalysis" | "plugin.add" | "plugin.delete" | "plugin.restore" | "plugin.move" | "plugin.replace" | "plugin.setProperty" | "plugin.setState" | "plugin.setParameter" | "plugin.removeParameter" | "plugin.setAssetBinding" | "plugin.removeAssetBinding" | "samplerFx.setLevels" | "note.upsert" | "note.delete" | "note.restore" | "automationPoint.upsert" | "automationPoint.delete" | "automationPoint.restore" | "controllerLane.add" | "controllerLane.delete" | "controllerLane.restore" | "controllerLane.setTarget" | "controllerLane.setDefault" | "automation.setTarget" | "automation.setDefault" | "automation.setActive" | "take.add" | "take.delete" | "take.restore" | "take.move" | "take.setProperty" | "compSegment.upsert" | "compSegment.delete" | "compSegment.restore" | "recording.commit" | "batch";
+                scalarValue: string | number | boolean;
+                precondition: {
+                    /** @constant */
+                    kind: "fieldWriterIs";
+                    fieldKey: string;
+                    operationId: components["schemas"]["id"];
+                };
+                setScalarPayload: {
+                    /** @enum {unknown} */
+                    field: "name" | "tempo" | "aiInstructions" | "renderSampleRate" | "masterVolume" | "masterPan";
+                    value: components["schemas"]["scalarValue"];
+                } & ({
+                    /** @constant */
+                    field?: "name";
+                    value?: string;
+                } | {
+                    /** @constant */
+                    field?: "aiInstructions";
+                    value?: string;
+                } | {
+                    /** @constant */
+                    field?: "tempo";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    field?: "renderSampleRate";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    field?: "masterVolume";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    field?: "masterPan";
+                    value?: number;
+                });
+                timeSignaturePayload: {
+                    numerator: number;
+                    /** @enum {unknown} */
+                    denominator: 1 | 2 | 4 | 8 | 16 | 32;
+                };
+                projectKeyPayload: {
+                    root: number;
+                    scale: string;
+                };
+                trackAddPayload: {
+                    trackId: components["schemas"]["id"];
+                    /** @enum {unknown} */
+                    trackKind: "audio" | "instrument" | "midi" | "pattern" | "automation" | "bus" | "aux" | "group" | "master" | "folder";
+                    name: string;
+                    color: number;
+                    parentId: components["schemas"]["optionalId"];
+                    afterId: components["schemas"]["optionalId"];
+                };
+                trackIdPayload: {
+                    trackId: components["schemas"]["id"];
+                };
+                trackRestorePayload: {
+                    trackId: components["schemas"]["id"];
+                    deleteOperationId: components["schemas"]["id"];
+                };
+                trackMovePayload: {
+                    trackId: components["schemas"]["id"];
+                    afterId: components["schemas"]["optionalId"];
+                };
+                trackPropertyPayload: {
+                    trackId: components["schemas"]["id"];
+                    /** @enum {unknown} */
+                    property: "name" | "color" | "volume" | "pan" | "muted" | "mono" | "summing";
+                    value: components["schemas"]["scalarValue"];
+                } & ({
+                    /** @constant */
+                    property?: "name";
+                    value?: string;
+                } | {
+                    /** @constant */
+                    property?: "color";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "volume";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "pan";
+                    value?: number;
+                } | {
+                    /** @enum {unknown} */
+                    property?: "muted" | "mono" | "summing";
+                    value?: boolean;
+                });
+                trackParentPayload: {
+                    trackId: components["schemas"]["id"];
+                    parentId: components["schemas"]["optionalId"];
+                };
+                trackOutputPayload: {
+                    trackId: components["schemas"]["id"];
+                    outputTrackId: components["schemas"]["optionalId"];
+                };
+                send: {
+                    id: components["schemas"]["id"];
+                    destinationTrackId: components["schemas"]["id"];
+                    level: number;
+                    preFader: boolean;
+                    enabled: boolean;
+                };
+                sendAddPayload: {
+                    trackId: components["schemas"]["id"];
+                    send: components["schemas"]["send"];
+                    afterId: components["schemas"]["optionalId"];
+                };
+                sendRefPayload: {
+                    trackId: components["schemas"]["id"];
+                    sendId: components["schemas"]["id"];
+                };
+                sendRestorePayload: {
+                    trackId: components["schemas"]["id"];
+                    sendId: components["schemas"]["id"];
+                    deleteOperationId: components["schemas"]["id"];
+                };
+                sendMovePayload: {
+                    trackId: components["schemas"]["id"];
+                    sendId: components["schemas"]["id"];
+                    afterId: components["schemas"]["optionalId"];
+                };
+                sendPropertyPayload: {
+                    trackId: components["schemas"]["id"];
+                    sendId: components["schemas"]["id"];
+                    /** @enum {unknown} */
+                    property: "destinationTrackId" | "level" | "preFader" | "enabled";
+                    value: components["schemas"]["scalarValue"];
+                } & ({
+                    /** @constant */
+                    property?: "destinationTrackId";
+                    value?: components["schemas"]["id"];
+                } | {
+                    /** @constant */
+                    property?: "level";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "preFader";
+                    value?: boolean;
+                } | {
+                    /** @constant */
+                    property?: "enabled";
+                    value?: boolean;
+                });
+                clipAddPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    /** @enum {unknown} */
+                    clipKind: "audio" | "midi" | "pattern" | "automation";
+                    name: string;
+                    startSeconds: number;
+                    durationSeconds: number;
+                    color: number;
+                    afterId?: components["schemas"]["optionalId"];
+                };
+                clipRefPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                };
+                clipRestorePayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    deleteOperationId: components["schemas"]["id"];
+                };
+                clipMovePayload: {
+                    clipId: components["schemas"]["id"];
+                    sourceTrackId: components["schemas"]["id"];
+                    trackId: components["schemas"]["id"];
+                    afterId: components["schemas"]["optionalId"];
+                };
+                clipPropertyPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    /** @enum {unknown} */
+                    property: "name" | "startSeconds" | "durationSeconds" | "offsetSeconds" | "gain" | "pan" | "muted" | "color" | "compCrossfadeMs";
+                    value: components["schemas"]["scalarValue"];
+                } & ({
+                    /** @constant */
+                    property?: "name";
+                    value?: string;
+                } | {
+                    /** @enum {unknown} */
+                    property?: "startSeconds" | "durationSeconds" | "offsetSeconds";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "gain";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "pan";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "muted";
+                    value?: boolean;
+                } | {
+                    /** @constant */
+                    property?: "color";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "compCrossfadeMs";
+                    value?: number;
+                });
+                assetRef: {
+                    assetId: components["schemas"]["id"];
+                    sha256: string;
+                    /** @enum {unknown} */
+                    kind: "audio" | "plugin-state" | "plugin-resource" | "freeze";
+                    byteSize: number;
+                    originalName: string;
+                    audioMetadata?: components["schemas"]["audioMetadata"];
+                };
+                optionalAssetRef: null | components["schemas"]["assetRef"];
+                pluginStateAssetRef: components["schemas"]["assetRef"] & {
+                    /** @constant */
+                    kind?: "plugin-state";
+                };
+                optionalPluginStateAssetRef: null | components["schemas"]["pluginStateAssetRef"];
+                clipAssetPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    asset: components["schemas"]["optionalAssetRef"];
+                };
+                sampleEdit: {
+                    loopMode: number;
+                    loopStart: number;
+                    loopEnd: number;
+                    stretchMode: number;
+                    stretchTime: number;
+                    stretchPitch: number;
+                    formant: number;
+                    rootNote: number;
+                    boost: number;
+                    eqLow: number;
+                    eqMid: number;
+                    eqHigh: number;
+                    ringMix: number;
+                    ringFreq: number;
+                    cut: number;
+                    res: number;
+                    reverbType: number;
+                    reverb: number;
+                    stereoDelay: number;
+                    pogo: number;
+                    removeDc: boolean;
+                    reversePolarity: boolean;
+                    normalize: boolean;
+                    fadeStereo: boolean;
+                    reverse: boolean;
+                    swapStereo: boolean;
+                };
+                clipSampleEditPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    sampleEdit: components["schemas"]["sampleEdit"];
+                };
+                clipFadePayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    fadeInSeconds: number;
+                    fadeOutSeconds: number;
+                };
+                clipFadeCurvePayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    /** @enum {unknown} */
+                    edge: "in" | "out";
+                    curve: number;
+                };
+                clipFadeModePayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    /** @enum {unknown} */
+                    edge: "in" | "out";
+                    /** @enum {unknown} */
+                    mode: "gain" | "tape";
+                };
+                clipPatternOwnerPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    patternClipId: components["schemas"]["optionalId"];
+                };
+                musicalAnalysis: {
+                    version: number;
+                    offsetSeconds: number;
+                    durationSeconds: number;
+                    tempo: {
+                        status: number;
+                        bpm: number;
+                        confidence: number;
+                        stability: number;
+                        alternatives: number[];
+                        variable: boolean;
+                    };
+                    key: {
+                        status: number;
+                        root: number;
+                        scale: string;
+                        confidence: number;
+                        alternateRoot: number;
+                        alternateScale: string;
+                        tuningCents: number;
+                    };
+                };
+                clipMusicalAnalysisPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    analysis: components["schemas"]["musicalAnalysis"];
+                };
+                pluginLocation: {
+                    /** @enum {unknown} */
+                    chain: "master" | "track" | "instrument" | "samplerFx" | "clip";
+                    trackId: components["schemas"]["optionalId"];
+                    clipId: components["schemas"]["optionalId"];
+                } & ({
+                    /** @constant */
+                    chain?: "master";
+                    /** @constant */
+                    trackId?: "";
+                    /** @constant */
+                    clipId?: "";
+                } | {
+                    /** @enum {unknown} */
+                    chain?: "track" | "instrument" | "samplerFx";
+                    trackId?: components["schemas"]["id"];
+                    /** @constant */
+                    clipId?: "";
+                } | {
+                    /** @constant */
+                    chain?: "clip";
+                    trackId?: components["schemas"]["id"];
+                    clipId?: components["schemas"]["id"];
+                });
+                insertParameter: {
+                    id: string;
+                    value: number;
+                };
+                pluginAssetBinding: {
+                    key: string;
+                    asset: components["schemas"]["assetRef"];
+                    required: boolean;
+                } & unknown;
+                samplerAssetBinding: components["schemas"]["pluginAssetBinding"] & unknown;
+                sharedInsert: {
+                    id: components["schemas"]["id"];
+                    name: string;
+                    bypassed: boolean;
+                    /** @constant */
+                    format: "internal";
+                    /** @enum {unknown} */
+                    uid: "daw.sampler" | "daw.equalizer" | "daw.gravity";
+                    vendor: string;
+                    pluginVersion: string;
+                    stateSchemaVersion: number;
+                    mix: number;
+                    /** @enum {unknown} */
+                    channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+                    sidechainTrackId: components["schemas"]["optionalId"];
+                    stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    parameters: components["schemas"]["insertParameter"][];
+                    rightParameters: components["schemas"]["insertParameter"][];
+                    assetBindings: components["schemas"]["pluginAssetBinding"][];
+                } & unknown;
+                pluginAddPayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insert: components["schemas"]["sharedInsert"];
+                    afterId: components["schemas"]["optionalId"];
+                } & ({
+                    location?: {
+                        /** @constant */
+                        chain?: "instrument";
+                    };
+                    insert?: {
+                        /** @constant */
+                        uid?: "daw.sampler";
+                    };
+                    /** @constant */
+                    afterId?: "";
+                } | {
+                    location?: {
+                        /** @enum {unknown} */
+                        chain?: "master" | "track" | "samplerFx" | "clip";
+                    };
+                    insert?: {
+                        /** @enum {unknown} */
+                        uid?: "daw.equalizer" | "daw.gravity";
+                    };
+                });
+                pluginRefPayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                };
+                pluginRestorePayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    deleteOperationId: components["schemas"]["id"];
+                };
+                pluginMovePayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    afterId: components["schemas"]["optionalId"];
+                };
+                pluginReplacePayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    replacement: components["schemas"]["sharedInsert"];
+                } & ({
+                    location?: {
+                        /** @constant */
+                        chain?: "instrument";
+                    };
+                    replacement?: {
+                        /** @constant */
+                        uid?: "daw.sampler";
+                    };
+                } | {
+                    location?: {
+                        /** @enum {unknown} */
+                        chain?: "master" | "track" | "samplerFx" | "clip";
+                    };
+                    replacement?: {
+                        /** @enum {unknown} */
+                        uid?: "daw.equalizer" | "daw.gravity";
+                    };
+                });
+                pluginPropertyPayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    /** @enum {unknown} */
+                    property: "name" | "bypassed" | "mix" | "channelMode" | "sidechainTrackId";
+                    value: components["schemas"]["scalarValue"];
+                } & ({
+                    /** @constant */
+                    property?: "name";
+                    value?: string;
+                } | {
+                    /** @constant */
+                    property?: "bypassed";
+                    value?: boolean;
+                } | {
+                    /** @constant */
+                    property?: "mix";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "channelMode";
+                    /** @enum {unknown} */
+                    value?: "auto" | "mono" | "stereo" | "dual-mono";
+                } | {
+                    /** @constant */
+                    property?: "sidechainTrackId";
+                    value?: components["schemas"]["optionalId"];
+                });
+                pluginStatePayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    pluginVersion: string;
+                    stateSchemaVersion: number;
+                    stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    parameters: components["schemas"]["insertParameter"][];
+                    rightParameters: components["schemas"]["insertParameter"][];
+                    assetBindings: components["schemas"]["pluginAssetBinding"][];
+                } & unknown;
+                pluginParameterPayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    parameterId: string;
+                    value: number;
+                    rightChannel: boolean;
+                };
+                pluginRemoveParameterPayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    parameterId: string;
+                    rightChannel: boolean;
+                };
+                pluginBindingPayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    binding: components["schemas"]["pluginAssetBinding"];
+                } & unknown;
+                pluginRemoveBindingPayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    key: string;
+                };
+                samplerFxLevelsPayload: {
+                    trackId: components["schemas"]["id"];
+                    instrumentId: components["schemas"]["id"];
+                    volume: number;
+                    pan: number;
+                };
+                note: {
+                    id: components["schemas"]["id"];
+                    pitch: number;
+                    startBeats: number;
+                    lengthBeats: number;
+                    velocity: number;
+                    muted: boolean;
+                    color: number;
+                    pan: number;
+                };
+                noteUpsertPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    note: components["schemas"]["note"];
+                    afterId?: components["schemas"]["optionalId"];
+                };
+                noteRefPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    noteId: components["schemas"]["id"];
+                };
+                noteRestorePayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    noteId: components["schemas"]["id"];
+                    deleteOperationId: components["schemas"]["id"];
+                };
+                automationPoint: {
+                    id: components["schemas"]["id"];
+                    beats: number;
+                    value: number;
+                    /** @enum {unknown} */
+                    shape: "linear" | "hold" | "scurve";
+                    curve: number;
+                };
+                automationPointUpsertPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    laneId?: components["schemas"]["optionalId"];
+                    point: components["schemas"]["automationPoint"];
+                    afterId?: components["schemas"]["optionalId"];
+                };
+                automationPointRefPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    laneId?: components["schemas"]["optionalId"];
+                    pointId: components["schemas"]["id"];
+                };
+                automationPointRestorePayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    laneId?: components["schemas"]["optionalId"];
+                    pointId: components["schemas"]["id"];
+                    deleteOperationId: components["schemas"]["id"];
+                };
+                controllerLaneTarget: {
+                    cc: number;
+                    parameterId: string;
+                    slotId: components["schemas"]["optionalId"];
+                };
+                controllerLaneAddPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    laneId: components["schemas"]["id"];
+                    name: string;
+                    target: components["schemas"]["controllerLaneTarget"];
+                    defaultValue: number;
+                    afterId: components["schemas"]["optionalId"];
+                };
+                controllerLaneRefPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    laneId: components["schemas"]["id"];
+                };
+                controllerLaneRestorePayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    laneId: components["schemas"]["id"];
+                    deleteOperationId: components["schemas"]["id"];
+                };
+                controllerLaneTargetPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    laneId: components["schemas"]["id"];
+                    target: components["schemas"]["controllerLaneTarget"];
+                };
+                controllerLaneDefaultPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    laneId: components["schemas"]["id"];
+                    defaultValue: number;
+                };
+                automationTarget: {
+                    /** @enum {unknown} */
+                    kind: "volume" | "pan" | "mute" | "send" | "parameter";
+                    channelId: components["schemas"]["id"];
+                    slotId: components["schemas"]["optionalId"];
+                    parameterId: string;
+                    sendId: components["schemas"]["optionalId"];
+                };
+                automationTargetPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    target: components["schemas"]["automationTarget"];
+                };
+                automationDefaultPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    defaultValue: number;
+                };
+                automationActivePayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    active: boolean;
+                };
+                audioMetadata: {
+                    mimeType?: string;
+                    codec?: string;
+                    sampleRate?: number;
+                    channels?: number;
+                    frames?: number;
+                };
+                audioAssetRef: {
+                    assetId: components["schemas"]["id"];
+                    sha256: string;
+                    /** @constant */
+                    kind: "audio";
+                    byteSize: number;
+                    originalName: string;
+                    audioMetadata?: components["schemas"]["audioMetadata"];
+                };
+                take: {
+                    id: components["schemas"]["id"];
+                    name: string;
+                    offsetSeconds: number;
+                    lengthSeconds: number;
+                    clipOffsetSeconds: number;
+                    gain: number;
+                    muted: boolean;
+                    channels: number;
+                    color: number;
+                    asset: components["schemas"]["audioAssetRef"];
+                };
+                takeAddPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    take: components["schemas"]["take"];
+                    afterId: components["schemas"]["optionalId"];
+                };
+                takeRefPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    takeId: components["schemas"]["id"];
+                };
+                takeRestorePayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    takeId: components["schemas"]["id"];
+                    deleteOperationId: components["schemas"]["id"];
+                };
+                takeMovePayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    takeId: components["schemas"]["id"];
+                    afterId: components["schemas"]["optionalId"];
+                };
+                takePropertyPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    takeId: components["schemas"]["id"];
+                    /** @enum {unknown} */
+                    property: "name" | "offsetSeconds" | "lengthSeconds" | "clipOffsetSeconds" | "gain" | "muted" | "color";
+                    value: components["schemas"]["scalarValue"];
+                } & ({
+                    /** @constant */
+                    property?: "name";
+                    value?: string;
+                } | {
+                    /** @enum {unknown} */
+                    property?: "offsetSeconds" | "lengthSeconds" | "clipOffsetSeconds";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "gain";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "muted";
+                    value?: boolean;
+                } | {
+                    /** @constant */
+                    property?: "color";
+                    value?: number;
+                });
+                compSegment: {
+                    id: components["schemas"]["id"];
+                    takeId: components["schemas"]["id"];
+                    startSeconds: number;
+                    endSeconds: number;
+                };
+                compSegmentUpsertPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    segment: components["schemas"]["compSegment"];
+                    afterId: components["schemas"]["optionalId"];
+                };
+                compSegmentRefPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    segmentId: components["schemas"]["id"];
+                };
+                compSegmentRestorePayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    segmentId: components["schemas"]["id"];
+                    deleteOperationId: components["schemas"]["id"];
+                };
+                nonBatchBody: {
+                    /** @constant */
+                    kind?: "project.setScalar";
+                    payload?: components["schemas"]["setScalarPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "project.setTimeSignature";
+                    payload?: components["schemas"]["timeSignaturePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "project.setKey";
+                    payload?: components["schemas"]["projectKeyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.add";
+                    payload?: components["schemas"]["trackAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.delete";
+                    payload?: components["schemas"]["trackIdPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.restore";
+                    payload?: components["schemas"]["trackRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.move";
+                    payload?: components["schemas"]["trackMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.setProperty";
+                    payload?: components["schemas"]["trackPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.setParent";
+                    payload?: components["schemas"]["trackParentPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.setOutput";
+                    payload?: components["schemas"]["trackOutputPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.add";
+                    payload?: components["schemas"]["sendAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.delete";
+                    payload?: components["schemas"]["sendRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.restore";
+                    payload?: components["schemas"]["sendRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.move";
+                    payload?: components["schemas"]["sendMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.setProperty";
+                    payload?: components["schemas"]["sendPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.add";
+                    payload?: components["schemas"]["clipAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.delete";
+                    payload?: components["schemas"]["clipRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.restore";
+                    payload?: components["schemas"]["clipRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.move";
+                    payload?: components["schemas"]["clipMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setProperty";
+                    payload?: components["schemas"]["clipPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setAsset";
+                    payload?: components["schemas"]["clipAssetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setSampleEdit";
+                    payload?: components["schemas"]["clipSampleEditPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setFade";
+                    payload?: components["schemas"]["clipFadePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setFadeCurve";
+                    payload?: components["schemas"]["clipFadeCurvePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setFadeMode";
+                    payload?: components["schemas"]["clipFadeModePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setPatternOwner";
+                    payload?: components["schemas"]["clipPatternOwnerPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setMusicalAnalysis";
+                    payload?: components["schemas"]["clipMusicalAnalysisPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.add";
+                    payload?: components["schemas"]["pluginAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.delete";
+                    payload?: components["schemas"]["pluginRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.restore";
+                    payload?: components["schemas"]["pluginRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.move";
+                    payload?: components["schemas"]["pluginMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.replace";
+                    payload?: components["schemas"]["pluginReplacePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setProperty";
+                    payload?: components["schemas"]["pluginPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setState";
+                    payload?: components["schemas"]["pluginStatePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setParameter";
+                    payload?: components["schemas"]["pluginParameterPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.removeParameter";
+                    payload?: components["schemas"]["pluginRemoveParameterPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setAssetBinding";
+                    payload?: components["schemas"]["pluginBindingPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.removeAssetBinding";
+                    payload?: components["schemas"]["pluginRemoveBindingPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "samplerFx.setLevels";
+                    payload?: components["schemas"]["samplerFxLevelsPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "note.upsert";
+                    payload?: components["schemas"]["noteUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "note.delete";
+                    payload?: components["schemas"]["noteRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "note.restore";
+                    payload?: components["schemas"]["noteRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automationPoint.upsert";
+                    payload?: components["schemas"]["automationPointUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automationPoint.delete";
+                    payload?: components["schemas"]["automationPointRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automationPoint.restore";
+                    payload?: components["schemas"]["automationPointRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.add";
+                    payload?: components["schemas"]["controllerLaneAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.delete";
+                    payload?: components["schemas"]["controllerLaneRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.restore";
+                    payload?: components["schemas"]["controllerLaneRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.setTarget";
+                    payload?: components["schemas"]["controllerLaneTargetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.setDefault";
+                    payload?: components["schemas"]["controllerLaneDefaultPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automation.setTarget";
+                    payload?: components["schemas"]["automationTargetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automation.setDefault";
+                    payload?: components["schemas"]["automationDefaultPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automation.setActive";
+                    payload?: components["schemas"]["automationActivePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.add";
+                    payload?: components["schemas"]["takeAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.delete";
+                    payload?: components["schemas"]["takeRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.restore";
+                    payload?: components["schemas"]["takeRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.move";
+                    payload?: components["schemas"]["takeMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.setProperty";
+                    payload?: components["schemas"]["takePropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.upsert";
+                    payload?: components["schemas"]["compSegmentUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.delete";
+                    payload?: components["schemas"]["compSegmentRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.restore";
+                    payload?: components["schemas"]["compSegmentRestorePayload"];
+                };
+                batchItem: {
+                    kind: components["schemas"]["kind"];
+                    payload: Record<string, never>;
+                    preconditions: components["schemas"]["precondition"][];
+                } & components["schemas"]["nonBatchBody"];
+                batchPayload: {
+                    commands: components["schemas"]["batchItem"][];
+                };
+                recordingLease: {
+                    trackId: components["schemas"]["id"];
+                    leaseId: components["schemas"]["id"];
+                };
+                recordingCommitItem: {
+                    /** @enum {unknown} */
+                    kind: "clip.add" | "clip.setProperty" | "clip.setAsset" | "take.add" | "compSegment.upsert";
+                    payload: Record<string, never>;
+                    preconditions: components["schemas"]["precondition"][];
+                } & ({
+                    /** @constant */
+                    kind?: "clip.add";
+                    payload?: components["schemas"]["clipAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setProperty";
+                    payload?: components["schemas"]["clipPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setAsset";
+                    payload?: components["schemas"]["clipAssetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.add";
+                    payload?: components["schemas"]["takeAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.upsert";
+                    payload?: components["schemas"]["compSegmentUpsertPayload"];
+                });
+                recordingCommitPayload: {
+                    leases: components["schemas"]["recordingLease"][];
+                    commands: components["schemas"]["recordingCommitItem"][];
+                };
+                bodyShape: components["schemas"]["nonBatchBody"] | {
+                    /** @constant */
+                    kind?: "recording.commit";
+                    payload?: components["schemas"]["recordingCommitPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "batch";
+                    payload?: components["schemas"]["batchPayload"];
+                };
+            };
+        } & components["schemas"]["bodyShape"];
     };
     responses: {
         /** @description Structured API error */
@@ -1359,6 +4473,10 @@ export interface components {
     parameters: {
         UserId: string;
         DeviceId: string;
+        ProjectId: string;
+        OpId: string;
+        SessionId: string;
+        UploadId: string;
         BugId: string;
         AttachmentId: string;
         CrashId: string;
@@ -1427,6 +4545,64 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getProcessHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description API process is running */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @constant */
+                        status: "ok";
+                    };
+                };
+            };
+        };
+    };
+    getReadiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description API is ready to serve traffic */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @constant */
+                        status: "ready";
+                    };
+                };
+            };
+            /** @description A required local dependency is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @constant */
+                        status: "not_ready";
+                    };
+                };
+            };
+        };
+    };
     getMeta: {
         parameters: {
             query?: never;
@@ -1836,6 +5012,28 @@ export interface operations {
             200: components["responses"]["AccountSession"];
         };
     };
+    getDesktopCapabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Capabilities for the authenticated desktop account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesktopCapabilities"];
+                };
+            };
+            401: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
     uploadTelemetryBatch: {
         parameters: {
             query?: never;
@@ -2008,6 +5206,901 @@ export interface operations {
                 content?: never;
             };
             503: components["responses"]["Error"];
+        };
+    };
+    listCloudProjects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projects owned by or shared with the user */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        projects: components["schemas"]["CloudProjectView"][];
+                    };
+                };
+            };
+        };
+    };
+    createCloudProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCloudProjectRequest"];
+            };
+        };
+        responses: {
+            /** @description Uploading project created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudProjectView"];
+                };
+            };
+            422: components["responses"]["Error"];
+        };
+    };
+    getCloudProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project and caller role */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudProjectView"];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    archiveCloudProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Archived */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    updateCloudProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCloudProjectRequest"];
+            };
+        };
+        responses: {
+            /** @description Project updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudProjectView"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    completeCloudProjectPublication: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project activated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudProjectView"];
+                };
+            };
+            409: components["responses"]["Error"];
+        };
+    };
+    bootstrapCloudProject: {
+        parameters: {
+            query?: {
+                after_seq?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bootstrap materialization input */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudProjectBootstrap"];
+                };
+            };
+            409: components["responses"]["Error"];
+        };
+    };
+    appendCloudProjectOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["project-command-v2.schema"];
+            };
+        };
+        responses: {
+            /** @description Idempotent retry returned the original operation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppendOperationResult"];
+                };
+            };
+            /** @description New operation committed */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppendOperationResult"];
+                };
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    getCloudProjectOperationStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                opId: components["parameters"]["OpId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Operation durability status; an absent operation is not an error */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationStatus"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    prepareCloudProjectAssetUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareAssetUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent upload preparation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadPreparation"];
+                };
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    completeCloudProjectAssetUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                uploadId: components["parameters"]["UploadId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CompleteMultipartUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Asset is verified and may now be referenced by a document command */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompletedProjectAsset"];
+                };
+            };
+            409: components["responses"]["Error"];
+            410: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    abortCloudProjectUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                uploadId: components["parameters"]["UploadId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Upload aborted; staging cleanup is asynchronous-safe */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Error"];
+        };
+    };
+    prepareCloudProjectSnapshotUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareSnapshotUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent snapshot upload preparation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadPreparation"];
+                };
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    completeCloudProjectSnapshotUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                uploadId: components["parameters"]["UploadId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CompleteMultipartUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Snapshot verified and attached */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompletedProjectSnapshot"];
+                };
+            };
+            409: components["responses"]["Error"];
+            410: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    prepareCloudProjectAssetDownload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                assetId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sensitive short-lived download request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresignedDownload"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    prepareCloudProjectSnapshotDownload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                snapshotId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sensitive short-lived download request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresignedDownload"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listCloudProjectMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project members other than the owner */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        members: components["schemas"]["ProjectMember"][];
+                    };
+                };
+            };
+        };
+    };
+    putCloudProjectMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {unknown} */
+                    role: "editor" | "viewer";
+                    color_index: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Member role saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectMember"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    removeCloudProjectMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Member removed and active devices evicted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    transferCloudProjectOwnership: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    targetUserId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Ownership transferred */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    listCloudProjectInvites: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Invitations ordered by creation time */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        invites: components["schemas"]["ProjectInvite"][];
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    createCloudProjectInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProjectInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description One-use invitation; token is returned only here */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedProjectInvite"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    revokeCloudProjectInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                inviteId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Invitation revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Error"];
+        };
+    };
+    acceptCloudProjectInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    token: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Membership created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudProjectView"];
+                };
+            };
+            410: components["responses"]["Error"];
+        };
+    };
+    startCloudProjectSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartProjectSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Session started and owner device joined */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSessionState"];
+                };
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    getActiveCloudProjectSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Active session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSessionState"];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    endCloudProjectSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description End accepted; the session is ended now or is waiting in ending for its exact-head snapshot */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    joinCloudProjectSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionCompatibilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Device joined */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSessionState"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    leaveCloudProjectSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Device left and host was reconciled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSessionState"];
+                };
+            };
+        };
+    };
+    heartbeatCloudProjectSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Presence lease refreshed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    handoffCloudProjectSessionHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    target_member_id: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Host changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSessionState"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    acquireProjectRecordingLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrackLeaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Exclusive track recording lease granted */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectTrackLease"];
+                };
+            };
+            409: components["responses"]["Error"];
+        };
+    };
+    releaseProjectRecordingLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+                leaseId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Lease released */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    renewProjectRecordingLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+                leaseId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    ttl_seconds?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Lease renewed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectTrackLease"];
+                };
+            };
         };
     };
     adminListAIPrompts: {
@@ -2364,6 +6457,40 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    adminSetUserCollaborationAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    enabled: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Stored collaboration entitlement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        collaboration_enabled: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     adminGetUserTelemetry: {

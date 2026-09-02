@@ -10,12 +10,16 @@
 #include "AccountService.hpp"
 #include "CollaborationService.hpp"
 #ifdef DAW_ENABLE_COLLABORATION
+#include "AssetCache.hpp"
 #include "CloudProjectPublisher.hpp"
 #include "CloudProjectSyncCoordinator.hpp"
+#include "CloudProjectAssetHydrator.hpp"
+#include "CloudSharedAssetMutationBridge.hpp"
 #include "CloudSessionLifecycleController.hpp"
 #include "CloudProjectInviteDialog.hpp"
 #include "CollaborationCommandBridge.hpp"
 #include "RecordingLeaseCoordinator.hpp"
+#include "cloud/CloudDocumentProjection.hpp"
 #include "cloud/CloudPublicationCapture.hpp"
 #include "recovery/CloudRecordingRecovery.hpp"
 #endif
@@ -70,6 +74,7 @@
 #include <QActionGroup>
 #include <QAbstractButton>
 #include <QCheckBox>
+#include <QCryptographicHash>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDateTime>
@@ -82,6 +87,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFrame>
+#include <QHeaderView>
 #include <QCloseEvent>
 #include <QFileDialog>
 #include <QHBoxLayout>
@@ -111,6 +117,7 @@
 #include <QTextEdit>
 #include <QThreadPool>
 #include <QToolButton>
+#include <QTreeWidget>
 #include <QWheelEvent>
 #include <QShortcut>
 #include <QSettings>
@@ -996,13 +1003,68 @@ MainWindow::MainWindow(bool openDevice, QWidget* parent,
 }
 
 #ifdef DAW_ENABLE_COLLABORATION
+void MainWindow::setCloudSharedAssetMutationBridge(
+    collab::CloudSharedAssetMutationBridge* bridge) {
+    if (m_cloudSharedAssetMutationBridge)
+        disconnect(m_cloudSharedAssetMutationBridge, nullptr, this, nullptr);
+    m_cloudSharedAssetMutationBridge = bridge;
+
+    const auto updateActions = [this](bool active) {
+        if (m_cancelAssetMutationAction)
+            m_cancelAssetMutationAction->setEnabled(active);
+        if (m_retryAssetMutationAction)
+            m_retryAssetMutationAction->setEnabled(false);
+    };
+    updateActions(bridge && bridge->active());
+    if (!bridge) return;
+
+    connect(bridge, &collab::CloudSharedAssetMutationBridge::activeChanged,
+            this, updateActions);
+    connect(bridge, &collab::CloudSharedAssetMutationBridge::progressChanged,
+            this, [this](qsizetype complete, qsizetype total) {
+                statusBar()->showMessage(
+                    tr("Preparing shared asset… %1/%2")
+                        .arg(complete)
+                        .arg(total));
+            });
+    connect(bridge, &collab::CloudSharedAssetMutationBridge::failed, this,
+            [this](const QString& message, bool retryable) {
+                if (m_retryAssetMutationAction)
+                    m_retryAssetMutationAction->setEnabled(retryable);
+                if (m_cancelAssetMutationAction)
+                    m_cancelAssetMutationAction->setEnabled(true);
+                statusBar()->showMessage(
+                    retryable
+                        ? tr("%1 Use Session > Retry Asset Upload.")
+                              .arg(message)
+                        : message,
+                    10000);
+            });
+    connect(bridge, &collab::CloudSharedAssetMutationBridge::completed, this,
+            [this](bool submitted) {
+                statusBar()->showMessage(
+                    submitted
+                        ? tr("Asset verified; shared change submitted.")
+                        : tr("Asset verified, but the project changed before "
+                             "the shared command could be submitted."),
+                    7000);
+            });
+    connect(bridge, &collab::CloudSharedAssetMutationBridge::cancelled, this,
+            [this] {
+                statusBar()->showMessage(tr("Shared asset upload cancelled."),
+                                         5000);
+            });
+}
+
 void MainWindow::setCloudPublicationServices(
     collab::CloudProjectPublisher* publisher,
     collab::CloudProjectSyncCoordinator* synchronizer,
     collab::CloudSessionLifecycleController* sessionLifecycle,
     collab::CollaborationCommandBridge* commandBridge,
     collab::CloudProjectClient* projectClient,
-    collab::RecordingLeaseCoordinator* recordingLeases) {
+    collab::RecordingLeaseCoordinator* recordingLeases,
+    collab::CloudProjectAssetHydrator* assetHydrator,
+    collab::AssetCache* assetCache) {
     if (m_cloudPublisher)
         disconnect(m_cloudPublisher, nullptr, this, nullptr);
     if (m_cloudProjectSync)
@@ -1015,6 +1077,8 @@ void MainWindow::setCloudPublicationServices(
         disconnect(m_cloudProjectClient, nullptr, this, nullptr);
     if (m_recordingLeases)
         disconnect(m_recordingLeases, nullptr, this, nullptr);
+    if (m_cloudAssetHydrator)
+        disconnect(m_cloudAssetHydrator, nullptr, this, nullptr);
 
     m_cloudPublisher = publisher;
     m_cloudProjectSync = synchronizer;
@@ -1022,6 +1086,8 @@ void MainWindow::setCloudPublicationServices(
     m_collaborationCommandBridge = commandBridge;
     m_cloudProjectClient = projectClient;
     m_recordingLeases = recordingLeases;
+    m_cloudAssetHydrator = assetHydrator;
+    m_collaborationAssetCache = assetCache;
     if (!m_publicationUi)
         m_publicationUi = std::make_unique<PublicationUiState>();
 
@@ -1148,24 +1214,14 @@ void MainWindow::setCloudPublicationServices(
                     }
 
                     // The package that was explicitly saved before publication
-                    // is now a backup, never the live cloud cache. Clearing the
-                    // ordinary save path makes a later Save choose a new path;
-                    // doSave also rejects this exact backup path defensively.
-                    m_cloudLocalBackupPath = sourcePath;
-                    m_cloudProjectId = projectId;
-                    if (m_cloudSessionLifecycle)
-                        m_cloudSessionLifecycle->bindProject(projectId);
-                    m_projectPath.clear();
-                    m_dirty = false;
-                    m_journal.setProjectPath({}, {});
-                    m_journalStale = true;
-                    updateCloudPublicationAction();
-                    updateWindowTitle();
+                    // becomes the protected backup only after the downloaded
+                    // cloud snapshot has been verified and installed.
+                    m_candidateCloudProjectId = projectId;
+                    m_candidateCloudBackupPath = sourcePath;
 
                     statusBar()->showMessage(
                         tr("Published. Opening the verified cloud copy…"));
-                    if (!m_cloudProjectSync ||
-                        !m_cloudProjectSync->synchronize(projectId, true)) {
+                    if (!openCloudProject(projectId, sourcePath)) {
                         QMessageBox::warning(
                             this, tr("Cloud Project Published"),
                             tr("The project was published, but VLT could not "
@@ -1186,7 +1242,23 @@ void MainWindow::setCloudPublicationServices(
                 &collab::CloudProjectSyncCoordinator::synchronizedProject,
                 this, [this](const QString& projectId, quint64,
                              const QString&, collab::CloudProjectRole) {
-                    if (projectId != m_cloudProjectId) return;
+                    if (projectId == m_candidateCloudProjectId) {
+                        m_cloudProjectId = projectId;
+                        m_cloudLocalBackupPath = m_candidateCloudBackupPath;
+                        m_candidateCloudProjectId.clear();
+                        m_candidateCloudBackupPath.clear();
+                        if (m_cloudSessionLifecycle)
+                            m_cloudSessionLifecycle->bindProject(projectId);
+                        m_projectPath.clear();
+                        m_dirty = false;
+                        m_journal.setProjectPath({}, {});
+                        m_journalStale = true;
+                        persistCloudBinding();
+                        updateCloudPublicationAction();
+                        updateWindowTitle();
+                    } else if (projectId != m_cloudProjectId) {
+                        return;
+                    }
                     updateCloudSessionActions();
                     statusBar()->showMessage(tr("Cloud project is ready"),
                                              5000);
@@ -1203,20 +1275,65 @@ void MainWindow::setCloudPublicationServices(
                 &collab::CloudProjectSyncCoordinator::synchronizationFailed,
                 this, [this](quint64 generation,
                              const collab::CloudSyncError& error) {
-                    if (m_cloudProjectId.isEmpty() || !m_cloudProjectSync ||
+                    if (!m_cloudProjectSync ||
                         generation != m_cloudProjectSync->generation())
                         return;
+                    m_candidateCloudProjectId.clear();
+                    m_candidateCloudBackupPath.clear();
                     QString detail = error.safeMessage.trimmed();
                     if (detail.isEmpty())
                         detail = tr("The verified cloud copy could not be opened.");
                     if (detail.size() > 400) detail = detail.left(400);
                     QMessageBox::warning(
                         this, tr("Open Cloud Project Failed"),
-                        tr("The project was published, and the original local "
-                           "backup was preserved.\n\n%1")
+                        tr("The cloud project was not opened. The current "
+                           "project was preserved.\n\n%1")
                             .arg(detail));
                     statusBar()->showMessage(
                         tr("Cloud project could not be opened"), 6000);
+                });
+        connect(m_cloudProjectSync,
+                &collab::CloudProjectSyncCoordinator::snapshotUploadStarted,
+                this, [this](const QString&, int attempt, quint64) {
+                    statusBar()->showMessage(
+                        tr("Saving collaboration snapshot… attempt %1")
+                            .arg(attempt));
+                });
+        connect(m_cloudProjectSync,
+                &collab::CloudProjectSyncCoordinator::snapshotUploadCompleted,
+                this, [this](const QString&, quint64) {
+                    statusBar()->showMessage(
+                        tr("Collaboration snapshot saved"), 5000);
+                });
+        connect(m_cloudProjectSync,
+                &collab::CloudProjectSyncCoordinator::snapshotUploadFailed,
+                this, [this](const QString&, quint64,
+                             const QString& message, bool) {
+                    statusBar()->showMessage(
+                        message.isEmpty()
+                            ? tr("Collaboration snapshot could not be saved")
+                            : message.left(320),
+                        7000);
+                });
+    }
+
+    if (m_cloudAssetHydrator) {
+        connect(m_cloudAssetHydrator,
+                &collab::CloudProjectAssetHydrator::progressChanged,
+                this, [this](qsizetype complete, qsizetype total) {
+                    if (total > 0 && complete < total)
+                        statusBar()->showMessage(
+                            tr("Downloading cloud assets… %1/%2")
+                                .arg(complete)
+                                .arg(total));
+                });
+        connect(m_cloudAssetHydrator,
+                &collab::CloudProjectAssetHydrator::assetUnavailable,
+                this, [this](const QString&, const QString& message, bool) {
+                    statusBar()->showMessage(
+                        message.isEmpty() ? tr("A cloud asset is unavailable")
+                                          : message.left(320),
+                        7000);
                 });
     }
 
@@ -1327,6 +1444,7 @@ void MainWindow::setCloudPublicationServices(
 
     updateCloudPublicationAction();
     updateCloudSessionActions();
+    QTimer::singleShot(0, this, &MainWindow::restoreCloudBinding);
 }
 
 bool MainWindow::cloudRecordingContextIsWritable(
@@ -1409,6 +1527,12 @@ bool MainWindow::cloudRecordingRecoveryExists() const {
 
 void MainWindow::startCloudRecording(
     const std::vector<std::string>& targets) {
+    if (!m_cloudProjectId.isEmpty()) {
+        statusBar()->showMessage(
+            tr("Cloud recording is disabled in this version. Make a local copy to record."),
+            7000);
+        return;
+    }
     if (m_cloudRecording) {
         const bool retry =
             m_cloudRecording->phase ==
@@ -1679,10 +1803,12 @@ void MainWindow::updateCloudPublicationAction() {
         return;
     }
     m_publishProjectAction->setText(tr("Publish Project to Cloud…"));
-    if (!m_cloudProjectId.isEmpty()) {
+    if (!m_cloudProjectId.isEmpty() || !m_candidateCloudProjectId.isEmpty()) {
         m_publishProjectAction->setEnabled(false);
         m_publishProjectAction->setToolTip(
-            tr("This document is already bound to a cloud project."));
+            m_cloudProjectId.isEmpty()
+                ? tr("A cloud project is being opened.")
+                : tr("This document is already bound to a cloud project."));
         return;
     }
     m_publishProjectAction->setEnabled(m_cloudPublisher && m_cloudProjectSync);
@@ -1693,6 +1819,8 @@ void MainWindow::updateCloudPublicationAction() {
 
 void MainWindow::updateCloudSessionActions() {
     const bool available = m_cloudSessionLifecycle != nullptr;
+    if (m_cloudProjectsAction)
+        m_cloudProjectsAction->setEnabled(m_cloudProjectClient != nullptr);
     if (m_startSessionAction) {
         m_startSessionAction->setEnabled(
             available && m_cloudSessionLifecycle->canStartSession());
@@ -1709,6 +1837,14 @@ void MainWindow::updateCloudSessionActions() {
             enabled
                 ? tr("Create an editor or viewer invitation for this cloud project.")
                 : tr("Only the owner of a verified cloud project can invite people."));
+    }
+    if (m_sessionSettingsAction) {
+        const bool enabled = canOpenSessionSettings();
+        m_sessionSettingsAction->setEnabled(enabled);
+        m_sessionSettingsAction->setToolTip(
+            enabled
+                ? tr("View participants and manage this verified cloud project.")
+                : tr("Open a verified cloud project to view session settings."));
     }
     if (m_endSessionAction) {
         const bool ending =
@@ -1758,6 +1894,519 @@ bool MainWindow::canInvitePeople() const {
            phase == collab::CloudSessionLifecyclePhase::Active;
 }
 
+bool MainWindow::canOpenSessionSettings() const {
+    if (!m_cloudProjectClient || !m_cloudProjectSync ||
+        !m_cloudSessionLifecycle || m_cloudProjectId.isEmpty() ||
+        m_cloudProjectSync->phase() != collab::CloudSyncPhase::Ready ||
+        m_cloudProjectSync->projectId() != m_cloudProjectId ||
+        m_cloudSessionLifecycle->projectId() != m_cloudProjectId) {
+        return false;
+    }
+    const auto phase = m_cloudSessionLifecycle->phase();
+    return phase == collab::CloudSessionLifecyclePhase::Ready ||
+           phase == collab::CloudSessionLifecyclePhase::Active ||
+           phase == collab::CloudSessionLifecyclePhase::Ending;
+}
+
+bool MainWindow::openCloudProject(const QString& requestedProjectId,
+                                  const QString& localBackupPath) {
+    const QString projectId = canonicalCloudUuid(requestedProjectId);
+    if (projectId.isEmpty() || !m_cloudProjectSync ||
+        !m_cloudProjectClient) {
+        statusBar()->showMessage(tr("Cloud project is unavailable"), 5000);
+        return false;
+    }
+    if (m_collaborationCommandBridge &&
+        m_collaborationCommandBridge->pendingOperationCount() != 0) {
+        QMessageBox::information(
+            this, tr("Cloud Edits Still Synchronizing"),
+            tr("Wait for pending cloud edits to be confirmed before opening another project."));
+        return false;
+    }
+    if (m_cloudProjectId.isEmpty() && m_dirty && !maybeSaveChanges())
+        return false;
+
+    m_candidateCloudProjectId = projectId;
+    m_candidateCloudBackupPath = localBackupPath.isEmpty()
+        ? (m_cloudProjectId.isEmpty() ? m_projectPath : QString())
+        : absoluteCleanPath(localBackupPath);
+    const quint64 generation = m_cloudProjectSync->synchronize(projectId, true);
+    if (generation == 0) {
+        m_candidateCloudProjectId.clear();
+        m_candidateCloudBackupPath.clear();
+        return false;
+    }
+    statusBar()->showMessage(tr("Opening verified cloud project…"));
+    return true;
+}
+
+void MainWindow::persistCloudBinding() {
+    if (!m_cloudProjectClient || m_cloudProjectId.isEmpty()) return;
+    const QString userId = m_cloudProjectClient->currentUserId();
+    if (userId.isEmpty()) return;
+    QSettings settings;
+    settings.setAtomicSyncRequired(true);
+    settings.beginGroup(QStringLiteral("collaboration/v2/") + userId);
+    settings.setValue(QStringLiteral("cacheVersion"), 2);
+    settings.setValue(QStringLiteral("projectId"), m_cloudProjectId);
+    settings.setValue(QStringLiteral("localBackupPath"),
+                      m_cloudLocalBackupPath);
+    settings.endGroup();
+    settings.sync();
+}
+
+void MainWindow::restoreCloudBinding() {
+    if (!m_cloudProjectClient || !m_cloudProjectSync ||
+        !m_cloudProjectId.isEmpty() || !m_candidateCloudProjectId.isEmpty() ||
+        m_dirty || !m_projectPath.isEmpty()) {
+        return;
+    }
+    const QString userId = m_cloudProjectClient->currentUserId();
+    if (userId.isEmpty()) return;
+    QSettings settings;
+    settings.setAtomicSyncRequired(true);
+    settings.beginGroup(QStringLiteral("collaboration/v2/") + userId);
+    const int cacheVersion = settings.value(QStringLiteral("cacheVersion"))
+                                 .toInt();
+    const QString projectId = settings.value(QStringLiteral("projectId"))
+                                  .toString();
+    const QString backup = settings.value(QStringLiteral("localBackupPath"))
+                               .toString();
+    settings.endGroup();
+    if (cacheVersion == 2 && !canonicalCloudUuid(projectId).isEmpty())
+        openCloudProject(projectId, backup);
+}
+
+void MainWindow::onOpenCloudProjects() {
+    if (!m_cloudProjectClient) {
+        statusBar()->showMessage(tr("Cloud projects are unavailable"), 5000);
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Cloud Projects"));
+    dialog.resize(620, 420);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* list = new QListWidget(&dialog);
+    list->setSelectionMode(QAbstractItemView::SingleSelection);
+    layout->addWidget(list, 1);
+    auto* buttons = new QDialogButtonBox(&dialog);
+    QPushButton* refresh = buttons->addButton(
+        tr("Refresh"), QDialogButtonBox::ActionRole);
+    QPushButton* acceptInvite = buttons->addButton(
+        tr("Accept Invitation…"), QDialogButtonBox::ActionRole);
+    QPushButton* archive = buttons->addButton(
+        tr("Archive"), QDialogButtonBox::DestructiveRole);
+    QPushButton* open = buttons->addButton(
+        tr("Open"), QDialogButtonBox::AcceptRole);
+    buttons->addButton(QDialogButtonBox::Close);
+    layout->addWidget(buttons);
+    open->setEnabled(false);
+    archive->setEnabled(false);
+    connect(list, &QListWidget::itemSelectionChanged, &dialog,
+            [list, open, archive] {
+                const bool selected = list->currentItem() != nullptr;
+                open->setEnabled(selected);
+                archive->setEnabled(selected);
+            });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(open, &QPushButton::clicked, &dialog, &QDialog::accept);
+
+    quint64 listRequest = 0;
+    quint64 acceptRequest = 0;
+    quint64 archiveRequest = 0;
+    QString acceptedProjectId;
+    const auto requestList = [&] {
+        list->clear();
+        list->addItem(tr("Loading…"));
+        listRequest = m_cloudProjectClient->listProjects();
+    };
+    connect(refresh, &QPushButton::clicked, &dialog, requestList);
+    connect(m_cloudProjectClient,
+            &collab::CloudProjectClient::projectsListed, &dialog,
+            [&](quint64 requestId,
+                const QVector<collab::CloudProjectView>& projects) {
+                if (requestId != listRequest) return;
+                listRequest = 0;
+                list->clear();
+                for (const collab::CloudProjectView& view : projects) {
+                    QString role = tr("Viewer");
+                    if (view.role == collab::CloudProjectRole::Owner)
+                        role = tr("Owner");
+                    else if (view.role == collab::CloudProjectRole::Editor)
+                        role = tr("Editor");
+                    QString status = tr("Active");
+                    if (view.project.status == collab::CloudProjectStatus::ReadOnly)
+                        status = tr("Read-only");
+                    else if (view.project.status == collab::CloudProjectStatus::Conflict)
+                        status = tr("Conflict");
+                    else if (view.project.status == collab::CloudProjectStatus::Archived)
+                        status = tr("Archived");
+                    else if (view.project.status == collab::CloudProjectStatus::Uploading)
+                        status = tr("Uploading");
+                    auto* item = new QListWidgetItem(
+                        tr("%1  —  %2, %3")
+                            .arg(view.project.title, role, status),
+                        list);
+                    item->setData(Qt::UserRole, view.project.id);
+                }
+                if (list->count() == 0)
+                    list->addItem(tr("No cloud projects"));
+            });
+    connect(acceptInvite, &QPushButton::clicked, &dialog, [&] {
+        bool accepted = false;
+        const QString token = QInputDialog::getText(
+            &dialog, tr("Accept Invitation"), tr("Invitation token:"),
+            QLineEdit::Normal, {}, &accepted).trimmed();
+        if (!accepted || token.isEmpty()) return;
+        acceptRequest = m_cloudProjectClient->acceptInvite(token);
+    });
+    connect(m_cloudProjectClient,
+            &collab::CloudProjectClient::inviteAccepted, &dialog,
+            [&](quint64 requestId, const collab::CloudProjectView& project) {
+                if (requestId != acceptRequest) return;
+                acceptRequest = 0;
+                // Keep the modal result local. Reusing the app-wide candidate
+                // slot here could steal the identity of a bootstrap that
+                // completes while this dialog's nested event loop is running.
+                acceptedProjectId = project.project.id;
+                dialog.accept();
+            });
+    connect(archive, &QPushButton::clicked, &dialog, [&] {
+        QListWidgetItem* item = list->currentItem();
+        if (!item) return;
+        const QString projectId = item->data(Qt::UserRole).toString();
+        if (projectId.isEmpty() || projectId == m_cloudProjectId) {
+            statusBar()->showMessage(
+                tr("Open another project before archiving this one"), 5000);
+            return;
+        }
+        if (QMessageBox::question(
+                &dialog, tr("Archive Cloud Project"),
+                tr("Archive the selected cloud project?"),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No) != QMessageBox::Yes) return;
+        archiveRequest = m_cloudProjectClient->archiveProject(projectId);
+    });
+    connect(m_cloudProjectClient,
+            &collab::CloudProjectClient::operationCompleted, &dialog,
+            [&](quint64 requestId, collab::CloudRequestKind kind,
+                const QString&) {
+                if (requestId == archiveRequest &&
+                    kind == collab::CloudRequestKind::ArchiveProject) {
+                    archiveRequest = 0;
+                    requestList();
+                }
+            });
+    connect(m_cloudProjectClient, &collab::CloudProjectClient::requestFailed,
+            &dialog, [&](quint64 requestId, collab::CloudRequestKind,
+                         const collab::CloudClientError& error) {
+                if (requestId != listRequest && requestId != acceptRequest &&
+                    requestId != archiveRequest) return;
+                QMessageBox::warning(
+                    &dialog, tr("Cloud Project Request Failed"),
+                    error.safeMessage.isEmpty()
+                        ? tr("The cloud request could not be completed.")
+                        : error.safeMessage.left(400));
+            });
+
+    requestList();
+    const int result = dialog.exec();
+    QString selectedProject;
+    if (result == QDialog::Accepted) {
+        if (!acceptedProjectId.isEmpty()) {
+            selectedProject = acceptedProjectId;
+        } else if (list->currentItem()) {
+            selectedProject = list->currentItem()->data(Qt::UserRole).toString();
+        }
+    }
+    if (!selectedProject.isEmpty()) openCloudProject(selectedProject);
+}
+
+void MainWindow::onMakeLocalCopy() {
+    if (m_cloudProjectId.isEmpty() || !m_cloudProjectSync ||
+        !m_collaborationCommandBridge || !m_collaborationAssetCache ||
+        !m_cloudAssetHydrator ||
+        m_cloudProjectSync->phase() != collab::CloudSyncPhase::Ready) {
+        statusBar()->showMessage(tr("No verified cloud project is open"), 5000);
+        return;
+    }
+    if (m_collaborationCommandBridge->pendingOperationCount() != 0) {
+        QMessageBox::information(
+            this, tr("Cloud Edits Still Synchronizing"),
+            tr("Wait for all edits to be confirmed before making a local copy."));
+        return;
+    }
+    if (m_cloudAssetHydrator &&
+        (m_cloudAssetHydrator->projectId() != m_cloudProjectId ||
+         m_cloudAssetHydrator->state() != collab::CloudHydrationState::Ready ||
+         m_cloudAssetHydrator->pendingCount() != 0 ||
+         m_cloudAssetHydrator->failedCount() != 0)) {
+        QMessageBox::information(
+            this, tr("Cloud Assets Not Ready"),
+            tr("Wait for every cloud asset to download successfully before making a portable local copy."));
+        return;
+    }
+
+    // Freeze the exact reducer head before opening a nested file dialog.  Modal
+    // event loops continue to deliver websocket traffic, so every condition is
+    // checked again after the user has chosen a destination and after the
+    // potentially long integrity pass.
+    const QString frozenProjectId = m_cloudProjectId;
+    const quint64 frozenGeneration = m_cloudProjectSync->generation();
+    const quint64 frozenSequence =
+        m_collaborationCommandBridge->confirmedServerSequence();
+    const auto frozen =
+        m_collaborationCommandBridge->confirmedSnapshotAt(frozenSequence);
+    if (!frozen) {
+        QMessageBox::warning(
+            this, tr("Local Copy Not Ready"),
+            tr("The confirmed cloud head is not available. Reconnect and try again."));
+        return;
+    }
+
+    QString target = QFileDialog::getSaveFileName(
+        this, tr("Make Local Copy"),
+        displayProjectName(frozen->project.name) + QStringLiteral(".vlt"),
+        tr("VLT Project (*.vlt)"));
+    if (target.isEmpty()) return;
+    target = packagePathFromSelection(target);
+    const QString extension =
+        QStringLiteral(".") + QString::fromLatin1(daw::ProjectSerializer::kExtension);
+    if (!target.endsWith(extension, Qt::CaseInsensitive)) target += extension;
+    target = absoluteCleanPath(target);
+    if (target.isEmpty() ||
+        (!m_cloudLocalBackupPath.isEmpty() &&
+         target == absoluteCleanPath(m_cloudLocalBackupPath))) {
+        QMessageBox::warning(
+            this, tr("Choose Another Destination"),
+            tr("The protected publication backup cannot be replaced. Choose a different file."));
+        return;
+    }
+    const QFileInfo targetInfo(target);
+    if (targetInfo.exists() && !targetInfo.isDir()) {
+        QMessageBox::warning(
+            this, tr("Local Copy Failed"),
+            tr("The selected destination is not a VLT project package."));
+        return;
+    }
+
+    const auto stillFrozen = [&] {
+        return m_cloudProjectId == frozenProjectId && m_cloudProjectSync &&
+               m_cloudProjectSync->generation() == frozenGeneration &&
+               m_cloudProjectSync->phase() == collab::CloudSyncPhase::Ready &&
+               m_collaborationCommandBridge &&
+               m_collaborationCommandBridge->pendingOperationCount() == 0 &&
+               m_collaborationCommandBridge->confirmedServerSequence() ==
+                   frozenSequence &&
+               m_cloudAssetHydrator &&
+               m_cloudAssetHydrator->projectId() == frozenProjectId &&
+               m_cloudAssetHydrator->state() ==
+                   collab::CloudHydrationState::Ready &&
+               m_cloudAssetHydrator->pendingCount() == 0 &&
+               m_cloudAssetHydrator->failedCount() == 0;
+    };
+    if (!stillFrozen()) {
+        QMessageBox::information(
+            this, tr("Cloud Project Changed"),
+            tr("The confirmed cloud head changed while the dialog was open. Start the local copy again."));
+        return;
+    }
+
+    // Prove that the engine edge-copy contains exactly the frozen shared
+    // document. Local transport/layout/device fields and local paths are
+    // projected away before comparison.
+    const daw::ProjectModel runtimeBefore = m_controller.project();
+    const auto projected =
+        daw::cloud::projectForCloudSnapshotV1(runtimeBefore);
+    std::string projectedBytes;
+    std::string confirmedBytes;
+    const audio::Result projectedResult = daw::ProjectSerializer::serializeDocument(
+        projected.document, projectedBytes, daw::MediaPaths::Absolute);
+    const audio::Result confirmedResult = daw::ProjectSerializer::serializeDocument(
+        frozen->project, confirmedBytes, daw::MediaPaths::Absolute);
+    if (!projectedResult || !confirmedResult || !projected.valid() ||
+        projectedBytes != confirmedBytes) {
+        QMessageBox::warning(
+            this, tr("Local Copy Not Safe"),
+            tr("The live project is not the exact confirmed cloud head. Reconnect before exporting a local copy."));
+        return;
+    }
+
+    const QList<daw::AssetRef> assets =
+        collab::collectCloudProjectAssets(frozen->project);
+    quint64 totalBytes = 0;
+    for (const daw::AssetRef& asset : assets) {
+        if (std::numeric_limits<quint64>::max() - totalBytes < asset.byteSize) {
+            QMessageBox::warning(this, tr("Local Copy Failed"),
+                                 tr("The project asset manifest is too large."));
+            return;
+        }
+        totalBytes += asset.byteSize;
+    }
+
+    QProgressDialog verification(tr("Verifying cloud assetsвЂ¦"), tr("Cancel"),
+                                 0, 1000, this);
+    verification.setWindowTitle(tr("Make Local Copy"));
+    verification.setWindowModality(Qt::WindowModal);
+    verification.setMinimumDuration(0);
+    quint64 verifiedBytes = 0;
+    bool integrityFailure = false;
+    for (const daw::AssetRef& asset : assets) {
+        const QString localPath = m_collaborationAssetCache->resolve(asset);
+        QFile file(localPath);
+        if (localPath.isEmpty() || !file.open(QIODevice::ReadOnly) ||
+            quint64(file.size()) != asset.byteSize) {
+            integrityFailure = true;
+            break;
+        }
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        while (!file.atEnd()) {
+            const QByteArray chunk = file.read(1024 * 1024);
+            if (chunk.isEmpty() && file.error() != QFileDevice::NoError) {
+                integrityFailure = true;
+                break;
+            }
+            hash.addData(chunk);
+            verifiedBytes += quint64(chunk.size());
+            const int value = totalBytes == 0
+                ? 1000
+                : int(std::min<quint64>(
+                      1000, quint64((static_cast<long double>(verifiedBytes) *
+                                     1000.0L) /
+                                    static_cast<long double>(totalBytes))));
+            verification.setValue(value);
+            QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+            if (verification.wasCanceled()) return;
+        }
+        const QString expected =
+            QString::fromStdString(asset.sha256).trimmed().toLower();
+        if (integrityFailure ||
+            QString::fromLatin1(hash.result().toHex()) != expected) {
+            integrityFailure = true;
+            break;
+        }
+    }
+    verification.setValue(1000);
+    if (integrityFailure) {
+        QMessageBox::warning(
+            this, tr("Asset Verification Failed"),
+            tr("At least one cloud asset failed its size or SHA-256 check. Retry hydration before making a local copy."));
+        return;
+    }
+    if (!stillFrozen()) {
+        QMessageBox::information(
+            this, tr("Cloud Project Changed"),
+            tr("The confirmed cloud head changed during verification. Start the local copy again."));
+        return;
+    }
+
+    QDir parent(targetInfo.absolutePath());
+    if (!parent.exists() && !QDir().mkpath(targetInfo.absolutePath())) {
+        QMessageBox::warning(this, tr("Local Copy Failed"),
+                             tr("The destination folder could not be created."));
+        return;
+    }
+    const QString targetName = QFileInfo(target).fileName();
+    const QString nonce = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString stagingName = QStringLiteral(".%1.tmp-%2").arg(targetName, nonce);
+    const QString backupName = QStringLiteral(".%1.backup-%2").arg(targetName, nonce);
+    const QString staging = parent.absoluteFilePath(stagingName);
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    audio::Result saved = m_controller.saveProject(staging.toStdString());
+    if (saved) {
+        daw::ProjectModel portable;
+        saved = daw::ProjectSerializer::load(portable, staging.toStdString());
+        if (saved) {
+            // The local package owns ordinary paths/state chunks. Cloud asset
+            // identities are removed so reopening never depends on account
+            // cache state. Sampler sources have already been embedded by the
+            // live built-in's saveProjectState path above.
+            const auto clearInsert = [](daw::InsertModel& insert) {
+                insert.stateAsset = {};
+                insert.rightStateAsset = {};
+                insert.assetBindings.clear();
+            };
+            const auto clearInserts = [&](std::vector<daw::InsertModel>& inserts) {
+                for (daw::InsertModel& insert : inserts) clearInsert(insert);
+            };
+            clearInserts(portable.masterInserts);
+            for (daw::TrackModel& track : portable.tracks) {
+                clearInsert(track.instrument);
+                clearInserts(track.samplerFx.inserts);
+                clearInserts(track.inserts);
+                for (daw::ClipModel& clip : track.clips) {
+                    clip.asset = {};
+                    clearInserts(clip.inserts);
+                    for (daw::TakeModel& take : clip.takes) take.asset = {};
+                }
+            }
+            portable.sampleRate = frozen->project.sampleRate;
+            portable.name = QFileInfo(target).completeBaseName().toStdString();
+            saved = daw::ProjectSerializer::saveDocument(
+                portable,
+                QDir(staging)
+                    .absoluteFilePath(
+                        QString::fromLatin1(daw::ProjectSerializer::kProjectFile))
+                    .toStdString(),
+                daw::MediaPaths::Basenames);
+        }
+    }
+
+    bool installed = false;
+    bool movedOldTarget = false;
+    if (saved) {
+        movedOldTarget = !QFileInfo::exists(target) ||
+                         parent.rename(targetName, backupName);
+        if (movedOldTarget) installed = parent.rename(stagingName, targetName);
+        if (!installed && QFileInfo::exists(parent.absoluteFilePath(backupName)))
+            parent.rename(backupName, targetName);
+    }
+    if (installed && QFileInfo::exists(parent.absoluteFilePath(backupName)))
+        QDir(parent.absoluteFilePath(backupName)).removeRecursively();
+    if (!installed && QFileInfo::exists(staging))
+        QDir(staging).removeRecursively();
+    QApplication::restoreOverrideCursor();
+
+    if (!saved || !installed) {
+        // saveProject captures live built-in state into the model; restore the
+        // exact pre-export edge copy if publication did not complete.
+        (void)m_controller.materializeCollaborationProject(runtimeBefore, false);
+        QMessageBox::warning(
+            this, tr("Local Copy Failed"),
+            tr("The portable project could not be written atomically. The cloud project remains open."));
+        return;
+    }
+
+    const audio::Result opened = m_controller.openProject(target.toStdString());
+    if (!opened) {
+        (void)m_controller.materializeCollaborationProject(runtimeBefore, false);
+        QMessageBox::warning(
+            this, tr("Local Copy Saved"),
+            tr("The portable copy was saved, but could not be opened. The cloud project remains open."));
+        return;
+    }
+
+    clearCloudProjectBinding(/*cancelPublication=*/false);
+    m_projectPath = target;
+    m_selectedTrackId.clear();
+    m_dirty = false;
+    m_journal.setProjectPath(target.toStdString(),
+                             QFileInfo(target).baseName().toStdString());
+    m_journalStale = true;
+    m_transport->syncTempo();
+    syncViews();
+    if (!m_controller.project().tracks.empty()) {
+        selectTrackFromHeader(
+            QString::fromStdString(m_controller.project().tracks.front().id));
+    }
+    updateWindowTitle();
+    statusBar()->showMessage(tr("Created local copy %1")
+                                 .arg(QFileInfo(target).fileName()),
+                             5000);
+}
+
 void MainWindow::onInvitePeople() {
     if (!canInvitePeople()) {
         statusBar()->showMessage(
@@ -1780,8 +2429,513 @@ void MainWindow::onInvitePeople() {
     updateCloudSessionActions();
 }
 
+void MainWindow::onSessionSettings() {
+    if (!canOpenSessionSettings()) {
+        statusBar()->showMessage(
+            tr("Open a verified cloud project before viewing session settings."),
+            5000);
+        return;
+    }
+
+    const QString projectId = m_cloudProjectId;
+    QPointer<collab::CloudProjectClient> client = m_cloudProjectClient;
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Session Settings"));
+    dialog.resize(720, 440);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* status = new QLabel(tr("Loading participants\u2026"), &dialog);
+    status->setWordWrap(true);
+    layout->addWidget(status);
+
+    auto* participants = new QTreeWidget(&dialog);
+    participants->setColumnCount(3);
+    participants->setHeaderLabels(
+        {tr("Participant"), tr("Role"), tr("Session")});
+    participants->setRootIsDecorated(false);
+    participants->setAlternatingRowColors(true);
+    participants->setSelectionMode(QAbstractItemView::SingleSelection);
+    participants->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    participants->header()->setSectionResizeMode(1,
+                                                  QHeaderView::ResizeToContents);
+    participants->header()->setSectionResizeMode(2,
+                                                  QHeaderView::ResizeToContents);
+    layout->addWidget(participants, 1);
+
+    auto* management = new QHBoxLayout;
+    auto* role = new QComboBox(&dialog);
+    role->addItem(tr("Editor"), 1);
+    role->addItem(tr("Viewer"), 2);
+    auto* applyRole = new QPushButton(tr("Change Role"), &dialog);
+    auto* remove = new QPushButton(tr("Remove"), &dialog);
+    auto* transfer = new QPushButton(tr("Transfer Ownership\u2026"), &dialog);
+    auto* handoff = new QPushButton(tr("Make Session Host"), &dialog);
+    management->addWidget(new QLabel(tr("Role:"), &dialog));
+    management->addWidget(role);
+    management->addWidget(applyRole);
+    management->addWidget(remove);
+    management->addWidget(transfer);
+    management->addStretch(1);
+    management->addWidget(handoff);
+    layout->addLayout(management);
+
+    auto* buttons = new QDialogButtonBox(&dialog);
+    QPushButton* refresh = buttons->addButton(
+        tr("Refresh"), QDialogButtonBox::ActionRole);
+    buttons->addButton(QDialogButtonBox::Close);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(client.data(), &QObject::destroyed, &dialog, &QDialog::reject);
+
+    constexpr int kUserIdRole = Qt::UserRole;
+    constexpr int kRowRole = Qt::UserRole + 1;
+    constexpr int kColorRole = Qt::UserRole + 2;
+    constexpr int kTargetMemberRole = Qt::UserRole + 3;
+    constexpr int kOwnerRow = 0;
+    constexpr int kEditorRow = 1;
+    constexpr int kViewerRow = 2;
+
+    collab::CloudProjectView project;
+    QVector<collab::CloudProjectMember> members;
+    collab::CloudSessionState session;
+    bool projectLoaded = false;
+    bool membersLoaded = false;
+    bool sessionLoaded = false;
+    bool sessionActive = false;
+    bool closing = false;
+    QString loadError;
+    quint64 generation = 0;
+    quint64 projectGeneration = 0;
+    quint64 membersGeneration = 0;
+    quint64 sessionGeneration = 0;
+    quint64 projectRequest = 0;
+    quint64 membersRequest = 0;
+    quint64 sessionRequest = 0;
+    quint64 mutationRequest = 0;
+
+    const auto cancelRequest = [&](quint64& request) {
+        const quint64 pending = std::exchange(request, quint64(0));
+        if (pending != 0 && client) client->cancel(pending);
+    };
+
+    const auto currentOwner = [&] {
+        return client && projectLoaded &&
+               project.role == collab::CloudProjectRole::Owner &&
+               project.project.ownerUserId == client->currentUserId();
+    };
+
+    const auto currentHost = [&] {
+        if (!m_collaboration || !m_collaboration->isOnline()) return false;
+        const QString local = m_collaboration->localParticipantId();
+        const QString liveHost = m_collaboration->hostParticipantId();
+        const QString host = liveHost.isEmpty()
+            ? session.session.hostMemberId
+            : liveHost;
+        return !local.isEmpty() && local == host;
+    };
+
+    const auto updateControls = [&] {
+        QTreeWidgetItem* item = participants->currentItem();
+        const bool sameProject = client && m_cloudProjectId == projectId &&
+                                 canOpenSessionSettings();
+        const bool busy = mutationRequest != 0;
+        const bool selected = item != nullptr;
+        const int selectedRole = selected
+            ? item->data(0, kRowRole).toInt()
+            : kViewerRow;
+        const bool ownerTarget = selectedRole == kOwnerRow;
+        const bool mayManage = sameProject && currentOwner() && !busy;
+        const QString targetMember = selected
+            ? item->data(0, kTargetMemberRole).toString()
+            : QString();
+        const QString localParticipant = m_collaboration
+            ? m_collaboration->localParticipantId()
+            : QString();
+        const bool mayHandoff =
+            sameProject && !busy && selected && !targetMember.isEmpty() &&
+            targetMember != localParticipant && selectedRole != kViewerRow &&
+            m_cloudSessionLifecycle &&
+            m_cloudSessionLifecycle->phase() ==
+                collab::CloudSessionLifecyclePhase::Active &&
+            (currentOwner() || currentHost());
+
+        role->setEnabled(mayManage && selected && !ownerTarget);
+        applyRole->setEnabled(mayManage && selected && !ownerTarget);
+        remove->setEnabled(mayManage && selected && !ownerTarget);
+        transfer->setEnabled(mayManage && selected &&
+                             selectedRole == kEditorRow);
+        handoff->setEnabled(mayHandoff);
+        refresh->setEnabled(!busy && client);
+    };
+
+    const auto render = [&] {
+        const QString selectedUser = participants->currentItem()
+            ? participants->currentItem()->data(0, kUserIdRole).toString()
+            : QString();
+        participants->clear();
+
+        const QVector<collab::ParticipantIdentity> presence =
+            m_collaboration
+                ? m_collaboration->presenceStore()->participants()
+                : QVector<collab::ParticipantIdentity>{};
+        const QString localParticipant = m_collaboration
+            ? m_collaboration->localParticipantId()
+            : QString();
+
+        const auto addParticipant = [&](const QString& userId, int rowRole,
+                                        int colorIndex) {
+            if (userId.isEmpty()) return;
+            QString nickname;
+            bool online = false;
+            bool host = false;
+            QString targetMember;
+
+            if (sessionActive) {
+                for (const collab::CloudSessionMember& member : session.members) {
+                    if (member.userId != userId) continue;
+                    online = true;
+                    host = host || member.id == session.session.hostMemberId;
+                    if (targetMember.isEmpty() ||
+                        (targetMember == localParticipant &&
+                         member.id != localParticipant)) {
+                        targetMember = member.id;
+                    }
+                }
+            }
+            for (const collab::ParticipantIdentity& identity : presence) {
+                if (identity.userId != userId) continue;
+                if (!identity.nickname.trimmed().isEmpty())
+                    nickname = collab::safeDisplayName(identity.nickname);
+                online = online || identity.online;
+                host = host || identity.host ||
+                       identity.participantId ==
+                           (m_collaboration
+                                ? m_collaboration->hostParticipantId()
+                                : QString());
+                if (identity.online &&
+                    (targetMember.isEmpty() ||
+                     (targetMember == localParticipant &&
+                      identity.participantId != localParticipant))) {
+                    targetMember = identity.participantId;
+                }
+            }
+
+            QString name = nickname.isEmpty() ? userId : nickname;
+            if (client && userId == client->currentUserId())
+                name += tr(" (You)");
+            QString roleName = tr("Viewer");
+            if (rowRole == kOwnerRow) roleName = tr("Owner");
+            else if (rowRole == kEditorRow) roleName = tr("Editor");
+            QString sessionState = online ? tr("Online") : tr("Offline");
+            if (host) sessionState = tr("Host \u00b7 Online");
+
+            auto* item = new QTreeWidgetItem(
+                participants, {name, roleName, sessionState});
+            item->setData(0, kUserIdRole, userId);
+            item->setData(0, kRowRole, rowRole);
+            item->setData(0, kColorRole, colorIndex);
+            item->setData(0, kTargetMemberRole,
+                          online ? targetMember : QString());
+            item->setToolTip(0, userId);
+            if (userId == selectedUser) participants->setCurrentItem(item);
+        };
+
+        if (projectLoaded)
+            addParticipant(project.project.ownerUserId, kOwnerRow, 0);
+        if (membersLoaded) {
+            for (const collab::CloudProjectMember& member : members) {
+                if (projectLoaded &&
+                    member.userId == project.project.ownerUserId) {
+                    continue;
+                }
+                addParticipant(
+                    member.userId,
+                    member.role == collab::CloudMemberRole::Editor
+                        ? kEditorRow
+                        : kViewerRow,
+                    member.colorIndex);
+            }
+        }
+
+        if (participants->topLevelItemCount() != 0 &&
+            !participants->currentItem()) {
+            participants->setCurrentItem(participants->topLevelItem(0));
+        }
+        if (QTreeWidgetItem* item = participants->currentItem()) {
+            const int rowRole = item->data(0, kRowRole).toInt();
+            if (rowRole != kOwnerRow)
+                role->setCurrentIndex(rowRole == kEditorRow ? 0 : 1);
+        }
+
+        if (projectRequest || membersRequest || sessionRequest) {
+            status->setText(tr("Refreshing project participants\u2026"));
+        } else if (mutationRequest) {
+            status->setText(tr("Applying session settings\u2026"));
+        } else if (!loadError.isEmpty()) {
+            status->setText(loadError);
+        } else if (sessionLoaded && sessionActive) {
+            status->setText(tr("Live session: %1 participant(s) online.")
+                                .arg(session.members.size()));
+        } else {
+            status->setText(tr("No live session is active. Project membership is still available below."));
+        }
+        if (projectLoaded && !currentOwner() && !currentHost()) {
+            status->setText(
+                status->text() +
+                tr("\nProject management is read-only for your role."));
+        }
+        updateControls();
+    };
+
+    std::function<void()> requestRefresh;
+    requestRefresh = [&] {
+        if (!client || closing || m_cloudProjectId != projectId ||
+            !canOpenSessionSettings()) {
+            dialog.reject();
+            return;
+        }
+        cancelRequest(projectRequest);
+        cancelRequest(membersRequest);
+        cancelRequest(sessionRequest);
+        const quint64 next = ++generation;
+        projectGeneration = next;
+        membersGeneration = next;
+        sessionGeneration = next;
+        projectLoaded = false;
+        membersLoaded = false;
+        sessionLoaded = false;
+        sessionActive = false;
+        project = {};
+        members.clear();
+        session = {};
+        loadError.clear();
+        projectRequest = client->getProject(projectId);
+        membersRequest = client->listMembers(projectId);
+        sessionRequest = client->getActiveSession(projectId);
+        render();
+    };
+
+    connect(participants, &QTreeWidget::itemSelectionChanged, &dialog, [&] {
+        if (QTreeWidgetItem* item = participants->currentItem()) {
+            const int rowRole = item->data(0, kRowRole).toInt();
+            if (rowRole != kOwnerRow)
+                role->setCurrentIndex(rowRole == kEditorRow ? 0 : 1);
+        }
+        updateControls();
+    });
+    connect(refresh, &QPushButton::clicked, &dialog, requestRefresh);
+
+    connect(client.data(), &collab::CloudProjectClient::projectReceived, &dialog,
+            [&](quint64 requestId, collab::CloudRequestKind kind,
+                const collab::CloudProjectView& view) {
+                if (closing || requestId != projectRequest ||
+                    projectGeneration != generation ||
+                    kind != collab::CloudRequestKind::GetProject ||
+                    view.project.id != projectId) {
+                    return;
+                }
+                projectRequest = 0;
+                project = view;
+                projectLoaded = true;
+                render();
+            });
+    connect(client.data(), &collab::CloudProjectClient::membersListed, &dialog,
+            [&](quint64 requestId,
+                const QVector<collab::CloudProjectMember>& result) {
+                if (closing || requestId != membersRequest ||
+                    membersGeneration != generation) {
+                    return;
+                }
+                membersRequest = 0;
+                members = result;
+                membersLoaded = true;
+                render();
+            });
+    connect(client.data(), &collab::CloudProjectClient::sessionStateReceived,
+            &dialog,
+            [&](quint64 requestId, collab::CloudRequestKind kind,
+                const collab::CloudSessionState& result) {
+                if (closing) return;
+                if (requestId == sessionRequest &&
+                    sessionGeneration == generation &&
+                    kind == collab::CloudRequestKind::GetActiveSession &&
+                    result.session.projectId == projectId) {
+                    sessionRequest = 0;
+                    session = result;
+                    sessionLoaded = true;
+                    sessionActive = true;
+                    render();
+                    return;
+                }
+                if (requestId == mutationRequest &&
+                    kind == collab::CloudRequestKind::HandoffSession &&
+                    result.session.projectId == projectId) {
+                    mutationRequest = 0;
+                    requestRefresh();
+                }
+            });
+    connect(client.data(), &collab::CloudProjectClient::memberSaved, &dialog,
+            [&](quint64 requestId,
+                const collab::CloudProjectMember& member) {
+                if (closing || requestId != mutationRequest ||
+                    member.projectId != projectId) {
+                    return;
+                }
+                mutationRequest = 0;
+                requestRefresh();
+            });
+    connect(client.data(), &collab::CloudProjectClient::ownershipTransferred,
+            &dialog,
+            [&](quint64 requestId,
+                const collab::CloudOwnershipTransfer& result) {
+                if (closing || requestId != mutationRequest ||
+                    result.project.id != projectId) {
+                    return;
+                }
+                mutationRequest = 0;
+                requestRefresh();
+            });
+    connect(client.data(), &collab::CloudProjectClient::operationCompleted,
+            &dialog,
+            [&](quint64 requestId, collab::CloudRequestKind kind,
+                const QString&) {
+                if (closing || requestId != mutationRequest ||
+                    kind != collab::CloudRequestKind::RemoveMember) {
+                    return;
+                }
+                mutationRequest = 0;
+                requestRefresh();
+            });
+    connect(client.data(), &collab::CloudProjectClient::requestFailed, &dialog,
+            [&](quint64 requestId, collab::CloudRequestKind,
+                const collab::CloudClientError& error) {
+                if (closing) return;
+                if (requestId == sessionRequest && error.httpStatus == 404) {
+                    sessionRequest = 0;
+                    sessionLoaded = true;
+                    sessionActive = false;
+                    render();
+                    return;
+                }
+                const QString message = error.safeMessage.isEmpty()
+                    ? tr("The cloud request could not be completed.")
+                    : error.safeMessage.left(400);
+                if (requestId == mutationRequest) {
+                    mutationRequest = 0;
+                    render();
+                    QMessageBox::warning(&dialog,
+                                         tr("Session Settings Failed"),
+                                         message);
+                    return;
+                }
+                bool matched = false;
+                if (requestId == projectRequest) {
+                    projectRequest = 0;
+                    matched = true;
+                }
+                if (requestId == membersRequest) {
+                    membersRequest = 0;
+                    matched = true;
+                }
+                if (requestId == sessionRequest) {
+                    sessionRequest = 0;
+                    sessionLoaded = true;
+                    sessionActive = false;
+                    matched = true;
+                }
+                if (matched) {
+                    if (loadError.isEmpty()) loadError = message;
+                    render();
+                }
+            });
+
+    if (m_collaboration) {
+        connect(m_collaboration->presenceStore(),
+                &collab::PresenceStore::participantsChanged, &dialog, render);
+        connect(m_collaboration, &collab::CollaborationService::roomIdentityChanged,
+                &dialog, [&](const QString&, const QString&, const QString&) {
+                    render();
+                });
+    }
+
+    connect(applyRole, &QPushButton::clicked, &dialog, [&] {
+        QTreeWidgetItem* item = participants->currentItem();
+        if (!item || !currentOwner() || mutationRequest != 0 || !client)
+            return;
+        collab::PutCloudProjectMemberInput input;
+        input.role = role->currentData().toInt() == kEditorRow
+            ? collab::CloudMemberRole::Editor
+            : collab::CloudMemberRole::Viewer;
+        input.colorIndex = item->data(0, kColorRole).toInt();
+        mutationRequest = client->putMember(
+            projectId, item->data(0, kUserIdRole).toString(), input);
+        render();
+    });
+    connect(remove, &QPushButton::clicked, &dialog, [&] {
+        QTreeWidgetItem* item = participants->currentItem();
+        if (!item || !currentOwner() || mutationRequest != 0 || !client)
+            return;
+        if (QMessageBox::question(
+                &dialog, tr("Remove Project Member"),
+                tr("Remove %1 from this cloud project?").arg(item->text(0)),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No) != QMessageBox::Yes) {
+            return;
+        }
+        mutationRequest = client->removeMember(
+            projectId, item->data(0, kUserIdRole).toString());
+        render();
+    });
+    connect(transfer, &QPushButton::clicked, &dialog, [&] {
+        QTreeWidgetItem* item = participants->currentItem();
+        if (!item || !currentOwner() || mutationRequest != 0 || !client ||
+            item->data(0, kRowRole).toInt() != kEditorRow) {
+            return;
+        }
+        if (QMessageBox::question(
+                &dialog, tr("Transfer Project Ownership"),
+                tr("Transfer ownership to %1? You will become an editor, and "
+                   "both accounts will reconnect to verify the new roles.")
+                    .arg(item->text(0)),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No) != QMessageBox::Yes) {
+            return;
+        }
+        mutationRequest = client->transferOwnership(
+            projectId, item->data(0, kUserIdRole).toString());
+        render();
+    });
+    connect(handoff, &QPushButton::clicked, &dialog, [&] {
+        QTreeWidgetItem* item = participants->currentItem();
+        if (!item || mutationRequest != 0 || !client ||
+            !m_cloudSessionLifecycle) {
+            return;
+        }
+        const QString target = item->data(0, kTargetMemberRole).toString();
+        const QString sessionId = m_cloudSessionLifecycle->sessionId();
+        if (target.isEmpty() || sessionId.isEmpty()) return;
+        mutationRequest = client->handoffSession(projectId, sessionId, target);
+        render();
+    });
+
+    connect(&dialog, &QDialog::finished, &dialog, [&](int) {
+        closing = true;
+        ++generation;
+        cancelRequest(projectRequest);
+        cancelRequest(membersRequest);
+        cancelRequest(sessionRequest);
+        cancelRequest(mutationRequest);
+    });
+
+    requestRefresh();
+    dialog.exec();
+    updateCloudSessionActions();
+}
+
 void MainWindow::clearCloudProjectBinding(bool cancelPublication) {
     if (!prepareCloudRecordingForProjectTransition()) return;
+    if (m_cloudSharedAssetMutationBridge)
+        m_cloudSharedAssetMutationBridge->cancel();
     if (m_publicationUi && m_publicationUi->active) {
         if (m_cloudPublisher) m_cloudPublisher->cancel();
         // cancel() normally emits publicationCancelled synchronously, after
@@ -1799,8 +2953,19 @@ void MainWindow::clearCloudProjectBinding(bool cancelPublication) {
     }
     if (m_cloudSessionLifecycle) m_cloudSessionLifecycle->clearBinding();
     if (m_cloudProjectSync) m_cloudProjectSync->cancel();
+    if (m_cloudAssetHydrator) m_cloudAssetHydrator->cancel();
     if (m_collaboration) m_collaboration->clearProject();
+    if (m_cloudProjectClient) {
+        const QString userId = m_cloudProjectClient->currentUserId();
+        if (!userId.isEmpty()) {
+            QSettings settings;
+            settings.remove(QStringLiteral("collaboration/v2/") + userId);
+            settings.sync();
+        }
+    }
     m_cloudProjectId.clear();
+    m_candidateCloudProjectId.clear();
+    m_candidateCloudBackupPath.clear();
     m_cloudLocalBackupPath.clear();
     ++m_projectRevision;
     updateCloudPublicationAction();
@@ -1819,7 +2984,8 @@ void MainWindow::onPublishCloudProject() {
         if (answer == QMessageBox::Yes) m_cloudPublisher->cancel();
         return;
     }
-    if (!m_cloudProjectId.isEmpty()) return;
+    if (!m_cloudProjectId.isEmpty() || !m_candidateCloudProjectId.isEmpty())
+        return;
 
     if (m_controller.isRecording() || m_controller.isCountingIn()) {
         QMessageBox::information(
@@ -2293,6 +3459,8 @@ bool MainWindow::checkAutomationForTest() {
     // it, so there is something to draw into straight away.
     toggleAutomationLanes();
     QApplication::processEvents();
+    m_transport->setToolIndex(0);  // Select edits the curve, not the clip.
+    m_timeline->setSnapEnabled(false);
     const std::vector<std::string> lanes = m_controller.automationLanesOf(track);
     if (lanes.size() != 1) {
         std::fprintf(stderr, "opening automation made %d lanes, wanted one\n",
@@ -2360,7 +3528,7 @@ bool MainWindow::checkAutomationForTest() {
     // ── A click on empty curve adds a breakpoint and places it in one gesture ──
     const std::size_t before = curve()->points.size();
     const QPoint at(m_timeline->width() / 3, y);
-    click(at, at, Qt::AltModifier);   // Alt: off the grid, so it lands where hit
+    click(at, at, Qt::NoModifier);
     if (!curve() || curve()->points.size() != before + 1) {
         std::fprintf(stderr, "clicking the curve did not add a point\n");
         return false;
@@ -2369,7 +3537,7 @@ bool MainWindow::checkAutomationForTest() {
     // ── And the same gesture drags it ──
     const double placed = curve()->points[1].value;
     const QPoint lower(at.x(), at.y() + 14);
-    click(at, lower, Qt::AltModifier);
+    click(at, lower, Qt::NoModifier);
     const daw::ClipAutomationModel* after = curve();
     if (!after) return false;
     if (after->points.size() != before + 1 ||
@@ -2396,7 +3564,7 @@ bool MainWindow::checkAutomationForTest() {
     const double lockedValue = after->points[1].value;
     const double lockedFrom = after->points[1].beats;
     const QPoint right(lower.x() + 40, lower.y() + 25);
-    click(lower, right, Qt::ShiftModifier | Qt::AltModifier);
+    click(lower, right, Qt::ShiftModifier);
     after = curve();
     bool horizontalOnly = false;
     if (after) {
@@ -3587,7 +4755,11 @@ bool MainWindow::checkTrackSelectionForTest() {
             std::fprintf(stderr, "the track name editor is missing\n");
             return false;
         }
-        const QPoint blank(name->width() - 2, name->height() / 2);
+        const int blankX = name->textMargins().left() +
+                           std::max(8, name->fontMetrics().horizontalAdvance(
+                                           name->text())) +
+                           5;
+        const QPoint blank(blankX, name->height() / 2);
         QMouseEvent blankName(QEvent::MouseButtonDblClick, QPointF(blank),
                               QPointF(name->mapToGlobal(blank)),
                               Qt::LeftButton, Qt::LeftButton,
@@ -3665,31 +4837,32 @@ bool MainWindow::checkTrackSelectionForTest() {
         std::fprintf(stderr, "packing the selection made no summing folder\n");
         return false;
     }
+    const std::string folderId = folder->id;
     for (size_t i = 0; i < 3; ++i) {
         const auto* track = project.findTrack(ids[i]);
-        if (!track || track->parentId != folder->id ||
-            track->outputBusId != folder->id) {
+        if (!track || track->parentId != folderId ||
+            track->outputBusId != folderId) {
             std::fprintf(stderr,
                          "track %d is not filed in and routed to the folder\n",
                          int(i));
             return false;
         }
     }
-    if (project.findTrack(ids[3])->parentId == folder->id) {
+    if (project.findTrack(ids[3])->parentId == folderId) {
         std::fprintf(stderr, "a track outside the selection was packed too\n");
         return false;
     }
     // The header column has to be showing the folder's row, not a row that is
     // now hidden inside it.
     if (m_trackList->selectedTrackIds() !=
-        QStringList{QString::fromStdString(folder->id)}) {
+        QStringList{QString::fromStdString(folderId)}) {
         std::fprintf(stderr, "the new folder is not what is selected\n");
         return false;
     }
 
     // Colouring the folder colours everything in it — the one behaviour both
     // kinds of folder share, and the reason a folder has a colour at all.
-    m_controller.setTrackColor(folder->id, 0x22C55E);
+    m_controller.setTrackColor(folderId, 0x22C55E);
     for (size_t i = 0; i < 3; ++i) {
         if (m_controller.project().findTrack(ids[i])->color != 0x22C55Eu) {
             std::fprintf(stderr, "the folder's colour did not reach its tracks\n");
@@ -3804,7 +4977,7 @@ bool MainWindow::checkTrackSelectionForTest() {
     // pair, so neither channel control disappears with the full fader throw.
     {
         std::vector<std::string> chain;
-        std::string parent = folder->id;
+        std::string parent = folderId;
         for (int level = 0; level < 5; ++level) {
             const std::string nested = m_controller.addFolder(/*summing=*/false);
             m_controller.moveTrackToFolder(nested, parent);
@@ -3843,7 +5016,6 @@ bool MainWindow::checkTrackSelectionForTest() {
     // Put the project back exactly as it was found — including the folder this
     // check made, which would otherwise be sitting in every screenshot and
     // every later check that walks the tracks.
-    const std::string folderId = folder->id;
     for (const std::string& id : ids) m_controller.removeTrack(id);
     m_controller.removeTrack(folderId);
     syncViews();
@@ -6955,16 +8127,9 @@ void MainWindow::buildMenus() {
 #ifdef DAW_ENABLE_COLLABORATION
     if (m_collaboration) {
         auto* session = menuBar()->addMenu(tr("&Session"));
-        const auto addPlannedSessionAction =
-            [this, session](const QString& label) {
-                QAction* action = session->addAction(
-                    tr("%1 (Not available yet)").arg(label));
-                action->setEnabled(false);
-                action->setToolTip(tr(
-                    "This workflow remains disabled until cloud publish and "
-                    "session release gates are implemented."));
-                return action;
-            };
+        m_cloudProjectsAction = session->addAction(tr("Cloud Projects…"));
+        connect(m_cloudProjectsAction, &QAction::triggered, this,
+                &MainWindow::onOpenCloudProjects);
         m_publishProjectAction =
             session->addAction(tr("Publish Project to Cloud…"));
         m_publishProjectAction->setEnabled(false);
@@ -6988,7 +8153,10 @@ void MainWindow::buildMenus() {
         m_invitePeopleAction->setEnabled(false);
         connect(m_invitePeopleAction, &QAction::triggered, this,
                 &MainWindow::onInvitePeople);
-        addPlannedSessionAction(tr("Session Settings…"));
+        m_sessionSettingsAction = session->addAction(tr("Session Settings…"));
+        m_sessionSettingsAction->setEnabled(false);
+        connect(m_sessionSettingsAction, &QAction::triggered, this,
+                &MainWindow::onSessionSettings);
         m_endSessionAction = session->addAction(tr("End Session…"));
         m_endSessionAction->setEnabled(false);
         connect(m_endSessionAction, &QAction::triggered, this, [this] {
@@ -7007,7 +8175,9 @@ void MainWindow::buildMenus() {
                     5000);
             }
         });
-        addPlannedSessionAction(tr("Make Local Copy…"));
+        QAction* makeLocalCopy = session->addAction(tr("Make Local Copy…"));
+        connect(makeLocalCopy, &QAction::triggered, this,
+                &MainWindow::onMakeLocalCopy);
         m_leaveSessionAction = session->addAction(tr("Leave Session…"));
         m_leaveSessionAction->setEnabled(false);
         connect(m_leaveSessionAction, &QAction::triggered, this, [this] {
@@ -7026,6 +8196,27 @@ void MainWindow::buildMenus() {
                     5000);
             }
         });
+        session->addSeparator();
+        m_retryAssetMutationAction =
+            session->addAction(tr("Retry Asset Upload"));
+        m_retryAssetMutationAction->setEnabled(false);
+        connect(m_retryAssetMutationAction, &QAction::triggered, this,
+                [this] {
+                    if (!m_cloudSharedAssetMutationBridge ||
+                        !m_cloudSharedAssetMutationBridge->retry()) {
+                        statusBar()->showMessage(
+                            tr("There is no retryable shared asset upload."),
+                            5000);
+                    }
+                });
+        m_cancelAssetMutationAction =
+            session->addAction(tr("Cancel Asset Upload"));
+        m_cancelAssetMutationAction->setEnabled(false);
+        connect(m_cancelAssetMutationAction, &QAction::triggered, this,
+                [this] {
+                    if (m_cloudSharedAssetMutationBridge)
+                        m_cloudSharedAssetMutationBridge->cancel();
+                });
         session->addSeparator();
         auto* independent = session->addAction(tr("Independent Transport"));
         auto* followHost = session->addAction(tr("Follow Session Host"));
@@ -8233,8 +9424,10 @@ bool MainWindow::checkBrowser(const QString& folder, const QString& audioFile) {
     {
         const bool wasAuto = ui::browserprefs::autoPreview();
         ui::browserprefs::setAutoPreview(false);
-        m_browser->showFolderForTest(folder, QString(), /*persist=*/false);
-        m_browser->showFolderForTest(folder, audioFile, /*persist=*/false);
+        if (!m_browser->reloadSelectedPreviewForTest()) {
+            ui::browserprefs::setAutoPreview(wasAuto);
+            return fail("selected audio file could not be reloaded");
+        }
         decodeTimeout.restart();
         while (!m_browser->hasPreviewWaveformForTest() &&
                decodeTimeout.elapsed() < kDecodeTimeoutMs) {
@@ -9741,12 +10934,9 @@ void MainWindow::setRecordEngaged(bool engaged) {
 void MainWindow::startRecordingSelection() {
 #ifdef DAW_ENABLE_COLLABORATION
     if (!m_cloudProjectId.isEmpty()) {
-        const std::vector<std::string> targets = recordTargets();
-        if (targets.empty()) {
-            statusBar()->showMessage(tr("Select a track to record onto"), 2000);
-            return;
-        }
-        startCloudRecording(targets);
+        statusBar()->showMessage(
+            tr("Cloud recording is disabled in this version. Make a local copy to record."),
+            7000);
         return;
     }
 #endif
@@ -10329,6 +11519,12 @@ void MainWindow::onRecordModeChanged() {
 
 void MainWindow::onRecord() {
 #ifdef DAW_ENABLE_COLLABORATION
+    if (!m_cloudProjectId.isEmpty()) {
+        statusBar()->showMessage(
+            tr("Cloud recording is disabled in this version. Make a local copy to record."),
+            7000);
+        return;
+    }
     if (m_collaboration)
         m_collaboration->localSessionState()->noteLocalTransportInteraction();
     if (m_cloudRecording &&
@@ -10368,6 +11564,12 @@ void MainWindow::onRecordKey() {
     // R is the whole record gesture: it starts, it cancels a count-in it
     // started, and it lands a running take.
 #ifdef DAW_ENABLE_COLLABORATION
+    if (!m_cloudProjectId.isEmpty()) {
+        statusBar()->showMessage(
+            tr("Cloud recording is disabled in this version. Make a local copy to record."),
+            7000);
+        return;
+    }
     if (m_cloudRecording &&
         m_cloudRecording->phase ==
             CloudRecordingRuntime::Phase::Acquiring) {

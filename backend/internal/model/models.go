@@ -15,19 +15,20 @@ const (
 )
 
 type User struct {
-	ID                uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
-	Email             string    `gorm:"not null" json:"email"`
-	EmailKey          string    `gorm:"uniqueIndex;not null" json:"-"`
-	Nickname          string    `gorm:"not null" json:"nickname"`
-	NicknameKey       string    `gorm:"uniqueIndex;not null" json:"-"`
-	PasswordHash      string    `gorm:"not null" json:"-"`
-	Locale            string    `gorm:"not null;default:en" json:"locale"`
-	Status            string    `gorm:"not null;default:active" json:"status"`
-	ConsentVersion    string    `gorm:"not null" json:"consent_version"`
-	ConsentAcceptedAt time.Time `gorm:"not null" json:"consent_accepted_at"`
-	ConsentIP         string    `gorm:"not null" json:"-"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                   uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	Email                string    `gorm:"not null" json:"email"`
+	EmailKey             string    `gorm:"uniqueIndex;not null" json:"-"`
+	Nickname             string    `gorm:"not null" json:"nickname"`
+	NicknameKey          string    `gorm:"uniqueIndex;not null" json:"-"`
+	PasswordHash         string    `gorm:"not null" json:"-"`
+	Locale               string    `gorm:"not null;default:en" json:"locale"`
+	Status               string    `gorm:"not null;default:active" json:"status"`
+	CollaborationEnabled bool      `gorm:"not null;default:false" json:"collaboration_enabled"`
+	ConsentVersion       string    `gorm:"not null" json:"consent_version"`
+	ConsentAcceptedAt    time.Time `gorm:"not null" json:"consent_accepted_at"`
+	ConsentIP            string    `gorm:"not null" json:"-"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 type AdminUser struct {

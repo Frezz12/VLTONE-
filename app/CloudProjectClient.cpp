@@ -2,6 +2,7 @@
 
 #include "AccountService.hpp"
 #include "CloudSnapshotAssetManifest.hpp"
+#include "ProjectSerializer.hpp"
 #include "collaboration/CommandJson.hpp"
 
 #include <QCoreApplication>
@@ -1573,7 +1574,9 @@ CloudProjectClient::CloudProjectClient(CredentialProvider credentials,
     qRegisterMetaType<CloudProjectBootstrap>();
     qRegisterMetaType<CloudOperationLookup>();
     qRegisterMetaType<CloudProjectMember>();
+    qRegisterMetaType<CloudProjectInvite>();
     qRegisterMetaType<CreatedCloudProjectInvite>();
+    qRegisterMetaType<CloudOwnershipTransfer>();
     qRegisterMetaType<CloudSessionState>();
     qRegisterMetaType<CloudProjectTrackLease>();
 }
@@ -1590,12 +1593,20 @@ void CloudProjectClient::setRequestTimeoutMs(int timeoutMs) {
         std::clamp(timeoutMs, kMinimumTimeoutMs, kMaximumTimeoutMs);
 }
 
+QString CloudProjectClient::currentUserId() const {
+    if (!m_impl || !m_impl->credentialProvider) return {};
+    const Credentials credentials = m_impl->credentialProvider();
+    const auto normalized = m_impl->uuidInput(credentials.userId);
+    return normalized ? *normalized : QString();
+}
+
 quint64 CloudProjectClient::createProject(
     const CreateCloudProjectInput& input) {
     const QString title = input.title.trimmed();
     const QString engineVersion = input.engineVersion.trimmed();
     const QString minimumVersion = input.minimumAppVersion.trimmed();
-    if (input.formatVersion != 6 || title.isEmpty() || title.size() > 160 ||
+    if (input.formatVersion != daw::ProjectSerializer::kFormatVersion ||
+        title.isEmpty() || title.size() > 160 ||
         engineVersion.isEmpty() || engineVersion.size() > 64 ||
         minimumVersion.isEmpty() || minimumVersion.size() > 64) {
         return m_impl->invalid(CloudRequestKind::CreateProject,
@@ -1818,8 +1829,10 @@ quint64 CloudProjectClient::startSession(const QString& projectId,
         {QStringLiteral("mode"), sessionModeName(mode)},
         {QStringLiteral("appVersion"), version},
         {QStringLiteral("engineVersion"), version},
-        {QStringLiteral("commandSchemaVersion"), 1},
-        {QStringLiteral("projectFormatVersion"), 6},
+        {QStringLiteral("commandSchemaVersion"),
+         int(daw::collab::kProjectCommandSchemaVersion)},
+        {QStringLiteral("projectFormatVersion"),
+         daw::ProjectSerializer::kFormatVersion},
     };
     return m_impl->requestSession(
         CloudRequestKind::StartSession, QByteArrayLiteral("POST"),
@@ -1838,8 +1851,10 @@ quint64 CloudProjectClient::joinSession(const QString& projectId,
     const QJsonObject body{
         {QStringLiteral("appVersion"), version},
         {QStringLiteral("engineVersion"), version},
-        {QStringLiteral("commandSchemaVersion"), 1},
-        {QStringLiteral("projectFormatVersion"), 6},
+        {QStringLiteral("commandSchemaVersion"),
+         int(daw::collab::kProjectCommandSchemaVersion)},
+        {QStringLiteral("projectFormatVersion"),
+         daw::ProjectSerializer::kFormatVersion},
     };
     return m_impl->requestSession(
         CloudRequestKind::JoinSession, QByteArrayLiteral("POST"),
@@ -2069,6 +2084,126 @@ quint64 CloudProjectClient::removeMember(const QString& projectId,
         CloudRequestKind::RemoveMember, QByteArrayLiteral("DELETE"),
         QStringLiteral("desktop/projects/%1/members/%2").arg(*project, *user),
         *user);
+}
+
+quint64 CloudProjectClient::transferOwnership(
+    const QString& projectId, const QString& targetUserId) {
+    const auto project = m_impl->uuidInput(projectId);
+    const auto target = m_impl->uuidInput(targetUserId);
+    if (!project || !target || *target == currentUserId()) {
+        return m_impl->invalid(CloudRequestKind::TransferOwnership,
+                               QStringLiteral("Invalid ownership target"));
+    }
+    const QJsonObject body{
+        {QStringLiteral("targetUserId"), *target},
+    };
+    const quint64 requestId = m_impl->allocate();
+    m_impl->issue(
+        requestId, CloudRequestKind::TransferOwnership,
+        QByteArrayLiteral("POST"),
+        QStringLiteral("desktop/projects/%1/ownership").arg(*project), {},
+        QJsonDocument(body).toJson(QJsonDocument::Compact), {200},
+        kMaxRegularResponseBytes, true,
+        [this, requestId, projectId = *project,
+         targetUserId = *target](const QByteArray& response) {
+            const auto object = m_impl->responseObject(
+                requestId, CloudRequestKind::TransferOwnership, response);
+            if (!object ||
+                !exactKeys(*object,
+                           {"project", "previousOwnerUserId",
+                            "newOwnerUserId"}) ||
+                !object->value(QStringLiteral("project")).isObject()) {
+                if (object) {
+                    m_impl->invalidResponse(
+                        requestId, CloudRequestKind::TransferOwnership,
+                        {CloudClientErrorCode::InvalidResponse,
+                         QStringLiteral("Invalid ownership response")});
+                }
+                return;
+            }
+            ParseFailure parse;
+            auto parsedProject = parseProject(
+                object->value(QStringLiteral("project")).toObject(), &parse);
+            QString previousOwner;
+            QString newOwner;
+            if (!parsedProject || parsedProject->id != projectId ||
+                !normalizedUuid(object->value(
+                                    QStringLiteral("previousOwnerUserId")),
+                                &previousOwner) ||
+                !normalizedUuid(
+                    object->value(QStringLiteral("newOwnerUserId")),
+                    &newOwner) ||
+                newOwner != targetUserId ||
+                parsedProject->ownerUserId != newOwner) {
+                if (parse.message.isEmpty()) {
+                    parse.message =
+                        QStringLiteral("Ownership response mismatch");
+                }
+                m_impl->invalidResponse(
+                    requestId, CloudRequestKind::TransferOwnership, parse);
+                return;
+            }
+            emit ownershipTransferred(
+                requestId,
+                CloudOwnershipTransfer{*parsedProject, previousOwner,
+                                       newOwner});
+        });
+    return requestId;
+}
+
+quint64 CloudProjectClient::listInvites(const QString& projectId) {
+    const auto project = m_impl->uuidInput(projectId);
+    if (!project) {
+        return m_impl->invalid(CloudRequestKind::ListInvites,
+                               QStringLiteral("Invalid project id"));
+    }
+    const quint64 requestId = m_impl->allocate();
+    m_impl->issue(
+        requestId, CloudRequestKind::ListInvites, QByteArrayLiteral("GET"),
+        QStringLiteral("desktop/projects/%1/invites").arg(*project), {}, {},
+        {200}, kMaxRegularResponseBytes, true,
+        [this, requestId, projectId = *project](const QByteArray& response) {
+            const auto object = m_impl->responseObject(
+                requestId, CloudRequestKind::ListInvites, response);
+            if (!object || !exactKeys(*object, {"invites"}) ||
+                !object->value(QStringLiteral("invites")).isArray()) {
+                if (object) {
+                    m_impl->invalidResponse(
+                        requestId, CloudRequestKind::ListInvites,
+                        {CloudClientErrorCode::InvalidResponse,
+                         QStringLiteral("Invalid invitation list")});
+                }
+                return;
+            }
+            const QJsonArray array =
+                object->value(QStringLiteral("invites")).toArray();
+            if (array.size() > 100) {
+                m_impl->invalidResponse(
+                    requestId, CloudRequestKind::ListInvites,
+                    {CloudClientErrorCode::ResponseTooLarge,
+                     QStringLiteral("Invitation list is too large")});
+                return;
+            }
+            QVector<CloudProjectInvite> invites;
+            invites.reserve(array.size());
+            for (const QJsonValue& value : array) {
+                ParseFailure parse;
+                auto invite = value.isObject()
+                    ? parseInvite(value.toObject(), &parse)
+                    : std::optional<CloudProjectInvite>{};
+                if (!invite || invite->projectId != projectId) {
+                    if (parse.message.isEmpty())
+                        parse.message =
+                            QStringLiteral("Invitation list mismatch");
+                    m_impl->invalidResponse(
+                        requestId, CloudRequestKind::ListInvites, parse);
+                    return;
+                }
+                invites.push_back(std::move(*invite));
+            }
+            emit invitesListed(requestId, invites);
+        });
+    return requestId;
 }
 
 quint64 CloudProjectClient::createInvite(
@@ -2306,7 +2441,8 @@ QJsonObject testProject(const QString& projectId, quint64 head,
          QStringLiteral("11111111-1111-4111-8111-111111111111")},
         {QStringLiteral("title"), QStringLiteral("Cloud Test")},
         {QStringLiteral("status"), QStringLiteral("active")},
-        {QStringLiteral("format_version"), 6},
+        {QStringLiteral("format_version"),
+         daw::ProjectSerializer::kFormatVersion},
         {QStringLiteral("engine_version"), QStringLiteral("0.1.2")},
         {QStringLiteral("minimum_app_version"), QStringLiteral("0.1.2")},
         {QStringLiteral("head_seq"), double(head)},
@@ -2327,7 +2463,8 @@ QJsonObject testSnapshot(const QString& projectId, quint64 sequence) {
         {QStringLiteral("seq"), double(sequence)},
         {QStringLiteral("blob_id"),
          QStringLiteral("33333333-3333-4333-8333-333333333333")},
-        {QStringLiteral("schema_version"), 6},
+        {QStringLiteral("schema_version"),
+         daw::ProjectSerializer::kFormatVersion},
         {QStringLiteral("asset_ids"), QJsonArray{}},
         {QStringLiteral("created_by"),
          QStringLiteral("11111111-1111-4111-8111-111111111111")},
@@ -2368,14 +2505,16 @@ QJsonObject testOperation(const QString& projectId, quint64 sequence,
         {QStringLiteral("actor_device_id"),
          QStringLiteral("44444444-4444-4444-8444-444444444444")},
         {QStringLiteral("kind"), QStringLiteral("project.setScalar")},
-        {QStringLiteral("schemaVersion"), 1},
+        {QStringLiteral("schemaVersion"),
+         int(daw::collab::kProjectCommandSchemaVersion)},
         {QStringLiteral("baseServerSeq"), double(sequence - 1)},
         {QStringLiteral("payload"),
          QJsonObject{{QStringLiteral("field"), QStringLiteral("tempo")},
                      {QStringLiteral("value"), tempo}}},
         {QStringLiteral("preconditions"), QJsonArray{}},
         {QStringLiteral("touchedFields"),
-         QJsonArray{QStringLiteral("project:tempo")}},
+         QJsonArray{QStringLiteral("project:tempo"),
+                    QStringLiteral("project:tempoCascade")}},
         {QStringLiteral("created_at"),
          QStringLiteral("2026-08-29T10:01:00Z")},
     };
@@ -2597,10 +2736,10 @@ bool checkCloudProjectClientForTest(QString* error) {
             QCoreApplication::applicationVersion() ||
         joinBody.object()
                 .value(QStringLiteral("commandSchemaVersion"))
-                .toInt() != 1 ||
+                .toInt() != int(daw::collab::kProjectCommandSchemaVersion) ||
         joinBody.object()
                 .value(QStringLiteral("projectFormatVersion"))
-                .toInt() != 6) {
+                .toInt() != daw::ProjectSerializer::kFormatVersion) {
         return fail(QStringLiteral("join omitted compatibility metadata"));
     }
     if (!client.cancel(joinId) || failures != 1 ||
@@ -2641,7 +2780,18 @@ bool checkCloudProjectClientForTest(QString* error) {
         bootstrap.operations[0].serverSequence != 3 ||
         bootstrap.operations[1].serverSequence != 4 ||
         network.captured.size() != 4) {
-        return fail(QStringLiteral("canonical bootstrap pagination failed"));
+        return fail(QStringLiteral(
+                        "canonical bootstrap pagination failed "
+                        "(failures=%1, signals=%2, base=%3, head=%4, ops=%5, "
+                        "requests=%6, code=%7, message=%8)")
+                        .arg(failures)
+                        .arg(bootstrapSignals)
+                        .arg(bootstrap.replayBaseSequence)
+                        .arg(bootstrap.headSequence)
+                        .arg(bootstrap.operations.size())
+                        .arg(network.captured.size())
+                        .arg(int(lastError.code))
+                        .arg(lastError.safeMessage));
     }
     const QUrlQuery firstQuery(network.captured[2].request.url());
     const QUrlQuery secondQuery(network.captured[3].request.url());

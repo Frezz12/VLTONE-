@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 import { AdminShell } from "./admin-shell";
 import { adminPollingAllowed } from "./admin-activity";
+import { CollaborationAccessSwitch } from "./collaboration-access-switch";
 import { useAdmin } from "./use-admin";
 
 type Detail = { user: User; devices: Device[]; quota: Quota; subscription: { plan: { display_name: string } }; counts: { launches: number; crashes: number; bugs: number } };
@@ -22,6 +23,9 @@ export function UserDetail({ id }: { id: string }) {
   const [telemetry, setTelemetry] = useState<{ sessions: TelemetrySession[]; samples: TelemetrySample[] }>({ sessions: [], samples: [] });
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [error, setError] = useState("");
+  const [accessPending, setAccessPending] = useState(false);
+  const [accessError, setAccessError] = useState("");
+  const [accessSuccess, setAccessSuccess] = useState("");
 
   async function load() {
     try {
@@ -55,6 +59,26 @@ export function UserDetail({ id }: { id: string }) {
       await load();
     } catch (reason) { setError((reason as APIError).message); }
   }
+  async function setCollaborationAccess(enabled: boolean) {
+    if (!session || !detail || accessPending) return;
+    const previous = detail.user.collaboration_enabled;
+    setAccessPending(true);
+    setAccessError("");
+    setAccessSuccess("");
+    setDetail((current) => current ? { ...current, user: { ...current.user, collaboration_enabled: enabled } } : current);
+    try {
+      const result = await api.json<{ collaboration_enabled: boolean }>(
+        `/v1/admin/users/${id}/collaboration-access`, "PUT", { enabled }, session.csrf_token,
+      );
+      setDetail((current) => current ? { ...current, user: { ...current.user, collaboration_enabled: result.collaboration_enabled } } : current);
+      setAccessSuccess(`Онлайн-доступ ${result.collaboration_enabled ? "включён" : "выключен"}.`);
+    } catch (reason) {
+      setDetail((current) => current ? { ...current, user: { ...current.user, collaboration_enabled: previous } } : current);
+      setAccessError((reason as APIError).message || "Не удалось изменить онлайн-доступ.");
+    } finally {
+      setAccessPending(false);
+    }
+  }
   async function addTokens(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget);
     await action("/tokens/add", { amount: Number(form.get("amount")) });
@@ -87,7 +111,21 @@ export function UserDetail({ id }: { id: string }) {
     <div className="admin-page-head"><div><h1 className="vlt-title">{detail.user.nickname}</h1><p className="vlt-subtitle">{detail.user.email}</p></div><span className="vlt-badge vlt-badge-accent">Demo</span></div>
     {error && <div className="vlt-error" style={{ marginBottom: 16 }}>{error}</div>}
     <div className="detail-grid"><div className="vlt-stack">
-      <section className="vlt-card vlt-card-pad vlt-stack"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">Аккаунт</h2><button className={`vlt-button ${detail.user.status === "active" ? "vlt-button-danger" : ""}`} onClick={() => void action(detail.user.status === "active" ? "/suspend" : "/activate")}><Ban size={15} />{detail.user.status === "active" ? "Приостановить" : "Активировать"}</button></div><dl className="definition-list"><dt>ID</dt><dd className="vlt-code">{detail.user.id}</dd><dt>Статус</dt><dd>{detail.user.status}</dd><dt>Согласие</dt><dd>{detail.user.consent_version}</dd><dt>Запусков</dt><dd>{detail.counts.launches}</dd><dt>Крашей</dt><dd>{detail.counts.crashes}</dd><dt>Багов</dt><dd>{detail.counts.bugs}</dd></dl></section>
+      <section className="vlt-card vlt-card-pad vlt-stack">
+        <div className="vlt-row vlt-between"><h2 className="vlt-section-title">Аккаунт</h2><button className={`vlt-button ${detail.user.status === "active" ? "vlt-button-danger" : ""}`} onClick={() => void action(detail.user.status === "active" ? "/suspend" : "/activate")}><Ban size={15} />{detail.user.status === "active" ? "Приостановить" : "Активировать"}</button></div>
+        <dl className="definition-list"><dt>ID</dt><dd className="vlt-code">{detail.user.id}</dd><dt>Статус</dt><dd>{detail.user.status}</dd><dt>Согласие</dt><dd>{detail.user.consent_version}</dd><dt>Запусков</dt><dd>{detail.counts.launches}</dd><dt>Крашей</dt><dd>{detail.counts.crashes}</dd><dt>Багов</dt><dd>{detail.counts.bugs}</dd></dl>
+        <div className="collaboration-access-setting">
+          <div><h3 className="vlt-section-title">Онлайн-доступ</h3><p className="vlt-muted">Выключение отключит активные онлайн-сессии пользователя. Вход в аккаунт и работа с локальными проектами останутся доступны.</p></div>
+          <CollaborationAccessSwitch
+            enabled={detail.user.collaboration_enabled}
+            pending={accessPending}
+            label={`Онлайн-доступ для ${detail.user.nickname}`}
+            error={accessError}
+            success={accessSuccess}
+            onChange={(enabled) => void setCollaborationAccess(enabled)}
+          />
+        </div>
+      </section>
       <section className="vlt-card vlt-card-pad vlt-stack"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">Устройства</h2><button className="vlt-button vlt-button-secondary" onClick={() => void action("/sessions/revoke")}><Unplug size={15} />Отозвать все сессии</button></div>{detail.devices.map((device) => <div className="device-row" key={device.id}><div><strong>{device.display_name}</strong><div className="vlt-muted">{device.platform} · {device.os_version} · {device.app_version}</div></div>{!device.revoked_at && <button className="vlt-button vlt-button-danger" onClick={() => void action(`/devices/${device.id}/revoke`)}>Отозвать</button>}</div>)}</section>
       <section className="vlt-card vlt-card-pad vlt-stack"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">Запуски и телеметрия</h2><button className="vlt-button vlt-button-danger" onClick={() => void deleteDiagnostics()}><DatabaseZap size={15} />Удалить диагностику</button></div>{latest && <div className="vlt-grid vlt-grid-4"><div><span className="vlt-muted">CPU process/system</span><div className="vlt-code">{latest.process_cpu.toFixed(1)}% / {latest.system_cpu.toFixed(1)}%</div></div><div><span className="vlt-muted">DSP avg/peak</span><div className="vlt-code">{latest.dsp_load.toFixed(1)}% / {latest.dsp_peak.toFixed(1)}%</div></div><div><span className="vlt-muted">Дорожки / клипы</span><div className="vlt-code">{latest.track_count} / {latest.clip_count}</div></div><div><span className="vlt-muted">Плагины / xruns</span><div className="vlt-code">{latest.plugin_count} / {latest.xruns}</div></div></div>}{latest && <div className="vlt-row"><span className="vlt-badge">{latest.recording ? "recording" : latest.playback_state}</span><span className="vlt-muted">{latest.foreground ? "окно активно" : "в фоне"}</span></div>}<div className="vlt-table-wrap"><table className="vlt-table"><thead><tr><th>Начало</th><th>Версия / build</th><th>Последний сигнал</th><th>Завершение</th></tr></thead><tbody>{telemetry.sessions.map((item) => <tr key={item.id}><td>{new Date(item.started_at).toLocaleString("ru")}</td><td>{item.app_version}<div className="vlt-muted vlt-code">{item.build_id}</div></td><td>{new Date(item.last_seen_at).toLocaleString("ru")}</td><td>{item.ended_at ? item.end_reason || "normal" : <span className="vlt-badge vlt-badge-accent">active</span>}</td></tr>)}</tbody></table></div>{latest?.plugins?.length > 0 && <div><h3 className="vlt-section-title">Плагины последнего sample</h3><div className="plugin-chips">{latest.plugins.map((plugin) => <span className="vlt-badge" key={`${plugin.format}:${plugin.vendor}:${plugin.name}`}>{plugin.format} · {plugin.vendor} · {plugin.name} × {plugin.count}</span>)}</div></div>}</section>
     </div><aside className="vlt-stack">

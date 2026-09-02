@@ -15,6 +15,71 @@ import (
 	"vltstudio/backend/internal/model"
 )
 
+func takeAddFixtureTouchedFields(trackID, clipID, takeID uuid.UUID, recordingCommit bool) []string {
+	fields := []string{
+		"clip:" + clipID.String() + ":descendants",
+		"take:" + takeID.String() + ":clipOffsetSeconds",
+		"take:" + takeID.String() + ":color",
+		"take:" + takeID.String() + ":gain",
+		"take:" + takeID.String() + ":lengthSeconds",
+		"take:" + takeID.String() + ":lifecycle",
+		"take:" + takeID.String() + ":muted",
+		"take:" + takeID.String() + ":name",
+		"take:" + takeID.String() + ":offsetSeconds",
+		"take:" + takeID.String() + ":position",
+	}
+	if recordingCommit {
+		fields = append(fields, "track:"+trackID.String()+":clipLanding")
+	}
+	return fields
+}
+
+func TestTakeAddFixtureTouchedFieldsMatchContract(t *testing.T) {
+	trackID, clipID, takeID, leaseID, assetID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	takePayload := map[string]any{
+		"trackId": trackID.String(), "clipId": clipID.String(), "afterId": "",
+		"take": map[string]any{
+			"id": takeID.String(), "name": "Take", "offsetSeconds": 0.0,
+			"lengthSeconds": 1.0, "clipOffsetSeconds": 0.0, "gain": 1.0,
+			"muted": false, "channels": 2, "color": 0,
+			"asset": map[string]any{
+				"assetId": assetID.String(), "sha256": strings.Repeat("d", 64),
+				"kind": "audio", "byteSize": 512, "originalName": "take.wav",
+			},
+		},
+	}
+	encodedTake, err := json.Marshal(takePayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	takeFields, _, err := deriveCommandMetadata("take.add", encodedTake, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected := takeAddFixtureTouchedFields(trackID, clipID, takeID, false); !equalStrings(takeFields, expected) {
+		t.Fatalf("take.add fields = %v, fixture = %v", takeFields, expected)
+	}
+
+	encodedCommit, err := json.Marshal(map[string]any{
+		"leases": []any{map[string]any{
+			"trackId": trackID.String(), "leaseId": leaseID.String(),
+		}},
+		"commands": []any{map[string]any{
+			"kind": "take.add", "payload": takePayload, "preconditions": []any{},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFields, _, err := deriveCommandMetadata("recording.commit", encodedCommit, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected := takeAddFixtureTouchedFields(trackID, clipID, takeID, true); !equalStrings(commitFields, expected) {
+		t.Fatalf("recording.commit fields = %v, fixture = %v", commitFields, expected)
+	}
+}
+
 // The opt-in PostgreSQL test verifies the transactional boundary that unit
 // policy tests cannot cover: sequence allocation and exact lease consumption
 // either commit together or neither does, and an idempotent retry does not
@@ -22,6 +87,9 @@ import (
 func TestPostgresRecordingCommitConsumesExactLeaseOnce(t *testing.T) {
 	dsn := os.Getenv("VLT_COLLAB_TEST_DATABASE_URL")
 	if dsn == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("VLT_COLLAB_TEST_DATABASE_URL is required in CI")
+		}
 		t.Skip("set VLT_COLLAB_TEST_DATABASE_URL to run collaboration PostgreSQL tests")
 	}
 	db, err := database.Open(dsn, false)
@@ -172,14 +240,9 @@ func TestPostgresRecordingCommitConsumesExactLeaseOnce(t *testing.T) {
 	input := AppendOperationInput{
 		ProjectID: project.ID, ActorUserID: actor.user.ID,
 		ActorDeviceID: actor.device.ID, ActorSessionID: actor.session.ID,
-		OpID: uuid.New(), Kind: "recording.commit", SchemaVersion: 1,
+		OpID: uuid.New(), Kind: "recording.commit", SchemaVersion: CollaborationCommandSchemaVersion,
 		BaseSeq: 0, Payload: payload,
-		TouchedFields: []string{
-			"clip:" + clipID.String() + ":descendants",
-			"take:" + takeID.String() + ":lifecycle",
-			"take:" + takeID.String() + ":position",
-			"track:" + trackID.String() + ":clipLanding",
-		},
+		TouchedFields: takeAddFixtureTouchedFields(trackID, clipID, takeID, true),
 	}
 	store := NewStore(tx, 8)
 	store.Now = func() time.Time { return now }
@@ -201,6 +264,13 @@ func TestPostgresRecordingCommitConsumesExactLeaseOnce(t *testing.T) {
 		Where("project_id = ? AND op_id = ?", project.ID, input.OpID).
 		Count(&operationCount).Error; err != nil || operationCount != 1 {
 		t.Fatalf("durable operation count = %d, err %v", operationCount, err)
+	}
+	var operationAssetRefs int64
+	if err := tx.Model(&model.ProjectOperationAsset{}).
+		Where("project_id = ? AND operation_seq = ? AND asset_id = ?",
+			project.ID, operation.Seq, assetID).
+		Count(&operationAssetRefs).Error; err != nil || operationAssetRefs != 1 {
+		t.Fatalf("durable operation asset refs = %d, err %v", operationAssetRefs, err)
 	}
 
 	foundStatus, err := store.GetOperationStatus(context.Background(),
@@ -272,13 +342,9 @@ func TestPostgresRecordingCommitConsumesExactLeaseOnce(t *testing.T) {
 	_, duplicate, err = store.AppendOperation(context.Background(), AppendOperationInput{
 		ProjectID: project.ID, ActorUserID: actor.user.ID,
 		ActorDeviceID: actor.device.ID, ActorSessionID: actor.session.ID,
-		OpID: uuid.New(), Kind: "take.add", SchemaVersion: 1,
+		OpID: uuid.New(), Kind: "take.add", SchemaVersion: CollaborationCommandSchemaVersion,
 		BaseSeq: 1, Payload: barePayload,
-		TouchedFields: []string{
-			"clip:" + clipID.String() + ":descendants",
-			"take:" + secondTake.String() + ":lifecycle",
-			"take:" + secondTake.String() + ":position",
-		},
+		TouchedFields: takeAddFixtureTouchedFields(secondTrack, clipID, secondTake, false),
 	})
 	if err != nil || duplicate {
 		t.Fatalf("bare take.add = duplicate %v err %v", duplicate, err)
@@ -300,7 +366,7 @@ func TestPostgresRecordingCommitConsumesExactLeaseOnce(t *testing.T) {
 	_, duplicate, err = store.AppendOperation(context.Background(), AppendOperationInput{
 		ProjectID: project.ID, ActorUserID: actor.user.ID,
 		ActorDeviceID: actor.device.ID, ActorSessionID: actor.session.ID,
-		OpID: uuid.New(), Kind: "project.setScalar", SchemaVersion: 1,
+		OpID: uuid.New(), Kind: "project.setScalar", SchemaVersion: CollaborationCommandSchemaVersion,
 		BaseSeq: 2, Payload: mixerPayload,
 		TouchedFields: []string{"project:masterVolume"},
 	})
@@ -333,14 +399,9 @@ func TestPostgresRecordingCommitConsumesExactLeaseOnce(t *testing.T) {
 	rebased, duplicate, err := store.AppendOperation(context.Background(), AppendOperationInput{
 		ProjectID: project.ID, ActorUserID: actor.user.ID,
 		ActorDeviceID: actor.device.ID, ActorSessionID: actor.session.ID,
-		OpID: uuid.New(), Kind: "recording.commit", SchemaVersion: 1,
+		OpID: uuid.New(), Kind: "recording.commit", SchemaVersion: CollaborationCommandSchemaVersion,
 		BaseSeq: 1, Payload: rebasedPayload,
-		TouchedFields: []string{
-			"clip:" + clipID.String() + ":descendants",
-			"take:" + commitTakeID.String() + ":lifecycle",
-			"take:" + commitTakeID.String() + ":position",
-			"track:" + secondTrack.String() + ":clipLanding",
-		},
+		TouchedFields: takeAddFixtureTouchedFields(secondTrack, clipID, commitTakeID, true),
 	})
 	if err != nil || duplicate || rebased.Seq != 4 {
 		t.Fatalf("safe rebased recording commit = seq %d duplicate %v err %v",
@@ -384,12 +445,7 @@ func TestPostgresRecordingCommitConsumesExactLeaseOnce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return encoded, []string{
-			"clip:" + targetClipID.String() + ":descendants",
-			"take:" + targetTakeID.String() + ":lifecycle",
-			"take:" + targetTakeID.String() + ":position",
-			"track:" + trackID.String() + ":clipLanding",
-		}
+		return encoded, takeAddFixtureTouchedFields(trackID, targetClipID, targetTakeID, true)
 	}
 	assertLeaseRemains := func(leaseID uuid.UUID, label string) {
 		if err := tx.Model(&model.ProjectTrackLease{}).Where("id = ?", leaseID).
@@ -413,7 +469,7 @@ func TestPostgresRecordingCommitConsumesExactLeaseOnce(t *testing.T) {
 	parallelA, duplicate, err := store.AppendOperation(context.Background(), AppendOperationInput{
 		ProjectID: project.ID, ActorUserID: actor.user.ID,
 		ActorDeviceID: actor.device.ID, ActorSessionID: actor.session.ID,
-		OpID: uuid.New(), Kind: "recording.commit", SchemaVersion: 1,
+		OpID: uuid.New(), Kind: "recording.commit", SchemaVersion: CollaborationCommandSchemaVersion,
 		BaseSeq: parallelBase, Payload: parallelPayloadA, TouchedFields: parallelFieldsA,
 	})
 	if err != nil || duplicate || parallelA.Seq != parallelBase+1 {
@@ -423,7 +479,7 @@ func TestPostgresRecordingCommitConsumesExactLeaseOnce(t *testing.T) {
 	parallelB, duplicate, err := store.AppendOperation(context.Background(), AppendOperationInput{
 		ProjectID: project.ID, ActorUserID: actor.user.ID,
 		ActorDeviceID: actor.device.ID, ActorSessionID: actor.session.ID,
-		OpID: uuid.New(), Kind: "recording.commit", SchemaVersion: 1,
+		OpID: uuid.New(), Kind: "recording.commit", SchemaVersion: CollaborationCommandSchemaVersion,
 		BaseSeq: parallelBase, Payload: parallelPayloadB, TouchedFields: parallelFieldsB,
 	})
 	if err != nil || duplicate || parallelB.Seq != parallelBase+2 {
@@ -450,10 +506,11 @@ func TestPostgresRecordingCommitConsumesExactLeaseOnce(t *testing.T) {
 	geometryEdit, duplicate, err := store.AppendOperation(context.Background(), AppendOperationInput{
 		ProjectID: project.ID, ActorUserID: actor.user.ID,
 		ActorDeviceID: actor.device.ID, ActorSessionID: actor.session.ID,
-		OpID: uuid.New(), Kind: "clip.setProperty", SchemaVersion: 1,
+		OpID: uuid.New(), Kind: "clip.setProperty", SchemaVersion: CollaborationCommandSchemaVersion,
 		BaseSeq: parallelB.Seq, Payload: clipMovePayload,
 		TouchedFields: []string{
 			"clip:" + geometryClip.String() + ":startSeconds",
+			"project:tempoCascade",
 			"track:" + geometryTrack.String() + ":clipLanding",
 		},
 	})
@@ -464,7 +521,7 @@ func TestPostgresRecordingCommitConsumesExactLeaseOnce(t *testing.T) {
 	_, _, err = store.AppendOperation(context.Background(), AppendOperationInput{
 		ProjectID: project.ID, ActorUserID: actor.user.ID,
 		ActorDeviceID: actor.device.ID, ActorSessionID: actor.session.ID,
-		OpID: uuid.New(), Kind: "recording.commit", SchemaVersion: 1,
+		OpID: uuid.New(), Kind: "recording.commit", SchemaVersion: CollaborationCommandSchemaVersion,
 		BaseSeq: parallelB.Seq, Payload: geometryPayload, TouchedFields: geometryFields,
 	})
 	if !errors.Is(err, ErrBaseSeqMismatch) {
@@ -486,7 +543,7 @@ func TestPostgresRecordingCommitConsumesExactLeaseOnce(t *testing.T) {
 	lifecycleEdit, duplicate, err := store.AppendOperation(context.Background(), AppendOperationInput{
 		ProjectID: project.ID, ActorUserID: actor.user.ID,
 		ActorDeviceID: actor.device.ID, ActorSessionID: actor.session.ID,
-		OpID: uuid.New(), Kind: "track.add", SchemaVersion: 1,
+		OpID: uuid.New(), Kind: "track.add", SchemaVersion: CollaborationCommandSchemaVersion,
 		BaseSeq: geometryEdit.Seq, Payload: trackAddPayload,
 		TouchedFields: []string{
 			"track:" + lifecycleTrack.String() + ":lifecycle",
@@ -500,7 +557,7 @@ func TestPostgresRecordingCommitConsumesExactLeaseOnce(t *testing.T) {
 	_, _, err = store.AppendOperation(context.Background(), AppendOperationInput{
 		ProjectID: project.ID, ActorUserID: actor.user.ID,
 		ActorDeviceID: actor.device.ID, ActorSessionID: actor.session.ID,
-		OpID: uuid.New(), Kind: "recording.commit", SchemaVersion: 1,
+		OpID: uuid.New(), Kind: "recording.commit", SchemaVersion: CollaborationCommandSchemaVersion,
 		BaseSeq: geometryEdit.Seq, Payload: lifecyclePayload, TouchedFields: lifecycleFields,
 	})
 	if !errors.Is(err, ErrBaseSeqMismatch) {

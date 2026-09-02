@@ -63,6 +63,7 @@ public:
     /// screenshot or a selftest can show a real tree and a real waveform.
     bool showFolderForTest(const QString& folder, const QString& selectFile = {},
                            bool persist = false);
+    bool reloadSelectedPreviewForTest();
     /// Headless check only: open the plugin folders and select the first
     /// plugin, so a grab shows the listing. False when none are scanned.
     bool showPluginsForTest();

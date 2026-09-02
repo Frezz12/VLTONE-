@@ -1,4 +1,5 @@
 #include "collaboration/ProjectReducer.hpp"
+#include "collaboration/CommandJson.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -8,6 +9,8 @@
 
 namespace daw::collab {
 namespace {
+
+constexpr double kMaximumSendLevel = 1.9953; // +6 dB, matches EngineController
 
 ApplyResult reject(ApplyCode code, std::string message) {
     ApplyResult result;
@@ -449,6 +452,56 @@ bool validSampleEdit(const ClipSampleEditModel& value) {
            finiteRange(value.pogo, 0.0, 1.0);
 }
 
+bool musicalAnalysisEqual(const ClipMusicalAnalysisModel& a,
+                          const ClipMusicalAnalysisModel& b) {
+    return a.algorithmVersion == b.algorithmVersion &&
+           a.analyzedOffsetSeconds == b.analyzedOffsetSeconds &&
+           a.analyzedDurationSeconds == b.analyzedDurationSeconds &&
+           a.tempo.status == b.tempo.status && a.tempo.bpm == b.tempo.bpm &&
+           a.tempo.confidence == b.tempo.confidence &&
+           a.tempo.stability == b.tempo.stability &&
+           a.tempo.alternatives == b.tempo.alternatives &&
+           a.tempo.variable == b.tempo.variable &&
+           a.key.status == b.key.status && a.key.root == b.key.root &&
+           a.key.scale == b.key.scale &&
+           a.key.confidence == b.key.confidence &&
+           a.key.alternateRoot == b.key.alternateRoot &&
+           a.key.alternateScale == b.key.alternateScale &&
+           a.key.tuningCents == b.key.tuningCents;
+}
+
+bool validMusicalAnalysis(const ClipMusicalAnalysisModel& value) {
+    const auto finiteRange = [](double number, double minimum,
+                                double maximum) {
+        return std::isfinite(number) && number >= minimum && number <= maximum;
+    };
+    const int tempoStatus = static_cast<int>(value.tempo.status);
+    const int keyStatus = static_cast<int>(value.key.status);
+    if (value.algorithmVersion < 0 || value.algorithmVersion > 1000000 ||
+        !finiteRange(value.analyzedOffsetSeconds, 0.0, 1.0e12) ||
+        !finiteRange(value.analyzedDurationSeconds, 0.0, 1.0e12) ||
+        tempoStatus < int(MusicalAnalysisStatus::Unavailable) ||
+        tempoStatus > int(MusicalAnalysisStatus::Available) ||
+        keyStatus < int(MusicalAnalysisStatus::Unavailable) ||
+        keyStatus > int(MusicalAnalysisStatus::Available) ||
+        !finiteRange(value.tempo.bpm, 0.0, 300.0) ||
+        !finiteRange(value.tempo.confidence, 0.0, 1.0) ||
+        !finiteRange(value.tempo.stability, 0.0, 1.0) ||
+        value.tempo.alternatives.size() > 3 || value.key.root < -1 ||
+        value.key.root > 11 || value.key.alternateRoot < -1 ||
+        value.key.alternateRoot > 11 || value.key.scale.size() > 128 ||
+        value.key.alternateScale.size() > 128 ||
+        !finiteRange(value.key.confidence, 0.0, 1.0) ||
+        !finiteRange(value.key.tuningCents, -200.0, 200.0)) {
+        return false;
+    }
+    return std::all_of(value.tempo.alternatives.begin(),
+                       value.tempo.alternatives.end(), [](double bpm) {
+                           return std::isfinite(bpm) && bpm > 0.0 &&
+                                  bpm <= 300.0;
+                       });
+}
+
 bool validSendDestination(const ProjectModel& project,
                           const std::string& sourceId,
                           const std::string& destinationId) {
@@ -459,6 +512,7 @@ bool validSendDestination(const ProjectModel& project,
            destination->kind == TrackKind::Aux ||
            destination->kind == TrackKind::Group ||
            destination->kind == TrackKind::Master ||
+           destination->kind == TrackKind::Pattern ||
            (destination->kind == TrackKind::Folder && destination->summing);
 }
 
@@ -638,7 +692,6 @@ bool validParameters(const std::vector<InsertParameter>& parameters) {
 bool validBindings(const std::vector<PluginAssetBinding>& bindings,
                    bool sampler) {
     std::vector<std::string> keys;
-    bool hasSample = false;
     for (const PluginAssetBinding& binding : bindings) {
         if (binding.key.empty() || binding.key.size() > 96 ||
             std::find(keys.begin(), keys.end(), binding.key) != keys.end()) {
@@ -652,9 +705,10 @@ bool validBindings(const std::vector<PluginAssetBinding>& bindings,
             !completeAsset(binding.asset, expected, false)) {
             return false;
         }
-        if (binding.key == "sample" && binding.required) hasSample = true;
+        if (sampler && binding.key == "sample" && !binding.required)
+            return false;
     }
-    return !sampler || hasSample;
+    return true;
 }
 
 bool validSharedInsert(const InsertModel& insert) {
@@ -683,6 +737,20 @@ bool parameterVectorsEqual(const std::vector<InsertParameter>& a,
             return false;
     }
     return true;
+}
+
+bool sharedInsertEqual(const InsertModel& a, const InsertModel& b) {
+    return a.id == b.id && a.name == b.name && a.bypassed == b.bypassed &&
+           a.format == b.format && a.uid == b.uid && a.vendor == b.vendor &&
+           a.pluginVersion == b.pluginVersion &&
+           a.stateSchemaVersion == b.stateSchemaVersion && a.mix == b.mix &&
+           a.channelMode == b.channelMode &&
+           a.sidechainTrackId == b.sidechainTrackId &&
+           a.stateAsset == b.stateAsset &&
+           a.rightStateAsset == b.rightStateAsset &&
+           parameterVectorsEqual(a.parameters, b.parameters) &&
+           parameterVectorsEqual(a.rightParameters, b.rightParameters) &&
+           a.assetBindings == b.assetBindings;
 }
 
 bool completeAudioTake(const TakeModel& take) {
@@ -762,6 +830,20 @@ void markClipDescendantsWriter(SharedProjectDocument& state,
     }
 }
 
+void markPluginGenerationWriter(SharedProjectDocument& state,
+                                const std::string& insertId,
+                                const ProjectCommand& command,
+                                ChangeImpact& impact) {
+    markWriter(state, "plugin:" + insertId + ":generation",
+               command.meta.operationId, impact);
+}
+
+FieldWriterIs pluginGenerationCondition(const std::string& insertId,
+                                        const ProjectCommand& command) {
+    return FieldWriterIs{"plugin:" + insertId + ":generation",
+                         command.meta.operationId};
+}
+
 bool checkConditions(const SharedProjectDocument& state,
                      const ProjectCommand& command, std::string& error) {
     for (const CommandCondition& condition : command.conditions) {
@@ -804,9 +886,40 @@ ApplyResult applyScalar(SharedProjectDocument& state,
             double value = 0.0;
             if (!doubleValue(body.value, value) || value <= 0.0 || value > 999.0)
                 return reject(ApplyCode::InvalidCommand, "invalid tempo");
-            before = state.project.tempo;
+            const double previousTempo = state.project.tempo;
+            before = previousTempo;
             same = state.project.tempo == value;
             state.project.tempo = value;
+            if (!same) {
+                // Project clip positions are stored in seconds but authored in
+                // bars. Mirror EngineController::retimeToTempo exactly for the
+                // shared document: every clip retains its start beat; MIDI
+                // duration/fades are musical, while audio duration/fades stay
+                // tied to the recorded material's clock.
+                const double ratio = previousTempo / value;
+                for (TrackModel& track : state.project.tracks) {
+                    for (ClipModel& clip : track.clips) {
+                        clip.startSeconds *= ratio;
+                        if (clip.kind == ClipKind::Midi) {
+                            clip.durationSeconds *= ratio;
+                            clip.fadeInSeconds *= ratio;
+                            clip.fadeOutSeconds *= ratio;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        case ProjectScalar::RenderSampleRate: {
+            double value = 0.0;
+            if (!doubleValue(body.value, value) || value < 8000.0 ||
+                value > 768000.0) {
+                return reject(ApplyCode::InvalidCommand,
+                              "invalid render sample rate");
+            }
+            before = state.project.sampleRate;
+            same = state.project.sampleRate == value;
+            state.project.sampleRate = value;
             break;
         }
         case ProjectScalar::MasterVolume: {
@@ -835,13 +948,27 @@ ApplyResult applyScalar(SharedProjectDocument& state,
     result.impact.transportProjectionChanged =
         body.field == ProjectScalar::Tempo && !same;
     result.impact.timelineChanged = body.field == ProjectScalar::Tempo && !same;
+    if (body.field == ProjectScalar::Tempo && !same) {
+        for (const TrackModel& track : state.project.tracks) {
+            if (!track.clips.empty()) result.impact.trackIds.insert(track.id);
+        }
+    }
     result.impact.masterGainChanged =
         (body.field == ProjectScalar::MasterVolume ||
          body.field == ProjectScalar::MasterPan) && !same;
     markWriter(state, key, command.meta.operationId, result.impact);
+    if (body.field == ProjectScalar::Tempo) {
+        markWriter(state, "project:tempoCascade", command.meta.operationId,
+                   result.impact);
+    }
     if (!same) {
         ProjectCommand inverse = inverseShell(command, SetProjectScalar{body.field, before});
         inverse.conditions.push_back(FieldWriterIs{key, command.meta.operationId});
+        if (body.field == ProjectScalar::Tempo) {
+            inverse.conditions.push_back(
+                FieldWriterIs{"project:tempoCascade",
+                              command.meta.operationId});
+        }
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;
@@ -1113,10 +1240,22 @@ ApplyResult applyTrackProperty(SharedProjectDocument& state,
             target = *value;
             break;
         }
+        case TrackProperty::Summing: {
+            const auto* value = std::get_if<bool>(&body.value);
+            if (!value || track->kind != TrackKind::Folder)
+                return reject(ApplyCode::InvalidCommand,
+                              "summing is valid only for folders");
+            before = track->summing;
+            same = track->summing == *value;
+            track->summing = *value;
+            break;
+        }
     }
     ApplyResult result;
     result.code = same ? ApplyCode::NoChange : ApplyCode::Applied;
     result.impact.documentChanged = !same;
+    result.impact.graphRebuild =
+        !same && body.property == TrackProperty::Summing;
     result.impact.trackIds.insert(body.trackId);
     const std::string key = ProjectReducer::trackFieldKey(body.trackId,
                                                           body.property);
@@ -1229,7 +1368,7 @@ ApplyResult applyAddSend(SharedProjectDocument& state,
     if (!validSendDestination(state.project, body.trackId,
                               body.send.destinationTrackId) ||
         !std::isfinite(body.send.level) || body.send.level < 0.0f ||
-        body.send.level > 1.0f) {
+        body.send.level > float(kMaximumSendLevel)) {
         return reject(ApplyCode::InvalidCommand, "invalid send payload");
     }
     insertEntityAfter(track->sends, body.send, body.afterId, false);
@@ -1407,7 +1546,8 @@ ApplyResult applySetSendProperty(SharedProjectDocument& state,
         }
         case SendProperty::Level: {
             double value = 0.0;
-            if (!doubleValue(body.value, value) || value < 0.0 || value > 1.0)
+            if (!doubleValue(body.value, value) || value < 0.0 ||
+                value > kMaximumSendLevel)
                 return reject(ApplyCode::InvalidCommand, "invalid send level");
             before = double(send.level);
             same = send.level == float(value);
@@ -1610,6 +1750,9 @@ ApplyResult applyMoveClip(SharedProjectDocument& state,
     ClipLocation source = findClip(state.project, body.clipId);
     if (!source.clip)
         return reject(ApplyCode::MissingEntity, "clip does not exist");
+    if (source.track->id != body.sourceTrackId)
+        return reject(ApplyCode::PreconditionsFailed,
+                      "clip source track changed");
     TrackModel* destination = state.project.findTrack(body.trackId);
     if (!destination)
         return reject(ApplyCode::MissingEntity,
@@ -1642,7 +1785,8 @@ ApplyResult applyMoveClip(SharedProjectDocument& state,
     markWriter(state, key, command.meta.operationId, result.impact);
     if (!same) {
         ProjectCommand inverse = inverseShell(
-            command, MoveClip{body.clipId, beforeTrackId, beforeAfter});
+            command, MoveClip{body.clipId, body.trackId, beforeTrackId,
+                              beforeAfter});
         inverse.conditions.push_back(
             FieldWriterIs{key, command.meta.operationId});
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
@@ -1756,12 +1900,24 @@ ApplyResult applyClipProperty(SharedProjectDocument& state,
     const std::string key =
         ProjectReducer::clipFieldKey(body.clipId, body.property);
     markWriter(state, key, command.meta.operationId, result.impact);
+    const bool tempoSensitive =
+        body.property == ClipProperty::StartSeconds ||
+        body.property == ClipProperty::DurationSeconds;
+    if (tempoSensitive) {
+        markWriter(state, "project:tempoCascade", command.meta.operationId,
+                   result.impact);
+    }
     if (!same) {
         ProjectCommand inverse = inverseShell(
             command,
             SetClipProperty{body.trackId, body.clipId, body.property, before});
         inverse.conditions.push_back(
             FieldWriterIs{key, command.meta.operationId});
+        if (tempoSensitive) {
+            inverse.conditions.push_back(
+                FieldWriterIs{"project:tempoCascade",
+                              command.meta.operationId});
+        }
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;
@@ -1848,6 +2004,220 @@ ApplyResult applySetClipSampleEdit(SharedProjectDocument& state,
     return result;
 }
 
+ApplyResult applySetClipFade(SharedProjectDocument& state,
+                             const ProjectCommand& command,
+                             const SetClipFade& body) {
+    if (clipScopeIsDeleted(state, body.trackId, body.clipId))
+        return reject(ApplyCode::DeletedEntity,
+                      "delete wins over clip fade edit");
+    ClipLocation location = findClip(state.project, body.clipId);
+    if (!location.clip || location.track->id != body.trackId)
+        return reject(ApplyCode::MissingEntity,
+                      "clip does not exist in track");
+    if (!std::isfinite(body.fadeInSeconds) ||
+        !std::isfinite(body.fadeOutSeconds) || body.fadeInSeconds < 0.0 ||
+        body.fadeOutSeconds < 0.0 ||
+        body.fadeInSeconds > location.clip->durationSeconds ||
+        body.fadeOutSeconds > location.clip->durationSeconds ||
+        body.fadeInSeconds + body.fadeOutSeconds >
+            location.clip->durationSeconds) {
+        return reject(ApplyCode::InvalidCommand, "invalid clip fades");
+    }
+    const SetClipFade before{body.trackId, body.clipId,
+                             location.clip->fadeInSeconds,
+                             location.clip->fadeOutSeconds};
+    const bool same = before.fadeInSeconds == body.fadeInSeconds &&
+                      before.fadeOutSeconds == body.fadeOutSeconds;
+    location.clip->fadeInSeconds = body.fadeInSeconds;
+    location.clip->fadeOutSeconds = body.fadeOutSeconds;
+    ApplyResult result;
+    result.code = same ? ApplyCode::NoChange : ApplyCode::Applied;
+    result.impact.documentChanged = !same;
+    result.impact.graphRebuild = !same;
+    result.impact.timelineChanged = !same;
+    result.impact.trackIds.insert(body.trackId);
+    result.impact.clipIds.insert(body.clipId);
+    markCommandWriters(state, command, result.impact);
+    if (!same) {
+        ProjectCommand inverse = inverseShell(command, before);
+        inverse.conditions.push_back(FieldWriterIs{
+            "clip:" + body.clipId + ":fadeInSeconds",
+            command.meta.operationId});
+        inverse.conditions.push_back(FieldWriterIs{
+            "clip:" + body.clipId + ":fadeOutSeconds",
+            command.meta.operationId});
+        inverse.conditions.push_back(FieldWriterIs{
+            "project:tempoCascade", command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    }
+    return result;
+}
+
+ApplyResult applySetClipFadeCurve(SharedProjectDocument& state,
+                                  const ProjectCommand& command,
+                                  const SetClipFadeCurve& body) {
+    if (clipScopeIsDeleted(state, body.trackId, body.clipId))
+        return reject(ApplyCode::DeletedEntity,
+                      "delete wins over clip fade curve edit");
+    ClipLocation location = findClip(state.project, body.clipId);
+    if (!location.clip || location.track->id != body.trackId)
+        return reject(ApplyCode::MissingEntity,
+                      "clip does not exist in track");
+    if (!std::isfinite(body.curve) || body.curve < -1.0 || body.curve > 1.0)
+        return reject(ApplyCode::InvalidCommand, "invalid clip fade curve");
+    double& target = body.edge == ClipEdge::In
+                         ? location.clip->fadeInCurve
+                         : location.clip->fadeOutCurve;
+    const double beforeValue = target;
+    const bool same = beforeValue == body.curve;
+    target = body.curve;
+    const std::string key = "clip:" + body.clipId + ":fade" +
+                            (body.edge == ClipEdge::In ? "In" : "Out") +
+                            "Curve";
+    ApplyResult result;
+    result.code = same ? ApplyCode::NoChange : ApplyCode::Applied;
+    result.impact.documentChanged = !same;
+    result.impact.graphRebuild = !same;
+    result.impact.timelineChanged = !same;
+    result.impact.trackIds.insert(body.trackId);
+    result.impact.clipIds.insert(body.clipId);
+    markWriter(state, key, command.meta.operationId, result.impact);
+    if (!same) {
+        ProjectCommand inverse = inverseShell(
+            command, SetClipFadeCurve{body.trackId, body.clipId, body.edge,
+                                      beforeValue});
+        inverse.conditions.push_back(FieldWriterIs{key,
+                                                    command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    }
+    return result;
+}
+
+ApplyResult applySetClipFadeMode(SharedProjectDocument& state,
+                                 const ProjectCommand& command,
+                                 const SetClipFadeMode& body) {
+    if (clipScopeIsDeleted(state, body.trackId, body.clipId))
+        return reject(ApplyCode::DeletedEntity,
+                      "delete wins over clip fade mode edit");
+    ClipLocation location = findClip(state.project, body.clipId);
+    if (!location.clip || location.track->id != body.trackId)
+        return reject(ApplyCode::MissingEntity,
+                      "clip does not exist in track");
+    if (body.mode == ClipFadeMode::Tape &&
+        location.clip->kind != ClipKind::Audio) {
+        return reject(ApplyCode::InvalidCommand,
+                      "tape fade requires an audio clip");
+    }
+    ClipFadeMode& target = body.edge == ClipEdge::In
+                               ? location.clip->fadeInMode
+                               : location.clip->fadeOutMode;
+    const ClipFadeMode beforeValue = target;
+    const bool same = beforeValue == body.mode;
+    target = body.mode;
+    const std::string key = "clip:" + body.clipId + ":fade" +
+                            (body.edge == ClipEdge::In ? "In" : "Out") +
+                            "Mode";
+    ApplyResult result;
+    result.code = same ? ApplyCode::NoChange : ApplyCode::Applied;
+    result.impact.documentChanged = !same;
+    result.impact.graphRebuild = !same;
+    result.impact.timelineChanged = !same;
+    result.impact.trackIds.insert(body.trackId);
+    result.impact.clipIds.insert(body.clipId);
+    markWriter(state, key, command.meta.operationId, result.impact);
+    if (!same) {
+        ProjectCommand inverse = inverseShell(
+            command, SetClipFadeMode{body.trackId, body.clipId, body.edge,
+                                     beforeValue});
+        inverse.conditions.push_back(FieldWriterIs{key,
+                                                    command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    }
+    return result;
+}
+
+ApplyResult applySetClipPatternOwner(SharedProjectDocument& state,
+                                     const ProjectCommand& command,
+                                     const SetClipPatternOwner& body) {
+    if (clipScopeIsDeleted(state, body.trackId, body.clipId) ||
+        (!body.patternClipId.empty() &&
+         clipIsDeleted(state, body.patternClipId))) {
+        return reject(ApplyCode::DeletedEntity,
+                      "delete wins over clip pattern ownership edit");
+    }
+    ClipLocation location = findClip(state.project, body.clipId);
+    if (!location.clip || location.track->id != body.trackId ||
+        location.clip->kind != ClipKind::Midi) {
+        return reject(ApplyCode::MissingEntity,
+                      "MIDI clip does not exist in track");
+    }
+    if (!body.patternClipId.empty()) {
+        ClipLocation owner = findClip(state.project, body.patternClipId);
+        if (!owner.clip || owner.clip->kind != ClipKind::Pattern ||
+            owner.clip->id == body.clipId) {
+            return reject(ApplyCode::MissingEntity,
+                          "pattern owner does not exist");
+        }
+    }
+    const std::string before = location.clip->patternClipId;
+    const bool same = before == body.patternClipId;
+    location.clip->patternClipId = body.patternClipId;
+    const std::string key = "clip:" + body.clipId + ":patternClipId";
+    ApplyResult result;
+    result.code = same ? ApplyCode::NoChange : ApplyCode::Applied;
+    result.impact.documentChanged = !same;
+    result.impact.graphRebuild = !same;
+    result.impact.timelineChanged = !same;
+    result.impact.trackIds.insert(body.trackId);
+    result.impact.clipIds.insert(body.clipId);
+    markCommandWriters(state, command, result.impact);
+    if (!same) {
+        ProjectCommand inverse = inverseShell(
+            command, SetClipPatternOwner{body.trackId, body.clipId, before});
+        inverse.conditions.push_back(FieldWriterIs{key,
+                                                    command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    }
+    return result;
+}
+
+ApplyResult applySetClipMusicalAnalysis(
+    SharedProjectDocument& state, const ProjectCommand& command,
+    const SetClipMusicalAnalysis& body) {
+    if (clipScopeIsDeleted(state, body.trackId, body.clipId))
+        return reject(ApplyCode::DeletedEntity,
+                      "delete wins over clip analysis edit");
+    ClipLocation location = findClip(state.project, body.clipId);
+    if (!location.clip || location.track->id != body.trackId ||
+        location.clip->kind != ClipKind::Audio) {
+        return reject(ApplyCode::MissingEntity,
+                      "audio clip does not exist in track");
+    }
+    if (!validMusicalAnalysis(body.analysis))
+        return reject(ApplyCode::InvalidCommand,
+                      "invalid clip musical analysis");
+    const ClipMusicalAnalysisModel before = location.clip->musicalAnalysis;
+    const bool same = musicalAnalysisEqual(before, body.analysis);
+    location.clip->musicalAnalysis = body.analysis;
+    const std::string key = "clip:" + body.clipId + ":musicalAnalysis";
+    ApplyResult result;
+    result.code = same ? ApplyCode::NoChange : ApplyCode::Applied;
+    result.impact.documentChanged = !same;
+    result.impact.timelineChanged = !same;
+    result.impact.trackIds.insert(body.trackId);
+    result.impact.clipIds.insert(body.clipId);
+    markWriter(state, key, command.meta.operationId, result.impact);
+    if (!same) {
+        ProjectCommand inverse = inverseShell(
+            command,
+            SetClipMusicalAnalysis{body.trackId, body.clipId, before});
+        inverse.conditions.push_back(FieldWriterIs{key,
+                                                    command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    }
+    return result;
+}
+
 bool pluginKindMatchesLocation(const PluginLocation& location,
                                const InsertModel& insert) {
     const bool instrument = insert.uid == "daw.sampler";
@@ -1913,6 +2283,8 @@ ApplyResult applyAddPlugin(SharedProjectDocument& state,
     inverse.conditions.push_back(FieldWriterIs{
         ProjectReducer::pluginLifecycleKey(body.insert.id),
         command.meta.operationId});
+    inverse.conditions.push_back(
+        pluginGenerationCondition(body.insert.id, command));
     result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     return result;
 }
@@ -2028,6 +2400,8 @@ ApplyResult applyRestorePlugin(SharedProjectDocument& state,
     inverse.conditions.push_back(FieldWriterIs{
         ProjectReducer::pluginLifecycleKey(body.insertId),
         command.meta.operationId});
+    inverse.conditions.push_back(
+        pluginGenerationCondition(body.insertId, command));
     result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     return result;
 }
@@ -2079,12 +2453,66 @@ ApplyResult applyMovePlugin(SharedProjectDocument& state,
     result.impact.pluginInsertIds.insert(body.insertId);
     const std::string key = ProjectReducer::pluginPositionKey(body.insertId);
     markWriter(state, key, command.meta.operationId, result.impact);
+    markPluginGenerationWriter(state, body.insertId, command, result.impact);
     markClipDescendantsWriter(state, body.location.clipId, command,
                               result.impact);
     if (!same) {
         ProjectCommand inverse = inverseShell(
             command, MovePluginInsert{body.location, body.insertId, before});
         inverse.conditions.push_back(FieldWriterIs{key, command.meta.operationId});
+        inverse.conditions.push_back(
+            pluginGenerationCondition(body.insertId, command));
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    }
+    return result;
+}
+
+ApplyResult applyReplacePlugin(SharedProjectDocument& state,
+                               const ProjectCommand& command,
+                               const ReplacePluginInsert& body) {
+    if (pluginLocationParentDeleted(state, body.location) ||
+        pluginIsDeleted(state, body.insertId)) {
+        return reject(ApplyCode::DeletedEntity,
+                      "delete wins over plugin replacement");
+    }
+    InsertModel* insert = pluginAt(state.project, body.location, body.insertId);
+    if (!insert)
+        return reject(ApplyCode::MissingEntity, "plugin does not exist");
+    if (body.replacement.id != body.insertId ||
+        !validSharedInsert(body.replacement) ||
+        !pluginKindMatchesLocation(body.location, body.replacement)) {
+        return reject(ApplyCode::InvalidCommand,
+                      "replacement must preserve a clean supported insert id");
+    }
+    if (!body.replacement.sidechainTrackId.empty() &&
+        (!state.project.findTrack(body.replacement.sidechainTrackId) ||
+         body.replacement.sidechainTrackId == body.location.trackId)) {
+        return reject(ApplyCode::InvalidCommand,
+                      "plugin sidechain track does not exist or is self-routed");
+    }
+    const InsertModel before = *insert;
+    const bool same = sharedInsertEqual(before, body.replacement);
+    *insert = body.replacement;
+    if (body.location.chain == PluginChain::Instrument) {
+        TrackModel* track = state.project.findTrack(body.location.trackId);
+        if (track) track->samplerFx.ownerInstrumentId = body.insertId;
+    }
+    ApplyResult result;
+    result.code = same ? ApplyCode::NoChange : ApplyCode::Applied;
+    result.impact.documentChanged = !same;
+    result.impact.graphRebuild = !same;
+    if (!body.location.trackId.empty())
+        result.impact.trackIds.insert(body.location.trackId);
+    if (!body.location.clipId.empty())
+        result.impact.clipIds.insert(body.location.clipId);
+    result.impact.pluginInsertIds.insert(body.insertId);
+    markCommandWriters(state, command, result.impact);
+    if (!same) {
+        ProjectCommand inverse = inverseShell(
+            command, ReplacePluginInsert{body.location, body.insertId, before});
+        inverse.conditions.push_back(FieldWriterIs{
+            "plugin:" + body.insertId + ":generation",
+            command.meta.operationId});
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;
@@ -2171,6 +2599,7 @@ ApplyResult applySetPluginProperty(SharedProjectDocument& state,
     const std::string key = "plugin:" + body.insertId + ":" +
                             pluginPropertyName(body.property);
     markWriter(state, key, command.meta.operationId, result.impact);
+    markPluginGenerationWriter(state, body.insertId, command, result.impact);
     markClipDescendantsWriter(state, body.location.clipId, command,
                               result.impact);
     if (!same) {
@@ -2178,6 +2607,8 @@ ApplyResult applySetPluginProperty(SharedProjectDocument& state,
             command, SetPluginProperty{body.location, body.insertId,
                                        body.property, before});
         inverse.conditions.push_back(FieldWriterIs{key, command.meta.operationId});
+        inverse.conditions.push_back(
+            pluginGenerationCondition(body.insertId, command));
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;
@@ -2243,11 +2674,14 @@ ApplyResult applySetPluginState(SharedProjectDocument& state,
     result.impact.pluginInsertIds.insert(body.insertId);
     const std::string key = "plugin:" + body.insertId + ":state";
     markWriter(state, key, command.meta.operationId, result.impact);
+    markPluginGenerationWriter(state, body.insertId, command, result.impact);
     markClipDescendantsWriter(state, body.location.clipId, command,
                               result.impact);
     if (!same) {
         ProjectCommand inverse = inverseShell(command, before);
         inverse.conditions.push_back(FieldWriterIs{key, command.meta.operationId});
+        inverse.conditions.push_back(
+            pluginGenerationCondition(body.insertId, command));
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;
@@ -2303,6 +2737,7 @@ ApplyResult applySetPluginParameter(SharedProjectDocument& state,
     const std::string stateKey = "plugin:" + body.insertId + ":state";
     markWriter(state, key, command.meta.operationId, result.impact);
     markWriter(state, stateKey, command.meta.operationId, result.impact);
+    markPluginGenerationWriter(state, body.insertId, command, result.impact);
     markClipDescendantsWriter(state, body.location.clipId, command,
                               result.impact);
     if (!same) {
@@ -2318,6 +2753,8 @@ ApplyResult applySetPluginParameter(SharedProjectDocument& state,
         inverse.conditions.push_back(FieldWriterIs{key, command.meta.operationId});
         inverse.conditions.push_back(
             FieldWriterIs{stateKey, command.meta.operationId});
+        inverse.conditions.push_back(
+            pluginGenerationCondition(body.insertId, command));
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;
@@ -2360,6 +2797,7 @@ ApplyResult applyRemovePluginParameter(SharedProjectDocument& state,
     const std::string stateKey = "plugin:" + body.insertId + ":state";
     markWriter(state, key, command.meta.operationId, result.impact);
     markWriter(state, stateKey, command.meta.operationId, result.impact);
+    markPluginGenerationWriter(state, body.insertId, command, result.impact);
     markClipDescendantsWriter(state, body.location.clipId, command,
                               result.impact);
     if (!same) {
@@ -2370,6 +2808,8 @@ ApplyResult applyRemovePluginParameter(SharedProjectDocument& state,
         inverse.conditions.push_back(FieldWriterIs{key, command.meta.operationId});
         inverse.conditions.push_back(
             FieldWriterIs{stateKey, command.meta.operationId});
+        inverse.conditions.push_back(
+            pluginGenerationCondition(body.insertId, command));
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;
@@ -2434,6 +2874,7 @@ ApplyResult applySetPluginBinding(SharedProjectDocument& state,
     const std::string stateKey = "plugin:" + body.insertId + ":state";
     markWriter(state, key, command.meta.operationId, result.impact);
     markWriter(state, stateKey, command.meta.operationId, result.impact);
+    markPluginGenerationWriter(state, body.insertId, command, result.impact);
     markClipDescendantsWriter(state, body.location.clipId, command,
                               result.impact);
     if (!same) {
@@ -2448,6 +2889,8 @@ ApplyResult applySetPluginBinding(SharedProjectDocument& state,
         inverse.conditions.push_back(FieldWriterIs{key, command.meta.operationId});
         inverse.conditions.push_back(
             FieldWriterIs{stateKey, command.meta.operationId});
+        inverse.conditions.push_back(
+            pluginGenerationCondition(body.insertId, command));
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;
@@ -2469,11 +2912,6 @@ ApplyResult applyRemovePluginBinding(SharedProjectDocument& state,
     PluginAssetBinding before;
     if (!same) {
         before = *found;
-        if (insert->uid == "daw.sampler" && body.key == "sample" &&
-            before.required) {
-            return reject(ApplyCode::InvalidCommand,
-                          "Sampler required sample binding cannot be removed");
-        }
         insert->assetBindings.erase(found);
     }
     ApplyResult result;
@@ -2490,6 +2928,7 @@ ApplyResult applyRemovePluginBinding(SharedProjectDocument& state,
     const std::string stateKey = "plugin:" + body.insertId + ":state";
     markWriter(state, key, command.meta.operationId, result.impact);
     markWriter(state, stateKey, command.meta.operationId, result.impact);
+    markPluginGenerationWriter(state, body.insertId, command, result.impact);
     markClipDescendantsWriter(state, body.location.clipId, command,
                               result.impact);
     if (!same) {
@@ -2499,6 +2938,53 @@ ApplyResult applyRemovePluginBinding(SharedProjectDocument& state,
         inverse.conditions.push_back(FieldWriterIs{key, command.meta.operationId});
         inverse.conditions.push_back(
             FieldWriterIs{stateKey, command.meta.operationId});
+        inverse.conditions.push_back(
+            pluginGenerationCondition(body.insertId, command));
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    }
+    return result;
+}
+
+ApplyResult applySetSamplerFxLevels(SharedProjectDocument& state,
+                                    const ProjectCommand& command,
+                                    const SetSamplerFxLevels& body) {
+    if (state.deletedTracks.contains(body.trackId))
+        return reject(ApplyCode::DeletedEntity,
+                      "delete wins over Sampler FX levels");
+    TrackModel* track = state.project.findTrack(body.trackId);
+    if (!track || track->instrument.id != body.instrumentId ||
+        !track->samplerFx.isOwnedBy(track->instrument)) {
+        return reject(ApplyCode::MissingEntity,
+                      "owned Sampler FX strip does not exist");
+    }
+    if (!std::isfinite(body.volume) || body.volume < 0.0 ||
+        body.volume > 2.0 || !std::isfinite(body.pan) || body.pan < -1.0 ||
+        body.pan > 1.0) {
+        return reject(ApplyCode::InvalidCommand,
+                      "invalid Sampler FX levels");
+    }
+    const SetSamplerFxLevels before{body.trackId, body.instrumentId,
+                                    track->samplerFx.volume,
+                                    track->samplerFx.pan};
+    const bool same = track->samplerFx.volume == float(body.volume) &&
+                      track->samplerFx.pan == float(body.pan);
+    track->samplerFx.volume = float(body.volume);
+    track->samplerFx.pan = float(body.pan);
+    ApplyResult result;
+    result.code = same ? ApplyCode::NoChange : ApplyCode::Applied;
+    result.impact.documentChanged = !same;
+    result.impact.graphRebuild = !same;
+    result.impact.trackIds.insert(body.trackId);
+    result.impact.pluginInsertIds.insert(body.instrumentId);
+    markCommandWriters(state, command, result.impact);
+    if (!same) {
+        ProjectCommand inverse = inverseShell(command, before);
+        inverse.conditions.push_back(FieldWriterIs{
+            "samplerFx:" + body.instrumentId + ":volume",
+            command.meta.operationId});
+        inverse.conditions.push_back(FieldWriterIs{
+            "samplerFx:" + body.instrumentId + ":pan",
+            command.meta.operationId});
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;
@@ -3278,9 +3764,14 @@ ApplyResult applyAddTake(SharedProjectDocument& state,
     markCommandWriters(state, command, result.impact);
     ProjectCommand inverse = inverseShell(
         command, DeleteTake{body.trackId, body.clipId, body.take.id});
-    inverse.conditions.push_back(FieldWriterIs{
-        ProjectReducer::takeLifecycleKey(body.take.id),
-        command.meta.operationId});
+    const std::string descendants =
+        ProjectReducer::clipDescendantsKey(body.clipId);
+    for (const auto& field : commandTouchedFields(command)) {
+        if (field != descendants) {
+            inverse.conditions.push_back(
+                FieldWriterIs{field, command.meta.operationId});
+        }
+    }
     result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     return result;
 }
@@ -3383,10 +3874,169 @@ ApplyResult applyRestoreTake(SharedProjectDocument& state,
     markCommandWriters(state, command, result.impact);
     ProjectCommand inverse = inverseShell(
         command, DeleteTake{body.trackId, body.clipId, body.takeId});
-    inverse.conditions.push_back(FieldWriterIs{
-        ProjectReducer::takeLifecycleKey(body.takeId),
-        command.meta.operationId});
+    const std::string descendants =
+        ProjectReducer::clipDescendantsKey(body.clipId);
+    for (const auto& field : commandTouchedFields(command)) {
+        if (field != descendants) {
+            inverse.conditions.push_back(
+                FieldWriterIs{field, command.meta.operationId});
+        }
+    }
     result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    return result;
+}
+
+ApplyResult applyMoveTake(SharedProjectDocument& state,
+                          const ProjectCommand& command,
+                          const MoveTake& body) {
+    if (clipScopeIsDeleted(state, body.trackId, body.clipId) ||
+        takeIsDeleted(state, body.takeId)) {
+        return reject(ApplyCode::DeletedEntity, "delete wins over take move");
+    }
+    ClipLocation location = findClip(state.project, body.clipId);
+    if (!location.clip || location.track->id != body.trackId ||
+        location.clip->kind != ClipKind::Audio) {
+        return reject(ApplyCode::MissingEntity,
+                      "audio clip does not exist in track");
+    }
+    const std::size_t index = entityIndexOf(location.clip->takes, body.takeId);
+    if (index == std::string::npos)
+        return reject(ApplyCode::MissingEntity, "take does not exist");
+    if (!validEntityAnchor(location.clip->takes, body.afterId, body.takeId))
+        return reject(ApplyCode::MissingAnchor, "take anchor does not exist");
+
+    const std::string before =
+        entityPredecessor(location.clip->takes, body.takeId);
+    const bool same = before == body.afterId;
+    if (!same) {
+        TakeModel moved = std::move(location.clip->takes[index]);
+        location.clip->takes.erase(location.clip->takes.begin() +
+                                   std::ptrdiff_t(index));
+        insertEntityAfter(location.clip->takes, std::move(moved),
+                          body.afterId, false);
+    }
+
+    ApplyResult result;
+    result.code = same ? ApplyCode::NoChange : ApplyCode::Applied;
+    result.impact.documentChanged = !same;
+    result.impact.graphRebuild = !same;
+    result.impact.timelineChanged = !same;
+    result.impact.trackIds.insert(body.trackId);
+    result.impact.clipIds.insert(body.clipId);
+    result.impact.takeIds.insert(body.takeId);
+    const std::string key = ProjectReducer::takePositionKey(body.takeId);
+    markWriter(state, key, command.meta.operationId, result.impact);
+    if (!same) {
+        ProjectCommand inverse = inverseShell(
+            command,
+            MoveTake{body.trackId, body.clipId, body.takeId, before});
+        inverse.conditions.push_back(
+            FieldWriterIs{key, command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    }
+    return result;
+}
+
+ApplyResult applySetTakeProperty(SharedProjectDocument& state,
+                                 const ProjectCommand& command,
+                                 const SetTakeProperty& body) {
+    if (clipScopeIsDeleted(state, body.trackId, body.clipId) ||
+        takeIsDeleted(state, body.takeId)) {
+        return reject(ApplyCode::DeletedEntity,
+                      "delete wins over take property edit");
+    }
+    ClipLocation location = findClip(state.project, body.clipId);
+    if (!location.clip || location.track->id != body.trackId ||
+        location.clip->kind != ClipKind::Audio) {
+        return reject(ApplyCode::MissingEntity,
+                      "audio clip does not exist in track");
+    }
+    const std::size_t index = entityIndexOf(location.clip->takes, body.takeId);
+    if (index == std::string::npos)
+        return reject(ApplyCode::MissingEntity, "take does not exist");
+    TakeModel& take = location.clip->takes[index];
+    ScalarValue before;
+    bool same = false;
+    switch (body.property) {
+        case TakeProperty::Name: {
+            const auto* value = std::get_if<std::string>(&body.value);
+            if (!value || value->size() > 4096)
+                return reject(ApplyCode::InvalidCommand, "invalid take name");
+            before = take.name;
+            same = take.name == *value;
+            take.name = *value;
+            break;
+        }
+        case TakeProperty::OffsetSeconds:
+        case TakeProperty::LengthSeconds:
+        case TakeProperty::ClipOffsetSeconds: {
+            double value = 0.0;
+            if (!doubleValue(body.value, value) || value < 0.0)
+                return reject(ApplyCode::InvalidCommand,
+                              "invalid take time value");
+            double* target = body.property == TakeProperty::OffsetSeconds
+                                 ? &take.offsetSeconds
+                                 : (body.property == TakeProperty::LengthSeconds
+                                        ? &take.lengthSeconds
+                                        : &take.clipOffsetSeconds);
+            before = *target;
+            same = *target == value;
+            *target = value;
+            break;
+        }
+        case TakeProperty::Gain: {
+            double value = 0.0;
+            if (!doubleValue(body.value, value) || value < 0.0 || value > 4.0)
+                return reject(ApplyCode::InvalidCommand, "invalid take gain");
+            before = double(take.gain);
+            same = take.gain == float(value);
+            take.gain = float(value);
+            break;
+        }
+        case TakeProperty::Muted: {
+            const auto* value = std::get_if<bool>(&body.value);
+            if (!value)
+                return reject(ApplyCode::InvalidCommand,
+                              "invalid take mute flag");
+            before = take.muted;
+            same = take.muted == *value;
+            take.muted = *value;
+            break;
+        }
+        case TakeProperty::Color: {
+            std::int64_t value = 0;
+            if (!integerValue(body.value, value) || value < 0 ||
+                value > std::numeric_limits<std::uint32_t>::max()) {
+                return reject(ApplyCode::InvalidCommand,
+                              "invalid take color");
+            }
+            before = std::int64_t(take.color);
+            same = take.color == std::uint32_t(value);
+            take.color = std::uint32_t(value);
+            break;
+        }
+    }
+    const std::string key = "take:" + body.takeId + ":" +
+                            takePropertyName(body.property);
+    ApplyResult result;
+    result.code = same ? ApplyCode::NoChange : ApplyCode::Applied;
+    result.impact.documentChanged = !same;
+    result.impact.graphRebuild =
+        !same && body.property != TakeProperty::Name &&
+        body.property != TakeProperty::Color;
+    result.impact.timelineChanged = !same;
+    result.impact.trackIds.insert(body.trackId);
+    result.impact.clipIds.insert(body.clipId);
+    result.impact.takeIds.insert(body.takeId);
+    markCommandWriters(state, command, result.impact);
+    if (!same) {
+        ProjectCommand inverse = inverseShell(
+            command, SetTakeProperty{body.trackId, body.clipId, body.takeId,
+                                     body.property, before});
+        inverse.conditions.push_back(FieldWriterIs{key,
+                                                    command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    }
     return result;
 }
 
@@ -3740,6 +4390,16 @@ ApplyResult applyImpl(SharedProjectDocument& state,
             return applySetClipAsset(state, command, body);
         else if constexpr (std::is_same_v<T, SetClipSampleEdit>)
             return applySetClipSampleEdit(state, command, body);
+        else if constexpr (std::is_same_v<T, SetClipFade>)
+            return applySetClipFade(state, command, body);
+        else if constexpr (std::is_same_v<T, SetClipFadeCurve>)
+            return applySetClipFadeCurve(state, command, body);
+        else if constexpr (std::is_same_v<T, SetClipFadeMode>)
+            return applySetClipFadeMode(state, command, body);
+        else if constexpr (std::is_same_v<T, SetClipPatternOwner>)
+            return applySetClipPatternOwner(state, command, body);
+        else if constexpr (std::is_same_v<T, SetClipMusicalAnalysis>)
+            return applySetClipMusicalAnalysis(state, command, body);
         else if constexpr (std::is_same_v<T, AddPluginInsert>)
             return applyAddPlugin(state, command, body);
         else if constexpr (std::is_same_v<T, DeletePluginInsert>)
@@ -3748,6 +4408,8 @@ ApplyResult applyImpl(SharedProjectDocument& state,
             return applyRestorePlugin(state, command, body);
         else if constexpr (std::is_same_v<T, MovePluginInsert>)
             return applyMovePlugin(state, command, body);
+        else if constexpr (std::is_same_v<T, ReplacePluginInsert>)
+            return applyReplacePlugin(state, command, body);
         else if constexpr (std::is_same_v<T, SetPluginProperty>)
             return applySetPluginProperty(state, command, body);
         else if constexpr (std::is_same_v<T, SetPluginState>)
@@ -3760,6 +4422,8 @@ ApplyResult applyImpl(SharedProjectDocument& state,
             return applySetPluginBinding(state, command, body);
         else if constexpr (std::is_same_v<T, RemovePluginAssetBinding>)
             return applyRemovePluginBinding(state, command, body);
+        else if constexpr (std::is_same_v<T, SetSamplerFxLevels>)
+            return applySetSamplerFxLevels(state, command, body);
         else if constexpr (std::is_same_v<T, UpsertMidiNote>)
             return applyUpsertMidiNote(state, command, body);
         else if constexpr (std::is_same_v<T, DeleteMidiNote>)
@@ -3794,6 +4458,10 @@ ApplyResult applyImpl(SharedProjectDocument& state,
             return applyDeleteTake(state, command, body);
         else if constexpr (std::is_same_v<T, RestoreTake>)
             return applyRestoreTake(state, command, body);
+        else if constexpr (std::is_same_v<T, MoveTake>)
+            return applyMoveTake(state, command, body);
+        else if constexpr (std::is_same_v<T, SetTakeProperty>)
+            return applySetTakeProperty(state, command, body);
         else if constexpr (std::is_same_v<T, UpsertCompSegment>)
             return applyUpsertCompSegment(state, command, body);
         else if constexpr (std::is_same_v<T, DeleteCompSegment>)
@@ -3814,6 +4482,11 @@ ApplyResult applyImpl(SharedProjectDocument& state,
             return reject(ApplyCode::Unsupported,
                           "command reducer is not implemented");
     }, command.body);
+    // Keep reducer field-writer state exactly aligned with the public touched
+    // field contract. Individual handlers mark the keys used by their inverse;
+    // this final pass also covers coarse ordering/generation heads.
+    if (result.accepted())
+        markCommandWriters(state, command, result.impact);
     if (recordOperation && result.accepted())
         state.appliedOperationIds.insert(command.meta.operationId);
     return result;
@@ -3854,6 +4527,13 @@ ApplyResult ProjectReducer::apply(SharedProjectDocument& state,
         kMaxProjectCommandTouchedFields) {
         return reject(ApplyCode::InvalidCommand,
                       "command touches too many fields");
+    }
+    if ((std::holds_alternative<std::shared_ptr<BatchCommand>>(command.body) ||
+         std::holds_alternative<RecordingCommit>(command.body)) &&
+        serializedProjectCommandPayloadSize(command) >
+            kMaxProjectCommandBatchBytes) {
+        return reject(ApplyCode::InvalidCommand,
+                      "batch command exceeds the 1 MiB payload limit");
     }
     return applyImpl(state, command, true, true);
 }

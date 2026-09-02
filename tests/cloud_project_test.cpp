@@ -156,10 +156,8 @@ int main() {
         project.tracks.front().instrument.assetBindings.clear();
         const auto samplerWithoutAsset =
             daw::cloud::inspectForPublishV1(project);
-        check(!samplerWithoutAsset.canPublish() &&
-                  samplerWithoutAsset.blockers.front().detail.find("sample") !=
-                      std::string::npos,
-              "a loaded Sampler without its required sample binding is blocked");
+        check(samplerWithoutAsset.canPublish(),
+              "an empty Sampler is a valid publishable instrument");
         project.tracks.front().instrument.assetBindings.push_back(
             daw::PluginAssetBinding{
                 "sample",

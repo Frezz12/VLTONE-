@@ -20,6 +20,12 @@ jobs:
     timeout-minutes: 45
     env:
       VLT_TEST_DATABASE_URL: postgres://vlt_test:vlt_test@127.0.0.1:5432/vlt_test?sslmode=disable
+      VLT_COLLAB_TEST_DATABASE_URL: postgres://vlt_test:vlt_test@127.0.0.1:5432/vlt_collab_test?sslmode=disable
+      COLLAB_OBJECT_ENDPOINT: http://127.0.0.1:9000
+      COLLAB_OBJECT_REGION: us-east-1
+      COLLAB_OBJECT_BUCKET: vlt-collaboration-ci
+      COLLAB_OBJECT_ACCESS_KEY_ID: vlt_minio_ci
+      COLLAB_OBJECT_SECRET_ACCESS_KEY: vlt_minio_ci_secret
     steps:
       - name: Check out sources
         uses: actions/checkout@v4
@@ -37,8 +43,10 @@ jobs:
           sudo -u postgres psql --set=ON_ERROR_STOP=1 <<'SQL'
           CREATE USER vlt_test WITH PASSWORD 'vlt_test';
           CREATE DATABASE vlt_test OWNER vlt_test;
+          CREATE DATABASE vlt_collab_test OWNER vlt_test;
           SQL
           psql "$VLT_TEST_DATABASE_URL" -c 'SELECT version();'
+          psql "$VLT_COLLAB_TEST_DATABASE_URL" -c 'SELECT version();'
 
       - name: Install Go 1.26.7
         uses: actions/setup-go@v5
@@ -46,9 +54,50 @@ jobs:
           go-version: 1.26.7
           cache-dependency-path: backend/go.sum
 
+      - name: Start isolated MinIO and verify lifecycle
+        shell: bash
+        run: |
+          docker run --detach --rm --name vlt-minio \
+            --publish 127.0.0.1:9000:9000 \
+            --env MINIO_ROOT_USER="$COLLAB_OBJECT_ACCESS_KEY_ID" \
+            --env MINIO_ROOT_PASSWORD="$COLLAB_OBJECT_SECRET_ACCESS_KEY" \
+            quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z \
+            server /data
+          for attempt in {1..60}; do
+            if curl --fail --silent --show-error \
+              "$COLLAB_OBJECT_ENDPOINT/minio/health/ready" >/dev/null; then
+              break
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              docker logs vlt-minio
+              exit 1
+            fi
+            sleep 1
+          done
+          aws --endpoint-url "$COLLAB_OBJECT_ENDPOINT" s3api create-bucket \
+            --bucket "$COLLAB_OBJECT_BUCKET"
+          aws --endpoint-url "$COLLAB_OBJECT_ENDPOINT" s3api \
+            put-bucket-lifecycle-configuration \
+            --bucket "$COLLAB_OBJECT_BUCKET" \
+            --lifecycle-configuration file://packaging/server/s3-lifecycle.example.json
+          aws --endpoint-url "$COLLAB_OBJECT_ENDPOINT" s3api \
+            get-bucket-lifecycle-configuration \
+            --bucket "$COLLAB_OBJECT_BUCKET" >/dev/null
+          printf 'vlt-collaboration-synthetic' > "$RUNNER_TEMP/s3-synthetic"
+          aws --endpoint-url "$COLLAB_OBJECT_ENDPOINT" s3 cp \
+            "$RUNNER_TEMP/s3-synthetic" \
+            "s3://$COLLAB_OBJECT_BUCKET/uploads/ci-synthetic"
+          aws --endpoint-url "$COLLAB_OBJECT_ENDPOINT" s3 cp \
+            "s3://$COLLAB_OBJECT_BUCKET/uploads/ci-synthetic" \
+            "$RUNNER_TEMP/s3-synthetic-read"
+          cmp "$RUNNER_TEMP/s3-synthetic" "$RUNNER_TEMP/s3-synthetic-read"
+
       - name: Test backend and migration directions
         working-directory: backend
         run: |
+          : "${VLT_TEST_DATABASE_URL:?account integration database is required in CI}"
+          : "${VLT_COLLAB_TEST_DATABASE_URL:?collaboration integration database is required in CI}"
+          DATABASE_URL="$VLT_COLLAB_TEST_DATABASE_URL" go run ./cmd/migrate up
           go vet ./...
           go test -race -count=1 ./...
 
@@ -68,9 +117,11 @@ jobs:
 
       - name: Verify generated API and public-release gate
         run: |
+          pnpm check:collaboration-contracts
           pnpm generate:api
           git diff --exit-code -- packages/api-client/src/schema.d.ts
           pnpm check:release-security
+          bash -n packaging/server/*.sh
 
       - name: Typecheck and build independent Next.js apps
         run: |
@@ -85,6 +136,20 @@ jobs:
           pnpm --filter @vlt/web test
           pnpm --filter @vlt/admin test
 
+      - name: Build immutable server bundle
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: bash packaging/server/build-bundle.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Publish immutable server bundle
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: vlt-account-platform-${{ github.ref_name }}
+          path: |
+            dist/server/*.tar.gz
+            dist/server/*.sha256
+          if-no-files-found: error
+
       - name: Upload Playwright diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -94,3 +159,23 @@ jobs:
             web/test-results/**
             admin/test-results/**
           if-no-files-found: ignore
+
+  release-attestation:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: backend-web
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download immutable server bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: vlt-account-platform-${{ github.ref_name }}
+          path: dist/server
+
+      - name: Sign server bundle provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/server/*.tar.gz

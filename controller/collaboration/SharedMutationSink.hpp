@@ -1,5 +1,8 @@
 #pragma once
 
+#include "collaboration/ProjectCommand.hpp"
+
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -26,12 +29,21 @@ constexpr bool marksLocalFileDirty(SharedMutationResult result) noexcept {
     return result == SharedMutationResult::LocalFallback;
 }
 
+struct SharedMutationRequest {
+    CommandBody body;
+    std::string undoLabel;
+    std::optional<std::string> transactionId;
+};
+
 /// Narrow controller-side seam for shared document edits already represented
 /// by the typed collaboration reducer.  Command metadata, UUIDs and transport
 /// policy belong to the application bridge, not to EngineController.
 class SharedMutationSink {
 public:
     virtual ~SharedMutationSink() = default;
+
+    virtual bool handlesCloudBinding() = 0;
+    virtual SharedMutationResult submit(SharedMutationRequest request) = 0;
 
     virtual SharedMutationResult setTimeSignature(int numerator,
                                                   int denominator) = 0;

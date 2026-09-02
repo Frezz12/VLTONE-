@@ -37,6 +37,8 @@ enum class CloudRequestKind : quint8 {
     ListMembers,
     PutMember,
     RemoveMember,
+    TransferOwnership,
+    ListInvites,
     CreateInvite,
     RevokeInvite,
     AcceptInvite,
@@ -113,7 +115,7 @@ struct CreateCloudProjectInput {
     QString title;
     QString engineVersion;
     QString minimumAppVersion;
-    int formatVersion = 6;
+    int formatVersion = 7;
 };
 
 struct CloudSnapshotDescriptor {
@@ -208,6 +210,12 @@ struct CreatedCloudProjectInvite {
     QString oneTimeToken;
 };
 
+struct CloudOwnershipTransfer {
+    CloudProject project;
+    QString previousOwnerUserId;
+    QString newOwnerUserId;
+};
+
 struct CloudLiveSession {
     QString id;
     QString projectId;
@@ -262,6 +270,7 @@ public:
 
     int requestTimeoutMs() const;
     void setRequestTimeoutMs(int timeoutMs);
+    QString currentUserId() const;
 
     quint64 createProject(const CreateCloudProjectInput& input);
     quint64 listProjects();
@@ -311,7 +320,10 @@ public:
     quint64 putMember(const QString& projectId, const QString& userId,
                       const PutCloudProjectMemberInput& input);
     quint64 removeMember(const QString& projectId, const QString& userId);
+    quint64 transferOwnership(const QString& projectId,
+                              const QString& targetUserId);
 
+    quint64 listInvites(const QString& projectId);
     quint64 createInvite(const QString& projectId,
                          const CreateCloudProjectInviteInput& input);
     quint64 revokeInvite(const QString& projectId, const QString& inviteId);
@@ -339,6 +351,12 @@ signals:
                        const QVector<collab::CloudProjectMember>& members);
     void memberSaved(quint64 requestId,
                      const collab::CloudProjectMember& member);
+    void ownershipTransferred(
+        quint64 requestId,
+        const collab::CloudOwnershipTransfer& transfer);
+    void invitesListed(
+        quint64 requestId,
+        const QVector<collab::CloudProjectInvite>& invites);
     void inviteCreated(quint64 requestId,
                        const collab::CreatedCloudProjectInvite& invite);
     void inviteAccepted(quint64 requestId,
@@ -380,6 +398,8 @@ Q_DECLARE_METATYPE(collab::CloudProjectView)
 Q_DECLARE_METATYPE(collab::CloudProjectBootstrap)
 Q_DECLARE_METATYPE(collab::CloudOperationLookup)
 Q_DECLARE_METATYPE(collab::CloudProjectMember)
+Q_DECLARE_METATYPE(collab::CloudProjectInvite)
 Q_DECLARE_METATYPE(collab::CreatedCloudProjectInvite)
+Q_DECLARE_METATYPE(collab::CloudOwnershipTransfer)
 Q_DECLARE_METATYPE(collab::CloudSessionState)
 Q_DECLARE_METATYPE(collab::CloudProjectTrackLease)

@@ -1511,36 +1511,46 @@ int main() {
         // nothing yet has no frames for a decoder to return, but its channel
         // count was written the moment the file was opened — which is the
         // decision under test.
-        const auto writtenChannels = [&]() -> int {
-            int found = -1;
-            fs::file_time_type newest{};
+        const auto captureFiles = [&]() {
+            std::set<fs::path> files;
+            if (!fs::exists(m.recordDirectory())) return files;
             for (const auto& entry : fs::directory_iterator(m.recordDirectory())) {
-                if (entry.path().extension() != ".wav") continue;
-                if (found >= 0 && entry.last_write_time() <= newest) continue;
+                if (entry.path().extension() == ".wav")
+                    files.insert(entry.path());
+            }
+            return files;
+        };
+        const auto writtenChannels = [&](const std::set<fs::path>& before) {
+            for (const auto& entry : fs::directory_iterator(m.recordDirectory())) {
+                if (entry.path().extension() != ".wav" ||
+                    before.contains(entry.path())) {
+                    continue;
+                }
                 std::FILE* file = std::fopen(entry.path().string().c_str(), "rb");
                 if (!file) continue;
                 unsigned char header[24] = {};
                 const size_t read = std::fread(header, 1, sizeof(header), file);
                 std::fclose(file);
                 if (read < sizeof(header)) continue;
-                newest = entry.last_write_time();
-                found = int(header[22]) | (int(header[23]) << 8);
+                return int(header[22]) | (int(header[23]) << 8);
             }
-            return found;
+            return -1;
         };
 
         // Read it while the take is rolling: a take that captured nothing —
         // which is every take in a run with no audio device — is discarded on
         // stop, file and all.
+        const auto beforeMono = captureFiles();
         check(m.startRecording(track), "a mono take starts");
-        const int monoWidth = writtenChannels();
+        const int monoWidth = writtenChannels(beforeMono);
         m.stopRecording();
         check(monoWidth == 1,
               "and writes one channel, not a pair with a silent side");
 
         m.setTrackInputChannelCount(track, 2);
+        const auto beforeStereo = captureFiles();
         check(m.startRecording(track), "a stereo take starts");
-        const int stereoWidth = writtenChannels();
+        const int stereoWidth = writtenChannels(beforeStereo);
         m.stopRecording();
         check(stereoWidth == 2,
               "while a track pointed at a pair still captures both");

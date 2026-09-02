@@ -3,6 +3,7 @@ package collab
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,15 +66,15 @@ func (f *maintenanceFakeStore) Delete(_ context.Context, key string) error {
 
 func TestCleanupExpiredMultipartAbortsBeforeDeletingStaging(t *testing.T) {
 	fake := &maintenanceFakeStore{}
-	upload := model.UploadSession{
-		ObjectKey: "uploads/project/upload", UploadMode: UploadModeMultipart,
-		ProviderUploadID: "provider-id", MultipartState: MultipartStateAborting,
+	job := model.ObjectCleanupJob{
+		ObjectKey:        "uploads/project/upload",
+		ProviderUploadID: "provider-id", AbortMultipart: true, DeleteObject: true,
 	}
-	if err := cleanupUploadObject(context.Background(), fake, upload); err != nil {
+	if err := cleanupQueuedObject(context.Background(), fake, job); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.aborts) != 1 || fake.aborts[0] != "uploads/project/upload:provider-id" ||
-		len(fake.deletes) != 1 || fake.deletes[0] != upload.ObjectKey {
+		len(fake.deletes) != 1 || fake.deletes[0] != job.ObjectKey {
 		t.Fatalf("cleanup order/state is incomplete: aborts=%v deletes=%v",
 			fake.aborts, fake.deletes)
 	}
@@ -81,22 +82,33 @@ func TestCleanupExpiredMultipartAbortsBeforeDeletingStaging(t *testing.T) {
 
 func TestCleanupExpiredMultipartRetriesProviderFailureSafely(t *testing.T) {
 	fake := &maintenanceFakeStore{abortErr: objectstore.ErrProvider}
-	upload := model.UploadSession{
-		ObjectKey: "uploads/project/upload", UploadMode: UploadModeMultipart,
-		ProviderUploadID: "provider-id", MultipartState: MultipartStateOpen,
+	job := model.ObjectCleanupJob{
+		ObjectKey:        "uploads/project/upload",
+		ProviderUploadID: "provider-id", AbortMultipart: true, DeleteObject: true,
 	}
-	if err := cleanupUploadObject(context.Background(), fake, upload); !errors.Is(err, objectstore.ErrProvider) {
+	if err := cleanupQueuedObject(context.Background(), fake, job); !errors.Is(err, objectstore.ErrProvider) {
 		t.Fatalf("provider abort failure was hidden: %v", err)
 	}
 	if len(fake.deletes) != 0 {
 		t.Fatal("staging object was deleted before multipart abort succeeded")
 	}
 	fake.abortErr = objectstore.ErrMultipartNotFound
-	if err := cleanupUploadObject(context.Background(), fake, upload); err != nil {
+	if err := cleanupQueuedObject(context.Background(), fake, job); err != nil {
 		t.Fatalf("idempotent missing multipart was not accepted: %v", err)
 	}
 	if len(fake.deletes) != 1 {
 		t.Fatal("retry did not remove staging object")
+	}
+}
+
+func TestObjectCleanupRetryIsBoundedAndErrorIsSafeForStorage(t *testing.T) {
+	if objectCleanupRetryDelay(1) != 5*time.Second ||
+		objectCleanupRetryDelay(100) != time.Hour {
+		t.Fatal("cleanup retry backoff is not bounded")
+	}
+	errorText := cleanupErrorText(errors.New("provider\nfailed\x00" + string(make([]byte, 600))))
+	if len([]rune(errorText)) > 512 || strings.ContainsAny(errorText, "\x00\r\n") {
+		t.Fatalf("unsafe cleanup error text %q", errorText)
 	}
 }
 

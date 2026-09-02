@@ -109,22 +109,6 @@ void inspectInsert(const InsertModel& insert, const std::string& location,
     addAsset(insert.rightStateAsset, location + "/right-state", report,
              seenAssets, AssetKind::PluginState);
     const bool sampler = insert.uid == "daw.sampler";
-    const bool hasRequiredSample = std::any_of(
-        insert.assetBindings.begin(), insert.assetBindings.end(),
-        [](const PluginAssetBinding& binding) {
-            return binding.key == "sample" && binding.required &&
-                   !binding.asset.empty();
-        });
-    if (sampler && !hasRequiredSample) {
-        report.blockers.push_back(PublishIssue{
-            PublishIssueKind::InvalidAssetIdentity,
-            location,
-            insert.id,
-            insert.uid,
-            insert.name,
-            "Sampler requires a non-empty required asset binding named 'sample'",
-        });
-    }
     std::unordered_set<std::string> bindingKeys;
     for (const PluginAssetBinding& binding : insert.assetBindings) {
         if (binding.key.empty() || binding.key.size() > 96 ||
@@ -143,15 +127,17 @@ void inspectInsert(const InsertModel& insert, const std::string& location,
                  seenAssets,
                  binding.key == "sample" ? AssetKind::Audio
                                            : AssetKind::Unknown);
-        if (binding.required && binding.asset.empty() &&
-            !(sampler && binding.key == "sample")) {
+        if (binding.asset.empty() ||
+            (sampler && binding.key == "sample" && !binding.required)) {
             report.blockers.push_back(PublishIssue{
                 PublishIssueKind::InvalidAssetIdentity,
                 location,
                 insert.id,
                 insert.uid,
                 insert.name,
-                "required plugin asset binding '" + binding.key + "' is empty",
+                binding.asset.empty()
+                    ? "plugin asset binding '" + binding.key + "' is empty"
+                    : "Sampler sample binding must remain required",
             });
         }
     }

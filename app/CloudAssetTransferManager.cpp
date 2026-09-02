@@ -1287,7 +1287,7 @@ struct CloudAssetTransferManager::Impl {
                 !normalizeUuid(input.uploadId, &job.uploadId) ||
                 input.sourcePath.isEmpty() ||
                 input.sequence > kMaximumExactJsonInteger ||
-                input.schemaVersion != 6 ||
+                input.schemaVersion != 7 ||
                 !isCanonicalCloudSnapshotAssetManifest(input.assetIds)) {
                 fail(job, transferFailure(
                               CloudTransferErrorCode::InvalidInput,
@@ -3209,7 +3209,7 @@ QJsonObject testCompletedSnapshot(
              {QStringLiteral("project_id"), projectId},
              {QStringLiteral("seq"), double(sequence)},
              {QStringLiteral("blob_id"), blobId},
-             {QStringLiteral("schema_version"), 6},
+             {QStringLiteral("schema_version"), 7},
              {QStringLiteral("asset_ids"), manifest},
              {QStringLiteral("created_at"),
               QStringLiteral("2026-08-30T10:00:00Z")},
@@ -3517,7 +3517,7 @@ bool checkCloudAssetTransferManagerForTest(QString* error) {
     // sent on every prepare/retry and the completed descriptor must echo the
     // same sorted, unique manifest.
     const QByteArray uploadSnapshotBytes(
-        R"({"schemaVersion":1,"projectFormatVersion":6,"project":{}})");
+        R"({"schemaVersion":1,"projectFormatVersion":7,"project":{}})");
     const QString uploadSnapshotPath =
         QDir(temporary.path()).filePath(QStringLiteral("upload.snapshot"));
     QFile uploadSnapshotFile(uploadSnapshotPath);
@@ -3584,7 +3584,7 @@ bool checkCloudAssetTransferManagerForTest(QString* error) {
     uploadSnapshotInput.uploadId = snapshotUploadId;
     uploadSnapshotInput.sourcePath = uploadSnapshotPath;
     uploadSnapshotInput.sequence = 2;
-    uploadSnapshotInput.schemaVersion = 6;
+    uploadSnapshotInput.schemaVersion = 7;
     uploadSnapshotInput.assetIds = snapshotManifest;
     manager.uploadSnapshot(uploadSnapshotInput);
     if (!waitForTransfer(
@@ -3662,7 +3662,7 @@ bool checkCloudAssetTransferManagerForTest(QString* error) {
     // accepted, while authenticated preparation metadata becomes authoritative
     // and is enforced against the delegated bytes before atomic publication.
     const QByteArray snapshotBytes(
-        R"({"schemaVersion":1,"projectFormatVersion":6,"project":{}})");
+        R"({"schemaVersion":1,"projectFormatVersion":7,"project":{}})");
     const QString snapshotId =
         QStringLiteral("34343434-3434-4343-8343-343434343434");
     const QString snapshotSha = QString::fromLatin1(

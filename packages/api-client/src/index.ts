@@ -13,6 +13,7 @@ export type User = {
   nickname: string;
   locale: "ru" | "en";
   status: "active" | "suspended";
+  collaboration_enabled: boolean;
   consent_version: string;
   consent_accepted_at: string;
   created_at: string;

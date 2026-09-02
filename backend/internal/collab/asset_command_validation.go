@@ -110,6 +110,16 @@ func commandAssetRequirements(kind string, payload json.RawMessage,
 			return nil, err
 		}
 		return pluginAssetRequirements(body)
+	case "plugin.replace":
+		body, err := commandPayloadObject(payload)
+		if err != nil {
+			return nil, err
+		}
+		replacement, err := commandPayloadObject(body["replacement"])
+		if err != nil {
+			return nil, invalidf("plugin replacement contains an invalid insert")
+		}
+		return pluginAssetRequirements(replacement)
 	case "plugin.setAssetBinding":
 		body, err := commandPayloadObject(payload)
 		if err != nil {

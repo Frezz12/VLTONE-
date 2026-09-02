@@ -36,6 +36,21 @@ type CreatedInvite struct {
 	Token  string              `json:"token"`
 }
 
+func (s *Store) ListInvites(ctx context.Context, projectID,
+	actorUserID uuid.UUID) ([]model.ProjectInvite, error) {
+	view, err := s.projectAccess(s.DB.WithContext(ctx), projectID, actorUserID, false)
+	if err != nil {
+		return nil, err
+	}
+	if !RoleAllows(view.Role, PermissionManageMembers) {
+		return nil, ErrForbidden
+	}
+	var invites []model.ProjectInvite
+	err = s.DB.WithContext(ctx).Where("project_id = ?", projectID).
+		Order("created_at DESC, id DESC").Limit(100).Find(&invites).Error
+	return invites, err
+}
+
 func (s *Store) CreateInvite(ctx context.Context, input CreateInviteInput) (CreatedInvite, error) {
 	if input.ProjectID == uuid.Nil || input.ActorUserID == uuid.Nil ||
 		input.ActorDeviceID == uuid.Nil || input.ActorSessionID == uuid.Nil {

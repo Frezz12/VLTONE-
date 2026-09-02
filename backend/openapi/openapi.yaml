@@ -1,11 +1,48 @@
 openapi: 3.1.0
 info:
   title: VLT Studio Platform API
-  version: 0.0.1
+  version: 1.0.0
   description: Source-of-truth contract shared by the public site, admin site, and desktop application.
 servers:
   - url: http://localhost:8080
 paths:
+  /healthz:
+    get:
+      operationId: getProcessHealth
+      summary: Process liveness only
+      responses:
+        "200":
+          description: API process is running
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties: { status: { const: ok } }
+  /readyz:
+    get:
+      operationId: getReadiness
+      summary: PostgreSQL, schema-version and writable-temp readiness
+      responses:
+        "200":
+          description: API is ready to serve traffic
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties: { status: { const: ready } }
+        "503":
+          description: A required local dependency is unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties: { status: { const: not_ready } }
   /v1/meta:
     get:
       operationId: getMeta
@@ -150,6 +187,17 @@ paths:
       operationId: desktopMe
       security: [{ desktopBearer: [] }]
       responses: { "200": { $ref: "#/components/responses/AccountSession" } }
+  /v1/desktop/capabilities:
+    get:
+      operationId: getDesktopCapabilities
+      summary: Return account-scoped collaboration entitlement and effective storage limits
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200":
+          description: Capabilities for the authenticated desktop account
+          content: { application/json: { schema: { $ref: "#/components/schemas/DesktopCapabilities" } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /v1/desktop/telemetry/batch:
     post:
       operationId: uploadTelemetryBatch
@@ -316,12 +364,13 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "../../protocol/schema/project-command-v1.schema.json" }
+            schema: { $ref: "../../protocol/schema/project-command-v2.schema.json" }
       responses:
         "201": { description: New operation committed, content: { application/json: { schema: { $ref: "#/components/schemas/AppendOperationResult" } } } }
         "200": { description: Idempotent retry returned the original operation, content: { application/json: { schema: { $ref: "#/components/schemas/AppendOperationResult" } } } }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
   /v1/desktop/projects/{projectId}/ops/{opId}:
     parameters:
@@ -350,6 +399,7 @@ paths:
         "200": { description: Idempotent upload preparation, content: { application/json: { schema: { $ref: "#/components/schemas/UploadPreparation" } } } }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
   /v1/desktop/projects/{projectId}/asset-uploads/{uploadId}/complete:
@@ -382,7 +432,7 @@ paths:
     parameters: [{ $ref: "#/components/parameters/ProjectId" }]
     post:
       operationId: prepareCloudProjectSnapshotUpload
-      summary: Deduplicate or prepare a resumable canonical v6 snapshot at the exact requested head
+      summary: Deduplicate or prepare a resumable canonical v7 snapshot at the exact requested head
       description: Initial publication is owner-authorized. During a live session, only the server-assigned host for a pending snapshot.requested target may prepare the upload; an ending session keeps that target frozen. assetIds is the exact set of AssetRefs parsed from the canonical snapshot; the server normalizes it and verifies every declared project asset before prepare and complete.
       security: [{ desktopBearer: [] }]
       requestBody:
@@ -392,6 +442,7 @@ paths:
         "200": { description: Idempotent snapshot upload preparation, content: { application/json: { schema: { $ref: "#/components/schemas/UploadPreparation" } } } }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
   /v1/desktop/projects/{projectId}/snapshot-uploads/{uploadId}/complete:
     parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/UploadId" }]
@@ -495,6 +546,22 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
   /v1/desktop/projects/{projectId}/invites:
     parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+    get:
+      operationId: listCloudProjectInvites
+      summary: List invitations for owner project management; invitation tokens are never returned
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200":
+          description: Invitations ordered by creation time
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [invites]
+                properties:
+                  invites: { type: array, items: { $ref: "#/components/schemas/ProjectInvite" } }
+        "403": { $ref: "#/components/responses/Error" }
     post:
       operationId: createCloudProjectInvite
       security: [{ desktopBearer: [] }]
@@ -746,6 +813,35 @@ paths:
       parameters: [{ $ref: "#/components/parameters/UserId" }]
       requestBody: { $ref: "#/components/requestBodies/PasswordConfirmation" }
       responses: { "204": { description: Account and related data deleted } }
+  /v1/admin/users/{userId}/collaboration-access:
+    put:
+      operationId: adminSetUserCollaborationAccess
+      summary: Enable or immediately revoke cloud collaboration for one account
+      security: [{ adminCookie: [], csrf: [] }]
+      parameters: [{ $ref: "#/components/parameters/UserId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled]
+              properties: { enabled: { type: boolean } }
+      responses:
+        "200":
+          description: Stored collaboration entitlement
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [collaboration_enabled]
+                properties: { collaboration_enabled: { type: boolean } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /v1/admin/users/{userId}/telemetry:
     get:
       operationId: adminGetUserTelemetry
@@ -1015,6 +1111,38 @@ components:
         message: { type: string }
         field_errors: { type: object, additionalProperties: { type: string } }
         request_id: { type: string }
+    StableCollaborationErrorCode:
+      type: string
+      description: Stable machine-readable release errors that desktop clients may branch on.
+      enum:
+        - collaboration_not_enabled
+        - collaboration_access_unavailable
+        - hash_consensus_required
+        - cloud_recording_disabled
+        - storage_quota_exceeded
+        - upload_concurrency_exceeded
+    DesktopCapabilities:
+      type: object
+      additionalProperties: false
+      required: [collaboration]
+      properties:
+        collaboration:
+          type: object
+          additionalProperties: false
+          required: [enabled, entitled, recording, maxParticipants, storage]
+          properties:
+            enabled: { type: boolean }
+            entitled: { type: boolean }
+            recording: { const: false }
+            maxParticipants: { type: integer, minimum: 1, maximum: 8 }
+            storage:
+              type: object
+              additionalProperties: false
+              required: [maximumObjectBytes, projectQuotaBytes, userQuotaBytes]
+              properties:
+                maximumObjectBytes: { type: integer, format: int64, minimum: 1 }
+                projectQuotaBytes: { type: integer, format: int64, minimum: 1 }
+                userQuotaBytes: { type: integer, format: int64, minimum: 1 }
     CloudProject:
       type: object
       additionalProperties: false
@@ -1024,7 +1152,7 @@ components:
         owner_user_id: { type: string, format: uuid }
         title: { type: string, minLength: 1, maxLength: 160 }
         status: { enum: [uploading, active, read_only, conflict, archived] }
-        format_version: { type: integer, minimum: 1 }
+        format_version: { const: 7 }
         engine_version: { type: string, maxLength: 64 }
         minimum_app_version: { type: string, maxLength: 64 }
         head_seq: { type: integer, format: int64, minimum: 0 }
@@ -1045,7 +1173,7 @@ components:
       required: [title, format_version, engine_version, minimum_app_version]
       properties:
         title: { type: string, minLength: 1, maxLength: 160 }
-        format_version: { const: 6 }
+        format_version: { const: 7 }
         engine_version: { type: string, minLength: 1, maxLength: 64 }
         minimum_app_version: { type: string, minLength: 1, maxLength: 64 }
     UpdateCloudProjectRequest:
@@ -1106,7 +1234,7 @@ components:
         project_id: { type: string, format: uuid }
         seq: { type: integer, format: int64, minimum: 0 }
         blob_id: { type: string, format: uuid }
-        schema_version: { type: integer, minimum: 1 }
+        schema_version: { const: 7 }
         asset_ids:
           type: array
           maxItems: 100000
@@ -1135,7 +1263,7 @@ components:
       properties:
         uploadId: { type: string, format: uuid, description: Client-generated idempotency identifier }
         seq: { type: integer, format: int64, minimum: 0 }
-        schemaVersion: { const: 6 }
+        schemaVersion: { const: 7 }
         sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
         byteSize: { type: integer, format: int64, minimum: 1, maximum: 68719476736 }
         contentType: { type: string, minLength: 1, maxLength: 160 }
@@ -1184,7 +1312,7 @@ components:
         uploadId: { type: string, format: uuid }
         assetId: { type: string, format: uuid }
         snapshotSeq: { type: integer, format: int64, minimum: 0 }
-        status: { enum: [uploading, completed] }
+        status: { enum: [uploading, verifying, completed] }
         uploadMode: { enum: [single, multipart] }
         alreadyAvailable: { type: boolean }
         request: { $ref: "#/components/schemas/PresignedRequest" }
@@ -1287,7 +1415,7 @@ components:
         actor_user_id: { type: [string, "null"], format: uuid }
         actor_device_id: { type: [string, "null"], format: uuid }
         kind: { type: string }
-        schemaVersion: { const: 1 }
+        schemaVersion: { const: 2 }
         baseServerSeq: { type: integer, format: int64, minimum: 0 }
         payload:
           type: object
@@ -1353,8 +1481,8 @@ components:
       properties:
         appVersion: { type: string, minLength: 5, maxLength: 64, description: SemVer 2.0.0 application version }
         engineVersion: { type: string, minLength: 1, maxLength: 64 }
-        commandSchemaVersion: { const: 1 }
-        projectFormatVersion: { const: 6 }
+        commandSchemaVersion: { const: 2 }
+        projectFormatVersion: { const: 7 }
     StartProjectSessionRequest:
       type: object
       additionalProperties: false
@@ -1362,8 +1490,8 @@ components:
       properties:
         appVersion: { type: string, minLength: 5, maxLength: 64, description: SemVer 2.0.0 application version }
         engineVersion: { type: string, minLength: 1, maxLength: 64 }
-        commandSchemaVersion: { const: 1 }
-        projectFormatVersion: { const: 6 }
+        commandSchemaVersion: { const: 2 }
+        projectFormatVersion: { const: 7 }
         mode: { enum: [independent, follow_host, synchronized], default: independent }
     ProjectSessionMember:
       type: object
@@ -1552,13 +1680,14 @@ components:
         collaboration:
           type: object
           additionalProperties: false
-          required: [enabled, protocol, project_format, command_schema, max_participants]
+          required: [enabled, protocol, project_format, command_schema, recording, max_participants]
           properties:
             enabled: { type: boolean }
-            protocol: { const: vlt-collab-v1 }
-            project_format: { const: 6 }
-            command_schema: { const: 1 }
-            max_participants: { type: integer, minimum: 1, maximum: 64 }
+            protocol: { const: vlt-collab-v2 }
+            project_format: { const: 7 }
+            command_schema: { const: 2 }
+            recording: { const: false }
+            max_participants: { type: integer, minimum: 1, maximum: 8 }
     LoginRequest:
       type: object
       additionalProperties: false
@@ -1588,13 +1717,14 @@ components:
         password_confirmation: { type: string, minLength: 12, maxLength: 128 }
     User:
       type: object
-      required: [id, email, nickname, locale, status]
+      required: [id, email, nickname, locale, status, collaboration_enabled]
       properties:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
         nickname: { type: string }
         locale: { type: string, enum: [ru, en] }
         status: { type: string, enum: [active, suspended] }
+        collaboration_enabled: { type: boolean }
         consent_version: { type: string }
         consent_accepted_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }

@@ -11,6 +11,8 @@
         "CMAKE_BUILD_TYPE": "Release",
         "DAW_BUILD_APP": "ON",
         "DAW_BUILD_TESTS": "ON",
+        "DAW_ENABLE_COLLABORATION": "ON",
+        "DAW_ENFORCE_COLLABORATION_RELEASE_GATES": "ON",
         "VLT_DEFAULT_API_ORIGIN": "https://vltstudio.ru/api/v1"
       }
     },
@@ -34,6 +36,8 @@
         "DAW_BUILD_APP": "ON",
         "DAW_BUILD_TESTS": "ON",
         "DAW_PACKAGE": "ON",
+        "DAW_ENABLE_COLLABORATION": "ON",
+        "DAW_ENFORCE_COLLABORATION_RELEASE_GATES": "ON",
         "DAW_QT_VERSION": "6.8.3",
         "DAW_REQUIRE_EXACT_QT_VERSION": "ON",
         "VLT_DEFAULT_API_ORIGIN": "https://vltstudio.ru/api/v1",

@@ -1,0 +1,16 @@
+{
+  "Rules": [
+    {
+      "ID": "abort-incomplete-collaboration-multipart",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "uploads/" },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    },
+    {
+      "ID": "expire-abandoned-collaboration-staging",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "uploads/" },
+      "Expiration": { "Days": 7 }
+    }
+  ]
+}

@@ -95,7 +95,15 @@ public:
     /// True means this document is cloud-bound even when its room is offline,
     /// read-only or resyncing. Callers must never fall through to a local
     /// mutation/legacy undo while this is true.
-    bool handlesCloudBinding();
+    bool handlesCloudBinding() override;
+    daw::collab::SharedMutationResult submit(
+        daw::collab::SharedMutationRequest request) override;
+    qsizetype pendingOperationCount() const;
+    QVector<daw::collab::ProjectCommand> journaledOperations(
+        const QString& projectId) const;
+    qsizetype journalEntryCount(const QString& projectId) const;
+    bool retireJournaledOperation(const QString& projectId,
+                                  const QString& operationId);
     bool canUndo();
     bool canRedo();
     bool requestUndo();
@@ -117,6 +125,10 @@ public:
         std::span<const std::string> mutedTrackIds) override;
 
     LocalOperationResult submitLocal(daw::collab::ProjectCommand command);
+    /// Replays a command recovered from the durable pending journal while
+    /// normal edits remain blocked. The original opId is preserved.
+    LocalOperationResult resubmitJournaled(
+        daw::collab::ProjectCommand command);
     /// Watches one canonical operation id for proof supplied by the current or
     /// a future verified confirmed state. The bounded watch is scoped to the
     /// current project binding and is retired once observed. A live commit is
@@ -222,6 +234,8 @@ private:
         std::span<const std::string> trackIds, bool muted,
         std::string label);
     bool submitPreparedHistory(bool redo);
+    LocalOperationResult submitLocalImpl(
+        daw::collab::ProjectCommand command, bool journalRecovery);
 
     enum class PendingHistoryKind : std::uint8_t { Forward, Undo, Redo };
     struct PendingHistory {

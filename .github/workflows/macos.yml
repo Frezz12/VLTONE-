@@ -23,10 +23,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install native dependencies
-        run: brew install cmake ninja qt qtwebengine qtserialport portaudio rtmidi libsndfile nlohmann-json
+        run: brew install cmake ninja qt qtwebengine qtserialport qtwebsockets portaudio rtmidi libsndfile nlohmann-json
 
       - name: Configure Release desktop
-        run: cmake --preset macos -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        run: >-
+          cmake --preset macos
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DDAW_ENABLE_COLLABORATION=ON
+          -DDAW_ENFORCE_COLLABORATION_RELEASE_GATES=ON
 
       - name: Build DAW, reporter and tests
         run: cmake --build build --parallel

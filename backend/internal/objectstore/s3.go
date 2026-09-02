@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -102,12 +103,41 @@ func NewS3(configuration S3Config) (*S3, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	if err := sweepStaleVerificationFiles(configuration.TempDirectory,
+		now().Add(-30*time.Minute)); err != nil {
+		return nil, fmt.Errorf("sweep verification files: %w", err)
+	}
 	return &S3{
 		endpoint: endpoint, region: region, bucket: bucket,
 		accessKeyID: accessKeyID, secretAccessKey: configuration.SecretAccessKey,
 		sessionToken: configuration.SessionToken, tempDirectory: configuration.TempDirectory,
 		maximumBytes: configuration.MaximumBytes, client: client, now: now,
 	}, nil
+}
+
+func sweepStaleVerificationFiles(directory string, cutoff time.Time) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".collab-object-") {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			return infoErr
+		}
+		// Never follow links or descend into directories supplied by an
+		// operator-controlled temp directory.
+		if !info.Mode().IsRegular() || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		if removeErr := os.Remove(filepath.Join(directory, entry.Name())); removeErr != nil {
+			return removeErr
+		}
+	}
+	return nil
 }
 
 func (s *S3) PresignPut(_ context.Context, key string, expected ExpectedObject, ttl time.Duration) (PresignedRequest, error) {

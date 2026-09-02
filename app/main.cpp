@@ -9,6 +9,8 @@
 #include "CloudProjectInviteDialog.hpp"
 #include "CloudAssetTransferManager.hpp"
 #include "CloudRecordingAssetCoordinator.hpp"
+#include "CloudSharedAssetMutationCoordinator.hpp"
+#include "CloudSharedAssetMutationBridge.hpp"
 #include "CloudRecordingRecoveryUpload.hpp"
 #include "CloudProjectAssetHydrator.hpp"
 #include "CloudProjectCache.hpp"
@@ -39,6 +41,7 @@
 #include <QEventLoop>
 #include <QFileOpenEvent>
 #include <QFileInfo>
+#include <QTemporaryDir>
 #include <QWidget>
 #include <QMouseEvent>
 #include <QDebug>
@@ -456,6 +459,13 @@ int main(int argc, char** argv) {
                          assetCacheError.toUtf8().constData());
             return 38;
         }
+        if (!collab::checkCloudSharedAssetMutationCoordinatorForTest(
+                &collaborationError)) {
+            std::fprintf(stderr,
+                         "cloud shared asset mutation coordinator check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 55;
+        }
         if (!collab::checkEngineProjectProjectionForTest(
                 &collaborationError)) {
             std::fprintf(stderr, "engine projection check failed: %s\n",
@@ -627,6 +637,8 @@ int main(int argc, char** argv) {
         });
     collab::CloudAssetTransferManager cloudAssetTransfers(
         &accountService, &collaborationAssetCache);
+    collab::CloudSharedAssetMutationCoordinator cloudSharedAssetMutations(
+        &cloudAssetTransfers, &collaborationAssetCache);
     collab::CloudProjectAssetHydrator cloudAssetHydrator(
         &cloudAssetTransfers, &collaborationAssetCache);
     collab::CloudProjectPublisher cloudProjectPublisher(
@@ -645,18 +657,45 @@ int main(int argc, char** argv) {
         &cloudAssetHydrator,
         [&cloudAssetHydrator](const QString& projectId,
                               const QList<daw::AssetRef>& assets) {
-            cloudAssetHydrator.hydrate(projectId, assets);
+            if (cloudAssetHydrator.projectId() == projectId)
+                cloudAssetHydrator.ensureMissing(projectId, assets);
+            else
+                cloudAssetHydrator.hydrate(projectId, assets);
         });
     MainWindow window(/*openDevice=*/!headless, nullptr,
                       &collaborationService);
+    collab::CloudSharedAssetMutationBridge cloudSharedAssetMutationBridge(
+        &cloudSharedAssetMutations, &collaborationService,
+        window.collaborationEngineController());
+    window.setCloudSharedAssetMutationBridge(
+        &cloudSharedAssetMutationBridge);
     window.setCloudPublicationServices(&cloudProjectPublisher,
                                        &cloudProjectSync,
                                        &cloudSessionLifecycle,
                                        &collaborationCommandBridge,
                                        &cloudProjectClient,
-                                       &recordingLeases);
+                                       &recordingLeases,
+                                       &cloudAssetHydrator,
+                                       &collaborationAssetCache);
     collab::EngineProjectProjectionAdapter collaborationProjection(
         window.collaborationEngineController(), &collaborationAssetCache);
+    QObject::connect(
+        &collaborationProjection,
+        &collab::EngineProjectProjectionAdapter::missingAssetRefsChanged,
+        &cloudAssetHydrator,
+        [&cloudAssetHydrator, &collaborationService](
+            const QList<daw::AssetRef>& assets) {
+            const QString projectId = collaborationService.projectId();
+            if (!projectId.isEmpty() && !assets.isEmpty())
+                cloudAssetHydrator.ensureMissing(projectId, assets);
+        });
+    QObject::connect(
+        &collaborationService, &collab::CollaborationService::projectChanged,
+        &collaborationProjection,
+        [&cloudAssetHydrator, &collaborationProjection](const QString&) {
+            cloudAssetHydrator.cancel();
+            collaborationProjection.clearDocument();
+        });
     collaborationCommands.setAdapter(&collaborationProjection);
     struct ProjectionAdapterDetach final {
         daw::collab::CommandGateway* gateway = nullptr;
@@ -1264,11 +1303,18 @@ int main(int argc, char** argv) {
             // The browser: its tree, its worker-thread decode, the audition it
             // starts, and moving the panel across the window.
             const QString tone = QDir::temp().filePath("daw_demo_tone.wav");
-            if (!window.checkBrowser(QDir::tempPath(), tone)) {
+            QTemporaryDir browserFixture(
+                QDir::temp().filePath("daw-selftest-browser-XXXXXX"));
+            const QString browserTone = browserFixture.filePath("demo.wav");
+            if (!browserFixture.isValid() || !QFile::copy(tone, browserTone)) {
+                std::fprintf(stderr, "could not isolate the browser fixture\n");
+                return 5;
+            }
+            if (!window.checkBrowser(browserFixture.path(), browserTone)) {
                 std::fprintf(stderr, "the browser did not audition a file\n");
                 return 5;
             }
-            if (!window.checkWebBrowserForTest(tone)) {
+            if (!window.checkWebBrowserForTest(browserTone)) {
                 std::fprintf(stderr,
                              "the Web browser audio import/undo flow failed\n");
                 return 27;

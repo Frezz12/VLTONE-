@@ -10,7 +10,8 @@ import (
 	"vltstudio/backend/internal/collab"
 )
 
-// RunCollaborationMaintenance owns the v1 single-instance lifecycle ticker.
+// RunCollaborationMaintenance owns the V1 product's single-instance lifecycle
+// ticker while speaking the v2 collaboration protocol.
 // The database recheck is authoritative, so a reconnect racing the timer keeps
 // the room alive. The caller controls shutdown through ctx.
 func (s *Server) RunCollaborationMaintenance(ctx context.Context) {
@@ -72,12 +73,16 @@ func (s *Server) runCollaborationMaintenancePass(ctx context.Context,
 	grace, staleAfter time.Duration, reaperBatch, storageBatch int,
 	snapshotOps int64, snapshotAge, snapshotRetry, blobRetention time.Duration) {
 	reaped, err := s.Collab.ReapStaleSessionMembers(ctx, staleAfter, reaperBatch)
-	if err == nil {
+	if err != nil {
+		s.recordCollaborationMaintenanceError("reap-session-members", err, false, false)
+	} else {
 		s.publishReapedSessionMembers(reaped)
 	}
 
 	transitions, err := s.Collab.EndIdleSessions(ctx, grace)
-	if err == nil {
+	if err != nil {
+		s.recordCollaborationMaintenanceError("end-idle-sessions", err, false, false)
+	} else {
 		for _, session := range transitions {
 			if session.Finalized {
 				s.publishSnapshotFinalization(&collab.SnapshotFinalization{
@@ -93,19 +98,59 @@ func (s *Server) runCollaborationMaintenancePass(ctx context.Context,
 
 	dispatches, err := s.Collab.ScheduleSnapshotRequests(ctx, snapshotOps,
 		snapshotAge, snapshotRetry, reaperBatch)
-	if err == nil {
+	if err != nil {
+		s.recordCollaborationMaintenanceError("schedule-snapshots", err, false, false)
+	} else {
 		for _, dispatch := range dispatches {
 			s.publishSnapshotDispatch(dispatch)
 		}
+	}
+	stuckAfter := 2 * snapshotRetry
+	if stuckAfter < time.Minute {
+		stuckAfter = time.Minute
+	}
+	stuckEnding, err := s.Collab.CountStuckEndingSessions(ctx, stuckAfter)
+	if err != nil {
+		s.recordCollaborationMaintenanceError("count-stuck-ending", err, false, false)
+	} else if s.metrics != nil {
+		s.metrics.stuckEndingSessions.Store(stuckEnding)
 	}
 
 	if s.CollabAssets == nil {
 		return
 	}
-	_, _ = s.CollabAssets.ReapExpiredUploads(ctx, storageBatch)
-	_, _ = s.CollabAssets.RefreshUnreferencedBlobs(ctx, storageBatch)
-	_, _ = s.CollabAssets.GarbageCollectUnreferencedBlobs(ctx,
+	if _, err := s.CollabAssets.ReapExpiredUploads(ctx, storageBatch); err != nil {
+		s.recordCollaborationMaintenanceError("reap-uploads", err, true, false)
+	}
+	cleaned, err := s.CollabAssets.DrainObjectCleanupJobs(ctx, storageBatch)
+	if cleaned > 0 && s.metrics != nil {
+		s.metrics.objectCleanupSuccess.Add(uint64(cleaned))
+	}
+	if err != nil {
+		if s.metrics != nil {
+			s.metrics.objectCleanupFailures.Add(1)
+		}
+		s.recordCollaborationMaintenanceError("cleanup-staging-objects", err, true, false)
+	}
+	pendingCleanup, runningCleanup, depthErr := s.CollabAssets.ObjectCleanupQueueDepth(ctx)
+	if depthErr != nil {
+		s.recordCollaborationMaintenanceError("measure-staging-cleanup-queue",
+			depthErr, true, false)
+	} else if s.metrics != nil {
+		s.metrics.objectCleanupPending.Store(pendingCleanup)
+		s.metrics.objectCleanupRunning.Store(runningCleanup)
+	}
+	if _, err := s.CollabAssets.RefreshUnreferencedBlobs(ctx, storageBatch); err != nil {
+		s.recordCollaborationMaintenanceError("refresh-blob-references", err, true, false)
+	}
+	deleted, err := s.CollabAssets.GarbageCollectUnreferencedBlobs(ctx,
 		blobRetention, storageBatch)
+	if deleted > 0 && s.metrics != nil {
+		s.metrics.gcDeletes.Add(uint64(deleted))
+	}
+	if err != nil {
+		s.recordCollaborationMaintenanceError("garbage-collect-blobs", err, true, true)
+	}
 }
 
 func (s *Server) publishSnapshotDispatch(dispatch collab.SnapshotDispatch) {
@@ -116,6 +161,12 @@ func (s *Server) publishSnapshotDispatch(dispatch collab.SnapshotDispatch) {
 	s.Rooms.DeliverParticipant(dispatch.ProjectID, dispatch.HostMemberID,
 		collab.RoomMessage{Data: collaborationEnvelope(
 			"snapshot.requested", payload, uuid.Nil, nil, 0)})
+	if s.metrics != nil {
+		s.metrics.snapshotRequests.Add(1)
+		if dispatch.Attempt > 1 {
+			s.metrics.snapshotRetries.Add(1)
+		}
+	}
 }
 
 func (s *Server) publishSessionEnding(projectID, sessionID uuid.UUID,
@@ -129,6 +180,9 @@ func (s *Server) publishSessionEnding(projectID, sessionID uuid.UUID,
 	})
 	s.Rooms.Publish(projectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelope(
 		"session.ending", payload, uuid.Nil, nil, 0)})
+	if s.metrics != nil {
+		s.metrics.sessionEnding.Add(1)
+	}
 }
 
 func (s *Server) publishSnapshotFinalization(finalization *collab.SnapshotFinalization) {
@@ -149,6 +203,9 @@ func (s *Server) publishSnapshotFinalization(finalization *collab.SnapshotFinali
 	}
 	if s.Hashes != nil {
 		s.Hashes.ClearProject(finalization.ProjectID)
+	}
+	if s.metrics != nil {
+		s.metrics.sessionEnded.Add(1)
 	}
 }
 
@@ -178,6 +235,17 @@ func (s *Server) publishReapedSessionMembers(events []collab.ReapedSessionMember
 				Data: collaborationEnvelope("session.host_changed", payload,
 					uuid.Nil, nil, 0),
 			})
+		}
+		if s.DB != nil && s.Hashes != nil {
+			ctx, cancel := context.WithTimeout(context.Background(),
+				collaborationWriteTimeout)
+			if round, err := s.prepareCurrentHashRound(ctx, event.ProjectID); err == nil {
+				s.publishHashRound(event.ProjectID, round)
+			} else {
+				s.recordCollaborationMaintenanceError("member-reap-hash-round", err,
+					false, false)
+			}
+			cancel()
 		}
 	}
 }

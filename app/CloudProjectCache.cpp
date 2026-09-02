@@ -83,7 +83,7 @@ CloudProjectCache::CloudProjectCache(QString rootDirectory)
 
 QString CloudProjectCache::defaultRootDirectory() {
     return QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
-        .filePath(QStringLiteral("collaboration/projects-v1"));
+        .filePath(QStringLiteral("collaboration/projects-v2"));
 }
 
 bool CloudProjectCache::store(

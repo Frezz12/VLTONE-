@@ -1,54 +1,78 @@
 #!/usr/bin/env bash
-# Rebuild and restart the VLT account platform on a prepared Ubuntu server.
-# Provision PostgreSQL, Node.js 24, Go 1.26.7, Apache and the systemd unit
-# files once (see README.md); this script is safe to run for each update.
+# Apply forward migrations and atomically activate one installed release.
 set -euo pipefail
 
 APP_ROOT="${VLT_APP_ROOT:-/opt/vlt-account-platform}"
 SYSTEM_USER="${VLT_SYSTEM_USER:-vltaccount}"
 ENV_FILE="${VLT_ENV_FILE:-/etc/vlt-account/api.env}"
+SERVICES=(vlt-account-api vlt-account-web vlt-account-admin)
 
-if [[ ${EUID} -ne 0 ]]; then
-    echo "Run as root (or through sudo)." >&2
-    exit 1
-fi
-for tool in go node corepack; do
-    command -v "$tool" >/dev/null || { echo "Missing $tool." >&2; exit 1; }
-done
-[[ -r "$ENV_FILE" ]] || { echo "Missing $ENV_FILE." >&2; exit 1; }
-[[ -d "$APP_ROOT/backend" && -f "$APP_ROOT/pnpm-lock.yaml" ]] || {
-    echo "Not a VLT platform checkout: $APP_ROOT" >&2; exit 1;
-}
+die() { echo "deploy: $*" >&2; exit 1; }
+[[ ${EUID} -eq 0 ]] || die "run as root (or through sudo)"
+[[ $# -eq 1 ]] || die "usage: $0 /opt/vlt-account-platform/releases/<version>"
 
-install -d -o "$SYSTEM_USER" -g "$SYSTEM_USER" "$APP_ROOT/bin"
-runuser -u "$SYSTEM_USER" -- bash -c "
-  set -euo pipefail
-  export PATH=/usr/local/bin:\$PATH
-  export GOCACHE=/var/lib/vlt-account/.cache/go-build
-  cd '$APP_ROOT/backend'
-  go build -trimpath -ldflags='-s -w' -o '$APP_ROOT/bin/vlt-api' ./cmd/api
-  go build -trimpath -ldflags='-s -w' -o '$APP_ROOT/bin/vlt-migrate' ./cmd/migrate
-  go build -trimpath -ldflags='-s -w' -o '$APP_ROOT/bin/vlt-adminctl' ./cmd/adminctl
-"
+release="$(readlink -e -- "$1")" || die "release does not exist: $1"
+releases_root="$(readlink -m -- "$APP_ROOT/releases")"
+[[ "$(dirname -- "$release")" == "$releases_root" ]] ||
+    die "release must be directly below $releases_root"
+[[ -x "$release/bin/vlt-migrate" ]] || die "vlt-migrate is missing"
+[[ -x "$release/ops/preflight.sh" ]] || die "preflight is missing"
+[[ -r "$ENV_FILE" ]] || die "missing $ENV_FILE"
 
-corepack enable
-runuser -u "$SYSTEM_USER" -- bash -c "
-  set -euo pipefail
-  export COREPACK_HOME=/var/lib/vlt-account/.cache/corepack
-  cd '$APP_ROOT'
-  pnpm install --frozen-lockfile
-  pnpm generate:api
-  NODE_OPTIONS=--max-old-space-size=1024 pnpm --filter @vlt/api-client build
-  NODE_OPTIONS=--max-old-space-size=1024 pnpm --filter @vlt/web build
-  NODE_OPTIONS=--max-old-space-size=1024 pnpm --filter @vlt/admin build
-"
+"$release/ops/preflight.sh" "$release"
 
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 set +a
-runuser -u "$SYSTEM_USER" -- "$APP_ROOT/bin/vlt-migrate" up
+systemctl stop "${SERVICES[@]}"
+if ! runuser -u "$SYSTEM_USER" -- "$release/bin/vlt-migrate" up; then
+    # Expand-only migrations keep the previous application compatible. If a
+    # migration itself fails, restore availability without changing current.
+    systemctl start "${SERVICES[@]}" || true
+    die "database migration failed; current release was not changed"
+fi
+
+replace_link() {
+    local name="$1"
+    local target="$2"
+    local temporary="$APP_ROOT/.${name}.$$"
+    rm -f -- "$temporary"
+    ln -s -- "$target" "$temporary"
+    mv -Tf -- "$temporary" "$APP_ROOT/$name"
+}
+
+previous=""
+if [[ -L "$APP_ROOT/current" ]]; then
+    previous="$(readlink -e -- "$APP_ROOT/current")" || true
+fi
+if [[ -n "$previous" ]]; then
+    [[ "$(dirname -- "$previous")" == "$releases_root" ]] ||
+        die "current points outside $releases_root"
+    replace_link previous "$previous"
+fi
+replace_link current "$release"
+
+install -m 0644 "$release/ops/systemd/"*.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now vlt-account-api vlt-account-web vlt-account-admin
-systemctl restart vlt-account-api vlt-account-web vlt-account-admin
-systemctl --no-pager --full status vlt-account-api vlt-account-web vlt-account-admin
+systemctl start "${SERVICES[@]}"
+if "$release/ops/smoke.sh"; then
+    systemctl --no-pager --full status "${SERVICES[@]}"
+    echo "Activated $release"
+    exit 0
+fi
+
+if [[ -n "$previous" ]]; then
+    echo "Smoke test failed; restoring $previous" >&2
+    replace_link current "$previous"
+    replace_link previous "$release"
+    install -m 0644 "$previous/ops/systemd/"*.service /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl restart "${SERVICES[@]}"
+    if ! "$previous/ops/smoke.sh"; then
+        echo "Previous release was restored but its smoke test also failed." >&2
+    fi
+else
+    echo "Smoke test failed and no previous release is installed." >&2
+fi
+exit 1

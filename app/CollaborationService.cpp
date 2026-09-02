@@ -1,6 +1,8 @@
 #include "CollaborationService.hpp"
 
 #include "AccountService.hpp"
+#include "ProjectSerializer.hpp"
+#include "collaboration/ProjectCommand.hpp"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -309,6 +311,13 @@ CollaborationService::CollaborationService(account::Service* account,
     refreshAccountState();
 }
 
+QString CollaborationService::accountUserId() const {
+    if (!m_account || !m_account->authenticated()) return {};
+    const QUuid id(m_account->snapshot().userId);
+    return id.isNull() ? QString()
+                       : id.toString(QUuid::WithoutBraces).toLower();
+}
+
 void CollaborationService::setProjectId(const QString& projectId,
                                         bool requestConnection) {
     const QUuid uuid(projectId);
@@ -318,10 +327,15 @@ void CollaborationService::setProjectId(const QString& projectId,
     if (safe == m_projectId && (!requestConnection || m_shouldConnect)) return;
     m_projectId = safe;
     m_sessionId.clear();
+    m_hashRoundId.clear();
+    m_hashRoundSessionId.clear();
+    m_hashRoundServerSequence = 0;
+    m_hashRoundDeadlineMs = 0;
     m_bootstrapServerSequence = 0;
     m_bootstrapStateHash.clear();
     m_transportConnected = false;
     m_sessionReadOnly = false;
+    m_pendingRecoveryBlocked = false;
     m_resyncPending = false;
     m_authorizationRequested = false;
     m_shouldConnect = requestConnection && !safe.isEmpty();
@@ -335,11 +349,16 @@ void CollaborationService::setProjectId(const QString& projectId,
 void CollaborationService::clearProject() {
     m_projectId.clear();
     m_sessionId.clear();
+    m_hashRoundId.clear();
+    m_hashRoundSessionId.clear();
+    m_hashRoundServerSequence = 0;
+    m_hashRoundDeadlineMs = 0;
     m_bootstrapServerSequence = 0;
     m_bootstrapStateHash.clear();
     m_shouldConnect = false;
     m_transportConnected = false;
     m_sessionReadOnly = false;
+    m_pendingRecoveryBlocked = false;
     m_resyncPending = false;
     m_authorizationRequested = false;
     m_presenceStore.clear();
@@ -358,6 +377,10 @@ void CollaborationService::reconnectNow() {
     m_shouldConnect = true;
     m_transportConnected = false;
     m_sessionId.clear();
+    m_hashRoundId.clear();
+    m_hashRoundSessionId.clear();
+    m_hashRoundServerSequence = 0;
+    m_hashRoundDeadlineMs = 0;
     m_sessionReadOnly = false;
     m_resyncPending = false;
     m_authorizationRequested = false;
@@ -374,6 +397,10 @@ void CollaborationService::disconnectFromProject() {
     m_resyncPending = false;
     m_authorizationRequested = false;
     m_sessionId.clear();
+    m_hashRoundId.clear();
+    m_hashRoundSessionId.clear();
+    m_hashRoundServerSequence = 0;
+    m_hashRoundDeadlineMs = 0;
     m_presenceStore.clear();
     m_localSessionState.setHostParticipantId({});
     emit roomIdentityChanged({}, {}, {});
@@ -437,8 +464,10 @@ void CollaborationService::trustedTransportConnected() {
     QJsonObject hello{
         {QStringLiteral("appVersion"), QCoreApplication::applicationVersion()},
         {QStringLiteral("engineVersion"), QCoreApplication::applicationVersion()},
-        {QStringLiteral("commandSchemaVersion"), 1},
-        {QStringLiteral("projectFormatVersion"), 6},
+        {QStringLiteral("commandSchemaVersion"),
+         int(daw::collab::kProjectCommandSchemaVersion)},
+        {QStringLiteral("projectFormatVersion"),
+         daw::ProjectSerializer::kFormatVersion},
         {QStringLiteral("afterServerSeq"),
          double(m_bootstrapServerSequence)},
     };
@@ -453,6 +482,10 @@ void CollaborationService::trustedTransportDisconnected(
     m_transportSent = false;
     m_presenceStore.clear();
     m_sessionId.clear();
+    m_hashRoundId.clear();
+    m_hashRoundSessionId.clear();
+    m_hashRoundServerSequence = 0;
+    m_hashRoundDeadlineMs = 0;
     m_localSessionState.setHostParticipantId({});
     emit roomIdentityChanged({}, {}, {});
     if (!m_shouldConnect) {
@@ -473,6 +506,10 @@ void CollaborationService::trustedTransportUnavailable(
     m_transportSent = false;
     m_presenceStore.clear();
     m_sessionId.clear();
+    m_hashRoundId.clear();
+    m_hashRoundSessionId.clear();
+    m_hashRoundServerSequence = 0;
+    m_hashRoundDeadlineMs = 0;
     m_localSessionState.setHostParticipantId({});
     emit roomIdentityChanged({}, {}, {});
     // Keep authorization latched until reconnectNow() so a permanent endpoint
@@ -509,10 +546,10 @@ bool CollaborationService::trustedResyncCompleted() {
     }
     m_resyncPending = false;
     setState(m_sessionReadOnly ? CollaborationState::ReadOnly
-                               : CollaborationState::Synced,
+                               : CollaborationState::Joining,
              m_sessionReadOnly ? tr("Session is read-only")
-                               : tr("Session synced"));
-    sendSnapshotHash();
+                               : tr("Verifying shared project state"));
+    if (!m_sessionReadOnly) requestOrSendRoundHash();
     return true;
 }
 
@@ -633,11 +670,32 @@ bool CollaborationService::sendEnvelope(WireType type,
 }
 
 bool CollaborationService::canSubmitOperations() const {
-    return m_transportConnected && m_state == CollaborationState::Synced;
+    return m_transportConnected && m_state == CollaborationState::Synced &&
+           !m_pendingRecoveryBlocked;
+}
+
+bool CollaborationService::canSubmitRecoveryOperations() const {
+    return m_transportConnected && m_state == CollaborationState::Synced &&
+           m_pendingRecoveryBlocked;
+}
+
+void CollaborationService::setPendingRecoveryBlocked(bool blocked) {
+    if (m_pendingRecoveryBlocked == blocked) return;
+    m_pendingRecoveryBlocked = blocked;
+    // Writability changes even though the transport state does not. Re-emit
+    // so action/controller gates refresh synchronously.
+    emit stateChanged(m_state, m_stateDetail);
 }
 
 bool CollaborationService::submitOperation(const QJsonObject& command) {
     if (!canSubmitOperations() || command.isEmpty()) return false;
+    return sendEnvelope(WireType::OpSubmit,
+                        QJsonObject{{QStringLiteral("command"), command}});
+}
+
+bool CollaborationService::submitRecoveryOperation(
+    const QJsonObject& command) {
+    if (!canSubmitRecoveryOperations() || command.isEmpty()) return false;
     return sendEnvelope(WireType::OpSubmit,
                         QJsonObject{{QStringLiteral("command"), command}});
 }
@@ -696,11 +754,68 @@ void CollaborationService::sendTransport(const TransportFrame& frame) {
     m_lastTransportSent.restart();
 }
 
+bool CollaborationService::acceptHashRound(const QJsonObject& payload) {
+    if (payload.size() != 4) return false;
+    const QString roundId =
+        canonicalUuid(payload.value(QStringLiteral("roundId")));
+    const QString sessionId =
+        canonicalUuid(payload.value(QStringLiteral("sessionId")));
+    const auto serverSequence =
+        exactSequence(payload.value(QStringLiteral("serverSeq")));
+    const auto deadline =
+        exactSequence(payload.value(QStringLiteral("deadlineMs")));
+    if (roundId.isEmpty() || sessionId.isEmpty() ||
+        sessionId != m_sessionId || !serverSequence || !deadline ||
+        *deadline > quint64(std::numeric_limits<qint64>::max()) ||
+        qint64(*deadline) <= nowMs()) {
+        return false;
+    }
+    m_hashRoundId = roundId;
+    m_hashRoundSessionId = sessionId;
+    m_hashRoundServerSequence = *serverSequence;
+    m_hashRoundDeadlineMs = qint64(*deadline);
+    if (*serverSequence != m_bootstrapServerSequence) {
+        trustedResyncRequired(false, false,
+                              tr("Refreshing project for hash verification"));
+        emit resyncRequired(QJsonObject{
+            {QStringLiteral("reason"), QStringLiteral("hash_round_gap")},
+            {QStringLiteral("snapshotSeq"),
+             double(m_bootstrapServerSequence)},
+            {QStringLiteral("headSeq"), double(*serverSequence)},
+            {QStringLiteral("readOnly"), false},
+        });
+        return true;
+    }
+    requestOrSendRoundHash();
+    return true;
+}
+
+void CollaborationService::requestOrSendRoundHash() {
+    if (m_hashRoundId.isEmpty() ||
+        m_hashRoundSessionId != m_sessionId ||
+        m_hashRoundServerSequence != m_bootstrapServerSequence ||
+        m_hashRoundDeadlineMs <= nowMs()) {
+        return;
+    }
+    if (!m_bootstrapStateHash.isEmpty()) {
+        sendSnapshotHash();
+        return;
+    }
+    emit hashRoundRequested(m_hashRoundId, m_hashRoundSessionId,
+                            m_hashRoundServerSequence,
+                            m_hashRoundDeadlineMs);
+}
+
 bool CollaborationService::sendSnapshotHash() {
-    if (!isOnline() || m_bootstrapStateHash.isEmpty()) return false;
+    if (!m_transportConnected || m_bootstrapStateHash.isEmpty() ||
+        m_hashRoundId.isEmpty() ||
+        m_hashRoundSessionId != m_sessionId ||
+        m_hashRoundServerSequence != m_bootstrapServerSequence ||
+        m_hashRoundDeadlineMs <= nowMs()) return false;
     return sendEnvelope(
         WireType::SnapshotHash,
         QJsonObject{
+            {QStringLiteral("roundId"), m_hashRoundId},
             {QStringLiteral("serverSeq"),
              double(m_bootstrapServerSequence)},
             {QStringLiteral("sha256"), m_bootstrapStateHash},
@@ -758,6 +873,21 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
             1024, 8 * 1024 * 1024);
         const bool readOnly =
             envelope.payload.value(QStringLiteral("readOnly")).toBool(false);
+        const QString writeBlockedReason = envelope.payload
+            .value(QStringLiteral("writeBlockedReason"))
+            .toString();
+        const QJsonValue hashRound =
+            envelope.payload.value(QStringLiteral("hashRound"));
+        if (writeBlockedReason.isEmpty() ||
+            (!readOnly &&
+             (writeBlockedReason != QLatin1String("hash_consensus_required") ||
+              !hashRound.isObject()))) {
+            emit protocolWarning(
+                tr("Server omitted the collaboration v2 write gate"));
+            trustedResyncRequired(false, true,
+                                  tr("Incompatible collaboration server"));
+            return;
+        }
         m_sessionReadOnly = readOnly;
         if (*headSequence != m_bootstrapServerSequence) {
             m_resyncPending = true;
@@ -773,21 +903,47 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
             return;
         }
         m_resyncPending = false;
-        setState(readOnly ? CollaborationState::ReadOnly
-                          : CollaborationState::Synced,
-                 readOnly ? tr("Session is read-only") : tr("Session synced"));
-        // A non-host editor can finish its welcome just before the host opens
-        // the hash round. Re-reporting the same immutable pair is idempotent.
-        sendSnapshotHash();
-        const QString hashProject = m_projectId;
-        const quint64 hashSequence = m_bootstrapServerSequence;
-        for (const int delayMs : {750, 2000}) {
-            QTimer::singleShot(delayMs, this,
-                               [this, hashProject, hashSequence] {
-                if (m_projectId == hashProject &&
-                    m_bootstrapServerSequence == hashSequence)
-                    sendSnapshotHash();
-            });
+        if (readOnly) {
+            setState(CollaborationState::ReadOnly,
+                     tr("Session is read-only"));
+            return;
+        }
+        setState(CollaborationState::Joining,
+                 tr("Verifying shared project state"));
+        if (!acceptHashRound(hashRound.toObject())) {
+            emit protocolWarning(tr("Invalid collaboration hash round"));
+            trustedResyncRequired(false, true,
+                                  tr("Project hash verification failed"));
+        }
+        return;
+    }
+    if (envelope.type == WireType::HashRequested) {
+        if (m_sessionReadOnly) return;
+        setState(CollaborationState::Joining,
+                 tr("Verifying shared project state"));
+        if (!acceptHashRound(envelope.payload)) {
+            emit protocolWarning(tr("Invalid collaboration hash request"));
+            trustedResyncRequired(false, true,
+                                  tr("Project hash verification failed"));
+        }
+        return;
+    }
+    if (envelope.type == WireType::HashVerified) {
+        if (envelope.payload.size() != 2 ||
+            canonicalUuid(envelope.payload.value(QStringLiteral("roundId"))) !=
+                m_hashRoundId ||
+            exactSequence(
+                envelope.payload.value(QStringLiteral("serverSeq"))) !=
+                std::optional<quint64>(m_hashRoundServerSequence)) {
+            emit protocolWarning(tr("Invalid hash verification result"));
+            return;
+        }
+        m_hashRoundId.clear();
+        m_hashRoundSessionId.clear();
+        m_hashRoundServerSequence = 0;
+        m_hashRoundDeadlineMs = 0;
+        if (!m_sessionReadOnly && !m_resyncPending) {
+            setState(CollaborationState::Synced, tr("Session synced"));
         }
         return;
     }
@@ -807,7 +963,10 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
         emit roomIdentityChanged(
             m_sessionId, m_presenceStore.localParticipantId(),
             m_localSessionState.hostParticipantId());
-        sendSnapshotHash();
+        if (!m_sessionReadOnly) {
+            setState(CollaborationState::Joining,
+                     tr("Verifying host handoff"));
+        }
         return;
     }
     if (envelope.type == WireType::SnapshotRequested) {
@@ -839,6 +998,10 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
         m_sessionReadOnly = false;
         m_resyncPending = false;
         m_sessionId.clear();
+        m_hashRoundId.clear();
+        m_hashRoundSessionId.clear();
+        m_hashRoundServerSequence = 0;
+        m_hashRoundDeadlineMs = 0;
         m_presenceStore.clear();
         m_localSessionState.setHostParticipantId({});
         emit roomIdentityChanged({}, {}, {});

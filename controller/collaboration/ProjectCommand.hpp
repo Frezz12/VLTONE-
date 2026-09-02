@@ -12,10 +12,11 @@
 
 namespace daw::collab {
 
-inline constexpr std::uint32_t kProjectCommandSchemaVersion = 1;
+inline constexpr std::uint32_t kProjectCommandSchemaVersion = 2;
 inline constexpr std::size_t kMaxProjectCommandPreconditions = 1024;
 inline constexpr std::size_t kMaxProjectCommandTouchedFields = 8192;
 inline constexpr std::size_t kMaxProjectCommandBatchSize = 1024;
+inline constexpr std::size_t kMaxProjectCommandBatchBytes = 1024 * 1024;
 inline constexpr std::size_t kMaxPluginParameterIdBytes = 400;
 
 using ScalarValue = std::variant<std::string, double, std::int64_t, bool>;
@@ -24,6 +25,7 @@ enum class ProjectScalar : std::uint8_t {
     Name,
     Tempo,
     AiInstructions,
+    RenderSampleRate,
     MasterVolume,
     MasterPan,
 };
@@ -35,6 +37,7 @@ enum class TrackProperty : std::uint8_t {
     Pan,
     Muted,
     Mono,
+    Summing,
 };
 
 enum class ClipProperty : std::uint8_t {
@@ -54,6 +57,21 @@ enum class SendProperty : std::uint8_t {
     Level,
     PreFader,
     Enabled,
+};
+
+enum class ClipEdge : std::uint8_t {
+    In,
+    Out,
+};
+
+enum class TakeProperty : std::uint8_t {
+    Name,
+    OffsetSeconds,
+    LengthSeconds,
+    ClipOffsetSeconds,
+    Gain,
+    Muted,
+    Color,
 };
 
 /// A plugin can live in one of the document-owned processing chains. The
@@ -217,6 +235,7 @@ struct RestoreClip {
 /// destination may be its current track; empty afterId means first.
 struct MoveClip {
     std::string clipId;
+    std::string sourceTrackId;
     std::string trackId;
     std::string afterId;
 };
@@ -244,6 +263,39 @@ struct SetClipSampleEdit {
     ClipSampleEditModel sampleEdit;
 };
 
+struct SetClipFade {
+    std::string trackId;
+    std::string clipId;
+    double fadeInSeconds = 0.0;
+    double fadeOutSeconds = 0.0;
+};
+
+struct SetClipFadeCurve {
+    std::string trackId;
+    std::string clipId;
+    ClipEdge edge = ClipEdge::In;
+    double curve = 0.0;
+};
+
+struct SetClipFadeMode {
+    std::string trackId;
+    std::string clipId;
+    ClipEdge edge = ClipEdge::In;
+    ClipFadeMode mode = ClipFadeMode::Gain;
+};
+
+struct SetClipPatternOwner {
+    std::string trackId;
+    std::string clipId;
+    std::string patternClipId;
+};
+
+struct SetClipMusicalAnalysis {
+    std::string trackId;
+    std::string clipId;
+    ClipMusicalAnalysisModel analysis;
+};
+
 struct AddPluginInsert {
     PluginLocation location;
     InsertModel insert;
@@ -265,6 +317,15 @@ struct MovePluginInsert {
     PluginLocation location;
     std::string insertId;
     std::string afterId;
+};
+
+/// Replaces the plugin occupying a stable insert id. Every plugin mutation
+/// advances the insert's coarse generation field-head, so conditional undo of
+/// a replacement cannot overwrite a later parameter/state edit.
+struct ReplacePluginInsert {
+    PluginLocation location;
+    std::string insertId;
+    InsertModel replacement;
 };
 
 struct SetPluginProperty {
@@ -313,6 +374,13 @@ struct RemovePluginAssetBinding {
     PluginLocation location;
     std::string insertId;
     std::string key;
+};
+
+struct SetSamplerFxLevels {
+    std::string trackId;
+    std::string instrumentId;
+    double volume = 1.0;
+    double pan = 0.0;
 };
 
 struct UpsertMidiNote {
@@ -451,6 +519,22 @@ struct RestoreTake {
     std::string deleteOperationId;
 };
 
+struct MoveTake {
+    std::string trackId;
+    std::string clipId;
+    std::string takeId;
+    /// Empty means move first; otherwise move immediately after this take id.
+    std::string afterId;
+};
+
+struct SetTakeProperty {
+    std::string trackId;
+    std::string clipId;
+    std::string takeId;
+    TakeProperty property = TakeProperty::Name;
+    ScalarValue value = std::string();
+};
+
 struct UpsertCompSegment {
     std::string trackId;
     std::string clipId;
@@ -498,13 +582,18 @@ using CommandBody = std::variant<SetProjectScalar, SetTimeSignature,
                                  SetSendProperty,
                                  AddClip, DeleteClip, RestoreClip, MoveClip,
                                  SetClipProperty, SetClipAsset,
-                                 SetClipSampleEdit, AddPluginInsert,
+                                 SetClipSampleEdit, SetClipFade,
+                                 SetClipFadeCurve, SetClipFadeMode,
+                                 SetClipPatternOwner,
+                                 SetClipMusicalAnalysis, AddPluginInsert,
                                  DeletePluginInsert, RestorePluginInsert,
-                                 MovePluginInsert, SetPluginProperty,
+                                 MovePluginInsert, ReplacePluginInsert,
+                                 SetPluginProperty,
                                  SetPluginState, SetPluginParameter,
                                  RemovePluginParameter,
                                  SetPluginAssetBinding,
-                                 RemovePluginAssetBinding, UpsertMidiNote,
+                                 RemovePluginAssetBinding,
+                                 SetSamplerFxLevels, UpsertMidiNote,
                                  DeleteMidiNote, RestoreMidiNote,
                                  UpsertAutomationPoint,
                                  DeleteAutomationPoint,
@@ -515,7 +604,8 @@ using CommandBody = std::variant<SetProjectScalar, SetTimeSignature,
                                  SetControllerLaneDefault,
                                  SetAutomationTarget, SetAutomationDefault,
                                  SetAutomationActive, AddTake, DeleteTake,
-                                 RestoreTake, UpsertCompSegment,
+                                 RestoreTake, MoveTake, SetTakeProperty,
+                                 UpsertCompSegment,
                                  DeleteCompSegment, RestoreCompSegment,
                                  RecordingCommit,
                                  std::shared_ptr<BatchCommand>>;
@@ -539,6 +629,10 @@ std::string trackPropertyName(TrackProperty property);
 bool trackPropertyFromName(const std::string& name, TrackProperty& out);
 std::string clipPropertyName(ClipProperty property);
 bool clipPropertyFromName(const std::string& name, ClipProperty& out);
+std::string clipEdgeName(ClipEdge edge);
+bool clipEdgeFromName(const std::string& name, ClipEdge& out);
+std::string takePropertyName(TakeProperty property);
+bool takePropertyFromName(const std::string& name, TakeProperty& out);
 std::string sendPropertyName(SendProperty property);
 bool sendPropertyFromName(const std::string& name, SendProperty& out);
 std::string pluginChainName(PluginChain chain);
