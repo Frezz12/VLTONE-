@@ -11,4 +11,13 @@ else()
 endif()
 if(NOT (DAW_PACKAGE AND APPLE))
     install(TARGETS daw_reporter RUNTIME DESTINATION bin)
+else()
+    # Installed into Contents/MacOS beside the app (see app/CMakeLists.txt), so
+    # it needs the bundle's own search path for the Qt frameworks macdeployqt
+    # puts in Contents/Frameworks. macdeployqt rewrites the application binary
+    # but leaves the helper executables alone, and without this the courier
+    # dies at launch with "no LC_RPATH's found" -- taking crash diagnostics
+    # with it, silently, on every machine but the build one.
+    set_target_properties(daw_reporter PROPERTIES
+        INSTALL_RPATH "@executable_path/../Frameworks")
 endif()
