@@ -776,6 +776,7 @@ int main(int argc, char** argv) {
         startup->accept();
         startup.reset();
     }
+    if (!headless) window.completeInteractiveStartup();
 
     // No reporter in headless checks. Live sessions enqueue immediately and
     // let the separate process own retries and post-crash delivery.

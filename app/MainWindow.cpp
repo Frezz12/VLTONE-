@@ -995,11 +995,16 @@ MainWindow::MainWindow(bool openDevice, QWidget* parent,
     }
     m_persistGeometry = openDevice;
 
-    // Last: the prompt must not appear over a half-built window, and the
-    // journal's first write should describe the project the user actually has.
-    startRecovery(/*interactive=*/openDevice);
+    // Headless recovery tests use a disposable DAW_RECOVERY_ROOT and never
+    // show a prompt. Live recovery is deliberately started by main() only
+    // after this window is visible and the modal startup dialog is gone.
+    if (!openDevice) startRecovery(/*interactive=*/false);
 
     updateWindowTitle();
+}
+
+void MainWindow::completeInteractiveStartup() {
+    startRecovery(/*interactive=*/true);
 }
 
 #ifdef DAW_ENABLE_COLLABORATION

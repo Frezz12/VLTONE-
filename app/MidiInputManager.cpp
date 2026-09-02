@@ -12,9 +12,23 @@
 #include <algorithm>
 #include <cstdint>
 
+#if defined(Q_OS_MACOS)
+#include <CoreMIDI/CoreMIDI.h>
+
+#include <thread>
+#endif
+
 namespace {
 
 constexpr int kPortScanMs = 1000;
+
+#if defined(Q_OS_MACOS)
+// Scan ticks (one second each) between two attempts after CoreMIDI answered
+// with an error, and before an unanswered probe is reported as a wedged
+// MIDIServer.
+constexpr int kCoreMidiRetryTicks = 5;
+constexpr int kCoreMidiStallTicks = 8;
+#endif
 
 int messageBytes(std::uint8_t status) {
     switch (status & 0xF0) {
@@ -86,8 +100,89 @@ void MidiInputManager::closePorts() {
     m_ports.clear();
 }
 
+#if defined(Q_OS_MACOS)
+bool MidiInputManager::coreMidiReady() {
+    if (m_coreMidiReadyLatched) return true;
+
+    const int state = m_coreMidiProbe
+        ? m_coreMidiProbe->state.load(std::memory_order_acquire)
+        : int(CoreMidiProbe::Idle);
+    switch (state) {
+        case CoreMidiProbe::Ready:
+            // The XPC handshake is per process and done: RtMidi may now be
+            // entered from this thread without risking a stall.
+            m_coreMidiReadyLatched = true;
+            return true;
+        case CoreMidiProbe::Running:
+            // MIDIServer has not answered. Say so once and carry on; the probe
+            // keeps waiting, so a server that recovers later still brings MIDI
+            // up without a restart.
+            if (++m_coreMidiWaitTicks >= kCoreMidiStallTicks &&
+                !m_coreMidiStallReported) {
+                m_coreMidiStallReported = true;
+                qWarning("the system MIDI server is not answering; MIDI input "
+                         "stays off until it does. A faulty driver in "
+                         "/Library/Audio/MIDI Drivers can hang it for every "
+                         "application on the machine.");
+            }
+            return false;
+        case CoreMidiProbe::Failed: {
+            const int status = m_coreMidiProbe->status.load(
+                std::memory_order_relaxed);
+            if (!m_coreMidiFailureReported ||
+                status != m_coreMidiReportedStatus) {
+                m_coreMidiFailureReported = true;
+                m_coreMidiReportedStatus = status;
+                qWarning("CoreMIDI is not ready yet (status %d); MIDI scan "
+                         "deferred", status);
+            }
+            if (++m_coreMidiRetryTicks < kCoreMidiRetryTicks) return false;
+            m_coreMidiRetryTicks = 0;
+            break;
+        }
+        case CoreMidiProbe::Idle:
+        default:
+            break;
+    }
+
+    // A probe that never returns can never be joined, so every attempt gets
+    // its own state, held by a shared_ptr the thread keeps alive: this manager
+    // may be destroyed, and the process may exit, while a thread is still
+    // parked in the kernel waiting for MIDIServer.
+    m_coreMidiProbe = std::make_shared<CoreMidiProbe>();
+    m_coreMidiProbe->state.store(CoreMidiProbe::Running,
+                                 std::memory_order_release);
+    std::thread([probe = m_coreMidiProbe] {
+        MIDIClientRef client = 0;
+        const OSStatus status = MIDIClientCreate(
+            CFSTR("VLT Studio Pro MIDI readiness check"), nullptr, nullptr,
+            &client);
+        if (status == noErr && client != 0) {
+            MIDIClientDispose(client);
+            probe->state.store(CoreMidiProbe::Ready, std::memory_order_release);
+            return;
+        }
+        if (client != 0) MIDIClientDispose(client);
+        probe->status.store(int(status), std::memory_order_relaxed);
+        probe->state.store(CoreMidiProbe::Failed, std::memory_order_release);
+    }).detach();
+    return false;
+}
+#endif
+
 void MidiInputManager::refreshPorts() {
     refreshTarget();
+
+#if defined(Q_OS_MACOS)
+    // Every RtMidi entry point drags in CoreMIDI's one-time XPC handshake with
+    // the system MIDIServer, and a wedged server makes that handshake block
+    // forever -- on the GUI thread that is a frozen application, splash screen
+    // and all. It also cannot be caught: RtMidi 6.0.0 declares its CoreMIDI
+    // client helper throw() while throwing RtMidiError from it, so an error
+    // reaches std::terminate rather than the catch below. Wait for the probe
+    // thread instead; the one-second scan only polls its result.
+    if (!coreMidiReady()) return;
+#endif
 
     QStringList names;
     try {

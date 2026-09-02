@@ -5,6 +5,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -76,4 +77,27 @@ private:
     std::vector<Route> m_routes;
     std::string m_lastTarget;
     quint64 m_generation = 1;
+#if defined(Q_OS_MACOS)
+    /// The first CoreMIDI call a process makes is a synchronous XPC round trip
+    /// to the system MIDIServer, and it never returns while that server is
+    /// wedged -- one bad third-party driver in /Library/Audio/MIDI Drivers is
+    /// enough. Nothing on the GUI thread may wait on it, so the call lives on
+    /// a detached thread that publishes its result here.
+    struct CoreMidiProbe {
+        enum State { Idle, Running, Ready, Failed };
+        std::atomic<int> state{Idle};
+        std::atomic<int> status{0};
+    };
+    /// True once CoreMIDI has answered at least once, which is the only point
+    /// at which RtMidi may be entered from this thread. Never blocks.
+    bool coreMidiReady();
+
+    std::shared_ptr<CoreMidiProbe> m_coreMidiProbe;
+    bool m_coreMidiReadyLatched = false;
+    bool m_coreMidiFailureReported = false;
+    bool m_coreMidiStallReported = false;
+    int m_coreMidiReportedStatus = 0;
+    int m_coreMidiRetryTicks = 0;
+    int m_coreMidiWaitTicks = 0;
+#endif
 };

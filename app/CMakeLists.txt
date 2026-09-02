@@ -59,7 +59,7 @@ qt_add_resources(daw "vlt_startup_assets"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon-1024.png")
 if(APPLE)
     target_sources(daw PRIVATE PluginEditorWindowMac.mm)
-    target_link_libraries(daw PRIVATE "-framework AppKit")
+    target_link_libraries(daw PRIVATE "-framework AppKit" "-framework CoreMIDI")
 endif()
 daw_add_windows_metadata(daw "VLT Studio Pro.exe" "VLTStudioPro"
                          "VLT Studio Pro digital audio workstation")

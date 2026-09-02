@@ -85,6 +85,12 @@ public:
     }
     void applyStartupPluginScanResults();
 
+    /// Offer crash recovery only after the splash has been dismissed and this
+    /// window is visible. On macOS a modal prompt parented to a still-hidden
+    /// main window can sit behind the modal startup dialog and look like a
+    /// permanent "Loading system" hang.
+    void completeInteractiveStartup();
+
     /// Narrow collaboration seam.  The projection adapter is owned at app
     /// scope (beside CommandGateway) while the engine is owned by this window.
     /// No editing UI should use this hook for ordinary mutations.
@@ -643,9 +649,10 @@ private:
     /// How far the context plate may travel: the arrangement's left and right
     /// edges in the tool strip's coordinates.
     bool contextPanelBounds(int& left, int& right) const;
-    /// Start the crash-recovery journal, after offering back any work an
-    /// earlier session left behind. Skipped in headless runs unless
-    /// DAW_RECOVERY_ROOT points somewhere disposable.
+    /// Start the crash-recovery journal, optionally offering back work an
+    /// earlier session left behind. Interactive startup invokes this only once
+    /// the splash is gone; headless runs skip it unless DAW_RECOVERY_ROOT
+    /// points somewhere disposable.
     void startRecovery(bool interactive);
     /// Hand the journal the current document if anything changed since the last
     /// sample. Driven by a timer rather than by markDirty() directly: an edit
