@@ -52,6 +52,15 @@ func TestSessionCompatibilityBodyIsRequiredAndCamelCase(t *testing.T) {
 	}
 }
 
+func TestCollaborationJoinCloseReason(t *testing.T) {
+	if got := collaborationJoinCloseReason(collab.ErrVersionMismatch); got != "incompatible collaboration client" {
+		t.Fatalf("version mismatch close reason = %q", got)
+	}
+	if got := collaborationJoinCloseReason(collab.ErrForbidden); got != "session membership unavailable" {
+		t.Fatalf("generic join close reason = %q", got)
+	}
+}
+
 func TestCollaborationPresenceRejectsSensitiveDetailAndUnknownContent(t *testing.T) {
 	coarseWithCoordinates := json.RawMessage(`{
 		"surface":"settings","precision":"coarse","u":0.5,"v":0.5

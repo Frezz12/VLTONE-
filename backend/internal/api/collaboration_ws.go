@@ -373,7 +373,7 @@ func (s *Server) collaborationLive(w http.ResponseWriter, r *http.Request) {
 	cancelJoin()
 	if err != nil {
 		_ = connection.Close(websocket.StatusPolicyViolation,
-			"session membership unavailable")
+			collaborationJoinCloseReason(err))
 		return
 	}
 	joinedTransportOwned := false
@@ -490,6 +490,13 @@ func (s *Server) collaborationLive(w http.ResponseWriter, r *http.Request) {
 	})
 	joinedTransportOwned = true
 	roomConnection.run(joined.Session.HostMemberID)
+}
+
+func collaborationJoinCloseReason(err error) string {
+	if errors.Is(err, collab.ErrVersionMismatch) {
+		return "incompatible collaboration client"
+	}
+	return "session membership unavailable"
 }
 
 func (connection *collaborationRoomConnection) run(initialHost *uuid.UUID) {

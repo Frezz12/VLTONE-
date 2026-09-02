@@ -37,6 +37,13 @@ constexpr int kStableConnectionMs = 10'000;
 constexpr int kReconnectBaseMs = 500;
 constexpr int kReconnectCapMs = 30'000;
 
+#ifdef DAW_ENABLE_COLLABORATION
+bool isPermanentCloseCode(QWebSocketProtocol::CloseCode code) {
+    return code == QWebSocketProtocol::CloseCodeProtocolError ||
+           code == QWebSocketProtocol::CloseCodePolicyViolated;
+}
+#endif
+
 QString canonicalProjectId(const QString& value) {
     static const QRegularExpression uuidPattern(
         QStringLiteral("^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
@@ -314,6 +321,15 @@ void CollaborationTransport::startConnection() {
             });
     connect(socket, &QWebSocket::disconnected, this,
             [this, socket, generation] {
+                if (isCurrent(socket, generation) &&
+                    isPermanentCloseCode(socket->closeCode())) {
+                    const QString reason = socket->closeReason().trimmed();
+                    permanentFailure(
+                        reason.isEmpty()
+                            ? QStringLiteral("Collaboration connection was rejected")
+                            : reason);
+                    return;
+                }
                 socketFailed(socket, generation,
                              QStringLiteral("Session connection closed"));
             });
@@ -561,6 +577,15 @@ bool checkCollaborationTransportForTest(QString* error) {
     if (options.subprotocols() !=
         QStringList{QString::fromLatin1(kSubprotocol)}) {
         return fail(QStringLiteral("collaboration subprotocol was not requested"));
+    }
+    if (!isPermanentCloseCode(
+            QWebSocketProtocol::CloseCodePolicyViolated) ||
+        !isPermanentCloseCode(
+            QWebSocketProtocol::CloseCodeProtocolError) ||
+        isPermanentCloseCode(QWebSocketProtocol::CloseCodeGoingAway) ||
+        isPermanentCloseCode(QWebSocketProtocol::CloseCodeBadOperation)) {
+        return fail(QStringLiteral(
+            "permanent WebSocket rejection was not classified safely"));
     }
 #endif
     return true;
