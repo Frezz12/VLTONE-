@@ -1776,8 +1776,10 @@ QWidget* ChannelStrip::buildButtons() {
     }
     connect(m_mute, &QAbstractButton::toggled, this, [this](bool on) {
         if (m_master) return;
-        m_controller->setTrackMuted(m_trackId.toStdString(), on);
-        emit edited();
+        const auto result =
+            m_controller->setTrackMuted(m_trackId.toStdString(), on);
+        syncFromModel();
+        emit edited(daw::collab::marksLocalFileDirty(result));
     });
     m_solo = new ui::MsrButton("S", Theme::solo(), tr("Solo"), box);
     connect(m_solo, &QAbstractButton::toggled, this, [this](bool on) {

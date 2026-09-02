@@ -1,0 +1,601 @@
+asyncapi: 2.6.0
+id: urn:vltstudio:collaboration:v1
+info:
+  title: VLTONE Collaboration Protocol
+  version: 1.0.0
+  description: |
+    Versioned WebSocket protocol for durable project operations and ephemeral
+    presence, transport, and lease traffic. Durable project state is always
+    recovered with the REST bootstrap endpoint; this stream is never the sole
+    copy of an operation.
+defaultContentType: application/json
+
+servers:
+  production:
+    url: api.vltstudio.example
+    protocol: wss
+    security:
+      - desktopBearer: []
+    description: |
+      The access token is sent in the Authorization header. Tokens in the URL
+      or query string are forbidden.
+
+channels:
+  /v1/desktop/projects/{projectId}/live:
+    parameters:
+      projectId:
+        description: Cloud project UUID.
+        schema:
+          type: string
+          format: uuid
+    publish:
+      operationId: receiveClientMessage
+      summary: Messages submitted by one authenticated desktop client.
+      message:
+        oneOf:
+          - $ref: '#/components/messages/Hello'
+          - $ref: '#/components/messages/OpSubmit'
+          - $ref: '#/components/messages/PresenceCursor'
+          - $ref: '#/components/messages/PresenceClick'
+          - $ref: '#/components/messages/PresenceSelection'
+          - $ref: '#/components/messages/PresenceDrag'
+          - $ref: '#/components/messages/TransportState'
+          - $ref: '#/components/messages/TransportFollow'
+          - $ref: '#/components/messages/LeaseAcquire'
+          - $ref: '#/components/messages/LeaseRenew'
+          - $ref: '#/components/messages/LeaseRelease'
+          - $ref: '#/components/messages/SessionHandoff'
+          - $ref: '#/components/messages/SnapshotHash'
+    subscribe:
+      operationId: receiveServerMessage
+      summary: Authoritative and ephemeral room messages sent by the server.
+      message:
+        oneOf:
+          - $ref: '#/components/messages/Welcome'
+          - $ref: '#/components/messages/OpCommitted'
+          - $ref: '#/components/messages/OpRejected'
+          - $ref: '#/components/messages/PresenceJoined'
+          - $ref: '#/components/messages/PresenceLeft'
+          - $ref: '#/components/messages/PresenceCursor'
+          - $ref: '#/components/messages/PresenceClick'
+          - $ref: '#/components/messages/PresenceSelection'
+          - $ref: '#/components/messages/PresenceDrag'
+          - $ref: '#/components/messages/TransportState'
+          - $ref: '#/components/messages/TransportFollow'
+          - $ref: '#/components/messages/LeaseGranted'
+          - $ref: '#/components/messages/LeaseDenied'
+          - $ref: '#/components/messages/SessionHostChanged'
+          - $ref: '#/components/messages/SessionEnding'
+          - $ref: '#/components/messages/SnapshotRequested'
+          - $ref: '#/components/messages/SessionEnded'
+          - $ref: '#/components/messages/ResyncRequired'
+
+components:
+  securitySchemes:
+    desktopBearer:
+      type: httpApiKey
+      name: Authorization
+      in: header
+
+  messages:
+    Hello:
+      name: hello
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            properties:
+              type: { const: hello }
+              payload: { $ref: '#/components/schemas/HelloPayload' }
+            required: [type, payload]
+    Welcome:
+      name: welcome
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: welcome }
+              payload: { $ref: '#/components/schemas/WelcomePayload' }
+            required: [type, payload]
+    OpSubmit:
+      name: op.submit
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            properties:
+              type: { const: op.submit }
+              payload:
+                type: object
+                properties:
+                  command:
+                    $ref: '../protocol/schema/project-command-v1.schema.json'
+                required: [command]
+                additionalProperties: false
+            required: [type, payload]
+    OpCommitted:
+      name: op.committed
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: op.committed }
+              payload: { $ref: '#/components/schemas/CommittedOperation' }
+            required: [type, payload]
+    OpRejected:
+      name: op.rejected
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: op.rejected }
+              payload: { $ref: '#/components/schemas/Rejection' }
+            required: [type, payload]
+    PresenceJoined:
+      name: presence.join
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: presence.join }
+              payload: { $ref: '#/components/schemas/Participant' }
+            required: [type, payload]
+    PresenceLeft:
+      name: presence.leave
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: presence.leave }
+              payload:
+                type: object
+                properties:
+                  participantId: { type: string, format: uuid }
+                  reason: { type: string, maxLength: 64 }
+                required: [participantId]
+                additionalProperties: false
+            required: [type, payload]
+    PresenceCursor:
+      name: presence.cursor
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/EphemeralEnvelope'
+          - type: object
+            properties:
+              type: { const: presence.cursor }
+              payload: { $ref: '#/components/schemas/SafePresence' }
+            required: [type, payload]
+    PresenceClick:
+      name: presence.click
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/EphemeralEnvelope'
+          - type: object
+            properties:
+              type: { const: presence.click }
+              payload:
+                allOf:
+                  - $ref: '#/components/schemas/SafePresence'
+                  - type: object
+                    properties:
+                      phase: { enum: [press, release] }
+                      button: { enum: [primary, secondary, middle] }
+                    required: [phase, button]
+            required: [type, payload]
+    PresenceSelection:
+      name: presence.selection
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/EphemeralEnvelope'
+          - type: object
+            properties:
+              type: { const: presence.selection }
+              payload:
+                allOf:
+                  - $ref: '#/components/schemas/SafePresence'
+                  - type: object
+                    properties:
+                      entityIds:
+                        type: array
+                        maxItems: 256
+                        uniqueItems: true
+                        items: { type: string, maxLength: 64 }
+            required: [type, payload]
+    PresenceDrag:
+      name: presence.drag
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/EphemeralEnvelope'
+          - type: object
+            properties:
+              type: { const: presence.drag }
+              payload:
+                allOf:
+                  - $ref: '#/components/schemas/SafePresence'
+                  - type: object
+                    properties:
+                      gesture: { type: string, pattern: '^[a-z][a-z0-9_.-]{0,47}$' }
+                      entityIds:
+                        type: array
+                        maxItems: 64
+                        uniqueItems: true
+                        items: { type: string, maxLength: 64 }
+                    required: [gesture]
+            required: [type, payload]
+    TransportState:
+      name: transport.state
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/EphemeralEnvelope'
+          - type: object
+            properties:
+              type: { const: transport.state }
+              payload: { $ref: '#/components/schemas/TransportState' }
+            required: [type, payload]
+    TransportFollow:
+      name: transport.follow
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/EphemeralEnvelope'
+          - type: object
+            properties:
+              type: { const: transport.follow }
+              payload:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+                  targetParticipantId:
+                    oneOf:
+                      - { type: string, format: uuid }
+                      - { type: 'null' }
+                required: [enabled]
+                additionalProperties: false
+            required: [type, payload]
+    LeaseAcquire:
+      name: lease.acquire
+      payload:
+        $ref: '#/components/schemas/LeaseRequestMessage'
+    LeaseRenew:
+      name: lease.renew
+      payload:
+        $ref: '#/components/schemas/LeaseRequestMessage'
+    LeaseRelease:
+      name: lease.release
+      payload:
+        $ref: '#/components/schemas/LeaseRequestMessage'
+    LeaseGranted:
+      name: lease.granted
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: lease.granted }
+              payload: { $ref: '#/components/schemas/Lease' }
+            required: [type, payload]
+    LeaseDenied:
+      name: lease.denied
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: lease.denied }
+              payload:
+                allOf:
+                  - $ref: '#/components/schemas/Rejection'
+                  - type: object
+                    properties:
+                      currentLease:
+                        oneOf:
+                          - $ref: '#/components/schemas/Lease'
+                          - { type: 'null' }
+            required: [type, payload]
+    SessionHandoff:
+      name: session.handoff
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            properties:
+              type: { const: session.handoff }
+              payload:
+                type: object
+                properties:
+                  participantId: { type: string, format: uuid }
+                required: [participantId]
+                additionalProperties: false
+            required: [type, payload]
+    SessionHostChanged:
+      name: session.host_changed
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: session.host_changed }
+              payload:
+                type: object
+                properties:
+                  hostParticipantId:
+                    oneOf:
+                      - { type: string, format: uuid }
+                      - { type: 'null' }
+                  reason: { enum: [manual, disconnected, removed, heartbeat_timeout] }
+                required: [hostParticipantId, reason]
+                additionalProperties: false
+            required: [type, payload]
+    SessionEnding:
+      name: session.ending
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: session.ending }
+              payload: { $ref: '#/components/schemas/SessionBoundary' }
+            required: [type, payload]
+    SnapshotRequested:
+      name: snapshot.requested
+      description: |
+        Durable server-control message delivered only to the currently assigned
+        host. The host must upload a canonical snapshot for exactly
+        targetServerSeq; a different sequence is rejected.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: snapshot.requested }
+              payload:
+                type: object
+                properties:
+                  requestId: { type: string, format: uuid }
+                  sessionId: { type: string, format: uuid }
+                  hostParticipantId: { type: string, format: uuid }
+                  targetServerSeq: { type: integer, minimum: 0 }
+                  reason: { enum: [autosave, session_end] }
+                  attempt: { type: integer, minimum: 1 }
+                  retryAtMs: { type: integer, minimum: 0 }
+                required: [requestId, sessionId, hostParticipantId, targetServerSeq, reason, attempt, retryAtMs]
+                additionalProperties: false
+            required: [type, payload]
+    SessionEnded:
+      name: session.ended
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: session.ended }
+              payload: { $ref: '#/components/schemas/SessionBoundary' }
+            required: [type, payload]
+    SnapshotHash:
+      name: snapshot.hash
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            properties:
+              type: { const: snapshot.hash }
+              payload:
+                type: object
+                properties:
+                  serverSeq: { type: integer, minimum: 0 }
+                  sha256: { $ref: '#/components/schemas/Sha256' }
+                required: [serverSeq, sha256]
+                additionalProperties: false
+            required: [type, payload]
+    ResyncRequired:
+      name: resync.required
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: resync.required }
+              payload:
+                type: object
+                properties:
+                  reason: { enum: [sequence_gap, hash_mismatch, protocol_upgrade, conflict] }
+                  snapshotSeq: { type: integer, minimum: 0 }
+                  headSeq: { type: integer, minimum: 0 }
+                  readOnly: { type: boolean }
+                required: [reason, snapshotSeq, headSeq, readOnly]
+                additionalProperties: false
+            required: [type, payload]
+
+  schemas:
+    ClientEnvelope:
+      type: object
+      properties:
+        protocol: { const: vlt-collab-v1 }
+        type: { type: string, maxLength: 64 }
+        messageId: { type: string, format: uuid }
+        sentAtMs: { type: integer, minimum: 0 }
+      required: [protocol, type, messageId, sentAtMs]
+    ServerEnvelope:
+      type: object
+      properties:
+        protocol: { const: vlt-collab-v1 }
+        type: { type: string, maxLength: 64 }
+        messageId: { type: string, format: uuid }
+        serverTimeMs: { type: integer, minimum: 0 }
+      required: [protocol, type, messageId, serverTimeMs]
+    EphemeralEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ClientEnvelope'
+        - type: object
+          properties:
+            participantId:
+              description: Ignored on client-to-server traffic and overwritten by the server.
+              type: string
+              format: uuid
+            ephemeralSeq: { type: integer, minimum: 0 }
+          required: [ephemeralSeq]
+    HelloPayload:
+      type: object
+      properties:
+        appVersion: { type: string, maxLength: 64 }
+        engineVersion: { type: string, maxLength: 64 }
+        commandSchemaVersion: { const: 1 }
+        projectFormatVersion: { const: 6 }
+        afterServerSeq: { type: integer, minimum: 0 }
+        stateHash:
+          oneOf:
+            - $ref: '#/components/schemas/Sha256'
+            - { type: 'null' }
+      required: [appVersion, engineVersion, commandSchemaVersion, projectFormatVersion, afterServerSeq]
+      additionalProperties: false
+    WelcomePayload:
+      type: object
+      properties:
+        projectId: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        participant: { $ref: '#/components/schemas/Participant' }
+        hostParticipantId:
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
+        headSeq: { type: integer, minimum: 0 }
+        readOnly: { type: boolean }
+        participants:
+          type: array
+          maxItems: 8
+          items: { $ref: '#/components/schemas/Participant' }
+        limits:
+          type: object
+          properties:
+            maxParticipants: { type: integer, minimum: 1, maximum: 8 }
+            cursorHz: { type: integer, minimum: 1, maximum: 30 }
+            transportHz: { type: integer, minimum: 1, maximum: 15 }
+            maxMessageBytes: { type: integer, minimum: 1024 }
+            roomQueueBytes: { type: integer, minimum: 2097152, maximum: 67108864 }
+          required: [maxParticipants, cursorHz, transportHz, maxMessageBytes, roomQueueBytes]
+          additionalProperties: false
+      required: [projectId, sessionId, participant, headSeq, readOnly, participants, limits]
+      additionalProperties: false
+    Participant:
+      type: object
+      properties:
+        participantId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        nickname: { type: string, minLength: 1, maxLength: 80 }
+        role: { enum: [owner, editor, viewer] }
+        color: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
+        host: { type: boolean }
+        joinedAtMs: { type: integer, minimum: 0 }
+      required: [participantId, userId, nickname, role, color, host, joinedAtMs]
+      additionalProperties: false
+    CommittedOperation:
+      type: object
+      properties:
+        projectId: { type: string, format: uuid }
+        serverSeq: { type: integer, minimum: 1 }
+        actorUserId: { type: string, format: uuid }
+        actorDeviceId: { type: string, format: uuid }
+        committedAtMs: { type: integer, minimum: 0 }
+        command:
+          $ref: '../protocol/schema/project-command-v1.schema.json'
+      required: [projectId, serverSeq, actorUserId, actorDeviceId, committedAtMs, command]
+      additionalProperties: false
+    Rejection:
+      type: object
+      properties:
+        requestMessageId: { type: string, format: uuid }
+        opId: { type: string, format: uuid }
+        code:
+          enum:
+            - invalid_message
+            - forbidden
+            - read_only
+            - session_inactive
+            - version_mismatch
+            - stale_precondition
+            - entity_deleted
+            - asset_incomplete
+            - lease_required
+            - lease_conflict
+            - sequence_gap
+            - operation_id_reused
+            - conflict
+            - rate_limited
+        message: { type: string, maxLength: 240 }
+        retryable: { type: boolean }
+        headSeq: { type: integer, minimum: 0 }
+      required: [requestMessageId, code, message, retryable]
+      additionalProperties: false
+    SafePresence:
+      type: object
+      description: |
+        Privacy-safe semantic position. It deliberately has no fields capable
+        of carrying widget text, URLs, tooltips, filenames, absolute paths,
+        clipboard data, credentials, or native-plugin contents.
+      properties:
+        surface:
+          enum: [timeline, track_list, transport, mixer, piano_roll, automation_editor, sample_editor, builtin_plugin, toolbar, settings, ai, browser, file_browser, hidden]
+        precision: { enum: [exact, coarse, hidden] }
+        targetId:
+          type: string
+          pattern: '^[A-Za-z0-9_.:-]{1,96}$'
+        trackId: { type: string, format: uuid }
+        clipId: { type: string, format: uuid }
+        lane: { type: string, pattern: '^[A-Za-z0-9_.:-]{1,64}$' }
+        controlId: { type: string, pattern: '^[A-Za-z0-9_.:-]{1,96}$' }
+        timeSeconds: { type: number, minimum: 0 }
+        beat: { type: number }
+        pitch: { type: integer, minimum: 0, maximum: 127 }
+        laneFraction: { type: number, minimum: 0, maximum: 1 }
+        u: { type: number, minimum: 0, maximum: 1 }
+        v: { type: number, minimum: 0, maximum: 1 }
+      required: [surface, precision]
+      additionalProperties: false
+    TransportState:
+      type: object
+      properties:
+        playing: { type: boolean }
+        positionSeconds: { type: number, minimum: 0 }
+        monotonicAnchorMs: { type: integer, minimum: 0 }
+        rate: { type: number, minimum: 0.25, maximum: 4 }
+      required: [playing, positionSeconds, monotonicAnchorMs, rate]
+      additionalProperties: false
+    LeaseRequestMessage:
+      allOf:
+        - $ref: '#/components/schemas/ClientEnvelope'
+        - type: object
+          properties:
+            type: { enum: [lease.acquire, lease.renew, lease.release] }
+            payload:
+              type: object
+              properties:
+                trackId: { type: string, format: uuid }
+                leaseId: { type: string, format: uuid }
+              required: [trackId]
+              additionalProperties: false
+          required: [type, payload]
+    Lease:
+      type: object
+      properties:
+        leaseId: { type: string, format: uuid }
+        trackId: { type: string, format: uuid }
+        holderParticipantId: { type: string, format: uuid }
+        expiresAtMs: { type: integer, minimum: 0 }
+      required: [leaseId, trackId, holderParticipantId, expiresAtMs]
+      additionalProperties: false
+    SessionBoundary:
+      type: object
+      properties:
+        sessionId: { type: string, format: uuid }
+        finalServerSeq: { type: integer, minimum: 0 }
+        snapshotRequired: { type: boolean }
+        graceDeadlineMs: { type: integer, minimum: 0 }
+      required: [sessionId, finalServerSeq, snapshotRequired]
+      additionalProperties: false
+    Sha256:
+      type: string
+      pattern: '^[0-9a-f]{64}$'

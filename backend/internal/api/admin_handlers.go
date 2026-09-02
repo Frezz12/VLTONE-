@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,10 +13,13 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"vltstudio/backend/internal/auth"
 	"vltstudio/backend/internal/model"
 )
+
+var errUserOwnsCloudProjects = errors.New("user owns cloud projects")
 
 func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	var input loginRequest
@@ -220,6 +224,16 @@ func (s *Server) adminSetUserStatus(w http.ResponseWriter, r *http.Request, stat
 	}
 	now := time.Now().UTC()
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		var user model.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&user, "id = ?", id).Error; err != nil {
+			return err
+		}
+		if status == model.UserSuspended {
+			if err := s.Collab.EvictUserSessionsTx(tx, id, now); err != nil {
+				return err
+			}
+		}
 		if result := tx.Model(&model.User{}).Where("id = ?", id).Update("status", status); result.Error != nil || result.RowsAffected == 0 {
 			if result.Error != nil {
 				return result.Error
@@ -227,14 +241,25 @@ func (s *Server) adminSetUserStatus(w http.ResponseWriter, r *http.Request, stat
 			return gorm.ErrRecordNotFound
 		}
 		if status == model.UserSuspended {
-			tx.Model(&model.WebSession{}).Where("user_id = ? AND revoked_at IS NULL", id).Update("revoked_at", now)
-			tx.Model(&model.DesktopSession{}).Where("user_id = ? AND revoked_at IS NULL", id).Update("revoked_at", now)
+			if err := tx.Model(&model.WebSession{}).
+				Where("user_id = ? AND revoked_at IS NULL", id).
+				Update("revoked_at", now).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&model.DesktopSession{}).
+				Where("user_id = ? AND revoked_at IS NULL", id).
+				Update("revoked_at", now).Error; err != nil {
+				return err
+			}
 		}
 		return s.audit(tx, r, "user."+status, "user", id, map[string]any{})
 	})
 	if err != nil {
 		writeError(w, r, http.StatusNotFound, "user_update_failed", "User could not be updated.", nil)
 		return
+	}
+	if status == model.UserSuspended {
+		s.disconnectCollaborationUser(id, "account_suspended")
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -297,17 +322,31 @@ func (s *Server) adminRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		var device model.Device
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND user_id = ? AND revoked_at IS NULL", deviceID,
+				userID).First(&device).Error; err != nil {
+			return err
+		}
+		if err := s.Collab.EvictDeviceSessionsTx(tx, deviceID, now); err != nil {
+			return err
+		}
 		result := tx.Model(&model.Device{}).Where("id = ? AND user_id = ? AND revoked_at IS NULL", deviceID, userID).Update("revoked_at", now)
 		if result.Error != nil || result.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
 		}
-		tx.Model(&model.DesktopSession{}).Where("device_id = ? AND revoked_at IS NULL", deviceID).Update("revoked_at", now)
+		if err := tx.Model(&model.DesktopSession{}).
+			Where("device_id = ? AND revoked_at IS NULL", deviceID).
+			Update("revoked_at", now).Error; err != nil {
+			return err
+		}
 		return s.audit(tx, r, "device.revoke", "user", userID, map[string]any{"device_hash": targetHash(deviceID)})
 	})
 	if err != nil {
 		writeError(w, r, http.StatusNotFound, "device_not_found", "Device was not found.", nil)
 		return
 	}
+	s.disconnectCollaborationDevice(deviceID, "device_revoked")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -318,14 +357,34 @@ func (s *Server) adminRevokeSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
-		tx.Model(&model.WebSession{}).Where("user_id = ? AND revoked_at IS NULL", id).Update("revoked_at", now)
-		tx.Model(&model.DesktopSession{}).Where("user_id = ? AND revoked_at IS NULL", id).Update("revoked_at", now)
+		// Serialize account-wide revocation with desktop session creation and
+		// offline-entitlement signing. Otherwise an uncommitted new session can be
+		// invisible to the bulk UPDATE and survive a successful revoke-all request.
+		var user model.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&user, "id = ?", id).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.WebSession{}).
+			Where("user_id = ? AND revoked_at IS NULL", id).
+			Update("revoked_at", now).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.DesktopSession{}).
+			Where("user_id = ? AND revoked_at IS NULL", id).
+			Update("revoked_at", now).Error; err != nil {
+			return err
+		}
+		if err := s.Collab.EvictUserSessionsTx(tx, id, now); err != nil {
+			return err
+		}
 		return s.audit(tx, r, "sessions.revoke", "user", id, map[string]any{})
 	})
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "session_revoke_failed", "Sessions could not be revoked.", nil)
 		return
 	}
+	s.disconnectCollaborationUser(id, "sessions_revoked")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -370,6 +429,21 @@ func (s *Server) adminDeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	bugPaths, crashPaths := s.diagnosticPaths(id)
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		var user model.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&user, "id = ?", id).Error; err != nil {
+			return err
+		}
+		var ownedProjects int64
+		if err := tx.Model(&model.CloudProject{}).Where("owner_user_id = ?", id).Count(&ownedProjects).Error; err != nil {
+			return err
+		}
+		if ownedProjects != 0 {
+			return errUserOwnsCloudProjects
+		}
+		if err := s.Collab.EvictUserSessionsTx(tx, id, time.Now().UTC()); err != nil {
+			return err
+		}
 		if err := s.audit(tx, r, "user.delete", "user", id, map[string]any{"scope": "full"}); err != nil {
 			return err
 		}
@@ -383,9 +457,19 @@ func (s *Server) adminDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		writeError(w, r, http.StatusNotFound, "user_delete_failed", "User could not be deleted.", nil)
+		if errors.Is(err, errUserOwnsCloudProjects) {
+			writeError(w, r, http.StatusConflict, "cloud_project_ownership_required",
+				"Transfer ownership of all cloud projects before deleting this account.", nil)
+			return
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeError(w, r, http.StatusNotFound, "user_delete_failed", "User could not be deleted.", nil)
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, "user_delete_failed", "User could not be deleted.", nil)
 		return
 	}
+	s.disconnectCollaborationUser(id, "account_deleted")
 	removeStoredPaths(append(bugPaths, crashPaths...))
 	w.WriteHeader(http.StatusNoContent)
 }

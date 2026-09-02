@@ -311,6 +311,7 @@ const PluginDescriptor& GravityInstance::staticDescriptor() noexcept {
         d.name = "Gravity";
         d.vendor = "VLT Studio Pro";
         d.version = "2.0";
+        d.stateSchemaVersion = kStateVersion;
         d.category = "Effect";
         d.isInstrument = false;
         d.hasEditor = false;

@@ -58,7 +58,7 @@ public:
 
 signals:
     void selectRequested(const QString& trackId);
-    void edited();
+    void edited(bool localFileDirty = true);
     /// A send was added/removed — the owner should rebuild this strip.
     void structureChanged();
     /// A loaded insert was clicked: open its editor. The strip does not own

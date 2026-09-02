@@ -42,7 +42,7 @@ public:
     void toggleCollapsed() { setCollapsed(!m_collapsed); }
 
 signals:
-    void edited();
+    void edited(bool localFileDirty = true);
     /// The embedded channel's slots changed and peer views need one structural
     /// refresh. Value changes are handled by the cheaper `syncFromModel()`.
     void structureChanged();

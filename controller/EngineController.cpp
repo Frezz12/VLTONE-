@@ -1,6 +1,7 @@
 #include "EngineController.hpp"
 #include "ChannelStripPreset.hpp"
 #include "ProjectSerializer.hpp"
+#include "collaboration/CollaborationState.hpp"
 #include "plugins/PluginConvert.hpp"
 
 #include "Internal/SampleDecoder.hpp"
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -21,6 +23,7 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -728,7 +731,8 @@ EngineController::PlacementSpan EngineController::emitClipPlacements(
     // material there to extend into. That is what bounds the fade below, along
     // with the segment lengths themselves (a 5 ms fade across a 3 ms sliver
     // would run past both ends).
-    const double crossfade = std::max(0.0, m_recording.compCrossfadeMs) / 1000.0;
+    const double crossfade =
+        std::clamp(clip.compCrossfadeMs, 0.0, 20.0) / 1000.0;
 
     // Auditioning one take replaces the comp for as long as it lasts, so the
     // headphone button works while the transport is already rolling.
@@ -738,7 +742,13 @@ EngineController::PlacementSpan EngineController::emitClipPlacements(
             const double end = solo->lengthSeconds > 0.0
                 ? solo->clipOffsetSeconds + solo->lengthSeconds
                 : effectiveClipLength(clip);
-            audition.push_back({m_soloTakeId, solo->clipOffsetSeconds, end});
+            CompSegment segment;
+            segment.takeId = m_soloTakeId;
+            segment.startSeconds = solo->clipOffsetSeconds;
+            segment.endSeconds = end;
+            // This segment exists only while auditioning and is never part of
+            // the shared document, so it deliberately has no durable id.
+            audition.push_back(std::move(segment));
         }
     }
     const std::vector<CompSegment>& segments = audition.empty() ? clip.comp : audition;
@@ -1547,7 +1557,21 @@ void EngineController::clearAllSolos() {
     if (changed) syncAllTrackGains();
 }
 
-void EngineController::clearAllMutes() {
+collab::SharedMutationResult EngineController::clearAllMutes() {
+    if (m_sharedMutationSink) {
+        std::vector<std::string> mutedTrackIds;
+        mutedTrackIds.reserve(m_project.tracks.size());
+        for (const TrackModel& track : m_project.tracks) {
+            if (track.muted) mutedTrackIds.push_back(track.id);
+        }
+        if (mutedTrackIds.empty())
+            return collab::SharedMutationResult::LocalFallback;
+        const auto result =
+            m_sharedMutationSink->clearAllMutes(mutedTrackIds);
+        if (result != collab::SharedMutationResult::LocalFallback)
+            return result;
+    }
+
     bool changed = false;
     for (TrackModel& t : m_project.tracks) {
         if (!t.muted) continue;
@@ -1555,6 +1579,7 @@ void EngineController::clearAllMutes() {
         changed = true;
     }
     if (changed) syncAllTrackGains();
+    return collab::SharedMutationResult::LocalFallback;
 }
 
 // ── Plugin inserts ─────────────────────────────────────────────────────────
@@ -2388,6 +2413,271 @@ audio::Result EngineController::saveProject(const std::string& packageDir) {
     return projectResult;
 }
 
+cloud::CloudPublicationCapture EngineController::captureCloudPublicationV1(
+    const std::string& stagingParent) {
+    // This entry point is deliberately synchronous and control-thread-only.
+    // It is called from Publish Project before any worker hashes or uploads a
+    // byte; RenderGate makes opaque state reads disjoint from process().
+    cloud::CloudPublicationCapture capture(m_project);
+    capture.blockers = cloud::inspectCaptureCompatibilityV1(m_project);
+    if (!capture.blockers.empty()) return capture;
+
+    capture.document.sampleRate = m_sampleRate;
+    collab::ensureStableCollaborationIds(capture.document);
+
+    struct CapturedPluginState {
+        InsertModel* model = nullptr;
+        std::string channelId;
+        std::string location;
+        std::vector<std::uint8_t> left;
+        std::vector<std::uint8_t> right;
+        std::string samplerPath;
+    };
+    std::vector<CapturedPluginState> pluginStates;
+
+    const auto issueForSlot = [&](cloud::PublicationCaptureIssueKind kind,
+                                  const InsertModel& slot,
+                                  const std::string& location,
+                                  std::string detail) {
+        capture.addIssue({kind, location, slot.id, slot.uid, slot.name,
+                          std::move(detail)});
+    };
+
+    auto captureSlot = [&](const std::string& channelId, InsertModel& slot,
+                           std::string location) {
+        if (!slot.isLoaded()) return;
+        InsertSlot* live = liveInsertSlot(channelId, slot.id);
+        plugins::PluginInstance* left =
+            live && live->node ? live->node->instance() : nullptr;
+        if (!left) {
+            issueForSlot(
+                cloud::PublicationCaptureIssueKind::MissingLivePlugin, slot,
+                location,
+                "the built-in slot has no live instance to capture");
+            return;
+        }
+
+        const plugins::PluginDescriptor& descriptor = left->descriptor();
+        if (descriptor.format != plugins::Format::Internal ||
+            descriptor.uid != slot.uid || descriptor.version.empty() ||
+            descriptor.stateSchemaVersion <= 0) {
+            issueForSlot(
+                cloud::PublicationCaptureIssueKind::UnknownInternalPlugin,
+                slot, location,
+                "the live built-in does not expose exact v1 version/state-schema metadata");
+            return;
+        }
+        slot.pluginVersion = descriptor.version;
+        slot.stateSchemaVersion = descriptor.stateSchemaVersion;
+        snapshotParameters(*left, slot.parameters);
+
+        CapturedPluginState state;
+        state.model = &slot;
+        state.channelId = channelId;
+        state.location = std::move(location);
+        bool leftSaved = false;
+        if (auto* sampler =
+                dynamic_cast<plugins::sampler::SamplerInstance*>(left)) {
+            // Empty is intentional: the `sample` AssetRef binding is the only
+            // durable source identity. An opaque state blob must never smuggle
+            // a private local path into the cloud snapshot.
+            state.samplerPath = sampler->samplePath();
+            leftSaved = sampler->saveProjectState(state.left, {});
+        } else {
+            leftSaved = left->saveState(state.left);
+        }
+        if (!leftSaved || state.left.empty()) {
+            issueForSlot(
+                cloud::PublicationCaptureIssueKind::PluginStateCaptureFailed,
+                slot, state.location,
+                "the built-in plugin could not serialize its state");
+            return;
+        }
+
+        if (slot.channelMode == PluginChannelMode::DualMono) {
+            plugins::PluginInstance* right =
+                live && live->rightNode ? live->rightNode->instance() : nullptr;
+            if (!right) {
+                issueForSlot(
+                    cloud::PublicationCaptureIssueKind::MissingLivePlugin,
+                    slot, state.location,
+                    "the right half of the dual-mono slot is unavailable");
+                return;
+            }
+            snapshotParameters(*right, slot.rightParameters);
+            if (!right->saveState(state.right) || state.right.empty()) {
+                issueForSlot(
+                    cloud::PublicationCaptureIssueKind::PluginStateCaptureFailed,
+                    slot, state.location,
+                    "the right half of the dual-mono slot could not serialize its state");
+                return;
+            }
+        } else {
+            slot.rightParameters.clear();
+            slot.rightStateAsset = {};
+            slot.rightStateFile.clear();
+        }
+        pluginStates.push_back(std::move(state));
+    };
+
+    // Capture all opaque bytes in one short renderer pause. No filesystem I/O,
+    // hashing or upload is performed while the gate is held.
+    {
+        const engine::RealtimeEngine::RenderGate gate(m_engine);
+        for (std::size_t index = 0;
+             index < capture.document.masterInserts.size(); ++index) {
+            captureSlot(std::string(kMasterChannelId),
+                        capture.document.masterInserts[index],
+                        "master/insert:" + std::to_string(index));
+        }
+        for (std::size_t trackIndex = 0;
+             trackIndex < capture.document.tracks.size(); ++trackIndex) {
+            TrackModel& track = capture.document.tracks[trackIndex];
+            const std::string trackLocation =
+                "track:" + (track.id.empty() ? std::to_string(trackIndex)
+                                              : track.id);
+            if (track.instrument.isLoaded()) {
+                captureSlot(track.id, track.instrument,
+                            trackLocation + "/instrument");
+            }
+            for (std::size_t index = 0;
+                 index < track.samplerFx.inserts.size(); ++index) {
+                captureSlot(track.id, track.samplerFx.inserts[index],
+                            trackLocation + "/sampler-fx/insert:" +
+                                std::to_string(index));
+            }
+            for (std::size_t clipIndex = 0;
+                 clipIndex < track.clips.size(); ++clipIndex) {
+                ClipModel& clip = track.clips[clipIndex];
+                const std::string clipLocation =
+                    trackLocation + "/clip:" +
+                    (clip.id.empty() ? std::to_string(clipIndex) : clip.id);
+                for (std::size_t index = 0; index < clip.inserts.size();
+                     ++index) {
+                    captureSlot(track.id, clip.inserts[index],
+                                clipLocation + "/insert:" +
+                                    std::to_string(index));
+                }
+            }
+            for (std::size_t index = 0; index < track.inserts.size(); ++index) {
+                captureSlot(track.id, track.inserts[index],
+                            trackLocation + "/insert:" +
+                                std::to_string(index));
+            }
+        }
+    }
+    if (!capture.blockers.empty()) return capture;
+
+    // Resolve every ordinary document-owned media path before creating the
+    // staging directory. A missing source therefore leaves no partial output.
+    for (std::size_t trackIndex = 0;
+         trackIndex < capture.document.tracks.size(); ++trackIndex) {
+        TrackModel& track = capture.document.tracks[trackIndex];
+        const std::string trackLocation =
+            "track:" + (track.id.empty() ? std::to_string(trackIndex)
+                                          : track.id);
+        for (std::size_t clipIndex = 0; clipIndex < track.clips.size();
+             ++clipIndex) {
+            ClipModel& clip = track.clips[clipIndex];
+            const std::string clipLocation =
+                trackLocation + "/clip:" +
+                (clip.id.empty() ? std::to_string(clipIndex) : clip.id);
+            if (clip.kind == ClipKind::Audio && !clip.filePath.empty()) {
+                const AssetRef preferred = clip.asset;
+                (void)capture.bindLocalFile(
+                    clip.asset, preferred, clip.filePath, AssetKind::Audio,
+                    clipLocation + "/audio");
+            } else if (clip.kind == ClipKind::Audio && !clip.asset.empty()) {
+                capture.addIssue({
+                    cloud::PublicationCaptureIssueKind::MissingLocalSource,
+                    clipLocation + "/audio", clip.asset.assetId, {},
+                    clip.asset.originalName,
+                    "the audio clip has an asset identity but no local upload source"});
+            }
+            for (std::size_t takeIndex = 0; takeIndex < clip.takes.size();
+                 ++takeIndex) {
+                TakeModel& take = clip.takes[takeIndex];
+                const std::string takeLocation =
+                    clipLocation + "/take:" +
+                    (take.id.empty() ? std::to_string(takeIndex) : take.id);
+                if (!take.filePath.empty()) {
+                    const AssetRef preferred = take.asset;
+                    (void)capture.bindLocalFile(
+                        take.asset, preferred, take.filePath, AssetKind::Audio,
+                        takeLocation + "/audio");
+                } else if (!take.asset.empty()) {
+                    capture.addIssue({
+                        cloud::PublicationCaptureIssueKind::MissingLocalSource,
+                        takeLocation + "/audio", take.asset.assetId, {},
+                        take.asset.originalName,
+                        "the recorded take has an asset identity but no local upload source"});
+                }
+            }
+        }
+    }
+
+    for (CapturedPluginState& state : pluginStates) {
+        InsertModel& slot = *state.model;
+        if (slot.uid == "daw.sampler") {
+            AssetRef preferredSample;
+            const auto sample = std::find_if(
+                slot.assetBindings.begin(), slot.assetBindings.end(),
+                [](const PluginAssetBinding& binding) {
+                    return binding.key == "sample";
+                });
+            if (sample != slot.assetBindings.end())
+                preferredSample = sample->asset;
+            std::erase_if(slot.assetBindings,
+                          [](const PluginAssetBinding& binding) {
+                              return binding.key == "sample";
+                          });
+            AssetRef sampleAsset;
+            (void)capture.bindLocalFile(
+                sampleAsset, preferredSample, state.samplerPath,
+                AssetKind::Audio, state.location + "/binding:sample");
+            if (!sampleAsset.empty()) {
+                slot.assetBindings.push_back(
+                    PluginAssetBinding{"sample", sampleAsset, true});
+            }
+        }
+        for (const PluginAssetBinding& binding : slot.assetBindings) {
+            if (slot.uid == "daw.sampler" && binding.key == "sample")
+                continue;
+            if (!binding.asset.empty()) {
+                capture.addIssue({
+                    cloud::PublicationCaptureIssueKind::MissingLocalSource,
+                    state.location + "/binding:" + binding.key,
+                    binding.asset.assetId, slot.uid, slot.name,
+                    "this built-in asset binding has no local capture adapter"});
+            }
+        }
+    }
+    if (!capture.blockers.empty()) return capture;
+
+    if (!capture.prepareStaging(stagingParent)) return capture;
+    for (CapturedPluginState& state : pluginStates) {
+        InsertModel& slot = *state.model;
+        const AssetRef preferredLeft = slot.stateAsset;
+        if (!capture.stagePluginState(
+                slot.stateAsset, preferredLeft, state.left,
+                state.location + "/state", false, slot.stateFile)) {
+            (void)capture.cleanup();
+            return capture;
+        }
+        if (slot.channelMode == PluginChannelMode::DualMono) {
+            const AssetRef preferredRight = slot.rightStateAsset;
+            if (!capture.stagePluginState(
+                    slot.rightStateAsset, preferredRight, state.right,
+                    state.location + "/right-state", true,
+                    slot.rightStateFile)) {
+                (void)capture.cleanup();
+                return capture;
+            }
+        }
+    }
+    return capture;
+}
+
 bool EngineController::refreshRecoveryPluginStates(
     std::size_t maxPluginStateCaptures,
     std::span<const std::string> preferredStems) {
@@ -2851,6 +3141,236 @@ audio::Result EngineController::openProject(const std::string& packageDir) {
     return activateProject(std::move(loaded), packageDir);
 }
 
+audio::Result EngineController::materializeCollaborationProject(
+    ProjectModel runtimeDocument, bool clearLegacyUndo) {
+    // Collaboration owns its durable history and hands us a disposable
+    // runtime copy.  Keep every piece that rebuildGraph mutates so a malformed
+    // route cannot leave the audible graph and the UI-facing model disagreeing.
+    // This is deliberately a separate activation path: openProject() resolves
+    // package-relative Content/State files and resets the playhead, while a
+    // live projection must preserve this participant's transport exactly.
+    const ProjectModel previousProject = m_project;
+    const UndoStack previousUndo = m_undo;
+    const WaveformCache previousWaveforms = m_waveforms;
+    const auto previousChannels = m_channels;
+    const auto previousSamples = m_samples;
+    const auto previousClipSampleCache = m_clipSampleCache;
+    const auto previousSharedClipSampleCache = m_sharedClipSampleCache;
+    const auto previousDeferredClipSync = m_deferredClipSync;
+    const auto previousMidiNotesRevisions = m_midiNotesRevisions;
+    const std::uint64_t previousMidiNotesRevisionCounter =
+        m_midiNotesRevisionCounter;
+    const auto previousRecoveryPluginStateCache =
+        m_recoveryPluginStateCache;
+    const std::size_t previousRecoveryPluginCaptureCursor =
+        m_recoveryPluginCaptureCursor;
+    const bool previousAutomationReadoutDirty =
+        m_automationReadoutCacheDirty;
+    const auto previousAutomationReadoutCurves = m_automationReadoutCurves;
+
+    const auto restorePrevious = [&](audio::Result failure) {
+        m_project = previousProject;
+        m_undo = previousUndo;
+        m_waveforms = previousWaveforms;
+        m_channels = previousChannels;
+        m_samples = previousSamples;
+        m_clipSampleCache = previousClipSampleCache;
+        m_sharedClipSampleCache = previousSharedClipSampleCache;
+        m_deferredClipSync = previousDeferredClipSync;
+        m_midiNotesRevisions = previousMidiNotesRevisions;
+        m_midiNotesRevisionCounter = previousMidiNotesRevisionCounter;
+        m_recoveryPluginStateCache = previousRecoveryPluginStateCache;
+        m_recoveryPluginCaptureCursor =
+            previousRecoveryPluginCaptureCursor;
+        m_automationReadoutCacheDirty = previousAutomationReadoutDirty;
+        m_automationReadoutCurves = previousAutomationReadoutCurves;
+
+        engine::Transport& transport = m_engine.transport();
+        transport.setTempo(m_project.tempo);
+        transport.setTimeSignature(m_project.timeSigNumerator,
+                                   m_project.timeSigDenominator);
+        transport.setLoopRange(toSamples(m_project.loopStartSeconds),
+                               toSamples(m_project.loopEndSeconds));
+        transport.setLoopEnabled(m_project.loopEnabled &&
+                                 m_project.loopEndSeconds >
+                                     m_project.loopStartSeconds);
+        // rebuildGraph publishes a new immutable graph.  It does not seek,
+        // play, pause or stop, so the local playhead/state survive both the
+        // attempted projection and this rollback without being sampled and
+        // reconstructed imprecisely.
+        (void)rebuildGraph();
+        return failure;
+    };
+
+    m_project = std::move(runtimeDocument);
+    inheritAutomationLaneColors(m_project);
+    // Decoded sources are immutable and keyed by absolute cache path.  A new
+    // or replaced AssetRef naturally misses this memo, while an unrelated
+    // rename/plugin-knob operation should not decode every unchanged clip
+    // again.  Project activation may clear it; live projection retains it.
+    m_clipSampleCache.clear();
+    m_sharedClipSampleCache.clear();
+    m_deferredClipSync.clear();
+    m_midiNotesRevisions.clear();
+    m_recoveryPluginStateCache.clear();
+    m_recoveryPluginCaptureCursor = 0;
+    invalidateAutomationReadoutCache();
+
+    engine::Transport& transport = m_engine.transport();
+    transport.setTempo(m_project.tempo);
+    transport.setTimeSignature(m_project.timeSigNumerator,
+                               m_project.timeSigDenominator);
+    transport.setLoopRange(toSamples(m_project.loopStartSeconds),
+                           toSamples(m_project.loopEndSeconds));
+    transport.setLoopEnabled(m_project.loopEnabled &&
+                             m_project.loopEndSeconds >
+                                 m_project.loopStartSeconds);
+
+    audio::Result built = rebuildGraph();
+    if (!built) return restorePrevious(built);
+
+    // Existing slots are intentionally reused by rebuildGraph.  Reusing them
+    // keeps native/built-in editors and DSP continuity alive, but it also means
+    // stored parameter changes must be projected explicitly.  Opaque state is
+    // loaded only when its resolved cache path changed (or the slot is new),
+    // avoiding a full plugin reset for an unrelated remote track rename.
+    const auto previousInsert = [&](const std::string& channelId,
+                                    const std::string& insertId)
+        -> const InsertModel* {
+        const auto findIn = [&](const std::vector<InsertModel>& slots)
+            -> const InsertModel* {
+            const auto found = std::find_if(
+                slots.begin(), slots.end(), [&](const InsertModel& slot) {
+                    return slot.id == insertId;
+                });
+            return found == slots.end() ? nullptr : &*found;
+        };
+        if (channelId == kMasterChannelId)
+            return findIn(previousProject.masterInserts);
+        const TrackModel* track = previousProject.findTrack(channelId);
+        if (!track) return nullptr;
+        if (track->instrument.id == insertId) return &track->instrument;
+        if (const InsertModel* slot = findIn(track->samplerFx.inserts))
+            return slot;
+        for (const ClipModel& clip : track->clips) {
+            if (const InsertModel* slot = findIn(clip.inserts)) return slot;
+        }
+        return findIn(track->inserts);
+    };
+
+    constexpr std::uintmax_t kMaximumCollaborationPluginStateBytes =
+        64u * 1024u * 1024u;
+    const auto readResolvedState = [&](const std::string& path,
+                                       std::vector<std::uint8_t>& bytes) {
+        bytes.clear();
+        if (path.empty()) return false;
+        const fs::path source = platform::pathFromUtf8(path);
+        if (!source.is_absolute()) return false;
+        std::error_code error;
+        const std::uintmax_t size = fs::file_size(source, error);
+        if (error || size == 0 ||
+            size > kMaximumCollaborationPluginStateBytes) {
+            return false;
+        }
+        std::ifstream input(source, std::ios::binary);
+        if (!input) return false;
+        bytes.resize(static_cast<std::size_t>(size));
+        input.read(reinterpret_cast<char*>(bytes.data()),
+                   std::streamsize(bytes.size()));
+        return input.good() || input.eof();
+    };
+
+    const auto visitRuntimeSlots = [&](auto&& visitor) {
+        for (const InsertModel& slot : m_project.masterInserts)
+            visitor(std::string(kMasterChannelId), slot);
+        for (const TrackModel& track : m_project.tracks) {
+            if (track.instrument.isLoaded())
+                visitor(track.id, track.instrument);
+            for (const InsertModel& slot : track.samplerFx.inserts)
+                visitor(track.id, slot);
+            for (const ClipModel& clip : track.clips) {
+                for (const InsertModel& slot : clip.inserts)
+                    visitor(track.id, slot);
+            }
+            for (const InsertModel& slot : track.inserts)
+                visitor(track.id, slot);
+        }
+    };
+
+    // Read verified cache blobs while audio continues rendering.  Only the
+    // plugin's in-memory loadState call needs RenderGate; parking the renderer
+    // during filesystem I/O would turn a large state asset into an avoidable
+    // audible dropout.
+    std::unordered_map<std::string, std::vector<std::uint8_t>> stateBytes;
+    std::unordered_set<std::string> attemptedStatePaths;
+    const auto cacheState = [&](const std::string& path) {
+        if (path.empty() || !attemptedStatePaths.insert(path).second) return;
+        std::vector<std::uint8_t> bytes;
+        if (readResolvedState(path, bytes))
+            stateBytes.emplace(path, std::move(bytes));
+    };
+    visitRuntimeSlots([&](const std::string& channelId,
+                          const InsertModel& slot) {
+        const InsertModel* before = previousInsert(channelId, slot.id);
+        const bool slotChanged = !before || before->uid != slot.uid;
+        if (slotChanged || slot.stateFile != before->stateFile)
+            cacheState(slot.stateFile);
+        if (slot.channelMode == PluginChannelMode::DualMono &&
+            (slotChanged ||
+             slot.rightStateFile != before->rightStateFile)) {
+            cacheState(slot.rightStateFile);
+        }
+    });
+
+    {
+        // Plugin state replacement is not realtime-safe.  Park at a block
+        // boundary only for instance mutation.  File reads above remain on the
+        // control thread but do not keep the renderer parked.
+        const engine::RealtimeEngine::RenderGate gate(m_engine);
+        const auto projectSlot = [&](const std::string& channelId,
+                                     const InsertModel& slot) {
+            InsertSlot* live = liveInsertSlot(channelId, slot.id);
+            if (!live) return;
+            const InsertModel* before = previousInsert(channelId, slot.id);
+            const bool slotChanged = !before || before->uid != slot.uid;
+
+            const auto projectOne = [&](plugins::PluginNode* node,
+                                        const std::string& path,
+                                        const std::string& previousPath,
+                                        const std::vector<InsertParameter>& values) {
+                if (!node || !node->instance()) return;
+                if (slotChanged || path != previousPath) {
+                    const auto state = stateBytes.find(path);
+                    if (state != stateBytes.end())
+                        (void)node->instance()->loadState(state->second);
+                }
+                // The inline mirror is authoritative over an older state blob
+                // and is also the complete fallback for a missing blob.
+                applyStoredParameters(*node, values);
+            };
+
+            projectOne(live->node.get(), slot.stateFile,
+                       before ? before->stateFile : std::string{},
+                       slot.parameters);
+            if (slot.channelMode == PluginChannelMode::DualMono) {
+                projectOne(
+                    live->rightNode.get(), slot.rightStateFile,
+                    before ? before->rightStateFile : std::string{},
+                    slot.rightParameters.empty() ? slot.parameters
+                                                  : slot.rightParameters);
+            }
+        };
+        visitRuntimeSlots(projectSlot);
+    }
+
+    // A state blob may change a plugin's reported latency.  Recompile once
+    // after all state/parameter projection, not once per slot.
+    built = rebuildGraph();
+    if (!built) return restorePrevious(built);
+    if (clearLegacyUndo) m_undo.clear();
+    return built;
+}
+
 audio::Result EngineController::restoreRecoveryProject(
     ProjectModel snapshot, const std::string& recoveryDir,
     const std::string& originalPackageDir) {
@@ -3262,10 +3782,17 @@ void EngineController::retimeToTempo(double from, double to) {
     updateTimelineDuration();
 }
 
-void EngineController::setTimeSignature(int numerator, int denominator) {
+collab::SharedMutationResult EngineController::setTimeSignature(
+    int numerator, int denominator) {
     if (m_project.timeSigNumerator == numerator &&
         m_project.timeSigDenominator == denominator)
-        return;
+        return collab::SharedMutationResult::LocalFallback;
+    if (m_sharedMutationSink) {
+        const auto result =
+            m_sharedMutationSink->setTimeSignature(numerator, denominator);
+        if (result != collab::SharedMutationResult::LocalFallback)
+            return result;
+    }
     const int previousNum = m_project.timeSigNumerator;
     const int previousDen = m_project.timeSigDenominator;
     m_project.timeSigNumerator = numerator;
@@ -3280,6 +3807,7 @@ void EngineController::setTimeSignature(int numerator, int denominator) {
         [this, numerator, denominator] {
             setTimeSignature(numerator, denominator);
         });
+    return collab::SharedMutationResult::LocalFallback;
 }
 
 void EngineController::restoreProject(const ProjectModel& snapshot,
@@ -3310,9 +3838,17 @@ void EngineController::commitProjectGesture(const ProjectModel& before,
     pushProjectSnapshotUndo(before, label);
 }
 
-void EngineController::setProjectKey(int root, const std::string& scaleId) {
+collab::SharedMutationResult EngineController::setProjectKey(
+    int root, const std::string& scaleId) {
     const int pitchClass = ((root % 12) + 12) % 12;
-    if (m_project.keyRoot == pitchClass && m_project.scale == scaleId) return;
+    if (m_project.keyRoot == pitchClass && m_project.scale == scaleId)
+        return collab::SharedMutationResult::LocalFallback;
+    if (m_sharedMutationSink) {
+        const auto result =
+            m_sharedMutationSink->setProjectKey(pitchClass, scaleId);
+        if (result != collab::SharedMutationResult::LocalFallback)
+            return result;
+    }
     const int previousRoot = m_project.keyRoot;
     const std::string previousScale = m_project.scale;
     m_project.keyRoot = pitchClass;
@@ -3323,6 +3859,20 @@ void EngineController::setProjectKey(int root, const std::string& scaleId) {
                     setProjectKey(previousRoot, previousScale);
                 },
                 [this, pitchClass, scaleId] { setProjectKey(pitchClass, scaleId); });
+    return collab::SharedMutationResult::LocalFallback;
+}
+
+collab::SharedMutationResult EngineController::setAiInstructions(
+    std::string text) {
+    if (m_project.aiInstructions == text)
+        return collab::SharedMutationResult::LocalFallback;
+    if (m_sharedMutationSink) {
+        const auto result = m_sharedMutationSink->setAiInstructions(text);
+        if (result != collab::SharedMutationResult::LocalFallback)
+            return result;
+    }
+    m_project.aiInstructions = std::move(text);
+    return collab::SharedMutationResult::LocalFallback;
 }
 
 void EngineController::setMetronomeEnabled(bool enabled) {
@@ -3654,10 +4204,22 @@ void EngineController::removeTrack(const std::string& trackId) {
         collapseUndo(compoundUndoStart, "Remove Pattern");
 }
 
-void EngineController::renameTrack(const std::string& trackId,
-                                   const std::string& name) {
+collab::SharedMutationResult EngineController::renameTrack(
+    const std::string& trackId, const std::string& name) {
     auto* track = m_project.findTrack(trackId);
-    if (!track || track->name == name) return;
+    if (!track || track->name == name)
+        return collab::SharedMutationResult::LocalFallback;
+    if (m_sharedMutationSink) {
+        const auto result = m_sharedMutationSink->renameTrack(trackId, name);
+        if (result != collab::SharedMutationResult::LocalFallback)
+            return result;
+    }
+    // A LocalFallback sink is synchronous but may still have inspected other
+    // controller state.  Reacquire the vector-backed pointer at the mutation
+    // boundary instead of retaining it across external code.
+    track = m_project.findTrack(trackId);
+    if (!track || track->name == name)
+        return collab::SharedMutationResult::LocalFallback;
     const std::string previous = track->name;
     track->name = name;
 
@@ -3667,6 +4229,7 @@ void EngineController::renameTrack(const std::string& trackId,
     m_undo.push("Rename Track",
                 [this, trackId, previous] { renameTrack(trackId, previous); },
                 [this, trackId, name] { renameTrack(trackId, name); });
+    return collab::SharedMutationResult::LocalFallback;
 }
 
 void EngineController::setTrackVolume(const std::string& trackId, float volume) {
@@ -3807,11 +4370,59 @@ void EngineController::setTrackMono(const std::string& trackId, bool mono) {
                 [this, trackId, mono] { setTrackMono(trackId, mono); });
 }
 
-void EngineController::setTrackMuted(const std::string& trackId, bool muted) {
-    if (auto* t = m_project.findTrack(trackId)) {
-        t->muted = muted;
-        syncTrackGain(*t);
+collab::SharedMutationResult EngineController::setTrackMuted(
+    const std::string& trackId, bool muted) {
+    const TrackModel* current = m_project.findTrack(trackId);
+    if (!current || current->muted == muted)
+        return collab::SharedMutationResult::LocalFallback;
+    if (m_sharedMutationSink) {
+        const auto result = m_sharedMutationSink->setTrackMuted(trackId, muted);
+        if (result != collab::SharedMutationResult::LocalFallback)
+            return result;
     }
+    auto* track = m_project.findTrack(trackId);
+    if (!track) return collab::SharedMutationResult::LocalFallback;
+    track->muted = muted;
+    syncTrackGain(*track);
+    return collab::SharedMutationResult::LocalFallback;
+}
+
+collab::SharedMutationResult EngineController::setTracksMuted(
+    std::span<const std::string> trackIds, bool muted) {
+    std::vector<std::string> targets;
+    std::unordered_set<std::string> seen;
+    const auto appendIfChanged = [&](const std::string& id) {
+        const TrackModel* track = m_project.findTrack(id);
+        if (!track || track->muted == muted || !seen.insert(id).second) return;
+        targets.push_back(id);
+    };
+
+    for (const std::string& requestedId : trackIds) {
+        const TrackModel* requested = m_project.findTrack(requestedId);
+        if (!requested) continue;
+        const std::string rootId = isAutomationLane(*requested)
+                                       ? requested->parentId
+                                       : requested->id;
+        const TrackModel* root = m_project.findTrack(rootId);
+        if (!root) continue;
+        appendIfChanged(rootId);
+        if (isFolder(*root) && !carriesAudio(*root)) {
+            for (const std::string& childId : subtreeOf(m_project, rootId))
+                appendIfChanged(childId);
+        }
+    }
+
+    if (targets.empty()) return collab::SharedMutationResult::LocalFallback;
+    if (m_sharedMutationSink) {
+        const auto result = m_sharedMutationSink->setTracksMuted(targets, muted);
+        if (result != collab::SharedMutationResult::LocalFallback)
+            return result;
+    }
+    for (const std::string& id : targets) {
+        if (TrackModel* track = m_project.findTrack(id)) track->muted = muted;
+    }
+    syncAllTrackGains();
+    return collab::SharedMutationResult::LocalFallback;
 }
 
 void EngineController::setTrackSoloed(const std::string& trackId, bool soloed) {
@@ -5726,6 +6337,14 @@ void EngineController::loadSamplerSampleSilently(const std::string& channelId,
                                                  const std::string& filePath) {
     if (plugins::sampler::SamplerInstance* sampler = samplerInstance(channelId, slotId)) {
         sampler->loadSample(filePath);
+    }
+}
+
+void EngineController::clearSamplerSampleSilently(
+    const std::string& channelId, const std::string& slotId) {
+    if (plugins::sampler::SamplerInstance* sampler =
+            samplerInstance(channelId, slotId)) {
+        sampler->clearSample();
     }
 }
 
@@ -9609,8 +10228,10 @@ std::string EngineController::addAutomationClip(const std::string& laneTrackId,
     clip.automation.defaultValue = defaultAutomationValue(target);
     const double endBeats = secondsToBeats(length, m_project.tempo);
     clip.automation.points = {
-        AutomationPoint{0.0, clip.automation.defaultValue},
-        AutomationPoint{endBeats, clip.automation.defaultValue},
+        AutomationPoint{0.0, clip.automation.defaultValue,
+                        AutomationSegment::Linear, 0.0, newUuid()},
+        AutomationPoint{endBeats, clip.automation.defaultValue,
+                        AutomationSegment::Linear, 0.0, newUuid()},
     };
     clip.name = automationTargetName(target);
 
@@ -10103,14 +10724,8 @@ void EngineController::publishRecorders() {
 }
 
 void EngineController::setRecordingPrefs(const RecordingPrefs& prefs) {
-    const double previousCrossfade = m_recording.compCrossfadeMs;
     m_recording = prefs;
     m_recording.compCrossfadeMs = std::clamp(m_recording.compCrossfadeMs, 0.0, 20.0);
-    // The comp crossfade is baked into the placements, so a change to it has to
-    // be pushed through the graph rather than waiting for the next edit.
-    if (m_recording.compCrossfadeMs != previousCrossfade) {
-        for (const auto& track : m_project.tracks) syncTrackClips(track);
-    }
 }
 
 void EngineController::setTrackRecordMode(const std::string& trackId,
@@ -10149,13 +10764,54 @@ RecordMode EngineController::effectiveRecordMode(const std::string& trackId) con
     return mode;
 }
 
+EngineController::FrozenRecordingSemantics
+EngineController::frozenRecordingSemantics(const std::string& trackId) const {
+    FrozenRecordingSemantics semantics;
+    semantics.mode = effectiveRecordMode(trackId);
+    semantics.loopEnabled = isLoopEnabled();
+    semantics.loopStartSeconds = loopStartSeconds();
+    semantics.loopEndSeconds = loopEndSeconds();
+    semantics.loopCreatesTakes = m_recording.loopCreatesTakes;
+    semantics.trimTakesToRegion = m_recording.trimTakesToRegion;
+    semantics.autoExpandAfterRecord = m_recording.autoExpandAfterRecord;
+    semantics.compCrossfadeMs = m_recording.compCrossfadeMs;
+    semantics.autoMonitorOnRecord = m_recording.autoMonitorOnRecord;
+    semantics.monitorStopPolicy = m_recording.monitorStopPolicy;
+    return semantics;
+}
+
 bool EngineController::startRecording(const std::string& trackId) {
     return startRecordingTracks({trackId});
 }
 
 bool EngineController::startRecordingTracks(
     const std::vector<std::string>& trackIds) {
+    return startRecordingTracksImpl(trackIds, false);
+}
+
+bool EngineController::canStartRecordingTracksExactly(
+    const std::vector<std::string>& trackIds) const {
     if (isRecording() || trackIds.empty()) return false;
+    std::unordered_set<std::string> unique;
+    unique.reserve(trackIds.size());
+    for (const std::string& trackId : trackIds) {
+        if (trackId.empty() || !unique.insert(trackId).second) return false;
+        const TrackModel* track = m_project.findTrack(trackId);
+        if (!track || !isRecordable(*track)) return false;
+    }
+    return true;
+}
+
+bool EngineController::startRecordingTracksExactly(
+    const std::vector<std::string>& trackIds) {
+    return startRecordingTracksImpl(trackIds, true);
+}
+
+bool EngineController::startRecordingTracksImpl(
+    const std::vector<std::string>& trackIds, bool requireEveryTarget) {
+    if (isRecording() || trackIds.empty()) return false;
+    if (requireEveryTarget && !canStartRecordingTracksExactly(trackIds))
+        return false;
     stopPreview();   // never into a take
 
     // Restart returns a new take to the run anchor just like Play. Resume keeps
@@ -10166,21 +10822,55 @@ bool EngineController::startRecordingTracks(
     std::error_code ec;
     fs::create_directories(m_recordDir, ec);
 
+    std::vector<Capture> prepared;
+    prepared.reserve(trackIds.size());
+
+    const auto rollbackExactStart = [&] {
+        bool localStateChanged = false;
+        for (auto it = prepared.rbegin(); it != prepared.rend(); ++it) {
+            if (it->recorder && it->recorder->isRecording())
+                it->recorder->stopRecording();
+            TrackModel* track = m_project.findTrack(it->trackId);
+            if (!track) continue;
+            localStateChanged = localStateChanged ||
+                                track->armed != it->armedBefore ||
+                                track->monitor != it->monitorBefore ||
+                                track->monitorAuto != it->monitorAutoBefore;
+            track->armed = it->armedBefore;
+            track->monitor = it->monitorBefore;
+            track->monitorAuto = it->monitorAutoBefore;
+        }
+        prepared.clear();
+        if (localStateChanged) rebuildGraph();
+    };
+
     for (const std::string& trackId : trackIds) {
         auto* track = m_project.findTrack(trackId);
-        if (!track || !isRecordable(*track)) continue;
+        if (!track || !isRecordable(*track)) {
+            if (requireEveryTarget) {
+                rollbackExactStart();
+                return false;
+            }
+            continue;
+        }
 
         Capture capture;
         capture.trackId = trackId;
         capture.startSeconds = startSeconds;
+        capture.semantics = frozenRecordingSemantics(trackId);
+        capture.monitorManaged = capture.semantics.autoMonitorOnRecord;
         // "Before" means before the *whole* gesture: a count-in has already
         // opened the monitor by now, and restoring to that would leave it on
         // for good.
         capture.monitorBefore = track->monitor;
         for (const auto& [id, monitor] : m_countInMonitorBefore) {
-            if (id == trackId) capture.monitorBefore = monitor;
+            if (id == trackId) {
+                capture.monitorBefore = monitor;
+                capture.monitorManaged = true;
+            }
         }
         capture.armedBefore = track->armed;
+        capture.monitorAutoBefore = track->monitorAuto;
 
         // Exactly as wide as the input the track is pointed at. Capturing a
         // pair from a mono source wrote a file whose right channel was whatever
@@ -10190,7 +10880,13 @@ bool EngineController::startRecordingTracks(
         const std::uint32_t captureChannels =
             std::clamp(track->inputChannelCount, 1u, 2u);
         capture.recorder = std::make_shared<audio::AudioRecorder>();
-        if (!capture.recorder->initialize(m_sampleRate, captureChannels)) continue;
+        if (!capture.recorder->initialize(m_sampleRate, captureChannels)) {
+            if (requireEveryTarget) {
+                rollbackExactStart();
+                return false;
+            }
+            continue;
+        }
         // `setRecordPath` names the *directory* a capture goes in; the recorder
         // mints the file name itself and reports it back through the session.
         capture.recorder->setRecordPath(m_recordDir);
@@ -10198,6 +10894,10 @@ bool EngineController::startRecordingTracks(
             audio::ChannelCount(track->inputChannel),
             audio::ChannelCount(captureChannels));
         if (!capture.recorder->startRecording(0, m_engine.transport().position())) {
+            if (requireEveryTarget) {
+                rollbackExactStart();
+                return false;
+            }
             continue;
         }
         capture.path = capture.recorder->session().filePath;
@@ -10205,17 +10905,27 @@ bool EngineController::startRecordingTracks(
         // Arming is implied by recording onto the track — the user picked it,
         // which is the whole intent the arm button expresses.
         track->armed = true;
-        if (m_recording.autoMonitorOnRecord) applySmartMonitoring(*track);
+        if (capture.semantics.autoMonitorOnRecord) applySmartMonitoring(*track);
 
-        m_captures.push_back(std::move(capture));
-        m_recordingTracks.push_back(trackId);
+        prepared.push_back(std::move(capture));
     }
 
-    if (m_captures.empty()) return false;
+    if (prepared.empty()) return false;
+    if (requireEveryTarget && prepared.size() != trackIds.size()) {
+        rollbackExactStart();
+        return false;
+    }
+
+    for (Capture& capture : prepared) {
+        m_recordingTracks.push_back(capture.trackId);
+        m_captures.push_back(std::move(capture));
+    }
 
     // Whatever was counting in has landed here.
     m_countInTracks.clear();
     m_countInBeatsLeft = 0;
+    m_countInToNextBeat = 0.0;
+    m_countInRequiresExactTargets = false;
     m_countInMonitorBefore.clear();
 
     publishRecorders();
@@ -10231,21 +10941,43 @@ double beatLength(double tempo) { return tempo > 0.0 ? 60.0 / tempo : 0.5; }
 
 bool EngineController::armCountIn(const std::vector<std::string>& trackIds,
                                   int beats) {
+    return armCountInImpl(trackIds, beats, false);
+}
+
+bool EngineController::armCountInExactly(
+    const std::vector<std::string>& trackIds, int beats) {
+    return armCountInImpl(trackIds, beats, true);
+}
+
+bool EngineController::armCountInImpl(
+    const std::vector<std::string>& trackIds, int beats,
+    bool requireEveryTarget) {
     if (isRecording() || trackIds.empty()) return false;
-    if (beats <= 0) return startRecordingTracks(trackIds);
+    if (requireEveryTarget && !canStartRecordingTracksExactly(trackIds))
+        return false;
+    if (beats <= 0) {
+        return requireEveryTarget ? startRecordingTracksExactly(trackIds)
+                                  : startRecordingTracks(trackIds);
+    }
 
     // Nothing is captured yet, so refuse now rather than after three clicks
     // have already been counted at the user.
-    bool recordable = false;
-    for (const std::string& id : trackIds) {
-        const auto* track = m_project.findTrack(id);
-        if (track && isRecordable(*track)) { recordable = true; break; }
+    if (!requireEveryTarget) {
+        bool recordable = false;
+        for (const std::string& id : trackIds) {
+            const auto* track = m_project.findTrack(id);
+            if (track && isRecordable(*track)) {
+                recordable = true;
+                break;
+            }
+        }
+        if (!recordable) return false;
     }
-    if (!recordable) return false;
 
     m_countInTracks = trackIds;
     m_countInBeatsLeft = beats;
     m_countInToNextBeat = beatLength(m_project.tempo);
+    m_countInRequiresExactTargets = requireEveryTarget;
 
     // Monitoring opens now, not when the take starts: the point of counting a
     // player in is that they play *on* the first beat, which they can only do
@@ -10283,9 +11015,28 @@ bool EngineController::tickCountIn(double deltaSeconds) {
     // The last beat has been counted: the take starts on the downbeat that
     // follows it, which is now.
     const std::vector<std::string> tracks = std::move(m_countInTracks);
+    const bool requireEveryTarget = m_countInRequiresExactTargets;
     m_countInTracks.clear();
     m_countInToNextBeat = 0.0;
-    startRecordingTracks(tracks);
+    const bool started = requireEveryTarget
+        ? startRecordingTracksExactly(tracks)
+        : startRecordingTracks(tracks);
+    if (!started) {
+        // The exact path may fail while opening one of the WAVs after its
+        // count-in already opened monitoring. Restore that local state just as
+        // an explicit count-in cancellation would.
+        bool monitorChanged = false;
+        for (const auto& [id, monitor] : m_countInMonitorBefore) {
+            auto* track = m_project.findTrack(id);
+            if (!track || !track->monitorAuto || track->monitor == monitor)
+                continue;
+            track->monitor = monitor;
+            monitorChanged = true;
+        }
+        m_countInMonitorBefore.clear();
+        m_countInRequiresExactTargets = false;
+        if (monitorChanged) rebuildGraph();
+    }
     return true;
 }
 
@@ -10294,6 +11045,7 @@ void EngineController::cancelCountIn() {
     m_countInTracks.clear();
     m_countInBeatsLeft = 0;
     m_countInToNextBeat = 0.0;
+    m_countInRequiresExactTargets = false;
 
     // Nothing was recorded, so the monitors go back exactly as they were —
     // except on a track the user grabbed by hand mid-count, which is theirs now.
@@ -10402,15 +11154,25 @@ void EngineController::pumpRecordingEnvelopes() {
 }
 
 std::vector<RecordingSpan> EngineController::capturePasses(
-    double startSeconds, double capturedLength) const {
+    const FrozenRecordingSemantics& semantics, double startSeconds,
+    double capturedLength) {
     std::vector<RecordingSpan> passes;
     if (capturedLength <= 0.0) return passes;
 
     // File time 0 is the punch point: the count-in happens before any recorder
     // exists, so nothing has to be trimmed off the front.
-    const std::vector<double> boundaries =
-        loopPassBoundaries(startSeconds, capturedLength);
-    const double loopStart = loopStartSeconds();
+    std::vector<double> boundaries;
+    const double loopLength =
+        semantics.loopEndSeconds - semantics.loopStartSeconds;
+    if (semantics.loopEnabled && loopLength > 0.0 &&
+        startSeconds >= semantics.loopStartSeconds &&
+        startSeconds < semantics.loopEndSeconds) {
+        double cursor = semantics.loopEndSeconds - startSeconds;
+        while (cursor < capturedLength) {
+            boundaries.push_back(cursor);
+            cursor += loopLength;
+        }
+    }
     if (boundaries.empty()) {
         passes.push_back({startSeconds, startSeconds + capturedLength, 0.0});
     } else {
@@ -10419,7 +11181,7 @@ std::vector<RecordingSpan> EngineController::capturePasses(
         for (const double boundary : boundaries) {
             passes.push_back({at, at + (boundary - from), from});
             from = boundary;
-            at = loopStart;                    // every pass after the first
+            at = semantics.loopStartSeconds;   // every pass after the first
         }
         // The run is still inside (or was stopped in) the last pass.
         if (capturedLength - from > 0.0) {
@@ -10443,6 +11205,50 @@ void EngineController::seedRecordingForShot(
             const double at = double(i) * capture.envelopeStepSeconds;
             capture.envelope.push_back(
                 std::clamp(level ? level(at) : 0.6f, 0.0f, 1.0f));
+        }
+
+        // This is an explicitly offline/test-only hook. Feed the recorder too,
+        // so Stop exercises the same closed WAV metadata and landing path as a
+        // device callback instead of manufacturing a duration that the file
+        // does not actually contain.
+        if (!capture.recorder || !capture.recorder->isRecording() ||
+            m_sampleRate <= 0.0) {
+            continue;
+        }
+        const TrackModel* track = m_project.findTrack(trackId);
+        const std::uint32_t neededChannels = track
+            ? std::max<std::uint32_t>(
+                  1, track->inputChannel +
+                         std::clamp(track->inputChannelCount, 1u, 2u))
+            : 1;
+        const std::uint64_t targetFrames = std::uint64_t(
+            std::llround(capture.seededSeconds * m_sampleRate));
+        constexpr audio::BufferSize kSeedBlock = 512;
+        audio::AudioBuffer input(neededChannels, kSeedBlock);
+        int stalledWrites = 0;
+        while (std::uint64_t(capture.recorder->recordedFrames()) <
+                   targetFrames &&
+               stalledWrites < 5000) {
+            const std::uint64_t before =
+                std::uint64_t(capture.recorder->recordedFrames());
+            const audio::BufferSize frames = audio::BufferSize(
+                std::min<std::uint64_t>(kSeedBlock, targetFrames - before));
+            for (std::uint32_t channel = 0; channel < neededChannels;
+                 ++channel) {
+                float* destination = input.getChannel(channel);
+                for (audio::BufferSize frame = 0; frame < frames; ++frame) {
+                    const double at = double(before + frame) / m_sampleRate;
+                    destination[frame] = std::clamp(
+                        level ? level(at) : 0.6f, 0.0f, 1.0f);
+                }
+            }
+            capture.recorder->process(input, frames);
+            if (std::uint64_t(capture.recorder->recordedFrames()) == before) {
+                ++stalledWrites;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } else {
+                stalledWrites = 0;
+            }
         }
     }
 }
@@ -10471,7 +11277,8 @@ RecordingPreview EngineController::recordingPreview(
     preview.name =
         platform::pathToUtf8(platform::pathFromUtf8(capture->path).stem());
 
-    preview.spans = capturePasses(capture->startSeconds, preview.capturedSeconds);
+    preview.spans = capturePasses(capture->semantics, capture->startSeconds,
+                                  preview.capturedSeconds);
     // Nothing yet: still show where the take begins, so the punch point is
     // visible from the instant record is pressed.
     if (preview.spans.empty()) {
@@ -10479,7 +11286,7 @@ RecordingPreview EngineController::recordingPreview(
     }
     // With loop takes off the passes overwrite each other, so only the newest
     // one will survive — and only the newest one is drawn.
-    if (!m_recording.loopCreatesTakes && preview.spans.size() > 1) {
+    if (!capture->semantics.loopCreatesTakes && preview.spans.size() > 1) {
         preview.spans.erase(preview.spans.begin(), preview.spans.end() - 1);
     }
 
@@ -10496,7 +11303,7 @@ RecordingPreview EngineController::recordingPreview(
         head.endSeconds = position;
     }
 
-    if (effectiveRecordMode(trackId) != RecordMode::Layers) return preview;
+    if (capture->semantics.mode != RecordMode::Layers) return preview;
 
     // Layer recording: a punch-in lands *inside* the clip it was recorded over,
     // as the next take in that clip's stack — so it is drawn in that take's
@@ -10556,28 +11363,6 @@ bool EngineController::isRecording() const {
     return false;
 }
 
-std::vector<double> EngineController::loopPassBoundaries(double startSeconds,
-                                                         double capturedLength) const {
-    // Every pass boundary is known from the loop geometry alone: the transport
-    // wraps at the loop end, so pass 0 runs from wherever recording started to
-    // the loop end and each pass after it is exactly one loop long. Deriving
-    // them beats sampling the playhead, which would have to poll and would land
-    // a block or two late every time.
-    std::vector<double> boundaries;
-    const double loopStart = loopStartSeconds();
-    const double loopEnd = loopEndSeconds();
-    const double loopLength = loopEnd - loopStart;
-    if (!isLoopEnabled() || loopLength <= 0.0) return boundaries;
-    if (startSeconds < loopStart || startSeconds >= loopEnd) return boundaries;
-
-    double cursor = loopEnd - startSeconds;    // end of the first pass, in file time
-    while (cursor < capturedLength) {
-        boundaries.push_back(cursor);
-        cursor += loopLength;
-    }
-    return boundaries;
-}
-
 void EngineController::clearTrackRange(TrackModel& track, double from, double to) {
     if (to <= from) return;
     std::vector<ClipModel> kept;
@@ -10624,27 +11409,14 @@ void EngineController::clearTrackRange(TrackModel& track, double from, double to
     track.clips = std::move(kept);
 }
 
-void EngineController::landCapture(TrackModel& track, const Capture& capture,
-                                   const std::string& path, double capturedLength,
-                                   int channels) {
-    if (capturedLength <= 0.0) return;
+void EngineController::landCapture(
+    TrackModel& track, const FinalizedRecordingTrack& recording) {
+    if (recording.passes.empty()) return;
 
-    // Split the one captured file into the passes the transport actually made —
-    // the same split the arrangement drew while the take was running.
-    std::vector<RecordingSpan> passes =
-        capturePasses(capture.startSeconds, capturedLength);
-    // Stopping the instant it started leaves nothing worth landing.
-    std::erase_if(passes, [](const RecordingSpan& p) {
-        return p.endSeconds - p.startSeconds <= 0.01;
-    });
-    if (passes.empty()) return;
-
-    const RecordMode mode = effectiveRecordMode(capture.trackId);
-    // Loop recording can be told to keep only the newest attempt, which in both
-    // modes means the run contributes exactly one pass: the last one.
-    if (!m_recording.loopCreatesTakes && passes.size() > 1) {
-        passes.erase(passes.begin(), passes.end() - 1);
-    }
+    const std::vector<RecordingSpan>& passes = recording.passes;
+    const RecordMode mode = recording.semantics.mode;
+    const std::string& path = recording.closedWavPath;
+    const int channels = int(recording.channels);
 
     const std::string fileName =
         platform::pathToUtf8(platform::pathFromUtf8(path).stem());
@@ -10721,6 +11493,12 @@ void EngineController::landCapture(TrackModel& track, const Capture& capture,
         }
     }
 
+    // The preference is frozen when recording starts. Store it on the shared
+    // container so later preference changes and other clients cannot alter the
+    // sound of already-landed comp seams.
+    target->compCrossfadeMs =
+        std::clamp(recording.semantics.compCrossfadeMs, 0.0, 20.0);
+
     for (const RecordingSpan& pass : passes) {
         const double length = pass.endSeconds - pass.startSeconds;
         if (length <= 0.0) continue;
@@ -10740,7 +11518,7 @@ void EngineController::landCapture(TrackModel& track, const Capture& capture,
         // The newest take is the one you want to hear — over its own region when
         // takes are trimmed to what was recorded, over the whole clip otherwise
         // (the renderer clamps to available material, so the rest is silence).
-        if (m_recording.trimTakesToRegion) {
+        if (recording.semantics.trimTakesToRegion) {
             const double from = pass.startSeconds - target->startSeconds;
             setCompRange(*target, takeId, from, from + length);
         } else {
@@ -10748,11 +11526,13 @@ void EngineController::landCapture(TrackModel& track, const Capture& capture,
         }
     }
 
-    if (m_recording.autoExpandAfterRecord) target->expanded = true;
+    if (recording.semantics.autoExpandAfterRecord) target->expanded = true;
 }
 
-std::string EngineController::stopRecording() {
-    if (m_captures.empty()) return {};
+EngineController::FinalizedRecordingRun
+EngineController::finalizeRecordingCapture() {
+    FinalizedRecordingRun run;
+    if (m_captures.empty()) return run;
 
     // Take the transport out of record but leave it rolling, so punching out
     // does not also stop playback.
@@ -10762,6 +11542,102 @@ std::string EngineController::stopRecording() {
     m_captures.clear();
     m_recordingTracks.clear();
     publishRecorders();          // the audio thread stops tapping them here
+    run.tracks.reserve(captures.size());
+
+    for (Capture& capture : captures) {
+        FinalizedRecordingTrack recording;
+        recording.trackId = capture.trackId;
+        recording.closedWavPath = capture.path;
+        recording.startSeconds = capture.startSeconds;
+        recording.semantics = capture.semantics;
+
+        if (capture.recorder) {
+            if (capture.recorder->isRecording())
+                capture.recorder->stopRecording();
+            // `session().filePath` survives stop: only its transient state flag
+            // returns to Idle. It is the authority for the name minted by the
+            // recorder, while `capture.path` remains a defensive fallback.
+            const audio::RecordingSession session = capture.recorder->session();
+            if (!session.filePath.empty())
+                recording.closedWavPath = session.filePath;
+            recording.sampleRate = session.sampleRate;
+            recording.channels = session.channelCount;
+            recording.capturedFrames = session.capturedFrames > 0
+                ? std::uint64_t(session.capturedFrames)
+                : 0;
+            recording.writtenFrames = session.writtenFrames > 0
+                ? std::uint64_t(session.writtenFrames)
+                : 0;
+            recording.droppedFrames = session.droppedFrames;
+            recording.fileWriteSucceeded = session.fileWriteSucceeded;
+            recording.frames = recording.writtenFrames;
+        }
+
+        TrackModel* track = m_project.findTrack(capture.trackId);
+        if (track) {
+            // Monitoring/arm/input are local session state even though the
+            // legacy runtime stores them on TrackModel. Restore only what this
+            // capture owned, using the policy frozen when it began.
+            if (capture.monitorManaged) {
+                switch (capture.semantics.monitorStopPolicy) {
+                    case MonitorStopPolicy::KeepOn: break;
+                    case MonitorStopPolicy::ReturnToPrevious:
+                        if (track->monitorAuto)
+                            track->monitor = capture.monitorBefore;
+                        break;
+                    case MonitorStopPolicy::AutoDisable:
+                        if (track->monitorAuto) track->monitor = false;
+                        break;
+                }
+            }
+            track->armed = capture.armedBefore;
+        }
+
+        // A cloud Stop needs metadata, not a decoded copy of the whole take.
+        // Loading here retained every recovery-only WAV in the project sample
+        // cache and could exhaust memory before its recovery sidecar was written.
+        // The shared probe opens only the container header and also gives this
+        // path a non-throwing readability check. A failed final flush/header
+        // does not erase either the raw path or the writer-confirmed prefix:
+        // when the prefix still probes, it remains available for recovery.
+        if (!recording.closedWavPath.empty()) {
+            audio::platform::AudioFileInfo info;
+            if (audio::platform::probeAudioFile(recording.closedWavPath, info) &&
+                info.sampleRate > 0.0 && info.frames > 0 && info.channels > 0) {
+                recording.audioReadable = true;
+                recording.frames = std::uint64_t(info.frames);
+                recording.sampleRate = info.sampleRate;
+                recording.channels = std::uint32_t(info.channels);
+                recording.durationSeconds = info.durationSeconds();
+            }
+        }
+
+        recording.passes = capturePasses(
+            recording.semantics, recording.startSeconds,
+            recording.durationSeconds);
+        // Stopping the instant it started leaves no document material, but the
+        // closed WAV still belongs in the finalized run for crash recovery.
+        std::erase_if(recording.passes, [](const RecordingSpan& pass) {
+            return pass.endSeconds - pass.startSeconds <= 0.01;
+        });
+        if (!recording.semantics.loopCreatesTakes &&
+            recording.passes.size() > 1) {
+            recording.passes.erase(recording.passes.begin(),
+                                   recording.passes.end() - 1);
+        }
+        run.tracks.push_back(std::move(recording));
+    }
+
+    // Recorder taps have gone and automatic arm/monitor state was restored.
+    // This rebuild is purely a local engine projection; the shared document is
+    // byte-for-byte untouched by capture finalization.
+    rebuildGraph();
+    return run;
+}
+
+std::string EngineController::stopRecording() {
+    FinalizedRecordingRun run = finalizeRecordingCapture();
+    if (run.empty()) return {};
 
     struct Landing {
         std::string trackId;
@@ -10771,49 +11647,18 @@ std::string EngineController::stopRecording() {
     std::vector<Landing> landings;
     std::string firstPath;
 
-    for (Capture& capture : captures) {
-        if (!capture.recorder) continue;
-        capture.recorder->stopRecording();
-        // `session().filePath` survives the stop — the recorder resets its state
-        // but keeps what it wrote, which is the only place the real name is.
-        std::string path = capture.recorder->session().filePath;
-        if (path.empty()) path = capture.path;
-
-        auto* track = m_project.findTrack(capture.trackId);
-        if (!track) continue;
-
-        // Only what the recording opened does the recording close. With
-        // automatic monitoring off nothing here was ours to touch, so a monitor
-        // the user opened by hand stays exactly as they left it.
-        if (m_recording.autoMonitorOnRecord) {
-            switch (m_recording.monitorStopPolicy) {
-                case MonitorStopPolicy::KeepOn: break;
-                case MonitorStopPolicy::ReturnToPrevious:
-                    if (track->monitorAuto) track->monitor = capture.monitorBefore;
-                    break;
-                case MonitorStopPolicy::AutoDisable:
-                    if (track->monitorAuto) track->monitor = false;
-                    break;
-            }
-        }
-        // Recording armed the track on its own; it hands it back the same way.
-        // Left armed, the track keeps a live input node open for good and the
-        // next take's "before" state is a lie.
-        track->armed = capture.armedBefore;
-
-        if (path.empty() || !fs::exists(path)) continue;
-        auto samples = loadSamples(path);
-        if (!samples || samples->sampleRate() <= 0.0) continue;
-        const double length = double(samples->frames()) / samples->sampleRate();
+    for (const FinalizedRecordingTrack& recording : run.tracks) {
+        TrackModel* track = m_project.findTrack(recording.trackId);
+        if (!track || !recording.audioReadable) continue;
 
         Landing landing;
-        landing.trackId = capture.trackId;
+        landing.trackId = recording.trackId;
         landing.before = track->clips;
-        landCapture(*track, capture, path, length, int(samples->channels()));
+        landCapture(*track, recording);
         landing.after = track->clips;
         landings.push_back(std::move(landing));
 
-        if (firstPath.empty()) firstPath = path;
+        if (firstPath.empty()) firstPath = recording.closedWavPath;
     }
 
     // Snapshot-and-restore rather than inverse operations: one recording can
@@ -11461,7 +12306,8 @@ size_t EngineController::cropToComp(const std::string& trackId,
 
     // Crossfades read past a segment's edge, so the crop keeps a fade's worth of
     // margin — cropping flush would silence the seams it was meant to preserve.
-    const double margin = std::max(0.0, m_recording.compCrossfadeMs) / 1000.0;
+    const double margin =
+        std::clamp(clip->compCrossfadeMs, 0.0, 20.0) / 1000.0;
 
     size_t rewritten = 0;
     std::error_code ec;

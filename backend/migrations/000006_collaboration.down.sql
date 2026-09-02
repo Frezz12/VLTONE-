@@ -1,0 +1,13 @@
+DROP TABLE IF EXISTS project_leases;
+ALTER TABLE IF EXISTS project_live_sessions DROP CONSTRAINT IF EXISTS project_live_sessions_host_member_fk;
+DROP TABLE IF EXISTS project_session_members;
+DROP TABLE IF EXISTS project_live_sessions;
+DROP TABLE IF EXISTS project_snapshots;
+DROP TABLE IF EXISTS upload_sessions;
+DROP TABLE IF EXISTS project_assets;
+DROP TABLE IF EXISTS blobs;
+DROP TABLE IF EXISTS project_field_heads;
+DROP TABLE IF EXISTS project_ops;
+DROP TABLE IF EXISTS project_invites;
+DROP TABLE IF EXISTS project_members;
+DROP TABLE IF EXISTS cloud_projects;

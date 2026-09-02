@@ -76,6 +76,7 @@ const PluginDescriptor& SamplerInstance::staticDescriptor() noexcept {
         d.name = "Sampler";
         d.vendor = "VLT Studio Pro";
         d.version = "1.0";
+        d.stateSchemaVersion = kStateVersion;
         d.category = "Instrument";
         d.isInstrument = true;
         d.hasEditor = false;

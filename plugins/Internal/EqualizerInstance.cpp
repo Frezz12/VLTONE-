@@ -328,6 +328,7 @@ const PluginDescriptor& EqualizerInstance::staticDescriptor() noexcept {
         d.name = "VLT Equalizer";
         d.vendor = "VLT Studio Pro";
         d.version = "1.0";
+        d.stateSchemaVersion = kStateVersion;
         d.category = "Effect|EQ";
         d.isInstrument = false;
         d.hasEditor = false;

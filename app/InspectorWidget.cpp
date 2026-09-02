@@ -67,10 +67,11 @@ void InspectorWidget::buildUi() {
     m_nameEdit->setFocusPolicy(Qt::ClickFocus);
     connect(m_nameEdit, &QLineEdit::editingFinished, this, [this] {
         if (m_trackId.isEmpty()) return;
-        m_controller->renameTrack(m_trackId.toStdString(),
-                                  m_nameEdit->text().toStdString());
+        const auto result = m_controller->renameTrack(
+            m_trackId.toStdString(), m_nameEdit->text().toStdString());
         m_nameEdit->clearFocus();
-        emit edited();
+        loadProperties();
+        emit edited(daw::collab::marksLocalFileDirty(result));
     });
 
     auto* colorRow = new QHBoxLayout;

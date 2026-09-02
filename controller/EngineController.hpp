@@ -8,6 +8,8 @@
 #include "AudioAnalysis.hpp"
 #include "AudioMusicalAnalysis.hpp"
 #include "WaveformCache.hpp"
+#include "cloud/CloudPublicationCapture.hpp"
+#include "collaboration/SharedMutationSink.hpp"
 #include "plugins/PluginManager.hpp"
 
 #include "Host/PluginNode.hpp"
@@ -99,6 +101,23 @@ public:
     EngineController(const EngineController&) = delete;
     EngineController& operator=(const EngineController&) = delete;
 
+    /// Install the synchronous, non-owning bridge used for shared document
+    /// mutations.  The owner must detach it before destroying the sink.
+    void attachSharedMutationSink(collab::SharedMutationSink& sink) noexcept {
+        m_sharedMutationSink = &sink;
+    }
+    /// Detach only if `sink` is still the active bridge.  Conditional detach
+    /// prevents an older bridge's teardown from clearing a newer attachment.
+    bool detachSharedMutationSink(
+        const collab::SharedMutationSink& sink) noexcept {
+        if (m_sharedMutationSink != &sink) return false;
+        m_sharedMutationSink = nullptr;
+        return true;
+    }
+    const collab::SharedMutationSink* sharedMutationSink() const noexcept {
+        return m_sharedMutationSink;
+    }
+
     /// Handles of the engine nodes that make up one channel. Exposed so tools
     /// and tests can look at what the routing actually compiled to.
     struct TrackNodes {
@@ -160,6 +179,28 @@ public:
 
     audio::Result saveProject(const std::string& packageDir);
     audio::Result openProject(const std::string& packageDir);
+    /// Freeze the current local document and every built-in plugin instance
+    /// into a move-only upload staging object. This never changes the live
+    /// project, transport or undo stack. The returned sources deliberately do
+    /// not carry SHA-256 values yet: hashing belongs to the publisher worker,
+    /// not to this control-thread/plugin seam.
+    cloud::CloudPublicationCapture captureCloudPublicationV1(
+        const std::string& stagingParent = {});
+    /// Replace only the engine-facing materialization of a cloud document.
+    ///
+    /// `runtimeDocument` is a disposable edge copy: cloud AssetRef values have
+    /// already been resolved to cache paths and per-user transport/UI fields
+    /// have already been overlaid.  The shared reducer document is never
+    /// passed here by mutable reference.  This path records no legacy undo and
+    /// performs a transactional model/graph swap on the control thread; a
+    /// failed graph compilation restores the previous model and graph.
+    ///
+    /// Initial verified snapshots set `clearLegacyUndo`.  Subsequent
+    /// optimistic, acknowledged, remote and rebase projections leave the
+    /// (normally already empty) legacy stack untouched; typed cloud history is
+    /// authoritative for the session.
+    audio::Result materializeCollaborationProject(
+        ProjectModel runtimeDocument, bool clearLegacyUndo);
     /// Capture a complete crash-recovery generation. Must be called on the
     /// message/control thread: plugin formats require saveState there.
     /// Limit opaque plugin serialization when polling native editors. Cached
@@ -216,17 +257,17 @@ public:
     // ── Tempo / time signature ──
     void setTempo(double bpm);
     double tempo() const { return m_project.tempo; }
-    void setTimeSignature(int numerator, int denominator);
+    collab::SharedMutationResult setTimeSignature(int numerator,
+                                                  int denominator);
 
     /// The key the project is in: a pitch class (0 = C) and a scale id from
     /// `miditools::scaleId`. Advisory — nothing is forced into it — but it is
     /// what the assistant writes against, so a wrong key is heard immediately.
-    void setProjectKey(int root, const std::string& scaleId);
+    collab::SharedMutationResult setProjectKey(int root,
+                                               const std::string& scaleId);
     /// Standing instructions the assistant works under for this project.
     /// Not undoable: it is a preference about the work, not part of it.
-    void setAiInstructions(std::string text) {
-        m_project.aiInstructions = std::move(text);
-    }
+    collab::SharedMutationResult setAiInstructions(std::string text);
     const std::string& aiInstructions() const { return m_project.aiInstructions; }
 
     int keyRoot() const { return m_project.keyRoot; }
@@ -256,7 +297,8 @@ public:
     // ── Tracks ──
     std::string addTrack(TrackKind kind, const std::string& name = "");
     void removeTrack(const std::string& trackId);
-    void renameTrack(const std::string& trackId, const std::string& name);
+    collab::SharedMutationResult renameTrack(const std::string& trackId,
+                                             const std::string& name);
     void setTrackVolume(const std::string& trackId, float volume);
     void setTrackPan(const std::string& trackId, float pan);
     /// Continuous mixer preview. These update the document and engine without
@@ -271,7 +313,13 @@ public:
         const std::string& label = "Set Pan");
     /// Fold the track to mono (true) or keep it stereo (false).
     void setTrackMono(const std::string& trackId, bool mono);
-    void setTrackMuted(const std::string& trackId, bool muted);
+    collab::SharedMutationResult setTrackMuted(const std::string& trackId,
+                                               bool muted);
+    /// Atomically apply one mute gesture to several stable track IDs. Plain
+    /// folders include their descendants; duplicate IDs are removed before
+    /// the collaboration sink or local document sees the gesture.
+    collab::SharedMutationResult setTracksMuted(
+        std::span<const std::string> trackIds, bool muted);
     void setTrackSoloed(const std::string& trackId, bool soloed);
     /// Is anything soloed / muted right now? What a "clear all" control lights
     /// itself from, so the UI never keeps its own copy of the answer.
@@ -279,7 +327,7 @@ public:
     bool anyMuted() const;
     /// Lift every solo / every mute in the project, in one go.
     void clearAllSolos();
-    void clearAllMutes();
+    collab::SharedMutationResult clearAllMutes();
     void setTrackArmed(const std::string& trackId, bool armed);
     /// Input monitoring for one track: the graph grows a live input node feeding
     /// that channel's fader.
@@ -626,6 +674,11 @@ public:
     void loadSamplerSampleSilently(const std::string& channelId,
                                    const std::string& slotId,
                                    const std::string& filePath);
+    /// Unload a sampler asset without manufacturing a local UndoStack entry.
+    /// Used when a cloud binding is absent or not downloaded yet, so stale
+    /// bytes from a previous projection cannot continue sounding.
+    void clearSamplerSampleSilently(const std::string& channelId,
+                                    const std::string& slotId);
 
     /// Put the built-in sampler in the track's instrument slot and load
     /// `filePath` into it — what dropping a sample on the slot means.
@@ -1270,6 +1323,56 @@ public:
         bool manualMonitorDisablesAuto = true;
     };
 
+    /// Immutable recording decisions captured at the instant audio capture
+    /// starts. A take must not change from Layers to Overwrite (or acquire a
+    /// different loop split) because Preferences or the local loop were edited
+    /// while its recorder was running.
+    struct FrozenRecordingSemantics {
+        RecordMode mode = RecordMode::Overwrite;
+        bool loopEnabled = false;
+        double loopStartSeconds = 0.0;
+        double loopEndSeconds = 0.0;
+        bool loopCreatesTakes = true;
+        bool trimTakesToRegion = true;
+        bool autoExpandAfterRecord = false;
+        double compCrossfadeMs = 5.0;
+        bool autoMonitorOnRecord = true;
+        MonitorStopPolicy monitorStopPolicy =
+            MonitorStopPolicy::ReturnToPrevious;
+    };
+
+    /// One closed local capture. The raw path and accounting survive every
+    /// writer outcome. `audioReadable` means a non-empty WAV passed a metadata
+    /// probe; it may still be a recoverable prefix when `fileWriteSucceeded`
+    /// is false.
+    struct FinalizedRecordingTrack {
+        std::string trackId;
+        std::string closedWavPath;
+        double startSeconds = 0.0;
+        double durationSeconds = 0.0;
+        /// Frames described by the probed WAV, or the writer-confirmed prefix
+        /// when the container could not be probed.
+        std::uint64_t frames = 0;
+        std::uint64_t capturedFrames = 0;
+        std::uint64_t writtenFrames = 0;
+        std::uint64_t droppedFrames = 0;
+        double sampleRate = 0.0;
+        std::uint32_t channels = 0;
+        std::vector<RecordingSpan> passes;
+        FrozenRecordingSemantics semantics;
+        bool fileWriteSucceeded = false;
+        bool audioReadable = false;
+    };
+
+    /// Capture finalization is deliberately separate from document landing.
+    /// Cloud recording can retain/upload these files without touching shared
+    /// clips or entering the closure-based local undo stack.
+    struct FinalizedRecordingRun {
+        std::vector<FinalizedRecordingTrack> tracks;
+
+        bool empty() const noexcept { return tracks.empty(); }
+    };
+
     const RecordingPrefs& recordingPrefs() const { return m_recording; }
     void setRecordingPrefs(const RecordingPrefs& prefs);
 
@@ -1278,6 +1381,20 @@ public:
     /// monitor. For a counted-in start use `armCountIn`.
     bool startRecording(const std::string& trackId);
     bool startRecordingTracks(const std::vector<std::string>& trackIds);
+    /// Strict seam for cloud recording: every id must be unique, exist, and be
+    /// recordable. The start is all-or-nothing; a recorder failure closes any
+    /// recorder already prepared and publishes no partial capture set.
+    bool canStartRecordingTracksExactly(
+        const std::vector<std::string>& trackIds) const;
+    bool startRecordingTracksExactly(
+        const std::vector<std::string>& trackIds);
+    /// Count-in counterpart of the exact start. Its final beat preserves the
+    /// same all-target rule instead of falling back to the legacy subset path.
+    bool armCountInExactly(const std::vector<std::string>& trackIds,
+                           int beats);
+    /// Stop and close active recorders, restoring local input state and the
+    /// graph, but never mutating clips/takes/comp or pushing an undo entry.
+    FinalizedRecordingRun finalizeRecordingCapture();
     /// Stop and land what was captured: as a replacement clip in Overwrite mode,
     /// or as one take per loop pass in Layer mode. Returns the path of the
     /// captured file for the first track (empty when nothing was recorded).
@@ -1565,6 +1682,7 @@ private:
     std::unique_ptr<DeviceCallback> m_callback;
 
     ProjectModel m_project;
+    collab::SharedMutationSink* m_sharedMutationSink = nullptr;
     UndoStack m_undo;
     WaveformCache m_waveforms;
     PluginManager m_pluginManager;
@@ -1811,6 +1929,9 @@ private:
         double startSeconds = 0.0;      ///< timeline position recording began
         bool monitorBefore = false;     ///< monitor state to restore on stop
         bool armedBefore = false;
+        bool monitorAutoBefore = false; ///< exact-start rollback only
+        bool monitorManaged = false;
+        FrozenRecordingSemantics semantics;
         /// Input peak per bucket since the capture began, for the growing
         /// waveform the arrangement draws inside the take-to-be. A bucket is a
         /// fixed slice of *recorded* time rather than one UI frame: the frame
@@ -1832,6 +1953,7 @@ private:
     std::vector<std::string> m_countInTracks;
     int m_countInBeatsLeft = 0;
     double m_countInToNextBeat = 0.0;
+    bool m_countInRequiresExactTargets = false;
     /// Each count-in target's monitor state before the count-in opened it, so
     /// cancelling puts it back and the take that follows knows what "before"
     /// really was.
@@ -1849,25 +1971,28 @@ private:
     /// only listen when no other track is already carrying the same input.
     /// Marks the track as auto-managed either way.
     void applySmartMonitoring(TrackModel& track);
-    /// Where the transport wrapped, in seconds within the captured file. Derived
-    /// from the loop range and the start position rather than sampled while
-    /// rolling, so a boundary is exact instead of a block late.
-    std::vector<double> loopPassBoundaries(double startSeconds,
-                                           double capturedLength) const;
+    bool startRecordingTracksImpl(const std::vector<std::string>& trackIds,
+                                  bool requireEveryTarget);
+    bool armCountInImpl(const std::vector<std::string>& trackIds, int beats,
+                        bool requireEveryTarget);
+    FrozenRecordingSemantics frozenRecordingSemantics(
+        const std::string& trackId) const;
     /// The passes a capture of `capturedLength` seconds, punched in at
     /// `startSeconds`, has made: one span per stretch of timeline it wrote,
     /// each carrying its own offset into the capture. Loop recording makes
     /// several, everything else exactly one. Used both to land a finished take
     /// and to draw a running one, so what is drawn is what will land.
-    std::vector<RecordingSpan> capturePasses(double startSeconds,
-                                             double capturedLength) const;
+    static std::vector<RecordingSpan> capturePasses(
+        const FrozenRecordingSemantics& semantics, double startSeconds,
+        double capturedLength);
     /// Delete everything on the track between two timeline times, trimming the
     /// clips that straddle the edges rather than dropping them whole.
     void clearTrackRange(TrackModel& track, double from, double to);
-    /// Turn one finished capture into clips or takes on its track, per the
-    /// track's effective record mode. `capturedLength` is the file's duration.
-    void landCapture(TrackModel& track, const Capture& capture,
-                     const std::string& path, double capturedLength, int channels);
+    /// Turn one already-finalized capture into clips or takes on its track.
+    /// Every decision comes from the frozen result; current preferences are
+    /// deliberately irrelevant here.
+    void landCapture(TrackModel& track,
+                     const FinalizedRecordingTrack& recording);
 
     /// Put every track's output back where its folders say it belongs, after
     /// anything that changed the tree: a track inside a summing folder feeds

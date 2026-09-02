@@ -45,6 +45,39 @@ int main() {
     recorder.initialize(kRate, 2);
     check(recorder.writeWAVFile(path, tone, kRate).isOk(), "writes a WAV file");
 
+    // The realtime recorder reports producer acceptance separately from the
+    // writer-confirmed file prefix. A successful Stop is the point at which
+    // the latter becomes a durable, finalized WAV claim.
+    {
+        AudioRecorder capture;
+        check(capture.initialize(kRate, 2).isOk(),
+              "initializes the realtime WAV recorder");
+        capture.setRecordPath((dir / "recordings").string());
+        if (check(capture.startRecording(7, 0).isOk(),
+                  "starts a realtime WAV capture")) {
+            capture.process(tone, kFrames);
+            const RecordingSession inFlight = capture.session();
+            check(inFlight.capturedFrames == kFrames &&
+                      inFlight.recordedSamples == kFrames &&
+                      inFlight.droppedFrames == 0 &&
+                      !inFlight.fileWriteSucceeded,
+                  "in-flight accounting is capture-only, not a durability claim");
+
+            const Result stopped = capture.stopRecording();
+            const RecordingSession completed = capture.session();
+            platform::AudioFileInfo capturedInfo;
+            check(stopped.isOk() && completed.fileWriteSucceeded &&
+                      completed.capturedFrames == kFrames &&
+                      completed.recordedSamples == kFrames &&
+                      completed.writtenFrames == kFrames &&
+                      completed.droppedFrames == 0 &&
+                      platform::probeAudioFile(completed.filePath,
+                                               capturedInfo) &&
+                      capturedInfo.frames == kFrames,
+                  "Stop confirms exact captured/written/dropped frame accounting");
+        }
+    }
+
     // ── libsndfile decode ──
     platform::DecodedAudio decoded;
     check(platform::decodeAudioFile(path, decoded).isOk(),

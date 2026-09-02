@@ -19,6 +19,9 @@ public:
 
     const QString& trackId() const { return m_trackId; }
     const QString& clipId() const { return m_clipId; }
+    /// The application-owned sampler panel. Presence attaches here and never
+    /// to a file dialog or to any path-bearing label value.
+    QWidget* collaborationPresenceSurface() const;
 
     /// Forwarded to the panel: the arrangement's grid, so stretching a clip
     /// can land its end on a bar line.

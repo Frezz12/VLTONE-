@@ -235,6 +235,414 @@ paths:
         "200": { description: The prompt pack }
         "304": { description: Unchanged since the cached copy }
         "503": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects:
+    get:
+      operationId: listCloudProjects
+      summary: List cloud projects visible to the signed-in desktop user
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200":
+          description: Projects owned by or shared with the user
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [projects]
+                properties:
+                  projects: { type: array, items: { $ref: "#/components/schemas/CloudProjectView" } }
+    post:
+      operationId: createCloudProject
+      summary: Create an uploading cloud-project shell
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateCloudProjectRequest" } } }
+      responses:
+        "201": { description: Uploading project created, content: { application/json: { schema: { $ref: "#/components/schemas/CloudProjectView" } } } }
+        "422": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+    get:
+      operationId: getCloudProject
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200": { description: Project and caller role, content: { application/json: { schema: { $ref: "#/components/schemas/CloudProjectView" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateCloudProject
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UpdateCloudProjectRequest" } } }
+      responses:
+        "200": { description: Project updated, content: { application/json: { schema: { $ref: "#/components/schemas/CloudProjectView" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: archiveCloudProject
+      summary: Archive the project after any live session has an exact-head snapshot
+      security: [{ desktopBearer: [] }]
+      responses:
+        "204": { description: Archived }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/publish:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+    post:
+      operationId: completeCloudProjectPublication
+      summary: Atomically activate an uploading project after a verified head snapshot and assets exist
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200": { description: Project activated, content: { application/json: { schema: { $ref: "#/components/schemas/CloudProjectView" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/bootstrap:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+      - { name: after_seq, in: query, schema: { type: integer, format: int64, minimum: 0, default: 0 } }
+      - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 2000, default: 500 } }
+    get:
+      operationId: bootstrapCloudProject
+      summary: Fetch the newest snapshot plus the ordered operation page after a sequence
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200": { description: Bootstrap materialization input, content: { application/json: { schema: { $ref: "#/components/schemas/CloudProjectBootstrap" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/ops:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+    post:
+      operationId: appendCloudProjectOperation
+      summary: Sequence one durable command for an editor joined from this device
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "../../protocol/schema/project-command-v1.schema.json" }
+      responses:
+        "201": { description: New operation committed, content: { application/json: { schema: { $ref: "#/components/schemas/AppendOperationResult" } } } }
+        "200": { description: Idempotent retry returned the original operation, content: { application/json: { schema: { $ref: "#/components/schemas/AppendOperationResult" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/ops/{opId}:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+      - { $ref: "#/components/parameters/OpId" }
+    get:
+      operationId: getCloudProjectOperationStatus
+      summary: Authoritatively check whether an operation identifier is durable at the current project head
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200": { description: Operation durability status; an absent operation is not an error, content: { application/json: { schema: { $ref: "#/components/schemas/OperationStatus" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/asset-uploads/prepare:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+    post:
+      operationId: prepareCloudProjectAssetUpload
+      summary: Deduplicate an asset or prepare bounded single/multipart staging PUTs
+      description: Large objects use provider-side multipart upload. partNumberStart explicitly pages missing part URLs without changing uploadId idempotency. Returned URLs are sensitive delegated access and must never be logged; the opaque provider upload identifier is never returned separately. Object keys contain UUIDs only, never client filenames or paths.
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PrepareAssetUploadRequest" } } }
+      responses:
+        "200": { description: Idempotent upload preparation, content: { application/json: { schema: { $ref: "#/components/schemas/UploadPreparation" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/asset-uploads/{uploadId}/complete:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/UploadId" }]
+    post:
+      operationId: completeCloudProjectAssetUpload
+      summary: Stream, hash, seal and atomically link an uploaded asset
+      description: The server independently verifies exact SHA-256 and byte size, promotes into immutable content-addressed storage, then creates the project asset. Client checksum metadata alone is never trusted.
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: "#/components/schemas/CompleteMultipartUploadRequest" } } }
+      responses:
+        "200": { description: Asset is verified and may now be referenced by a document command, content: { application/json: { schema: { $ref: "#/components/schemas/CompletedProjectAsset" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/uploads/{uploadId}:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/UploadId" }]
+    delete:
+      operationId: abortCloudProjectUpload
+      summary: Idempotently abort an open asset or snapshot staging upload
+      security: [{ desktopBearer: [] }]
+      responses:
+        "204": { description: Upload aborted; staging cleanup is asynchronous-safe }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/snapshot-uploads/prepare:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+    post:
+      operationId: prepareCloudProjectSnapshotUpload
+      summary: Deduplicate or prepare a resumable canonical v6 snapshot at the exact requested head
+      description: Initial publication is owner-authorized. During a live session, only the server-assigned host for a pending snapshot.requested target may prepare the upload; an ending session keeps that target frozen. assetIds is the exact set of AssetRefs parsed from the canonical snapshot; the server normalizes it and verifies every declared project asset before prepare and complete.
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PrepareSnapshotUploadRequest" } } }
+      responses:
+        "200": { description: Idempotent snapshot upload preparation, content: { application/json: { schema: { $ref: "#/components/schemas/UploadPreparation" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/snapshot-uploads/{uploadId}/complete:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/UploadId" }]
+    post:
+      operationId: completeCloudProjectSnapshotUpload
+      summary: Verify a canonical snapshot and attach it only at the exact requested current head
+      description: Provider bytes are verified before the database transaction. For session_end, linking the exact snapshot, completing the request, and changing the live session from ending to ended are one transaction.
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: "#/components/schemas/CompleteMultipartUploadRequest" } } }
+      responses:
+        "200": { description: Snapshot verified and attached, content: { application/json: { schema: { $ref: "#/components/schemas/CompletedProjectSnapshot" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/assets/{assetId}/download:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+      - { name: assetId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: prepareCloudProjectAssetDownload
+      summary: Issue an authorized short-lived GET for a verified asset
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200": { description: Sensitive short-lived download request, content: { application/json: { schema: { $ref: "#/components/schemas/PresignedDownload" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/snapshots/{snapshotId}/download:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+      - { name: snapshotId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: prepareCloudProjectSnapshotDownload
+      summary: Issue an authorized short-lived GET for a verified bootstrap snapshot
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200": { description: Sensitive short-lived download request, content: { application/json: { schema: { $ref: "#/components/schemas/PresignedDownload" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/members:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+    get:
+      operationId: listCloudProjectMembers
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200":
+          description: Project members other than the owner
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [members]
+                properties:
+                  members: { type: array, items: { $ref: "#/components/schemas/ProjectMember" } }
+  /v1/desktop/projects/{projectId}/members/{userId}:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+      - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      operationId: putCloudProjectMember
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [role, color_index]
+              properties:
+                role: { enum: [editor, viewer] }
+                color_index: { type: integer, minimum: 0, maximum: 31 }
+      responses:
+        "200": { description: Member role saved, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectMember" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeCloudProjectMember
+      security: [{ desktopBearer: [] }]
+      responses:
+        "204": { description: Member removed and active devices evicted }
+        "403": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/ownership:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+    post:
+      operationId: transferCloudProjectOwnership
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [targetUserId]
+              properties: { targetUserId: { type: string, format: uuid } }
+      responses:
+        "200": { description: Ownership transferred }
+        "403": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/invites:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+    post:
+      operationId: createCloudProjectInvite
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateProjectInviteRequest" } } }
+      responses:
+        "201": { description: One-use invitation; token is returned only here, content: { application/json: { schema: { $ref: "#/components/schemas/CreatedProjectInvite" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/invites/{inviteId}:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+      - { name: inviteId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      operationId: revokeCloudProjectInvite
+      security: [{ desktopBearer: [] }]
+      responses:
+        "204": { description: Invitation revoked }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/desktop/project-invites/accept:
+    post:
+      operationId: acceptCloudProjectInvite
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token]
+              properties: { token: { type: string, minLength: 32, maxLength: 256, writeOnly: true } }
+      responses:
+        "200": { description: Membership created, content: { application/json: { schema: { $ref: "#/components/schemas/CloudProjectView" } } } }
+        "410": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+    post:
+      operationId: startCloudProjectSession
+      summary: Owner-only live-session start
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartProjectSessionRequest" }
+      responses:
+        "201": { description: Session started and owner device joined, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectSessionState" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/active:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+    get:
+      operationId: getActiveCloudProjectSession
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200": { description: Active session, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectSessionState" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+      - { $ref: "#/components/parameters/SessionId" }
+    delete:
+      operationId: endCloudProjectSession
+      summary: Freeze and end a session as its host or project owner
+      description: If head_seq is not yet snapshotted, the session enters ending and remains recoverable until the assigned host uploads a verified exact-head snapshot. The WebSocket session.ended event is emitted only after that commit.
+      security: [{ desktopBearer: [] }]
+      responses:
+        "204": { description: End accepted; the session is ended now or is waiting in ending for its exact-head snapshot }
+        "403": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/join:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
+    post:
+      operationId: joinCloudProjectSession
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SessionCompatibilityRequest" }
+      responses:
+        "200": { description: Device joined, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectSessionState" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/leave:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
+    post:
+      operationId: leaveCloudProjectSession
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200": { description: Device left and host was reconciled, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectSessionState" } } } }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/heartbeat:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
+    post:
+      operationId: heartbeatCloudProjectSession
+      security: [{ desktopBearer: [] }]
+      responses: { "200": { description: Presence lease refreshed } }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/host:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
+    post:
+      operationId: handoffCloudProjectSessionHost
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [target_member_id]
+              properties: { target_member_id: { type: string, format: uuid } }
+      responses:
+        "200": { description: Host changed, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectSessionState" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/leases:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
+    post:
+      operationId: acquireProjectRecordingLease
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/TrackLeaseRequest" } } }
+      responses:
+        "201": { description: Exclusive track recording lease granted, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectTrackLease" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/leases/{leaseId}:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+      - { $ref: "#/components/parameters/SessionId" }
+      - { name: leaseId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: renewProjectRecordingLease
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties: { ttl_seconds: { type: integer, minimum: 5, maximum: 120 } }
+      responses:
+        "200": { description: Lease renewed, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectTrackLease" } } } }
+    delete:
+      operationId: releaseProjectRecordingLease
+      security: [{ desktopBearer: [] }]
+      responses:
+        "204": { description: Lease released }
   /v1/admin/ai/prompts:
     get:
       operationId: adminListAIPrompts
@@ -527,6 +935,10 @@ components:
   parameters:
     UserId: { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
     DeviceId: { name: deviceId, in: path, required: true, schema: { type: string, format: uuid } }
+    ProjectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
+    OpId: { name: opId, in: path, required: true, schema: { type: string, format: uuid } }
+    SessionId: { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
+    UploadId: { name: uploadId, in: path, required: true, schema: { type: string, format: uuid } }
     BugId: { name: bugId, in: path, required: true, schema: { type: string, format: uuid } }
     AttachmentId: { name: attachmentId, in: path, required: true, schema: { type: string, format: uuid } }
     CrashId: { name: crashId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -603,6 +1015,396 @@ components:
         message: { type: string }
         field_errors: { type: object, additionalProperties: { type: string } }
         request_id: { type: string }
+    CloudProject:
+      type: object
+      additionalProperties: false
+      required: [id, owner_user_id, title, status, format_version, engine_version, minimum_app_version, head_seq, snapshot_seq, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        owner_user_id: { type: string, format: uuid }
+        title: { type: string, minLength: 1, maxLength: 160 }
+        status: { enum: [uploading, active, read_only, conflict, archived] }
+        format_version: { type: integer, minimum: 1 }
+        engine_version: { type: string, maxLength: 64 }
+        minimum_app_version: { type: string, maxLength: 64 }
+        head_seq: { type: integer, format: int64, minimum: 0 }
+        snapshot_seq: { type: integer, format: int64, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        archived_at: { type: [string, "null"], format: date-time }
+    CloudProjectView:
+      type: object
+      additionalProperties: false
+      required: [project, role]
+      properties:
+        project: { $ref: "#/components/schemas/CloudProject" }
+        role: { enum: [owner, editor, viewer] }
+    CreateCloudProjectRequest:
+      type: object
+      additionalProperties: false
+      required: [title, format_version, engine_version, minimum_app_version]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 160 }
+        format_version: { const: 6 }
+        engine_version: { type: string, minLength: 1, maxLength: 64 }
+        minimum_app_version: { type: string, minLength: 1, maxLength: 64 }
+    UpdateCloudProjectRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title: { type: string, minLength: 1, maxLength: 160 }
+        engine_version: { type: string, maxLength: 64 }
+        minimum_app_version: { type: string, maxLength: 64 }
+    ProjectMember:
+      type: object
+      additionalProperties: false
+      required: [project_id, user_id, role, color_index, joined_at, updated_at]
+      properties:
+        project_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        role: { enum: [editor, viewer] }
+        color_index: { type: integer, minimum: 0, maximum: 31 }
+        invited_by: { type: [string, "null"], format: uuid }
+        joined_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateProjectInviteRequest:
+      type: object
+      additionalProperties: false
+      required: [role]
+      properties:
+        role: { enum: [editor, viewer] }
+        targetEmail: { type: string, format: email, maxLength: 320 }
+        expiresInSeconds: { type: integer, format: int64, minimum: 3600, maximum: 2592000, default: 604800 }
+    ProjectInvite:
+      type: object
+      additionalProperties: false
+      required: [id, project_id, role, expires_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        project_id: { type: string, format: uuid }
+        invited_by: { type: [string, "null"], format: uuid }
+        role: { enum: [editor, viewer] }
+        expires_at: { type: string, format: date-time }
+        accepted_by: { type: [string, "null"], format: uuid }
+        accepted_at: { type: [string, "null"], format: date-time }
+        revoked_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+    CreatedProjectInvite:
+      type: object
+      additionalProperties: false
+      required: [invite, token]
+      properties:
+        invite: { $ref: "#/components/schemas/ProjectInvite" }
+        token: { type: string, writeOnly: true }
+    ProjectSnapshot:
+      type: object
+      additionalProperties: false
+      required: [id, project_id, seq, blob_id, schema_version, asset_ids, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        project_id: { type: string, format: uuid }
+        seq: { type: integer, format: int64, minimum: 0 }
+        blob_id: { type: string, format: uuid }
+        schema_version: { type: integer, minimum: 1 }
+        asset_ids:
+          type: array
+          maxItems: 100000
+          uniqueItems: true
+          description: Exact normalized lexicographically sorted manifest; clients must compare it with AssetRefs parsed from the downloaded canonical snapshot.
+          items: { type: string, format: uuid, pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+    PrepareAssetUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [uploadId, assetId, sha256, byteSize, kind, contentType, displayName]
+      properties:
+        uploadId: { type: string, format: uuid, description: Client-generated idempotency identifier }
+        assetId: { type: string, format: uuid, description: Stable document asset identifier }
+        sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        byteSize: { type: integer, format: int64, minimum: 1, maximum: 68719476736 }
+        kind: { enum: [audio, sample, plugin_state, other] }
+        contentType: { type: string, minLength: 1, maxLength: 160 }
+        displayName: { type: string, minLength: 1, maxLength: 255, description: Basename only; directory components are discarded }
+        partNumberStart: { type: integer, minimum: 1, maximum: 1000, description: Explicit first part considered for this missing-URL page; omitted means 1 and is excluded from the upload idempotency hash }
+    PrepareSnapshotUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [uploadId, seq, schemaVersion, sha256, byteSize, contentType, assetIds]
+      properties:
+        uploadId: { type: string, format: uuid, description: Client-generated idempotency identifier }
+        seq: { type: integer, format: int64, minimum: 0 }
+        schemaVersion: { const: 6 }
+        sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        byteSize: { type: integer, format: int64, minimum: 1, maximum: 68719476736 }
+        contentType: { type: string, minLength: 1, maxLength: 160 }
+        assetIds:
+          type: array
+          maxItems: 100000
+          uniqueItems: true
+          description: Exact AssetRef identifiers in the canonical snapshot. Input order is arbitrary; the server canonicalizes it for upload idempotency. Use an empty array when there are no assets.
+          items: { type: string, format: uuid, pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" }
+        partNumberStart: { type: integer, minimum: 1, maximum: 1000, description: Explicit first part considered for this missing-URL page; omitted means 1 and is excluded from the upload idempotency hash }
+    CompleteMultipartPart:
+      type: object
+      additionalProperties: false
+      required: [partNumber, eTag]
+      properties:
+        partNumber: { type: integer, minimum: 1, maximum: 1000 }
+        eTag: { type: string, minLength: 1, maxLength: 256, description: Exact ETag response header, including provider quotes when present }
+    CompleteMultipartUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [parts]
+      properties:
+        parts:
+          type: array
+          minItems: 2
+          maxItems: 1000
+          description: Strictly ordered contiguous parts 1..N; the server compares every ETag and byte size with provider ListParts before signing completion
+          items: { $ref: "#/components/schemas/CompleteMultipartPart" }
+    PresignedRequest:
+      type: object
+      additionalProperties: false
+      required: [method, url, headers, expiresAt]
+      properties:
+        method: { enum: [PUT, GET] }
+        url: { type: string, format: uri, x-vlt-sensitive: true, description: Delegated URL; redact it from all logs and telemetry }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          description: Every returned header must be sent exactly; no storage credentials are included
+        expiresAt: { type: string, format: date-time }
+    UploadPreparation:
+      type: object
+      additionalProperties: false
+      required: [uploadId, status, uploadMode, alreadyAvailable, expiresAt]
+      properties:
+        uploadId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        snapshotSeq: { type: integer, format: int64, minimum: 0 }
+        status: { enum: [uploading, completed] }
+        uploadMode: { enum: [single, multipart] }
+        alreadyAvailable: { type: boolean }
+        request: { $ref: "#/components/schemas/PresignedRequest" }
+        multipartPartSize: { type: integer, format: int64, minimum: 5242880, maximum: 5368709120 }
+        multipartPartCount: { type: integer, minimum: 2, maximum: 1000 }
+        uploadedParts:
+          type: array
+          maxItems: 1000
+          description: Provider-observed resumable state; ETags are opaque and are not treated as checksums
+          items:
+            type: object
+            additionalProperties: false
+            required: [partNumber, byteSize, eTag]
+            properties:
+              partNumber: { type: integer, minimum: 1, maximum: 1000 }
+              byteSize: { type: integer, format: int64, minimum: 1, maximum: 5368709120 }
+              eTag: { type: string, minLength: 1, maxLength: 256 }
+        parts:
+          type: array
+          maxItems: 200
+          description: Missing provider parts in the explicit page, each with an independently expiring delegated PUT
+          items:
+            type: object
+            additionalProperties: false
+            required: [partNumber, byteSize, request]
+            properties:
+              partNumber: { type: integer, minimum: 1, maximum: 1000 }
+              byteSize: { type: integer, format: int64, minimum: 1, maximum: 5368709120 }
+              request: { $ref: "#/components/schemas/PresignedRequest" }
+        nextPartNumberStart: { type: integer, minimum: 1, maximum: 1000, description: Explicit cursor for the next missing-URL page }
+        expiresAt: { type: string, format: date-time }
+    BlobDescriptor:
+      type: object
+      additionalProperties: false
+      required: [id, sha256, bytes, content_type, kind, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        bytes: { type: integer, format: int64, minimum: 1 }
+        content_type: { type: string, minLength: 1, maxLength: 160 }
+        kind: { enum: [audio, sample, plugin_state, project_snapshot, other] }
+        status: { const: ready }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        verified_at: { type: [string, "null"], format: date-time }
+    ProjectAsset:
+      type: object
+      additionalProperties: false
+      required: [project_id, asset_id, blob_id, kind, display_name, created_at]
+      properties:
+        project_id: { type: string, format: uuid }
+        asset_id: { type: string, format: uuid }
+        blob_id: { type: string, format: uuid }
+        kind: { enum: [audio, sample, plugin_state, other] }
+        display_name: { type: string, maxLength: 255 }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+    CompletedProjectAsset:
+      type: object
+      additionalProperties: false
+      required: [asset, blob]
+      properties:
+        asset: { $ref: "#/components/schemas/ProjectAsset" }
+        blob: { $ref: "#/components/schemas/BlobDescriptor" }
+    CompletedProjectSnapshot:
+      type: object
+      additionalProperties: false
+      required: [snapshot, blob]
+      properties:
+        snapshot: { $ref: "#/components/schemas/ProjectSnapshot" }
+        blob: { $ref: "#/components/schemas/BlobDescriptor" }
+    PresignedDownload:
+      type: object
+      additionalProperties: false
+      required: [request, sha256, byteSize, contentType]
+      properties:
+        request: { $ref: "#/components/schemas/PresignedRequest" }
+        sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        byteSize: { type: integer, format: int64, minimum: 1 }
+        contentType: { type: string, minLength: 1, maxLength: 160 }
+    ProjectFieldHead:
+      type: object
+      additionalProperties: false
+      required: [project_id, field_key, head_seq, headOpId, updated_at]
+      properties:
+        project_id: { type: string, format: uuid }
+        field_key: { type: string, minLength: 1, maxLength: 512 }
+        head_seq: { type: integer, format: int64, minimum: 1 }
+        headOpId: { type: string, format: uuid }
+        updated_at: { type: string, format: date-time }
+    ProjectOperation:
+      type: object
+      additionalProperties: false
+      required: [project_id, serverSeq, opId, kind, schemaVersion, baseServerSeq, payload, preconditions, touchedFields, created_at]
+      properties:
+        project_id: { type: string, format: uuid }
+        serverSeq: { type: integer, format: int64, minimum: 1 }
+        opId: { type: string, format: uuid }
+        transactionId: { type: [string, "null"], format: uuid }
+        actor_user_id: { type: [string, "null"], format: uuid }
+        actor_device_id: { type: [string, "null"], format: uuid }
+        kind: { type: string }
+        schemaVersion: { const: 1 }
+        baseServerSeq: { type: integer, format: int64, minimum: 0 }
+        payload:
+          type: object
+          description: Canonical command payload; the complete submitted command is limited to 1 MiB of JSON.
+          x-vlt-max-command-bytes: 1048576
+        preconditions: { type: array, maxItems: 1024, items: { type: object } }
+        touchedFields: { type: array, maxItems: 8192, uniqueItems: true, items: { type: string, minLength: 1, maxLength: 512 } }
+        created_at: { type: string, format: date-time }
+    AppendOperationResult:
+      type: object
+      additionalProperties: false
+      required: [operation, duplicate]
+      properties:
+        operation: { $ref: "#/components/schemas/ProjectOperation" }
+        duplicate: { type: boolean }
+    OperationStatus:
+      type: object
+      additionalProperties: false
+      required: [found, head_seq, operation]
+      properties:
+        found: { type: boolean }
+        head_seq: { type: integer, format: int64, minimum: 0 }
+        operation:
+          oneOf:
+            - { $ref: "#/components/schemas/ProjectOperation" }
+            - { type: "null" }
+    CloudProjectBootstrap:
+      type: object
+      additionalProperties: false
+      required: [project, role, operations, field_heads, head_seq, next_after_seq, has_more]
+      properties:
+        project: { $ref: "#/components/schemas/CloudProject" }
+        role: { enum: [owner, editor, viewer] }
+        snapshot:
+          oneOf:
+            - { $ref: "#/components/schemas/ProjectSnapshot" }
+            - { type: "null" }
+        operations: { type: array, items: { $ref: "#/components/schemas/ProjectOperation" } }
+        field_heads: { type: array, items: { $ref: "#/components/schemas/ProjectFieldHead" } }
+        head_seq: { type: integer, format: int64, minimum: 0 }
+        next_after_seq: { type: integer, format: int64, minimum: 0 }
+        has_more: { type: boolean }
+    ProjectLiveSession:
+      type: object
+      additionalProperties: false
+      required: [id, project_id, mode, status, version, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        project_id: { type: string, format: uuid }
+        created_by: { type: [string, "null"], format: uuid }
+        host_member_id: { type: [string, "null"], format: uuid }
+        mode: { enum: [independent, follow_host, synchronized] }
+        status: { enum: [starting, active, ending, ended] }
+        version: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        started_at: { type: [string, "null"], format: date-time }
+        updated_at: { type: string, format: date-time }
+        ended_at: { type: [string, "null"], format: date-time }
+    SessionCompatibilityRequest:
+      type: object
+      additionalProperties: false
+      required: [appVersion, engineVersion, commandSchemaVersion, projectFormatVersion]
+      properties:
+        appVersion: { type: string, minLength: 5, maxLength: 64, description: SemVer 2.0.0 application version }
+        engineVersion: { type: string, minLength: 1, maxLength: 64 }
+        commandSchemaVersion: { const: 1 }
+        projectFormatVersion: { const: 6 }
+    StartProjectSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [appVersion, engineVersion, commandSchemaVersion, projectFormatVersion]
+      properties:
+        appVersion: { type: string, minLength: 5, maxLength: 64, description: SemVer 2.0.0 application version }
+        engineVersion: { type: string, minLength: 1, maxLength: 64 }
+        commandSchemaVersion: { const: 1 }
+        projectFormatVersion: { const: 6 }
+        mode: { enum: [independent, follow_host, synchronized], default: independent }
+    ProjectSessionMember:
+      type: object
+      additionalProperties: false
+      required: [id, session_id, user_id, device_id, joined_at, last_seen_at]
+      properties:
+        id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        device_id: { type: string, format: uuid }
+        joined_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        left_at: { type: [string, "null"], format: date-time }
+    ProjectSessionState:
+      type: object
+      additionalProperties: false
+      required: [session, members]
+      properties:
+        session: { $ref: "#/components/schemas/ProjectLiveSession" }
+        members: { type: array, maxItems: 8, items: { $ref: "#/components/schemas/ProjectSessionMember" } }
+    TrackLeaseRequest:
+      type: object
+      additionalProperties: false
+      required: [track_id]
+      properties:
+        track_id: { type: string, format: uuid }
+        ttl_seconds: { type: integer, minimum: 5, maximum: 120 }
+    ProjectTrackLease:
+      type: object
+      additionalProperties: false
+      required: [id, project_id, session_id, track_id, lease_kind, holder_member_id, acquired_at, renewed_at, expires_at]
+      properties:
+        id: { type: string, format: uuid }
+        project_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid }
+        track_id: { type: string, format: uuid }
+        lease_kind: { const: record }
+        holder_member_id: { type: string, format: uuid }
+        acquired_at: { type: string, format: date-time }
+        renewed_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
     ArtifactKind:
       type: string
       enum: [windows-exe, macos-dmg, linux-appimage, linux-deb, linux-rpm, linux-tar-gz, linux-tar-xz]
@@ -739,6 +1541,7 @@ components:
         sort_order: { type: integer }
     Meta:
       type: object
+      required: [service, api_version, consent_version, offline_hours, access_token_minutes, public_key, collaboration]
       properties:
         service: { const: vlt-studio }
         api_version: { const: v1 }
@@ -746,6 +1549,16 @@ components:
         offline_hours: { const: 72 }
         access_token_minutes: { const: 15 }
         public_key: { type: string }
+        collaboration:
+          type: object
+          additionalProperties: false
+          required: [enabled, protocol, project_format, command_schema, max_participants]
+          properties:
+            enabled: { type: boolean }
+            protocol: { const: vlt-collab-v1 }
+            project_format: { const: 6 }
+            command_schema: { const: 1 }
+            max_participants: { type: integer, minimum: 1, maximum: 64 }
     LoginRequest:
       type: object
       additionalProperties: false

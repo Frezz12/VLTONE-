@@ -45,6 +45,47 @@ add_test(NAME controller_test COMMAND controller_test)
 set_tests_properties(controller_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 
+# Narrow seam between legacy EngineController entry points and the typed cloud
+# command path: submitted/blocked edits never mutate locally, while an explicit
+# fallback retains the pre-collaboration mutation and undo behaviour.
+add_executable(shared_mutation_sink_test shared_mutation_sink_test.cpp)
+target_link_libraries(shared_mutation_sink_test PRIVATE daw_controller)
+
+add_test(NAME shared_mutation_sink_test COMMAND shared_mutation_sink_test)
+set_tests_properties(shared_mutation_sink_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
+# Collaboration document protocol: v5->v6 migration, canonical command wire,
+# pure reducer convergence, conditional undo, and optimistic/confirmed replay.
+add_executable(collaboration_protocol_test collaboration_protocol_test.cpp)
+target_link_libraries(collaboration_protocol_test PRIVATE daw_controller)
+target_compile_definitions(collaboration_protocol_test PRIVATE
+    DAW_PROJECT_COMMAND_SCHEMA="${CMAKE_SOURCE_DIR}/protocol/schema/project-command-v1.schema.json")
+
+add_test(NAME collaboration_protocol_test COMMAND collaboration_protocol_test)
+set_tests_properties(collaboration_protocol_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
+# Pure fail-closed landing of ready cloud captures into the narrow
+# recording.commit whitelist. Kept separate from the broad wire/reducer suite
+# so recovery/asset/overlap semantics remain quick to exercise in isolation.
+add_executable(recording_commit_planner_test recording_commit_planner_test.cpp)
+target_link_libraries(recording_commit_planner_test PRIVATE daw_controller)
+
+add_test(NAME recording_commit_planner_test COMMAND recording_commit_planner_test)
+set_tests_properties(recording_commit_planner_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
+# Cloud publication stays pure and headless: plugin compatibility, AssetRef
+# requirements, and the guarantee that canonical snapshots contain no local
+# paths, transport/capture choices, or editor geometry.
+add_executable(cloud_project_test cloud_project_test.cpp)
+target_link_libraries(cloud_project_test PRIVATE daw_controller)
+
+add_test(NAME cloud_project_test COMMAND cloud_project_test)
+set_tests_properties(cloud_project_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
 # The windowed-sinc sample-rate converter every clip is decoded through.
 add_executable(resampler_test resampler_test.cpp)
 target_link_libraries(resampler_test PRIVATE daw_engine)

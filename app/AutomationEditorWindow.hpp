@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AutomationTools.hpp"
+#include "CollaborationTypes.hpp"
 #include "model/Document.hpp"
 
 #include <QString>
@@ -65,6 +66,15 @@ public:
     void applyPoints(const daw::autotools::Points& points, const QString& label);
     /// Screen position of a breakpoint for the headless gesture check.
     QPoint pointPositionForTest(int index) const;
+
+    /// Exact semantic presence for the owned curve canvas. The pair
+    /// beat/laneFraction maps back to time/value after either participant
+    /// resizes the editor.
+    collab::SemanticPoint collaborationPresenceAt(
+        const QPointF& position) const;
+    std::optional<QPointF> collaborationPositionFor(
+        const collab::SemanticPoint& point) const;
+    static bool checkCollaborationPresenceForTest(QString* error = nullptr);
 
 signals:
     void edited();       ///< A finished change: mark the project dirty.
@@ -157,6 +167,11 @@ public:
 
     const QString& trackId() const { return m_trackId; }
     const QString& clipId() const { return m_clipId; }
+    QWidget* collaborationPresenceSurface() const { return m_view; }
+    collab::SemanticPoint collaborationPresenceAt(
+        const QPointF& position) const;
+    std::optional<QPointF> collaborationPositionFor(
+        const collab::SemanticPoint& point) const;
 
     /// The document moved under the window — an undo, a rename, a plugin
     /// swapped in the slot this curve drives. Re-read everything.

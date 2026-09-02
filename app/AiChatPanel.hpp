@@ -96,7 +96,7 @@ signals:
     /// The gear button: the shell opens the AI page of Settings.
     void settingsRequested();
     /// Tools changed the document; the shell rebuilds its views.
-    void projectChanged();
+    void projectChanged(bool localFileDirty = true);
 
 protected:
     void onReduceTransparencyChanged() override;

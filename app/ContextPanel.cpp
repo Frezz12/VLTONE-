@@ -418,9 +418,9 @@ QWidget* ContextPanel::newRow(QHBoxLayout*& row) {
     return host;
 }
 
-void ContextPanel::afterEdit(bool structural) {
-    emit projectEdited();
-    if (structural) emit tracksChanged();
+void ContextPanel::afterEdit(bool structural, bool localFileDirty) {
+    emit projectEdited(localFileDirty);
+    if (structural) emit tracksChanged(localFileDirty);
     invalidateBackdrop();
     refresh();
 }
@@ -1330,6 +1330,19 @@ QWidget* ContextPanel::buildTrackMulti() {
         row->addWidget(islandDivider(host));
         // Actions, not states: the tracks can disagree, so each chip mutes (or
         // solos) everything and a second press with the chip lit lifts it.
+        auto* mute = new ui::MsrButton(
+            tr("M"), Theme::mute(), tr("Mute them all"), host);
+        connect(mute, &QAbstractButton::clicked, this,
+                [this, mute, tracks](bool on) {
+                    const auto result =
+                        m_controller->setTracksMuted(tracks, on);
+                    mute->setToolTip(on ? tr("Unmute them all")
+                                        : tr("Mute them all"));
+                    afterEdit(/*structural=*/true,
+                              daw::collab::marksLocalFileDirty(result));
+                });
+        row->addWidget(mute);
+
         const auto stateChip = [&](const QString& letter, const QColor& colour,
                                    const QString& onTip, const QString& offTip,
                                    auto&& setter) {
@@ -1342,11 +1355,6 @@ QWidget* ContextPanel::buildTrackMulti() {
                     });
             row->addWidget(chip);
         };
-        stateChip(tr("M"), Theme::mute(), tr("Mute them all"),
-                  tr("Unmute them all"),
-                  [this](const std::string& id, bool on) {
-                      m_controller->setTrackMuted(id, on);
-                  });
         stateChip(tr("S"), Theme::solo(), tr("Solo them all"),
                   tr("Clear their solos"),
                   [this](const std::string& id, bool on) {
@@ -1573,8 +1581,9 @@ QWidget* ContextPanel::buildTrack() {
 
         connect(mute, &QAbstractButton::clicked, this, [this, trackId](bool on) {
             if (m_updating) return;
-            m_controller->setTrackMuted(trackId, on);
-            afterEdit(/*structural=*/true);
+            const auto result = m_controller->setTrackMuted(trackId, on);
+            afterEdit(/*structural=*/true,
+                      daw::collab::marksLocalFileDirty(result));
         });
         connect(solo, &QAbstractButton::clicked, this, [this, trackId](bool on) {
             if (m_updating) return;

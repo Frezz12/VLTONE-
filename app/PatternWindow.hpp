@@ -26,7 +26,7 @@ public:
     bool checkInteractionGesturesForTest();
 
 signals:
-    void projectEdited();
+    void projectEdited(bool localFileDirty = true);
     void openPianoRollRequested(const QString& trackId, const QString& clipId);
     void openPluginEditorRequested(const QString& trackId,
                                    const QString& slotId);

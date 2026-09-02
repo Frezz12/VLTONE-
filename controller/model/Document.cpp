@@ -8,6 +8,25 @@
 
 namespace daw {
 
+std::string toString(AssetKind kind) {
+    switch (kind) {
+        case AssetKind::Audio: return "audio";
+        case AssetKind::PluginState: return "plugin-state";
+        case AssetKind::PluginResource: return "plugin-resource";
+        case AssetKind::Freeze: return "freeze";
+        case AssetKind::Unknown: break;
+    }
+    return "unknown";
+}
+
+AssetKind assetKindFromString(const std::string& name) {
+    if (name == "audio") return AssetKind::Audio;
+    if (name == "plugin-state") return AssetKind::PluginState;
+    if (name == "plugin-resource") return AssetKind::PluginResource;
+    if (name == "freeze") return AssetKind::Freeze;
+    return AssetKind::Unknown;
+}
+
 std::string toString(PluginFormat format) {
     switch (format) {
         case PluginFormat::Clap: return "clap";
@@ -294,10 +313,19 @@ void setCompRange(ClipModel& clip, const std::string& takeId, double fromSeconds
         const bool coversEnd = segment.startSeconds < toSeconds &&
                                segment.endSeconds > toSeconds;
         if (coversStart) {
-            rebuilt.push_back({segment.takeId, segment.startSeconds, fromSeconds});
+            CompSegment left = segment;
+            left.endSeconds = fromSeconds;
+            rebuilt.push_back(std::move(left));
         }
         if (coversEnd) {
-            rebuilt.push_back({segment.takeId, toSeconds, segment.endSeconds});
+            CompSegment right = segment;
+            right.startSeconds = toSeconds;
+            // If one segment is split into two, only the left half can keep
+            // the original collaboration identity.  The new right-hand
+            // entity must be addressable independently before any command is
+            // created.
+            if (coversStart) right.id = newUuid();
+            rebuilt.push_back(std::move(right));
         }
         if (!coversStart && !coversEnd) {
             const bool swallowed = segment.startSeconds >= fromSeconds &&
@@ -305,7 +333,12 @@ void setCompRange(ClipModel& clip, const std::string& takeId, double fromSeconds
             if (!swallowed) rebuilt.push_back(segment);
         }
     }
-    rebuilt.push_back({takeId, fromSeconds, toSeconds});
+    CompSegment replacement;
+    replacement.takeId = takeId;
+    replacement.startSeconds = fromSeconds;
+    replacement.endSeconds = toSeconds;
+    replacement.id = newUuid();
+    rebuilt.push_back(std::move(replacement));
 
     clip.comp = std::move(rebuilt);
     normalizeComp(clip);
@@ -321,7 +354,11 @@ void selectWholeTake(ClipModel& clip, const std::string& takeId) {
                                                   : take->lengthSeconds;
     if (end <= 0.0) return;
     clip.comp.clear();
-    clip.comp.push_back({takeId, 0.0, end});
+    CompSegment segment;
+    segment.takeId = takeId;
+    segment.endSeconds = end;
+    segment.id = newUuid();
+    clip.comp.push_back(std::move(segment));
     normalizeComp(clip);
 }
 

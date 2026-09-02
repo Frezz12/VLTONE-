@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(VLTStudioPro
-    VERSION 0.0.1
+    VERSION 0.1.2
     DESCRIPTION "VLT Studio Pro digital audio workstation"
     LANGUAGES CXX)
 
@@ -57,6 +57,22 @@ option(DAW_BUILD_TESTS "Build the engine unit tests"        ON)
 # Declared here rather than in app/: the scanner and the watchdog are installed
 # *inside* the bundle when it is on, and they are configured before app/ is.
 option(DAW_PACKAGE     "Build a deployable bundle (app bundle + Qt runtime)" OFF)
+# Multiplayer foundations can be dogfooded independently of the production
+# release gate. The second switch is intentionally stricter: it makes an
+# incomplete command-migration ledger a compile error and must be enabled by
+# release automation before collaboration is exposed to ordinary users.
+option(DAW_ENABLE_COLLABORATION
+       "Enable the experimental cloud collaboration UI and networking" OFF)
+option(DAW_ENFORCE_COLLABORATION_RELEASE_GATES
+       "Require complete shared-mutation command coverage" OFF)
+if(DAW_ENFORCE_COLLABORATION_RELEASE_GATES AND
+   NOT DAW_ENABLE_COLLABORATION)
+    message(FATAL_ERROR
+        "Collaboration release gates require DAW_ENABLE_COLLABORATION=ON")
+endif()
+if(DAW_ENFORCE_COLLABORATION_RELEASE_GATES)
+    include(cmake/CheckCollaborationMutationCoverage.cmake)
+endif()
 # Development builds talk to a local API by default. Release automation sets
 # this cache value to the HTTPS API endpoint; an explicit VLT_API_ORIGIN
 # environment variable always takes precedence at runtime.

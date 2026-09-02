@@ -1,5 +1,25 @@
 #include "MainWindow.hpp"
 #include "AccountService.hpp"
+#include "AssetCache.hpp"
+#include "CollaborationService.hpp"
+#include "CollaborationCommandBridge.hpp"
+#include "CollaborationTransport.hpp"
+#include "CollaborationTypes.hpp"
+#include "CloudProjectClient.hpp"
+#include "CloudProjectInviteDialog.hpp"
+#include "CloudAssetTransferManager.hpp"
+#include "CloudRecordingAssetCoordinator.hpp"
+#include "CloudRecordingRecoveryUpload.hpp"
+#include "CloudProjectAssetHydrator.hpp"
+#include "CloudProjectCache.hpp"
+#include "CloudProjectPublisher.hpp"
+#include "CloudProjectSyncCoordinator.hpp"
+#include "CloudSessionLifecycleController.hpp"
+#include "EngineProjectProjectionAdapter.hpp"
+#include "PresenceInputRouter.hpp"
+#include "RecordingLeaseCoordinator.hpp"
+#include "PianoRollWindow.hpp"
+#include "AutomationEditorWindow.hpp"
 #include "AudioPreferences.hpp"
 #include "LocalizationManager.hpp"
 #include "PromptService.hpp"
@@ -178,6 +198,7 @@ private:
 
 int main(int argc, char** argv) {
     bool selftest = false;
+    bool collaborationSelftest = false;
     bool updateSelftest = false;
     // Deliberately faults after writing a known project into the recovery
     // journal, so the recovery path can be verified against a real crash
@@ -192,6 +213,8 @@ int main(int argc, char** argv) {
     QString projectArgument;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--selftest") == 0) selftest = true;
+        else if (std::strcmp(argv[i], "--collaboration-selftest") == 0)
+            collaborationSelftest = true;
         else if (std::strcmp(argv[i], "--update-selftest") == 0)
             updateSelftest = true;
         else if (std::strcmp(argv[i], "--crashtest") == 0) crashtest = true;
@@ -227,7 +250,8 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    const bool headless = selftest || screenshotPath || crashtest || recovercheck;
+    const bool headless = selftest || collaborationSelftest || screenshotPath ||
+                          crashtest || recovercheck;
     if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) {
         QByteArray chromiumFlags;
 #ifdef Q_OS_MACOS
@@ -395,6 +419,132 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "audio preferences did not round-trip\n");
         return 32;
     }
+    if (selftest || collaborationSelftest) {
+        QString collaborationError;
+        if (!collab::checkCollaborationProtocolForTest(&collaborationError)) {
+            std::fprintf(stderr, "collaboration protocol check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 37;
+        }
+        if (!collab::checkCollaborationPresenceSafetyForTest(
+                &collaborationError)) {
+            std::fprintf(stderr, "collaboration privacy check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 39;
+        }
+        if (!collab::PresenceInputRouter::checkSafetyForTest(
+                &collaborationError)) {
+            std::fprintf(stderr,
+                         "collaboration input privacy check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 41;
+        }
+        if (!collab::checkCollaborationPresenceGeometryForTest(
+                &collaborationError) ||
+            !PianoRollView::checkCollaborationPresenceForTest(
+                &collaborationError) ||
+            !AutomationCurveView::checkCollaborationPresenceForTest(
+                &collaborationError)) {
+            std::fprintf(stderr,
+                         "collaboration surface geometry check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 40;
+        }
+        QString assetCacheError;
+        if (!collab::checkAssetCacheForTest(&assetCacheError)) {
+            std::fprintf(stderr, "asset cache check failed: %s\n",
+                         assetCacheError.toUtf8().constData());
+            return 38;
+        }
+        if (!collab::checkEngineProjectProjectionForTest(
+                &collaborationError)) {
+            std::fprintf(stderr, "engine projection check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 49;
+        }
+        if (!collab::checkCollaborationTransportForTest(
+                &collaborationError)) {
+            std::fprintf(stderr,
+                         "collaboration transport check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 42;
+        }
+        if (!collab::checkCollaborationCommandBridgeForTest(
+                &collaborationError)) {
+            std::fprintf(stderr,
+                         "collaboration command bridge check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 43;
+        }
+        if (!collab::checkCloudProjectClientForTest(&collaborationError)) {
+            std::fprintf(stderr,
+                         "cloud project client check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 44;
+        }
+        if (!collab::checkCloudProjectInviteDialogForTest(
+                &collaborationError)) {
+            std::fprintf(stderr,
+                         "cloud project invite dialog check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 51;
+        }
+        if (!collab::checkRecordingLeaseCoordinatorForTest(
+                &collaborationError)) {
+            std::fprintf(stderr,
+                         "recording lease coordinator check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 52;
+        }
+        if (!collab::checkCloudRecordingAssetCoordinatorForTest(
+                &collaborationError)) {
+            std::fprintf(stderr,
+                         "cloud recording asset coordinator check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 53;
+        }
+        if (!collab::checkCloudRecordingRecoveryUploadForTest(
+                &collaborationError)) {
+            std::fprintf(stderr,
+                         "cloud recording recovery upload check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 54;
+        }
+        if (!collab::checkCloudAssetTransferManagerForTest(
+                &collaborationError)) {
+            std::fprintf(stderr,
+                         "cloud asset transfer manager check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 45;
+        }
+        if (!collab::checkCloudProjectSyncCoordinatorForTest(
+                &collaborationError)) {
+            std::fprintf(stderr,
+                         "cloud project sync coordinator check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 46;
+        }
+        if (!collab::checkCloudSessionLifecycleControllerForTest(
+                &collaborationError)) {
+            std::fprintf(stderr,
+                         "cloud session lifecycle check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 50;
+        }
+        if (!collab::checkCloudProjectCacheForTest(&collaborationError)) {
+            std::fprintf(stderr, "cloud project cache check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 47;
+        }
+        if (!collab::checkCloudProjectAssetHydratorForTest(
+                &collaborationError)) {
+            std::fprintf(stderr, "cloud project hydrator check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 48;
+        }
+    }
+    if (collaborationSelftest)
+        return 0;
 
     // Authentication is a hard startup gate. The branded startup window first
     // restores a saved entitlement silently; the login form is revealed only
@@ -463,7 +613,81 @@ int main(int argc, char** argv) {
     }
 
     // In headless (selftest/screenshot) mode don't grab a real audio device.
+#ifdef DAW_ENABLE_COLLABORATION
+    collab::CollaborationService collaborationService(&accountService);
+    collab::CollaborationTransport collaborationTransport(
+        &accountService, &collaborationService);
+    collab::AssetCache collaborationAssetCache;
+    collab::CloudProjectClient cloudProjectClient(&accountService);
+    collab::RecordingLeaseCoordinator recordingLeases(&cloudProjectClient);
+    QObject::connect(
+        &accountService, &account::Service::authenticatedChanged,
+        &recordingLeases, [&recordingLeases](bool authenticated) {
+            if (!authenticated) recordingLeases.handleLogout();
+        });
+    collab::CloudAssetTransferManager cloudAssetTransfers(
+        &accountService, &collaborationAssetCache);
+    collab::CloudProjectAssetHydrator cloudAssetHydrator(
+        &cloudAssetTransfers, &collaborationAssetCache);
+    collab::CloudProjectPublisher cloudProjectPublisher(
+        &cloudProjectClient, &cloudAssetTransfers);
+    daw::collab::CommandGateway collaborationCommands;
+    collab::CollaborationCommandBridge collaborationCommandBridge(
+        &collaborationService, &collaborationCommands);
+    collab::CloudProjectSyncCoordinator cloudProjectSync(
+        &cloudProjectClient, &cloudAssetTransfers,
+        &collaborationCommandBridge, &collaborationService);
+    collab::CloudSessionLifecycleController cloudSessionLifecycle(
+        &cloudProjectClient, &cloudProjectSync, &collaborationService);
+    QObject::connect(
+        &cloudProjectSync,
+        &collab::CloudProjectSyncCoordinator::projectAssetsDiscovered,
+        &cloudAssetHydrator,
+        [&cloudAssetHydrator](const QString& projectId,
+                              const QList<daw::AssetRef>& assets) {
+            cloudAssetHydrator.hydrate(projectId, assets);
+        });
+    MainWindow window(/*openDevice=*/!headless, nullptr,
+                      &collaborationService);
+    window.setCloudPublicationServices(&cloudProjectPublisher,
+                                       &cloudProjectSync,
+                                       &cloudSessionLifecycle,
+                                       &collaborationCommandBridge,
+                                       &cloudProjectClient,
+                                       &recordingLeases);
+    collab::EngineProjectProjectionAdapter collaborationProjection(
+        window.collaborationEngineController(), &collaborationAssetCache);
+    collaborationCommands.setAdapter(&collaborationProjection);
+    struct ProjectionAdapterDetach final {
+        daw::collab::CommandGateway* gateway = nullptr;
+        ~ProjectionAdapterDetach() {
+            if (gateway) gateway->setAdapter(nullptr);
+        }
+    } projectionAdapterDetach{&collaborationCommands};
+    window.collaborationEngineController()->attachSharedMutationSink(
+        collaborationCommandBridge);
+    struct SharedMutationSinkDetach final {
+        daw::EngineController* controller = nullptr;
+        const daw::collab::SharedMutationSink* sink = nullptr;
+        ~SharedMutationSinkDetach() {
+            if (controller && sink)
+                controller->detachSharedMutationSink(*sink);
+        }
+    } sharedMutationSinkDetach{window.collaborationEngineController(),
+                               &collaborationCommandBridge};
+    QObject::connect(
+        &collaborationProjection,
+        &collab::EngineProjectProjectionAdapter::projectionSucceeded,
+        &window, &MainWindow::refreshAfterCollaborationProjection);
+    QObject::connect(
+        &collaborationProjection,
+        &collab::EngineProjectProjectionAdapter::projectionFailed,
+        &collaborationCommandBridge,
+        &collab::CollaborationCommandBridge::handleProjectionFailure,
+        Qt::QueuedConnection);
+#else
     MainWindow window(/*openDevice=*/!headless);
+#endif
     if (startup) {
         daw::PluginManager& plugins = window.pluginManagerForStartup();
         startup->showPluginScan(0, 0, QString());

@@ -382,9 +382,10 @@ TrackListWidget::TrackListWidget(daw::EngineController* controller,
     // whatever the click leaves the project in, `refreshGlobalChips` puts the
     // lamp back in step with it.
     connect(m_clearMutes, &QAbstractButton::clicked, this, [this] {
-        m_controller->clearAllMutes();
+        const auto result = m_controller->clearAllMutes();
+        syncTrackValues();
         refreshGlobalChips();
-        emit tracksChanged();
+        emit tracksChanged(daw::collab::marksLocalFileDirty(result));
     });
     connect(m_clearSolos, &QAbstractButton::clicked, this, [this] {
         m_controller->clearAllSolos();
@@ -496,8 +497,15 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
     name->setMinimumWidth(40);
     name->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     connect(name, &QLineEdit::editingFinished, this, [this, id, name] {
-        m_controller->renameTrack(id.toStdString(), name->text().toStdString());
-        emit tracksChanged();
+        const auto result = m_controller->renameTrack(
+            id.toStdString(), name->text().toStdString());
+        if (const auto* track =
+                m_controller->project().findTrack(id.toStdString())) {
+            const QSignalBlocker blocker(name);
+            name->setText(QString::fromStdString(track->name));
+        }
+        syncTrackValues();
+        emit tracksChanged(daw::collab::marksLocalFileDirty(result));
     });
 
     const auto chip = [&](const QString& letter, const QColor& active,
@@ -507,11 +515,6 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
         return b;
     };
 
-    // Only a folder with no bus of its own has to reach into its contents. A
-    // summing folder is silenced by muting its own channel, and cascading there
-    // would additionally clear whatever mutes the user had set inside it — the
-    // folder would be a switch that destroys state on its way through.
-    const bool cascadeMute = folder && !channel;
     ui::MsrButton* mute = nullptr;
     ui::MsrButton* solo = nullptr;
     if (!automationLane) {
@@ -524,15 +527,8 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
                     [this, id] { emit automateMuteRequested(id); });
         }
         connect(mute, &QAbstractButton::toggled, this,
-                [this, id, cascadeMute](bool on) {
-                    applyToGroup(id, [&](const std::string& target) {
-                        m_controller->setTrackMuted(target, on);
-                        if (!cascadeMute) return;
-                        for (const auto& child : daw::subtreeOf(
-                                 m_controller->project(), target)) {
-                            m_controller->setTrackMuted(child, on);
-                        }
-                    });
+                [this, id](bool on) {
+                    applyMuteToGroup(id, on);
                 });
 
         solo = chip("S", Theme::solo(), tr("Solo"));
@@ -1078,6 +1074,20 @@ void TrackListWidget::applyToGroup(
     syncTrackValues();
     refreshGlobalChips();
     emit tracksChanged();
+}
+
+void TrackListWidget::applyMuteToGroup(const QString& id, bool muted) {
+    if (m_applyingGroup) return;
+    m_applyingGroup = true;
+    const std::vector<std::string> targets = actionTargets(id);
+    const auto result = m_controller->setTracksMuted(targets, muted);
+    m_applyingGroup = false;
+    // Submitted projection and blocked rollback both come from the document;
+    // never leave the initiating chip's transient checked state as a shadow
+    // copy of it.
+    syncTrackValues();
+    refreshGlobalChips();
+    emit tracksChanged(daw::collab::marksLocalFileDirty(result));
 }
 
 void TrackListWidget::applyGroupGain(const QString& id, float gain) {

@@ -8,6 +8,7 @@
 // out byte for byte the way it always did.
 #include "EngineController.hpp"
 #include "ProjectSerializer.hpp"
+#include "recovery/CloudRecordingRecovery.hpp"
 #include "recovery/RecoveryJournal.hpp"
 #include "plugins/ScanProcess.hpp"
 #include "crash/CrashHandler.hpp"
@@ -22,6 +23,7 @@
 #include <sstream>
 #include <thread>
 #include <utility>
+#include <nlohmann/json.hpp>
 #if !defined(_WIN32)
 #include <sys/wait.h>
 #include <unistd.h>
@@ -350,6 +352,500 @@ int main() {
 
         journal.stop();
         check(!fs::exists(session), "a clean stop deletes the session directory");
+    }
+
+    // ── Finalized cloud recordings survive until their durable commit ──
+    //
+    // This sidecar is intentionally separate from the document journal. A WAV
+    // may have closed successfully while its upload/recording.commit was still
+    // in flight, so recovering only the last ProjectModel would lose the take.
+    {
+        const fs::path session = root / "cloud-recording-session";
+        fs::create_directories(session);
+        const fs::path firstWav = sourceDir / "first-cloud-take.wav";
+        const fs::path secondWav = sourceDir / "second-take.wav";
+        writeTone(daw::platform::pathToUtf8(firstWav), 48000, 24000);
+        writeTone(daw::platform::pathToUtf8(secondWav), 44100, 44100);
+
+        daw::recovery::CloudRecordingRecoveryManifest manifest;
+        manifest.projectId = "11111111-1111-4111-8111-111111111111";
+        manifest.sessionId = "22222222-2222-4222-8222-222222222222";
+        manifest.createdAtUnixMs = daw::recovery::nowUnixMs();
+
+        daw::recovery::CloudRecordingRecoveryRun firstRun;
+        firstRun.runId = "88888888-8888-4888-8888-888888888888";
+        firstRun.opId = "99999999-9999-4999-8999-999999999999";
+        firstRun.transactionId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        firstRun.createdAtUnixMs = manifest.createdAtUnixMs;
+        firstRun.recoveryOnly = true;
+        firstRun.lostLease = true;
+
+        daw::recovery::CloudRecordingCapture firstCapture;
+        firstCapture.captureId = "55555555-5555-4555-8555-555555555555";
+        firstCapture.trackId = "33333333-3333-4333-8333-333333333333";
+        firstCapture.leaseId = "44444444-4444-4444-8444-444444444444";
+        firstCapture.uploadId = "66666666-6666-4666-8666-666666666666";
+        firstCapture.assetId = "77777777-7777-4777-8777-777777777777";
+        firstCapture.localWavPath =
+            daw::platform::pathToUtf8(firstWav);
+        firstCapture.startSeconds = 12.0;
+        firstCapture.durationSeconds = 0.5;
+        firstCapture.sampleRate = 48000.0;
+        firstCapture.channels = 2;
+        firstCapture.frames = 24000;
+        firstCapture.passes.push_back({12.0, 12.5, 0.0});
+        firstCapture.semantics.mode =
+            daw::recovery::CloudRecordingMode::Overwrite;
+        firstRun.captures.push_back(firstCapture);
+        manifest.runs.push_back(firstRun);
+
+        daw::recovery::CloudRecordingRecoveryRun secondRun;
+        secondRun.runId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        secondRun.opId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        secondRun.transactionId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+        secondRun.createdAtUnixMs = manifest.createdAtUnixMs + 1;
+        secondRun.recoveryOnly = true;
+        secondRun.lostLease = true;
+
+        daw::recovery::CloudRecordingCapture secondCapture;
+        // A second stop on the same track is appended to the sidecar rather
+        // than replacing the first recovery-only take.
+        secondCapture.trackId = firstCapture.trackId;
+        secondCapture.captureId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+        secondCapture.leaseId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+        secondCapture.uploadId = "12121212-1212-4212-8212-121212121212";
+        secondCapture.assetId = "13131313-1313-4313-8313-131313131313";
+        secondCapture.localWavPath =
+            daw::platform::pathToUtf8(secondWav);
+        secondCapture.startSeconds = 8.0;
+        secondCapture.durationSeconds = 1.0;
+        secondCapture.sampleRate = 44100.0;
+        secondCapture.channels = 2;
+        secondCapture.frames = 44100;
+        // File offsets are monotonic even though a transport loop rewound the
+        // second pass to an earlier point on the timeline.
+        secondCapture.passes.push_back({8.0, 8.25, 0.0});
+        secondCapture.passes.push_back({4.0, 4.75, 0.25});
+        secondCapture.semantics.mode =
+            daw::recovery::CloudRecordingMode::Layers;
+        secondCapture.semantics.loopEnabled = true;
+        secondCapture.semantics.loopStartSeconds = 4.0;
+        secondCapture.semantics.loopEndSeconds = 8.0;
+        secondCapture.semantics.loopCreatesTakes = true;
+        secondCapture.semantics.trimTakesToRegion = false;
+        secondCapture.semantics.autoExpandAfterRecord = true;
+        secondCapture.semantics.compCrossfadeMs = 7.0;
+        secondRun.captures.push_back(secondCapture);
+        manifest.runs.push_back(secondRun);
+
+        const fs::path recoveryFile =
+            session / daw::recovery::kCloudRecordingRecoveryFile;
+        {
+            daw::recovery::CloudRecordingRecoveryStore store(
+                daw::platform::pathToUtf8(session));
+            check(store.write(manifest).ok(),
+                  "cloud recording recovery publishes an atomic manifest");
+            check(store.exists() &&
+                      fs::path(daw::platform::pathFromUtf8(store.manifestPath())) ==
+                          recoveryFile,
+                  "cloud recording recovery lives in the current session");
+        }
+
+        // Destruction models the important half of a crash: unlike stop(), it
+        // performs no cleanup and the next process can open the same sidecar.
+        check(fs::is_regular_file(recoveryFile),
+              "cloud recording recovery survives store destruction");
+        daw::recovery::CloudRecordingRecoveryStore reopened(
+            daw::platform::pathToUtf8(session));
+        daw::recovery::CloudRecordingRecoveryManifest loaded;
+        check(reopened.read(loaded).ok() && loaded == manifest &&
+                  loaded.runs.size() == 2 &&
+                  loaded.runs[0].captures[0].trackId ==
+                      loaded.runs[1].captures[0].trackId &&
+                  loaded.runs[1].captures[0].semantics.loopEnabled &&
+                  !loaded.runs[1].captures[0]
+                       .semantics.trimTakesToRegion,
+              "cloud recovery round-trips runs, repeated tracks and frozen semantics");
+
+        const std::string raw = readFile(recoveryFile);
+        const nlohmann::json encoded = nlohmann::json::parse(raw);
+        check(encoded.size() == 6 &&
+                  encoded.value("format", "") ==
+                      daw::recovery::kCloudRecordingRecoveryFormat &&
+                  encoded.value("version", 0) ==
+                      daw::recovery::kCloudRecordingRecoveryVersion &&
+                  encoded.contains("createdAt") &&
+                  encoded.at("runs").size() == 2 &&
+                  encoded.at("runs")[0].contains("opId") &&
+                  encoded.at("runs")[0].contains("transactionId") &&
+                  encoded.at("runs")[0].at("captures")[0]
+                      .value("uploadPhase", "") == "captured" &&
+                  !encoded.contains("token") &&
+                  !encoded.contains("url") &&
+                  !encoded.contains("nickname"),
+              "cloud recovery v2 has stable resumability ids and no identity secrets");
+        check(raw.find(".tmp-") == std::string::npos,
+              "cloud recovery publishes no temporary path in its JSON");
+
+        using CaptureStatus =
+            daw::recovery::CloudRecordingCaptureStatus;
+        const auto classify =
+            daw::recovery::classifyCloudRecordingCaptureStatus;
+        check(classify(true, 4800, 4800, 0, true, 4800) ==
+                  CaptureStatus::Ready &&
+                  classify(true, 0, 0, 0, false, 0) ==
+                      CaptureStatus::ZeroFrames &&
+                  classify(true, 4800, 4800, 0, false, 4800) ==
+                      CaptureStatus::Unreadable,
+              "cloud recovery exposes only complete readable audio as ready");
+        check(classify(false, 4800, 4800, 0, true, 4800) ==
+                  CaptureStatus::WriteFailed &&
+                  classify(true, 4800, 4700, 0, true, 4700) ==
+                      CaptureStatus::WriteFailed &&
+                  classify(true, 4800, 4800, 64, true, 4800) ==
+                      CaptureStatus::WriteFailed &&
+                  classify(false, 0, 0, 0, false, 0) ==
+                      CaptureStatus::WriteFailed,
+              "writer failure, short writes and drops cannot become ready or zero-frame captures");
+
+        // Existing closed files remain durable even when they cannot yet be
+        // planned into a clip. This includes a zero-byte recorder artifact, a
+        // non-WAV payload bearing the reserved local .wav name and a readable
+        // prefix from a failed writer.
+        const fs::path zeroWav = sourceDir / "zero-frame.wav";
+        const fs::path unreadableWav = sourceDir / "unreadable.wav";
+        const fs::path failedPrefixWav =
+            sourceDir / "failed-writer-prefix.wav";
+        { std::ofstream(zeroWav, std::ios::binary); }
+        { std::ofstream(unreadableWav, std::ios::binary) << "not a wav"; }
+        writeTone(daw::platform::pathToUtf8(failedPrefixWav), 48000, 4800);
+        auto rawManifest = manifest;
+        daw::recovery::CloudRecordingRecoveryRun rawRun;
+        rawRun.runId = "14141414-1414-4414-8414-141414141414";
+        rawRun.opId = "15151515-1515-4515-8515-151515151515";
+        rawRun.transactionId = "16161616-1616-4616-8616-161616161616";
+        rawRun.createdAtUnixMs = manifest.createdAtUnixMs + 2;
+        rawRun.recoveryOnly = true;
+        rawRun.lostLease = true;
+        daw::recovery::CloudRecordingCapture zeroCapture;
+        zeroCapture.captureId = "17171717-1717-4717-8717-171717171717";
+        zeroCapture.trackId = "18181818-1818-4818-8818-181818181818";
+        zeroCapture.leaseId = "19191919-1919-4919-8919-191919191919";
+        zeroCapture.uploadId = "20202020-2020-4020-8020-202020202020";
+        zeroCapture.assetId = "21212121-2121-4121-8121-212121212121";
+        zeroCapture.status =
+            daw::recovery::CloudRecordingCaptureStatus::ZeroFrames;
+        zeroCapture.localWavPath =
+            daw::platform::pathToUtf8(zeroWav);
+        zeroCapture.startSeconds = 20.0;
+        zeroCapture.sampleRate = 48000.0;
+        zeroCapture.channels = 2;
+        rawRun.captures.push_back(zeroCapture);
+
+        daw::recovery::CloudRecordingCapture unreadableCapture;
+        unreadableCapture.captureId =
+            "22222222-3333-4222-8222-333333333333";
+        unreadableCapture.trackId =
+            "23232323-2323-4323-8323-232323232323";
+        unreadableCapture.leaseId =
+            "24242424-2424-4424-8424-242424242424";
+        unreadableCapture.uploadId =
+            "25252525-2525-4525-8525-252525252525";
+        unreadableCapture.assetId =
+            "26262626-2626-4626-8626-262626262626";
+        unreadableCapture.status =
+            daw::recovery::CloudRecordingCaptureStatus::Unreadable;
+        unreadableCapture.localWavPath =
+            daw::platform::pathToUtf8(unreadableWav);
+        unreadableCapture.startSeconds = 21.0;
+        unreadableCapture.frames = 128;
+        rawRun.captures.push_back(unreadableCapture);
+
+        daw::recovery::CloudRecordingCapture failedPrefixCapture;
+        failedPrefixCapture.captureId =
+            "27272727-2727-4727-8727-272727272727";
+        failedPrefixCapture.trackId =
+            "28282828-2828-4828-8828-282828282828";
+        failedPrefixCapture.leaseId =
+            "29292929-2929-4929-8929-292929292929";
+        failedPrefixCapture.uploadId =
+            "30303030-3030-4030-8030-303030303030";
+        failedPrefixCapture.assetId =
+            "31313131-3131-4131-8131-313131313131";
+        failedPrefixCapture.status =
+            daw::recovery::CloudRecordingCaptureStatus::WriteFailed;
+        failedPrefixCapture.localWavPath =
+            daw::platform::pathToUtf8(failedPrefixWav);
+        failedPrefixCapture.startSeconds = 22.0;
+        failedPrefixCapture.durationSeconds = 0.1;
+        failedPrefixCapture.sampleRate = 48000.0;
+        failedPrefixCapture.channels = 2;
+        failedPrefixCapture.frames = 4800;
+        failedPrefixCapture.passes.push_back({22.0, 22.1, 0.0});
+        rawRun.captures.push_back(failedPrefixCapture);
+        rawManifest.runs.push_back(rawRun);
+        check(reopened.write(rawManifest).ok(),
+              "v2 persists zero-frame, unreadable and failed-writer WAV artifacts");
+        daw::recovery::CloudRecordingRecoveryManifest rawLoaded;
+        check(reopened.read(rawLoaded).ok() && rawLoaded == rawManifest &&
+                  rawLoaded.runs.back().captures[0].status ==
+                      daw::recovery::CloudRecordingCaptureStatus::ZeroFrames &&
+                  rawLoaded.runs.back().captures[1].status ==
+                      daw::recovery::CloudRecordingCaptureStatus::Unreadable &&
+                  rawLoaded.runs.back().captures[2].status ==
+                      daw::recovery::CloudRecordingCaptureStatus::WriteFailed &&
+                  rawLoaded.runs.back().captures[2].passes.size() == 1 &&
+                  rawLoaded.runs.back().captures[2].frames == 4800,
+              "raw recovery status and readable failed prefix survive a strict v2 round-trip");
+
+        // A strict legacy reader migrates v1 in memory. Generated retry ids
+        // are deterministic, and the next write upgrades the file to v2.
+        const nlohmann::json legacyCapture = {
+            {"trackId", firstCapture.trackId},
+            {"leaseId", firstCapture.leaseId},
+            {"localWavPath", firstCapture.localWavPath},
+            {"startSeconds", firstCapture.startSeconds},
+            {"durationSeconds", firstCapture.durationSeconds},
+            {"sampleRate", firstCapture.sampleRate},
+            {"channels", firstCapture.channels},
+            {"frames", firstCapture.frames},
+            {"passes", {{{"startSeconds", 12.0},
+                          {"endSeconds", 12.5},
+                          {"captureOffsetSeconds", 0.0}}}},
+            {"mode", "overwrite"}};
+        const nlohmann::json legacy = {
+            {"format", daw::recovery::kCloudRecordingRecoveryFormat},
+            {"version", daw::recovery::kCloudRecordingRecoveryLegacyVersion},
+            {"projectId", manifest.projectId},
+            {"sessionId", manifest.sessionId},
+            {"createdAt", manifest.createdAtUnixMs},
+            {"recoveryOnly", true},
+            {"lostLease", true},
+            {"captures", {legacyCapture}}};
+        { std::ofstream(recoveryFile) << legacy.dump(); }
+        daw::recovery::CloudRecordingRecoveryManifest migratedOnce;
+        daw::recovery::CloudRecordingRecoveryManifest migratedTwice;
+        check(reopened.read(migratedOnce).ok() &&
+                  reopened.read(migratedTwice).ok() &&
+                  migratedOnce == migratedTwice &&
+                  migratedOnce.version ==
+                      daw::recovery::kCloudRecordingRecoveryVersion &&
+                  migratedOnce.runs.size() == 1 &&
+                  !migratedOnce.runs[0].captures[0].semantics.complete,
+              "strict v1 read migrates deterministically without guessing semantics");
+        check(reopened.write(migratedOnce).ok() &&
+                  nlohmann::json::parse(readFile(recoveryFile))
+                          .value("version", 0) ==
+                      daw::recovery::kCloudRecordingRecoveryVersion &&
+                  nlohmann::json::parse(readFile(recoveryFile))
+                      .contains("runs"),
+              "writing a migrated legacy manifest upgrades it to v2");
+        check(reopened.write(manifest).ok(),
+              "the current v2 generation is restored after migration testing");
+
+        // Validation happens before publication: an invalid replacement must
+        // leave the previous valid generation readable.
+        auto invalid = manifest;
+        invalid.projectId = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA";
+        check(invalid.projectId != manifest.projectId &&
+                  reopened.write(invalid).code ==
+                      daw::recovery::CloudRecordingRecoveryCode::Invalid,
+              "uppercase non-canonical cloud UUID is rejected");
+        daw::recovery::CloudRecordingRecoveryManifest stillValid;
+        check(reopened.read(stillValid).ok() && stillValid == manifest,
+              "a rejected cloud recovery write preserves the prior generation");
+
+        invalid = manifest;
+        invalid.runs.front().captures.front().localWavPath = "relative.wav";
+        check(reopened.write(invalid).code ==
+                  daw::recovery::CloudRecordingRecoveryCode::Invalid,
+              "a relative recovery WAV path is rejected");
+        invalid = manifest;
+        invalid.runs.front().captures.front().localWavPath =
+            daw::platform::pathToUtf8(sourceDir / "missing.wav");
+        check(reopened.write(invalid).code ==
+                  daw::recovery::CloudRecordingRecoveryCode::Invalid,
+              "a missing recovery WAV is rejected");
+        invalid = manifest;
+        invalid.runs.front().captures.front().durationSeconds = 1.0;
+        check(reopened.write(invalid).code ==
+                  daw::recovery::CloudRecordingRecoveryCode::Invalid,
+              "inconsistent cloud recording frames and duration are rejected");
+        invalid = manifest;
+        invalid.runs.front().captures.push_back(
+            invalid.runs.front().captures.front());
+        check(reopened.write(invalid).code ==
+                  daw::recovery::CloudRecordingRecoveryCode::Invalid,
+              "duplicate recovery leases and WAV paths are rejected");
+
+        // Readers accept only the closed schema. This is also the privacy
+        // boundary: a future caller cannot smuggle a bearer token, URL or
+        // nickname into a recovery manifest as an unrecognized convenience.
+        nlohmann::json forged = encoded;
+        forged["token"] = "must-not-survive";
+        { std::ofstream(recoveryFile) << forged.dump(); }
+        daw::recovery::CloudRecordingRecoveryManifest untouched = manifest;
+        untouched.projectId = "77777777-7777-4777-8777-777777777777";
+        check(reopened.read(untouched).code ==
+                  daw::recovery::CloudRecordingRecoveryCode::Invalid &&
+                  untouched.projectId ==
+                      "77777777-7777-4777-8777-777777777777",
+              "strict read rejects unknown sensitive fields without partial output");
+
+        forged = encoded;
+        forged["runs"][0]["captures"][0]["uploadUrl"] =
+            "https://example.invalid";
+        { std::ofstream(recoveryFile) << forged.dump(); }
+        check(reopened.read(untouched).code ==
+                  daw::recovery::CloudRecordingRecoveryCode::Invalid,
+              "strict read rejects unknown per-capture fields");
+        forged = encoded;
+        forged["runs"][0]["captures"][0]["semantics"]["inputDevice"] =
+            "must-not-survive";
+        { std::ofstream(recoveryFile) << forged.dump(); }
+        check(reopened.read(untouched).code ==
+                  daw::recovery::CloudRecordingRecoveryCode::Invalid,
+              "strict read rejects local input data inside frozen semantics");
+        forged = encoded;
+        forged["runs"][0]["captures"][0]["status"] = "unknown";
+        { std::ofstream(recoveryFile) << forged.dump(); }
+        check(reopened.read(untouched).code ==
+                  daw::recovery::CloudRecordingRecoveryCode::Invalid,
+              "strict read rejects unknown capture states");
+        forged = encoded;
+        forged["version"] = 3;
+        { std::ofstream(recoveryFile) << forged.dump(); }
+        check(reopened.read(untouched).code ==
+                  daw::recovery::CloudRecordingRecoveryCode::Invalid,
+              "strict read rejects unsupported manifest versions");
+        { std::ofstream(recoveryFile) << "{ broken json"; }
+        check(reopened.read(untouched).code ==
+                  daw::recovery::CloudRecordingRecoveryCode::Invalid,
+              "strict read rejects a torn cloud recovery manifest");
+
+        check(reopened.write(manifest).ok(),
+              "a valid cloud recovery generation replaces corrupt input");
+        bool cloudDebris = false;
+        for (const auto& entry : fs::directory_iterator(session)) {
+            const std::string name = entry.path().filename().string();
+            cloudDebris = cloudDebris || name.find(".tmp-") != std::string::npos;
+        }
+        check(!cloudDebris,
+              "successful cloud recovery publication leaves no temp debris");
+
+        fs::remove(secondWav);
+        check(reopened.read(untouched).code ==
+                  daw::recovery::CloudRecordingRecoveryCode::Invalid,
+              "strict read refuses a manifest whose WAV disappeared");
+        writeTone(daw::platform::pathToUtf8(secondWav), 44100, 44100);
+        check(reopened.read(loaded).ok(),
+              "cloud recovery becomes readable when its WAV is restored");
+
+        check(reopened.removeRunAfterCommit(
+                  "88888888-8888-4888-8888-88888888888X").code ==
+                      daw::recovery::CloudRecordingRunCleanupCode::Invalid &&
+                  reopened.read(loaded).ok() && loaded == manifest &&
+                  fs::is_regular_file(firstWav) &&
+                  fs::is_regular_file(secondWav),
+              "invalid exact-run cleanup fails closed before any publication");
+
+        // Exact-run cleanup first publishes a replacement that retains the
+        // other run. Only then may it unlink the selected run's WAV.
+        const auto firstCleanup =
+            reopened.removeRunAfterCommit(firstRun.runId);
+        daw::recovery::CloudRecordingRecoveryManifest afterFirstCleanup;
+        check(firstCleanup.code ==
+                      daw::recovery::CloudRecordingRunCleanupCode::Removed &&
+                  reopened.read(afterFirstCleanup).ok() &&
+                  afterFirstCleanup.runs.size() == 1 &&
+                  afterFirstCleanup.runs.front() == secondRun &&
+                  !fs::exists(firstWav) && fs::is_regular_file(secondWav),
+              "exact-run cleanup preserves other runs and removes only its WAV");
+        check(reopened.removeRunAfterCommit(firstRun.runId).code ==
+                      daw::recovery::CloudRecordingRunCleanupCode::AlreadyAbsent &&
+                  reopened.read(afterFirstCleanup).ok() &&
+                  afterFirstCleanup.runs.size() == 1 &&
+                  fs::is_regular_file(secondWav),
+              "exact-run cleanup is idempotent without touching remaining audio");
+
+        const fs::path cleanupIntentFile =
+            session / daw::recovery::kCloudRecordingRunCleanupFile;
+        const nlohmann::json reusedPathIntent = {
+            {"format", daw::recovery::kCloudRecordingRunCleanupFormat},
+            {"version", daw::recovery::kCloudRecordingRunCleanupVersion},
+            {"projectId", manifest.projectId},
+            {"sessionId", manifest.sessionId},
+            {"runId", firstRun.runId},
+            {"wavPaths", {secondCapture.localWavPath}}};
+        { std::ofstream(cleanupIntentFile) << reusedPathIntent.dump(); }
+        check(reopened.removeRunAfterCommit(firstRun.runId).code ==
+                      daw::recovery::CloudRecordingRunCleanupCode::Invalid &&
+                  fs::is_regular_file(secondWav) && reopened.exists(),
+              "cleanup intent cannot delete a WAV referenced by a remaining run");
+        fs::remove(cleanupIntentFile);
+
+        // Model a crash after the replacement manifest became visible but
+        // before its selected WAV or durable intent was removed. The next
+        // process can finish from the intent even though the run is no longer
+        // present in the manifest.
+        writeTone(daw::platform::pathToUtf8(firstWav), 48000, 24000);
+        check(reopened.write(manifest).ok(),
+              "cloud cleanup crash fixture restores both runs");
+        const nlohmann::json cleanupIntent = {
+            {"format", daw::recovery::kCloudRecordingRunCleanupFormat},
+            {"version", daw::recovery::kCloudRecordingRunCleanupVersion},
+            {"projectId", manifest.projectId},
+            {"sessionId", manifest.sessionId},
+            {"runId", firstRun.runId},
+            {"wavPaths", {firstCapture.localWavPath}}};
+        { std::ofstream(cleanupIntentFile) << cleanupIntent.dump(); }
+        auto replacement = manifest;
+        replacement.runs.erase(replacement.runs.begin());
+        check(reopened.write(replacement).ok() && fs::exists(firstWav),
+              "published cleanup generation never deletes WAV before its boundary");
+        const auto resumedCleanup =
+            reopened.removeRunAfterCommit(firstRun.runId);
+        check(resumedCleanup.code ==
+                      daw::recovery::CloudRecordingRunCleanupCode::Removed &&
+                  !fs::exists(firstWav) && !fs::exists(cleanupIntentFile) &&
+                  reopened.read(afterFirstCleanup).ok() &&
+                  afterFirstCleanup.runs.size() == 1 &&
+                  afterFirstCleanup.runs.front() == secondRun &&
+                  fs::is_regular_file(secondWav),
+              "post-publication crash resumes WAV cleanup without losing another run");
+
+        const nlohmann::json lastRunIntent = {
+            {"format", daw::recovery::kCloudRecordingRunCleanupFormat},
+            {"version", daw::recovery::kCloudRecordingRunCleanupVersion},
+            {"projectId", manifest.projectId},
+            {"sessionId", manifest.sessionId},
+            {"runId", secondRun.runId},
+            {"wavPaths", {secondCapture.localWavPath}}};
+        { std::ofstream(cleanupIntentFile) << lastRunIntent.dump(); }
+        check(reopened.removeAfterCommit().ok() &&
+                  !fs::exists(recoveryFile) && reopened.exists() &&
+                  fs::is_regular_file(secondWav),
+              "intent-only last-run crash remains discoverable before WAV cleanup");
+        const auto lastCleanup =
+            reopened.removeRunAfterCommit(secondRun.runId);
+        check(lastCleanup.code ==
+                      daw::recovery::CloudRecordingRunCleanupCode::Removed &&
+                  !reopened.exists() && !fs::exists(secondWav) &&
+                  !fs::exists(cleanupIntentFile),
+              "last exact-run cleanup removes its WAV and the sidecar");
+        check(reopened.removeRunAfterCommit(secondRun.runId).code ==
+                  daw::recovery::CloudRecordingRunCleanupCode::AlreadyAbsent,
+              "last-run cleanup remains idempotent after sidecar removal");
+
+        // Keep the broad legacy API covered independently. It intentionally
+        // removes only the sidecar and remains available to old callers.
+        writeTone(daw::platform::pathToUtf8(firstWav), 48000, 24000);
+        writeTone(daw::platform::pathToUtf8(secondWav), 44100, 44100);
+        check(reopened.write(manifest).ok() &&
+                  reopened.removeAfterCommit().ok() && !reopened.exists(),
+              "only explicit post-commit cleanup removes cloud recovery");
+        check(reopened.removeAfterCommit().ok(),
+              "post-commit cloud recovery cleanup is idempotent");
     }
 
     // ── Plugin chunks are part of the same journal generation ──

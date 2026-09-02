@@ -359,6 +359,10 @@ void PluginEditorWindow::rebuildEditorContent() {
     setWindowTitle(title);
 
     const bool hasNativeEditor = plugin && plugin->hasEditor();
+    const bool trustedInternal =
+        plugin && plugin->descriptor().format == daw::plugins::Format::Internal;
+    const std::string descriptorUid =
+        plugin ? plugin->descriptor().uid : std::string{};
     if (std::getenv("DAW_PLUGIN_DIAGNOSTICS")) {
         std::fprintf(stderr,
                      "editor for '%s' (%s): instance %s, hasEditor %s\n",
@@ -398,7 +402,8 @@ void PluginEditorWindow::rebuildEditorContent() {
         return;
     }
 
-    if (dynamic_cast<daw::plugins::equalizer::EqualizerInstance*>(plugin)) {
+    if (trustedInternal && descriptorUid == "daw.equalizer" &&
+        dynamic_cast<daw::plugins::equalizer::EqualizerInstance*>(plugin)) {
         auto* equalizerPanel =
             new EqualizerPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = equalizerPanel;
@@ -409,12 +414,14 @@ void PluginEditorWindow::rebuildEditorContent() {
                     emit automationRequested(m_channelId, m_insertId, parameterId);
                 });
         m_contentRow->insertWidget(0, m_generic, 1);
+        emit builtInPanelReady(equalizerPanel, QStringLiteral("equalizer"));
         // The branded EQ view itself is 820x520 minimum; this host widget also
         // owns the 39 px plugin header above it.
         setMinimumSize(820, 559);
         m_fallbackContentSize = QSize(1040, 680);
         resize(m_fallbackContentSize);
-    } else if (dynamic_cast<daw::plugins::gravity::GravityInstance*>(plugin)) {
+    } else if (trustedInternal && descriptorUid == "daw.gravity" &&
+               dynamic_cast<daw::plugins::gravity::GravityInstance*>(plugin)) {
         auto* gravityPanel =
             new GravityPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = gravityPanel;
@@ -425,10 +432,12 @@ void PluginEditorWindow::rebuildEditorContent() {
                     emit automationRequested(m_channelId, m_insertId, parameterId);
                 });
         m_contentRow->insertWidget(0, m_generic, 1);
+        emit builtInPanelReady(gravityPanel, QStringLiteral("gravity"));
         setMinimumSize(820, 638);
         m_fallbackContentSize = QSize(920, 718);
         resize(m_fallbackContentSize);
-    } else if (dynamic_cast<daw::plugins::sampler::SamplerInstance*>(plugin)) {
+    } else if (trustedInternal && descriptorUid == "daw.sampler" &&
+               dynamic_cast<daw::plugins::sampler::SamplerInstance*>(plugin)) {
         auto* samplerPanel =
             new SamplerPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = samplerPanel;
@@ -441,6 +450,7 @@ void PluginEditorWindow::rebuildEditorContent() {
                     emit automationRequested(m_channelId, m_insertId, parameterId);
                 });
         m_contentRow->insertWidget(0, m_generic, 1);
+        emit builtInPanelReady(samplerPanel, QStringLiteral("sampler"));
         setMinimumSize(860, 558);
         m_fallbackContentSize = QSize(1080, 688);
         resize(m_fallbackContentSize);

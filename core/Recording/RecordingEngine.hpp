@@ -20,7 +20,15 @@ struct RecordingSession {
     std::string filePath;
     TrackID trackID = 0;
     TimeSamples startSample = 0;
+    /// Backward-compatible alias for `capturedFrames`. It counts frames the
+    /// realtime producer accepted into the ring, not durable file contents.
     TimeSamples recordedSamples = 0;
+    TimeSamples capturedFrames = 0;
+    TimeSamples writtenFrames = 0;
+    uint64_t droppedFrames = 0;
+    /// True only after every data write, the final flush/close and the WAV
+    /// header rewrite have completed successfully.
+    bool fileWriteSucceeded = false;
     uint32_t channelCount = 2;
     SampleRate sampleRate = 44100;
 
@@ -62,13 +70,17 @@ public:
 
     RecordingSession session() const;
 
-    /// Frames captured so far, read without taking the session lock. This is
-    /// the recording's own clock — it counts what has actually been written —
-    /// so anything drawn against it (the growing take in the arrangement) stays
-    /// locked to the file that take will become instead of drifting away from
-    /// it on a jittery UI tick.
+    /// Frames accepted into the writer ring so far, read without taking the
+    /// session lock. This is the preview clock, not a durability claim: a disk
+    /// failure can leave `writtenFrames` behind this value.
     TimeSamples recordedFrames() const {
         return m_recordedFrames.load(std::memory_order_relaxed);
+    }
+
+    /// Full frames whose data-write operation completed successfully. The
+    /// recording is durable only when `session().fileWriteSucceeded` is true.
+    TimeSamples writtenFrames() const {
+        return m_writtenFrames.load(std::memory_order_relaxed);
     }
 
     /// Frames dropped because the writer could not keep up.
@@ -83,9 +95,17 @@ public:
                         SampleRate rate);
 
 private:
+    enum WriterFailure : std::uint32_t {
+        WriterOpenFailed = 1u << 0,
+        WriterDataWriteFailed = 1u << 1,
+        WriterFlushFailed = 1u << 2,
+        WriterHeaderFinalizeFailed = 1u << 3,
+    };
+
     void writerLoop();
-    void finalizeFile(uint64_t framesWritten);
-    std::string makeRecordingPath(TrackID trackID) const;
+    bool finalizeFile(uint64_t framesWritten);
+    void latchWriterFailure(WriterFailure failure) noexcept;
+    std::string makeRecordingPath(TrackID trackID, uint64_t nonce) const;
 
     RecordingSession m_session;
     std::string m_recordPath;
@@ -103,6 +123,8 @@ private:
     std::atomic<bool> m_recording{false};
     std::atomic<uint64_t> m_droppedFrames{0};
     std::atomic<TimeSamples> m_recordedFrames{0};
+    std::atomic<TimeSamples> m_writtenFrames{0};
+    std::atomic<std::uint32_t> m_writerFailures{0};
     std::atomic<std::uint32_t> m_processInFlight{0};
 
     ChannelCount m_inputFirstChannel = 0;

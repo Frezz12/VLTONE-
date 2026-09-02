@@ -1,6 +1,7 @@
 # daw — the Qt Widgets front-end.
 # Network serves the AI assistant; WebEngineWidgets provides the isolated
-# Chromium-based browser and its explicit download API.
+# Chromium-based browser and its explicit download API. WebSockets remains an
+# opt-in dependency with the collaboration feature flag.
 set(DAW_QT_VERSION "6.8.3" CACHE STRING "Supported Qt release line")
 if(WIN32)
     set(DAW_EXACT_QT_DEFAULT ON)
@@ -9,12 +10,17 @@ else()
 endif()
 option(DAW_REQUIRE_EXACT_QT_VERSION
        "Reject Qt versions other than DAW_QT_VERSION" ${DAW_EXACT_QT_DEFAULT})
+set(DAW_QT_COMPONENTS
+    Widgets Network WebEngineWidgets SerialPort LinguistTools)
+if(DAW_ENABLE_COLLABORATION)
+    list(APPEND DAW_QT_COMPONENTS WebSockets)
+endif()
 if(DAW_REQUIRE_EXACT_QT_VERSION)
     find_package(Qt6 ${DAW_QT_VERSION} EXACT REQUIRED COMPONENTS
-        Widgets Network WebEngineWidgets SerialPort LinguistTools)
+        ${DAW_QT_COMPONENTS})
 else()
-find_package(Qt6 ${DAW_QT_VERSION} REQUIRED COMPONENTS
-        Widgets Network WebEngineWidgets SerialPort LinguistTools)
+    find_package(Qt6 ${DAW_QT_VERSION} REQUIRED COMPONENTS
+        ${DAW_QT_COMPONENTS})
 endif()
 find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
 find_package(RtMidi CONFIG REQUIRED)
@@ -60,11 +66,24 @@ daw_add_windows_metadata(daw "VLT Studio Pro.exe" "VLTStudioPro"
 
 target_compile_definitions(daw PRIVATE
     VLT_DEFAULT_API_ORIGIN=\"${VLT_DEFAULT_API_ORIGIN}\")
+if(DAW_ENABLE_COLLABORATION)
+    # The root dogfood/release-gate option owns enablement. All session UI and
+    # service injection is compiled out unless that explicit gate is ON.
+    target_compile_definitions(daw PRIVATE DAW_ENABLE_COLLABORATION=1)
+    target_link_libraries(daw PRIVATE Qt6::WebSockets)
+endif()
 
 target_include_directories(daw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(daw PRIVATE daw_controller Qt6::Widgets Qt6::Network
                                   Qt6::WebEngineWidgets Qt6::SerialPort
                                   OpenSSL::Crypto RtMidi::rtmidi)
+if(DAW_BUILD_TESTS)
+    add_test(NAME collaboration_client_selftest
+             COMMAND $<TARGET_FILE:daw> --collaboration-selftest)
+    set_tests_properties(collaboration_client_selftest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 30)
+endif()
 if(APPLE)
     target_link_libraries(daw PRIVATE "-framework Security")
 elseif(WIN32)

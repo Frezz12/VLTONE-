@@ -32,7 +32,7 @@ public:
 
 signals:
     void trackSelected(const QString& trackId);
-    void edited();
+    void edited(bool localFileDirty = true);
     /// An insert, instrument or routing slot changed. Ordinary value edits do
     /// not emit this, so the shell can keep its existing strip widgets alive.
     void structureChanged();

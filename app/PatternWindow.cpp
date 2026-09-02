@@ -1013,8 +1013,11 @@ void PatternWindow::rebuildRows() {
         solo->setChecked(track->soloed);
         connect(mute, &QAbstractButton::toggled, this,
                 [this, id](bool on) {
-                    m_controller->setTrackMuted(id.toStdString(), on);
-                    emit projectEdited();
+                    const auto result =
+                        m_controller->setTrackMuted(id.toStdString(), on);
+                    syncRowsFromModel();
+                    emit projectEdited(
+                        daw::collab::marksLocalFileDirty(result));
                 });
         connect(solo, &QAbstractButton::toggled, this,
                 [this, id](bool on) {
@@ -1314,9 +1317,9 @@ void PatternWindow::renameSource(const QString& trackId) {
         this, tr("Rename Pattern Source"), tr("Source name:"),
         QLineEdit::Normal, current, &accepted);
     if (!accepted || name.trimmed().isEmpty() || name == current) return;
-    m_controller->renameTrack(trackId.toStdString(),
-                              name.trimmed().toStdString());
-    emit projectEdited();
+    const auto result = m_controller->renameTrack(
+        trackId.toStdString(), name.trimmed().toStdString());
+    emit projectEdited(daw::collab::marksLocalFileDirty(result));
     refresh();
 }
 

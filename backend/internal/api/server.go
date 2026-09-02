@@ -25,8 +25,10 @@ import (
 	"gorm.io/gorm"
 
 	"vltstudio/backend/internal/auth"
+	"vltstudio/backend/internal/collab"
 	"vltstudio/backend/internal/config"
 	"vltstudio/backend/internal/model"
+	"vltstudio/backend/internal/objectstore"
 	"vltstudio/backend/internal/quota"
 )
 
@@ -41,16 +43,25 @@ type Server struct {
 	DB             *gorm.DB
 	Signer         *auth.Signer
 	Quota          quota.Service
+	Collab         *collab.Store
+	CollabAssets   *collab.AssetService
+	Rooms          collab.RoomBus
+	Hashes         *collab.HashCoordinator
 	limiter        *rateLimiter
 	trustedProxies []*net.IPNet
 }
 
 func New(cfg config.Config, db *gorm.DB) (*Server, error) {
-	for _, directory := range []string{
+	directories := []string{
 		filepath.Join(cfg.StorageRoot, "bugs"),
 		filepath.Join(cfg.StorageRoot, "crashes"),
 		filepath.Join(cfg.StorageRoot, "releases"),
-	} {
+	}
+	collaborationTemp := filepath.Join(cfg.StorageRoot, "collaboration-objects")
+	if cfg.CollaborationEnabled {
+		directories = append(directories, collaborationTemp)
+	}
+	for _, directory := range directories {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return nil, fmt.Errorf("create storage: %w", err)
 		}
@@ -63,9 +74,32 @@ func New(cfg config.Config, db *gorm.DB) (*Server, error) {
 		}
 		trustedProxies = append(trustedProxies, network)
 	}
+	var collaborationAssets *collab.AssetService
+	if cfg.CollaborationEnabled {
+		objects, err := objectstore.NewS3(objectstore.S3Config{
+			Endpoint: cfg.CollabObjectEndpoint, Region: cfg.CollabObjectRegion,
+			Bucket: cfg.CollabObjectBucket, AccessKeyID: cfg.CollabObjectAccessKeyID,
+			SecretAccessKey: cfg.CollabObjectSecretAccessKey,
+			SessionToken:    cfg.CollabObjectSessionToken, TempDirectory: collaborationTemp,
+			MaximumBytes: cfg.CollabMaximumObjectBytes,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("configure collaboration object storage: %w", err)
+		}
+		collaborationAssets = collab.NewAssetService(db, objects,
+			time.Duration(cfg.CollabUploadURLSeconds)*time.Second,
+			time.Duration(cfg.CollabDownloadURLSeconds)*time.Second,
+			time.Duration(cfg.CollabUploadSessionSeconds)*time.Second,
+			cfg.CollabMaximumObjectBytes, cfg.CollabMultipartThresholdBytes,
+			cfg.CollabMultipartPartBytes, cfg.CollabMultipartURLBatch)
+	}
 	return &Server{
 		Config: cfg, DB: db, Signer: auth.NewSigner(cfg.SigningSeed),
 		Quota: quota.Service{DB: db, GlobalMonthlyLimit: cfg.AIGlobalMonthlyLimit}, limiter: newRateLimiter(),
+		Collab:         collab.NewStore(db, cfg.CollabMaxParticipants),
+		CollabAssets:   collaborationAssets,
+		Rooms:          collab.NewInProcessRoomBus(),
+		Hashes:         collab.NewHashCoordinator(),
 		trustedProxies: trustedProxies,
 	}, nil
 }
@@ -116,6 +150,44 @@ func (s *Server) Router() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.desktopAuth)
 		r.Get("/v1/desktop/me", s.desktopMe)
+		if s.Config.CollaborationEnabled {
+			r.Post("/v1/desktop/project-invites/accept", s.acceptProjectInvite)
+			r.Get("/v1/desktop/projects", s.cloudProjects)
+			r.Post("/v1/desktop/projects", s.createCloudProject)
+			r.Route("/v1/desktop/projects", func(r chi.Router) {
+				r.Get("/{projectID}", s.cloudProject)
+				r.Patch("/{projectID}", s.updateCloudProject)
+				r.Delete("/{projectID}", s.archiveCloudProject)
+				r.Post("/{projectID}/publish", s.publishCloudProject)
+				r.Get("/{projectID}/bootstrap", s.bootstrapCloudProject)
+				r.Get("/{projectID}/members", s.projectMembers)
+				r.Put("/{projectID}/members/{userID}", s.putProjectMember)
+				r.Delete("/{projectID}/members/{userID}", s.removeProjectMember)
+				r.Post("/{projectID}/ownership", s.transferProjectOwnership)
+				r.Post("/{projectID}/invites", s.createProjectInvite)
+				r.Delete("/{projectID}/invites/{inviteID}", s.revokeProjectInvite)
+				r.Post("/{projectID}/ops", s.appendProjectOperation)
+				r.Get("/{projectID}/ops/{opID}", s.projectOperationStatus)
+				r.Post("/{projectID}/asset-uploads/prepare", s.prepareProjectAssetUpload)
+				r.Post("/{projectID}/asset-uploads/{uploadID}/complete", s.completeProjectAssetUpload)
+				r.Delete("/{projectID}/uploads/{uploadID}", s.abortProjectUpload)
+				r.Post("/{projectID}/snapshot-uploads/prepare", s.prepareProjectSnapshotUpload)
+				r.Post("/{projectID}/snapshot-uploads/{uploadID}/complete", s.completeProjectSnapshotUpload)
+				r.Get("/{projectID}/assets/{assetID}/download", s.projectAssetDownload)
+				r.Get("/{projectID}/snapshots/{snapshotID}/download", s.projectSnapshotDownload)
+				r.Get("/{projectID}/live", s.collaborationLive)
+				r.Get("/{projectID}/sessions/active", s.activeProjectSession)
+				r.Post("/{projectID}/sessions", s.startProjectSession)
+				r.Post("/{projectID}/sessions/{sessionID}/join", s.joinProjectSession)
+				r.Post("/{projectID}/sessions/{sessionID}/leave", s.leaveProjectSession)
+				r.Post("/{projectID}/sessions/{sessionID}/heartbeat", s.heartbeatProjectSession)
+				r.Post("/{projectID}/sessions/{sessionID}/host", s.handoffProjectSessionHost)
+				r.Delete("/{projectID}/sessions/{sessionID}", s.endProjectSession)
+				r.Post("/{projectID}/sessions/{sessionID}/leases", s.acquireTrackLease)
+				r.Patch("/{projectID}/sessions/{sessionID}/leases/{leaseID}", s.renewTrackLease)
+				r.Delete("/{projectID}/sessions/{sessionID}/leases/{leaseID}", s.releaseTrackLease)
+			})
+		}
 		r.Get("/v1/desktop/ai/models", s.desktopAIModels)
 		r.Post("/v1/desktop/ai/models/{modelID}/lease", s.leaseAIModel)
 		r.Post("/v1/desktop/ai/reservations/{reservationID}/settle", s.settleAIReservation)
@@ -182,7 +254,20 @@ func (s *Server) Router() http.Handler {
 
 func (s *Server) requestTimeout(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet &&
+			strings.HasPrefix(r.URL.Path, "/v1/desktop/projects/") &&
+			strings.HasSuffix(r.URL.Path, "/live") {
+			// A WebSocket owns its own handshake, read, write, ping and idle
+			// deadlines. Applying the REST timeout would kill healthy rooms.
+			next.ServeHTTP(w, r)
+			return
+		}
 		duration := 4 * time.Minute
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/desktop/projects/") &&
+			(strings.Contains(r.URL.Path, "/asset-uploads/") || strings.Contains(r.URL.Path, "/snapshot-uploads/")) &&
+			strings.HasSuffix(r.URL.Path, "/complete") {
+			duration = 30 * time.Minute
+		}
 		if r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/admin/releases/") && strings.Contains(r.URL.Path, "/artifacts/") {
 			duration = 30 * time.Minute
 		}
@@ -232,6 +317,12 @@ func (s *Server) meta(w http.ResponseWriter, _ *http.Request) {
 		"consent_version": s.Config.ConsentVersion,
 		"offline_hours":   72, "access_token_minutes": 15,
 		"public_key": s.Signer.PublicKeyBase64(),
+		"collaboration": map[string]any{
+			"enabled": s.Config.CollaborationEnabled, "protocol": collab.CollaborationProtocol,
+			"project_format":   collab.CollaborationProjectFormatVersion,
+			"command_schema":   collab.CollaborationCommandSchemaVersion,
+			"max_participants": s.Config.CollabMaxParticipants,
+		},
 	})
 }
 
@@ -268,7 +359,12 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBody)
+	return decodeJSONWithLimit(w, r, out, maxJSONBody)
+}
+
+func decodeJSONWithLimit(w http.ResponseWriter, r *http.Request, out any,
+	maximumBytes int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maximumBytes)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(out); err != nil {

@@ -3,6 +3,7 @@
 #include "MidiPreviewIndex.hpp"
 #include "MidiTools.hpp"
 #include "NoteContextPanel.hpp"
+#include "CollaborationTypes.hpp"
 #include "model/Document.hpp"
 
 #include <QColor>
@@ -193,6 +194,15 @@ public:
     /// broken by event coalescing: swept erasing, grid-safe brush length and a
     /// stretch handle that only belongs to a multi-note selection.
     bool checkInteractionGesturesForTest();
+
+    /// Privacy-safe collaboration mapping for the application-owned note
+    /// canvas. Beat/pitch/value survive different zoom, scroll and lane sizes;
+    /// the normalised point remains a safe fallback for chrome regions.
+    collab::SemanticPoint collaborationPresenceAt(
+        const QPointF& position) const;
+    std::optional<QPointF> collaborationPositionFor(
+        const collab::SemanticPoint& point) const;
+    static bool checkCollaborationPresenceForTest(QString* error = nullptr);
 
     // ── Selection ──
     void selectAll();
@@ -680,6 +690,12 @@ public:
     /// The track being edited — what the typing keyboard plays while this
     /// internal editor is active.
     QString trackId() const { return m_trackId; }
+    QString clipId() const { return m_clipId; }
+    QWidget* collaborationPresenceSurface() const { return m_view; }
+    collab::SemanticPoint collaborationPresenceAt(
+        const QPointF& position) const;
+    std::optional<QPointF> collaborationPositionFor(
+        const collab::SemanticPoint& point) const;
     /// Re-read the document and repaint — call after anything that could have
     /// changed or removed the clip (undo, reload, track deletion).
     void refresh();
@@ -731,7 +747,7 @@ signals:
     void playheadMoved();
     /// Mute/Solo changed on the clip's track; the arrangement, headers and
     /// mixer need to refresh their copy of those two states.
-    void trackStateChanged();
+    void trackStateChanged(bool localFileDirty = true);
     void automateMuteRequested(const QString& trackId);
     void noteSelectionChanged(bool hasSelection);
     /// A modeless MIDI tool wants the same workspace chrome as every other

@@ -12,6 +12,7 @@
 #include <QString>
 #include <array>
 #include <bitset>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,7 @@ class ToolPanel;
 class ShortcutManager;
 class PluginEditorWindow;
 class SampleEditorWindow;
+class AutomationEditorWindow;
 class InternalEditorFrame;
 class PluginManagerWindow;
 class SettingsWindow;
@@ -46,6 +48,20 @@ class AiChatPanel;
 class WebBrowserPanel;
 class TypingKeyboard;
 class MidiInputManager;
+namespace collab {
+class CollaborationService;
+class CollaborationCommandBridge;
+class CloudProjectClient;
+class CloudProjectPublisher;
+class CloudProjectSyncCoordinator;
+class CloudSessionLifecycleController;
+class RecordingLeaseCoordinator;
+class PresenceInputRouter;
+class PresenceOverlay;
+class SessionStatusWidget;
+enum class SurfaceKind;
+struct TransportFrame;
+}
 
 /// The application shell. Top to bottom: the transport bar with its centred
 /// pill and inset panel toggles, then a row of [inspector | arrangement over
@@ -54,7 +70,8 @@ class MidiInputManager;
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
-    explicit MainWindow(bool openDevice = true, QWidget* parent = nullptr);
+    explicit MainWindow(bool openDevice = true, QWidget* parent = nullptr,
+                        collab::CollaborationService* collaboration = nullptr);
     ~MainWindow() override;
 
     /// Startup owns the initial incremental scan while this window is still
@@ -64,6 +81,29 @@ public:
         return m_controller.pluginManager();
     }
     void applyStartupPluginScanResults();
+
+    /// Narrow collaboration seam.  The projection adapter is owned at app
+    /// scope (beside CommandGateway) while the engine is owned by this window.
+    /// No editing UI should use this hook for ordinary mutations.
+    daw::EngineController* collaborationEngineController() noexcept {
+        return &m_controller;
+    }
+    /// Re-read the already projected model without marking a local file dirty
+    /// or emitting the legacy projectEdited signal.
+    void refreshAfterCollaborationProjection();
+
+#ifdef DAW_ENABLE_COLLABORATION
+    /// App-lifetime cloud services are constructed beside the account and
+    /// transport services.  The window only owns the publication UI state and
+    /// the temporary capture which keeps staged plugin bytes alive.
+    void setCloudPublicationServices(
+        collab::CloudProjectPublisher* publisher,
+        collab::CloudProjectSyncCoordinator* synchronizer,
+        collab::CloudSessionLifecycleController* sessionLifecycle,
+        collab::CollaborationCommandBridge* commandBridge,
+        collab::CloudProjectClient* projectClient,
+        collab::RecordingLeaseCoordinator* recordingLeases);
+#endif
 
     /// Populate a few coloured tracks (used for screenshots / demos).
     void populateDemo();
@@ -427,7 +467,7 @@ private slots:
     /// A track was picked in the header column or the mixer — as opposed to
     /// being selected as a side effect of clicking one of its clips.
     void selectTrackFromHeader(const QString& trackId);
-    void onTracksChanged();
+    void onTracksChanged(bool localFileDirty = true);
     void onClearSolos();
     void onClearMutes();
     /// Open (or close) the selected tracks' automation lanes. The first time a
@@ -580,6 +620,8 @@ private:
     void setEditTool(int index);
     void buildLayout();
     void buildStatusBar();
+    void publishSessionTransport(bool force = false);
+    void applySessionTransport(const collab::TransportFrame& frame);
     void updateWindowTitle();
     void syncViews();
     /// Rebuild the lane/header structure in the current frame, then leave
@@ -637,6 +679,31 @@ private:
     /// Give the shared context strip to selected Piano Roll notes while the
     /// internal editor is active, otherwise return it to the arrangement.
     void syncPianoRollContextPanel();
+#ifdef DAW_ENABLE_COLLABORATION
+    void registerPianoRollPresence();
+    void registerAutomationPresence(AutomationEditorWindow* editor);
+    void registerNormalizedPresenceSurface(QWidget* surface,
+                                           collab::SurfaceKind kind,
+                                           const QString& instanceId,
+                                           const QString& ownerId,
+                                           const QString& objectId);
+    void onPublishCloudProject();
+    void onInvitePeople();
+    void updateCloudPublicationAction();
+    void updateCloudSessionActions();
+    bool canInvitePeople() const;
+    void clearCloudProjectBinding(bool cancelPublication);
+    void startCloudRecording(const std::vector<std::string>& targets);
+    void stopCloudRecordingNow(bool interactiveError = true);
+    void cancelPendingCloudRecording(const QString& safeNotice = {});
+    void handleCloudRecordingContextChange();
+    void handleRecordingLeasesAcquired();
+    bool prepareCloudRecordingForProjectTransition();
+    bool cloudRecordingContextIsWritable(
+        const std::vector<std::string>& targets) const;
+    bool ensureCloudRecordingRecoverySession();
+    bool cloudRecordingRecoveryExists() const;
+#endif
     void setContextPanelVisible(bool visible);
     bool doSave(const QString& packageDir);
     bool saveProjectAs();
@@ -649,6 +716,41 @@ private:
     /// What is selected, in one place, for the views that need to know rather
     /// than the view that made the selection. See ui::SelectionModel.
     ui::SelectionModel m_selection;
+
+    /// Non-owning app-lifetime service; instantiated only by feature-enabled
+    /// builds. The window owns the input router/overlays/status widget.
+    collab::CollaborationService* m_collaboration = nullptr;
+    collab::PresenceInputRouter* m_presenceInput = nullptr;
+    collab::PresenceOverlay* m_timelinePresence = nullptr;
+    collab::PresenceOverlay* m_pianoRollPresence = nullptr;
+    collab::SessionStatusWidget* m_sessionStatus = nullptr;
+#ifdef DAW_ENABLE_COLLABORATION
+    struct PublicationUiState;
+    std::unique_ptr<PublicationUiState> m_publicationUi;
+    collab::CloudProjectPublisher* m_cloudPublisher = nullptr;
+    collab::CloudProjectSyncCoordinator* m_cloudProjectSync = nullptr;
+    collab::CloudSessionLifecycleController* m_cloudSessionLifecycle = nullptr;
+    collab::CollaborationCommandBridge* m_collaborationCommandBridge = nullptr;
+    QPointer<collab::CloudProjectClient> m_cloudProjectClient;
+    QPointer<collab::RecordingLeaseCoordinator> m_recordingLeases;
+    struct CloudRecordingRuntime;
+    std::unique_ptr<CloudRecordingRuntime> m_cloudRecording;
+    quint64 m_cloudRecordingGeneration = 0;
+    bool m_preserveCloudRecoverySession = false;
+    QAction* m_publishProjectAction = nullptr;
+    QAction* m_startSessionAction = nullptr;
+    QAction* m_invitePeopleAction = nullptr;
+    QAction* m_endSessionAction = nullptr;
+    QAction* m_leaveSessionAction = nullptr;
+    QString m_cloudProjectId;
+    /// The local package published into the cloud is retained as an immutable
+    /// backup.  Save/Save As may create a different local copy, but may never
+    /// target this path while the document remains cloud-bound.
+    QString m_cloudLocalBackupPath;
+#endif
+    bool m_applyingRemoteTransport = false;
+    bool m_transportBroadcastInitialized = false;
+    bool m_lastTransportBroadcastPlaying = false;
 
     TransportBar* m_transport = nullptr;
     QWidget* m_workspace = nullptr;
@@ -742,6 +844,10 @@ private:
     QString m_projectPath;
     QString m_selectedTrackId;
     bool m_dirty = false;
+    /// Monotonic identity of document content.  Publication uses this in
+    /// addition to the dirty bit so an edit followed by Save cannot make an
+    /// old staged snapshot look current again.
+    quint64 m_projectRevision = 0;
     /// Continuous, cheap copy of the document on disk — the only thing that
     /// actually survives a crash. Declared after m_controller so it is torn
     /// down before the engine it snapshots.

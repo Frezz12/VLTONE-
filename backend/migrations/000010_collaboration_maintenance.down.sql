@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS project_session_members_stale_active_idx;

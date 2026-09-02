@@ -1398,6 +1398,110 @@ double PianoRollView::pitchToY(int pitch) const {
            double(kMaxPitch - pitch) * m_rowHeight - m_scrollY;
 }
 
+collab::SemanticPoint PianoRollView::collaborationPresenceAt(
+    const QPointF& position) const {
+    collab::SemanticPoint point;
+    point.surface = {
+        collab::SurfaceKind::PianoRoll, QStringLiteral("notes"),
+        collab::safeSemanticId(m_trackId + QLatin1Char(':') + m_clipId)};
+    point.normalized = collab::normalizedSurfacePoint(position, size());
+    point.trackId = m_trackId;
+    point.clipId = m_clipId;
+
+    const double keys = keyboardWidth();
+    if (position.y() < ui::kRulerHeight) {
+        point.targetId = QStringLiteral("ruler");
+        if (position.x() >= keys)
+            point.beat = std::max(0.0, xToBeats(position.x()));
+        return point;
+    }
+    if (m_showVelocityLane && position.y() >= laneTop()) {
+        point.targetId = QStringLiteral("parameter_lane");
+        if (position.x() >= keys)
+            point.beat = std::max(0.0, xToBeats(position.x()));
+        point.laneFraction = laneValueAtY(position.y());
+        if (m_laneParam == LaneParam::Velocity)
+            point.parameterId = QStringLiteral("note.velocity");
+        else if (m_laneParam == LaneParam::Pan)
+            point.parameterId = QStringLiteral("note.pan");
+        else
+            point.parameterId = collab::safeSemanticId(m_laneId);
+        return point;
+    }
+
+    point.pitch = yToPitch(position.y());
+    if (position.x() < keys) {
+        point.targetId = QStringLiteral("keyboard");
+    } else {
+        point.targetId = QStringLiteral("note_grid");
+        point.beat = std::max(0.0, xToBeats(position.x()));
+    }
+    return point;
+}
+
+std::optional<QPointF> PianoRollView::collaborationPositionFor(
+    const collab::SemanticPoint& point) const {
+    const QString track = collab::safeSemanticId(m_trackId);
+    const QString clipId = collab::safeSemanticId(m_clipId);
+    if (point.trackId != track || point.clipId != clipId) return std::nullopt;
+
+    const auto fallback = collab::surfacePointFromNormalized(point, size());
+    qreal x = fallback ? fallback->x() : -1.0;
+    qreal y = fallback ? fallback->y() : -1.0;
+    if (std::isfinite(point.beat) && point.beat >= 0.0)
+        x = beatsToX(point.beat);
+    if (point.pitch >= kMinPitch && point.pitch <= kMaxPitch)
+        y = pitchToY(point.pitch) + m_rowHeight * 0.5;
+    else if (point.targetId == QLatin1String("parameter_lane") &&
+             std::isfinite(point.laneFraction) &&
+             point.laneFraction >= 0.0)
+        y = laneValueToY(point.laneFraction);
+    if (x < 0.0 || y < 0.0) return std::nullopt;
+    return QPointF(x, y);
+}
+
+bool PianoRollView::checkCollaborationPresenceForTest(QString* error) {
+    const auto fail = [error](const QString& message) {
+        if (error) *error = message;
+        return false;
+    };
+    PianoRollView view(nullptr);
+    view.m_trackId = QStringLiteral("track-1");
+    view.m_clipId = QStringLiteral("clip-1");
+    view.resize(720, 420);
+    view.m_pxPerBeat = 84.0;
+    view.m_rowHeight = 12.0;
+    view.m_scrollX = 36.0;
+    view.m_scrollY = 500.0;
+
+    const QPointF source(view.beatsToX(3.25),
+                         view.pitchToY(67) + view.m_rowHeight * 0.5);
+    const collab::SemanticPoint semantic =
+        view.collaborationPresenceAt(source);
+    if (std::abs(semantic.beat - 3.25) > 1e-9 || semantic.pitch != 67 ||
+        semantic.trackId != QLatin1String("track-1") ||
+        semantic.clipId != QLatin1String("clip-1")) {
+        return fail(QStringLiteral("piano-roll presence lost beat/pitch context"));
+    }
+
+    view.resize(1280, 700);
+    view.m_pxPerBeat = 132.0;
+    view.m_rowHeight = 18.0;
+    view.m_scrollX = 105.0;
+    view.m_scrollY = 700.0;
+    const auto remapped = view.collaborationPositionFor(semantic);
+    const QPointF expected(view.beatsToX(3.25),
+                           view.pitchToY(67) + view.m_rowHeight * 0.5);
+    if (!remapped || QLineF(*remapped, expected).length() > 1e-6)
+        return fail(QStringLiteral("piano-roll presence did not follow layout"));
+
+    collab::SemanticPoint otherClip = semantic;
+    otherClip.clipId = QStringLiteral("clip-2");
+    if (view.collaborationPositionFor(otherClip))
+        return fail(QStringLiteral("piano-roll presence crossed clip context"));
+    return true;
+}
+
 double PianoRollView::localBeatToSeconds(double beats) const {
     const auto* c = clip();
     if (!c || !m_controller) return 0.0;
@@ -5022,9 +5126,10 @@ void PianoRollWindow::buildToolbar() {
     });
     connect(m_trackMuteButton, &QAbstractButton::clicked, this, [this](bool on) {
         if (m_trackId.isEmpty()) return;
-        m_controller->setTrackMuted(m_trackId.toStdString(), on);
+        const auto result =
+            m_controller->setTrackMuted(m_trackId.toStdString(), on);
         updateActionState();
-        emit trackStateChanged();
+        emit trackStateChanged(daw::collab::marksLocalFileDirty(result));
     });
     row->addWidget(m_trackMuteButton);
 
@@ -6246,6 +6351,17 @@ void PianoRollWindow::setClip(const QString& trackId, const QString& clipId) {
         updateScrollBars();
         m_view->setFocus(Qt::OtherFocusReason);
     }, Qt::QueuedConnection);
+}
+
+collab::SemanticPoint PianoRollWindow::collaborationPresenceAt(
+    const QPointF& position) const {
+    return m_view ? m_view->collaborationPresenceAt(position)
+                  : collab::SemanticPoint{};
+}
+
+std::optional<QPointF> PianoRollWindow::collaborationPositionFor(
+    const collab::SemanticPoint& point) const {
+    return m_view ? m_view->collaborationPositionFor(point) : std::nullopt;
 }
 
 void PianoRollWindow::refresh() {

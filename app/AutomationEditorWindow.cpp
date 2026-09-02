@@ -15,6 +15,7 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLineF>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
@@ -100,6 +101,79 @@ QPoint AutomationCurveView::pointPositionForTest(int index) const {
     if (index < 0 || index >= int(points.size())) return {};
     const auto& point = points[std::size_t(index)];
     return QPoint(qRound(beatsToX(point.beats)), qRound(valueToY(point.value)));
+}
+
+collab::SemanticPoint AutomationCurveView::collaborationPresenceAt(
+    const QPointF& position) const {
+    collab::SemanticPoint point;
+    point.surface = {
+        collab::SurfaceKind::AutomationEditor, QStringLiteral("curve"),
+        collab::safeSemanticId(m_trackId + QLatin1Char(':') + m_clipId)};
+    point.normalized = collab::normalizedSurfacePoint(position, size());
+    point.trackId = m_trackId;
+    point.clipId = m_clipId;
+
+    const QRectF box = plot();
+    if (box.contains(position)) {
+        point.targetId = QStringLiteral("curve_plot");
+        point.beat = xToBeats(position.x());
+        point.laneFraction = yToValue(position.y());
+    } else if (position.x() < box.left() && position.y() <= box.bottom()) {
+        point.targetId = QStringLiteral("value_axis");
+        point.laneFraction = yToValue(position.y());
+    } else if (position.y() > box.bottom()) {
+        point.targetId = QStringLiteral("beat_ruler");
+        point.beat = xToBeats(position.x());
+    } else {
+        point.targetId = QStringLiteral("editor_chrome");
+    }
+    return point;
+}
+
+std::optional<QPointF> AutomationCurveView::collaborationPositionFor(
+    const collab::SemanticPoint& point) const {
+    const QString track = collab::safeSemanticId(m_trackId);
+    const QString clipId = collab::safeSemanticId(m_clipId);
+    if (point.trackId != track || point.clipId != clipId) return std::nullopt;
+
+    const auto fallback = collab::surfacePointFromNormalized(point, size());
+    qreal x = fallback ? fallback->x() : -1.0;
+    qreal y = fallback ? fallback->y() : -1.0;
+    if (std::isfinite(point.beat) && point.beat >= 0.0)
+        x = beatsToX(point.beat);
+    if (std::isfinite(point.laneFraction) && point.laneFraction >= 0.0)
+        y = valueToY(point.laneFraction);
+    if (x < 0.0 || y < 0.0) return std::nullopt;
+    return QPointF(x, y);
+}
+
+bool AutomationCurveView::checkCollaborationPresenceForTest(QString* error) {
+    const auto fail = [error](const QString& message) {
+        if (error) *error = message;
+        return false;
+    };
+    AutomationCurveView view(nullptr);
+    view.m_trackId = QStringLiteral("track-automation");
+    view.m_clipId = QStringLiteral("clip-automation");
+    view.resize(700, 360);
+    const QPointF source(view.beatsToX(6.5), view.valueToY(0.3));
+    const collab::SemanticPoint semantic =
+        view.collaborationPresenceAt(source);
+    if (std::abs(semantic.beat - 6.5) > 1e-9 ||
+        std::abs(semantic.laneFraction - 0.3) > 1e-9)
+        return fail(QStringLiteral("automation presence lost beat/value context"));
+
+    view.resize(1260, 680);
+    const auto remapped = view.collaborationPositionFor(semantic);
+    const QPointF expected(view.beatsToX(6.5), view.valueToY(0.3));
+    if (!remapped || QLineF(*remapped, expected).length() > 1e-6)
+        return fail(QStringLiteral("automation presence did not follow layout"));
+
+    collab::SemanticPoint otherClip = semantic;
+    otherClip.clipId = QStringLiteral("another-clip");
+    if (view.collaborationPositionFor(otherClip))
+        return fail(QStringLiteral("automation presence crossed clip context"));
+    return true;
 }
 
 const daw::ClipModel* AutomationCurveView::clip() const {
@@ -1181,6 +1255,17 @@ void AutomationEditorWindow::showLfoDialog() {
     } else {
         m_view->cancelPreview();
     }
+}
+
+collab::SemanticPoint AutomationEditorWindow::collaborationPresenceAt(
+    const QPointF& position) const {
+    return m_view ? m_view->collaborationPresenceAt(position)
+                  : collab::SemanticPoint{};
+}
+
+std::optional<QPointF> AutomationEditorWindow::collaborationPositionFor(
+    const collab::SemanticPoint& point) const {
+    return m_view ? m_view->collaborationPositionFor(point) : std::nullopt;
 }
 
 void AutomationEditorWindow::refresh() {

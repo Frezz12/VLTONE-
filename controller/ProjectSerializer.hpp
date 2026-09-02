@@ -3,6 +3,7 @@
 #include "model/Document.hpp"
 #include "Core/Result.hpp"
 #include <string>
+#include <string_view>
 
 namespace daw {
 
@@ -42,12 +43,14 @@ public:
     /// arrangement clips.
     static constexpr const char* kTemplateExtension = "vltt";
     /// 2 added plugin inserts, 3 added Sampler FX, 4 per-audio-clip Sample
-    /// Editor state, and 5 the persisted BPM/key analysis. Never enforced on
+    /// Editor state, 5 the persisted BPM/key analysis, and 6 content-addressed
+    /// assets, plugin compatibility fields, and stable automation/comp ids.
+    /// Never enforced on
     /// load and deliberately so: the
     /// reader defaults every field, which makes the format additive-tolerant in
     /// both directions — a v1 file loads here, and a v2 file loads in a v1
     /// build as free insert slots rather than failing.
-    static constexpr int kFormatVersion = 5;
+    static constexpr int kFormatVersion = 6;
 
     /// Write `project` into the package directory `packageDir` (created if
     /// needed). Referenced audio is copied into `<packageDir>/Content/`.
@@ -75,6 +78,16 @@ public:
     static audio::Result loadDocument(ProjectModel& out,
                                       const std::string& filePath,
                                       const std::string& mediaDir);
+
+    /// Canonical in-memory v6 document codec used by cloud snapshots. Compact
+    /// output has deterministic object-key ordering and performs no filesystem
+    /// access; cloud callers must project away local paths before invoking it.
+    static audio::Result serializeDocument(const ProjectModel& project,
+                                           std::string& out,
+                                           MediaPaths media = MediaPaths::Absolute);
+    static audio::Result deserializeDocument(ProjectModel& out,
+                                             std::string_view bytes,
+                                             const std::string& mediaDir = {});
 
     /// Copy one additional project-owned asset (for example the built-in
     /// Sampler's source file) into `Content/`. `outFileName` is the portable

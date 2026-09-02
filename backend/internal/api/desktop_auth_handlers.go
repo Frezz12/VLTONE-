@@ -113,35 +113,84 @@ func (s *Server) desktopLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, "desktop_login_failed", "Desktop sign in failed.", nil)
 		return
 	}
-	session, refresh, reporter, err := s.newDesktopSession(user.ID, device.ID, now)
+	material, err := s.newDesktopSession(user.ID, device.ID, now)
+	if errors.Is(err, errDesktopAccountUnavailable) {
+		writeError(w, r, http.StatusForbidden, "account_unavailable",
+			"This account or device is unavailable.", nil)
+		return
+	}
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "session_failed", "Desktop session could not be created.", nil)
 		return
 	}
-	s.writeDesktopSession(w, r, user, device, session, refresh, reporter)
+	s.writeDesktopSession(w, r, material)
 }
 
 var (
-	errDeviceLimit  = errors.New("device limit reached")
-	errRefreshReuse = errors.New("refresh token reuse")
+	errDeviceLimit               = errors.New("device limit reached")
+	errRefreshReuse              = errors.New("refresh token reuse")
+	errRefreshInvalid            = errors.New("refresh token invalid")
+	errDesktopAccountUnavailable = errors.New("desktop account unavailable")
 )
 
-func (s *Server) newDesktopSession(userID, deviceID uuid.UUID, now time.Time) (model.DesktopSession, string, string, error) {
+type desktopSignedTokens struct {
+	AccessToken      string
+	AccessExpiresAt  time.Time
+	OfflineToken     string
+	OfflineExpiresAt time.Time
+	IssuedAt         time.Time
+}
+
+type desktopSessionMaterial struct {
+	User          model.User
+	Device        model.Device
+	Session       model.DesktopSession
+	RefreshToken  string
+	ReporterToken string
+	Signed        desktopSignedTokens
+}
+
+func (s *Server) newDesktopSession(userID, deviceID uuid.UUID,
+	now time.Time) (desktopSessionMaterial, error) {
+	var material desktopSessionMaterial
 	refresh, err := auth.RandomToken(48)
 	if err != nil {
-		return model.DesktopSession{}, "", "", err
+		return material, err
 	}
 	reporter, err := auth.RandomToken(40)
 	if err != nil {
-		return model.DesktopSession{}, "", "", err
+		return material, err
 	}
-	session := model.DesktopSession{
+	material.RefreshToken = refresh
+	material.ReporterToken = reporter
+	material.Session = model.DesktopSession{
 		ID: uuid.New(), UserID: userID, DeviceID: deviceID,
 		RefreshTokenHash: auth.HashToken(refresh), ReporterTokenHash: auth.HashToken(reporter),
 		ReporterExpiresAt: now.Add(reporterTokenLifetime),
 		ExpiresAt:         now.Add(30 * 24 * time.Hour), CreatedAt: now, LastSeenAt: now,
 	}
-	return session, refresh, reporter, s.DB.Create(&session).Error
+	err = s.DB.Transaction(func(tx *gorm.DB) error {
+		// Credential material is signed while the exact actor rows are locked.
+		// Suspend/device-revoke either commits first and this lookup fails, or
+		// waits until the new DesktopSession and its entitlements commit together.
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).
+			Where("id = ? AND status = ?", userID, model.UserActive).
+			First(&material.User).Error; err != nil {
+			return errDesktopAccountUnavailable
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).
+			Where("id = ? AND user_id = ? AND revoked_at IS NULL", deviceID, userID).
+			First(&material.Device).Error; err != nil {
+			return errDesktopAccountUnavailable
+		}
+		if err := tx.Create(&material.Session).Error; err != nil {
+			return err
+		}
+		material.Signed, err = s.signDesktopSessionTokens(material.User,
+			material.Device, material.Session, now)
+		return err
+	})
+	return material, err
 }
 
 func (s *Server) desktopRefresh(w http.ResponseWriter, r *http.Request) {
@@ -157,7 +206,11 @@ func (s *Server) desktopRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if old.RotatedAt != nil {
-		s.DB.Model(&model.DesktopSession{}).Where("user_id = ? AND revoked_at IS NULL", old.UserID).Update("revoked_at", now)
+		if err := s.revokeDesktopSessionsAfterRefreshReuse(old.UserID, now); err != nil {
+			writeError(w, r, http.StatusInternalServerError, "session_revoke_failed",
+				"Compromised desktop sessions could not be closed.", nil)
+			return
+		}
 		writeError(w, r, http.StatusUnauthorized, "refresh_token_reused", "Refresh token reuse was detected. Sign in again.", nil)
 		return
 	}
@@ -165,50 +218,140 @@ func (s *Server) desktopRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnauthorized, "refresh_token_invalid", "Desktop session could not be refreshed.", nil)
 		return
 	}
-	var user model.User
-	var device model.Device
-	if s.DB.First(&user, "id = ?", old.UserID).Error != nil || user.Status != model.UserActive ||
-		s.DB.Where("id = ? AND revoked_at IS NULL", old.DeviceID).First(&device).Error != nil {
-		writeError(w, r, http.StatusForbidden, "account_unavailable", "This account or device is unavailable.", nil)
+	refresh, err := auth.RandomToken(48)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "session_failed",
+			"Desktop session could not be created.", nil)
 		return
 	}
-	refresh, _ := auth.RandomToken(48)
-	reporter, _ := auth.RandomToken(40)
+	reporter, err := auth.RandomToken(40)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "session_failed",
+			"Desktop session could not be created.", nil)
+		return
+	}
 	next := model.DesktopSession{
 		ID: uuid.New(), UserID: old.UserID, DeviceID: old.DeviceID,
 		RefreshTokenHash: auth.HashToken(refresh), ReporterTokenHash: auth.HashToken(reporter),
 		ReporterExpiresAt: now.Add(reporterTokenLifetime),
 		ExpiresAt:         now.Add(30 * 24 * time.Hour), CreatedAt: now, LastSeenAt: now,
 	}
+	var user model.User
+	var device model.Device
+	material := desktopSessionMaterial{
+		Session: next, RefreshToken: refresh, ReporterToken: reporter,
+	}
 	err = s.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&old, "id = ?", old.ID).Error; err != nil {
+		// Match collaboration's lock hierarchy so refresh cannot deadlock with a
+		// write holding actor locks before its project lock.
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).
+			Where("id = ? AND status = ?", old.UserID, model.UserActive).
+			First(&user).Error; err != nil {
+			return errDesktopAccountUnavailable
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND user_id = ? AND revoked_at IS NULL", old.DeviceID,
+				old.UserID).First(&device).Error; err != nil {
+			return errDesktopAccountUnavailable
+		}
+		var current model.DesktopSession
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND user_id = ? AND device_id = ?", old.ID,
+				old.UserID, old.DeviceID).First(&current).Error; err != nil {
 			return err
 		}
-		if old.RotatedAt != nil || old.RevokedAt != nil {
+		if current.RotatedAt != nil {
 			return errRefreshReuse
 		}
-		if err := tx.Model(&old).Updates(map[string]any{"rotated_at": now, "revoked_at": now}).Error; err != nil {
+		if current.RevokedAt != nil || !current.ExpiresAt.After(now) {
+			return errRefreshInvalid
+		}
+		old = current
+		if err := tx.Model(&current).Updates(map[string]any{
+			"rotated_at": now, "revoked_at": now,
+		}).Error; err != nil {
 			return err
 		}
 		if err := tx.Create(&next).Error; err != nil {
 			return err
 		}
-		return tx.Model(&device).Updates(map[string]any{"last_seen_at": now, "app_version": bounded(input.AppVersion, 64)}).Error
+		if err := tx.Model(&device).Updates(map[string]any{
+			"last_seen_at": now, "app_version": bounded(input.AppVersion, 64),
+		}).Error; err != nil {
+			return err
+		}
+		if s.Collab != nil {
+			if err := s.Collab.EvictDesktopSessionTx(tx, current.ID, now); err != nil {
+				return err
+			}
+		}
+		material.User = user
+		material.Device = device
+		material.Signed, err = s.signDesktopSessionTokens(user, device, next, now)
+		return err
 	})
 	if errors.Is(err, errRefreshReuse) {
-		s.DB.Model(&model.DesktopSession{}).Where("user_id = ? AND revoked_at IS NULL", old.UserID).Update("revoked_at", now)
+		if revokeErr := s.revokeDesktopSessionsAfterRefreshReuse(old.UserID, now); revokeErr != nil {
+			writeError(w, r, http.StatusInternalServerError, "session_revoke_failed",
+				"Compromised desktop sessions could not be closed.", nil)
+			return
+		}
 		writeError(w, r, http.StatusUnauthorized, "refresh_token_reused", "Refresh token reuse was detected. Sign in again.", nil)
+		return
+	}
+	if errors.Is(err, errDesktopAccountUnavailable) {
+		writeError(w, r, http.StatusForbidden, "account_unavailable",
+			"This account or device is unavailable.", nil)
 		return
 	}
 	if err != nil {
 		writeError(w, r, http.StatusUnauthorized, "refresh_token_invalid", "Desktop session could not be refreshed.", nil)
 		return
 	}
-	s.writeDesktopSession(w, r, user, device, next, refresh, reporter)
+	s.disconnectCollaborationDesktopSession(old.ID, "session_rotated")
+	s.writeDesktopSession(w, r, material)
 }
 
-func (s *Server) writeDesktopSession(w http.ResponseWriter, r *http.Request, user model.User, device model.Device, session model.DesktopSession, refresh, reporter string) {
-	now := time.Now().UTC()
+// Refresh-token reuse is an account-level credential compromise. Revoke every
+// desktop credential and evict its collaboration memberships/recording leases
+// in one transaction; RoomBus connections are closed only after that commit.
+// The user row is locked first to preserve collaboration's global lock order.
+func (s *Server) revokeDesktopSessionsAfterRefreshReuse(userID uuid.UUID,
+	now time.Time) error {
+	if userID == uuid.Nil {
+		return errRefreshInvalid
+	}
+	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		var user model.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&user, "id = ?", userID).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.DesktopSession{}).
+			Where("user_id = ? AND revoked_at IS NULL", userID).
+			Update("revoked_at", now).Error; err != nil {
+			return err
+		}
+		if s.Collab != nil {
+			return s.Collab.EvictUserSessionsTx(tx, userID, now)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	s.disconnectCollaborationUser(userID, "refresh_token_reused")
+	return nil
+}
+
+func (s *Server) signDesktopSessionTokens(user model.User, device model.Device,
+	session model.DesktopSession, now time.Time) (desktopSignedTokens, error) {
+	if s.Signer == nil || user.ID == uuid.Nil || device.ID == uuid.Nil ||
+		session.ID == uuid.Nil || session.UserID != user.ID ||
+		session.DeviceID != device.ID {
+		return desktopSignedTokens{}, errors.New("desktop token identity is invalid")
+	}
+	now = now.UTC()
 	base := auth.Claims{
 		Subject: user.ID, DeviceID: device.ID, SessionID: session.ID, Plan: model.PlanDemo,
 		ConsentVersion: user.ConsentVersion, IssuedAt: now.Unix(),
@@ -218,29 +361,36 @@ func (s *Server) writeDesktopSession(w http.ResponseWriter, r *http.Request, use
 	accessClaims.ExpiresAt = now.Add(15 * time.Minute).Unix()
 	access, err := s.Signer.Sign(accessClaims)
 	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, "token_sign_failed", "Desktop session could not be signed.", nil)
-		return
+		return desktopSignedTokens{}, err
 	}
 	offlineClaims := base
 	offlineClaims.Scope = "offline"
 	offlineClaims.ExpiresAt = now.Add(72 * time.Hour).Unix()
 	offline, err := s.Signer.Sign(offlineClaims)
 	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, "token_sign_failed", "Offline entitlement could not be signed.", nil)
-		return
+		return desktopSignedTokens{}, err
 	}
-	cycle, err := s.Quota.Current(user.ID, now)
+	return desktopSignedTokens{
+		AccessToken: access, AccessExpiresAt: time.Unix(accessClaims.ExpiresAt, 0).UTC(),
+		OfflineToken: offline, OfflineExpiresAt: time.Unix(offlineClaims.ExpiresAt, 0).UTC(),
+		IssuedAt: now,
+	}, nil
+}
+
+func (s *Server) writeDesktopSession(w http.ResponseWriter, r *http.Request,
+	material desktopSessionMaterial) {
+	cycle, err := s.Quota.Current(material.User.ID, material.Signed.IssuedAt)
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "quota_unavailable", "Quota is unavailable.", nil)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"access_token": access, "access_expires_at": time.Unix(accessClaims.ExpiresAt, 0).UTC(),
-		"refresh_token": refresh, "refresh_expires_at": session.ExpiresAt,
-		"reporter_token": reporter, "reporter_expires_at": session.ReporterExpiresAt,
-		"offline_entitlement": offline,
-		"offline_expires_at":  time.Unix(offlineClaims.ExpiresAt, 0).UTC(), "server_time": now,
-		"public_key": s.Signer.PublicKeyBase64(), "user": user, "device": device,
+		"access_token": material.Signed.AccessToken, "access_expires_at": material.Signed.AccessExpiresAt,
+		"refresh_token": material.RefreshToken, "refresh_expires_at": material.Session.ExpiresAt,
+		"reporter_token": material.ReporterToken, "reporter_expires_at": material.Session.ReporterExpiresAt,
+		"offline_entitlement": material.Signed.OfflineToken,
+		"offline_expires_at":  material.Signed.OfflineExpiresAt, "server_time": material.Signed.IssuedAt,
+		"public_key": s.Signer.PublicKeyBase64(), "user": material.User, "device": material.Device,
 		"subscription": map[string]any{"plan": "demo", "display_name": "Demo", "all_features": true},
 		"quota":        quotaResponse(cycle),
 	})
@@ -249,7 +399,22 @@ func (s *Server) writeDesktopSession(w http.ResponseWriter, r *http.Request, use
 func (s *Server) desktopLogout(w http.ResponseWriter, r *http.Request) {
 	claims := r.Context().Value(ctxDesktopClaims).(auth.Claims)
 	now := time.Now().UTC()
-	s.DB.Model(&model.DesktopSession{}).Where("id = ? AND user_id = ?", claims.SessionID, claims.Subject).Update("revoked_at", now)
+	if err := s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.DesktopSession{}).
+			Where("id = ? AND user_id = ?", claims.SessionID, claims.Subject).
+			Update("revoked_at", now).Error; err != nil {
+			return err
+		}
+		if s.Collab != nil {
+			return s.Collab.EvictDesktopSessionTx(tx, claims.SessionID, now)
+		}
+		return nil
+	}); err != nil {
+		writeError(w, r, http.StatusInternalServerError, "logout_failed",
+			"Desktop session could not be closed.", nil)
+		return
+	}
+	s.disconnectCollaborationDesktopSession(claims.SessionID, "logout")
 	w.WriteHeader(http.StatusNoContent)
 }
 

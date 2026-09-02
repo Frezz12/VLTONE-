@@ -2,6 +2,7 @@
 
 #include "EngineController.hpp"
 #include "ProjectSerializer.hpp"
+#include "recovery/CloudRecordingRecovery.hpp"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -26,6 +27,18 @@ QString formatWhen(std::int64_t unixMs) {
     if (unixMs <= 0) return QObject::tr("an unknown time");
     return QLocale().toString(QDateTime::fromMSecsSinceEpoch(unixMs),
                               QLocale::ShortFormat);
+}
+
+bool hasCloudRecordingSidecar(const daw::recovery::SessionInfo& session) {
+    return daw::recovery::CloudRecordingRecoveryStore(session.directory)
+        .exists();
+}
+
+void explainCloudRecordingPreserved(QWidget* parent) {
+    QMessageBox::information(
+        parent, QObject::tr("Cloud Recording Preserved"),
+        QObject::tr(
+            "A finished cloud recording in this recovery session is still awaiting upload. VLT kept its audio and recovery metadata; project Restore or Discard does not remove it."));
 }
 
 } // namespace
@@ -80,14 +93,19 @@ QMessageBox* buildRecoveryPrompt(QWidget* parent,
             .arg(name));
     // Every limit stated up front. Recovery that quietly restores less than the
     // user assumes is worse than recovery that says what it has.
-    box->setInformativeText(
+    QString information =
         QObject::tr(
             "Last saved automatically at %1 — %2.\n\n"
             "Notes, clips, the mix and plugin settings come back as of that "
             "moment. Audio is read "
             "from your original files, not from copies inside the project.")
             .arg(formatWhen(session.journalUnixMs))
-            .arg(describeSession(session)));
+            .arg(describeSession(session));
+    if (hasCloudRecordingSidecar(session)) {
+        information += QObject::tr(
+            "\n\nThis session also contains a finished cloud recording awaiting upload. Restore and Discard affect only the project recovery; VLT will preserve that recording.");
+    }
+    box->setInformativeText(information);
 
     QPushButton* restore =
         box->addButton(QObject::tr("Restore"), QMessageBox::AcceptRole);
@@ -138,6 +156,8 @@ Choice offerRecovery(QWidget* parent, daw::EngineController& controller) {
               });
 
     for (const auto& session : sessions) {
+        const bool preserveCloudRecording =
+            hasCloudRecordingSidecar(session);
         std::unique_ptr<QMessageBox> box(buildRecoveryPrompt(parent, session));
         box->exec();
 
@@ -145,7 +165,10 @@ Choice offerRecovery(QWidget* parent, daw::EngineController& controller) {
         const QMessageBox::ButtonRole role =
             clicked ? box->buttonRole(clicked) : QMessageBox::RejectRole;
         if (role == QMessageBox::DestructiveRole) {
-            daw::recovery::discardSession(session.directory);
+            if (preserveCloudRecording)
+                explainCloudRecordingPreserved(parent);
+            else
+                daw::recovery::discardSession(session.directory);
             continue;
         }
         if (role != QMessageBox::AcceptRole) continue;   // decide later
@@ -160,7 +183,10 @@ Choice offerRecovery(QWidget* parent, daw::EngineController& controller) {
 
         choice.restored = true;
         choice.projectPath = QString::fromStdString(session.projectPath);
-        daw::recovery::discardSession(session.directory);
+        if (preserveCloudRecording)
+            explainCloudRecordingPreserved(parent);
+        else
+            daw::recovery::discardSession(session.directory);
         // One recovery per launch: restoring a second would throw away the
         // first. Anything left over is offered again next time.
         break;

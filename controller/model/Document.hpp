@@ -17,6 +17,48 @@ struct InsertModel;
 /// Generate a random RFC-4122-ish UUID string (8-4-4-4-12 hex).
 std::string newUuid();
 
+/// Content-addressed project data. `assetId` is the server/catalog identity;
+/// `sha256` pins the bytes independently of a filename or a particular cache.
+/// Legacy local projects may keep both fields empty and continue to use their
+/// `filePath`/`stateFile` compatibility fields.
+enum class AssetKind : uint8_t {
+    Unknown = 0,
+    Audio = 1,
+    PluginState = 2,
+    PluginResource = 3,
+    Freeze = 4,
+};
+
+std::string toString(AssetKind kind);
+AssetKind assetKindFromString(const std::string& name);
+
+struct AssetRef {
+    std::string assetId;
+    std::string sha256;
+    AssetKind kind = AssetKind::Unknown;
+    std::uint64_t byteSize = 0;
+    std::string originalName;
+    std::string mimeType;
+    std::string codec;
+    double sampleRate = 0.0;
+    std::uint32_t channels = 0;
+    std::uint64_t frames = 0;
+
+    bool empty() const noexcept { return assetId.empty() && sha256.empty(); }
+    friend bool operator==(const AssetRef&, const AssetRef&) = default;
+};
+
+/// A non-state file a plugin needs (a Sampler source, impulse response, etc.).
+/// The binding key is plugin-defined but stable within its state schema.
+struct PluginAssetBinding {
+    std::string key;
+    AssetRef asset;
+    bool required = true;
+
+    friend bool operator==(const PluginAssetBinding&,
+                           const PluginAssetBinding&) = default;
+};
+
 enum class TrackKind {
     Audio,
     Instrument,
@@ -153,6 +195,11 @@ struct AutomationPoint {
     /// the one curve-shaping gesture in the application means one thing.
     double curve = 0.0;
 
+    /// Stable collaboration identity. Kept last so existing aggregate
+    /// initializers remain source-compatible; v5 files receive deterministic
+    /// migration ids when they are loaded.
+    std::string id;
+
     /// Exact comparison on purpose: this answers "did the gesture change
     /// anything", where the two sides are copies of the same doubles, not the
     /// results of two different calculations.
@@ -254,6 +301,7 @@ struct TakeModel {
     int channels = 0;
     uint32_t color = 0x4A90D9;
     std::vector<NoteModel> notes;  // MIDI takes
+    AssetRef asset;               // v6 cloud identity; filePath is legacy/cache
 };
 
 /// One stretch of the finished comp: play `takeId` from `startSeconds` to
@@ -266,6 +314,8 @@ struct CompSegment {
     std::string takeId;
     double startSeconds = 0.0;
     double endSeconds = 0.0;
+    /// Stable collaboration identity, assigned deterministically to v5 data.
+    std::string id;
 };
 
 /// Time-stretch priority for one audio clip. These are strategies, not UI
@@ -392,6 +442,10 @@ struct ClipModel {
     std::vector<TakeModel> takes;
     /// The assembled result. Empty while `takes` is empty.
     std::vector<CompSegment> comp;
+    /// Equal-power crossfade used at comp seams. This belongs to the clip so a
+    /// frozen recording sounds the same for every collaborator; recording
+    /// preferences are only the default for the next capture.
+    double compCrossfadeMs = 5.0;
     /// The curve, on an Automation clip. Meaningless on every other kind.
     ClipAutomationModel automation;
     /// Per-instance Sample/Clip Editor state. Optional on disk for backward
@@ -404,6 +458,7 @@ struct ClipModel {
     std::vector<InsertModel> inserts;
     /// Whether the comp editor is open on this clip in the arrangement.
     bool expanded = false;
+    AssetRef asset;               // v6 cloud identity; filePath is legacy/cache
 };
 
 /// An aux send from a track to a bus/aux track. Rendered by the engine as a
@@ -500,6 +555,14 @@ struct InsertModel {
     /// Editor placement, so reopening a project puts the window back.
     int windowX = 0, windowY = 0, windowWidth = 0, windowHeight = 0;
     bool windowOpen = false;
+
+    /// Exact product/state compatibility. `path` remains a per-machine lookup
+    /// hint; these values are the durable shared requirements.
+    std::string pluginVersion;
+    int stateSchemaVersion = 0;
+    AssetRef stateAsset;
+    AssetRef rightStateAsset;
+    std::vector<PluginAssetBinding> assetBindings;
 
     /// True when this slot actually refers to a plugin.
     bool isLoaded() const { return format != PluginFormat::None && !uid.empty(); }

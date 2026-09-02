@@ -43,6 +43,10 @@ void SampleEditorWindow::setSnapProvider(std::function<double()> provider) {
     if (m_panel) m_panel->setSnapProvider(std::move(provider));
 }
 
+QWidget* SampleEditorWindow::collaborationPresenceSurface() const {
+    return m_panel;
+}
+
 void SampleEditorWindow::closeEvent(QCloseEvent* event) {
     emit closing(m_trackId, m_clipId);
     QWidget::closeEvent(event);

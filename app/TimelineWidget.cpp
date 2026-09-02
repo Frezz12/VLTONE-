@@ -1054,6 +1054,54 @@ int TimelineWidget::secondsToX(double seconds) const {
     return int((seconds - m_scrollSeconds) * m_pixelsPerSecond);
 }
 
+collab::SemanticPoint TimelineWidget::collaborationPresenceAt(
+    const QPointF& position) const {
+    collab::SemanticPoint point;
+    point.surface = {collab::SurfaceKind::Timeline,
+                     QStringLiteral("arrangement"), {}};
+    point.normalized = QPointF(
+        std::clamp(position.x() / std::max(1, width()), 0.0, 1.0),
+        std::clamp(position.y() / std::max(1, height()), 0.0, 1.0));
+    point.timeSeconds = std::max(0.0, xToSeconds(int(position.x())));
+    const int lane = laneAt(int(position.y()));
+    if (lane >= 0) {
+        point.targetId = QStringLiteral("lane");
+        point.trackId = trackIdForLane(lane);
+        const int laneHeight = std::max(1, laneHeightAt(lane));
+        point.laneFraction = std::clamp(
+            (position.y() - laneTop(lane)) / laneHeight, 0.0, 1.0);
+    } else {
+        point.targetId = QStringLiteral("ruler");
+    }
+    return point;
+}
+
+std::optional<QPointF> TimelineWidget::collaborationPositionFor(
+    const collab::SemanticPoint& point) const {
+    qreal x = -1.0;
+    qreal y = -1.0;
+    if (std::isfinite(point.timeSeconds) && point.timeSeconds >= 0.0)
+        x = secondsToX(point.timeSeconds);
+    else if (std::isfinite(point.normalized.x()) &&
+             point.normalized.x() >= 0.0)
+        x = std::clamp(point.normalized.x(), 0.0, 1.0) * width();
+
+    if (!point.trackId.isEmpty()) {
+        const int lane = laneForTrackId(point.trackId);
+        if (lane >= 0) {
+            const qreal fraction = point.laneFraction >= 0.0
+                ? std::clamp(point.laneFraction, 0.0, 1.0)
+                : 0.5;
+            y = laneTop(lane) + fraction * std::max(1, laneHeightAt(lane));
+        }
+    }
+    if (y < 0.0 && std::isfinite(point.normalized.y()) &&
+        point.normalized.y() >= 0.0)
+        y = std::clamp(point.normalized.y(), 0.0, 1.0) * height();
+    if (x < 0.0 || y < 0.0) return std::nullopt;
+    return QPointF(x, y);
+}
+
 double TimelineWidget::snapSeconds() const {
     if (!m_snapEnabled || m_gridBeats <= 0.0) return 0.0;
     const double tempo = std::max(1.0, m_controller->project().tempo);

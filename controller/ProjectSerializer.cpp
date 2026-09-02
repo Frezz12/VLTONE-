@@ -1,5 +1,7 @@
 #include "ProjectSerializer.hpp"
+#include "collaboration/CollaborationState.hpp"
 #include "platform/PathUtils.hpp"
+#include "serialization/AssetJson.hpp"
 #include "serialization/InsertJson.hpp"
 
 #include <nlohmann/json.hpp>
@@ -48,6 +50,8 @@ using serialization::insertFromJson;
 using serialization::insertToJson;
 using serialization::insertsFromJson;
 using serialization::insertsToJson;
+using serialization::assetRefFromJson;
+using serialization::assetRefToJson;
 
 json reservedArray(std::size_t capacity) {
     json result = json::array();
@@ -131,6 +135,7 @@ NoteModel noteFromJson(const json& j) {
 
 json pointToJson(const AutomationPoint& point) {
     json out{{"beats", point.beats}, {"value", point.value}};
+    if (!point.id.empty()) out["id"] = point.id;
     // Written only when it has something to say. A straight segment is what
     // every point saved before shapes existed was, and what most points still
     // are — spelling that out on each one would double the size of a curve.
@@ -142,6 +147,7 @@ json pointToJson(const AutomationPoint& point) {
 
 AutomationPoint pointFromJson(const json& j) {
     AutomationPoint point;
+    point.id = j.value("id", std::string());
     point.beats = j.value("beats", 0.0);
     point.value = j.value("value", 0.0);
     point.shape = automationSegmentFromString(j.value("shape", std::string("linear")));
@@ -232,7 +238,7 @@ json takeToJson(const TakeModel& t, MediaPaths media) {
     std::string file = mediaReference(t.filePath, media);
     json notes = reservedArray(t.notes.size());
     for (const auto& n : t.notes) notes.push_back(noteToJson(n));
-    return json{
+    json result{
         {"id", t.id},
         {"name", t.name},
         {"file", std::move(file)},
@@ -245,6 +251,8 @@ json takeToJson(const TakeModel& t, MediaPaths media) {
         {"color", t.color},
         {"notes", std::move(notes)},
     };
+    if (!t.asset.empty()) result["asset"] = assetRefToJson(t.asset);
+    return result;
 }
 
 TakeModel takeFromJson(const json& j, const std::string& mediaDir) {
@@ -263,6 +271,7 @@ TakeModel takeFromJson(const json& j, const std::string& mediaDir) {
     t.muted = j.value("muted", false);
     t.channels = j.value("channels", 0);
     t.color = j.value("color", 0x4A90D9u);
+    if (j.contains("asset")) t.asset = assetRefFromJson(j.at("asset"));
     if (j.contains("notes") && j.at("notes").is_array()) {
         const auto& notes = j.at("notes");
         t.notes.reserve(notes.size());
@@ -273,6 +282,7 @@ TakeModel takeFromJson(const json& j, const std::string& mediaDir) {
 
 json compSegmentToJson(const CompSegment& s) {
     return json{
+        {"id", s.id},
         {"takeId", s.takeId},
         {"startSeconds", s.startSeconds},
         {"endSeconds", s.endSeconds},
@@ -281,6 +291,7 @@ json compSegmentToJson(const CompSegment& s) {
 
 CompSegment compSegmentFromJson(const json& j) {
     CompSegment s;
+    s.id = j.value("id", std::string());
     s.takeId = j.value("takeId", "");
     s.startSeconds = j.value("startSeconds", 0.0);
     s.endSeconds = j.value("endSeconds", 0.0);
@@ -442,6 +453,7 @@ json clipToJson(const ClipModel& c, MediaPaths media) {
         {"notes", std::move(notes)},
         {"takes", std::move(takes)},
         {"comp", std::move(comp)},
+        {"compCrossfadeMs", c.compCrossfadeMs},
         {"lanes", std::move(lanes)},
         // Only on the kind that has one — an "automation" object on an audio
         // clip would be a field that means nothing, written on every clip in
@@ -455,6 +467,7 @@ json clipToJson(const ClipModel& c, MediaPaths media) {
     };
     if (!c.musicalAnalysis.empty())
         result["musicalAnalysis"] = musicalAnalysisToJson(c.musicalAnalysis);
+    if (!c.asset.empty()) result["asset"] = assetRefToJson(c.asset);
     return result;
 }
 
@@ -485,6 +498,7 @@ ClipModel clipFromJson(const json& j, const std::string& mediaDir) {
     c.muted = j.value("muted", false);
     c.channels = j.value("channels", 0);
     c.color = j.value("color", 0x4A90D9u);
+    if (j.contains("asset")) c.asset = assetRefFromJson(j.at("asset"));
     // A project written before MIDI existed has neither key, so it reads back
     // as the audio clip it is — no migration step needed.
     c.kind = clipKindFromString(j.value("kind", "audio"));
@@ -510,6 +524,8 @@ ClipModel clipFromJson(const json& j, const std::string& mediaDir) {
             c.comp.push_back(compSegmentFromJson(js));
         }
     }
+    c.compCrossfadeMs =
+        std::clamp(j.value("compCrossfadeMs", 5.0), 0.0, 20.0);
     if (j.contains("automation") && j.at("automation").is_object()) {
         c.automation = automationFromJson(j.at("automation"));
     }
@@ -687,6 +703,55 @@ json documentToJson(const ProjectModel& project, MediaPaths media) {
     return root;
 }
 
+audio::Result documentFromJson(ProjectModel& out, const json& root,
+                               const std::string& mediaDir) {
+    if (!root.is_object()) {
+        return audio::Result::fail(audio::EngineError::UnsupportedFormat,
+                                   "project document is not a JSON object");
+    }
+    const std::string format = root.value("format", "");
+    if (format != "vlt-project" && format != "daw-project") {
+        return audio::Result::fail(audio::EngineError::UnsupportedFormat,
+                                   "not a VLT project");
+    }
+
+    out = ProjectModel{};
+    try {
+        out.name = root.value("name", "Untitled");
+        out.tempo = root.value("tempo", 120.0);
+        out.timeSigNumerator = root.value("timeSigNumerator", 4);
+        out.timeSigDenominator = root.value("timeSigDenominator", 4);
+        out.keyRoot = root.value("keyRoot", 0);
+        out.scale = root.value("scale", std::string("major"));
+        out.aiInstructions = root.value("aiInstructions", std::string());
+        out.loopStartSeconds = std::max(0.0, root.value("loopStart", 0.0));
+        out.loopEndSeconds = std::max(0.0, root.value("loopEnd", 0.0));
+        out.loopEnabled = root.value("loopEnabled", false);
+        out.sampleRate = root.value("sampleRate", 48000.0);
+        out.masterVolume = root.value("masterVolume", 1.0f);
+        out.masterPan = root.value("masterPan", 0.0f);
+        out.masterInserts = insertsFromJson(root, "masterInserts");
+        if (root.contains("tracks")) {
+            const auto& tracks = root.at("tracks");
+            if (!tracks.is_array()) {
+                return audio::Result::fail(
+                    audio::EngineError::UnsupportedFormat,
+                    "project tracks are not an array");
+            }
+            out.tracks.reserve(tracks.size());
+            for (const auto& track : tracks)
+                out.tracks.push_back(trackFromJson(track, mediaDir));
+        }
+    } catch (const std::exception& error) {
+        out = ProjectModel{};
+        return audio::Result::fail(audio::EngineError::UnsupportedFormat,
+                                   std::string("bad project data: ") +
+                                       error.what());
+    }
+    collab::ensureStableCollaborationIds(out);
+    return audio::Result::ok();
+}
+
 /// Write `root` to `file` without ever leaving a partial file in its place: a
 /// temporary sibling is written in full, then renamed over the target.
 audio::Result writeJsonAtomically(const json& root, const fs::path& file) {
@@ -811,7 +876,9 @@ audio::Result ProjectSerializer::saveDocument(const ProjectModel& project,
                                            ec.message());
         }
     }
-    return writeJsonAtomically(documentToJson(project, media), file);
+    ProjectModel persisted = project;
+    collab::ensureStableCollaborationIds(persisted);
+    return writeJsonAtomically(documentToJson(persisted, media), file);
 }
 
 audio::Result ProjectSerializer::loadDocument(ProjectModel& out,
@@ -830,39 +897,35 @@ audio::Result ProjectSerializer::loadDocument(ProjectModel& out,
                                    std::string("bad JSON: ") + e.what());
     }
 
-    const std::string format = root.value("format", "");
-    if (format != "vlt-project" && format != "daw-project") {
-        return audio::Result::fail(audio::EngineError::UnsupportedFormat,
-                                   "not a VLT project");
-    }
+    return documentFromJson(out, root, mediaDir);
+}
 
-    out = ProjectModel{};
-    out.name = root.value("name", "Untitled");
-    out.tempo = root.value("tempo", 120.0);
-    out.timeSigNumerator = root.value("timeSigNumerator", 4);
-    out.timeSigDenominator = root.value("timeSigDenominator", 4);
-    // Projects written before the key existed load as C major, which is what
-    // "no key chosen" has always meant in practice.
-    out.keyRoot = root.value("keyRoot", 0);
-    out.scale = root.value("scale", std::string("major"));
-    out.aiInstructions = root.value("aiInstructions", std::string());
-    // Absent before the cycle region existed, which loads as "no region", the
-    // state every one of those projects was actually in.
-    out.loopStartSeconds = std::max(0.0, root.value("loopStart", 0.0));
-    out.loopEndSeconds = std::max(0.0, root.value("loopEnd", 0.0));
-    out.loopEnabled = root.value("loopEnabled", false);
-    out.sampleRate = root.value("sampleRate", 48000.0);
-    out.masterVolume = root.value("masterVolume", 1.0f);
-    out.masterPan = root.value("masterPan", 0.0f);
-    out.masterInserts = insertsFromJson(root, "masterInserts");
-    if (root.contains("tracks")) {
-        const auto& tracks = root.at("tracks");
-        if (tracks.is_array()) out.tracks.reserve(tracks.size());
-        for (const auto& jt : tracks) {
-            out.tracks.push_back(trackFromJson(jt, mediaDir));
-        }
+audio::Result ProjectSerializer::serializeDocument(const ProjectModel& project,
+                                                    std::string& out,
+                                                    MediaPaths media) {
+    try {
+        ProjectModel persisted = project;
+        collab::ensureStableCollaborationIds(persisted);
+        out = documentToJson(persisted, media).dump();
+    } catch (const std::exception& error) {
+        out.clear();
+        return audio::Result::fail(audio::EngineError::FileWriteError,
+                                   std::string("cannot encode project: ") +
+                                       error.what());
     }
     return audio::Result::ok();
+}
+
+audio::Result ProjectSerializer::deserializeDocument(
+    ProjectModel& out, std::string_view bytes, const std::string& mediaDir) {
+    json root;
+    try {
+        root = json::parse(bytes.begin(), bytes.end());
+    } catch (const std::exception& error) {
+        return audio::Result::fail(audio::EngineError::UnsupportedFormat,
+                                   std::string("bad JSON: ") + error.what());
+    }
+    return documentFromJson(out, root, mediaDir);
 }
 
 audio::Result ProjectSerializer::save(const ProjectModel& project,

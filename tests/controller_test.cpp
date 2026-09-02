@@ -3941,13 +3941,21 @@ int main() {
 
         daw::selectWholeTake(clip, "t1");
         check(clip.comp.size() == 1 && clip.comp[0].takeId == "t1" &&
+                  !clip.comp[0].id.empty() &&
                   std::fabs(clip.comp[0].endSeconds - 10.0) < 1e-9,
               "selecting a take covers the whole clip");
         check(daw::activeTakeAt(clip, 5.0) == "t1", "the comp plays that take");
+        const std::string originalCompId = clip.comp[0].id;
 
         // A swipe in the middle splits the segment into three.
         daw::setCompRange(clip, "t2", 4.0, 6.0);
         check(clip.comp.size() == 3, "a swipe splits the segment it lands in");
+        std::set<std::string> splitIds;
+        for (const auto& segment : clip.comp) {
+            if (!segment.id.empty()) splitIds.insert(segment.id);
+        }
+        check(splitIds.size() == 3 && clip.comp.front().id == originalCompId,
+              "comp splits preserve one identity and pre-create two new ids");
         check(daw::activeTakeAt(clip, 2.0) == "t1" &&
                   daw::activeTakeAt(clip, 5.0) == "t2" &&
                   daw::activeTakeAt(clip, 8.0) == "t1",
@@ -3972,7 +3980,7 @@ int main() {
 
         // A segment naming a take that no longer exists is not playable, so
         // normalizing drops it rather than leaving a hole that reads as audio.
-        clip.comp.push_back({"ghost", 2.0, 3.0});
+        clip.comp.push_back({"ghost", 2.0, 3.0, daw::newUuid()});
         daw::normalizeComp(clip);
         check(daw::activeTakeAt(clip, 2.5) == "t3",
               "a segment naming a missing take is dropped");
@@ -4016,6 +4024,7 @@ int main() {
         clip.name = "Verse";
         clip.startSeconds = 2.0;
         clip.durationSeconds = 1.0;
+        clip.compCrossfadeMs = 7.5;
         clip.expanded = true;
         const char* paths[2] = {takeA.c_str(), takeB.c_str()};
         for (int i = 0; i < 2; ++i) {
@@ -4029,8 +4038,8 @@ int main() {
             take.gain = 0.75f;
             clip.takes.push_back(take);
         }
-        clip.comp.push_back({"tk1", 0.0, 0.5});
-        clip.comp.push_back({"tk2", 0.5, 1.0});
+        clip.comp.push_back({"tk1", 0.0, 0.5, daw::newUuid()});
+        clip.comp.push_back({"tk2", 0.5, 1.0, daw::newUuid()});
         track.clips.push_back(clip);
         proj.tracks.push_back(track);
 
@@ -4054,12 +4063,21 @@ int main() {
             check(loaded->comp.size() == 2 && loaded->comp[0].takeId == "tk1" &&
                       std::fabs(loaded->comp[1].startSeconds - 0.5) < 1e-9,
                   "the comp map round-trips");
+            check(std::fabs(loaded->compCrossfadeMs - 7.5) < 1e-9,
+                  "the shared comp crossfade round-trips with the clip");
             check(loaded->expanded, "an open comp editor round-trips");
         }
         const auto* loadedTrack = m.project().findTrack("tr1");
         check(loadedTrack &&
                   loadedTrack->recordMode == daw::TrackRecordMode::Layers,
               "the track's recording mode round-trips");
+
+        auto futurePrefs = m.recordingPrefs();
+        futurePrefs.compCrossfadeMs = 1.25;
+        m.setRecordingPrefs(futurePrefs);
+        loaded = findClip(m, "tr1", "cl1");
+        check(loaded && std::fabs(loaded->compCrossfadeMs - 7.5) < 1e-9,
+              "changing recording defaults does not retune an existing comp");
 
         // One swipe, wrapped the way the timeline wraps a stroke: the whole
         // gesture is a single undo entry.
@@ -4407,6 +4425,205 @@ int main() {
             check(!m.isRecording() && m.recordingTracks().empty(),
                   "stopping clears both");
         }
+    }
+
+    // Cloud recording needs an all-target seam: a lease set for two tracks
+    // must never turn into a one-track capture because one target was invalid.
+    // The older local API deliberately keeps its permissive subset behaviour.
+    {
+        daw::EngineController m;
+        m.initialize(48000, 512, /*openDevice=*/false);
+        m.setRecordDirectory((dir / "record-exact").string());
+        const std::string audio = m.addTrack(daw::TrackKind::Audio, "Audio");
+        const std::string folder = m.addTrack(daw::TrackKind::Folder, "Folder");
+
+        check(!m.canStartRecordingTracksExactly({audio, folder}) &&
+                  !m.startRecordingTracksExactly({audio, folder}),
+              "exact recording refuses the whole set when one target is invalid");
+        check(!m.canStartRecordingTracksExactly({audio, audio}),
+              "exact recording refuses duplicate track ids");
+        check(!m.isRecording() && m.recordingTracks().empty() &&
+                  !m.project().findTrack(audio)->armed,
+              "an exact preflight failure publishes no partial capture state");
+
+        check(m.startRecordingTracks({audio, folder}) &&
+                  m.recordingTracks().size() == 1,
+              "the legacy local start still records its valid subset");
+        m.finalizeRecordingCapture();
+
+        // Every recorder in an exact multi-track start must own a different
+        // file. The audio recorder's old second-resolution/Track-0 naming made
+        // simultaneous tracks truncate and write the same WAV.
+        const std::string second =
+            m.addTrack(daw::TrackKind::Audio, "Second Audio");
+        check(m.startRecordingTracksExactly({audio, second}),
+              "exact recording starts two valid targets atomically");
+        m.seedRecordingForShot(audio, 0.04, [](double) { return 0.2f; });
+        m.seedRecordingForShot(second, 0.06, [](double) { return 0.7f; });
+        const auto multi = m.finalizeRecordingCapture();
+        bool distinctReadableFiles = multi.tracks.size() == 2;
+        if (distinctReadableFiles) {
+            const auto& firstResult = multi.tracks[0];
+            const auto& secondResult = multi.tracks[1];
+            audio::platform::AudioFileInfo firstInfo;
+            audio::platform::AudioFileInfo secondInfo;
+            distinctReadableFiles =
+                firstResult.closedWavPath != secondResult.closedWavPath &&
+                firstResult.fileWriteSucceeded &&
+                secondResult.fileWriteSucceeded &&
+                firstResult.capturedFrames == firstResult.writtenFrames &&
+                secondResult.capturedFrames == secondResult.writtenFrames &&
+                firstResult.writtenFrames == firstResult.frames &&
+                secondResult.writtenFrames == secondResult.frames &&
+                firstResult.droppedFrames == 0 &&
+                secondResult.droppedFrames == 0 &&
+                firstResult.frames > 0 && secondResult.frames > 0 &&
+                audio::platform::probeAudioFile(firstResult.closedWavPath,
+                                                firstInfo) &&
+                audio::platform::probeAudioFile(secondResult.closedWavPath,
+                                                secondInfo) &&
+                firstInfo.frames > 0 && secondInfo.frames > 0;
+        }
+        check(distinctReadableFiles,
+              "simultaneous exact recorders close distinct non-empty WAV files");
+    }
+
+    // Capture finalization is the cloud seam: it closes a real WAV and returns
+    // frozen landing metadata, but cannot touch clips or legacy undo history.
+    {
+        daw::EngineController m;
+        m.initialize(48000, 512, /*openDevice=*/false);
+        m.setRecordDirectory((dir / "record-finalize-only").string());
+        const std::string track = m.addTrack(daw::TrackKind::Audio, "Vocal");
+        const std::string existing = m.importAudio(tonePath, track, 0.0);
+
+        auto prefs = m.recordingPrefs();
+        prefs.mode = daw::RecordMode::Layers;
+        prefs.loopCreatesTakes = true;
+        prefs.trimTakesToRegion = true;
+        prefs.autoExpandAfterRecord = true;
+        prefs.monitorStopPolicy =
+            daw::EngineController::MonitorStopPolicy::ReturnToPrevious;
+        m.setRecordingPrefs(prefs);
+        m.setLoopRangeSeconds(0.04, 0.08);
+        m.setLoopEnabled(true);
+        m.seekSeconds(0.06);
+
+        const std::size_t undoBefore = m.undoDepth();
+        const std::size_t decodedBeforeFinalize = m.decodedFileCount();
+        const auto clipsBefore = m.project().findTrack(track)->clips;
+        check(m.startRecordingTracksExactly({track}),
+              "an exact all-target capture starts when every target is valid");
+        m.seedRecordingForShot(track, 0.08);
+
+        // Mid-take preference and loop edits belong to the next take only.
+        prefs.mode = daw::RecordMode::Overwrite;
+        prefs.loopCreatesTakes = false;
+        prefs.trimTakesToRegion = false;
+        prefs.autoExpandAfterRecord = false;
+        prefs.monitorStopPolicy =
+            daw::EngineController::MonitorStopPolicy::KeepOn;
+        m.setRecordingPrefs(prefs);
+        m.setLoopRangeSeconds(1.0, 2.0);
+        m.setLoopEnabled(false);
+
+        const auto run = m.finalizeRecordingCapture();
+        check(run.tracks.size() == 1 && run.tracks[0].audioReadable &&
+                  fs::exists(run.tracks[0].closedWavPath),
+              "capture-only finalization returns one closed readable WAV");
+        if (run.tracks.size() == 1) {
+            const auto& result = run.tracks[0];
+            check(result.trackId == track && result.frames == 3840 &&
+                      result.fileWriteSucceeded &&
+                      result.capturedFrames == 3840 &&
+                      result.writtenFrames == 3840 &&
+                      result.droppedFrames == 0 &&
+                      std::fabs(result.sampleRate - 48000.0) < 1e-9 &&
+                      result.channels > 0 &&
+                      std::fabs(result.durationSeconds - 0.08) < 1e-6,
+                  "the finalized result carries exact file and writer metadata");
+            check(result.semantics.mode == daw::RecordMode::Layers &&
+                      result.semantics.loopEnabled &&
+                      std::fabs(result.semantics.loopStartSeconds - 0.04) < 1e-9 &&
+                      std::fabs(result.semantics.loopEndSeconds - 0.08) < 1e-9 &&
+                      result.semantics.loopCreatesTakes &&
+                      result.semantics.trimTakesToRegion &&
+                      result.semantics.autoExpandAfterRecord &&
+                      result.semantics.monitorStopPolicy ==
+                          daw::EngineController::MonitorStopPolicy::ReturnToPrevious,
+                  "recording semantics are frozen at capture start");
+            check(result.passes.size() == 3,
+                  "frozen loop geometry calculates every recorded pass");
+        }
+        const auto* after = m.project().findTrack(track);
+        check(after && after->clips.size() == clipsBefore.size() &&
+                  after->clips.front().id == existing &&
+                  after->clips.front().filePath == clipsBefore.front().filePath &&
+                  after->clips.front().takes.size() ==
+                      clipsBefore.front().takes.size() &&
+                  after->clips.front().comp.size() ==
+                      clipsBefore.front().comp.size() &&
+                  !after->armed && !after->monitor &&
+                  m.undoDepth() == undoBefore &&
+                  m.decodedFileCount() == decodedBeforeFinalize,
+              "capture-only finalization probes metadata without caching audio and leaves document undo untouched");
+    }
+
+    // The existing local Stop remains a one-step landing wrapper, and it uses
+    // the mode captured at Start rather than a preference changed mid-take.
+    {
+        daw::EngineController m;
+        m.initialize(48000, 512, /*openDevice=*/false);
+        m.setRecordDirectory((dir / "record-local-wrapper").string());
+        const std::string track = m.addTrack(daw::TrackKind::Audio, "Vocal");
+        auto prefs = m.recordingPrefs();
+        prefs.mode = daw::RecordMode::Overwrite;
+        m.setRecordingPrefs(prefs);
+        const std::size_t undoBefore = m.undoDepth();
+
+        check(m.startRecordingTracksExactly({track}),
+              "local-wrapper test capture starts");
+        m.seedRecordingForShot(track, 0.05);
+        prefs.mode = daw::RecordMode::Layers;
+        m.setRecordingPrefs(prefs);
+        const std::string path = m.stopRecording();
+        const auto* landed = m.project().findTrack(track);
+        check(!path.empty() && fs::exists(path) && landed &&
+                  landed->clips.size() == 1 && landed->clips[0].takes.empty(),
+              "local Stop lands the frozen overwrite capture and returns its path");
+        check(m.undoDepth() == undoBefore + 1,
+              "local Stop still creates exactly one legacy undo entry");
+        m.undo();
+        check(m.project().findTrack(track)->clips.empty(),
+              "one undo removes the locally landed recording");
+        m.redo();
+        check(m.project().findTrack(track)->clips.size() == 1,
+              "one redo restores the locally landed recording");
+    }
+
+    // A layered local landing stores the preference frozen at Start on its
+    // shared container. A settings edit while audio is in flight is only the
+    // default for the next recording.
+    {
+        daw::EngineController m;
+        m.initialize(48000, 512, /*openDevice=*/false);
+        m.setRecordDirectory((dir / "record-frozen-crossfade").string());
+        const std::string track = m.addTrack(daw::TrackKind::Audio, "Vocal");
+        const std::string existing = m.importAudio(tonePath, track, 0.0);
+        auto prefs = m.recordingPrefs();
+        prefs.mode = daw::RecordMode::Layers;
+        prefs.compCrossfadeMs = 9.0;
+        m.setRecordingPrefs(prefs);
+        check(m.startRecordingTracksExactly({track}),
+              "layered crossfade capture starts");
+        m.seedRecordingForShot(track, 0.05);
+        prefs.compCrossfadeMs = 1.0;
+        m.setRecordingPrefs(prefs);
+        m.stopRecording();
+        const daw::ClipModel* landed = findClip(m, track, existing);
+        check(landed && daw::isLayered(*landed) &&
+                  std::fabs(landed->compCrossfadeMs - 9.0) < 1e-9,
+              "local layer landing keeps the crossfade frozen at capture start");
     }
 
     // ── Record mode resolution ──

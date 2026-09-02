@@ -211,8 +211,8 @@ That last run covers Unicode, spaces and quoting in the deployed executable,
 Qt WebEngine helper and scanner paths. Artifacts are written to
 `build-windows\artifacts`:
 
-- `VLT-Studio-Pro-0.0.1-windows-x64.zip` — CI/developer artifact;
-- `VLT-Studio-Pro-0.0.1-x64-Setup.exe` — production installer.
+- `VLT-Studio-Pro-0.1.2-windows-x64.zip` — CI/developer artifact;
+- `VLT-Studio-Pro-0.1.2-x64-Setup.exe` — production installer.
 
 The computed install prefix is always the absolute
 `<repository>\build-windows\stage`; no machine-specific path is stored in the

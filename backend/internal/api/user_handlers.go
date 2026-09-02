@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	_ "golang.org/x/image/webp"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"vltstudio/backend/internal/model"
 	"vltstudio/backend/internal/quota"
@@ -66,6 +67,15 @@ func (s *Server) revokeOwnDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	result := s.DB.Transaction(func(tx *gorm.DB) error {
+		var device model.Device
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND user_id = ? AND revoked_at IS NULL", deviceID,
+				userFrom(r).ID).First(&device).Error; err != nil {
+			return err
+		}
+		if err := s.Collab.EvictDeviceSessionsTx(tx, deviceID, now); err != nil {
+			return err
+		}
 		result := tx.Model(&model.Device{}).
 			Where("id = ? AND user_id = ? AND revoked_at IS NULL", deviceID, userFrom(r).ID).
 			Update("revoked_at", now)
@@ -87,6 +97,7 @@ func (s *Server) revokeOwnDevice(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	s.disconnectCollaborationDevice(deviceID, "device_revoked")
 	w.WriteHeader(http.StatusNoContent)
 }
 

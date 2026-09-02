@@ -1,6 +1,9 @@
 #include "serialization/InsertJson.hpp"
+#include "serialization/AssetJson.hpp"
 
 #include <nlohmann/json.hpp>
+
+#include <algorithm>
 
 namespace daw::serialization {
 
@@ -16,6 +19,9 @@ json insertToJson(const InsertModel& i) {
     j["uid"] = i.uid;
     j["path"] = i.path;
     j["vendor"] = i.vendor;
+    if (!i.pluginVersion.empty()) j["pluginVersion"] = i.pluginVersion;
+    if (i.stateSchemaVersion > 0)
+        j["stateSchemaVersion"] = i.stateSchemaVersion;
     j["mix"] = i.mix;
     if (i.channelMode != PluginChannelMode::Auto)
         j["channelMode"] = toString(i.channelMode);
@@ -24,6 +30,11 @@ json insertToJson(const InsertModel& i) {
     if (!i.sidechainTrackId.empty()) j["sidechain"] = i.sidechainTrackId;
     if (!i.stateFile.empty()) j["stateFile"] = i.stateFile;
     if (!i.rightStateFile.empty()) j["rightStateFile"] = i.rightStateFile;
+    if (!i.stateAsset.empty()) j["stateAsset"] = assetRefToJson(i.stateAsset);
+    if (!i.rightStateAsset.empty())
+        j["rightStateAsset"] = assetRefToJson(i.rightStateAsset);
+    if (!i.assetBindings.empty())
+        j["assetBindings"] = pluginAssetBindingsToJson(i.assetBindings);
     if (!i.parameters.empty()) {
         json parameters = json::array();
         for (const InsertParameter& p : i.parameters)
@@ -56,6 +67,8 @@ InsertModel insertFromJson(const json& j) {
     i.uid = j.value("uid", "");
     i.path = j.value("path", "");
     i.vendor = j.value("vendor", "");
+    i.pluginVersion = j.value("pluginVersion", "");
+    i.stateSchemaVersion = std::max(0, j.value("stateSchemaVersion", 0));
     i.mix = j.value("mix", 1.0f);
     i.channelMode = pluginChannelModeFromString(
         j.value("channelMode", std::string("auto")));
@@ -64,6 +77,11 @@ InsertModel insertFromJson(const json& j) {
     i.sidechainTrackId = j.value("sidechain", "");
     i.stateFile = j.value("stateFile", "");
     i.rightStateFile = j.value("rightStateFile", "");
+    if (j.contains("stateAsset"))
+        i.stateAsset = assetRefFromJson(j.at("stateAsset"));
+    if (j.contains("rightStateAsset"))
+        i.rightStateAsset = assetRefFromJson(j.at("rightStateAsset"));
+    i.assetBindings = pluginAssetBindingsFromJson(j, "assetBindings");
     if (j.contains("parameters") && j.at("parameters").is_array()) {
         for (const auto& jp : j.at("parameters")) {
             InsertParameter p;

@@ -98,6 +98,9 @@ signals:
     void nestedPluginEditorRequested(const QString& channelId,
                                      const QString& insertId);
     void projectEdited();
+    /// Emitted only for the three application-owned Qt editors. Native and
+    /// generic third-party plugin surfaces deliberately have no presence seam.
+    void builtInPanelReady(QWidget* panel, const QString& stableTypeId);
     /// A parameter knob requested automation by gesture or context menu. The window itself
     /// cannot make a lane — that is the document's business — so it says which
     /// parameter and lets the main window do the work.

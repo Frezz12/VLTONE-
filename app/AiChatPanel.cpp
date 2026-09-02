@@ -2013,9 +2013,11 @@ void AiChatPanel::editInstructions() {
     column->addWidget(buttons);
 
     if (dialog.exec() != QDialog::Accepted) return;
-    m_controller->setAiInstructions(editor->toPlainText().trimmed().toStdString());
+    const auto result = m_controller->setAiInstructions(
+        editor->toPlainText().trimmed().toStdString());
     // Part of the document, so the project is now unsaved.
-    emit projectChanged();
+    emit projectChanged(daw::collab::marksLocalFileDirty(result));
+    if (result == daw::collab::SharedMutationResult::Blocked) return;
     emit statusMessage(m_controller->aiInstructions().empty()
                            ? tr("Instructions cleared")
                            : tr("Instructions saved with the project"));

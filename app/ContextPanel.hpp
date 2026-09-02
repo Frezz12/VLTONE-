@@ -106,7 +106,7 @@ protected:
     void resizeEvent(QResizeEvent*) override;
 
 signals:
-    void projectEdited();
+    void projectEdited(bool localFileDirty = true);
     /// A continuous control on the panel moved — level, pan, a fade. Emitted on
     /// every step of the drag, not only at the end, so the fader in the mixer
     /// and the one in the track header move *with* it. `projectEdited` still
@@ -115,7 +115,7 @@ signals:
     void liveEdited();
     /// The track set changed (a clip was duplicated onto a new lane, a track
     /// was deleted), so the other views must rebuild rather than repaint.
-    void tracksChanged();
+    void tracksChanged(bool localFileDirty = true);
     /// The panel's Start / Stop chip was pressed. It means whatever R means at
     /// that moment — start a take, cancel a count-in, land a running one —
     /// because MainWindow owns all three and the two gestures must not drift.
@@ -196,7 +196,7 @@ private:
     /// Apply an edit to every selected clip, then repaint the views once.
     void forEachSelectedClip(const std::function<void(const QString& trackId,
                                                       const QString& clipId)>& fn);
-    void afterEdit(bool structural = false);
+    void afterEdit(bool structural = false, bool localFileDirty = true);
 
     daw::EngineController* m_controller = nullptr;
     ui::SelectionModel* m_selection = nullptr;

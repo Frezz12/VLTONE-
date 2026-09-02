@@ -47,8 +47,10 @@ QMessageBox* buildRecoveryPrompt(QWidget* parent,
                                  const daw::recovery::SessionInfo& session);
 
 /// Offer every leftover session, newest first, and apply the one the user
-/// accepts. Sessions the user declines are deleted; sessions left unanswered
-/// (the dialog was dismissed) are kept for next time.
+/// accepts. Sessions the user declines are deleted unless they contain a cloud
+/// recording sidecar; that sidecar and its WAV are preserved until the future
+/// upload/commit recovery workflow owns their explicit cleanup. Sessions left
+/// unanswered (the dialog was dismissed) are kept for next time.
 Choice offerRecovery(QWidget* parent, daw::EngineController& controller);
 
 /// A one-line description of how a session ended, for the prompt.

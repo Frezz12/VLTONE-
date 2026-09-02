@@ -65,6 +65,9 @@ struct PluginDescriptor {
     /// Identity of the file the scan read, for incremental rescans.
     std::uint64_t fileSize = 0;
     std::int64_t fileModifiedTime = 0;
+    /// Version of the plugin's opaque save/load state contract when known.
+    /// External formats normally leave this at zero; built-ins publish it.
+    int stateSchemaVersion = 0;
 };
 
 struct ParameterInfo {

@@ -23,6 +23,7 @@
 #include "model/Document.hpp"
 #include "Host/PluginTypes.hpp"
 #include "MidiPreviewIndex.hpp"
+#include "CollaborationTypes.hpp"
 
 namespace daw { class EngineController; }
 namespace daw { struct WaveformPeaks; }
@@ -192,6 +193,13 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw };
     }
     /// Horizontal navigation state for the headless middle-drag check.
     double horizontalScrollForTest() const { return m_scrollSeconds; }
+
+    /// Stable collaboration coordinate conversion. Timeline time/track/lane
+    /// survives different window sizes, zoom and scroll; normalized fallback
+    /// keeps older peers usable when the addressed track no longer exists.
+    collab::SemanticPoint collaborationPresenceAt(const QPointF& position) const;
+    std::optional<QPointF> collaborationPositionFor(
+        const collab::SemanticPoint& point) const;
 
     /// Headless check only: the vertical centre of one visible lane, so a test
     /// can click on a lane it has just created.

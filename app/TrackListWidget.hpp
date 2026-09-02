@@ -91,7 +91,7 @@ signals:
     void selectionSetChanged(const QStringList& trackIds);
     /// Something about the tracks changed (name, flags, order, folders) — the
     /// rest of the UI needs to re-read the document.
-    void tracksChanged();
+    void tracksChanged(bool localFileDirty = true);
     /// Order/parenting changed; views that cache lane order must rebuild.
     void orderChanged();
     /// A plugin dropped onto a row loaded successfully and wants its editor.
@@ -218,6 +218,7 @@ private:
     /// calls are dropped: driving a chip re-emits its own `toggled`.
     void applyToGroup(const QString& id,
                       const std::function<void(const std::string&)>& act);
+    void applyMuteToGroup(const QString& id, bool muted);
     /// Move every selected track's level with the one being dragged, keeping
     /// the ratios they started the drag with.
     void applyGroupGain(const QString& id, float gain);
