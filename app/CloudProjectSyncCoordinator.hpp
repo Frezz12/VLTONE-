@@ -74,7 +74,8 @@ signals:
     void synchronizedProject(const QString& projectId,
                              quint64 serverSequence,
                              const QString& canonicalStateHash,
-                             collab::CloudProjectRole role);
+                             collab::CloudProjectRole role,
+                             collab::CloudProjectStatus status);
     /// Emitted only for an authenticated online bootstrap. Installation never
     /// waits for these bytes; a bounded hydrator may fill AssetCache while the
     /// project is already visible with silent placeholders.

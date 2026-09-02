@@ -194,6 +194,12 @@ func TestPostgresAdminManagedCollaborationAccess(t *testing.T) {
 		t.Fatalf("enable was not stored: enabled=%v err=%v",
 			user.CollaborationEnabled, err)
 	}
+	listed := performJSON(router, http.MethodGet, "/v1/desktop/projects", nil,
+		"203.0.113.10:1234", nil, desktopHeaders)
+	if projects, ok := listed.Body["projects"].([]any); listed.Status != http.StatusOK || !ok || len(projects) != 0 {
+		t.Fatalf("enabled empty project list = %d %v", listed.Status,
+			listed.Body)
+	}
 
 	server.Config.CollaborationEnabled = false
 	disabledCapabilities := performJSON(router, http.MethodGet,

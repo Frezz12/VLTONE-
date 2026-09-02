@@ -138,6 +138,7 @@ struct SnapshotRequestUploader::Impl {
     QPointer<CloudAssetTransferManager> transfers;
     std::function<quint64(const CloudSnapshotUploadInput&)> startUpload;
     std::function<bool(quint64)> cancelTransfer;
+    std::function<quint64(const QString&, const QString&)> abortUpload;
     QHash<QString, Entry> tracked;
     QQueue<QString> queue;
     QList<QString> history;
@@ -543,10 +544,18 @@ struct SnapshotRequestUploader::Impl {
         queue.clear();
         if (activeTransferId != 0) {
             QString path;
+            QString activeProject;
             const auto iterator = tracked.constFind(activeRequestId);
-            if (iterator != tracked.cend()) path = iterator->preparedPath;
+            if (iterator != tracked.cend()) {
+                path = iterator->preparedPath;
+                activeProject = iterator->projectId;
+            }
             cancelledTransferPaths.insert(activeTransferId, path);
             if (cancelTransfer) cancelTransfer(activeTransferId);
+            if (abortUpload && !activeProject.isEmpty() &&
+                !activeUploadId.isEmpty()) {
+                abortUpload(activeProject, activeUploadId);
+            }
         }
         for (auto iterator = tracked.begin(); iterator != tracked.end();
              ++iterator) {
@@ -559,6 +568,16 @@ struct SnapshotRequestUploader::Impl {
         activeAttempt = 0;
         activeTransferId = 0;
         activeUploadId.clear();
+    }
+
+    void operationCommitted(quint64 serverSequence) {
+        const auto iterator = tracked.constFind(activeRequestId);
+        if (iterator != tracked.cend() &&
+            iterator->request.targetServerSequence < serverSequence) {
+            cancelAll();
+            return;
+        }
+        pump();
     }
 };
 
@@ -576,6 +595,10 @@ SnapshotRequestUploader::SnapshotRequestUploader(
         };
         m_impl->cancelTransfer = [guard](quint64 transferId) {
             return guard && guard->cancel(transferId);
+        };
+        m_impl->abortUpload = [guard](const QString& projectId,
+                                      const QString& uploadId) {
+            return guard ? guard->abortUpload(projectId, uploadId) : 0;
         };
         connect(transfers,
                 &CloudAssetTransferManager::snapshotUploadCompleted, this,
@@ -623,7 +646,9 @@ SnapshotRequestUploader::SnapshotRequestUploader(
     }
     if (bridge) {
         connect(bridge, &CollaborationCommandBridge::operationCommitted, this,
-                [this](const QString&, quint64, bool) { m_impl->pump(); });
+                [this](const QString&, quint64 serverSequence, bool) {
+                    m_impl->operationCommitted(serverSequence);
+                });
     }
 }
 
@@ -708,6 +733,7 @@ bool checkSnapshotRequestUploaderForTest(QString* error) {
     QList<CloudSnapshotUploadInput> captured;
     int starts = 0;
     QList<quint64> cancelled;
+    QList<QPair<QString, QString>> aborted;
     uploader.m_impl->startUpload =
         [&captured, &starts](const CloudSnapshotUploadInput& input) {
             captured.push_back(input);
@@ -717,6 +743,11 @@ bool checkSnapshotRequestUploaderForTest(QString* error) {
     uploader.m_impl->cancelTransfer = [&cancelled](quint64 id) {
         cancelled.push_back(id);
         return true;
+    };
+    uploader.m_impl->abortUpload = [&aborted](const QString& project,
+                                              const QString& upload) {
+        aborted.push_back({project, upload});
+        return quint64(100 + aborted.size());
     };
 
     const auto envelopeFor = [&](QString assignedHost, int attempt,
@@ -815,19 +846,33 @@ bool checkSnapshotRequestUploaderForTest(QString* error) {
         return fail(QStringLiteral("snapshot retry was not idempotent"));
     }
 
+    uploader.m_impl->operationCommitted(8);
+    if (cancelled != QList<quint64>{91, 92} ||
+        aborted.size() != 1 || aborted.front().first != projectId ||
+        aborted.front().second != captured.at(1).uploadId ||
+        !uploader.m_impl->tracked.isEmpty() ||
+        !uploader.m_impl->activeRequestId.isEmpty()) {
+        return fail(QStringLiteral(
+            "superseded snapshot upload was not cancelled and aborted"));
+    }
+    service.handleEnvelope(envelopeFor(hostId, 3));
+    timeout.start(3000);
+    if (starts != 3) loop.exec();
+    if (starts != 3)
+        return fail(QStringLiteral("host-change cancellation setup failed"));
     service.m_localSessionState.setHostParticipantId(
         QStringLiteral("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"));
     emit service.roomIdentityChanged(
         sessionId, hostId, service.m_localSessionState.hostParticipantId());
-    if (cancelled != QList<quint64>{91, 92} ||
-        !uploader.m_impl->tracked.isEmpty() ||
-        !uploader.m_impl->activeRequestId.isEmpty()) {
+    if (cancelled != QList<quint64>{91, 92, 93} || aborted.size() != 2 ||
+        aborted.back().second != captured.at(2).uploadId ||
+        !uploader.m_impl->tracked.isEmpty()) {
         return fail(QStringLiteral("host change did not cancel snapshot upload"));
     }
     CloudTransferError cancelledError;
     cancelledError.code = CloudTransferErrorCode::Cancelled;
     uploader.m_impl->transferFailed(
-        92, CloudTransferKind::SnapshotUpload, cancelledError);
+        93, CloudTransferKind::SnapshotUpload, cancelledError);
 
     // The delivery ledger retains only a fixed number of terminal request ids
     // for dedupe and deterministically evicts the oldest terminal entry.

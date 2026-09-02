@@ -45,6 +45,7 @@ public:
     QString projectId() const;
     QString sessionId() const;
     CloudProjectRole role() const noexcept;
+    CloudProjectStatus projectStatus() const noexcept;
     CloudSessionLifecyclePhase phase() const noexcept;
 
     bool canStartSession() const;

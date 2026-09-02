@@ -1241,7 +1241,8 @@ void MainWindow::setCloudPublicationServices(
         connect(m_cloudProjectSync,
                 &collab::CloudProjectSyncCoordinator::synchronizedProject,
                 this, [this](const QString& projectId, quint64,
-                             const QString&, collab::CloudProjectRole) {
+                             const QString&, collab::CloudProjectRole,
+                             collab::CloudProjectStatus) {
                     if (projectId == m_candidateCloudProjectId) {
                         m_cloudProjectId = projectId;
                         m_cloudLocalBackupPath = m_candidateCloudBackupPath;
@@ -1886,6 +1887,8 @@ bool MainWindow::canInvitePeople() const {
     if (m_cloudProjectSync->phase() != collab::CloudSyncPhase::Ready ||
         m_cloudProjectSync->projectId() != m_cloudProjectId ||
         m_cloudSessionLifecycle->projectId() != m_cloudProjectId ||
+        m_cloudSessionLifecycle->projectStatus() !=
+            collab::CloudProjectStatus::Active ||
         m_cloudSessionLifecycle->role() != collab::CloudProjectRole::Owner) {
         return false;
     }
@@ -2005,9 +2008,21 @@ void MainWindow::onOpenCloudProjects() {
     archive->setEnabled(false);
     connect(list, &QListWidget::itemSelectionChanged, &dialog,
             [list, open, archive] {
-                const bool selected = list->currentItem() != nullptr;
-                open->setEnabled(selected);
-                archive->setEnabled(selected);
+                const QListWidgetItem* item = list->currentItem();
+                const auto status = item
+                    ? static_cast<collab::CloudProjectStatus>(
+                          item->data(Qt::UserRole + 1).toInt())
+                    : collab::CloudProjectStatus::Archived;
+                const auto role = item
+                    ? static_cast<collab::CloudProjectRole>(
+                          item->data(Qt::UserRole + 2).toInt())
+                    : collab::CloudProjectRole::Viewer;
+                open->setEnabled(
+                    item && status != collab::CloudProjectStatus::Archived &&
+                    status != collab::CloudProjectStatus::Uploading);
+                archive->setEnabled(
+                    item && role == collab::CloudProjectRole::Owner &&
+                    status != collab::CloudProjectStatus::Archived);
             });
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     connect(open, &QPushButton::clicked, &dialog, &QDialog::accept);
@@ -2049,6 +2064,9 @@ void MainWindow::onOpenCloudProjects() {
                             .arg(view.project.title, role, status),
                         list);
                     item->setData(Qt::UserRole, view.project.id);
+                    item->setData(Qt::UserRole + 1,
+                                  int(view.project.status));
+                    item->setData(Qt::UserRole + 2, int(view.role));
                 }
                 if (list->count() == 0)
                     list->addItem(tr("No cloud projects"));
@@ -2099,10 +2117,22 @@ void MainWindow::onOpenCloudProjects() {
                 }
             });
     connect(m_cloudProjectClient, &collab::CloudProjectClient::requestFailed,
-            &dialog, [&](quint64 requestId, collab::CloudRequestKind,
+            &dialog, [&](quint64 requestId, collab::CloudRequestKind kind,
                          const collab::CloudClientError& error) {
-                if (requestId != listRequest && requestId != acceptRequest &&
-                    requestId != archiveRequest) return;
+                // listProjects can reject synchronously before requestList has
+                // stored its returned id. It is the only list caller while
+                // this modal connection exists, so match its kind as well.
+                if (kind == collab::CloudRequestKind::ListProjects) {
+                    listRequest = 0;
+                    list->clear();
+                    list->addItem(tr("Could not load cloud projects"));
+                } else if (requestId == acceptRequest) {
+                    acceptRequest = 0;
+                } else if (requestId == archiveRequest) {
+                    archiveRequest = 0;
+                } else {
+                    return;
+                }
                 QMessageBox::warning(
                     &dialog, tr("Cloud Project Request Failed"),
                     error.safeMessage.isEmpty()

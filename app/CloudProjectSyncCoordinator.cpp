@@ -282,6 +282,8 @@ struct CloudProjectSyncCoordinator::Impl {
     QString installedCanonicalHash;
     QList<daw::AssetRef> installedAssets;
     CloudProjectRole installedRole = CloudProjectRole::Viewer;
+    CloudProjectStatus installedStatus = CloudProjectStatus::Archived;
+    CloudProjectStatus bootstrapStatus = CloudProjectStatus::Archived;
     bool installedOffline = false;
 
     explicit Impl(CloudProjectSyncCoordinator* owner) : q(owner) {
@@ -430,6 +432,7 @@ struct CloudProjectSyncCoordinator::Impl {
             return;
         bootstrapRequest = 0;
         bootstrapRole = value.role;
+        bootstrapStatus = value.project.status;
         bootstrap = std::make_shared<CloudProjectBootstrap>(value);
         if (!value.snapshot) {
             launchMaterialization({});
@@ -532,7 +535,7 @@ struct CloudProjectSyncCoordinator::Impl {
     void finishInstalledProject() {
         emit q->synchronizedProject(
             projectId, service->bootstrapServerSequence(),
-            installedCanonicalHash, installedRole);
+            installedCanonicalHash, installedRole, installedStatus);
         if (!installedOffline)
             emit q->projectAssetsDiscovered(projectId, installedAssets);
 
@@ -766,6 +769,8 @@ struct CloudProjectSyncCoordinator::Impl {
         installedCanonicalHash = result.canonicalHash;
         installedAssets = referencedAssets;
         installedRole = offline ? CloudProjectRole::Viewer : bootstrapRole;
+        installedStatus = offline ? CloudProjectStatus::ReadOnly
+                                  : bootstrapStatus;
         installedOffline = offline;
         if (offline) {
             finishInstalledProject();

@@ -72,6 +72,7 @@ struct CloudSessionLifecycleController::Impl {
     QString sessionId;
     QString verifiedHash;
     CloudProjectRole role = CloudProjectRole::Viewer;
+    CloudProjectStatus projectStatus = CloudProjectStatus::Archived;
     CloudSyncPhase syncPhase = CloudSyncPhase::Idle;
     CloudSessionLifecyclePhase phase =
         CloudSessionLifecyclePhase::Unbound;
@@ -114,6 +115,7 @@ struct CloudSessionLifecycleController::Impl {
 
     bool exactVerifiedProjectForStart() const {
         return verified && syncPhase == CloudSyncPhase::Ready &&
+               projectStatus == CloudProjectStatus::Active &&
                !projectId.isEmpty() && serviceProject() == projectId &&
                !verifiedHash.isEmpty() && serviceHash() == verifiedHash &&
                !blocksCloudRequests(currentServiceState());
@@ -232,6 +234,7 @@ struct CloudSessionLifecycleController::Impl {
         sessionId.clear();
         verifiedHash.clear();
         role = CloudProjectRole::Viewer;
+        projectStatus = CloudProjectStatus::Archived;
         syncPhase = CloudSyncPhase::Idle;
         verified = false;
         knownNoActiveSession = false;
@@ -376,7 +379,7 @@ struct CloudSessionLifecycleController::Impl {
     }
 
     void onRequestFailed(quint64 requestId, CloudRequestKind kind,
-                         const CloudClientError&) {
+                         const CloudClientError& error) {
         if (issuing && kind == issuingKind) {
             deferredFailure = DeferredFailure{requestId, kind, {}};
             return;
@@ -385,7 +388,10 @@ struct CloudSessionLifecycleController::Impl {
         QString notice;
         if (kind == CloudRequestKind::StartSession) {
             expected = Pending::Start;
-            notice = q->tr("Could not start the collaboration session.");
+            notice = error.apiCode == QLatin1String("project_not_active")
+                ? q->tr("This cloud project is archived or read-only. "
+                        "Open an active project to start a session.")
+                : q->tr("Could not start the collaboration session.");
         } else if (kind == CloudRequestKind::EndSession) {
             expected = Pending::End;
             notice = q->tr("Could not request the end of this session.");
@@ -402,7 +408,8 @@ struct CloudSessionLifecycleController::Impl {
     }
 
     void onSynchronized(const QString& synchronizedProject, quint64,
-                        const QString& hash, CloudProjectRole synchronizedRole) {
+                        const QString& hash, CloudProjectRole synchronizedRole,
+                        CloudProjectStatus synchronizedStatus) {
         if (canonicalUuid(synchronizedProject) != projectId) return;
         const QString normalizedHash = hash.trimmed().toLower();
         if (normalizedHash.size() != 64 || serviceProject() != projectId ||
@@ -415,6 +422,7 @@ struct CloudSessionLifecycleController::Impl {
         verified = true;
         verifiedHash = normalizedHash;
         role = synchronizedRole;
+        projectStatus = synchronizedStatus;
         knownNoActiveSession = false;
         left = false;
         recomputePhase();
@@ -571,9 +579,10 @@ CloudSessionLifecycleController::CloudSessionLifecycleController(
         connect(synchronizer,
                 &CloudProjectSyncCoordinator::synchronizedProject, this,
                 [this](const QString& projectId, quint64 serverSequence,
-                       const QString& hash, CloudProjectRole role) {
+                       const QString& hash, CloudProjectRole role,
+                       CloudProjectStatus status) {
                     m_impl->onSynchronized(projectId, serverSequence, hash,
-                                           role);
+                                           role, status);
                 });
         connect(synchronizer,
                 &CloudProjectSyncCoordinator::noActiveSession, this,
@@ -649,6 +658,11 @@ QString CloudSessionLifecycleController::sessionId() const {
 
 CloudProjectRole CloudSessionLifecycleController::role() const noexcept {
     return m_impl->role;
+}
+
+CloudProjectStatus
+CloudSessionLifecycleController::projectStatus() const noexcept {
+    return m_impl->projectStatus;
 }
 
 CloudSessionLifecyclePhase
@@ -776,7 +790,13 @@ bool checkCloudSessionLifecycleControllerForTest(QString* error) {
 
     lifecycle.bindProject(projectId);
     impl.syncPhase = CloudSyncPhase::Ready;
-    impl.onSynchronized(projectId, 0, hash, CloudProjectRole::Owner);
+    impl.onSynchronized(projectId, 0, hash, CloudProjectRole::Owner,
+                        CloudProjectStatus::Archived);
+    impl.onNoActiveSession(projectId);
+    if (lifecycle.canStartSession())
+        return fail(QStringLiteral("archived project allowed session start"));
+    impl.onSynchronized(projectId, 0, hash, CloudProjectRole::Owner,
+                        CloudProjectStatus::Active);
     impl.onNoActiveSession(projectId);
     if (!lifecycle.canStartSession() || lifecycle.canEndSession() ||
         lifecycle.canLeaveSession()) {
@@ -806,7 +826,8 @@ bool checkCloudSessionLifecycleControllerForTest(QString* error) {
     lifecycle.bindProject(otherProjectId);
     lifecycle.bindProject(projectId);
     impl.syncPhase = CloudSyncPhase::Ready;
-    impl.onSynchronized(projectId, 0, hash, CloudProjectRole::Owner);
+    impl.onSynchronized(projectId, 0, hash, CloudProjectRole::Owner,
+                        CloudProjectStatus::Active);
     impl.onNoActiveSession(projectId);
     if (!lifecycle.startSession())
         return fail(QStringLiteral("start retry was not enabled"));
@@ -867,7 +888,8 @@ bool checkCloudSessionLifecycleControllerForTest(QString* error) {
     lifecycle.bindProject(otherProjectId);
     lifecycle.bindProject(projectId);
     impl.syncPhase = CloudSyncPhase::Ready;
-    impl.onSynchronized(projectId, 0, hash, CloudProjectRole::Editor);
+    impl.onSynchronized(projectId, 0, hash, CloudProjectRole::Editor,
+                        CloudProjectStatus::Active);
     serviceSession = sessionId;
     serviceState = CollaborationState::Synced;
     impl.onRoomIdentity(sessionId);
@@ -903,7 +925,8 @@ bool checkCloudSessionLifecycleControllerForTest(QString* error) {
     serviceState = CollaborationState::LocalOnly;
     lifecycle.bindProject(projectId);
     impl.syncPhase = CloudSyncPhase::Ready;
-    impl.onSynchronized(projectId, 0, hash, CloudProjectRole::Owner);
+    impl.onSynchronized(projectId, 0, hash, CloudProjectRole::Owner,
+                        CloudProjectStatus::Active);
     impl.onNoActiveSession(projectId);
     impl.ports.start = [&](const QString&, CloudSessionMode) {
         const quint64 requestId = ++nextRequest;
