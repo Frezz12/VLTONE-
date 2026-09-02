@@ -825,6 +825,8 @@ CloudProjectSyncCoordinator::CloudProjectSyncCoordinator(
                 m_impl->service) {
                 m_impl->service->reconnectNow();
             } else {
+                if (m_impl->service)
+                    m_impl->service->disconnectFromProject();
                 emit noActiveSession(m_impl->projectId);
             }
         });
@@ -847,6 +849,8 @@ CloudProjectSyncCoordinator::CloudProjectSyncCoordinator(
                 m_impl->sessionRequest = 0;
                 m_impl->setPhase(CloudSyncPhase::Ready);
                 if (provesNoActiveSession(error)) {
+                    if (m_impl->service)
+                        m_impl->service->disconnectFromProject();
                     emit noActiveSession(m_impl->projectId);
                 } else {
                     emit activeSessionCheckFailed(
@@ -973,6 +977,13 @@ bool checkCloudProjectSyncCoordinatorForTest(QString* error) {
     }
     const QString projectId =
         QStringLiteral("11111111-1111-4111-8111-111111111111");
+    CollaborationService connectionIntent(nullptr);
+    connectionIntent.setProjectId(projectId, true);
+    connectionIntent.setProjectId(projectId, false);
+    if (connectionIntent.state() != CollaborationState::LocalOnly) {
+        return fail(QStringLiteral(
+            "same-project bootstrap did not clear stale live connection intent"));
+    }
     const QString operationId =
         QStringLiteral("22222222-2222-4222-8222-222222222222");
 

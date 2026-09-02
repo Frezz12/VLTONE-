@@ -324,7 +324,7 @@ void CollaborationService::setProjectId(const QString& projectId,
     const QString safe = uuid.isNull()
         ? QString()
         : uuid.toString(QUuid::WithoutBraces).toLower();
-    if (safe == m_projectId && (!requestConnection || m_shouldConnect)) return;
+    if (safe == m_projectId && requestConnection == m_shouldConnect) return;
     m_projectId = safe;
     m_sessionId.clear();
     m_hashRoundId.clear();

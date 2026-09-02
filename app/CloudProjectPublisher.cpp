@@ -476,6 +476,7 @@ struct CloudProjectPublisher::Impl {
         std::function<quint64(const CloudSnapshotUploadInput&)> uploadSnapshot;
         std::function<bool(quint64)> retryTransfer;
         std::function<bool(quint64)> cancelTransfer;
+        std::function<quint64(const QString&, const QString&)> abortUpload;
         std::function<void(std::function<void()>)> dispatchWorker;
         std::function<QString()> stagingDirectory;
         std::function<QString()> makeUuid;
@@ -551,6 +552,15 @@ struct CloudProjectPublisher::Impl {
             }
             if (snapshotTransferId)
                 ports.cancelTransfer(snapshotTransferId);
+        }
+        if (ports.abortUpload && !projectId.isEmpty()) {
+            for (auto iterator = activeAssets.cbegin();
+                 iterator != activeAssets.cend(); ++iterator) {
+                if (!iterator->uploadId.isEmpty())
+                    ports.abortUpload(projectId, iterator->uploadId);
+            }
+            if (!snapshotUploadId.isEmpty() && snapshotTransferId)
+                ports.abortUpload(projectId, snapshotUploadId);
         }
         activeAssets.clear();
         queuedAssets.clear();
@@ -1068,6 +1078,12 @@ CloudProjectPublisher::CloudProjectPublisher(
             quint64 transferId) {
             return guard && guard->cancel(transferId);
         };
+    m_impl->ports.abortUpload =
+        [guard = QPointer<CloudAssetTransferManager>(transfers)](
+            const QString& projectId, const QString& uploadId) {
+            return guard ? guard->abortUpload(projectId, uploadId)
+                         : quint64(0);
+        };
     m_impl->ports.dispatchWorker = [](std::function<void()> task) {
         QThreadPool::globalInstance()->start(std::move(task));
     };
@@ -1283,6 +1299,7 @@ bool checkCloudProjectPublisherForTest(QString* error) {
     QVector<QString> activations;
     QVector<quint64> cancelledRequests;
     QVector<quint64> cancelledTransfers;
+    QVector<QPair<QString, QString>> abortedUploads;
     QVector<quint64> retriedTransfers;
     publisher.m_impl->ports.createProject =
         [&](const CreateCloudProjectInput& metadata) {
@@ -1317,6 +1334,11 @@ bool checkCloudProjectPublisherForTest(QString* error) {
         cancelledTransfers.push_back(transferId);
         return true;
     };
+    publisher.m_impl->ports.abortUpload =
+        [&](const QString& projectId, const QString& uploadId) {
+            abortedUploads.push_back({projectId, uploadId});
+            return ++nextTransferId;
+        };
     publisher.m_impl->ports.dispatchWorker =
         [](std::function<void()> task) { task(); };
     publisher.m_impl->ports.stagingDirectory = [&] { return directory.path(); };
@@ -1556,6 +1578,12 @@ bool checkCloudProjectPublisherForTest(QString* error) {
             "publisher did not resume a retryable snapshot upload"));
     }
     publisher.cancel();
+    if (abortedUploads != QVector<QPair<QString, QString>>{
+                              {zeroUploading.project.id,
+                               snapshotUploads.back().second.uploadId}}) {
+        return fail(QStringLiteral(
+            "publisher cancellation did not abort the server upload"));
+    }
     return true;
 }
 
