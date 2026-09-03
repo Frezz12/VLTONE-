@@ -159,6 +159,8 @@ public:
         /// The insert chain, in document order, between the sources and the
         /// fader. Empty when the channel has no plugins loaded.
         std::vector<engine::NodeId> inserts;
+        /// The channel merge/generator output immediately before its inserts.
+        engine::NodeId sourceTap = engine::kInvalidNode;
         /// What a pre-fader send taps: the last insert, or the clips when there
         /// are none. "Pre-fader" means before the fader, *after* the inserts —
         /// tapping ahead of the plugins would send a signal nobody asked for.
@@ -177,6 +179,49 @@ public:
     /// clearer failure than `sf_open` running out halfway through.
     static constexpr std::size_t kMaxRenderStems = 200;
     static constexpr std::size_t kSamplerFxSlots = 8;
+
+    struct ClipAddress {
+        std::string trackId;
+        std::string clipId;
+        friend bool operator==(const ClipAddress&, const ClipAddress&) = default;
+    };
+
+    enum class BounceFxLayer : std::uint32_t {
+        Clip = 1u << 0,
+        Track = 1u << 1,
+        Sends = 1u << 2,
+        Summing = 1u << 3,
+        Master = 1u << 4,
+    };
+    enum class BounceDestination : std::uint8_t { Replace, NewTrack };
+
+    struct BounceRequest {
+        std::vector<ClipAddress> clips;
+        std::vector<std::string> tracks;
+        bool fullMix = false;
+        double startSeconds = 0.0;
+        double endSeconds = 0.0;
+        rendering::Tail tail = rendering::Tail::None;
+        double tailSilenceDb = -96.0;
+        double tailHoldSeconds = 0.3;
+        double tailMaxSeconds = 30.0;
+        std::uint32_t fxLayers =
+            std::uint32_t(BounceFxLayer::Clip) |
+            std::uint32_t(BounceFxLayer::Track) |
+            std::uint32_t(BounceFxLayer::Summing);
+        BounceDestination destination = BounceDestination::Replace;
+    };
+
+    struct BounceOutput {
+        std::string sourceTrackId;
+        std::string destinationTrackId;
+        std::string clipId;
+        std::string filePath;
+    };
+    struct BounceReport {
+        std::vector<BounceOutput> outputs;
+        bool cancelled = false;
+    };
 
     // ── Lifecycle ──
     /// Prepare the engine. With openDevice=true a live PortAudio stream is
@@ -327,6 +372,10 @@ public:
     double loopEndSeconds() const;
 
     // ── Tracks ──
+    /// Returns the new track id, or empty if a bound cloud session refused the
+    /// mutation. In a session the optimistic projection has already landed by
+    /// the time this returns, so `project().findTrack(returned)` resolves
+    /// immediately — see the note above submitSharedMutation in the .cpp.
     std::string addTrack(TrackKind kind, const std::string& name = "");
     void removeTrack(const std::string& trackId);
     collab::SharedMutationResult renameTrack(const std::string& trackId,
@@ -545,6 +594,30 @@ public:
         std::vector<SendModel> sends;
         bool empty() const { return inserts.empty() && !hasSettings; }
     };
+
+    /// Render selected arrangement material and insert the generated audio as
+    /// one undoable local edit. Files are staged before the document changes.
+    audio::Result bounceInPlace(
+        const BounceRequest& request,
+        const std::function<bool(const rendering::Progress&)>& onProgress,
+        BounceReport& out);
+
+    /// The persisted direct-offline chain for one clip, including opaque state
+    /// from the controller's content-addressed state cache.
+    ChannelSnapshot offlineProcessChain(const ClipAddress& clip) const;
+    bool offlineProcessCacheValid(const ClipAddress& clip) const;
+    double clipPlaybackDuration(const ClipModel& clip) const;
+    const std::string& clipPlaybackFilePath(const ClipModel& clip) const;
+
+    struct OfflineRenderReport {
+        std::vector<std::string> files;
+        bool cancelled = false;
+    };
+    audio::Result renderClipsOffline(
+        const std::vector<ClipAddress>& clips, const ChannelSnapshot& chain,
+        bool includeTail,
+        const std::function<bool(const rendering::Progress&)>& onProgress,
+        OfflineRenderReport& out);
 
     /// Lift a channel's chain, with the rest of its strip when asked for.
     ChannelSnapshot copyChannelStrip(const std::string& channelId,
@@ -1872,6 +1945,7 @@ private:
     std::unordered_map<std::string, std::shared_ptr<engine::TapNode>> m_renderTaps;
     /// Whether those taps hang off `preFaderTap` instead of `meter`.
     bool m_renderTapsPreFader = false;
+    bool m_renderTapsAtSource = false;
     /// True for the duration of an offline render. `rebuildGraph` leaves the
     /// metronome out while it is set: the click is a monitoring aid, and it is
     /// gated on `context.playing`, which an offline pass asserts — so without
@@ -1922,6 +1996,12 @@ private:
         bool includeMaster = true,
         const std::string& fallbackPackageDir = {},
         bool tolerateStateErrors = false);
+    void loadOfflinePluginStates(const std::string& packageDir,
+                                 const std::string& fallbackPackageDir = {});
+    std::vector<InsertModel> cacheOfflineChain(
+        const std::vector<ChainSlotSnapshot>& chain);
+    std::uint64_t offlineFileFingerprint(const std::string& path) const;
+    std::string offlineSourceFingerprint(const ClipModel& clip) const;
     PluginRetiringFn m_pluginRetiring;
 
     std::vector<InsertModel>* mutableChannelInserts(const std::string& channelId);
@@ -2012,6 +2092,16 @@ private:
     /// Where the current playback run started; Restart mode returns here.
     double m_playAnchorSeconds = 0.0;
     std::string m_recordDir;
+    std::unordered_map<std::string, std::vector<std::uint8_t>>
+        m_offlinePluginStateCache;
+    struct OfflineFileFingerprintEntry {
+        std::uintmax_t size = 0;
+        std::int64_t modified = 0;
+        std::uint64_t signature = 0;
+        bool exists = false;
+    };
+    mutable std::unordered_map<std::string, OfflineFileFingerprintEntry>
+        m_offlineFileFingerprints;
     RecordingPrefs m_recording;
 
     /// One track's capture for the duration of a recording run.
@@ -2191,6 +2281,12 @@ private:
         std::size_t afterIndex = 0;
     };
 
+    struct PatternDurationOrigin {
+        std::string trackId;
+        double beforeDurationSeconds = 0.0;
+        double afterDurationSeconds = 0.0;
+    };
+
     struct ClipPositionEdit {
         bool active = false;
         // While a private-FX clip is temporarily between owners, keep both
@@ -2200,6 +2296,11 @@ private:
         // other ClipModel payload stay in place and are never copied for drag
         // history, even for very dense MIDI clips.
         std::unordered_map<std::string, ClipPositionOrigin> origins;
+        // A child MIDI clip may cross the right edge of its Pattern owner.
+        // Keep that one scalar in the same gesture so the container grows
+        // live and undo/redo restores both endpoints together.
+        std::unordered_map<std::string, PatternDurationOrigin>
+            patternDurations;
     };
     ClipPositionEdit m_clipPositionEdit;
 

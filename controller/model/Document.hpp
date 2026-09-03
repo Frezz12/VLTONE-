@@ -405,6 +405,51 @@ struct ClipMusicalAnalysisModel {
     bool empty() const noexcept { return algorithmVersion <= 0; }
 };
 
+/// A rendered clip may enter the graph after processing which is already
+/// printed into its file. The anchor is the original channel whose remaining
+/// downstream controls stay live; an empty/missing anchor falls back to the
+/// clip's owning audio track.
+enum class PlaybackInjectionStage : uint8_t {
+    None = 0,
+    TrackSource,
+    BeforeTrackFader,
+    BeforeFolderFader,
+    BeforeMasterFx,
+    BeforeMasterFader,
+};
+
+std::string toString(PlaybackInjectionStage stage);
+PlaybackInjectionStage playbackInjectionStageFromString(const std::string& name);
+
+struct PlaybackInjection {
+    PlaybackInjectionStage stage = PlaybackInjectionStage::None;
+    std::string anchorChannelId;
+
+    bool active() const noexcept {
+        return stage != PlaybackInjectionStage::None;
+    }
+};
+
+/// Non-destructive direct/offline processing. `renderedFilePath` is a cache;
+/// the clip's ordinary source/takes remain authoritative and are used whenever
+/// `sourceFingerprint` no longer matches them.
+struct OfflineProcessModel {
+    std::vector<InsertModel> chain;
+    std::string renderedFilePath;
+    AssetRef renderedAsset;
+    std::string sourceFingerprint;
+    double sourceDurationSeconds = 0.0;
+    double renderedDurationSeconds = 0.0;
+    bool includeTail = false;
+    double tailSilenceDb = -96.0;
+    double tailHoldSeconds = 0.3;
+    double tailMaxSeconds = 30.0;
+
+    bool empty() const noexcept {
+        return chain.empty() && renderedFilePath.empty();
+    }
+};
+
 struct ClipModel {
     std::string id;
     std::string name;
@@ -456,6 +501,12 @@ struct ClipModel {
     /// clip's player and before it joins the track, so neighbouring clips,
     /// monitored input and audio routed into the track bypass them.
     std::vector<InsertModel> inserts;
+    /// Cached direct-offline processing, applied before the ordinary realtime
+    /// clip inserts above.
+    OfflineProcessModel offlineProcess;
+    /// Semantic graph entry for Bounce in Place audio. Ordinary clips leave it
+    /// at None and follow the standard track path.
+    PlaybackInjection playbackInjection;
     /// Whether the comp editor is open on this clip in the arrangement.
     bool expanded = false;
     AssetRef asset;               // v6 cloud identity; filePath is legacy/cache
@@ -763,6 +814,14 @@ uint32_t takeColor(uint32_t base, size_t index);
 /// that decides which clips belong on which track, so drag-and-drop, the
 /// context menus and the controller all agree.
 bool trackAccepts(TrackKind kind, ClipKind clipKind);
+
+/// Whether a live recording can land on this track. Bus-style channels
+/// (including Aux, surfaced in the UI as Send) process routed signal but do
+/// not own clips or hardware inputs.
+inline bool acceptsRecording(const TrackModel& track) {
+    return trackAccepts(track.kind, ClipKind::Audio) ||
+           trackAccepts(track.kind, ClipKind::Midi);
+}
 
 /// True for any folder, summing or not — i.e. a track that exists to hold
 /// other tracks rather than to play anything of its own.

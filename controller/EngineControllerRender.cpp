@@ -137,6 +137,8 @@ audio::Result EngineController::renderProject(
         /// the vector, and this has to hold for the whole pass.
         std::unordered_map<std::string, bool> inserts;
         std::unordered_map<std::string, std::pair<bool, bool>> muteSolo;
+        std::unordered_map<std::string, bool> clipMutes;
+        std::unordered_map<std::string, bool> sends;
         bool touchedGraph = false;
 
         void restoreSlots(std::vector<InsertModel>& slots) {
@@ -162,7 +164,22 @@ audio::Result EngineController::renderProject(
                 track.muted = found->second.first;
                 track.soloed = found->second.second;
             }
+            for (TrackModel& track : owner->m_project.tracks) {
+                for (ClipModel& clip : track.clips) {
+                    if (const auto found = clipMutes.find(clip.id);
+                        found != clipMutes.end()) {
+                        clip.muted = found->second;
+                    }
+                }
+                for (SendModel& send : track.sends) {
+                    if (const auto found = sends.find(send.id);
+                        found != sends.end()) {
+                        send.enabled = found->second;
+                    }
+                }
+            }
             owner->m_renderTaps.clear();
+            owner->m_renderTapsAtSource = false;
             owner->m_renderingPass = false;
             if (rateChanged) owner->applyRenderSampleRate(sampleRate);
             if (touchedGraph || rateChanged) {
@@ -198,8 +215,95 @@ audio::Result EngineController::renderProject(
         }
         restore.touchedGraph = true;
     }
+    if (spec.bypassClipInserts && !spec.bypassChannelInserts) {
+        for (TrackModel& track : m_project.tracks)
+            for (ClipModel& clip : track.clips)
+                rememberAndBypass(clip.inserts);
+        restore.touchedGraph = true;
+    }
+    if (spec.bypassTrackInserts && !spec.bypassChannelInserts) {
+        const std::unordered_set<std::string> sources(
+            spec.sourceTrackIds.begin(), spec.sourceTrackIds.end());
+        for (TrackModel& track : m_project.tracks) {
+            const bool ordinarySource =
+                track.kind == TrackKind::Audio ||
+                track.kind == TrackKind::Midi ||
+                track.kind == TrackKind::Instrument ||
+                track.kind == TrackKind::Pattern;
+            if ((!sources.empty() && !sources.contains(track.id)) ||
+                (sources.empty() && !ordinarySource)) {
+                continue;
+            }
+            rememberAndBypass(track.inserts);
+            rememberAndBypass(track.samplerFx.inserts);
+        }
+        restore.touchedGraph = true;
+    }
+    if (spec.bypassSummingInserts && !spec.bypassChannelInserts) {
+        for (TrackModel& track : m_project.tracks) {
+            if (!track.summing && track.kind != TrackKind::Bus &&
+                track.kind != TrackKind::Group &&
+                track.kind != TrackKind::Folder) {
+                continue;
+            }
+            rememberAndBypass(track.inserts);
+        }
+        restore.touchedGraph = true;
+    }
+    if (spec.bypassSends) {
+        for (TrackModel& track : m_project.tracks) {
+            for (SendModel& send : track.sends) {
+                restore.sends.emplace(send.id, send.enabled);
+                send.enabled = false;
+            }
+        }
+        restore.touchedGraph = true;
+    }
     if (spec.bypassMasterChain) {
         rememberAndBypass(m_project.masterInserts);
+        restore.touchedGraph = true;
+    }
+
+    // Isolate the requested musical material without touching automation
+    // clips. Pattern owners admit their linked child MIDI clips as one source.
+    if (!spec.sourceClipIds.empty() || !spec.sourceTrackIds.empty()) {
+        const std::unordered_set<std::string> clipIds(
+            spec.sourceClipIds.begin(), spec.sourceClipIds.end());
+        const std::unordered_set<std::string> trackIds(
+            spec.sourceTrackIds.begin(), spec.sourceTrackIds.end());
+        std::unordered_set<std::string> patternOwners;
+        for (const TrackModel& track : m_project.tracks) {
+            if (!trackIds.empty() && !trackIds.contains(track.id)) continue;
+            for (const ClipModel& clip : track.clips)
+                if (clip.kind == ClipKind::Pattern)
+                    patternOwners.insert(clip.id);
+        }
+        patternOwners.insert(clipIds.begin(), clipIds.end());
+
+        std::unordered_set<std::string> sourceChannels = trackIds;
+        for (TrackModel& track : m_project.tracks) {
+            bool channelHasSource = false;
+            for (ClipModel& clip : track.clips) {
+                if (clip.kind == ClipKind::Automation) continue;
+                const bool allowed = !clipIds.empty()
+                    ? (clipIds.contains(clip.id) ||
+                       (!clip.patternClipId.empty() &&
+                        patternOwners.contains(clip.patternClipId)))
+                    : (trackIds.contains(track.id) ||
+                       (!clip.patternClipId.empty() &&
+                        patternOwners.contains(clip.patternClipId)));
+                restore.clipMutes.emplace(clip.id, clip.muted);
+                clip.muted = !allowed;
+                channelHasSource |= allowed;
+            }
+            if (channelHasSource) sourceChannels.insert(track.id);
+        }
+        for (TrackModel& track : m_project.tracks) {
+            restore.muteSolo.try_emplace(
+                track.id, std::pair{track.muted, track.soloed});
+            track.soloed = sourceChannels.contains(track.id);
+            if (track.soloed) track.muted = false;
+        }
         restore.touchedGraph = true;
     }
 
@@ -223,6 +327,7 @@ audio::Result EngineController::renderProject(
 
     // ── Taps ──
     m_renderTapsPreFader = spec.stemsPreFader;
+    m_renderTapsAtSource = spec.stemsAtSource;
     std::vector<std::string> stems;
     for (const std::string& channelId : spec.stemChannelIds) {
         if (!m_channels.contains(channelId)) continue;   // deleted since

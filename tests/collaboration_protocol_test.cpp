@@ -397,32 +397,32 @@ void serializerV7AndLegacyMigration(const fs::path& dir) {
     project.tracks.push_back(track);
 
     project.sampleRate = 96000.0;
-    const fs::path v7File = dir / "project-v7.json";
-    check(ProjectSerializer::saveDocument(project, v7File.string(),
+    const fs::path v8File = dir / "project-v8.json";
+    check(ProjectSerializer::saveDocument(project, v8File.string(),
                                           MediaPaths::Absolute)
               .isOk(),
-          "writes v7 project document");
-    const json saved = readJson(v7File);
-    check(saved.value("version", 0) == 7 &&
+          "writes v8 project document");
+    const json saved = readJson(v8File);
+    check(saved.value("version", 0) == 8 &&
               saved.value("renderSampleRate", 0.0) == 96000.0 &&
               !saved.contains("sampleRate"),
-          "v7 writer publishes a durable render sample rate");
+          "v8 writer publishes a durable render sample rate");
     const json& savedInsert = saved["tracks"][0]["inserts"][0];
     check(savedInsert.value("pluginVersion", "") == "1.0" &&
               savedInsert.value("stateSchemaVersion", 0) == 1,
-          "v7 writes plugin product and state schema versions");
+          "v8 writes plugin product and state schema versions");
     check(savedInsert["stateAsset"].value("assetId", "") == "asset-state" &&
               !savedInsert["stateAsset"].contains("audioMetadata"),
-          "v7 writes content-addressed plugin state");
+          "v8 writes content-addressed plugin state");
     check(saved["tracks"][0]["clips"][0]["asset"]["audioMetadata"]
                   .value("sampleRate", 0.0) == 48000.0 &&
               savedInsert["assetBindings"][0].value("key", "") == "sample",
-          "v7 nests audio metadata and writes plugin binding keys");
+          "v8 nests audio metadata and writes plugin binding keys");
 
     ProjectModel loaded;
-    check(ProjectSerializer::loadDocument(loaded, v7File.string(), dir.string())
+    check(ProjectSerializer::loadDocument(loaded, v8File.string(), dir.string())
               .isOk(),
-          "loads v7 project document");
+          "loads v8 project document");
     const InsertModel& loadedInsert = loaded.tracks[0].inserts[0];
     check(loaded.tracks[0].clips[0].asset == clip.asset &&
               loadedInsert.pluginVersion == "1.0" &&
@@ -430,7 +430,7 @@ void serializerV7AndLegacyMigration(const fs::path& dir) {
               loadedInsert.stateAsset == insert.stateAsset &&
               loadedInsert.assetBindings.size() == 1 &&
               loadedInsert.assetBindings[0].key == "sample",
-          "v7 asset and plugin compatibility fields round-trip");
+          "v8 asset and plugin compatibility fields round-trip");
 
     std::string memoryBytes;
     ProjectModel memoryLoaded;
@@ -442,13 +442,13 @@ void serializerV7AndLegacyMigration(const fs::path& dir) {
                   .isOk() &&
               memoryLoaded.tracks.size() == 1 &&
               memoryLoaded.tracks[0].clips[0].asset == clip.asset,
-          "in-memory v7 codec round-trips without filesystem access");
+          "in-memory v8 codec round-trips without filesystem access");
     std::string memoryBytesAgain;
     check(ProjectSerializer::serializeDocument(memoryLoaded,
                                                memoryBytesAgain)
                   .isOk() &&
               memoryBytesAgain == memoryBytes,
-          "in-memory v7 codec is canonical across replay");
+          "in-memory v8 codec is canonical across replay");
 }
 
 void commandWireRoundTrip() {
@@ -2389,6 +2389,16 @@ void routingPluginAssetReducerAndWire() {
                   gravity.id,
           "plugin chain ordering uses stable afterId anchors");
 
+    InsertModel graphit = builtinInsert("graphit", "daw.graphit");
+    check(apply("plugin-graphit-add",
+                AddPluginInsert{trackChain, graphit, gravity.id})
+                  .changed() &&
+              apply("plugin-graphit-param",
+                    SetPluginParameter{trackChain, graphit.id,
+                                       "amount", 0.72, false})
+                  .changed(),
+          "Graphit is accepted by the shared built-in allowlist");
+
     InsertModel sampler = builtinInsert("sampler", "daw.sampler");
     const PluginAssetBinding sample = sampler.assetBindings.front();
     sampler.assetBindings.clear();
@@ -2502,6 +2512,7 @@ void commandV2Contracts() {
     const std::string audioTrackId = trackId("v2-audio");
     const std::string midiTrackId = trackId("v2-midi");
     const std::string instrumentTrackId = trackId("v2-instrument");
+    const std::string patternTrackId = trackId("v2-pattern");
     const std::string audioClipId = testUuid("v2-clip", "audio");
     const std::string midiClipId = testUuid("v2-clip", "midi");
     const std::string patternClipId = testUuid("v2-clip", "pattern");
@@ -2545,7 +2556,10 @@ void commandV2Contracts() {
     instrument.samplerFx.ownerInstrumentId = instrument.instrument.id;
     InsertModel insert = builtinInsert("v2-insert", "daw.equalizer");
     instrument.inserts.push_back(insert);
-    state.project.tracks = {folder, audio, midi, instrument};
+    TrackModel patternTrack;
+    patternTrack.id = patternTrackId;
+    patternTrack.kind = TrackKind::Pattern;
+    state.project.tracks = {folder, audio, midi, instrument, patternTrack};
 
     const auto apply = [&](std::string label, CommandBody body) {
         ProjectCommand value = command(std::move(label), std::move(body));
@@ -2567,6 +2581,15 @@ void commandV2Contracts() {
                   .changed() &&
               state.project.findTrack(folderId)->summing,
           "folder summing has a typed shared property");
+    // Load-bearing for EngineController: a Pattern sums by definition and
+    // isSummingFolder() reports it without the field, so nothing may send this
+    // command for one. addPattern and appendSharedTrackContents both rely on
+    // the rejection here — a batch containing it would fail entirely.
+    check(apply("v2-pattern-summing",
+                SetTrackProperty{patternTrackId, TrackProperty::Summing, true})
+                  .code == ApplyCode::InvalidCommand &&
+              !state.project.findTrack(patternTrackId)->summing,
+          "summing is rejected for a Pattern, not just accepted quietly");
     check(apply("v2-clip-fade",
                 SetClipFade{audioTrackId, audioClipId, 0.25, 0.5})
                   .changed() &&

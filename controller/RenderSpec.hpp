@@ -71,13 +71,27 @@ struct Spec {
     /// Render dry: every insert on every channel bypassed for the pass. The
     /// instruments stay, so a MIDI track still makes its sound.
     bool bypassChannelInserts = false;
+    /// More precise internal-render switches used by Bounce in Place. Export
+    /// leaves all of them false and retains its historical behaviour.
+    bool bypassClipInserts = false;
+    bool bypassTrackInserts = false;
+    bool bypassSummingInserts = false;
+    bool bypassSends = false;
     bool bypassMasterChain = false;
+    /// Optional source isolation. Clip ids win when supplied; track ids mean
+    /// every musical clip on those tracks. Automation clips remain active so
+    /// the isolated signal is rendered with its current automation.
+    std::vector<std::string> sourceTrackIds;
+    std::vector<std::string> sourceClipIds;
     /// Render every channel as though nothing were muted or soloed.
     bool ignoreMuteSolo = false;
     /// Take stems from ahead of the fader, so each one arrives at unity with
     /// pan centred and mute ignored. The mixdown written in the same pass is
     /// unaffected — it still goes through every fader.
     bool stemsPreFader = false;
+    /// Internal bounce capture directly ahead of a channel's insert chain.
+    /// Mutually exclusive with `stemsPreFader`; ordinary Export never sets it.
+    bool stemsAtSource = false;
 };
 
 /// Where a render has got to, for a progress bar.

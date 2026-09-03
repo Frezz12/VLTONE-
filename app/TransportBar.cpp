@@ -19,20 +19,22 @@
 #include <QEasingCurve>
 #include <QFontDatabase>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLinearGradient>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QResizeEvent>
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QToolButton>
 #include <QVariantAnimation>
-#include <QVBoxLayout>
 
 #include <cmath>
 #include <functional>
@@ -51,6 +53,19 @@ QFont monoFont(int pixelSize, bool bold = false) {
     f.setPixelSize(pixelSize);
     f.setBold(bold);
     return f;
+}
+
+// The original LCD proportions: a 38 px glass plate with enough in-widget
+// room for its soft shadow.
+constexpr int kLcdHeight = 38;
+constexpr int kLcdShadow = 6;
+
+QString gridDivisionName(const ui::GridDivision& division) {
+    if (division.beats < 0.0)
+        return QCoreApplication::translate("TransportBar", "Adaptive");
+    if (division.beats == 0.0)
+        return QCoreApplication::translate("TransportBar", "Off");
+    return division.name;
 }
 
 /// A tempo number with the interaction used by DAWs and graphics tools: drag
@@ -95,6 +110,7 @@ protected:
         bool ok = false;
         m_startValue = text().replace(',', '.').toDouble(&ok);
         if (!ok) m_startValue = 120.0;
+        m_startValue = std::round(m_startValue);
         m_currentValue = m_startValue;
         m_pressGlobalY = event->globalPosition().y();
         m_pressed = true;
@@ -114,11 +130,11 @@ protected:
             return;
         }
         m_dragging = true;
-        // One pixel is a tenth of a BPM; Shift gives a gentler five-pixel
-        // throw per tenth for detailed tempo matching.
-        const double perPixel = event->modifiers() & Qt::ShiftModifier ? 0.02 : 0.1;
+        // Scrubbing is deliberately quantised to whole BPM. Decimal tempo is
+        // still available through the explicit double-click text entry path.
+        const double perPixel = event->modifiers() & Qt::ShiftModifier ? 0.08 : 0.25;
         const double raw = std::clamp(m_startValue + delta * perPixel, 20.0, 300.0);
-        const double value = std::round(raw * 10.0) / 10.0;
+        const double value = std::round(raw);
         if (value != m_currentValue) {
             m_currentValue = value;
             if (m_callback) m_callback(value, false);
@@ -181,10 +197,131 @@ private:
     bool m_dragging = false;
 };
 
-// The readout plate: its inner height, plus the margin its shadow needs inside
-// its own rect (a child can't paint outside itself).
-constexpr int kLcdHeight = 38;
-constexpr int kLcdShadow = 6;
+/// Read-only during normal transport use, but vertically scrubbable. A
+/// double-click temporarily turns it into a normal text field, which is also
+/// the single-pointer alternative to dragging.
+class PositionScrubEdit final : public QLineEdit {
+public:
+    using SecondsGetter = std::function<double()>;
+    using SeekCallback = std::function<void(double)>;
+
+    explicit PositionScrubEdit(const QString& value, QWidget* parent = nullptr)
+        : QLineEdit(value, parent) {
+        setReadOnly(true);
+        setFocusPolicy(Qt::NoFocus);
+        setCursor(Qt::SizeVerCursor);
+    }
+
+    void setScrubCallbacks(SecondsGetter getter, SeekCallback seek) {
+        m_seconds = std::move(getter);
+        m_seek = std::move(seek);
+    }
+
+    void endTextEditing() {
+        if (isReadOnly()) return;
+        setReadOnly(true);
+        setFocusPolicy(Qt::NoFocus);
+        setCursor(Qt::SizeVerCursor);
+        style()->unpolish(this);
+        style()->polish(this);
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent* event) override {
+        if (!isReadOnly() || event->button() != Qt::LeftButton) {
+            QLineEdit::mousePressEvent(event);
+            return;
+        }
+        m_startSeconds = m_seconds ? std::max(0.0, m_seconds()) : 0.0;
+        m_currentSeconds = m_startSeconds;
+        m_pressGlobalY = event->globalPosition().y();
+        m_pressed = true;
+        m_dragging = false;
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override {
+        if (!m_pressed || !(event->buttons() & Qt::LeftButton)) {
+            QLineEdit::mouseMoveEvent(event);
+            return;
+        }
+        const qreal delta = m_pressGlobalY - event->globalPosition().y();
+        if (!m_dragging && std::abs(delta) < 3.0) {
+            event->accept();
+            return;
+        }
+        m_dragging = true;
+        const double secondsPerPixel =
+            event->modifiers() & Qt::ShiftModifier ? 0.01 : 0.10;
+        const double seconds = std::max(0.0, m_startSeconds +
+                                                delta * secondsPerPixel);
+        if (std::abs(seconds - m_currentSeconds) >= 0.0001) {
+            m_currentSeconds = seconds;
+            if (m_seek) m_seek(seconds);
+        }
+        event->accept();
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override {
+        if (!m_pressed || event->button() != Qt::LeftButton) {
+            QLineEdit::mouseReleaseEvent(event);
+            return;
+        }
+        m_pressed = false;
+        m_dragging = false;
+        setCursor(Qt::SizeVerCursor);
+        event->accept();
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* event) override {
+        if (event->button() != Qt::LeftButton) {
+            QLineEdit::mouseDoubleClickEvent(event);
+            return;
+        }
+        m_pressed = false;
+        m_dragging = false;
+        m_textBeforeEdit = text();
+        setReadOnly(false);
+        setFocusPolicy(Qt::StrongFocus);
+        setCursor(Qt::IBeamCursor);
+        setFocus(Qt::MouseFocusReason);
+        selectAll();
+        style()->unpolish(this);
+        style()->polish(this);
+        event->accept();
+    }
+
+    void keyPressEvent(QKeyEvent* event) override {
+        if (!isReadOnly() && event->key() == Qt::Key_Escape) {
+            setText(m_textBeforeEdit);
+            clearFocus();
+            endTextEditing();
+            event->accept();
+            return;
+        }
+        QLineEdit::keyPressEvent(event);
+    }
+
+private:
+    SecondsGetter m_seconds;
+    SeekCallback m_seek;
+    QString m_textBeforeEdit;
+    qreal m_pressGlobalY = 0.0;
+    double m_startSeconds = 0.0;
+    double m_currentSeconds = 0.0;
+    bool m_pressed = false;
+    bool m_dragging = false;
+};
+
+QString tempoText(double bpm) {
+    if (std::abs(bpm - std::round(bpm)) < 0.000001)
+        return QString::number(qRound64(bpm));
+    QString value = QString::number(bpm, 'f', 3);
+    while (value.endsWith(QLatin1Char('0'))) value.chop(1);
+    if (value.endsWith(QLatin1Char('.'))) value.chop(1);
+    return value;
+}
 
 struct ToolDef { icons::Glyph glyph; const char* name; };
 const ToolDef kTools[] = {
@@ -194,6 +331,8 @@ const ToolDef kTools[] = {
     {icons::Glyph::Crosshair, QT_TRANSLATE_NOOP("TransportBar", "Region")},
     {icons::Glyph::Power, QT_TRANSLATE_NOOP("TransportBar", "Mute")},
     {icons::Glyph::Brush, QT_TRANSLATE_NOOP("TransportBar", "Draw")},
+    {icons::Glyph::ResizeHorizontal,
+     QT_TRANSLATE_NOOP("TransportBar", "Stretch")},
 };
 constexpr int kToolCount = int(sizeof(kTools) / sizeof(kTools[0]));
 
@@ -201,15 +340,133 @@ QString translatedToolName(int index) {
     return QCoreApplication::translate("TransportBar", kTools[index].name);
 }
 
-QLabel* capLabel(const QString& text) {
-    auto* l = new QLabel(text);
-    QFont f = l->font();
-    f.setPixelSize(9);
-    f.setBold(true);
-    f.setLetterSpacing(QFont::AbsoluteSpacing, 0.6);
-    l->setFont(f);
-    return l;
+QIcon toolIcon(int index, const QColor& color, int size) {
+    if (index == 0) return icons::svgIcon(QStringLiteral("cursor.svg"), color, size);
+    if (index == 1) return icons::svgIcon(QStringLiteral("knife.svg"), color, size);
+    return icons::icon(kTools[index].glyph, color, size);
 }
+
+QIcon toolChipIcon(int index, const QColor& color) {
+    QIcon result;
+    for (int scale = 1; scale <= 3; ++scale) {
+        QPixmap pixmap(24 * scale, 18 * scale);
+        pixmap.setDevicePixelRatio(scale);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        icons::svgIcon(QStringLiteral("caret-down.svg"), color, 7)
+            .paint(&painter, QRect(0, 6, 7, 7));
+        toolIcon(index, color, 16).paint(&painter, QRect(8, 1, 16, 16));
+        painter.end();
+        result.addPixmap(pixmap);
+    }
+    return result;
+}
+
+void paintHeaderInsetSurface(QWidget* surface) {
+    QPainter painter(surface);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const Theme& t = th();
+    const QRectF panel = QRectF(surface->rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    QPainterPath shape;
+    shape.addRoundedRect(panel, 9, 9);
+
+    const QColor base = mixColors(t.headerBackground, t.surfaceElevated, 0.48);
+    QLinearGradient fill(0, panel.top(), 0, panel.bottom());
+    fill.setColorAt(0.0, mixColors(base, t.textPrimary, 0.045));
+    fill.setColorAt(1.0, mixColors(base, t.background, 0.10));
+    painter.fillPath(shape, fill);
+
+    // Dark at the upper edge and a hairline reflected edge below are the two
+    // cues that make the surface read as inset rather than floating glass.
+    const QColor rim = mixColors(t.separator(), t.headerBackground, 0.24);
+    painter.setPen(QPen(rim, 1));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(shape);
+
+    painter.save();
+    painter.setClipPath(shape);
+    QColor upper = t.background;
+    upper.setAlpha(150);
+    painter.setPen(QPen(upper, 1));
+    painter.drawLine(QPointF(panel.left() + 8, panel.top() + 1),
+                     QPointF(panel.right() - 8, panel.top() + 1));
+    QColor lower = t.textPrimary;
+    lower.setAlpha(18);
+    painter.setPen(QPen(lower, 1));
+    painter.drawLine(QPointF(panel.left() + 8, panel.bottom() - 1),
+                     QPointF(panel.right() - 8, panel.bottom() - 1));
+    painter.restore();
+}
+
+/// The LCD's recessed socket. The outer GlassPanel supplies refraction and a
+/// soft shadow; this inner layer supplies the dark cavity, inset bevel, and a
+/// restrained reflected edge without turning each value into another pill.
+class LcdInsetWell final : public QWidget {
+public:
+    explicit LcdInsetWell(QWidget* parent = nullptr) : QWidget(parent) {
+        setAttribute(Qt::WA_StyledBackground, false);
+        connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+                QOverload<>::of(&QWidget::update));
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const Theme& theme = th();
+        const QRectF cavity = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        constexpr qreal radius = 7.0;
+        QPainterPath shape;
+        shape.addRoundedRect(cavity, radius, radius);
+
+        QLinearGradient depth(0, cavity.top(), 0, cavity.bottom());
+        depth.setColorAt(0.0,
+                         mixColors(theme.well(), theme.background, 0.46));
+        depth.setColorAt(0.46,
+                         mixColors(theme.well(), theme.background, 0.25));
+        depth.setColorAt(1.0,
+                         mixColors(theme.well(), theme.surfaceElevated, 0.16));
+        painter.fillPath(shape, depth);
+
+        painter.save();
+        painter.setClipPath(shape);
+        QColor innerShadow = theme.background;
+        innerShadow.setAlpha(theme.dark ? 185 : 72);
+        painter.setPen(QPen(innerShadow, 1.2));
+        painter.drawLine(QPointF(cavity.left() + radius, cavity.top() + 1),
+                         QPointF(cavity.right() - radius, cavity.top() + 1));
+        painter.drawLine(QPointF(cavity.left() + 1, cavity.top() + radius),
+                         QPointF(cavity.left() + 1,
+                                 cavity.bottom() - radius));
+
+        QColor reflection = theme.textPrimary;
+        reflection.setAlpha(theme.dark ? 22 : 72);
+        painter.setPen(QPen(reflection, 1.0));
+        painter.drawLine(QPointF(cavity.left() + radius,
+                                 cavity.bottom() - 1),
+                         QPointF(cavity.right() - radius,
+                                 cavity.bottom() - 1));
+
+        QLinearGradient sheen(0, cavity.top() + 2, 0, cavity.center().y());
+        sheen.setColorAt(0.0,
+                         QColor(255, 255, 255, theme.dark ? 18 : 54));
+        sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(sheen);
+        painter.drawRoundedRect(cavity.adjusted(2, 2, -2,
+                                                 -cavity.height() * 0.48),
+                                radius - 2, radius - 2);
+        painter.restore();
+
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(mixColors(theme.separator(), theme.background,
+                                     theme.dark ? 0.38 : 0.18),
+                            1.0));
+        painter.drawPath(shape);
+    }
+};
 
 /// A shallow well punched into the header. The left instance can crop its
 /// action row down to one disclosure button; animating the well itself (rather
@@ -271,41 +528,7 @@ public:
     }
 
 protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-
-        const Theme& t = th();
-        const QRectF panel = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        QPainterPath shape;
-        shape.addRoundedRect(panel, 9, 9);
-
-        QLinearGradient well(0, panel.top(), 0, panel.bottom());
-        well.setColorAt(0.0, mixColors(t.well(), t.headerBackground, 0.18));
-        well.setColorAt(1.0, mixColors(t.well(), t.surfaceElevated, 0.16));
-        painter.fillPath(shape, well);
-
-        // Dark at the upper edge and a hairline reflected edge below are the
-        // two cues that make this read as inset, not as another floating pill.
-        const QColor rim = mixColors(t.separator(), t.well(), 0.34);
-        painter.setPen(QPen(rim, 1));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawPath(shape);
-
-        painter.save();
-        painter.setClipPath(shape);
-        QColor upper = t.background;
-        upper.setAlpha(150);
-        painter.setPen(QPen(upper, 1));
-        painter.drawLine(QPointF(panel.left() + 8, panel.top() + 1),
-                         QPointF(panel.right() - 8, panel.top() + 1));
-        QColor lower = t.textPrimary;
-        lower.setAlpha(18);
-        painter.setPen(QPen(lower, 1));
-        painter.drawLine(QPointF(panel.left() + 8, panel.bottom() - 1),
-                         QPointF(panel.right() - 8, panel.bottom() - 1));
-        painter.restore();
-    }
+    void paintEvent(QPaintEvent*) override { paintHeaderInsetSurface(this); }
 
 private:
     void setExpanded(bool expanded, bool animate) {
@@ -390,9 +613,9 @@ TransportBar::TransportBar(daw::EngineController* controller, QWidget* parent)
     setFixedHeight(ui::kTransportHeight);
     setAttribute(Qt::WA_StyledBackground, false);
 
-    // Build the trailing controls first, then place all three parts into one
-    // floating cluster. Keeping them under one layout is what guarantees that
-    // the gaps around the LCD stay equal and the whole header reads centred.
+    // Build the trailing controls first, then restore the original three-part
+    // composition: transport, glass LCD, and editing tools. Their shared
+    // wrapper centres the complete cluster rather than any individual block.
     m_rightGroup = buildRightGroup();
     m_pill = buildPill();
     m_pill->setParent(this);
@@ -411,6 +634,7 @@ TransportBar::TransportBar(daw::EngineController* controller, QWidget* parent)
             &TransportBar::applyTheme);
     applyTheme();
     syncTempo();
+    syncTimeSignature();
     updateResponsiveLayout();
     if (m_controller) m_controller->addMasterSpectrumConsumer();
 }
@@ -524,25 +748,50 @@ QWidget* TransportBar::buildRightDock() {
 
 QWidget* TransportBar::buildRightGroup() {
     auto* box = new QWidget(this);
-    box->setObjectName("HeaderToolGroup");
+    box->setObjectName(QStringLiteral("HeaderToolGroup"));
+    box->setAccessibleName(tr("Editing tools"));
+    box->setAttribute(Qt::WA_StyledBackground, true);
     box->setFixedHeight(32);
     auto* row = new QHBoxLayout(box);
     row->setContentsMargins(4, 2, 4, 2);
     row->setSpacing(2);
 
-    // Time format and grid stay closest to the transport, but now read as
-    // compact icon commands. Their checked menu items and tooltips carry the
-    // current value without making the header continually reserve text width.
+    m_gridButton = new QToolButton(box);
+    m_gridButton->setObjectName(QStringLiteral("GridChip"));
+    m_gridButton->setPopupMode(QToolButton::InstantPopup);
+    m_gridButton->setCursor(Qt::PointingHandCursor);
+    m_gridButton->setFocusPolicy(Qt::StrongFocus);
+    m_gridButton->setFixedSize(60, 28);
+    m_gridButton->setIconSize(QSize(15, 15));
+    m_gridButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    auto* gridMenu = new QMenu(m_gridButton);
+    auto* gridGroup = new QActionGroup(gridMenu);
+    gridGroup->setExclusive(true);
+    const auto& divisions = ui::gridDivisions();
+    for (int i = 0; i < divisions.size(); ++i) {
+        QAction* action = gridMenu->addAction(gridDivisionName(divisions[i]));
+        action->setCheckable(true);
+        action->setChecked(i == m_gridIndex);
+        action->setData(i);
+        gridGroup->addAction(action);
+        connect(action, &QAction::triggered, this,
+                [this, i] { setGridIndex(i); });
+    }
+    m_gridButton->setMenu(gridMenu);
+    m_gridButton->setText(gridDivisionName(divisions[m_gridIndex]));
+    const QString gridDescription =
+        tr("Grid division — %1").arg(gridDivisionName(divisions[m_gridIndex]));
+    m_gridButton->setToolTip(gridDescription);
+    m_gridButton->setAccessibleName(gridDescription);
+
     m_timeFormatButton = new QToolButton(box);
-    m_timeFormatButton->setObjectName("GridChip");
+    m_timeFormatButton->setObjectName(QStringLiteral("GridChip"));
     m_timeFormatButton->setPopupMode(QToolButton::InstantPopup);
     m_timeFormatButton->setCursor(Qt::PointingHandCursor);
-    m_timeFormatButton->setFixedSize(28, 24);
-    m_timeFormatButton->setIconSize(QSize(14, 14));
-    m_timeFormatButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    m_timeFormatButton->setIcon(
-        icons::icon(icons::Glyph::TimeFormat, th().textSecondary, 14));
-
+    m_timeFormatButton->setFocusPolicy(Qt::StrongFocus);
+    m_timeFormatButton->setFixedSize(64, 28);
+    m_timeFormatButton->setIconSize(QSize(15, 15));
+    m_timeFormatButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     auto* timeMenu = new QMenu(m_timeFormatButton);
     auto* timeGroup = new QActionGroup(timeMenu);
     timeGroup->setExclusive(true);
@@ -561,42 +810,18 @@ QWidget* TransportBar::buildRightGroup() {
                 [this, bars] { setTimeDisplayBars(bars); });
     }
     m_timeFormatButton->setMenu(timeMenu);
+    m_timeFormatButton->setText(m_showBars ? tr("Bars") : tr("Time"));
     const QString timeDescription =
-        tr("Time display — %1").arg(m_showBars ? tr("Bars") : tr("Time"));
+        tr("Time display — %1").arg(m_timeFormatButton->text());
     m_timeFormatButton->setToolTip(timeDescription);
     m_timeFormatButton->setAccessibleName(timeDescription);
 
-    m_gridButton = new QToolButton(box);
-    m_gridButton->setObjectName("GridChip");
-    m_gridButton->setPopupMode(QToolButton::InstantPopup);
-    m_gridButton->setCursor(Qt::PointingHandCursor);
-    m_gridButton->setFixedSize(28, 24);
-    m_gridButton->setIconSize(QSize(14, 14));
-    m_gridButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    m_gridButton->setIcon(
-        icons::icon(icons::Glyph::GridDivision, th().textSecondary, 14));
-
-    auto* gridMenu = new QMenu(m_gridButton);
-    auto* gridGroup = new QActionGroup(gridMenu);
-    gridGroup->setExclusive(true);
-    const auto& divisions = ui::gridDivisions();
-    for (int i = 0; i < divisions.size(); ++i) {
-        QAction* action = gridMenu->addAction(divisions[i].name);
-        action->setCheckable(true);
-        action->setChecked(i == m_gridIndex);
-        action->setData(i);
-        gridGroup->addAction(action);
-        connect(action, &QAction::triggered, this,
-                [this, i] { setGridIndex(i); });
-    }
-    m_gridButton->setMenu(gridMenu);
-    const QString gridDescription =
-        tr("Grid division — %1").arg(divisions[m_gridIndex].name);
-    m_gridButton->setToolTip(gridDescription);
-    m_gridButton->setAccessibleName(gridDescription);
-
-    m_snapButton = new ui::IconButton(icons::Glyph::Magnet, tr("Snap to grid"), box);
+    m_snapButton = new ui::IconButton(icons::Glyph::Magnet, tr("Snap to grid"),
+                                      box);
+    m_snapButton->setObjectName(QStringLiteral("SnapButton"));
     m_snapButton->setAccessibleName(tr("Snap to grid"));
+    m_snapButton->setFocusPolicy(Qt::StrongFocus);
+    m_snapButton->setButtonSize(28, 28);
     m_snapButton->setCheckable(true);
     m_snapButton->setChecked(m_snapEnabled);
     connect(m_snapButton, &QAbstractButton::toggled, this, [this](bool on) {
@@ -604,33 +829,32 @@ QWidget* TransportBar::buildRightGroup() {
         emit snapChanged(on);
     });
 
-    m_typingKeysButton = new ui::IconButton(icons::Glyph::MidiKeys,
-                                            QString(), box);
+    m_typingKeysButton = new ui::IconButton(icons::Glyph::MidiKeys, QString(),
+                                            box);
+    m_typingKeysButton->setObjectName(QStringLiteral("MidiKeyboardButton"));
+    m_typingKeysButton->setFocusPolicy(Qt::StrongFocus);
+    m_typingKeysButton->setButtonSize(28, 28);
     m_typingKeysButton->setCheckable(true);
-    setTypingKeyboardOctave(m_typingOctave);   // writes the tooltip
+    setTypingKeyboardOctave(m_typingOctave);
     connect(m_typingKeysButton, &QAbstractButton::toggled, this,
             &TransportBar::typingKeyboardToggled);
 
-    // Two tools, the way a Logic user works: the one on the pointer, and the
-    // one the modifier borrows. Both are icon chips — a tool is a picture, and
-    // spelling it out cost more width than it explained. The name is in the
-    // menu and in the tooltip.
     auto buildToolChip = [this, box](bool primary) {
         auto* chip = new QToolButton(box);
         chip->setObjectName(primary ? "PrimaryToolChip" : "SecondaryToolChip");
         chip->setPopupMode(QToolButton::InstantPopup);
         chip->setCursor(Qt::PointingHandCursor);
-        chip->setFixedSize(28, 24);
+        chip->setFocusPolicy(Qt::StrongFocus);
+        chip->setFixedSize(36, 28);
         chip->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        chip->setIconSize(QSize(15, 15));
+        chip->setIconSize(QSize(24, 18));
 
         auto* menu = new QMenu(chip);
         auto* group = new QActionGroup(menu);
         group->setExclusive(true);
         for (int i = 0; i < kToolCount; ++i) {
             QAction* action = menu->addAction(
-                icons::icon(kTools[i].glyph, th().textSecondary, 14),
-                translatedToolName(i));
+                toolIcon(i, th().textPrimary, 14), translatedToolName(i));
             action->setCheckable(true);
             group->addAction(action);
             (primary ? m_toolActions : m_altToolActions).push_back(action);
@@ -648,12 +872,16 @@ QWidget* TransportBar::buildRightGroup() {
     setToolIndex(m_toolIndex);
     setSecondaryToolIndex(m_altToolIndex);
 
-    row->addWidget(m_timeFormatButton);
+    auto* firstDivider = ui::separatorLine(Qt::Vertical, 20, box);
+    firstDivider->setObjectName(QStringLiteral("ToolGroupDivider"));
+    auto* secondDivider = ui::separatorLine(Qt::Vertical, 20, box);
+    secondDivider->setObjectName(QStringLiteral("ToolGroupDivider"));
     row->addWidget(m_gridButton);
-    row->addWidget(ui::separatorLine(Qt::Vertical, 22, box));
+    row->addWidget(m_timeFormatButton);
+    row->addWidget(firstDivider, 0, Qt::AlignVCenter);
     row->addWidget(m_snapButton);
     row->addWidget(m_typingKeysButton);
-    row->addWidget(ui::separatorLine(Qt::Vertical, 22, box));
+    row->addWidget(secondDivider, 0, Qt::AlignVCenter);
     row->addWidget(m_toolButton);
     row->addWidget(m_altToolButton);
     return box;
@@ -661,132 +889,147 @@ QWidget* TransportBar::buildRightGroup() {
 
 QWidget* TransportBar::buildPill() {
     auto* pill = new QWidget(this);
-    pill->setObjectName("TransportPill");
+    pill->setObjectName(QStringLiteral("TransportPill"));
+    pill->setAccessibleName(tr("Transport console"));
     pill->setFixedHeight(56);
 
     auto* row = new QHBoxLayout(pill);
     row->setContentsMargins(12, 0, 12, 0);
     row->setSpacing(10);
 
+    auto* transportPanel = new QWidget(pill);
+    m_transportGroup = transportPanel;
+    m_transportGroup->setObjectName(QStringLiteral("TransportGroup"));
+    m_transportGroup->setAccessibleName(tr("Transport controls"));
+    m_transportGroup->setAttribute(Qt::WA_StyledBackground, true);
+    m_transportGroup->setFixedHeight(28);
+    auto* buttonRow = new QHBoxLayout(m_transportGroup);
+    buttonRow->setContentsMargins(8, 0, 8, 0);
+    buttonRow->setSpacing(3);
+
     constexpr int kBtn = 24;
     m_toStartButton = new ui::IconButton(icons::Glyph::SkipStart,
-                                         tr("Return to start"), pill);
+                                         tr("Return to start"), transportPanel);
+    m_toStartButton->setObjectName(QStringLiteral("TransportToStart"));
     m_toStartButton->setButtonSize(kBtn, kBtn);
     connect(m_toStartButton, &QAbstractButton::clicked, this,
             &TransportBar::returnToStartRequested);
 
     m_rewindButton = new ui::IconButton(icons::Glyph::Rewind,
-                                        tr("Rewind one bar"), pill);
+                                        tr("Rewind one bar"), transportPanel);
+    m_rewindButton->setObjectName(QStringLiteral("TransportRewind"));
     m_rewindButton->setButtonSize(kBtn, kBtn);
     connect(m_rewindButton, &QAbstractButton::clicked, this,
             [this] { emit nudgeRequested(-1); });
 
-    m_stopButton = new ui::IconButton(icons::Glyph::Stop, tr("Stop"), pill);
+    m_stopButton = new ui::IconButton(icons::Glyph::Stop, tr("Stop"),
+                                      transportPanel);
+    m_stopButton->setObjectName(QStringLiteral("TransportStop"));
     m_stopButton->setButtonSize(kBtn, kBtn);
     connect(m_stopButton, &QAbstractButton::clicked, this,
             &TransportBar::stopRequested);
 
     // Play stays the primary action but flat — an accent-tinted glyph, not a
     // filled circle, so the transport block reads slim.
-    m_playButton = new ui::IconButton(icons::Glyph::Play, tr("Play"), pill);
+    m_playButton = new ui::IconButton(icons::Glyph::Play, tr("Play"),
+                                      transportPanel);
+    m_playButton->setObjectName(QStringLiteral("TransportPlay"));
     m_playButton->setAccentTint(true);
     m_playButton->setButtonSize(kBtn, kBtn);
     connect(m_playButton, &QAbstractButton::clicked, this,
             &TransportBar::playPauseRequested);
 
     m_forwardButton = new ui::IconButton(icons::Glyph::Forward,
-                                         tr("Forward one bar"), pill);
+                                         tr("Forward one bar"), transportPanel);
+    m_forwardButton->setObjectName(QStringLiteral("TransportForward"));
     m_forwardButton->setButtonSize(kBtn, kBtn);
     connect(m_forwardButton, &QAbstractButton::clicked, this,
             [this] { emit nudgeRequested(1); });
 
-    m_recordButton = new ui::IconButton(icons::Glyph::Record, tr("Record"), pill);
+    m_recordButton = new ui::IconButton(icons::Glyph::Record, tr("Record"),
+                                        transportPanel);
+    m_recordButton->setObjectName(QStringLiteral("TransportRecord"));
     m_recordButton->setCheckable(true);
     m_recordButton->setActiveColor(Theme::record());
+    m_recordButton->setIdleColor(Theme::record());
     m_recordButton->setButtonSize(kBtn, kBtn);
     connect(m_recordButton, &QAbstractButton::clicked, this,
             &TransportBar::recordRequested);
 
-    m_loopButton = new ui::IconButton(icons::Glyph::Loop, tr("Cycle / loop"), pill);
+    m_loopButton = new ui::IconButton(icons::Glyph::Loop, tr("Cycle / loop"),
+                                      transportPanel);
+    m_loopButton->setObjectName(QStringLiteral("TransportLoop"));
     m_loopButton->setCheckable(true);
     m_loopButton->setButtonSize(kBtn, kBtn);
     connect(m_loopButton, &QAbstractButton::toggled, this,
             &TransportBar::loopToggled);
 
     m_metroButton = new ui::IconButton(icons::Glyph::Metronome,
-                                       tr("Metronome"), pill);
+                                       tr("Metronome"), transportPanel);
+    m_metroButton->setObjectName(QStringLiteral("TransportMetronome"));
     m_metroButton->setCheckable(true);
     m_metroButton->setButtonSize(kBtn, kBtn);
     connect(m_metroButton, &QAbstractButton::toggled, this,
             &TransportBar::metronomeToggled);
 
-    // The transport buttons (return-to-start … metronome) live in their own
-    // rounded sub-block — a nested panel on the header, like Logic's transport.
-    m_transportGroup = new QWidget(pill);
-    m_transportGroup->setObjectName("TransportGroup");
-    m_transportGroup->setFixedHeight(28);   // match the Bars / grid chips
-    auto* btnRow = new QHBoxLayout(m_transportGroup);
-    btnRow->setContentsMargins(8, 0, 8, 0);
-    btnRow->setSpacing(3);
-    btnRow->addWidget(m_toStartButton);
-    btnRow->addWidget(m_rewindButton);
-    btnRow->addWidget(m_stopButton);
-    btnRow->addWidget(m_playButton);
-    btnRow->addWidget(m_forwardButton);
-    btnRow->addWidget(m_recordButton);
-    btnRow->addWidget(m_loopButton);
-    btnRow->addWidget(m_metroButton);
+    const QList<ui::IconButton*> transportButtons{
+        m_toStartButton, m_rewindButton, m_stopButton, m_playButton,
+        m_forwardButton, m_recordButton, m_loopButton, m_metroButton};
+    for (ui::IconButton* button : transportButtons) {
+        button->setFocusPolicy(Qt::StrongFocus);
+        buttonRow->addWidget(button);
+    }
 
-    row->addWidget(m_transportGroup);
-    m_lcdScreen = buildLcd();
-    row->addWidget(m_lcdScreen);
-    row->addWidget(m_rightGroup);
-    pill->adjustSize();
-    return pill;
-}
+    auto* centerPanel = new ui::GlassPanel(pill);
+    m_lcdScreen = centerPanel;
+    m_lcdScreen->setObjectName(QStringLiteral("LcdScreen"));
+    m_lcdScreen->setAccessibleName(tr("Project transport settings"));
+    centerPanel->setShadowMargin(kLcdShadow);
+    centerPanel->setCornerRadius(9);
+    centerPanel->setSubtleVerticalGradient(true);
+    centerPanel->setFixedHeight(kLcdHeight + 2 * kLcdShadow);
+    auto* glassRow = new QHBoxLayout(centerPanel);
+    glassRow->setContentsMargins(kLcdShadow + 5, kLcdShadow,
+                                 kLcdShadow + 5, kLcdShadow);
+    glassRow->setSpacing(0);
 
-QWidget* TransportBar::buildLcd() {
-    // The readout: bar.beat.ticks and the tempo, side by side on one baseline,
-    // in a well the same height as the transport buttons and the grid chips it
-    // sits between. No captions — a monospaced "3.2.480" next to "124.0 BPM"
-    // says what each one is, and the two stacked caption/value columns this
-    // replaced were what made the whole pill look misaligned.
-    // Liquid glass, the same plate the context island is made of: the readout
-    // is the one thing in the header that should look like it is floating over
-    // the interface rather than stamped into it.
-    auto* screen = new ui::GlassPanel(m_pill ? m_pill : this);
-    screen->setObjectName("LcdScreen");
-    screen->setShadowMargin(kLcdShadow);
-    screen->setCornerRadius(9);
-    screen->setSubtleVerticalGradient(true);
-    screen->setFixedHeight(kLcdHeight + 2 * kLcdShadow);
-    auto* row = new QHBoxLayout(screen);
-    row->setContentsMargins(kLcdShadow + 13, kLcdShadow, kLcdShadow + 9,
-                            kLcdShadow);
-    row->setSpacing(10);
+    auto* insetWell = new LcdInsetWell(centerPanel);
+    insetWell->setObjectName(QStringLiteral("LcdInsetWell"));
+    insetWell->setFixedHeight(34);
+    auto* centerRow = new QHBoxLayout(insetWell);
+    centerRow->setContentsMargins(5, 3, 5, 3);
+    centerRow->setSpacing(5);
+    glassRow->addWidget(insetWell);
 
-    m_positionValue = new QLabel("1.1.000", screen);
-    m_positionValue->setObjectName("LcdPosition");
-    m_positionValue->setFont(monoFont(15, true));
-    m_positionValue->setFixedSize(112, 28);
-    m_positionValue->setAlignment(Qt::AlignCenter);
-    m_positionValue->setAccessibleName(tr("Playhead position"));
-    m_positionValue->setToolTip(tr("Playhead position — bar.beat.ticks"));
-    row->addWidget(m_positionValue);
+    const auto addDisplayDivider = [insetWell, centerRow] {
+        QWidget* divider = ui::separatorLine(Qt::Vertical, 20, insetWell);
+        divider->setObjectName(QStringLiteral("LcdDivider"));
+        centerRow->addWidget(divider, 0, Qt::AlignVCenter);
+    };
 
-    row->addWidget(ui::separatorLine(Qt::Vertical, 22, screen));
+    m_positionGroup = buildPositionGroup();
+    centerRow->addWidget(m_positionGroup);
+    addDisplayDivider();
 
-    // Between the position and the tempo: a compact frequency view of what the
-    // master bus is actually doing. It moves only when there is sound.
-    m_spectrum = new SpectrumMeter(screen);
-    row->addWidget(m_spectrum);
+    auto* tempoSection = new QWidget(insetWell);
+    m_tempoGroup = tempoSection;
+    tempoSection->setObjectName(QStringLiteral("TempoSection"));
+    tempoSection->setAttribute(Qt::WA_StyledBackground, true);
+    tempoSection->setFixedSize(96, 28);
+    auto* tempoRow = new QHBoxLayout(tempoSection);
+    tempoRow->setContentsMargins(2, 0, 2, 0);
+    tempoRow->setSpacing(0);
 
-    row->addWidget(ui::separatorLine(Qt::Vertical, 22, screen));
+    auto* tempoUnit = new QLabel(QStringLiteral("BPM"), tempoSection);
+    tempoUnit->setObjectName(QStringLiteral("TempoUnit"));
+    tempoUnit->setFont(monoFont(10, true));
+    tempoUnit->setFixedWidth(28);
+    tempoUnit->setAlignment(Qt::AlignCenter);
 
-    auto* tempoEdit = new TempoScrubEdit("120.0", screen);
+    auto* tempoEdit = new TempoScrubEdit(QStringLiteral("120"), tempoSection);
     m_tempoEdit = tempoEdit;
-    m_tempoEdit->setObjectName("TempoField");
-    m_tempoEdit->setFont(monoFont(16, true));
+    m_tempoEdit->setObjectName(QStringLiteral("TempoField"));
+    m_tempoEdit->setFont(monoFont(15, true));
     m_tempoEdit->setFixedSize(64, 28);
     m_tempoEdit->setFrame(false);
     m_tempoEdit->setAlignment(Qt::AlignCenter);
@@ -796,7 +1039,7 @@ QWidget* TransportBar::buildLcd() {
     m_tempoEdit->setToolTip(
         tr("Drag up/down to change tempo · Double-click to type"));
     tempoEdit->setScrubCallback([this](double bpm, bool finished) {
-        const QString text = QString::number(bpm, 'f', 1);
+        const QString text = tempoText(bpm);
         if (m_tempoEdit->text() != text) m_tempoEdit->setText(text);
         previewTempo(text);
         if (finished) commitTempo();
@@ -807,20 +1050,123 @@ QWidget* TransportBar::buildLcd() {
             [this, tempoEdit] {
                 commitTempo();
                 tempoEdit->endTextEditing();
+              });
+    tempoUnit->setBuddy(m_tempoEdit);
+    tempoRow->addWidget(tempoUnit);
+    tempoRow->addWidget(m_tempoEdit);
+    centerRow->addWidget(tempoSection);
+    addDisplayDivider();
+
+    m_timeSignatureButton = new QToolButton(insetWell);
+    m_timeSignatureButton->setObjectName(QStringLiteral("TimeSignatureButton"));
+    m_timeSignatureButton->setPopupMode(QToolButton::InstantPopup);
+    m_timeSignatureButton->setCursor(Qt::PointingHandCursor);
+    m_timeSignatureButton->setFocusPolicy(Qt::StrongFocus);
+    m_timeSignatureButton->setFixedSize(44, 28);
+    m_timeSignatureButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_timeSignatureButton->setAccessibleName(tr("Project time signature"));
+    auto* signatureMenu = new QMenu(m_timeSignatureButton);
+    auto* signatureGroup = new QActionGroup(signatureMenu);
+    signatureGroup->setExclusive(true);
+    const std::pair<int, int> signatures[] = {
+        {2, 4}, {3, 4}, {4, 4}, {5, 4}, {6, 8}, {7, 8}, {9, 8}, {12, 8}};
+    for (const auto [numerator, denominator] : signatures) {
+        QAction* action = signatureMenu->addAction(
+            QStringLiteral("%1/%2").arg(numerator).arg(denominator));
+        action->setCheckable(true);
+        action->setData(QStringLiteral("%1/%2").arg(numerator).arg(denominator));
+        signatureGroup->addAction(action);
+        m_timeSignatureActions.push_back(action);
+        connect(action, &QAction::triggered, this,
+                [this, numerator, denominator] {
+                    emit timeSignatureChanged(numerator, denominator);
+                    syncTimeSignature();
+                });
+    }
+    signatureMenu->addSeparator();
+    QAction* customSignature = signatureMenu->addAction(tr("Other…"));
+    connect(customSignature, &QAction::triggered, this,
+            &TransportBar::chooseCustomTimeSignature);
+    m_timeSignatureButton->setMenu(signatureMenu);
+    centerRow->addWidget(m_timeSignatureButton);
+    addDisplayDivider();
+
+    m_spectrum = new SpectrumMeter(insetWell);
+    m_spectrum->setObjectName(QStringLiteral("TransportSpectrum"));
+    centerRow->addWidget(m_spectrum);
+
+    row->addWidget(m_transportGroup, 0, Qt::AlignVCenter);
+    row->addWidget(m_lcdScreen, 0, Qt::AlignVCenter);
+    row->addWidget(m_rightGroup, 0, Qt::AlignVCenter);
+    pill->adjustSize();
+    return pill;
+}
+
+QWidget* TransportBar::buildPositionGroup() {
+    auto* group = new QWidget(this);
+    group->setObjectName(QStringLiteral("PositionSection"));
+    group->setAttribute(Qt::WA_StyledBackground, true);
+    group->setFixedSize(112, 28);
+    auto* row = new QHBoxLayout(group);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(0);
+
+    auto* scrub = new PositionScrubEdit(QStringLiteral("1.1.000"), group);
+    m_positionValue = scrub;
+    m_positionValue->setObjectName(QStringLiteral("BarsPosition"));
+    m_positionValue->setFont(monoFont(15, true));
+    m_positionValue->setFixedSize(112, 28);
+    m_positionValue->setFrame(false);
+    m_positionValue->setAlignment(Qt::AlignCenter);
+    m_positionValue->setMaxLength(24);
+    m_positionValue->setAccessibleName(
+        m_positionShowsBars ? tr("Playhead musical position")
+                           : tr("Playhead clock position"));
+    m_positionValue->setAccessibleDescription(
+        tr("Drag up or down to seek. Double-click to type a position."));
+    m_positionValue->setToolTip(
+        m_positionShowsBars
+            ? tr("Drag to seek · Double-click to enter bar.beat.ticks")
+            : tr("Drag to seek · Double-click to enter minutes.seconds.centiseconds"));
+    scrub->setScrubCallbacks(
+        [this] { return m_controller->presentationPositionSeconds(); },
+          [this](double seconds) {
+              m_controller->seekSeconds(seconds);
+              refreshPosition();
+              emit positionChanged();
+          });
+    connect(m_positionValue, &QLineEdit::editingFinished, this,
+            [this] {
+                commitPositionEdit(m_positionValue, m_positionShowsBars);
             });
-    row->addWidget(m_tempoEdit);
+    m_positionValue->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_positionValue, &QWidget::customContextMenuRequested, this,
+            [this](const QPoint& localPos) {
+                if (!m_positionValue->isReadOnly()) {
+                    QMenu* editMenu = m_positionValue->createStandardContextMenu();
+                    editMenu->exec(m_positionValue->mapToGlobal(localPos));
+                    delete editMenu;
+                    return;
+                }
 
-    auto* unit = new QLabel(tr("BPM"), screen);
-    unit->setObjectName("LcdUnit");
-    QFont unitFont = unit->font();
-    unitFont.setPixelSize(9);
-    unitFont.setBold(true);
-    unitFont.setLetterSpacing(QFont::AbsoluteSpacing, 0.6);
-    unit->setFont(unitFont);
-    unit->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    row->addWidget(unit);
-
-    return screen;
+                QMenu menu(m_positionValue);
+                QActionGroup formats(&menu);
+                formats.setExclusive(true);
+                QAction* bars = menu.addAction(tr("Bars"));
+                QAction* time = menu.addAction(tr("Time"));
+                for (QAction* action : {bars, time}) {
+                    action->setCheckable(true);
+                    formats.addAction(action);
+                }
+                bars->setChecked(m_positionShowsBars);
+                time->setChecked(!m_positionShowsBars);
+                if (QAction* chosen = menu.exec(
+                        m_positionValue->mapToGlobal(localPos))) {
+                    setPositionDisplayBars(chosen == bars);
+                }
+            });
+    row->addWidget(m_positionValue);
+    return group;
 }
 
 double TransportBar::gridBeats() const {
@@ -833,8 +1179,9 @@ void TransportBar::setGridIndex(int index) {
     const bool changed = index != m_gridIndex;
     m_gridIndex = index;
     if (m_gridButton) {
+        m_gridButton->setText(gridDivisionName(divisions[index]));
         const QString description =
-            tr("Grid division — %1").arg(divisions[index].name);
+            tr("Grid division — %1").arg(gridDivisionName(divisions[index]));
         m_gridButton->setToolTip(description);
         m_gridButton->setAccessibleName(description);
         if (m_gridButton->menu()) {
@@ -861,9 +1208,10 @@ void TransportBar::setSnapEnabled(bool enabled) {
 }
 
 void TransportBar::setTimeDisplayBars(bool bars) {
-    if (m_showBars == bars) return;
+    const bool changed = m_showBars != bars;
     m_showBars = bars;
     if (m_timeFormatButton) {
+        m_timeFormatButton->setText(bars ? tr("Bars") : tr("Time"));
         const QString description =
             tr("Time display — %1").arg(bars ? tr("Bars") : tr("Time"));
         m_timeFormatButton->setToolTip(description);
@@ -875,21 +1223,35 @@ void TransportBar::setTimeDisplayBars(bool bars) {
             }
         }
     }
-    emit timeFormatChanged();
-    refresh();
+    setPositionDisplayBars(bars);
+    if (changed) emit timeFormatChanged();
+}
+
+void TransportBar::setPositionDisplayBars(bool bars) {
+    m_positionShowsBars = bars;
+    if (m_positionValue) {
+        m_positionValue->setAccessibleName(
+            bars ? tr("Playhead musical position")
+                 : tr("Playhead clock position"));
+        m_positionValue->setToolTip(
+            bars
+                ? tr("Drag to seek · Double-click to enter bar.beat.ticks")
+                : tr("Drag to seek · Double-click to enter minutes.seconds.centiseconds"));
+    }
+    refreshPosition();
 }
 
 void TransportBar::setToolIndex(int index) {
     // Only a real change is written. The constructor calls this to apply the
     // stored value, and a launch that re-saves what it just read is a launch
     // that can only ever write over a good setting with a worse one.
-    if (index != m_toolIndex) QSettings().setValue(ui::kEditToolSetting, index);
     if (index < 0 || index >= kToolCount) return;
+    if (index != m_toolIndex) QSettings().setValue(ui::kEditToolSetting, index);
     m_toolIndex = index;
     if (m_toolButton) {
-        m_toolButton->setIcon(icons::icon(kTools[index].glyph, th().accent, 15));
+        m_toolButton->setIcon(toolChipIcon(index, th().accent));
         const QString description =
-            tr("%1 tool — on the pointer. 1…6 switch it.")
+            tr("%1 tool — on the pointer. 1…7 switch it.")
                 .arg(translatedToolName(index));
         m_toolButton->setToolTip(description);
         m_toolButton->setAccessibleName(description);
@@ -900,19 +1262,18 @@ void TransportBar::setToolIndex(int index) {
 }
 
 void TransportBar::setSecondaryToolIndex(int index) {
+    if (index < 0 || index >= kToolCount) return;
     if (index != m_altToolIndex)
         QSettings().setValue(ui::kAltEditToolSetting, index);
-    if (index < 0 || index >= kToolCount) return;
     m_altToolIndex = index;
     if (m_altToolButton) {
         // Drawn in the secondary ink, so the pair reads as "this one, and this
         // one while you hold the key" rather than as two equal tools.
-        m_altToolButton->setIcon(
-            icons::icon(kTools[index].glyph, th().textSecondary, 15));
+        m_altToolButton->setIcon(toolChipIcon(index, th().textPrimary));
         const QString description =
             tr("%1 tool — while %2 is held.")
                 .arg(translatedToolName(index),
-                     QKeySequence(Qt::ControlModifier)
+                     QKeySequence(Qt::AltModifier)
                          .toString(QKeySequence::NativeText));
         m_altToolButton->setToolTip(description);
         m_altToolButton->setAccessibleName(description);
@@ -940,93 +1301,119 @@ void TransportBar::applyTheme() {
     const Theme& t = th();
 
     if (m_pill) {
-        // The header keeps its own colour; the transport buttons and the
-        // trailing tool group are matching nested panels. The LCD is a touch
-        // darker so the counters read as an inset screen.
         const QColor nested =
             mixColors(t.surfaceElevated, t.headerBackground, 0.45);
-        const QColor pillBorder = mixColors(t.separator(), t.textPrimary, 0.08);
-        const QColor hover = mixColors(t.surfaceElevated, t.textPrimary, 0.14);
+        const QColor panelBorder =
+            mixColors(t.separator(), t.textPrimary, 0.08);
+        const QColor field = mixColors(t.well(), t.surfaceElevated, 0.26);
+        const QColor hover =
+            mixColors(t.surfaceElevated, t.textPrimary, 0.14);
+        const QColor fieldHover = mixColors(field, t.textPrimary, 0.10);
+        const QColor focus(t.accent.red(), t.accent.green(), t.accent.blue(),
+                           220);
+        const QColor accentSoft(t.accent.red(), t.accent.green(),
+                                t.accent.blue(), 42);
+
+        // Keep the LCD recognisably glass, but calm the theme colour locally.
+        // No other GlassPanel in the application is affected.
+        if (auto* lcd = qobject_cast<ui::GlassPanel*>(m_lcdScreen))
+            lcd->setAccentColor(
+                mixColors(t.accent, t.surfaceElevated, 0.24));
+
         setStyleSheet(QString(R"(
 #TransportPill { background: transparent; }
-#TransportPill QLabel { color: %3; }
-#TransportGroup { background: %1; border: 1px solid %2; border-radius: 9px; }
-#HeaderToolGroup { background: %1; border: 1px solid %2; border-radius: 9px; }
-#LcdScreen QLabel { color: %4; background: transparent; }
-#LcdScreen #LcdUnit { color: %3; }
-#TempoField { background: %5; border: 1px solid %2; border-radius: 6px;
-              padding: 0 5px; color: %4; selection-background-color: %7; }
-#TempoField:hover { background: %6; border-color: %8; }
-#TempoField:focus { background: %5; border-color: %8; }
-#GridChip { background: transparent; border: 1px solid transparent;
-            border-radius: 6px; padding: 0; }
-#GridChip:hover { background: %6; border: 1px solid %6; }
-#GridChip:focus { background: %5; border: 1px solid %8; }
-#GridChip::menu-indicator { image: none; width: 0; }
-#PrimaryToolChip, #SecondaryToolChip {
-    background: %5; border: 1px solid %2; border-radius: 8px; padding: 0;
+#TransportGroup, #HeaderToolGroup {
+    background: %1; border: 1px solid %2; border-radius: 9px;
 }
-#PrimaryToolChip { background: %7; border-color: %8; }
-#PrimaryToolChip:hover, #SecondaryToolChip:hover { background: %6; }
-#PrimaryToolChip:focus, #SecondaryToolChip:focus { border-color: %8; }
+#LcdScreen QLabel { color: %3; background: transparent; }
+#PositionSection, #TempoSection {
+    background: transparent; border: none; border-radius: 5px;
+}
+#TempoUnit { color: %4; font-weight: 700; }
+#BarsPosition, #TempoField, #TimeSignatureButton {
+    background: transparent; border: 1px solid transparent; border-radius: 5px;
+    padding: 0 4px; color: %3; selection-background-color: %9;
+}
+#BarsPosition, #TempoField { padding: 0; font-weight: 700; }
+#BarsPosition:hover, #TempoField:hover, #TimeSignatureButton:hover {
+    background: %6;
+}
+#BarsPosition:focus, #TempoField:focus, #TimeSignatureButton:focus {
+    border-color: %7; background: %5;
+}
+#GridChip {
+    background: transparent; border: 1px solid transparent; border-radius: 6px;
+    padding: 0 3px; color: %3;
+}
+#GridChip:hover { background: %8; }
+#GridChip:focus {
+    border-color: %7; background: %5;
+}
+#PrimaryToolChip, #SecondaryToolChip {
+    background: %5; border: 1px solid %2; border-radius: 8px;
+    padding: 0; color: %3;
+}
+#PrimaryToolChip:hover, #SecondaryToolChip:hover { background: %8; }
+#PrimaryToolChip:focus, #SecondaryToolChip:focus { border-color: %7; }
+#PrimaryToolChip { background: %10; border-color: %7; }
+#GridChip::menu-indicator, #TimeSignatureButton::menu-indicator,
 #PrimaryToolChip::menu-indicator, #SecondaryToolChip::menu-indicator {
     image: none; width: 0;
 }
 )")
-            .arg(nested.name(),
-                 pillBorder.name(),
-                 t.textSecondary.name(),
-                 t.textPrimary.name(),
-                 t.well().name(),
-                 hover.name(),
-                 QColor(t.accent.red(), t.accent.green(), t.accent.blue(), 42).name(QColor::HexArgb),
-                 QColor(t.accent.red(), t.accent.green(), t.accent.blue(), 150).name(QColor::HexArgb)));
+            .arg(nested.name(), panelBorder.name(), t.textPrimary.name(),
+                 t.textSecondary.name(), field.name(), fieldHover.name(),
+                 focus.name(QColor::HexArgb), hover.name(), t.accent.name(),
+                 accentSoft.name(QColor::HexArgb)));
     }
     updatePositionStyle();
     if (m_timeFormatButton)
         m_timeFormatButton->setIcon(
-            icons::icon(icons::Glyph::TimeFormat, t.textSecondary, 14));
+            icons::svgIcon(QStringLiteral("clock.svg"), t.textPrimary, 15));
     if (m_gridButton)
         m_gridButton->setIcon(
-            icons::icon(icons::Glyph::GridDivision, t.textSecondary, 14));
+            icons::svgIcon(QStringLiteral("grid-four.svg"), t.textPrimary, 15));
+    if (m_snapButton)
+        m_snapButton->setIcon(
+            icons::svgIcon(QStringLiteral("magnet-straight.svg"), t.textPrimary, 18));
+    if (m_typingKeysButton)
+        m_typingKeysButton->setIcon(
+            icons::svgIcon(QStringLiteral("piano-keys.svg"), t.textPrimary, 18));
+    if (m_spectrum) m_spectrum->setAccent(t.accent);
     if (m_toolButton && m_toolIndex >= 0 && m_toolIndex < kToolCount)
-        m_toolButton->setIcon(
-            icons::icon(kTools[m_toolIndex].glyph, t.accent, 16));
+        m_toolButton->setIcon(toolChipIcon(m_toolIndex, t.accent));
     if (m_altToolButton && m_altToolIndex >= 0 && m_altToolIndex < kToolCount)
-        m_altToolButton->setIcon(
-            icons::icon(kTools[m_altToolIndex].glyph, t.textSecondary, 16));
+        m_altToolButton->setIcon(toolChipIcon(m_altToolIndex, t.textPrimary));
     for (int i = 0; i < m_toolActions.size() && i < kToolCount; ++i) {
         if (m_toolActions[i])
-            m_toolActions[i]->setIcon(
-                icons::icon(kTools[i].glyph, t.textSecondary, 14));
+            m_toolActions[i]->setIcon(toolIcon(i, t.textPrimary, 14));
     }
     for (int i = 0; i < m_altToolActions.size() && i < kToolCount; ++i) {
         if (m_altToolActions[i])
-            m_altToolActions[i]->setIcon(
-                icons::icon(kTools[i].glyph, t.textSecondary, 14));
+            m_altToolActions[i]->setIcon(toolIcon(i, t.textPrimary, 14));
     }
-    if (m_statusText) m_statusText->setStyleSheet(
-        QString("color: %1;").arg(t.textSecondary.name()));
-    if (m_deviceText) m_deviceText->setStyleSheet(
-        QString("color: %1;").arg(t.textSecondary.name()));
     update();
 }
 
 void TransportBar::updatePositionStyle() {
-    if (!m_positionValue) return;
+    if (!m_positionGroup || !m_positionValue) return;
     const Theme& t = th();
     const QColor background = mixColors(t.well(), t.surfaceElevated, 0.26);
-    const QColor border = m_positionRecording
-                              ? Theme::record()
-                              : mixColors(t.separator(), t.textPrimary, 0.10);
     const QColor text = m_positionRecording ? Theme::record() : t.textPrimary;
-    // A flat, typographic timecode chip replaces the novelty seven-segment
-    // display. Tabular system digits stay steady as the playhead advances, and
-    // the border only gains semantic colour while recording.
-    m_positionValue->setStyleSheet(
-        QString("QLabel#LcdPosition { background: %1; border: 1px solid %2; "
-                "border-radius: 6px; color: %3; padding: 0 7px; }")
-            .arg(background.name(), border.name(), text.name()));
+    const QColor hover = mixColors(
+        background, m_positionRecording ? Theme::record() : t.accent, 0.14);
+    const QColor focus = m_positionRecording ? Theme::record() : t.accent;
+    const QString style =
+        QString("#PositionSection { background: transparent; border: none; "
+                "border-radius: 5px; } "
+                "#BarsPosition { background: transparent; border: 1px solid "
+                "transparent; border-radius: 5px; color: %1; padding: 0 7px; "
+                "selection-background-color: %2; } "
+                "#BarsPosition:hover { background: %3; } "
+                "#BarsPosition:focus { border-color: %2; background: %4; }")
+            .arg(text.name(), focus.name(), hover.name(QColor::HexArgb),
+                 background.name());
+    m_positionGroup->setStyleSheet(style);
 }
 
 void TransportBar::paintEvent(QPaintEvent*) {
@@ -1047,7 +1434,8 @@ void TransportBar::resizeEvent(QResizeEvent* ev) {
 }
 
 int TransportBar::minimumResponsiveWidth() const {
-    if (!m_pill || !m_transportGroup || !m_lcdScreen || !m_rightGroup)
+    if (!m_pill || !m_transportGroup || !m_lcdScreen || !m_positionGroup ||
+        !m_rightGroup)
         return 0;
 
     const auto widgetWidth = [](const QWidget* widget) {
@@ -1097,6 +1485,18 @@ int TransportBar::minimumResponsiveWidth() const {
 void TransportBar::updateResponsiveLayout() {
     if (!m_pill) return;
 
+    const auto setDisplayCompact = [this](bool compact) {
+        if (m_positionGroup) m_positionGroup->setFixedWidth(compact ? 104 : 112);
+        if (m_positionValue) m_positionValue->setFixedWidth(compact ? 104 : 112);
+        if (m_tempoGroup) m_tempoGroup->setFixedWidth(compact ? 88 : 96);
+        if (m_tempoEdit) m_tempoEdit->setFixedWidth(compact ? 56 : 64);
+        if (m_timeSignatureButton)
+            m_timeSignatureButton->setFixedWidth(compact ? 40 : 44);
+        if (m_gridButton) m_gridButton->setFixedWidth(compact ? 56 : 60);
+        if (m_timeFormatButton)
+            m_timeFormatButton->setFixedWidth(compact ? 58 : 64);
+    };
+
     const auto fitTransportGroup = [this] {
         if (!m_transportGroup || !m_transportGroup->layout()) return;
         QLayout* layout = m_transportGroup->layout();
@@ -1118,9 +1518,11 @@ void TransportBar::updateResponsiveLayout() {
         m_transportGroup->setFixedWidth(std::max(1, width));
     };
 
-    // Restore everything before measuring: enlarging the window must bring
-    // controls back in the same deterministic priority order used to hide
-    // them. The three core actions are never candidates.
+    // Restore the comfortable display widths and every transport action before
+    // measuring. On the way down the display tightens first, then secondary
+    // actions disappear in one deterministic order. The three core actions
+    // are never candidates.
+    setDisplayCompact(false);
     QWidget* const optional[] = {
         m_forwardButton, m_rewindButton, m_loopButton, m_metroButton,
         m_toStartButton};
@@ -1159,6 +1561,10 @@ void TransportBar::updateResponsiveLayout() {
     };
 
     int pillWidth = measuredWidth();
+    if (pillWidth > available) {
+        setDisplayCompact(true);
+        pillWidth = measuredWidth();
+    }
     for (QWidget* item : optional) {
         if (pillWidth <= available) break;
         if (!item) continue;
@@ -1187,25 +1593,40 @@ void TransportBar::updateResponsiveLayout() {
 }
 
 QString TransportBar::positionText() const {
-    const double seconds = m_controller->presentationPositionSeconds();
-    if (!m_showBars) {
-        const int mins = int(seconds) / 60;
-        const double rest = seconds - mins * 60;
-        return QString::asprintf("%d:%06.3f", mins, rest);
-    }
+    const double seconds = std::max(0.0, m_controller->presentationPositionSeconds());
     const double tempo = std::max(1.0, m_controller->tempo());
-    const double beats = seconds * tempo / 60.0;
+    const double quarterNotes = seconds * tempo / 60.0;
     const int beatsPerBar = std::max(1, m_controller->timeSigNumerator());
-    const int bar = int(beats) / beatsPerBar + 1;
-    const int beat = int(beats) % beatsPerBar + 1;
-    const int ticks = int((beats - std::floor(beats)) * 1000.0);
+    const int denominator = std::max(1, m_controller->timeSigDenominator());
+    const double beatLength = 4.0 / denominator;
+    const double barLength = beatsPerBar * beatLength;
+    const int bar = int(std::floor(quarterNotes / barLength)) + 1;
+    const double inBar = std::fmod(quarterNotes, barLength);
+    const int beat = int(std::floor(inBar / beatLength)) + 1;
+    const double inBeat = inBar - (beat - 1) * beatLength;
+    const int ticks = std::clamp(int(std::floor(inBeat / beatLength * 1000.0)),
+                                 0, 999);
     return QString::asprintf("%d.%d.%03d", bar, beat, ticks);
 }
 
+QString TransportBar::clockText() const {
+    const double seconds = std::max(0.0, m_controller->presentationPositionSeconds());
+    const qint64 centiseconds = qint64(std::floor(seconds * 100.0));
+    const qint64 minutes = centiseconds / 6000;
+    const int wholeSeconds = int((centiseconds / 100) % 60);
+    const int fraction = int(centiseconds % 100);
+    return QStringLiteral("%1.%2.%3")
+        .arg(minutes, 2, 10, QLatin1Char('0'))
+        .arg(wholeSeconds, 2, 10, QLatin1Char('0'))
+        .arg(fraction, 2, 10, QLatin1Char('0'));
+}
+
 void TransportBar::refreshPosition() {
-    if (!m_positionValue) return;
-    const QString position = positionText();
-    if (m_positionValue->text() != position) m_positionValue->setText(position);
+    if (!m_positionValue || !m_positionValue->isReadOnly()) return;
+    const QString position =
+        m_positionShowsBars ? positionText() : clockText();
+    if (m_positionValue->text() != position)
+        m_positionValue->setText(position);
 }
 
 void TransportBar::refresh() {
@@ -1235,44 +1656,121 @@ void TransportBar::refresh() {
 
     // While rolling the dedicated lightweight playhead clock owns this at
     // display cadence. Avoid formatting the same position again on the slower
-    // meter/plugin UI tick.
+    // general UI tick.
     if (!playing) refreshPosition();
     if (m_positionRecording != recording) {
         m_positionRecording = recording;
         updatePositionStyle();
     }
 
-    const bool online = m_controller->isDeviceOpen();
-    const QColor dot = !online ? QColor(0xE0, 0x9B, 0x3B)
-                              : recording ? Theme::record()
-                              : playing ? QColor(0x4C, 0xC4, 0x8A)
-                                        : th().textSecondary;
-    if (m_statusDot) {
-        const QString style =
-            QString("background: %1; border-radius: 3px;").arg(dot.name());
-        if (m_statusDot->styleSheet() != style) m_statusDot->setStyleSheet(style);
-    }
-    if (m_statusText) {
-        const QString status = !online ? tr("Offline")
-                               : recording ? tr("Recording")
-                               : playing ? tr("Playing")
-                                         : tr("Stopped");
-        if (m_statusText->text() != status) m_statusText->setText(status);
-    }
     if (m_spectrum) {
-        // Real log-spaced master-bus bands. The device stays live while the
-        // transport is parked so previews, keyboard notes and effect tails are
-        // represented rather than being mistaken for silence.
         m_spectrum->setAccent(recording ? Theme::record() : th().accent);
-        m_spectrum->push(m_controller->masterSpectrum(), online);
+        m_spectrum->push(m_controller->masterSpectrum(),
+                         m_controller->isDeviceOpen());
     }
 
-    if (m_deviceText) {
-        const QString device = QString("%1k  %2")
-                                   .arg(m_controller->sampleRate() / 1000.0, 0, 'g', 3)
-                                   .arg(m_controller->bufferSizeFrames());
-        if (m_deviceText->text() != device) m_deviceText->setText(device);
+    syncTimeSignature();
+}
+
+void TransportBar::commitPositionEdit(QLineEdit* edit, bool musical) {
+    if (!edit || edit->isReadOnly()) return;
+
+    const QString normalized = QString(edit->text()).trimmed().replace(':', '.');
+    const QStringList parts = normalized.split(QLatin1Char('.'));
+    bool valid = parts.size() == 3;
+    double seconds = 0.0;
+
+    if (valid && musical) {
+        bool barOk = false;
+        bool beatOk = false;
+        bool ticksOk = false;
+        const qlonglong bar = parts[0].toLongLong(&barOk);
+        const int beat = parts[1].toInt(&beatOk);
+        const int ticks = parts[2].toInt(&ticksOk);
+        const int numerator = std::max(1, m_controller->timeSigNumerator());
+        const int denominator = std::max(1, m_controller->timeSigDenominator());
+        valid = barOk && beatOk && ticksOk && bar >= 1 &&
+                beat >= 1 && beat <= numerator && ticks >= 0 && ticks <= 999;
+        if (valid) {
+            const double beatLength = 4.0 / denominator;
+            const double quarterNotes =
+                ((double(bar - 1) * numerator) + double(beat - 1) +
+                 ticks / 1000.0) * beatLength;
+            seconds = quarterNotes * 60.0 / std::max(1.0, m_controller->tempo());
+        }
+    } else if (valid) {
+        bool minutesOk = false;
+        bool secondsOk = false;
+        bool centisecondsOk = false;
+        const qlonglong minutes = parts[0].toLongLong(&minutesOk);
+        const int wholeSeconds = parts[1].toInt(&secondsOk);
+        const int centiseconds = parts[2].toInt(&centisecondsOk);
+        valid = minutesOk && secondsOk && centisecondsOk && minutes >= 0 &&
+                wholeSeconds >= 0 && wholeSeconds < 60 &&
+                centiseconds >= 0 && centiseconds < 100;
+        if (valid)
+            seconds = double(minutes) * 60.0 + wholeSeconds +
+                      centiseconds / 100.0;
     }
+
+    if (valid) {
+        m_controller->seekSeconds(seconds);
+        emit positionChanged();
+    } else {
+        QMessageBox::warning(
+            this, tr("Invalid playhead position"),
+            musical
+                ? tr("Enter the position as bar.beat.ticks. Beat must fit the current time signature and ticks must be from 000 to 999.")
+                : tr("Enter the position as minutes.seconds.centiseconds. Seconds must be from 00 to 59 and centiseconds from 00 to 99."));
+    }
+
+    edit->clearFocus();
+    static_cast<PositionScrubEdit*>(edit)->endTextEditing();
+    refreshPosition();
+}
+
+void TransportBar::syncTimeSignature() {
+    if (!m_controller || !m_timeSignatureButton) return;
+    const int numerator = m_controller->timeSigNumerator();
+    const int denominator = m_controller->timeSigDenominator();
+    const QString value = QStringLiteral("%1/%2").arg(numerator).arg(denominator);
+    m_timeSignatureButton->setText(value);
+    m_timeSignatureButton->setToolTip(tr("Project time signature — %1").arg(value));
+    for (QAction* action : m_timeSignatureActions)
+        if (action) action->setChecked(action->data().toString() == value);
+}
+
+void TransportBar::chooseCustomTimeSignature() {
+    const QString current = QStringLiteral("%1/%2")
+        .arg(m_controller->timeSigNumerator())
+        .arg(m_controller->timeSigDenominator());
+    bool accepted = false;
+    const QString value = QInputDialog::getText(
+        this, tr("Custom time signature"),
+        tr("Enter numerator/denominator:"), QLineEdit::Normal, current, &accepted)
+                              .trimmed();
+    if (!accepted) return;
+    const QStringList parts = value.split(QLatin1Char('/'));
+    bool numeratorOk = false;
+    bool denominatorOk = false;
+    const int numerator = parts.size() == 2
+                              ? parts[0].trimmed().toInt(&numeratorOk)
+                              : 0;
+    const int denominator = parts.size() == 2
+                                ? parts[1].trimmed().toInt(&denominatorOk)
+                                : 0;
+    const bool validDenominator = denominator == 1 || denominator == 2 ||
+                                  denominator == 4 || denominator == 8 ||
+                                  denominator == 16 || denominator == 32;
+    if (!numeratorOk || !denominatorOk || numerator < 1 || numerator > 32 ||
+        !validDenominator) {
+        QMessageBox::warning(
+            this, tr("Invalid time signature"),
+            tr("Use a numerator from 1 to 32 and a denominator of 1, 2, 4, 8, 16, or 32."));
+        return;
+    }
+    emit timeSignatureChanged(numerator, denominator);
+    syncTimeSignature();
 }
 
 void TransportBar::setRecordEngaged(bool engaged) {
@@ -1341,7 +1839,7 @@ void TransportBar::setMixerDetached(bool detached) {
 void TransportBar::syncTempo() {
     if (!m_tempoEdit) return;
     m_tempoEditing = false;
-    m_tempoEdit->setText(QString::number(m_controller->tempo(), 'f', 1));
+    m_tempoEdit->setText(tempoText(m_controller->tempo()));
 }
 
 void TransportBar::previewTempo(const QString& text) {
@@ -1369,7 +1867,7 @@ void TransportBar::commitTempo() {
         syncTempo();
         return;
     }
-    m_tempoEdit->setText(QString::number(bpm, 'f', 1));
+    m_tempoEdit->setText(tempoText(bpm));
     if (bpm != m_controller->tempo()) emit tempoChanged(bpm);
     if (m_tempoEditing) {
         m_controller->collapseUndo(m_tempoUndoDepth, "Set Tempo");

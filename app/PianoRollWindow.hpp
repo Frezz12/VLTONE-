@@ -74,9 +74,8 @@ public:
 
     /// How a note is painted. Purely cosmetic — nothing here changes a note.
     enum class NoteStyle {
-        Flat,      ///< a solid block: the fastest to read at small sizes
-        Glass,     ///< translucent, lit from above, with a specular sheen
-        Outline,   ///< hollow, for when the grid underneath matters more
+        Rounded,   ///< a clean solid body with smooth, antialiased corners
+        Flat,      ///< a pixel-aligned rectangle with square corners
     };
 
     /// What the lane along the bottom is editing.
@@ -494,7 +493,7 @@ private:
     bool m_showVelocityLane = true;
     bool m_showNoteNames = false;
     bool m_noteBorders = true;
-    NoteStyle m_noteStyle = NoteStyle::Glass;
+    NoteStyle m_noteStyle = NoteStyle::Rounded;
     bool m_showAllKeyNames = false;
     bool m_scaleHighlight = false;
     ColorMode m_colorMode = ColorMode::Clip;
@@ -732,9 +731,9 @@ public:
     /// context now belongs to the application's shared strip above it.
     bool checkCompactLayoutForTest();
 
-    /// The cycle strip in this ruler: a drag marks a region out, a double-click
-    /// on it switches the cycle on and off. The same region and the same
-    /// gesture as the arrangement's.
+    /// The cycle strip in this ruler: a drag creates and arms a region, while a
+    /// double-click on it removes it. The same region and gesture as the
+    /// arrangement's.
     bool checkCycleGestureForTest();
 
 signals:

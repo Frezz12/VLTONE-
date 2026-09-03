@@ -630,7 +630,7 @@ QToolButton { background: transparent; border: none; border-radius: 6px; padding
 QToolButton:hover { background: %HOVER%; }
 QToolButton:checked { background: %ACCENT_SOFT%; }
 
-QSplitter::handle { background: transparent; }
+QSplitter::handle { background: %SECTION%; }
 QSplitter::handle:hover { background: %ACCENT_SOFT%; }
 
 QDockWidget { titlebar-close-icon: none; titlebar-normal-icon: none; }

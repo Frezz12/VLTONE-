@@ -113,6 +113,10 @@ int main() {
     std::string gravityTrackId;
     std::string gravityInsertId;
     daw::AutomationTarget gravityAutomation;
+    std::string graphitTrackId;
+    std::string graphitInsertId;
+    daw::AutomationTarget graphitAutomation;
+    daw::AutomationTarget graphitPriorityAutomation;
     // ── Built-in Gravity follows the ordinary insert/project pipeline ──
     {
         const auto gravity = ctrl.pluginManager().find(
@@ -151,6 +155,52 @@ int main() {
                   std::fabs(ctrl.insertParameter(duplicate, copied->front().id,
                                                  "mass") - 0.8) < 1e-6,
               "duplicating a track clones Gravity with independent state");
+        ctrl.removeTrack(duplicate);
+    }
+
+    // ── Built-in Graphit follows the same state and automation pipeline ──
+    {
+        const auto graphit = ctrl.pluginManager().find(
+            daw::plugins::Format::Internal, "daw.graphit");
+        check(graphit.has_value() && !graphit->isInstrument,
+              "Graphit appears in the built-in effect catalogue");
+        graphitTrackId = ctrl.addTrack(daw::TrackKind::Audio, "Graphit Test");
+        graphitInsertId = graphit
+            ? ctrl.addInsert(graphitTrackId, *graphit)
+            : std::string{};
+        check(!graphitInsertId.empty() &&
+                  ctrl.insertInstance(graphitTrackId, graphitInsertId) != nullptr,
+              "Graphit adds as a live insert");
+        ctrl.setInsertParameter(graphitTrackId, graphitInsertId, "amount", 0.82);
+        ctrl.setInsertParameter(graphitTrackId, graphitInsertId, "mode", 3.0);
+        ctrl.setInsertParameter(graphitTrackId, graphitInsertId, "priority", 0.45);
+
+        graphitAutomation.kind = daw::AutomationTargetKind::PluginParameter;
+        graphitAutomation.channelId = graphitTrackId;
+        graphitAutomation.slotId = graphitInsertId;
+        graphitAutomation.parameterId = "amount";
+        const auto automation = ctrl.ensureAutomation(graphitAutomation);
+        check(!automation.first.empty() && !automation.second.empty(),
+              "Graphit Amount can create automation");
+        graphitPriorityAutomation = graphitAutomation;
+        graphitPriorityAutomation.parameterId = "priority";
+        const auto priorityAutomation =
+            ctrl.ensureAutomation(graphitPriorityAutomation);
+        check(!priorityAutomation.first.empty() &&
+                  !priorityAutomation.second.empty(),
+              "Graphit Priority can create automation");
+
+        const std::string duplicate = ctrl.duplicateTrack(graphitTrackId, true);
+        const std::vector<daw::InsertModel>* copied = ctrl.channelInserts(duplicate);
+        check(copied && copied->size() == 1 &&
+                  copied->front().uid == "daw.graphit" &&
+                  copied->front().id != graphitInsertId &&
+                  std::fabs(ctrl.insertParameter(duplicate, copied->front().id,
+                                                 "amount") - 0.82) < 1e-6 &&
+                  ctrl.insertParameter(duplicate, copied->front().id, "mode") == 3.0 &&
+                  std::fabs(ctrl.insertParameter(duplicate, copied->front().id,
+                                                 "priority") - 0.45) < 1e-6,
+              "duplicating a track clones independent Graphit state");
         ctrl.removeTrack(duplicate);
     }
 
@@ -708,6 +758,29 @@ int main() {
         check(!reloadedGravityAutomation.first.empty() &&
                   !reloadedGravityAutomation.second.empty(),
               "Gravity automation target survives project reload");
+        const std::vector<daw::InsertModel>* reloadedGraphit =
+            reloaded.channelInserts(graphitTrackId);
+        check(reloadedGraphit && reloadedGraphit->size() == 1 &&
+                  reloadedGraphit->front().uid == "daw.graphit" &&
+                  std::fabs(reloaded.insertParameter(
+                                graphitTrackId, reloadedGraphit->front().id,
+                                "amount") - 0.82) < 1e-6 &&
+                  reloaded.insertParameter(
+                      graphitTrackId, reloadedGraphit->front().id, "mode") == 3.0 &&
+                  std::fabs(reloaded.insertParameter(
+                                graphitTrackId, reloadedGraphit->front().id,
+                                "priority") - 0.45) < 1e-6,
+              "Graphit insert and parameters survive project reload");
+        const auto reloadedGraphitAutomation =
+            reloaded.findAutomation(graphitAutomation);
+        check(!reloadedGraphitAutomation.first.empty() &&
+                  !reloadedGraphitAutomation.second.empty(),
+              "Graphit automation target survives project reload");
+        const auto reloadedGraphitPriorityAutomation =
+            reloaded.findAutomation(graphitPriorityAutomation);
+        check(!reloadedGraphitPriorityAutomation.first.empty() &&
+                  !reloadedGraphitPriorityAutomation.second.empty(),
+              "Graphit Priority automation survives project reload");
         const std::vector<daw::InsertModel>* slots =
             reloaded.channelInserts(reloaded.project().tracks.front().id);
         check(slots && slots->size() == 1, "the insert slot came back");

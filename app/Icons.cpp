@@ -3,6 +3,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QSvgRenderer>
 
 #include <algorithm>
 #include <cmath>
@@ -1152,12 +1153,40 @@ void paint(QPainter& p, Glyph glyph, const QRectF& rect, const QColor& color) {
 }
 
 QIcon icon(Glyph glyph, const QColor& color, int size) {
-    QPixmap pm(size, size);
-    pm.fill(Qt::transparent);
-    QPainter p(&pm);
-    paint(p, glyph, QRectF(0, 0, size, size), color);
-    p.end();
-    return QIcon(pm);
+    if (size <= 0) return {};
+    QIcon result;
+    for (int scale = 1; scale <= 3; ++scale) {
+        QPixmap pixmap(size * scale, size * scale);
+        pixmap.setDevicePixelRatio(scale);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        paint(painter, glyph, QRectF(0, 0, size, size), color);
+        painter.end();
+        result.addPixmap(pixmap);
+    }
+    return result;
+}
+
+QIcon svgIcon(const QString& fileName, const QColor& color, int size) {
+    const QString path = fileName.startsWith(QLatin1Char(':'))
+                             ? fileName
+                             : QStringLiteral(":/icons/%1").arg(fileName);
+    QSvgRenderer renderer(path);
+    if (!renderer.isValid() || size <= 0) return {};
+
+    QIcon result;
+    for (int scale = 1; scale <= 3; ++scale) {
+        QPixmap pixmap(size * scale, size * scale);
+        pixmap.setDevicePixelRatio(scale);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        renderer.render(&painter, QRectF(0, 0, size, size));
+        painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        painter.fillRect(QRectF(0, 0, size, size), color);
+        painter.end();
+        result.addPixmap(pixmap);
+    }
+    return result;
 }
 
 } // namespace icons

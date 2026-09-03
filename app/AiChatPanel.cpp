@@ -1905,7 +1905,7 @@ void AiChatPanel::renderTranscript() {
                                 connect(choose, &QAbstractButton::clicked, this,
                                         [this, candidateId] {
                                             m_input->setPlainText(
-                                                tr("/compose Apply composition candidate %1 to the currently selected instrument track.")
+                                                tr("/compose Apply composition candidate %1 to the currently selected MIDI track.")
                                                     .arg(candidateId));
                                             m_input->setFocus();
                                             send();

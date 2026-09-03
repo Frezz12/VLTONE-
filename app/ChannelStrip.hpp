@@ -42,6 +42,9 @@ public:
     /// scrolls. Either way it never shrinks below the height at which every
     /// section is fully visible — a short mixer scrolls instead.
     void setStretchable(bool stretchable);
+    /// Slightly tighten vertical rhythm for the Inspector. All sections remain
+    /// present; the surrounding Inspector scrolls instead of crushing them.
+    void setInspectorCompact(bool compact);
     /// Height at which the whole console (I/O, inserts, sends, pan, fader) is
     /// visible. This is also the strip's minimum.
     int naturalHeight() const { return m_naturalHeight; }
@@ -185,6 +188,7 @@ private:
     RoutingField* m_inputButton = nullptr;
     RoutingField* m_outputButton = nullptr;
     ui::IconButton* m_monoButton = nullptr;   // mono (1 ring) / stereo (2 rings)
+    QVBoxLayout* m_mainLayout = nullptr;
 
     /// Values before the first live update of the current physical gesture.
     /// Intermediate pixels never enter history; release commits these once.
@@ -195,6 +199,7 @@ private:
     /// built, and used as the minimum so nothing is ever squeezed.
     int m_naturalHeight = 0;
     bool m_stretchable = true;
+    bool m_inspectorCompact = false;
     /// A chain or a send set is being dragged over this strip right now.
     bool m_dropHighlight = false;
     /// True while a plugin or preset from the browser is routed through this

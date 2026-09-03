@@ -426,7 +426,7 @@ struct SnapshotRequestUploader::Impl {
         input.uploadId = activeUploadId;
         input.sourcePath = iterator->preparedPath;
         input.sequence = iterator->request.targetServerSequence;
-        input.schemaVersion = daw::ProjectSerializer::kFormatVersion;
+        input.schemaVersion = daw::collab::kSharedProjectFormatVersion;
         input.sha256 = iterator->sha256;
         input.byteSize = iterator->byteSize;
         input.assetIds = iterator->assetIds;
@@ -467,7 +467,7 @@ struct SnapshotRequestUploader::Impl {
                            result.sequence ==
                                iterator->request.targetServerSequence &&
                            result.schemaVersion ==
-                               daw::ProjectSerializer::kFormatVersion &&
+                               daw::collab::kSharedProjectFormatVersion &&
                            result.sha256 == iterator->sha256 &&
                            result.byteSize == iterator->byteSize &&
                            result.assetIds == iterator->assetIds;
@@ -802,7 +802,7 @@ bool checkSnapshotRequestUploaderForTest(QString* error) {
     if (acceptedRequests != 1 || starts != 1 || captured.size() != 1 ||
         captured.front().sequence != 7 ||
         captured.front().schemaVersion !=
-            daw::ProjectSerializer::kFormatVersion ||
+            daw::collab::kSharedProjectFormatVersion ||
         canonicalUuid(captured.front().uploadId).isEmpty() ||
         captured.front().sha256.size() != 64 ||
         captured.front().byteSize == 0 ||

@@ -29,12 +29,13 @@ namespace daw { class EngineController; }
 namespace daw { struct WaveformPeaks; }
 namespace daw { struct RecordingSpan; struct RecordingPreview; }
 namespace ui { class SelectionModel; }
+class QScrollBar;
 
 /// The arrangement timeline: a bar/beat ruler, one lane per track with its clips
 /// drawn as rounded rectangles, the grid at the division chosen in the transport
 /// bar, and the playhead. With the Select tool clips can be selected, dragged
-/// (snapping to the grid, Alt bypasses), trimmed by their edges and faded by
-/// their top corners; several clips can be rubber-band-selected and moved or cut
+/// (snapping to the grid, Ctrl bypasses), trimmed by their edges and faded by
+/// their top corners; several clips can be Ctrl-drag-selected and moved or cut
 /// together. Overlapping clips crossfade. Audio files can be dropped in from the
 /// file manager. The Knife tool splits clips and the Eraser deletes them.
 /// Empty space seeks; dragging in the ruler scrubs. Wheel scrolls, Ctrl+wheel
@@ -53,17 +54,17 @@ public:
     /// Appended, never inserted: the transport's chip menu addresses a tool by its
 /// index and stores that index, so renumbering one would silently change
 /// everybody's chosen tool.
-enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw };
+enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
 
     explicit TimelineWidget(daw::EngineController* controller,
                             QWidget* parent = nullptr);
     ~TimelineWidget() override;
 
     void setTool(Tool tool);
-    /// The tool the modifier key borrows while it is held. Logic calls it the
-    /// command-click tool: the pointer stays what it is, and one key turns it
-    /// into the knife (or whatever else) for as long as it is down.
+    /// The tool Alt/Option borrows while it is held: the pointer changes at key
+    /// press, before the next mouse event, and returns on release.
     void setSecondaryTool(Tool tool);
+    void setSecondaryToolHeld(bool held);
     void setSelectedTrack(const QString& id);
     /// Every selected lane, so a multi-track selection made in the headers is
     /// visible here too. The primary stays `setSelectedTrack`'s.
@@ -79,7 +80,13 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw };
     /// track, and the shell has to publish the clips *before* it reacts to
     /// that, or the panel would flash a track context on the way through.
     void publishSelection();
-    /// Scroll so the playhead stays on screen during playback.
+    /// Enable or disable playback follow. Enabling it centres the playhead
+    /// immediately; while disabled, playback never changes the viewport.
+    void setFollowPlayhead(bool follow);
+    bool followsPlayhead() const { return m_followPlayhead; }
+    /// Put the playhead in the horizontal centre without changing follow mode.
+    void centerPlayhead();
+    /// Scroll so the playhead stays on screen during playback when follow is on.
     void ensurePlayheadVisible();
     /// Advance the playback cursor without invalidating the whole arrangement.
     /// A horizontal auto-scroll still requests a full frame because every
@@ -161,6 +168,13 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw };
     /// True when a region is committed in the SelectRegion tool (Delete acts on
     /// it instead of the clip selection).
     bool hasRegionSelection() const { return m_regionActive; }
+    double regionStartSeconds() const { return m_regionStart; }
+    double regionEndSeconds() const { return m_regionEnd; }
+    /// Unique track ids covered by the committed region, in lane order.
+    QStringList regionTrackIds() const;
+    void setLocalProcessingEnabled(bool enabled) {
+        m_localProcessingEnabled = enabled;
+    }
     /// Delete the portions of clips inside the committed region.
     bool deleteRegionSelection();
 
@@ -188,11 +202,18 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw };
     /// column is in step with the lanes.
     int laneTopForTest(int lane) const { return laneTop(lane); }
     int bottomInsetForTest() const { return m_bottomInset; }
+    Tool activeToolForTest() const { return tool(); }
+    int displayedPlayheadXForTest() const {
+        return m_lastPlayheadX.value_or(-1);
+    }
     std::uint64_t staticFramePaintCountForTest() const {
         return m_staticFramePaintCount;
     }
     /// Horizontal navigation state for the headless middle-drag check.
     double horizontalScrollForTest() const { return m_scrollSeconds; }
+    bool hasNavigationControlsForTest() const {
+        return m_horizontalScrollBar && m_verticalScrollBar;
+    }
 
     /// Stable collaboration coordinate conversion. Timeline time/track/lane
     /// survives different window sizes, zoom and scroll; normalized fallback
@@ -207,9 +228,14 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw };
     /// Geometry probes for the real-mouse region drag check.
     double regionStartSecondsForTest() const { return m_regionStart; }
     int regionFirstLaneForTest() const { return m_regionLaneA; }
+    QPoint fadeCurveHandleForTest(const QString& trackId,
+                                  const QString& clipId,
+                                  bool fadeIn) const;
 
 signals:
     void clipSelected(const QString& trackId, const QString& clipId);
+    void bounceInPlaceRequested();
+    void offlineRenderRequested();
     /// The cycle region was dragged out or moved. The window persists it and
     /// keeps the transport's Cycle button in step.
     void loopRangeChanged();
@@ -353,6 +379,10 @@ private:
     /// the mixer covers.
     int visibleLaneHeight() const;
     int maxVerticalScroll() const;
+    double visibleSeconds() const;
+    void setHorizontalScroll(double seconds);
+    void layoutNavigationControls();
+    void syncNavigationControls();
     QString trackIdForLane(int lane) const;  // track id for a lane, or empty
     int laneForTrackId(const QString& trackId) const;
     QRectF clipRect(int lane, const daw::ClipModel& clip) const;
@@ -441,12 +471,15 @@ private:
     void drawRegion(QPainter& p);
     /// Faint original-boundary guides shown only while clips or a region move.
     void drawMoveGuides(QPainter& p);
+    /// The exact snapped cut that a Knife click at the current pointer makes.
+    void drawKnifeGuide(QPainter& p);
     /// Split a clip so the part inside [r0, r1] becomes its own clip; returns
     /// that piece's id (empty when the clip doesn't touch the region). The
     /// outer fragments keep their original ids.
     std::string regionInnerPiece(const RegionClipCandidate& clip, double r0,
                                  double r1) const;
     void updateCursor(const QPoint& pos);
+    void refreshToolCursor();
     void drawRuler(class QPainter& p);
     void drawGrid(QPainter& p);
     void drawLanes(QPainter& p);
@@ -488,6 +521,8 @@ private:
     void selectAutomationClip(const QString& trackId, const QString& clipId);
     /// Snap a clip-relative beat to the grid.
     double snapBeats(double beats, bool enabled) const;
+    /// Resolves the adaptive sentinel against the current horizontal zoom.
+    double effectiveGridBeats() const;
 
     /// Where a normalised value sits inside a clip's body, and the inverse.
     /// Everything the curve editor does goes through this pair, so the drawing
@@ -512,7 +547,8 @@ private:
     /// the picture stops describing the audio the moment the Time knob moves.
     void drawPeaks(QPainter& p, const daw::WaveformPeaks* peaks,
                    double sourceStartSeconds, const QRectF& area, float gain,
-                   const QColor& color, double timeStretch = 1.0);
+                   const QColor& color, double timeStretch = 1.0,
+                   bool reversed = false);
     /// One take's material inside `area` (the clip's full width), placed at the
     /// take's own offset into the clip.
     void drawTakeAudio(QPainter& p, const daw::ClipModel& clip,
@@ -608,6 +644,9 @@ private:
     int m_rightRadius = 0;
     double m_pixelsPerSecond = 80.0;
     double m_scrollSeconds = 0.0;   // time at the left edge
+    QScrollBar* m_horizontalScrollBar = nullptr;
+    QScrollBar* m_verticalScrollBar = nullptr;
+    bool m_followPlayhead = false;
     /// Last cursor x requested or painted. Playback invalidates this narrow
     /// strip and the new one instead of repainting every lane.
     std::optional<int> m_lastPlayheadX;
@@ -711,6 +750,17 @@ private:
     };
     QVector<TrimOrigin> m_trimOrigins;
 
+    // Stretch tool: a horizontal drag changes playback duration without
+    // consuming more or less of the source file.
+    bool m_stretching = false;
+    QString m_stretchTrackId;
+    QString m_stretchClipId;
+    double m_stretchBefore = 1.0;
+    double m_stretchSourceSpan = 0.0;
+    double m_stretchOriginalDuration = 0.0;
+    double m_stretchPressSeconds = 0.0;
+    void finishStretchGesture();
+
     // Fade (corner-drag) state.
     bool m_fading = false;
     Fade m_fadeSide = Fade::None;
@@ -722,7 +772,6 @@ private:
     double m_fadeOriginalIn = 0.0;
     double m_fadeOriginalOut = 0.0;
     bool m_fadeCurving = false;
-    int m_fadeCurveDragY = 0;
     double m_fadeCurveOriginal = 0.0;
 
     // Gain (volume) handle drag state. Captured on press so the whole drag
@@ -781,6 +830,7 @@ private:
         daw::ClipKind kind = daw::ClipKind::Audio;
     };
     std::vector<RegionPiece> m_regionPieces;
+    bool m_localProcessingEnabled = true;
 
     // External file drag hover: the lane the drop would land on (−1 = below all).
     bool m_dropActive = false;

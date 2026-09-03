@@ -98,8 +98,8 @@ public:
     /// is selected — that is the whole point of engaging rather than starting.
     void setRecordEngaged(bool engaged);
 
-    /// Reveal and focus the track plugin search. No-op unless a track is the
-    /// active context; used by the global Ctrl+F command.
+    /// Reveal and focus the plugin search for a track or one audio clip. Used
+    /// by the global Ctrl+F command as well as the inline search button.
     void openPluginSearch();
 
 protected:

@@ -468,6 +468,33 @@ json clipToJson(const ClipModel& c, MediaPaths media) {
     if (!c.musicalAnalysis.empty())
         result["musicalAnalysis"] = musicalAnalysisToJson(c.musicalAnalysis);
     if (!c.asset.empty()) result["asset"] = assetRefToJson(c.asset);
+    if (c.playbackInjection.active()) {
+        result["playbackInjection"] = json{
+            {"stage", toString(c.playbackInjection.stage)},
+            {"anchorChannelId", c.playbackInjection.anchorChannelId},
+        };
+    }
+    if (!c.offlineProcess.empty()) {
+        json offline{
+            {"chain", insertsToJson(c.offlineProcess.chain)},
+            {"renderedFile",
+             mediaReference(c.offlineProcess.renderedFilePath, media)},
+            {"sourceFingerprint", c.offlineProcess.sourceFingerprint},
+            {"sourceDurationSeconds",
+             c.offlineProcess.sourceDurationSeconds},
+            {"renderedDurationSeconds",
+             c.offlineProcess.renderedDurationSeconds},
+            {"includeTail", c.offlineProcess.includeTail},
+            {"tailSilenceDb", c.offlineProcess.tailSilenceDb},
+            {"tailHoldSeconds", c.offlineProcess.tailHoldSeconds},
+            {"tailMaxSeconds", c.offlineProcess.tailMaxSeconds},
+        };
+        if (!c.offlineProcess.renderedAsset.empty()) {
+            offline["renderedAsset"] =
+                assetRefToJson(c.offlineProcess.renderedAsset);
+        }
+        result["offlineProcess"] = std::move(offline);
+    }
     return result;
 }
 
@@ -502,6 +529,43 @@ ClipModel clipFromJson(const json& j, const std::string& mediaDir) {
     // A project written before MIDI existed has neither key, so it reads back
     // as the audio clip it is — no migration step needed.
     c.kind = clipKindFromString(j.value("kind", "audio"));
+    if (j.contains("playbackInjection") &&
+        j.at("playbackInjection").is_object()) {
+        const auto& injection = j.at("playbackInjection");
+        c.playbackInjection.stage = playbackInjectionStageFromString(
+            injection.value("stage", std::string("none")));
+        c.playbackInjection.anchorChannelId =
+            injection.value("anchorChannelId", std::string());
+    }
+    if (j.contains("offlineProcess") &&
+        j.at("offlineProcess").is_object()) {
+        const auto& offline = j.at("offlineProcess");
+        c.offlineProcess.chain = insertsFromJson(offline, "chain");
+        const std::string rendered =
+            offline.value("renderedFile", std::string());
+        if (!rendered.empty()) {
+            c.offlineProcess.renderedFilePath = platform::pathToUtf8(
+                platform::pathFromUtf8(mediaDir) /
+                platform::pathFromUtf8(rendered));
+        }
+        if (offline.contains("renderedAsset")) {
+            c.offlineProcess.renderedAsset =
+                assetRefFromJson(offline.at("renderedAsset"));
+        }
+        c.offlineProcess.sourceFingerprint =
+            offline.value("sourceFingerprint", std::string());
+        c.offlineProcess.sourceDurationSeconds =
+            offline.value("sourceDurationSeconds", c.durationSeconds);
+        c.offlineProcess.renderedDurationSeconds =
+            offline.value("renderedDurationSeconds", c.durationSeconds);
+        c.offlineProcess.includeTail = offline.value("includeTail", false);
+        c.offlineProcess.tailSilenceDb =
+            offline.value("tailSilenceDb", -96.0);
+        c.offlineProcess.tailHoldSeconds =
+            offline.value("tailHoldSeconds", 0.3);
+        c.offlineProcess.tailMaxSeconds =
+            offline.value("tailMaxSeconds", 30.0);
+    }
     c.patternClipId = j.value("patternClipId", "");
     if (j.contains("notes") && j.at("notes").is_array()) {
         const auto& notes = j.at("notes");
@@ -1023,6 +1087,7 @@ audio::Result ProjectSerializer::save(const ProjectModel& project,
     for (auto& t : persisted.tracks) {
         for (auto& c : t.clips) {
             copyMedia(c.filePath);
+            copyMedia(c.offlineProcess.renderedFilePath);
             for (auto& take : c.takes) copyMedia(take.filePath);
         }
     }

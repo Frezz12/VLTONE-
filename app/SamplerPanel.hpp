@@ -122,6 +122,10 @@ public:
     /// the edge worth landing on a bar line.
     void setSnapProvider(std::function<double()> provider);
 
+    /// Re-read the clip/instrument model, including an FX chain edited from
+    /// another surface such as the Context Panel.
+    void refresh();
+
 signals:
     /// Nested editors still go through MainWindow's one-window registry.
     void pluginEditorRequested(const QString& channelId, const QString& insertId);
@@ -159,7 +163,6 @@ private:
     ui::Led* led(const QString& parameterId, const QString& caption);
     QComboBox* combo(const QString& parameterId, const QStringList& items);
 
-    void refresh();
     void applyTheme();
     void openSampleDialog();
     void revealSample();

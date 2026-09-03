@@ -32,6 +32,8 @@
 #include "UpdateChecker.hpp"
 #include "TelemetryClient.hpp"
 #include "SettingsWindow.hpp"
+#include "GlassPanel.hpp"
+#include "Controls.hpp"
 #include "Theme.hpp"
 
 #include <QApplication>
@@ -419,6 +421,10 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "custom font check failed: %s\n",
                          fontError.toUtf8().constData());
             return 35;
+        }
+        if (!ui::PanKnob::checkInteractionForTest()) {
+            std::fprintf(stderr, "pan control interaction failed\n");
+            return 39;
         }
     }
     if (selftest && !ui::checkAudioPreferencesRoundTripForTest()) {
@@ -831,6 +837,8 @@ int main(int argc, char** argv) {
         window.populateDemo();
         if (std::getenv("DAW_SHOT_REDUCE_MOTION"))
             QSettings().setValue(QStringLiteral("ui/reduceMotion"), true);
+        if (std::getenv("DAW_SHOT_REDUCE_TRANSPARENCY"))
+            ui::GlassPanel::setReduceTransparency(true);
         // Engaged, not rolling: the state the recording options belong to.
         if (std::getenv("DAW_SHOT_RECORD")) window.engageRecord(true);
         // DAW_SHOT_TRACKS adds this many extra tracks, so a grab shows what a
@@ -939,6 +947,13 @@ int main(int argc, char** argv) {
         const char* shotSampler = std::getenv("DAW_SHOT_SAMPLER");
         const bool shootSampler = shotSampler != nullptr;
         if (shootSampler) window.openDemoSampler(QString::fromUtf8(shotSampler));
+        // DAW_SHOT_GRAPHIT opens the compact built-in one-knob saturator.
+        const bool shootGraphit = std::getenv("DAW_SHOT_GRAPHIT") != nullptr;
+        if (shootGraphit) window.openDemoGraphit();
+        if (shootGraphit && std::getenv("DAW_SHOT_GRAPHIT_MIN")) {
+            QTimer::singleShot(300, &window,
+                               [&window] { window.resizeGraphitForShot(); });
+        }
         // DAW_SHOT_GRAVITY opens the built-in spatial pitch-delay. It is pure
         // Qt, so preferred and minimum layouts can both be captured offscreen.
         // DAW_SHOT_GRAVITY_DRAWER expands the advanced controls and
@@ -1126,6 +1141,14 @@ int main(int argc, char** argv) {
                     if (w != &window && w->isVisible() && w->width() > 600) target = w;
                 }
             }
+            if (shootGraphit) {
+                for (QWidget* w : QApplication::topLevelWidgets()) {
+                    if (w != &window && w->isVisible() &&
+                        w->findChild<QWidget*>(QStringLiteral("GraphitPanel"))) {
+                        target = w;
+                    }
+                }
+            }
             // A message box is far narrower than the 600 px the windows above
             // are found by, so it gets its own pass with no width floor.
             if (shootRecovery) {
@@ -1166,10 +1189,22 @@ int main(int argc, char** argv) {
         *boom = 1;
         return 9;   // unreachable; keeps the compiler from eliding the store
     } else if (selftest) {
-        // Keep Gravity's widget/undo/preset invariants independently runnable:
+        if (!window.checkFreshProjectEmptyForTest()) {
+            std::fprintf(stderr,
+                         "a fresh project unexpectedly contains tracks\n");
+            return 38;
+        }
+        // Keep each built-in editor's widget and undo invariants independently runnable:
         // the full UI selftest also exercises platform codecs, file watching
         // and WebEngine, which may be unavailable on a sanitizer machine.
-        if (qEnvironmentVariableIsSet("DAW_SELFTEST_GRAVITY_ONLY")) {
+        if (qEnvironmentVariableIsSet("DAW_SELFTEST_GRAPHIT_ONLY")) {
+            window.populateDemo();
+            if (!window.checkGraphitPanelForTest()) {
+                std::fprintf(stderr, "Graphit panel UI invariants failed\n");
+                return 32;
+            }
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_GRAVITY_ONLY")) {
             window.populateDemo();
             if (!window.checkGravityPanelForTest()) {
                 std::fprintf(stderr, "Gravity panel UI invariants failed\n");
@@ -1211,6 +1246,10 @@ int main(int argc, char** argv) {
             return 29;
         }
         window.openDemoSampler();
+        if (!window.checkGraphitPanelForTest()) {
+            std::fprintf(stderr, "Graphit panel UI invariants failed\n");
+            return 32;
+        }
         if (!window.checkGravityPanelForTest()) {
             std::fprintf(stderr, "Gravity panel UI invariants failed\n");
             return 30;
@@ -1229,6 +1268,11 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                          "a shortcut did not follow its physical key across layouts\n");
             return 15;
+        }
+        if (!window.checkProcessingCommandsForTest()) {
+            std::fprintf(stderr,
+                         "Bounce in Place or Offline Render command registration failed\n");
+            return 39;
         }
         // The render dialog probes libsndfile to build its format menus, so a
         // build whose codecs went missing shows up here rather than as an
@@ -1306,6 +1350,10 @@ int main(int argc, char** argv) {
         if (!window.checkTempoScrubForTest()) {
             std::fprintf(stderr, "the tempo scrub interaction failed\n");
             return 17;
+        }
+        if (!window.checkPositionScrubForTest()) {
+            std::fprintf(stderr, "the playhead position scrub interaction failed\n");
+            return 37;
         }
         // Dropping files on the arrangement: the routing decides what kind of
         // track a file needs, and nothing but a real drop exercises it.

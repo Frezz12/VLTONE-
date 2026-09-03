@@ -107,7 +107,6 @@ private:
     QString startPageHtml() const;
     QString errorPageHtml(const QUrl& failedUrl) const;
     void updateNavigationState();
-    void updateViewMask();
     void updateAddress();
     QString currentPageUrl() const;
 
@@ -164,7 +163,7 @@ private:
     QStringListModel* m_completionModel = nullptr;
     /// Coalesces session writes: a burst of tab edits is one settings write.
     QTimer* m_sessionTimer = nullptr;
-    /// Coalesces native mask and responsive bookmark work during a drag.
+    /// Coalesces responsive bookmark work during a drag.
     QTimer* m_resizeTimer = nullptr;
     bool m_initialNavigationPending = true;
     bool m_restoringSession = false;

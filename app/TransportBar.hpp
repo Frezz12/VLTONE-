@@ -14,9 +14,8 @@ class QToolButton;
 class SpectrumMeter;
 namespace ui { class IconButton; }
 
-/// The top chrome: one centred three-part cluster. Playback controls sit to the
-/// left of the position/tempo LCD and editing controls sit to its right, with
-/// equal gaps and matching panel treatment on both sides.
+/// The top chrome: three compact control blocks centred as one cluster, with
+/// independent workspace docks pinned to the outer edges.
 class TransportBar : public QWidget {
     Q_OBJECT
 public:
@@ -27,7 +26,7 @@ public:
     /// Pull position/tempo/state from the controller (called by the UI timer).
     void refresh();
     /// Update only the moving time readout. The playhead clock calls this at
-    /// display cadence; meters and transport state stay on the slower UI tick.
+    /// display cadence; transport state stays on the slower UI tick.
     void refreshPosition();
     /// Re-read tempo after a project load / undo.
     void syncTempo();
@@ -40,8 +39,12 @@ public:
     void setGridIndex(int index);
     bool showsBars() const { return m_showBars; }
     void setTimeDisplayBars(bool bars);
+    bool positionShowsBars() const { return m_positionShowsBars; }
+    /// Change only the compact playhead readout. The timeline ruler keeps its
+    /// independently selected format.
+    void setPositionDisplayBars(bool bars);
 
-    /// Select the edit tool (0 Select, 1 Knife, 2 Eraser, 3 Region): updates
+    /// Select the edit tool (0 Select through 6 Stretch): updates
     /// the chip and emits toolChanged. Lets keyboard shortcuts drive the tool
     /// selector.
     void setToolIndex(int index);
@@ -93,10 +96,16 @@ signals:
     void metronomeToggled(bool on);
     void typingKeyboardToggled(bool on);
     void tempoChanged(double bpm);
+    void timeSignatureChanged(int numerator, int denominator);
+    /// `committed` is false while the mute state is mirrored and true after
+    /// the mute/restore action is committed to the project.
+    void masterVolumeChanged(bool committed);
     void gridChanged();
     void snapChanged(bool on);
     void timeFormatChanged();
-    void toolChanged(int tool); // 0 Select, 1 Knife, 2 Eraser, 3 Region, 4 Mute
+    /// The controller playhead was moved by the compact position editor.
+    void positionChanged();
+    void toolChanged(int tool); // 0 Select through 6 Stretch
     /// The tool held under the modifier key changed.
     void secondaryToolChanged(int tool);
     void zoomRequested(int direction);   // −1 out, +1 in, 0 fit
@@ -122,18 +131,22 @@ private:
     QWidget* buildLeftDock();
     QWidget* buildRightDock();
     QWidget* buildPill();
-    QWidget* buildLcd();
-    /// Keep the complete three-part cluster centred. Secondary transport
-    /// actions disappear by priority until only Stop, Play and Record remain;
-    /// the position, BPM and edit controls never disappear.
+    QWidget* buildPositionGroup();
+    /// Keep the complete three-block cluster centred. Its controls tighten
+    /// before secondary transport actions disappear; Stop, Play, Record, the
+    /// LCD, and edit tools always stay visible.
     void updateResponsiveLayout();
     void applyTheme();
     void updatePositionStyle();
+    void commitPositionEdit(QLineEdit* edit, bool musical);
+    void syncTimeSignature();
+    void chooseCustomTimeSignature();
     /// Apply a valid BPM while the user is still typing. A run of live values
     /// is folded back to one undo step when editing finishes.
     void previewTempo(const QString& text);
     void commitTempo();
     QString positionText() const;
+    QString clockText() const;
 
     daw::EngineController* m_controller = nullptr;
 
@@ -143,6 +156,8 @@ private:
     QWidget* m_rightGroup = nullptr;
     QWidget* m_transportGroup = nullptr;
     QWidget* m_lcdScreen = nullptr;
+    QWidget* m_positionGroup = nullptr;
+    QWidget* m_tempoGroup = nullptr;
     ui::IconButton* m_toStartButton = nullptr;
     ui::IconButton* m_rewindButton = nullptr;
     ui::IconButton* m_stopButton = nullptr;
@@ -160,14 +175,14 @@ private:
     ui::IconButton* m_webPanelButton = nullptr;
     ui::IconButton* m_aiPanelButton = nullptr;
 
-    QLabel* m_positionValue = nullptr;
+    QLineEdit* m_positionValue = nullptr;
     QLineEdit* m_tempoEdit = nullptr;
-    QLabel* m_statusDot = nullptr;
-    QLabel* m_statusText = nullptr;
-    QLabel* m_deviceText = nullptr;
 
     QToolButton* m_timeFormatButton = nullptr;
     QToolButton* m_gridButton = nullptr;
+    QToolButton* m_timeSignatureButton = nullptr;
+    SpectrumMeter* m_spectrum = nullptr;
+    QList<QAction*> m_timeSignatureActions;
     QToolButton* m_toolButton = nullptr;
     QList<QAction*> m_toolActions;
     /// The tool the modifier borrows — Logic's command-click tool.
@@ -177,14 +192,11 @@ private:
 
     /// Both of these are remembered across launches (see UiConstants.hpp);
     /// the initialisers are only the factory defaults.
-    SpectrumMeter* m_spectrum = nullptr;
-
-    /// Both of these are remembered across launches (see UiConstants.hpp);
-    /// the initialisers are only the factory defaults.
     int m_gridIndex = 5;      // 1/16
     int m_toolIndex = 0;      // 0 Select, 1 Knife, 2 Eraser, 3 Region
     bool m_snapEnabled = true;
     bool m_showBars = true;
+    bool m_positionShowsBars = true;
     bool m_recordEngaged = false;   // armed and waiting for R
     bool m_positionRecording = false;
     int m_typingOctave = 5;         // shown in the typing keyboard's tooltip

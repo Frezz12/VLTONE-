@@ -125,7 +125,7 @@ Materialization materialize(const CloudProjectBootstrap& bootstrap,
                             const QString& snapshotPath) {
     const QString projectId = canonicalUuid(bootstrap.project.id);
     if (projectId.isEmpty() || bootstrap.project.formatVersion !=
-                                   daw::ProjectSerializer::kFormatVersion ||
+                                   daw::collab::kSharedProjectFormatVersion ||
         bootstrap.headSequence != bootstrap.project.headSequence ||
         bootstrap.replayBaseSequence > bootstrap.headSequence) {
         return rejected(CloudSyncErrorCode::SnapshotInvalid,
@@ -137,7 +137,7 @@ Materialization materialize(const CloudProjectBootstrap& bootstrap,
     if (bootstrap.snapshot) {
         if (bootstrap.snapshot->projectId != projectId ||
             bootstrap.snapshot->schemaVersion !=
-                daw::ProjectSerializer::kFormatVersion ||
+                daw::collab::kSharedProjectFormatVersion ||
             bootstrap.snapshot->sequence != bootstrap.replayBaseSequence ||
             !isCanonicalCloudSnapshotAssetManifest(
                 bootstrap.snapshot->assetIds) ||
@@ -1049,14 +1049,14 @@ bool checkCloudProjectSyncCoordinatorForTest(QString* error) {
 
     CloudProjectBootstrap bootstrap;
     bootstrap.project.id = projectId;
-    bootstrap.project.formatVersion = daw::ProjectSerializer::kFormatVersion;
+    bootstrap.project.formatVersion = daw::collab::kSharedProjectFormatVersion;
     bootstrap.project.headSequence = 1;
     bootstrap.project.snapshotSequence = 0;
     bootstrap.snapshot = CloudSnapshotDescriptor{
         QStringLiteral("55555555-5555-4555-8555-555555555555"),
         projectId, 0,
         QStringLiteral("66666666-6666-4666-8666-666666666666"),
-        daw::ProjectSerializer::kFormatVersion};
+        daw::collab::kSharedProjectFormatVersion};
     CloudProjectOperation operation;
     operation.projectId = projectId;
     operation.serverSequence = 1;

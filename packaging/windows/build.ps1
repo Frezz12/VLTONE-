@@ -27,7 +27,7 @@ $stageDirectory = Join-Path $BuildDirectory "stage"
 $distributionDirectory = $stageDirectory
 $binaryDirectory = Join-Path $stageDirectory "bin"
 $artifactDirectory = Join-Path $BuildDirectory "artifacts"
-$expectedWindowsTestCount = 33
+$expectedWindowsTestCount = 35
 
 $cmakeSource = Get-Content -LiteralPath (Join-Path $repository "CMakeLists.txt") -Raw
 $versionMatch = [Regex]::Match(

@@ -281,6 +281,11 @@ int main() {
         check(gravity && !gravity->isInstrument &&
                   manager.instantiate(*gravity) != nullptr,
               "Gravity is registered as an instantiable built-in effect");
+        const auto graphit =
+            manager.find(plugins::Format::Internal, "daw.graphit");
+        check(graphit && !graphit->isInstrument &&
+                  manager.instantiate(*graphit) != nullptr,
+              "Graphit is registered as an instantiable built-in effect");
 
         // It must be usable, not merely listed.
         const auto descriptor =

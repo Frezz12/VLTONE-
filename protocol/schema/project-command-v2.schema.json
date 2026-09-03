@@ -525,7 +525,7 @@
         "name": { "type": "string", "maxLength": 4096 },
         "bypassed": { "type": "boolean" },
         "format": { "const": "internal" },
-        "uid": { "enum": ["daw.sampler", "daw.equalizer", "daw.gravity"] },
+        "uid": { "enum": ["daw.sampler", "daw.equalizer", "daw.gravity", "daw.graphit"] },
         "vendor": { "type": "string", "maxLength": 4096 },
         "pluginVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
         "stateSchemaVersion": { "type": "integer", "minimum": 1 },
@@ -556,7 +556,7 @@
       },
       "oneOf": [
         { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } }, "insert": { "properties": { "uid": { "const": "daw.sampler" } } }, "afterId": { "const": "" } } },
-        { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "insert": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity"] } } } } }
+        { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "insert": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity", "daw.graphit"] } } } } }
       ]
     },
     "pluginRefPayload": {
@@ -600,7 +600,7 @@
       },
       "oneOf": [
         { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } }, "replacement": { "properties": { "uid": { "const": "daw.sampler" } } } } },
-        { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "replacement": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity"] } } } } }
+        { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "replacement": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity", "daw.graphit"] } } } } }
       ]
     },
     "pluginPropertyPayload": {

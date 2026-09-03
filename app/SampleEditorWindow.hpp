@@ -26,6 +26,7 @@ public:
     /// Forwarded to the panel: the arrangement's grid, so stretching a clip
     /// can land its end on a bar line.
     void setSnapProvider(std::function<double()> provider);
+    void refresh();
 
 signals:
     void closing(const QString& trackId, const QString& clipId);

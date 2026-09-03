@@ -1116,7 +1116,10 @@ func validateSharedInsert(raw json.RawMessage) (string, string, error) {
 	if format, err := payloadString(body, "format", 16, false); err != nil || format != "internal" {
 		return "", "", invalidf("command payload plugin format must be internal")
 	}
-	uid, err := payloadEnum(body, "uid", "daw.sampler", "daw.equalizer", "daw.gravity")
+	// Must stay in lockstep with supportedBuiltin() in ProjectReducer.cpp and
+	// the sharedInsert uid enum in protocol/schema/project-command-v2.schema.json.
+	// scripts/check-collaboration-contracts.mjs asserts all three agree.
+	uid, err := payloadEnum(body, "uid", "daw.sampler", "daw.equalizer", "daw.gravity", "daw.graphit")
 	if err != nil {
 		return "", "", err
 	}

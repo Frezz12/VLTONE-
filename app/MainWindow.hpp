@@ -126,6 +126,12 @@ public:
     /// Populate a few coloured tracks (used for screenshots / demos).
     void populateDemo();
 
+    /// Headless regression check: a freshly constructed window must expose an
+    /// empty project until the user adds or imports a track.
+    bool checkFreshProjectEmptyForTest() const {
+        return m_controller.project().tracks.empty();
+    }
+
     /// Open a VLT package selected by the File menu, passed on the command
     /// line, or delivered by the operating system after a double-click. Both
     /// the outer `<name>.vlt` package and its inner `Project.vlt` manifest are
@@ -209,6 +215,11 @@ public:
     /// and open its editor. False when the project has no such track.
     bool openDemoSampler(const QString& samplePath = {});
 
+    /// Headless/screenshot check for the built-in Graphit saturator editor.
+    bool openDemoGraphit();
+    bool checkGraphitPanelForTest();
+    void resizeGraphitForShot();
+
     /// Headless check only: add the built-in Gravity effect to the first audio
     /// track and open its branded editor.
     bool openDemoGravity();
@@ -244,6 +255,9 @@ public:
     /// Headless check: send the physical B key as the Cyrillic И produced by a
     /// Russian layout and prove a Ctrl/Cmd shortcut still fires.
     bool checkLayoutIndependentShortcuts();
+    /// Both local processing commands remain registered for the shortcut
+    /// editor; only Bounce carries a factory key binding.
+    bool checkProcessingCommandsForTest() const;
 
     /// Headless check only: drop `paths` onto the arrangement through the real
     /// drag-and-drop events, as the browser and the desktop both do, and report
@@ -383,6 +397,9 @@ public:
     /// Drive the BPM field through a real vertical scrub, then double-click it
     /// and prove the normal text-entry mode is still available.
     bool checkTempoScrubForTest();
+    /// Exercise both playhead readouts through their drag and typed-entry
+    /// paths, including conversion through the current tempo and time signature.
+    bool checkPositionScrubForTest();
     /// Verify that application-owned modeless editors all remain bounded
     /// children of the workspace and hand focus back to the arrangement.
     bool checkAuxiliaryWindowPolicyForTest();
@@ -465,13 +482,15 @@ private slots:
     void onToggleMetronome(bool on);
     void onAddAudioTrack();
     void onAddMidiTrack();
-    void onAddInstrumentTrack();
     void onAddPatternTrack();
     void onAddBusTrack();
+    void onAddSendTrack();
     void onDuplicateSelectedTrack();
     void onRemoveSelectedTrack();
     void onImportAudio();
     void onExport();
+    void onBounceInPlace();
+    void onOfflineRender();
     void onNewProject();
     void onNewProjectFromTemplate();
     void onOpenProject();
@@ -614,6 +633,7 @@ private:
     void onRecordModeChanged();
 
     void buildMenus();
+    void updateLocalProcessingActions();
     /// Register stable, non-menu actions for permanent toolbar controls so the
     /// shortcut editor and assistant use the same handlers as their buttons.
     void buildSemanticCommands();
@@ -830,6 +850,9 @@ private:
     QAction* m_showBrowserAction = nullptr;
     QAction* m_showWebAction = nullptr;
     QAction* m_showAiAction = nullptr;
+    QAction* m_followPlayheadAction = nullptr;
+    QAction* m_bounceInPlaceAction = nullptr;
+    QAction* m_offlineRenderAction = nullptr;
     QTimer* m_refreshTimer = nullptr;
     /// Lightweight 60-ish Hz cursor clock. It sleeps while transport is still.
     QTimer* m_playheadTimer = nullptr;

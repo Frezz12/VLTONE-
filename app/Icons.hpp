@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QIcon>
 #include <QRectF>
+#include <QString>
 
 class QPainter;
 
@@ -54,5 +55,10 @@ void paint(QPainter& painter, Glyph glyph, const QRectF& rect,
 
 /// Rasterise a glyph into a QIcon (for menus, window icons, …).
 QIcon icon(Glyph glyph, const QColor& color, int size = 18);
+
+/// Render a monochrome SVG from the embedded /icons resource and tint it with
+/// the active theme. Multiple device-pixel-ratio variants keep toolbar assets
+/// sharp on scaled displays.
+QIcon svgIcon(const QString& fileName, const QColor& color, int size = 18);
 
 } // namespace icons

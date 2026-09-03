@@ -139,7 +139,7 @@ bool CloudProjectCache::store(
     const QJsonObject manifest{
         {QStringLiteral("schemaVersion"), kCacheSchemaVersion},
         {QStringLiteral("projectFormatVersion"),
-         daw::ProjectSerializer::kFormatVersion},
+         daw::collab::kSharedProjectFormatVersion},
         {QStringLiteral("projectId"), project},
         {QStringLiteral("serverSequence"),
          double(document.confirmedSequence)},
@@ -202,7 +202,7 @@ std::optional<CachedCloudProject> CloudProjectCache::load(
         manifest.value(QStringLiteral("schemaVersion")).toInt(-1) !=
             kCacheSchemaVersion ||
         manifest.value(QStringLiteral("projectFormatVersion")).toInt(-1) !=
-            daw::ProjectSerializer::kFormatVersion ||
+            daw::collab::kSharedProjectFormatVersion ||
         canonicalUuid(manifest.value(QStringLiteral("projectId")).toString()) !=
             project) {
         setError(error, QStringLiteral("Cloud cache manifest is invalid"));

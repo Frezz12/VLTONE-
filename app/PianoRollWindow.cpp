@@ -21,6 +21,7 @@
 #include <QContextMenuEvent>
 #include <QHBoxLayout>
 #include <QHideEvent>
+#include <QImage>
 #include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
@@ -459,6 +460,23 @@ QString noteName(int pitch) {
     return QString::fromStdString(mt::pitchName(pitch));
 }
 
+/// Piano keys meet the window with a square edge and round only at the playing
+/// end. A fully rounded rectangle starts outside the widget at x=0, so Qt clips
+/// its antialiased corners and makes the left edge look bitten away.
+QPainterPath pianoKeyPath(const QRectF& rect, qreal radius) {
+    const qreal r = std::clamp(radius, 0.0,
+                               std::min(rect.width(), rect.height()) * 0.5);
+    QPainterPath path;
+    path.moveTo(rect.left(), rect.top());
+    path.lineTo(rect.right() - r, rect.top());
+    path.quadTo(rect.right(), rect.top(), rect.right(), rect.top() + r);
+    path.lineTo(rect.right(), rect.bottom() - r);
+    path.quadTo(rect.right(), rect.bottom(), rect.right() - r, rect.bottom());
+    path.lineTo(rect.left(), rect.bottom());
+    path.closeSubpath();
+    return path;
+}
+
 /// Every choice the roll offers lives under "pianoRoll/" in the user's
 /// settings, so the window comes back the way it was left rather than at the
 /// factory defaults.
@@ -840,9 +858,44 @@ bool PianoRollView::checkInteractionGesturesForTest() {
     const auto originalPreview = m_preview;
     const QSet<QString> originalPreviewSelection = m_previewSelection;
     const bool originalPreviewWholeClip = m_previewWholeClip;
+    const NoteStyle originalNoteStyle = m_noteStyle;
+    const bool originalNoteBorders = m_noteBorders;
     const mt::Notes originalClipboard = clipboard();
     const std::size_t undoStart = m_controller->undoDepth();
     const double originalTransportPosition = m_controller->positionSeconds();
+    const double originalLoopStart = m_controller->loopStartSeconds();
+    const double originalLoopEnd = m_controller->loopEndSeconds();
+    const bool originalLoopEnabled = m_controller->isLoopEnabled();
+
+    // Both public note styles must keep their ends intact while remaining
+    // visibly distinct. This tiny raster check catches a centred outline being
+    // clipped at either edge and Flat accidentally becoming rounded again.
+    const auto renderNoteStyle = [this](NoteStyle style) {
+        QImage image(32, 16, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        m_noteStyle = style;
+        m_noteBorders = false;
+        QPainter painter(&image);
+        paintNoteShape(painter, QRectF(2.0, 2.0, 28.0, 12.0),
+                       QColor(90, 160, 225), false, false);
+        painter.end();
+        return image;
+    };
+    const QImage roundedNote = renderNoteStyle(NoteStyle::Rounded);
+    const QImage flatNote = renderNoteStyle(NoteStyle::Flat);
+    const bool noteStylesClean =
+        qAlpha(roundedNote.pixel(2, 8)) > 240 &&
+        qAlpha(roundedNote.pixel(29, 8)) > 240 &&
+        qAlpha(roundedNote.pixel(2, 2)) < qAlpha(flatNote.pixel(2, 2)) &&
+        qAlpha(flatNote.pixel(2, 2)) > 240 &&
+        qAlpha(flatNote.pixel(1, 8)) == 0;
+    const QPainterPath testKey = pianoKeyPath(QRectF(0, 0, 20, 10), 2.0);
+    const bool keyboardShapeClean =
+        testKey.contains(QPointF(0.25, 0.25)) &&
+        !testKey.contains(QPointF(19.75, 0.25)) &&
+        testKey.contains(QPointF(19.75, 5.0));
+    m_noteStyle = originalNoteStyle;
+    m_noteBorders = originalNoteBorders;
 
     const auto makeNote = [](const char* id, double start, double length) {
         daw::NoteModel note;
@@ -1043,6 +1096,8 @@ bool PianoRollView::checkInteractionGesturesForTest() {
 
     // Repeat selects its result. Repeating again therefore continues the line
     // instead of duplicating the original phrase on top of the first copy.
+    m_controller->setLoopRangeSeconds(0.0, 0.0);
+    m_controller->setLoopEnabled(false);
     mt::Notes repeatNotes = {makeNote("repeat-a", 0.5, 0.5)};
     replaceNotes(repeatNotes, "Prepare Repeat Chain Check");
     m_selected = {QStringLiteral("repeat-a")};
@@ -1053,6 +1108,38 @@ bool PianoRollView::checkInteractionGesturesForTest() {
                               m_selected.size() == 1 &&
                               std::abs(repeatedClip->notes[2].startBeats - 1.5) <
                                   1e-9;
+
+    // An active cycle is a time selection. Repeat copies every note portion
+    // inside it and moves the cycle to the copy, so the same shortcut chains.
+    mt::Notes loopNotes = {makeNote("loop-a", 0.25, 0.5),
+                           makeNote("loop-outside", 8.0, 0.5)};
+    replaceNotes(loopNotes, "Prepare Loop Repeat Check");
+    m_selected.clear();
+    m_controller->setLoopRangeSeconds(localBeatToSeconds(0.0),
+                                      localBeatToSeconds(1.0));
+    m_controller->setLoopEnabled(true);
+    duplicateSelection();
+    duplicateSelection();
+    const auto* loopRepeatedClip = clip();
+    const bool loopRepeatChains =
+        loopRepeatedClip && loopRepeatedClip->notes.size() == 4 &&
+        m_selected.size() == 1 &&
+        std::any_of(loopRepeatedClip->notes.begin(),
+                    loopRepeatedClip->notes.end(), [](const auto& note) {
+                        return std::abs(note.startBeats - 1.25) < 1e-9 &&
+                               std::abs(note.lengthBeats - 0.5) < 1e-9;
+                    }) &&
+        std::any_of(loopRepeatedClip->notes.begin(),
+                    loopRepeatedClip->notes.end(), [](const auto& note) {
+                        return std::abs(note.startBeats - 2.25) < 1e-9 &&
+                               std::abs(note.lengthBeats - 0.5) < 1e-9;
+                    }) &&
+        std::abs(secondsToLocalBeat(m_controller->loopStartSeconds()) - 2.0) <
+            1e-9 &&
+        std::abs(secondsToLocalBeat(m_controller->loopEndSeconds()) - 3.0) <
+            1e-9;
+    m_controller->setLoopRangeSeconds(0.0, 0.0);
+    m_controller->setLoopEnabled(false);
 
     // Exercise the actual key-event route, not merely QAction metadata. Both
     // modifier spellings are intentional: Qt/native/remote keyboards can
@@ -1312,37 +1399,47 @@ bool PianoRollView::checkInteractionGesturesForTest() {
     invalidateNotePaintIndex();
     m_previewSelection = originalPreviewSelection;
     m_previewWholeClip = originalPreviewWholeClip;
+    m_noteStyle = originalNoteStyle;
+    m_noteBorders = originalNoteBorders;
     clipboard() = originalClipboard;
+    m_controller->setLoopRangeSeconds(originalLoopStart, originalLoopEnd);
+    m_controller->setLoopEnabled(originalLoopEnabled);
     m_controller->seekSeconds(originalTransportPosition);
     clampScroll();
     emit selectionChanged();
     emit viewportChanged();
     update();
-    const bool ok = localPlayheadMapped && blankRightClearsSelection &&
+    const bool ok = noteStylesClean && keyboardShapeClean &&
+                    localPlayheadMapped &&
+                    blankRightClearsSelection &&
                     eraseDeferred && sweptAll && brushSafe && singleHidden && groupOffset &&
                     groupTrim && groupTrimAtomic && dynamicsPreserved &&
                     velocityAtomic && velocityCeilingIndependent &&
                     deletedTogether && undoneTogether && redoneTogether &&
-                    repeatChains && shortcutsRouted && previewCommitExact &&
+                    repeatChains && loopRepeatChains && shortcutsRouted &&
+                    previewCommitExact &&
                     indexedBoundaries && steadyQueriesReuseIndex &&
                     editInvalidatesIndex && logarithmicPlayheadLookup &&
                     controllerLaneCoalesced;
     if (!ok) {
         std::fprintf(stderr,
-                     "piano-roll view checks: seek=%d deselect=%d deferErase=%d erase=%d "
+                     "piano-roll view checks: styles=%d keyboard=%d seek=%d deselect=%d deferErase=%d erase=%d "
                      "brush=%d single=%d "
                      "offset=%d trim=%d trimUndo=%d dynamics=%d velocityUndo=%d "
-                     "ceiling=%d delete=%d undo=%d redo=%d repeat=%d keys=%d "
+                     "ceiling=%d delete=%d undo=%d redo=%d repeat=%d loop=%d keys=%d "
                      "previewCommit=%d index=%d cache=%d editIndex=%d "
                      "lookup=%d(%zu comparisons) controller=%d(%zu writes)\n",
-                     int(localPlayheadMapped), int(blankRightClearsSelection),
+                     int(noteStylesClean), int(keyboardShapeClean),
+                     int(localPlayheadMapped),
+                     int(blankRightClearsSelection),
                      int(eraseDeferred), int(sweptAll), int(brushSafe), int(singleHidden),
                      int(groupOffset), int(groupTrim), int(groupTrimAtomic),
                      int(dynamicsPreserved), int(velocityAtomic),
                      int(velocityCeilingIndependent),
                      int(deletedTogether), int(undoneTogether),
                      int(redoneTogether), int(repeatChains),
-                     int(shortcutsRouted), int(previewCommitExact),
+                     int(loopRepeatChains), int(shortcutsRouted),
+                     int(previewCommitExact),
                      int(indexedBoundaries), int(steadyQueriesReuseIndex),
                      int(editInvalidatesIndex), int(logarithmicPlayheadLookup),
                      maximumComparisons, int(controllerLaneCoalesced),
@@ -2452,10 +2549,51 @@ void PianoRollView::paste() {
 }
 
 void PianoRollView::duplicateSelection() {
-    mt::Notes selection = targetNotes();
-    if (selection.empty()) return;
     const auto* c = clip();
     if (!c) return;
+    const double loopFromSeconds = m_controller->loopStartSeconds();
+    const double loopToSeconds = m_controller->loopEndSeconds();
+    if (m_controller->isLoopEnabled() &&
+        loopToSeconds > loopFromSeconds) {
+        const double loopFrom = secondsToLocalBeat(loopFromSeconds);
+        const double loopTo = secondsToLocalBeat(loopToSeconds);
+        const double length = loopTo - loopFrom;
+        if (length <= 0.0) return;
+
+        mt::Notes merged = c->notes;
+        QSet<QString> copies;
+        for (const auto& source : c->notes) {
+            const double sourceEnd = source.startBeats + source.lengthBeats;
+            const double insideFrom = std::max(source.startBeats, loopFrom);
+            const double insideTo = std::min(sourceEnd, loopTo);
+            if (insideTo <= insideFrom) continue;
+            daw::NoteModel note = source;
+            note.id = daw::newUuid();
+            note.startBeats = insideFrom + length;
+            note.lengthBeats = insideTo - insideFrom;
+            copies.insert(QString::fromStdString(note.id));
+            merged.push_back(std::move(note));
+        }
+        if (copies.isEmpty()) return;
+
+        m_controller->setClipNotes(m_trackId.toStdString(), m_clipId.toStdString(),
+                                   merged, "Repeat Loop Notes");
+        invalidateSoundingPitchIndex();
+        m_selected = copies;
+        m_primary.clear();
+        m_controller->setLoopRangeSeconds(loopToSeconds,
+                                          loopToSeconds +
+                                              (loopToSeconds - loopFromSeconds));
+        m_controller->setLoopEnabled(true);
+        emit selectionChanged();
+        emit loopRangeChanged();
+        emit edited();
+        update();
+        return;
+    }
+
+    mt::Notes selection = targetNotes();
+    if (selection.empty()) return;
     double start = 0.0, end = 0.0;
     mt::spanOf(selection, &start, &end);
     // A duplicate lands immediately after the phrase it came from, which is how
@@ -2766,6 +2904,10 @@ void PianoRollView::paintEvent(QPaintEvent* event) {
                     m_ghostPaintScratch.end());
                 p.setBrush(ghost);
                 p.setPen(Qt::NoPen);
+                const bool roundedGhosts =
+                    m_noteStyle == NoteStyle::Rounded && px >= 64.0 &&
+                    m_rowHeight >= 8.0;
+                p.setRenderHint(QPainter::Antialiasing, roundedGhosts);
                 for (std::size_t noteIndex : m_ghostPaintScratch) {
                     const daw::NoteModel& note = other.notes[noteIndex];
                     QRectF r = noteRect(note);
@@ -2778,11 +2920,12 @@ void PianoRollView::paintEvent(QPaintEvent* event) {
                     if (!r.intersects(dirtyRect)) continue;
                     if (!event->region().intersects(r.toAlignedRect())) continue;
                     r = ui::pixelAlignedRect(r, devicePixelRatioF());
-                    if (px < 64.0 || r.width() < 12.0 || r.height() < 8.0)
+                    if (!roundedGhosts || r.width() < 12.0)
                         p.drawRect(r);
                     else
                         p.drawRoundedRect(r, 3, 3);
                 }
+                p.setRenderHint(QPainter::Antialiasing, false);
             }
         }
     }
@@ -2880,14 +3023,21 @@ void PianoRollView::paintEvent(QPaintEvent* event) {
                                  t.background.blue(), 110));
         }
         for (const auto& n : m_stretchPreview) {
-            const QRectF r = noteRect(n);
+            const QRectF r = ui::pixelAlignedRect(
+                noteRect(n), devicePixelRatioF());
             if (r.bottom() < gridTop || r.top() > fieldBottom) continue;
             if (r.right() < keyWidth || r.left() > width()) continue;
             p.setPen(QPen(t.accent, 1.5, Qt::DashLine));
             p.setBrush(QColor(t.accent.red(), t.accent.green(), t.accent.blue(),
                               45));
-            p.drawRoundedRect(r, 3, 3);
+            const bool rounded = m_noteStyle == NoteStyle::Rounded &&
+                                 r.width() >= 8.0 && r.height() >= 6.0;
+            p.setRenderHint(QPainter::Antialiasing, rounded);
+            if (rounded) p.drawRoundedRect(r.adjusted(0.75, 0.75, -0.75, -0.75),
+                                           3.0, 3.0);
+            else p.drawRect(r.adjusted(0.75, 0.75, -0.75, -0.75));
         }
+        p.setRenderHint(QPainter::Antialiasing, false);
         // The scale factor, as a percentage, next to the pointer.
         if (m_pointerInside) {
             const int percent = int(std::lround(m_stretchScale * 100.0));
@@ -2974,13 +3124,8 @@ void PianoRollView::paintEvent(QPaintEvent* event) {
     m_paintClip = nullptr;
 }
 
-/// One note's body, in whichever style the roll is set to.
-///
-/// The glass style is the interesting one: a translucent body lit from above,
-/// a bright rim, and a specular sheen sitting on the top half. The sheen is a
-/// rounded rectangle clipped to the note's own shape rather than an ellipse
-/// floating on top, which is what keeps it looking like light *in* the glass
-/// instead of a sticker on it.
+/// One note's body, in whichever style the roll is set to. Both styles paint
+/// inside the pixel-aligned bounds so neither end is clipped by its own stroke.
 void PianoRollView::paintNoteShape(QPainter& p, const QRectF& r,
                                    const QColor& fill, bool selected,
                                    bool muted) const {
@@ -2988,113 +3133,53 @@ void PianoRollView::paintNoteShape(QPainter& p, const QRectF& r,
     const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
     const qreal pixel = 1.0 / std::max<qreal>(1.0, dpr);
     const QRectF shape = ui::pixelAlignedRect(r, dpr);
-    const bool compact = pxPerBeat() < 64.0 || shape.width() < 12.0 ||
-                         shape.height() < 8.0;
+    const qreal borderWidth = selected ? 2.0 * pixel
+                              : m_noteBorders ? pixel
+                                              : 0.0;
+    const QColor border = selected
+                              ? t.textPrimary
+                              : mixColors(fill, Qt::black, muted ? 0.35 : 0.48);
 
-    // At overview scale a rounded translucent rim occupies most of the note
-    // and reads as blur. Reduce it to two pixel-aligned fills: one physical
-    // pixel of outline, then the body. Musical geometry remains untouched.
-    if (compact) {
-        QColor body = fill;
-        if (m_noteStyle == NoteStyle::Outline)
-            body.setAlphaF(muted ? 0.18 : 0.42);
-        const bool bordered = selected || m_noteStyle != NoteStyle::Flat ||
-                              m_noteBorders;
-
-        p.save();
+    p.save();
+    if (m_noteStyle == NoteStyle::Flat) {
+        // The flat style is deliberately raster-sharp: border and fill are
+        // nested rectangles rather than a centred pen that loses half a pixel
+        // at the note's beginning and end.
         p.setRenderHint(QPainter::Antialiasing, false);
         p.setPen(Qt::NoPen);
-        if (bordered) {
-            const QColor border = selected
-                ? t.textPrimary
-                : m_noteStyle == NoteStyle::Outline
-                    ? fill
-                    : mixColors(fill, Qt::black, 0.58);
+        if (borderWidth > 0.0) {
             p.fillRect(shape, border);
-            const QRectF inner = shape.adjusted(pixel, pixel, -pixel, -pixel);
+            const QRectF inner = shape.adjusted(borderWidth, borderWidth,
+                                                -borderWidth, -borderWidth);
             if (inner.width() > 0.0 && inner.height() > 0.0)
-                p.fillRect(inner, body);
+                p.fillRect(inner, fill);
         } else {
-            p.fillRect(shape, body);
+            p.fillRect(shape, fill);
         }
         p.restore();
         return;
     }
 
-    const double radius = std::min(4.0, shape.height() * 0.35);
-    const auto outlinePen = [pixel](const QColor& color, bool strong) {
-        return QPen(color, pixel * (strong ? 2.0 : 1.0));
-    };
-
-    switch (m_noteStyle) {
-        case NoteStyle::Flat: {
-            p.setBrush(fill);
-            if (selected) {
-                p.setPen(outlinePen(t.textPrimary, true));
-            } else if (m_noteBorders) {
-                p.setPen(outlinePen(mixColors(fill, Qt::black, 0.45), false));
-            } else {
-                p.setPen(Qt::NoPen);
-            }
-            p.drawRoundedRect(shape, radius, radius);
-            return;
-        }
-        case NoteStyle::Outline: {
-            QColor body = fill;
-            body.setAlphaF(muted ? 0.10 : 0.22);
-            p.setBrush(body);
-            p.setPen(outlinePen(selected ? t.textPrimary : fill, selected));
-            p.drawRoundedRect(shape, radius, radius);
-            return;
-        }
-        case NoteStyle::Glass:
-            break;
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const QRectF body = shape.adjusted(borderWidth * 0.5,
+                                       borderWidth * 0.5,
+                                      -borderWidth * 0.5,
+                                      -borderWidth * 0.5);
+    if (body.width() <= 0.0 || body.height() <= 0.0) {
+        p.restore();
+        return;
     }
-
-    QPainterPath body;
-    body.addRoundedRect(shape, radius, radius);
-
-    // The body: brighter and more opaque at the top, where the light is.
-    QColor top = fill.lighter(135);
-    QColor bottom = fill.darker(125);
-    top.setAlphaF(muted ? 0.35 : 0.92);
-    bottom.setAlphaF(muted ? 0.22 : 0.66);
-    QLinearGradient glass(shape.topLeft(), shape.bottomLeft());
-    glass.setColorAt(0.0, top);
-    glass.setColorAt(0.48, fill);
-    glass.setColorAt(1.0, bottom);
-
-    p.save();
-    p.setPen(Qt::NoPen);
-    p.setBrush(glass);
-    p.drawPath(body);
-
-    if (shape.height() >= 6.0 && shape.width() >= 6.0) {
-        // The sheen: a soft band across the top, fading out before the middle.
-        p.setClipPath(body, Qt::IntersectClip);
-        QLinearGradient sheen(shape.topLeft(),
-                              QPointF(shape.left(), shape.center().y()));
-        sheen.setColorAt(0.0, QColor(255, 255, 255, muted ? 40 : 150));
-        sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
-        p.setBrush(sheen);
-        p.drawRoundedRect(shape.adjusted(pixel, pixel, -pixel,
-                                         -shape.height() * 0.52),
-                          radius, radius);
-        // A thin bright line right under the top edge reads as the glass's own
-        // thickness catching the light.
-        p.setPen(outlinePen(QColor(255, 255, 255, muted ? 30 : 110), false));
-        p.drawLine(shape.topLeft() + QPointF(radius, pixel),
-                   shape.topRight() + QPointF(-radius, pixel));
-        p.setClipping(false);
-    }
-
-    // The rim. Selected notes get the theme's contrast colour so they still
-    // read as selected against any note colour.
-    QColor rim = selected ? t.textPrimary : fill.lighter(160);
-    rim.setAlphaF(selected ? 1.0 : (muted ? 0.35 : 0.75));
-    p.setBrush(Qt::NoBrush);
-    p.setPen(outlinePen(rim, selected));
-    p.drawPath(body);
+    const qreal radius = std::min({4.0, body.height() * 0.32,
+                                  body.width() * 0.25});
+    QColor top = mixColors(fill, Qt::white, muted ? 0.05 : 0.12);
+    QColor bottom = mixColors(fill, Qt::black, muted ? 0.04 : 0.10);
+    QLinearGradient face(body.topLeft(), body.bottomLeft());
+    face.setColorAt(0.0, top);
+    face.setColorAt(1.0, bottom);
+    p.setBrush(face);
+    if (borderWidth > 0.0) p.setPen(QPen(border, borderWidth));
+    else p.setPen(Qt::NoPen);
+    p.drawRoundedRect(body, radius, radius);
     p.restore();
 }
 
@@ -3107,6 +3192,8 @@ void PianoRollView::paintKeyboard(QPainter& p, double fieldBottom) {
     const double keyWidth = keyboardWidth();
     const double gridTop = ui::kRulerHeight;
     const PitchMask sounding = keyboardPitches();
+    const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
+    const qreal pixel = 1.0 / std::max<qreal>(1.0, dpr);
 
     p.save();
     p.setClipRect(QRectF(0, gridTop, keyWidth,
@@ -3131,8 +3218,11 @@ void PianoRollView::paintKeyboard(QPainter& p, double fieldBottom) {
 
             const bool held = pitch == m_pressedKey || sounding.test(size_t(pitch));
             const double w = black ? keyWidth * 0.62 : keyWidth;
-            QRectF key(0, y, w, m_rowHeight);
-            key.adjust(0, 0.5, 0, -0.5);
+            QRectF key = ui::pixelAlignedRect(QRectF(0, y, w, m_rowHeight), dpr);
+            key.adjust(0.0, 0.0, 0.0, -pixel);
+            if (key.height() <= 0.0) continue;
+            const qreal radius = std::min(2.0, key.height() * 0.24);
+            const QPainterPath keyPath = pianoKeyPath(key, radius);
 
             QLinearGradient face(key.topLeft(), key.bottomLeft());
             if (black) {
@@ -3149,31 +3239,28 @@ void PianoRollView::paintKeyboard(QPainter& p, double fieldBottom) {
                 face.setColorAt(1.0, held ? QColor(0xA8, 0xC2, 0xE2)
                                           : QColor(0xCF, 0xCF, 0xD2));
             }
+            p.setRenderHint(QPainter::Antialiasing, true);
             p.setPen(Qt::NoPen);
             p.setBrush(face);
-            p.drawRoundedRect(key, 2.0, 2.0);
+            p.drawPath(keyPath);
 
             // The lit edge along the top and the shadow along the bottom are
             // what give the key its thickness; a held key loses the highlight
             // and gains the shadow, so it reads as pushed in.
             if (m_rowHeight >= 7.0) {
-                p.setPen(QPen(QColor(255, 255, 255, held ? 30 : 90), 1.0));
-                p.drawLine(key.topLeft() + QPointF(1.5, 0.5),
-                           key.topRight() + QPointF(-1.5, 0.5));
-                p.setPen(QPen(QColor(0, 0, 0, black ? 150 : 70), 1.0));
-                p.drawLine(key.bottomLeft() + QPointF(1.5, -0.5),
-                           key.bottomRight() + QPointF(-1.5, -0.5));
+                p.setPen(QPen(QColor(255, 255, 255, held ? 30 : 90), pixel));
+                p.drawLine(key.topLeft() + QPointF(pixel, pixel * 0.5),
+                           key.topRight() + QPointF(-radius, pixel * 0.5));
+                p.setPen(QPen(QColor(0, 0, 0, black ? 150 : 70), pixel));
+                p.drawLine(key.bottomLeft() + QPointF(pixel, -pixel * 0.5),
+                           key.bottomRight() + QPointF(-radius, -pixel * 0.5));
             }
-            // The right edge of a black key throws a shadow onto the white one
-            // behind it.
             if (black) {
-                QLinearGradient edge(key.topRight() - QPointF(3, 0),
-                                     key.topRight() + QPointF(4, 0));
-                edge.setColorAt(0.0, QColor(0, 0, 0, 90));
-                edge.setColorAt(1.0, QColor(0, 0, 0, 0));
-                p.setPen(Qt::NoPen);
-                p.setBrush(edge);
-                p.drawRect(QRectF(key.right(), key.top(), 4.0, key.height()));
+                p.setPen(QPen(QColor(0, 0, 0, 150), pixel));
+                p.drawLine(QPointF(key.right() - pixel * 0.5,
+                                   key.top() + radius),
+                           QPointF(key.right() - pixel * 0.5,
+                                   key.bottom() - radius));
             }
             if (held) {
                 // A wash of the accent so a sounding note is obvious at a
@@ -3181,7 +3268,7 @@ void PianoRollView::paintKeyboard(QPainter& p, double fieldBottom) {
                 p.setPen(Qt::NoPen);
                 p.setBrush(QColor(t.accent.red(), t.accent.green(),
                                   t.accent.blue(), black ? 110 : 70));
-                p.drawRoundedRect(key, 2.0, 2.0);
+                p.drawPath(keyPath);
             }
 
             const bool nameIt = m_showAllKeyNames || pitch % 12 == 0;
@@ -3641,14 +3728,13 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
     // arrangement has, driving the same region.
     if (pos.y() < ui::kLoopStripHeight && ev->button() == Qt::LeftButton &&
         pos.x() >= keyboardWidth() && clip()) {
-        // A double-click on the region switches the cycle on and off — the
-        // mouse's way of doing what C does, without leaving the ruler after
-        // marking a region out. Only *on* the region: over empty strip a
-        // double-click is two clicks that each start a new one.
+        // A double-click removes the cycle completely. A single drag is enough
+        // to create and arm it, matching the arrangement ruler.
         if (ev->type() == QEvent::MouseButtonDblClick &&
             loopGrabAt(pos.x()) == LoopGrab::Move) {
             m_loopGrab = LoopGrab::None;
-            m_controller->setLoopEnabled(!m_controller->isLoopEnabled());
+            m_controller->setLoopRangeSeconds(0.0, 0.0);
+            m_controller->setLoopEnabled(false);
             emit loopRangeChanged();
             update();
             ev->accept();
@@ -3938,6 +4024,10 @@ void PianoRollView::mouseMoveEvent(QMouseEvent* ev) {
                 localBeatToSeconds(std::min(m_loopAnchorBeats, at)),
                 localBeatToSeconds(std::max(m_loopAnchorBeats, at)));
         }
+        if (m_controller->loopEndSeconds() >
+            m_controller->loopStartSeconds()) {
+            m_controller->setLoopEnabled(true);
+        }
         update();
         return;
     }
@@ -4131,18 +4221,15 @@ void PianoRollView::mouseMoveEvent(QMouseEvent* ev) {
 
 void PianoRollView::mouseReleaseEvent(QMouseEvent* ev) {
     if (m_loopGrab != LoopGrab::None) {
-        const LoopGrab was = m_loopGrab;
         m_loopGrab = LoopGrab::None;
         if (m_controller->loopEndSeconds() <= m_controller->loopStartSeconds()) {
             m_controller->setLoopRangeSeconds(0.0, 0.0);
-            if (was == LoopGrab::Create && m_controller->isLoopEnabled()) {
-                m_controller->setLoopEnabled(false);
-            }
+            m_controller->setLoopEnabled(false);
+        } else {
+            m_controller->setLoopEnabled(true);
         }
-        // Deliberately *not* armed by the drag. Marking out a region and
-        // switching the cycle on are two decisions — the region stays as a dim
-        // outline until C (or the transport's Cycle button) lights it, which is
-        // also what makes the lit state mean something.
+        // A valid range is already armed by the drag; a click without travel
+        // leaves no invisible cycle behind.
         updateCursor(ev->position());
         emit loopRangeChanged();
         update();
@@ -5660,9 +5747,8 @@ void PianoRollWindow::buildViewMenu(QMenu* menu) {
     m_noteStyleMenu = new QMenu(tr("Note Style"), this);
     addChoice<PianoRollView::NoteStyle>(
         m_noteStyleMenu, "view.noteStyle", 0,
-        {{tr("Glass"), PianoRollView::NoteStyle::Glass},
-         {tr("Flat"), PianoRollView::NoteStyle::Flat},
-         {tr("Outline"), PianoRollView::NoteStyle::Outline}},
+        {{tr("Rounded"), PianoRollView::NoteStyle::Rounded},
+         {tr("Flat"), PianoRollView::NoteStyle::Flat}},
         [this](PianoRollView::NoteStyle style) { m_view->setNoteStyle(style); });
     m_noteStyleMenu->addSeparator();
     addToggle(m_noteStyleMenu, tr("Note Names on Notes"), "view.noteNames", false,
@@ -6139,8 +6225,8 @@ bool PianoRollWindow::checkCycleGestureForTest() {
         std::fprintf(stderr, "dragging the roll's cycle strip made no region\n");
         return false;
     }
-    if (m_controller->isLoopEnabled()) {
-        std::fprintf(stderr, "the roll armed the cycle just by marking it out\n");
+    if (!m_controller->isLoopEnabled()) {
+        std::fprintf(stderr, "the roll did not arm the dragged cycle\n");
         return false;
     }
 
@@ -6153,18 +6239,10 @@ bool PianoRollWindow::checkCycleGestureForTest() {
         QApplication::processEvents();
     };
     doubleClick();
-    if (!m_controller->isLoopEnabled()) {
-        std::fprintf(stderr, "double-clicking the roll's region did not arm it\n");
-        return false;
-    }
-    if (std::abs(m_controller->loopStartSeconds() - start) > 1e-6 ||
-        std::abs(m_controller->loopEndSeconds() - end) > 1e-6) {
-        std::fprintf(stderr, "arming from the roll moved the region\n");
-        return false;
-    }
-    doubleClick();
-    if (m_controller->isLoopEnabled()) {
-        std::fprintf(stderr, "double-clicking it again did not switch it off\n");
+    if (m_controller->isLoopEnabled() ||
+        m_controller->loopStartSeconds() != 0.0 ||
+        m_controller->loopEndSeconds() != 0.0) {
+        std::fprintf(stderr, "double-clicking the roll's region did not remove it\n");
         return false;
     }
 

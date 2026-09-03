@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -67,6 +68,26 @@ std::string pluginStateFileName(const std::string& stem,
     return stem + "-" + text + ".bin";
 }
 
+void fingerprintBytes(std::uint64_t& hash, const void* bytes,
+                      std::size_t count) {
+    const auto* data = static_cast<const unsigned char*>(bytes);
+    for (std::size_t i = 0; i < count; ++i) {
+        hash ^= data[i];
+        hash *= 1099511628211ull;
+    }
+}
+
+template <typename T>
+void fingerprintValue(std::uint64_t& hash, const T& value) {
+    fingerprintBytes(hash, &value, sizeof(value));
+}
+
+void fingerprintString(std::uint64_t& hash, const std::string& value) {
+    fingerprintBytes(hash, value.data(), value.size());
+    const unsigned char separator = 0xff;
+    fingerprintBytes(hash, &separator, 1);
+}
+
 void snapshotParameters(plugins::PluginInstance& instance,
                         std::vector<InsertParameter>& destination) {
     const std::span<const plugins::ParameterInfo> parameters = instance.parameters();
@@ -96,12 +117,12 @@ void snapshotParameters(plugins::PluginInstance& instance,
 std::string defaultTrackName(TrackKind kind) {
     switch (kind) {
         case TrackKind::Audio: return "Audio";
-        case TrackKind::Instrument: return "Instrument";
+        case TrackKind::Instrument: return "MIDI"; // legacy project kind
         case TrackKind::Midi: return "MIDI";
         case TrackKind::Pattern: return "Pattern";
         case TrackKind::Automation: return "Automation";
         case TrackKind::Bus: return "Bus";
-        case TrackKind::Aux: return "Aux";
+        case TrackKind::Aux: return "Send";
         case TrackKind::Group: return "Group";
         case TrackKind::Master: return "Master";
         case TrackKind::Folder: return "Folder";
@@ -195,7 +216,7 @@ void appendCurvePoints(std::vector<std::pair<double, double>>& out,
 /// bus — but it plays other tracks' audio, never its own, so arming one would
 /// have nowhere to put the file.
 bool isRecordable(const TrackModel& track) {
-    return carriesAudio(track) && !isFolder(track);
+    return acceptsRecording(track);
 }
 
 /// A template is configuration, not an arrangement. Pattern containers are
@@ -402,7 +423,7 @@ void appendCommand(const std::shared_ptr<collab::BatchCommand>& batch,
 bool supportedSharedBuiltin(const InsertModel& insert) {
     return insert.format == PluginFormat::Internal &&
            (insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
-            insert.uid == "daw.gravity");
+            insert.uid == "daw.gravity" || insert.uid == "daw.graphit");
 }
 
 bool cleanSharedInsert(const InsertModel& source, InsertModel& copy,
@@ -709,6 +730,10 @@ bool appendSharedTrackContents(
         track.id, collab::TrackProperty::Muted, track.muted});
     appendCommand(batch, collab::SetTrackProperty{
         track.id, collab::TrackProperty::Mono, track.mono});
+    // Load-bearing: ProjectReducer::applySetTrackProperty rejects Summing for
+    // any kind other than Folder, and a rejected child fails the whole batch.
+    // A Pattern is summing by definition (Document.hpp isSummingFolder), so it
+    // needs no command; do not widen this guard without widening the reducer.
     if (track.kind == TrackKind::Folder) {
         appendCommand(batch, collab::SetTrackProperty{
             track.id, collab::TrackProperty::Summing, track.summing});
@@ -881,6 +906,47 @@ bool sameCollaborationTopology(const ProjectModel& left,
             return false;
     }
     return true;
+}
+
+struct PatternOwnerRef {
+    TrackModel* track = nullptr;
+    ClipModel* clip = nullptr;
+};
+
+PatternOwnerRef findPatternOwner(ProjectModel& project,
+                                 const std::string& clipId) {
+    if (clipId.empty()) return {};
+    for (TrackModel& track : project.tracks) {
+        if (track.kind != TrackKind::Pattern) continue;
+        for (ClipModel& clip : track.clips) {
+            if (clip.kind == ClipKind::Pattern && clip.id == clipId)
+                return {&track, &clip};
+        }
+    }
+    return {};
+}
+
+double patternDurationForMembers(
+    const ProjectModel& project, const ClipModel& owner,
+    double minimumDuration,
+    const std::unordered_map<std::string, double>* startOverrides = nullptr) {
+    double duration = std::max(kMinClipSeconds, minimumDuration);
+    for (const TrackModel& track : project.tracks) {
+        for (const ClipModel& member : track.clips) {
+            if (member.kind != ClipKind::Midi ||
+                member.patternClipId != owner.id) {
+                continue;
+            }
+            double start = member.startSeconds;
+            if (startOverrides) {
+                const auto override = startOverrides->find(member.id);
+                if (override != startOverrides->end()) start = override->second;
+            }
+            duration = std::max(
+                duration, start + member.durationSeconds - owner.startSeconds);
+        }
+    }
+    return duration;
 }
 
 } // namespace
@@ -1111,6 +1177,15 @@ void EngineController::retireOrphanedPendingAudioImports() {
     }
 }
 
+// DANGER: this call can replace the whole project document before it returns.
+// CommandGateway::submit notifies OptimisticLocal synchronously, which reaches
+// EngineProjectProjectionAdapter and hands the rebuilt document back through
+// projectCollaborationChange on this very stack. Every TrackModel*, ClipModel*
+// and iterator into m_project is invalidated at this point. Re-look-up by id
+// afterwards; never hold a pointer across a submit.
+//
+// The same synchrony is why a cloud addTrack/addClip can return an id that
+// findTrack() resolves immediately: the optimistic projection has already run.
 collab::SharedMutationResult EngineController::submitSharedMutation(
     collab::CommandBody body, std::string undoLabel,
     std::optional<std::string> transactionId) {
@@ -1512,18 +1587,182 @@ EngineController::clipSampleData(const std::string& trackId,
     return processedClipSample(*clip, clip->filePath, loadSamples(clip->filePath));
 }
 
+std::string EngineController::offlineSourceFingerprint(
+    const ClipModel& clip) const {
+    std::uint64_t hash = 1469598103934665603ull;
+    fingerprintString(hash, clip.asset.sha256);
+    const std::uint64_t sourceFile = offlineFileFingerprint(clip.filePath);
+    fingerprintValue(hash, sourceFile);
+    fingerprintValue(hash, clip.durationSeconds);
+    fingerprintValue(hash, clip.offsetSeconds);
+    fingerprintValue(hash, clip.fadeInSeconds);
+    fingerprintValue(hash, clip.fadeOutSeconds);
+    fingerprintValue(hash, clip.fadeInCurve);
+    fingerprintValue(hash, clip.fadeOutCurve);
+    fingerprintValue(hash, clip.fadeInMode);
+    fingerprintValue(hash, clip.fadeOutMode);
+    fingerprintValue(hash, clip.gain);
+    fingerprintValue(hash, clip.pan);
+    fingerprintValue(hash, clip.compCrossfadeMs);
+
+    const ClipSampleEditModel& edit = clip.sampleEdit;
+    fingerprintValue(hash, edit.loopMode);
+    fingerprintValue(hash, edit.loopStart);
+    fingerprintValue(hash, edit.loopEnd);
+    fingerprintValue(hash, edit.stretchMode);
+    fingerprintValue(hash, edit.stretchTime);
+    fingerprintValue(hash, edit.stretchPitch);
+    fingerprintValue(hash, edit.formant);
+    fingerprintValue(hash, edit.rootNote);
+    fingerprintValue(hash, edit.boost);
+    fingerprintValue(hash, edit.eqLow);
+    fingerprintValue(hash, edit.eqMid);
+    fingerprintValue(hash, edit.eqHigh);
+    fingerprintValue(hash, edit.ringMix);
+    fingerprintValue(hash, edit.ringFreq);
+    fingerprintValue(hash, edit.cut);
+    fingerprintValue(hash, edit.res);
+    fingerprintValue(hash, edit.reverbType);
+    fingerprintValue(hash, edit.reverb);
+    fingerprintValue(hash, edit.stereoDelay);
+    fingerprintValue(hash, edit.pogo);
+    fingerprintValue(hash, edit.removeDc);
+    fingerprintValue(hash, edit.reversePolarity);
+    fingerprintValue(hash, edit.normalize);
+    fingerprintValue(hash, edit.fadeStereo);
+    fingerprintValue(hash, edit.reverse);
+    fingerprintValue(hash, edit.swapStereo);
+    for (const TakeModel& take : clip.takes) {
+        fingerprintString(hash, take.id);
+        fingerprintString(hash, take.asset.sha256);
+        const std::uint64_t takeFile = offlineFileFingerprint(take.filePath);
+        fingerprintValue(hash, takeFile);
+        fingerprintValue(hash, take.offsetSeconds);
+        fingerprintValue(hash, take.lengthSeconds);
+        fingerprintValue(hash, take.clipOffsetSeconds);
+        fingerprintValue(hash, take.gain);
+        fingerprintValue(hash, take.muted);
+    }
+    for (const CompSegment& segment : clip.comp) {
+        fingerprintString(hash, segment.takeId);
+        fingerprintValue(hash, segment.startSeconds);
+        fingerprintValue(hash, segment.endSeconds);
+    }
+    char text[17]{};
+    std::snprintf(text, sizeof(text), "%016llx",
+                  static_cast<unsigned long long>(hash));
+    return text;
+}
+
+std::uint64_t EngineController::offlineFileFingerprint(
+    const std::string& path) const {
+    if (path.empty()) return 0;
+    const fs::path file = platform::pathFromUtf8(path);
+    std::error_code error;
+    const bool exists = fs::is_regular_file(file, error) && !error;
+    std::uintmax_t size = 0;
+    std::int64_t modified = 0;
+    if (exists) {
+        size = fs::file_size(file, error);
+        if (error) size = 0;
+        error.clear();
+        const auto time = fs::last_write_time(file, error);
+        if (!error) modified = static_cast<std::int64_t>(
+            time.time_since_epoch().count());
+    }
+    const auto cached = m_offlineFileFingerprints.find(path);
+    if (cached != m_offlineFileFingerprints.end() &&
+        cached->second.exists == exists && cached->second.size == size &&
+        cached->second.modified == modified) {
+        return cached->second.signature;
+    }
+
+    std::uint64_t signature = 1469598103934665603ull;
+    fingerprintValue(signature, size);
+    if (exists) {
+        std::ifstream stream(file, std::ios::binary);
+        std::array<char, 65536> block{};
+        stream.read(block.data(), std::streamsize(block.size()));
+        fingerprintBytes(signature, block.data(), std::size_t(stream.gcount()));
+        if (size > block.size()) {
+            stream.clear();
+            stream.seekg(std::streamoff(size - block.size()), std::ios::beg);
+            stream.read(block.data(), std::streamsize(block.size()));
+            fingerprintBytes(signature, block.data(),
+                             std::size_t(stream.gcount()));
+        }
+    } else {
+        fingerprintString(signature, "missing");
+    }
+    m_offlineFileFingerprints[path] =
+        OfflineFileFingerprintEntry{size, modified, signature, exists};
+    return signature;
+}
+
+bool EngineController::offlineProcessCacheValid(
+    const ClipAddress& address) const {
+    const TrackModel* track = m_project.findTrack(address.trackId);
+    if (!track) return false;
+    const auto found = std::find_if(
+        track->clips.begin(), track->clips.end(), [&](const ClipModel& clip) {
+            return clip.id == address.clipId;
+        });
+    if (found == track->clips.end() ||
+        found->offlineProcess.renderedFilePath.empty() ||
+        found->offlineProcess.sourceFingerprint.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    return fs::is_regular_file(
+               platform::pathFromUtf8(found->offlineProcess.renderedFilePath), ec) &&
+           !ec && found->offlineProcess.sourceFingerprint ==
+                      offlineSourceFingerprint(*found);
+}
+
+double EngineController::clipPlaybackDuration(const ClipModel& clip) const {
+    if (!clip.offlineProcess.renderedFilePath.empty() &&
+        clip.offlineProcess.sourceFingerprint ==
+            offlineSourceFingerprint(clip)) {
+        std::error_code ec;
+        if (fs::is_regular_file(
+                platform::pathFromUtf8(clip.offlineProcess.renderedFilePath), ec) &&
+            !ec && clip.offlineProcess.renderedDurationSeconds > 0.0) {
+            return clip.offlineProcess.renderedDurationSeconds;
+        }
+    }
+    return clip.durationSeconds;
+}
+
+const std::string& EngineController::clipPlaybackFilePath(
+    const ClipModel& clip) const {
+    if (!clip.offlineProcess.renderedFilePath.empty() &&
+        clip.offlineProcess.sourceFingerprint ==
+            offlineSourceFingerprint(clip)) {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(
+                platform::pathFromUtf8(
+                    clip.offlineProcess.renderedFilePath), ec) &&
+            !ec) {
+            return clip.offlineProcess.renderedFilePath;
+        }
+    }
+    return clip.filePath;
+}
+
 void EngineController::updateTimelineDuration() {
     double maxEnd = 0.0;
     for (const auto& t : m_project.tracks) {
         for (const auto& c : t.clips) {
-            maxEnd = std::max(maxEnd, c.startSeconds + c.durationSeconds);
+            maxEnd = std::max(maxEnd,
+                              c.startSeconds + clipPlaybackDuration(c));
         }
     }
     m_engine.transport().setDuration(toSamples(maxEnd));
 }
 
 double EngineController::effectiveClipLength(const ClipModel& clip) {
-    if (clip.durationSeconds > 0.0) return clip.durationSeconds;
+    const double processed = clipPlaybackDuration(clip);
+    if (processed > 0.0) return processed;
     if (auto samples = loadSamples(clip.filePath);
         samples && samples->sampleRate() > 0.0) {
         return double(samples->frames()) / samples->sampleRate() -
@@ -1536,6 +1775,35 @@ EngineController::PlacementSpan EngineController::emitClipPlacements(
     const ClipModel& clip, engine::ClipPlayerNode::ClipList& list) {
     PlacementSpan span;
     span.first = list.size();
+
+    if (!clip.offlineProcess.renderedFilePath.empty() &&
+        clip.offlineProcess.sourceFingerprint ==
+            offlineSourceFingerprint(clip)) {
+        auto rendered = loadSamples(clip.offlineProcess.renderedFilePath);
+        if (rendered && rendered->sampleRate() > 0.0) {
+            engine::ClipPlacement placement;
+            placement.audio = std::move(rendered);
+            placement.startSample = toSamples(clip.startSeconds);
+            placement.sourceStartFrame = 0.0;
+            const double outputSeconds =
+                clip.offlineProcess.renderedDurationSeconds > 0.0
+                    ? clip.offlineProcess.renderedDurationSeconds
+                    : double(placement.audio->frames()) /
+                          placement.audio->sampleRate();
+            placement.sourceEndFrame = std::min<double>(
+                placement.audio->frames(),
+                outputSeconds * placement.audio->sampleRate());
+            placement.lengthSamples = toSamples(outputSeconds);
+            placement.gain = 1.0f;
+            placement.pan = 0.0f;
+            placement.muted = clip.muted;
+            span.startSample = placement.startSample;
+            span.endSample = placement.startSample + placement.lengthSamples;
+            span.count = 1;
+            list.push_back(std::move(placement));
+            return span;
+        }
+    }
 
     if (!isLayered(clip)) {
         auto raw = loadSamples(clip.filePath);
@@ -2226,7 +2494,7 @@ void EngineController::syncTrackClips(const TrackModel& track) {
     for (const auto& clip : track.clips) {
         // MIDI clips carry notes, not samples, and nothing renders them yet.
         if (clip.kind != ClipKind::Audio) continue;
-        if (!clip.inserts.empty()) {
+        if (!clip.inserts.empty() || clip.playbackInjection.active()) {
             auto privateChannel = channel.clipFx.find(clip.id);
             if (privateChannel == channel.clipFx.end() ||
                 !privateChannel->second.player) {
@@ -2834,6 +3102,7 @@ audio::Result EngineController::rebuildGraph(bool reconfigurePlugins) {
     masterChannel.fader = m_masterFader;
     masterChannel.ids = TrackNodes{};
     masterChannel.ids.clips = m_masterSumId;
+    masterChannel.ids.sourceTap = m_masterSumId;
     masterChannel.ids.fader = m_masterFaderId;
     masterChannel.ids.meter = m_masterFaderId;
     syncChannelInserts(std::string(kMasterChannelId), masterChannel,
@@ -2875,6 +3144,15 @@ audio::Result EngineController::rebuildGraph(bool reconfigurePlugins) {
         for (const SendModel& send : track.sends) {
             receivers.insert(send.destinationTrackId);
         }
+        for (const ClipModel& clip : track.clips) {
+            if (clip.playbackInjection.stage !=
+                PlaybackInjectionStage::TrackSource) {
+                continue;
+            }
+            receivers.insert(clip.playbackInjection.anchorChannelId.empty()
+                                 ? track.id
+                                 : clip.playbackInjection.anchorChannelId);
+        }
     }
 
     // ── One channel strip per track ──
@@ -2904,7 +3182,8 @@ audio::Result EngineController::rebuildGraph(bool reconfigurePlugins) {
         // monitored input and routed audio never touch the private plugins.
         std::unordered_set<std::string> wantedClipFx;
         for (const ClipModel& clip : track.clips) {
-            if (clip.kind == ClipKind::Audio && !clip.inserts.empty()) {
+            if (clip.kind == ClipKind::Audio &&
+                (!clip.inserts.empty() || clip.playbackInjection.active())) {
                 wantedClipFx.insert(clip.id);
             }
         }
@@ -2944,11 +3223,14 @@ audio::Result EngineController::rebuildGraph(bool reconfigurePlugins) {
                 const engine::NodeId chainEnd = connectSlots(
                     graph, clipChannel.inserts, clipChannel.insertIds,
                     clipChannel.playerId);
-                clipChannel.fader->setGain(clip.gain);
-                clipChannel.fader->setPan(clip.pan);
+                const bool offlineValid = offlineProcessCacheValid(
+                    ClipAddress{track.id, clip.id});
+                clipChannel.fader->setGain(offlineValid ? 1.0f : clip.gain);
+                clipChannel.fader->setPan(offlineValid ? 0.0f : clip.pan);
                 graph.connect(chainEnd, clipChannel.faderId);
                 graph.connect(clipChannel.faderId, clipChannel.meterId);
-                graph.connect(clipChannel.meterId, sumId);
+                if (!clip.playbackInjection.active())
+                    graph.connect(clipChannel.meterId, sumId);
             }
             sourceHead = sumId;
         } else {
@@ -2957,7 +3239,7 @@ audio::Result EngineController::rebuildGraph(bool reconfigurePlugins) {
 
         // A live input node only exists while the channel is listening or armed,
         // so an idle project carries no input plumbing at all.
-        if (track.monitor || track.armed) {
+        if (isRecordable(track) && (track.monitor || track.armed)) {
             if (!channel.input || channel.inputChannel != track.inputChannel ||
                 channel.inputChannelCount != track.inputChannelCount) {
                 channel.input = std::make_shared<engine::InputNode>(
@@ -3058,6 +3340,7 @@ audio::Result EngineController::rebuildGraph(bool reconfigurePlugins) {
             channel.sum.reset();
         }
 
+        channel.ids.sourceTap = head;
         engine::NodeId chainEnd = connectInsertChain(graph, channel, head);
 
         // With no instrument, the notes still have to reach the first insert —
@@ -3111,6 +3394,51 @@ audio::Result EngineController::rebuildGraph(bool reconfigurePlugins) {
                                            : channel.ids.inserts.front();
     };
 
+    // Bounce clips are ordinary timeline players with a semantic output jack.
+    // Their private player keeps them out of the owning track's normal source
+    // sum; connect them exactly once after the stage already baked into audio.
+    for (const TrackModel& ownerTrack : m_project.tracks) {
+        const auto owner = m_channels.find(ownerTrack.id);
+        if (owner == m_channels.end()) continue;
+        for (const ClipModel& clip : ownerTrack.clips) {
+            if (!clip.playbackInjection.active()) continue;
+            const auto player = owner->second.clipFx.find(clip.id);
+            if (player == owner->second.clipFx.end() ||
+                player->second.meterId == engine::kInvalidNode) {
+                continue;
+            }
+            const std::string anchorId =
+                clip.playbackInjection.anchorChannelId.empty()
+                    ? ownerTrack.id
+                    : clip.playbackInjection.anchorChannelId;
+            const auto anchor = m_channels.find(anchorId);
+            engine::NodeId destination = engine::kInvalidNode;
+            switch (clip.playbackInjection.stage) {
+                case PlaybackInjectionStage::TrackSource:
+                    destination = anchor != m_channels.end()
+                                      ? channelEntry(anchor->second)
+                                      : channelEntry(owner->second);
+                    break;
+                case PlaybackInjectionStage::BeforeTrackFader:
+                case PlaybackInjectionStage::BeforeFolderFader:
+                    destination = anchor != m_channels.end()
+                                      ? anchor->second.ids.fader
+                                      : owner->second.ids.fader;
+                    break;
+                case PlaybackInjectionStage::BeforeMasterFx:
+                    destination = m_masterSumId;
+                    break;
+                case PlaybackInjectionStage::BeforeMasterFader:
+                    destination = m_masterFaderId;
+                    break;
+                case PlaybackInjectionStage::None:
+                    break;
+            }
+            if (destination != engine::kInvalidNode)
+                graph.connect(player->second.meterId, destination);
+        }
+    }
+
     for (const auto& track : m_project.tracks) {
         auto found = m_channels.find(track.id);
         if (found == m_channels.end()) continue;
@@ -3160,7 +3488,9 @@ audio::Result EngineController::rebuildGraph(bool reconfigurePlugins) {
         if (found == m_channels.end() || !tap) continue;
         const TrackNodes& ids = found->second.ids;
         const engine::NodeId source =
-            m_renderTapsPreFader ? ids.preFaderTap : ids.meter;
+            m_renderTapsAtSource ? ids.sourceTap
+            : m_renderTapsPreFader ? ids.preFaderTap
+                                   : ids.meter;
         if (source == engine::kInvalidNode) continue;
         graph.connect(source, graph.adoptNode(tap));
     }
@@ -3258,6 +3588,7 @@ void EngineController::newProject() {
     m_sharedClipSampleCache.clear();
     m_waveforms.clear();
     m_recoveryPluginStateCache.clear();
+    m_offlinePluginStateCache.clear();
     m_recoveryPluginCaptureCursor = 0;
     m_deferredClipSync.clear();
     announceAllRetiring();
@@ -3685,7 +4016,110 @@ recovery::RecoverySnapshot EngineController::captureRecoverySnapshot(
         collectChannel(track.id, track.inserts);
     }
     collectChannel(std::string(kMasterChannelId), snapshot.project.masterInserts);
+    std::unordered_set<std::string> captured;
+    for (const auto& state : snapshot.pluginStates)
+        captured.insert(state.fileName);
+    for (const TrackModel& track : snapshot.project.tracks) {
+        for (const ClipModel& clip : track.clips) {
+            for (const InsertModel& slot : clip.offlineProcess.chain) {
+                for (const std::string* file : {&slot.stateFile,
+                                                &slot.rightStateFile}) {
+                    if (file->empty() || !captured.insert(*file).second) continue;
+                    const auto found = m_offlinePluginStateCache.find(*file);
+                    if (found != m_offlinePluginStateCache.end())
+                        snapshot.pluginStates.push_back({*file, found->second});
+                }
+            }
+        }
+    }
     return snapshot;
+}
+
+EngineController::ChannelSnapshot EngineController::offlineProcessChain(
+    const ClipAddress& address) const {
+    ChannelSnapshot snapshot;
+    const TrackModel* track = m_project.findTrack(address.trackId);
+    if (!track) return snapshot;
+    const auto clip = std::find_if(
+        track->clips.begin(), track->clips.end(), [&](const ClipModel& candidate) {
+            return candidate.id == address.clipId;
+        });
+    if (clip == track->clips.end()) return snapshot;
+    snapshot.sourceName = clip->name;
+    for (const InsertModel& model : clip->offlineProcess.chain) {
+        ChainSlotSnapshot slot;
+        slot.model = model;
+        if (const auto found = m_offlinePluginStateCache.find(model.stateFile);
+            found != m_offlinePluginStateCache.end()) {
+            slot.state = found->second;
+        }
+        if (const auto found =
+                m_offlinePluginStateCache.find(model.rightStateFile);
+            found != m_offlinePluginStateCache.end()) {
+            slot.rightState = found->second;
+        }
+        snapshot.inserts.push_back(std::move(slot));
+    }
+    return snapshot;
+}
+
+std::vector<InsertModel> EngineController::cacheOfflineChain(
+    const std::vector<ChainSlotSnapshot>& chain) {
+    std::vector<InsertModel> models;
+    models.reserve(chain.size());
+    for (const ChainSlotSnapshot& source : chain) {
+        InsertModel model = source.model;
+        model.id = newUuid();
+        model.sidechainTrackId.clear();
+        model.windowOpen = false;
+        if (!source.state.empty()) {
+            model.stateFile = pluginStateFileName("offline", source.state);
+            m_offlinePluginStateCache[model.stateFile] = source.state;
+        }
+        if (!source.rightState.empty()) {
+            model.rightStateFile =
+                pluginStateFileName("offline-right", source.rightState);
+            m_offlinePluginStateCache[model.rightStateFile] = source.rightState;
+        }
+        models.push_back(std::move(model));
+    }
+    return models;
+}
+
+void EngineController::loadOfflinePluginStates(
+    const std::string& packageDir, const std::string& fallbackPackageDir) {
+    namespace fs = std::filesystem;
+    const fs::path primary =
+        platform::pathFromUtf8(ProjectSerializer::statePath(packageDir));
+    const fs::path fallback = fallbackPackageDir.empty()
+                                  ? fs::path{}
+                                  : platform::pathFromUtf8(
+                                        ProjectSerializer::statePath(
+                                            fallbackPackageDir));
+    std::unordered_set<std::string> files;
+    for (const TrackModel& track : m_project.tracks) {
+        for (const ClipModel& clip : track.clips) {
+            for (const InsertModel& slot : clip.offlineProcess.chain) {
+                if (!slot.stateFile.empty()) files.insert(slot.stateFile);
+                if (!slot.rightStateFile.empty())
+                    files.insert(slot.rightStateFile);
+            }
+        }
+    }
+    for (const std::string& file : files) {
+        fs::path source = primary / file;
+        std::ifstream stream(source, std::ios::binary);
+        if (!stream && !fallback.empty()) {
+            source = fallback / file;
+            stream = std::ifstream(source, std::ios::binary);
+        }
+        if (!stream) continue;
+        std::vector<std::uint8_t> bytes{
+            std::istreambuf_iterator<char>(stream),
+            std::istreambuf_iterator<char>()};
+        if (!bytes.empty())
+            m_offlinePluginStateCache.emplace(file, std::move(bytes));
+    }
 }
 
 audio::Result EngineController::writePluginState(ProjectModel& document,
@@ -3793,6 +4227,41 @@ audio::Result EngineController::writePluginState(ProjectModel& document,
     }
     saveChannel(std::string(kMasterChannelId), document.masterInserts);
 
+    std::unordered_set<std::string> offlineFiles;
+    for (const TrackModel& track : document.tracks)
+        for (const ClipModel& clip : track.clips)
+            for (const InsertModel& slot : clip.offlineProcess.chain) {
+                if (!slot.stateFile.empty()) offlineFiles.insert(slot.stateFile);
+                if (!slot.rightStateFile.empty())
+                    offlineFiles.insert(slot.rightStateFile);
+            }
+    for (const std::string& file : offlineFiles) {
+        const auto cached = m_offlinePluginStateCache.find(file);
+        if (cached == m_offlinePluginStateCache.end()) continue;
+        const fs::path target = stateDir / file;
+        ec.clear();
+        if (fs::is_regular_file(target, ec) && !ec) continue;
+        ec.clear();
+        fs::path temporary = target;
+        temporary += ".tmp-" + newUuid();
+        std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+        if (!stream) {
+            return audio::Result::fail(audio::EngineError::FileWriteError,
+                                       "cannot write offline plugin state " +
+                                           file);
+        }
+        stream.write(reinterpret_cast<const char*>(cached->second.data()),
+                     std::streamsize(cached->second.size()));
+        stream.close();
+        fs::rename(temporary, target, ec);
+        if (ec) {
+            fs::remove(temporary, ec);
+            return audio::Result::fail(audio::EngineError::FileWriteError,
+                                       "cannot publish offline plugin state " +
+                                           file);
+        }
+    }
+
     return result;
 }
 
@@ -3811,7 +4280,10 @@ void EngineController::cleanupPluginState(const ProjectModel& document,
     for (const TrackModel& track : document.tracks) {
         collect(track.inserts);
         collect(track.samplerFx.inserts);
-        for (const ClipModel& clip : track.clips) collect(clip.inserts);
+        for (const ClipModel& clip : track.clips) {
+            collect(clip.inserts);
+            collect(clip.offlineProcess.chain);
+        }
         if (!track.instrument.stateFile.empty())
             referenced.insert(track.instrument.stateFile);
         if (!track.instrument.rightStateFile.empty())
@@ -4517,6 +4989,7 @@ audio::Result EngineController::activateProject(
     const auto previousClipSampleCache = m_clipSampleCache;
     const auto previousDeferredClipSync = m_deferredClipSync;
     const auto previousMidiNotesRevisions = m_midiNotesRevisions;
+    const auto previousOfflinePluginStates = m_offlinePluginStateCache;
     engine::Transport& transport = m_engine.transport();
     const engine::TransportState previousTransportState = transport.state();
     const engine::SamplePos previousPosition = transport.position();
@@ -4531,6 +5004,7 @@ audio::Result EngineController::activateProject(
         m_clipSampleCache = previousClipSampleCache;
         m_deferredClipSync = previousDeferredClipSync;
         m_midiNotesRevisions = previousMidiNotesRevisions;
+        m_offlinePluginStateCache = previousOfflinePluginStates;
 
         transport.setTempo(m_project.tempo);
         transport.setTimeSignature(m_project.timeSigNumerator,
@@ -4560,6 +5034,7 @@ audio::Result EngineController::activateProject(
     m_deferredClipSync.clear();
     m_midiNotesRevisions.clear();
     m_recoveryPluginStateCache.clear();
+    m_offlinePluginStateCache.clear();
     m_recoveryPluginCaptureCursor = 0;
     announceAllRetiring();
     m_channels.clear();
@@ -4576,6 +5051,8 @@ audio::Result EngineController::activateProject(
                                         m_project.loopEndSeconds >
                                             m_project.loopStartSeconds);
     m_engine.transport().seek(0);
+
+    loadOfflinePluginStates(packageDir, fallbackPackageDir);
 
     // The first rebuild instantiates every plugin the project refers to; state
     // can only be restored once they exist.
@@ -5162,7 +5639,11 @@ std::string EngineController::addPattern(const std::string& name) {
     TrackModel model;
     model.id = newUuid();
     model.kind = TrackKind::Pattern;
-    model.summing = true;
+    // No `summing` here on purpose. Document.hpp isSummingFolder() already
+    // reports true for every Pattern regardless of the field, the shared
+    // AddTrack command has no room to carry it, and the reducer refuses
+    // SetTrackProperty::Summing for non-folders. Setting it locally would make
+    // the local and cloud paths disagree over a field nothing reads.
     model.name = name.empty() ? "Pattern" : name;
     model.color = defaultTrackColor(TrackKind::Pattern);
 
@@ -5333,13 +5814,15 @@ std::string EngineController::addPatternInstrument(
     }
 
     const std::size_t undoStart = m_undo.depth();
+    const std::size_t insertAt =
+        m_project.indexOf(patternId) + 1 + subtreeOf(m_project, patternId).size();
     const std::string trackId = addTrack(
         TrackKind::Instrument,
         descriptor.name.empty() ? std::string("Instrument") : descriptor.name);
     // Keep the membership in the collapsed history entry. appendTrack's redo
     // owns the pristine root-level model captured at creation time; an
     // undoable move is what restores the Pattern parent after that redo.
-    moveTrack(trackId, m_project.indexOf(trackId), patternId);
+    moveTrack(trackId, insertAt, patternId);
     if (!setTrackInstrumentPlugin(trackId, descriptor)) {
         removeTrack(trackId);
         return {};
@@ -5461,11 +5944,13 @@ std::string EngineController::addPatternSample(const std::string& patternId,
     }
 
     const std::size_t undoStart = m_undo.depth();
+    const std::size_t insertAt =
+        m_project.indexOf(patternId) + 1 + subtreeOf(m_project, patternId).size();
     std::string name =
         platform::pathToUtf8(platform::pathFromUtf8(filePath).stem());
     if (name.empty()) name = "Sample";
     const std::string trackId = addTrack(TrackKind::Instrument, name);
-    moveTrack(trackId, m_project.indexOf(trackId), patternId);
+    moveTrack(trackId, insertAt, patternId);
     if (!loadInstrumentSampler(trackId, filePath)) {
         removeTrack(trackId);
         return {};
@@ -5947,14 +6432,14 @@ void EngineController::setTrackSoloed(const std::string& trackId, bool soloed) {
 
 void EngineController::setTrackArmed(const std::string& trackId, bool armed) {
     auto* track = m_project.findTrack(trackId);
-    if (!track || track->armed == armed) return;
+    if (!track || !isRecordable(*track) || track->armed == armed) return;
     track->armed = armed;
     rebuildGraph();            // an armed track grows an input node
 }
 
 void EngineController::setTrackMonitor(const std::string& trackId, bool monitor) {
     auto* track = m_project.findTrack(trackId);
-    if (!track) return;
+    if (!track || !isRecordable(*track)) return;
     // A deliberate click outranks smart monitoring: from here on this track's
     // monitor is the user's, and the "A" mark goes away.
     if (m_recording.manualMonitorDisablesAuto) track->monitorAuto = false;
@@ -6506,7 +6991,14 @@ void EngineController::syncFolderRouting() {
 void EngineController::setFolderSumming(const std::string& folderId,
                                         bool summing) {
     auto* folder = m_project.findTrack(folderId);
-    if (!folder || !isFolder(*folder) || folder->summing == summing) return;
+    if (!folder || folder->kind != TrackKind::Folder ||
+        folder->summing == summing) {
+        // isFolder() also admits a Pattern, but a Pattern sums by definition
+        // and the reducer rejects SetTrackProperty::Summing for it — which in a
+        // session would fail the whole batch below. Keep that invariant here
+        // rather than relying on the track-list menu to filter it out.
+        return;
+    }
     if (cloudProjectBound()) {
         ProjectModel scratch = m_project;
         TrackModel* candidate = scratch.findTrack(folderId);
@@ -9059,6 +9551,12 @@ void EngineController::endClipPositionEdit(const std::string& label) {
         std::size_t beforeIndex = 0;
         std::size_t afterIndex = 0;
     };
+    struct PatternDurationDelta {
+        std::string trackId;
+        std::string clipId;
+        double beforeDurationSeconds = 0.0;
+        double afterDurationSeconds = 0.0;
+    };
 
     // Resolve only the clips touched by the gesture. The history payload is a
     // pair of scalar placements per clip; in particular it never owns a
@@ -9102,14 +9600,29 @@ void EngineController::endClipPositionEdit(const std::string& label) {
             origin.beforeStartSeconds, origin.afterStartSeconds,
             origin.beforeIndex, origin.afterIndex});
     }
-    if (built.empty()) return;
+    std::vector<PatternDurationDelta> durationBuilt;
+    durationBuilt.reserve(edit.patternDurations.size());
+    for (const auto& [clipId, origin] : edit.patternDurations) {
+        if (std::abs(origin.beforeDurationSeconds -
+                     origin.afterDurationSeconds) < 1e-12) {
+            continue;
+        }
+        durationBuilt.push_back(PatternDurationDelta{
+            origin.trackId, clipId, origin.beforeDurationSeconds,
+            origin.afterDurationSeconds});
+    }
+    if (built.empty() && durationBuilt.empty()) return;
 
     const auto delta =
         std::make_shared<const std::vector<PositionDelta>>(std::move(built));
-    auto apply = [this, delta](bool useAfter, bool publishAudio) {
+    const auto durationDelta =
+        std::make_shared<const std::vector<PatternDurationDelta>>(
+            std::move(durationBuilt));
+    auto apply = [this, delta, durationDelta](bool useAfter,
+                                              bool publishAudio) {
         std::unordered_map<std::string, const PositionDelta*> desired;
         desired.reserve(delta->size());
-        bool durationChanged = false;
+        bool durationChanged = !durationDelta->empty();
         for (const PositionDelta& change : *delta) {
             desired.emplace(change.clipId, &change);
             durationChanged |=
@@ -9242,6 +9755,33 @@ void EngineController::endClipPositionEdit(const std::string& label) {
             target->clips = std::move(merged);
         }
 
+        std::unordered_set<std::string> resizedPatternIds;
+        resizedPatternIds.reserve(durationDelta->size());
+        for (const PatternDurationDelta& change : *durationDelta) {
+            TrackModel* track = m_project.findTrack(change.trackId);
+            if (!track) continue;
+            const auto clip = std::find_if(
+                track->clips.begin(), track->clips.end(),
+                [&](const ClipModel& candidate) {
+                    return candidate.id == change.clipId &&
+                           candidate.kind == ClipKind::Pattern;
+                });
+            if (clip == track->clips.end()) continue;
+            clip->durationSeconds =
+                useAfter ? change.afterDurationSeconds
+                         : change.beforeDurationSeconds;
+            resizedPatternIds.insert(change.clipId);
+        }
+        for (const TrackModel& memberTrack : m_project.tracks) {
+            const bool linked = std::any_of(
+                memberTrack.clips.begin(), memberTrack.clips.end(),
+                [&](const ClipModel& member) {
+                    return member.kind == ClipKind::Midi &&
+                           resizedPatternIds.contains(member.patternClipId);
+                });
+            if (linked) midiTracks.insert(memberTrack.id);
+        }
+
         // A private clip chain is physically owned by its channel. Only that
         // ownership change needs graph topology work, and all such moves share
         // this one rebuild. Ordinary placements publish just their endpoints.
@@ -9303,6 +9843,12 @@ void EngineController::endClipPositionEdit(const std::string& label) {
                     change.afterStartSeconds});
             }
         }
+        for (const PatternDurationDelta& change : *durationDelta) {
+            appendCommand(batch, collab::SetClipProperty{
+                change.trackId, change.clipId,
+                collab::ClipProperty::DurationSeconds,
+                change.afterDurationSeconds});
+        }
         if (!batch->commands.empty()) {
             const auto result = submitSharedMutation(
                 collab::CommandBody{std::move(batch)}, label);
@@ -9323,6 +9869,8 @@ void EngineController::setClipStartsSeconds(
     std::span<const ClipStartChange> changes) {
     if (cloudProjectBound() && !m_clipPositionEdit.active) {
         auto batch = std::make_shared<collab::BatchCommand>();
+        std::unordered_map<std::string, double> requestedStarts;
+        std::unordered_set<std::string> patternOwners;
         for (const ClipStartChange& change : changes) {
             const TrackModel* track = m_project.findTrack(change.trackId);
             const ClipModel* clip = findClip(change.trackId, change.clipId);
@@ -9333,6 +9881,11 @@ void EngineController::setClipStartsSeconds(
             appendCommand(batch, collab::SetClipProperty{
                 change.trackId, change.clipId,
                 collab::ClipProperty::StartSeconds, next});
+            requestedStarts[clip->id] = next;
+            if (clip->kind == ClipKind::Midi &&
+                !clip->patternClipId.empty()) {
+                patternOwners.insert(clip->patternClipId);
+            }
             if (clip->kind != ClipKind::Pattern) continue;
             for (const TrackModel& memberTrack : m_project.tracks) {
                 for (const ClipModel& member : memberTrack.clips) {
@@ -9344,6 +9897,17 @@ void EngineController::setClipStartsSeconds(
                 }
             }
         }
+        for (const std::string& ownerId : patternOwners) {
+            const PatternOwnerRef owner = findPatternOwner(m_project, ownerId);
+            if (!owner.track || !owner.clip) continue;
+            const double duration = patternDurationForMembers(
+                m_project, *owner.clip, owner.clip->durationSeconds,
+                &requestedStarts);
+            if (duration <= owner.clip->durationSeconds + 1e-12) continue;
+            appendCommand(batch, collab::SetClipProperty{
+                owner.track->id, owner.clip->id,
+                collab::ClipProperty::DurationSeconds, duration});
+        }
         if (!batch->commands.empty()) {
             (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
                                        "Move Clip");
@@ -9352,6 +9916,7 @@ void EngineController::setClipStartsSeconds(
     }
     std::unordered_set<std::string> audioTracks;
     std::unordered_set<std::string> midiTracks;
+    std::unordered_set<std::string> patternOwners;
     bool automationMoved = false;
     bool changed = false;
 
@@ -9370,6 +9935,20 @@ void EngineController::setClipStartsSeconds(
         const double next = std::max(0.0, change.startSeconds);
         const double delta = next - clip.startSeconds;
         if (std::abs(delta) < 1e-12) continue;
+        if (clip.kind == ClipKind::Midi && !clip.patternClipId.empty()) {
+            patternOwners.insert(clip.patternClipId);
+            if (m_clipPositionEdit.active) {
+                const PatternOwnerRef owner =
+                    findPatternOwner(m_project, clip.patternClipId);
+                if (owner.track && owner.clip) {
+                    m_clipPositionEdit.patternDurations.try_emplace(
+                        owner.clip->id,
+                        PatternDurationOrigin{owner.track->id,
+                                              owner.clip->durationSeconds,
+                                              owner.clip->durationSeconds});
+                }
+            }
+        }
         if (m_clipPositionEdit.active) {
             auto [position, inserted] =
                 m_clipPositionEdit.origins.try_emplace(
@@ -9424,6 +10003,37 @@ void EngineController::setClipStartsSeconds(
     }
 
     if (!changed) return;
+
+    for (const std::string& ownerId : patternOwners) {
+        const PatternOwnerRef owner = findPatternOwner(m_project, ownerId);
+        if (!owner.track || !owner.clip) continue;
+        double minimumDuration = owner.clip->durationSeconds;
+        if (m_clipPositionEdit.active) {
+            const auto origin =
+                m_clipPositionEdit.patternDurations.find(ownerId);
+            if (origin != m_clipPositionEdit.patternDurations.end())
+                minimumDuration = origin->second.beforeDurationSeconds;
+        }
+        const double duration = patternDurationForMembers(
+            m_project, *owner.clip, minimumDuration);
+        if (std::abs(duration - owner.clip->durationSeconds) < 1e-12)
+            continue;
+        owner.clip->durationSeconds = duration;
+        if (m_clipPositionEdit.active) {
+            m_clipPositionEdit.patternDurations[ownerId]
+                .afterDurationSeconds = duration;
+            continue;
+        }
+        for (const TrackModel& memberTrack : m_project.tracks) {
+            const bool linked = std::any_of(
+                memberTrack.clips.begin(), memberTrack.clips.end(),
+                [&](const ClipModel& member) {
+                    return member.kind == ClipKind::Midi &&
+                           member.patternClipId == ownerId;
+                });
+            if (linked) midiTracks.insert(memberTrack.id);
+        }
+    }
 
     // Audio placements still follow an ordinary drag live. A private-chain
     // cross-track move is the exception: its graph is intentionally rebuilt
@@ -10388,7 +10998,8 @@ ClipModel* findPatternDeltaClip(ProjectModel& project,
 
 bool patternClipNeedsGraphRebuild(const ClipModel& clip) {
     // Clip-private chains are currently realised only for audio clips.
-    return clip.kind == ClipKind::Audio && !clip.inserts.empty();
+    return clip.kind == ClipKind::Audio &&
+           (!clip.inserts.empty() || clip.playbackInjection.active());
 }
 
 void appendUniqueTrack(std::vector<std::string>& tracks,
@@ -11443,10 +12054,26 @@ std::string EngineController::duplicateClipAt(const std::string& trackId,
             const std::string anchor = track->clips.empty()
                                            ? std::string()
                                            : track->clips.back().id;
-            if (!appendSharedClip(batch, trackId, parentCopy, anchor) ||
-                !sharedBatchApplies(m_project, batch)) {
+            if (!appendSharedClip(batch, trackId, parentCopy, anchor)) {
                 return {};
             }
+            if (parentCopy.kind == ClipKind::Midi &&
+                !parentCopy.patternClipId.empty()) {
+                const PatternOwnerRef owner =
+                    findPatternOwner(m_project, parentCopy.patternClipId);
+                if (owner.track && owner.clip) {
+                    const double duration = std::max(
+                        owner.clip->durationSeconds,
+                        parentCopy.startSeconds + parentCopy.durationSeconds -
+                            owner.clip->startSeconds);
+                    if (duration > owner.clip->durationSeconds + 1e-12) {
+                        appendCommand(batch, collab::SetClipProperty{
+                            owner.track->id, owner.clip->id,
+                            collab::ClipProperty::DurationSeconds, duration});
+                    }
+                }
+            }
+            if (!sharedBatchApplies(m_project, batch)) return {};
             const auto result = submitSharedMutation(
                 collab::CommandBody{std::move(batch)}, "Duplicate Clip");
             return result == collab::SharedMutationResult::Submitted
@@ -11544,10 +12171,25 @@ std::string EngineController::insertClipCopy(const std::string& trackId,
         if (!appendSharedClip(batch, trackId, copy,
                               track->clips.empty()
                                   ? std::string()
-                                  : track->clips.back().id) ||
-            !sharedBatchApplies(m_project, batch)) {
+                                  : track->clips.back().id)) {
             return {};
         }
+        if (copy.kind == ClipKind::Midi && !copy.patternClipId.empty()) {
+            const PatternOwnerRef owner =
+                findPatternOwner(m_project, copy.patternClipId);
+            if (owner.track && owner.clip) {
+                const double duration = std::max(
+                    owner.clip->durationSeconds,
+                    copy.startSeconds + copy.durationSeconds -
+                        owner.clip->startSeconds);
+                if (duration > owner.clip->durationSeconds + 1e-12) {
+                    appendCommand(batch, collab::SetClipProperty{
+                        owner.track->id, owner.clip->id,
+                        collab::ClipProperty::DurationSeconds, duration});
+                }
+            }
+        }
+        if (!sharedBatchApplies(m_project, batch)) return {};
         const std::string pastedId = copy.id;
         return submitSharedMutation(collab::CommandBody{std::move(batch)},
                                     "Duplicate Clip") ==
@@ -11568,7 +12210,56 @@ std::string EngineController::insertClipCopy(const std::string& trackId,
     // a lane by id. `insertPatternClipCopyImpl` has always minted these.
     for (ControllerLane& lane : copy.lanes) lane.id = newUuid();
 
+    struct PatternResize {
+        std::string trackId;
+        std::string clipId;
+        double before = 0.0;
+        double after = 0.0;
+    };
+    std::optional<PatternResize> patternResize;
+    if (copy.kind == ClipKind::Midi && !copy.patternClipId.empty()) {
+        const PatternOwnerRef owner =
+            findPatternOwner(m_project, copy.patternClipId);
+        if (owner.track && owner.clip) {
+            const double duration = std::max(
+                owner.clip->durationSeconds,
+                copy.startSeconds + copy.durationSeconds -
+                    owner.clip->startSeconds);
+            if (duration > owner.clip->durationSeconds + 1e-12) {
+                patternResize = PatternResize{
+                    owner.track->id, owner.clip->id,
+                    owner.clip->durationSeconds, duration};
+            }
+        }
+    }
+    auto applyPatternResize = [this, patternResize](bool useAfter) {
+        if (!patternResize) return;
+        TrackModel* ownerTrack =
+            m_project.findTrack(patternResize->trackId);
+        if (!ownerTrack) return;
+        const auto owner = std::find_if(
+            ownerTrack->clips.begin(), ownerTrack->clips.end(),
+            [&](const ClipModel& candidate) {
+                return candidate.id == patternResize->clipId &&
+                       candidate.kind == ClipKind::Pattern;
+            });
+        if (owner == ownerTrack->clips.end()) return;
+        owner->durationSeconds =
+            useAfter ? patternResize->after : patternResize->before;
+        for (const TrackModel& memberTrack : m_project.tracks) {
+            const bool linked = std::any_of(
+                memberTrack.clips.begin(), memberTrack.clips.end(),
+                [&](const ClipModel& member) {
+                    return member.kind == ClipKind::Midi &&
+                           member.patternClipId == patternResize->clipId;
+                });
+            if (linked) syncTrackNotes(memberTrack);
+        }
+        updateTimelineDuration();
+    };
+
     track->clips.push_back(copy);
+    applyPatternResize(true);
     if (copy.inserts.empty()) syncTrackClips(*track);
     else rebuildGraph();
     if (copy.kind == ClipKind::Midi) {
@@ -11580,11 +12271,12 @@ std::string EngineController::insertClipCopy(const std::string& trackId,
 
     const std::string newId = copy.id;
     m_undo.push("Duplicate Clip",
-                [this, trackId, newId, copy] {
+                [this, trackId, newId, copy, applyPatternResize] {
                     if (auto* t = m_project.findTrack(trackId)) {
                         std::erase_if(t->clips, [&](const ClipModel& c) {
                             return c.id == newId;
                         });
+                        applyPatternResize(false);
                         if (copy.inserts.empty()) syncTrackClips(*t);
                         else rebuildGraph();
                         if (copy.kind == ClipKind::Midi) {
@@ -11595,9 +12287,10 @@ std::string EngineController::insertClipCopy(const std::string& trackId,
                         updateTimelineDuration();
                     }
                 },
-                [this, trackId, copy] {
+                [this, trackId, copy, applyPatternResize] {
                     if (auto* t = m_project.findTrack(trackId)) {
                         t->clips.push_back(copy);
+                        applyPatternResize(true);
                         if (copy.inserts.empty()) syncTrackClips(*t);
                         else rebuildGraph();
                         if (copy.kind == ClipKind::Midi) {
@@ -13624,8 +14317,12 @@ std::string EngineController::addAutomationLane(const std::string& trackId,
             collab::AddTrack{model.id, model.kind, model.name, model.color,
                              model.parentId, afterId},
             "Add Automation Lane");
-        return result == collab::SharedMutationResult::Submitted ? laneId
-                                                                 : std::string{};
+        if (result != collab::SharedMutationResult::Submitted) return {};
+        // A lane nobody can see is not what asking for one means. The flag is
+        // LocalOnly, so no command carries it and each participant has to set
+        // it for themselves once the lane has landed.
+        setAutomationExpanded(trackId, true);
+        return laneId;
     }
     m_project.tracks.insert(m_project.tracks.begin() + std::ptrdiff_t(at),
                             std::move(model));

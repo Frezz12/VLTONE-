@@ -4,6 +4,7 @@
 #include "Theme.hpp"
 
 #include <QAction>
+#include <QCoreApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
@@ -13,21 +14,47 @@
 namespace collab {
 namespace {
 
-QString surfaceLabel(SessionStatusWidget* widget, SurfaceKind surface) {
+QString surfaceLabel(SurfaceKind surface) {
     switch (surface) {
-        case SurfaceKind::Timeline: return widget->tr("Timeline");
-        case SurfaceKind::TrackList: return widget->tr("Track list");
-        case SurfaceKind::Transport: return widget->tr("Transport");
-        case SurfaceKind::Mixer: return widget->tr("Mixer");
-        case SurfaceKind::PianoRoll: return widget->tr("Piano roll");
-        case SurfaceKind::AutomationEditor: return widget->tr("Automation");
-        case SurfaceKind::SampleEditor: return widget->tr("Sample editor");
-        case SurfaceKind::BuiltinPlugin: return widget->tr("Built-in plugin");
-        case SurfaceKind::Browser: return widget->tr("File browser");
-        case SurfaceKind::Web: return widget->tr("Web browser");
-        case SurfaceKind::Ai: return widget->tr("AI panel");
-        case SurfaceKind::Settings: return widget->tr("Settings");
-        case SurfaceKind::Shell: return widget->tr("Workspace");
+        case SurfaceKind::Timeline:
+            return QCoreApplication::translate("collab::SessionStatusWidget",
+                                               "Timeline");
+        case SurfaceKind::TrackList:
+            return QCoreApplication::translate("collab::SessionStatusWidget",
+                                               "Track list");
+        case SurfaceKind::Transport:
+            return QCoreApplication::translate("collab::SessionStatusWidget",
+                                               "Transport");
+        case SurfaceKind::Mixer:
+            return QCoreApplication::translate("collab::SessionStatusWidget",
+                                               "Mixer");
+        case SurfaceKind::PianoRoll:
+            return QCoreApplication::translate("collab::SessionStatusWidget",
+                                               "Piano roll");
+        case SurfaceKind::AutomationEditor:
+            return QCoreApplication::translate("collab::SessionStatusWidget",
+                                               "Automation");
+        case SurfaceKind::SampleEditor:
+            return QCoreApplication::translate("collab::SessionStatusWidget",
+                                               "Sample editor");
+        case SurfaceKind::BuiltinPlugin:
+            return QCoreApplication::translate("collab::SessionStatusWidget",
+                                               "Built-in plugin");
+        case SurfaceKind::Browser:
+            return QCoreApplication::translate("collab::SessionStatusWidget",
+                                               "File browser");
+        case SurfaceKind::Web:
+            return QCoreApplication::translate("collab::SessionStatusWidget",
+                                               "Web browser");
+        case SurfaceKind::Ai:
+            return QCoreApplication::translate("collab::SessionStatusWidget",
+                                               "AI panel");
+        case SurfaceKind::Settings:
+            return QCoreApplication::translate("collab::SessionStatusWidget",
+                                               "Settings");
+        case SurfaceKind::Shell:
+            return QCoreApplication::translate("collab::SessionStatusWidget",
+                                               "Workspace");
         default: return {};
     }
 }
@@ -119,7 +146,7 @@ void SessionStatusWidget::rebuildParticipants() {
         if (const auto surface = m_service->presenceStore()
                                      ->recentSurfaceForParticipant(
                                          participant.participantId)) {
-            const QString activity = surfaceLabel(this, *surface);
+            const QString activity = surfaceLabel(*surface);
             if (!activity.isEmpty()) suffix += tr(" — %1").arg(activity);
         }
         QAction* action = m_participantsMenu->addAction(

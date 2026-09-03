@@ -198,8 +198,22 @@ PluginQuickAdder::~PluginQuickAdder() {
 }
 
 void PluginQuickAdder::setTrackId(const QString& trackId) {
-    if (m_trackId == trackId) return;
+    if (m_trackId == trackId && m_clipId.isEmpty()) return;
     m_trackId = trackId;
+    m_clipId.clear();
+    rebuildEntries();
+    if (m_overlay) m_overlay->update();
+}
+
+void PluginQuickAdder::setClipTarget(const QString& trackId,
+                                     const QString& clipId) {
+    if (m_trackId == trackId && m_clipId == clipId) return;
+    m_trackId = trackId;
+    m_clipId = clipId;
+    setAccessibleName(tr("Search Clip FX"));
+    setToolTip(tr("Search Clip FX (%1)")
+                   .arg(QKeySequence(QKeySequence::Find)
+                            .toString(QKeySequence::NativeText)));
     rebuildEntries();
     if (m_overlay) m_overlay->update();
 }
@@ -364,6 +378,7 @@ void PluginQuickAdder::rebuildEntries() {
         });
         m_all.reserve(plugins.size());
         for (const auto& descriptor : plugins) {
+            if (!m_clipId.isEmpty() && descriptor.isInstrument) continue;
             Entry entry;
             entry.descriptor = descriptor;
             entry.section = baseSection(descriptor);
@@ -530,8 +545,6 @@ void PluginQuickAdder::rememberRecent(
 void PluginQuickAdder::insertCurrent(bool openEditor, bool keepOpen) {
     const Entry* entry = visibleAt(m_highlight);
     if (!entry || !m_controller || m_trackId.isEmpty()) return;
-    const std::vector<daw::InsertModel>* inserts =
-        m_controller->channelInserts(m_trackId.toStdString());
     const QString position =
         QSettings().value("contextPanel/pluginInsertPosition", "end").toString();
     const size_t index = position == QLatin1String("start") ? 0 : size_t(-1);
@@ -543,8 +556,12 @@ void PluginQuickAdder::insertCurrent(bool openEditor, bool keepOpen) {
                 m_overlay->repaint();
             }
             QApplication::setOverrideCursor(Qt::WaitCursor);
-            const std::string loaded = m_controller->addInsert(
-                m_trackId.toStdString(), entry->descriptor, index);
+            const std::string loaded = m_clipId.isEmpty()
+                ? m_controller->addInsert(m_trackId.toStdString(),
+                                          entry->descriptor, index)
+                : m_controller->addClipFxInsert(m_trackId.toStdString(),
+                                                m_clipId.toStdString(),
+                                                entry->descriptor, index);
             QApplication::restoreOverrideCursor();
             unsetCursor();
             m_loading = false;

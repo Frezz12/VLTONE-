@@ -1,5 +1,20 @@
 // Public EngineController mutation capability ledger for cloud V1.
 // Keep one stable method name per row. Overloads share one classification.
+//
+// Audited BlockedV1 rows — these are deliberate, not gaps. Do not "unblock"
+// one without reading the reason:
+//   startRecording*/armCountIn*/tickCountIn — matches the server. Config sets
+//     cloudRecordingEnabledV1 = false, the ops endpoint rejects
+//     recording.commit, and the WS refuses recording leases. Unblocking the
+//     client alone just moves the failure later. Needs a server flip first.
+//   ensureInsertSlots/ensureMasterInsertSlots — they append *unloaded* slot
+//     placeholders, which have no shared representation. No production caller
+//     exists; only tests reach them.
+//   setTrackInstrument — legacy name-only setter. The real path,
+//     setTrackInstrumentPlugin, is SharedCommand.
+//   undo/redo — the legacy local stack is blocked on purpose; a session routes
+//     Edit > Undo to CollaborationCommandBridge::requestUndo(), which replays
+//     an inverse command through the conditional-undo history instead.
 VLT_MUTATION(attachSharedMutationSink, LocalOnly)
 VLT_MUTATION(detachSharedMutationSink, LocalOnly)
 VLT_MUTATION(attachSharedAssetMutationSink, LocalOnly)
@@ -213,6 +228,8 @@ VLT_MUTATION(analyzeChannel, LocalOnly)
 VLT_MUTATION(analyzeSampleFile, LocalOnly)
 VLT_MUTATION(renderProject, LocalOnly)
 VLT_MUTATION(exportMixdown, LocalOnly)
+VLT_MUTATION(bounceInPlace, LocalOnly)
+VLT_MUTATION(renderClipsOffline, LocalOnly)
 VLT_MUTATION(applyAudioConfiguration, LocalOnly)
 VLT_MUTATION(setOutputDevice, LocalOnly)
 VLT_MUTATION(setInputDevice, LocalOnly)

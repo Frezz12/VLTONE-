@@ -4,6 +4,7 @@
 #include "CloudSnapshotAssetManifest.hpp"
 #include "ProjectSerializer.hpp"
 #include "collaboration/CommandJson.hpp"
+#include "collaboration/SharedProjectSnapshot.hpp"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -1605,7 +1606,7 @@ quint64 CloudProjectClient::createProject(
     const QString title = input.title.trimmed();
     const QString engineVersion = input.engineVersion.trimmed();
     const QString minimumVersion = input.minimumAppVersion.trimmed();
-    if (input.formatVersion != daw::ProjectSerializer::kFormatVersion ||
+    if (input.formatVersion != daw::collab::kSharedProjectFormatVersion ||
         title.isEmpty() || title.size() > 160 ||
         engineVersion.isEmpty() || engineVersion.size() > 64 ||
         minimumVersion.isEmpty() || minimumVersion.size() > 64) {
@@ -1832,7 +1833,7 @@ quint64 CloudProjectClient::startSession(const QString& projectId,
         {QStringLiteral("commandSchemaVersion"),
          int(daw::collab::kProjectCommandSchemaVersion)},
         {QStringLiteral("projectFormatVersion"),
-         daw::ProjectSerializer::kFormatVersion},
+         daw::collab::kSharedProjectFormatVersion},
     };
     return m_impl->requestSession(
         CloudRequestKind::StartSession, QByteArrayLiteral("POST"),
@@ -1854,7 +1855,7 @@ quint64 CloudProjectClient::joinSession(const QString& projectId,
         {QStringLiteral("commandSchemaVersion"),
          int(daw::collab::kProjectCommandSchemaVersion)},
         {QStringLiteral("projectFormatVersion"),
-         daw::ProjectSerializer::kFormatVersion},
+         daw::collab::kSharedProjectFormatVersion},
     };
     return m_impl->requestSession(
         CloudRequestKind::JoinSession, QByteArrayLiteral("POST"),
@@ -2442,7 +2443,7 @@ QJsonObject testProject(const QString& projectId, quint64 head,
         {QStringLiteral("title"), QStringLiteral("Cloud Test")},
         {QStringLiteral("status"), QStringLiteral("active")},
         {QStringLiteral("format_version"),
-         daw::ProjectSerializer::kFormatVersion},
+         daw::collab::kSharedProjectFormatVersion},
         {QStringLiteral("engine_version"), QStringLiteral("0.1.2")},
         {QStringLiteral("minimum_app_version"), QStringLiteral("0.1.2")},
         {QStringLiteral("head_seq"), double(head)},
@@ -2464,7 +2465,7 @@ QJsonObject testSnapshot(const QString& projectId, quint64 sequence) {
         {QStringLiteral("blob_id"),
          QStringLiteral("33333333-3333-4333-8333-333333333333")},
         {QStringLiteral("schema_version"),
-         daw::ProjectSerializer::kFormatVersion},
+         daw::collab::kSharedProjectFormatVersion},
         {QStringLiteral("asset_ids"), QJsonArray{}},
         {QStringLiteral("created_by"),
          QStringLiteral("11111111-1111-4111-8111-111111111111")},
@@ -2739,7 +2740,7 @@ bool checkCloudProjectClientForTest(QString* error) {
                 .toInt() != int(daw::collab::kProjectCommandSchemaVersion) ||
         joinBody.object()
                 .value(QStringLiteral("projectFormatVersion"))
-                .toInt() != daw::ProjectSerializer::kFormatVersion) {
+                .toInt() != daw::collab::kSharedProjectFormatVersion) {
         return fail(QStringLiteral("join omitted compatibility metadata"));
     }
     if (!client.cancel(joinId) || failures != 1 ||

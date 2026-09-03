@@ -524,7 +524,9 @@ void IconButton::paintEvent(QPaintEvent*) {
 
     QColor tint = (isChecked() || m_pulse)
                       ? active
-                      : (m_prominent ? Qt::white : t.textPrimary);
+                      : (m_prominent ? Qt::white
+                                     : (m_idleColor.isValid() ? m_idleColor
+                                                              : t.textPrimary));
     if (m_accentTint && !isChecked() && !m_prominent) tint = t.accent;
     if (!isEnabled()) tint = t.textSecondary;
 
@@ -534,7 +536,13 @@ void IconButton::paintEvent(QPaintEvent*) {
                        (m_prominent ? 0.74 : 0.68) * (1.0 - 0.07 * press);
     const QRectF box(r.center().x() - side / 2, r.center().y() - side / 2,
                      side, side);
-    icons::paint(p, m_glyph, box, tint);
+    if (icon().isNull()) {
+        icons::paint(p, m_glyph, box, tint);
+    } else {
+        const QIcon::Mode mode = isEnabled() ? QIcon::Normal : QIcon::Disabled;
+        icon().paint(&p, box.toAlignedRect(), Qt::AlignCenter, mode,
+                     isChecked() ? QIcon::On : QIcon::Off);
+    }
 
     // Most dense DAW controls deliberately opt out of Tab focus, but panels
     // with form-like navigation can opt back in. When they do, the focus must
@@ -1567,9 +1575,12 @@ void MiniSlider::wheelEvent(QWheelEvent* ev) {
 // ── PanKnob ──
 
 PanKnob::PanKnob(QWidget* parent) : QWidget(parent) {
-    setFixedSize(34, 34);
-    setCursor(Qt::SizeVerCursor);
-    setToolTip(tr("Pan · drag vertically · double-click to centre"));
+    setFixedSize(30, 30);
+    setCursor(Qt::SizeAllCursor);
+    setFocusPolicy(Qt::StrongFocus);
+    setAccessibleName(tr("Pan"));
+    setToolTip(
+        tr("Pan · drag horizontally or vertically · double-click to centre"));
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             QOverload<>::of(&QWidget::update));
 }
@@ -1585,65 +1596,99 @@ void PanKnob::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
     const Theme& t = th();
+    const double interaction = m_dragging ? 1.0 : m_hoverFade.value() * 0.55;
+    const double side = std::max(12.0, double(std::min(width(), height())));
+    const QRectF bounds((width() - side) / 2.0 + 1.0,
+                        (height() - side) / 2.0 + 1.0,
+                        side - 2.0, side - 2.0);
+    const QPointF centre = bounds.center();
 
-    const double side = std::min(width(), height()) - 5.0;
-    const QRectF body((width() - side) / 2.0, (height() - side) / 2.0 - 0.5,
-                      side, side);
-    const QPointF centre = body.center();
-    const double radius = side / 2.0;
+    // A quiet 270-degree scale keeps the control readable as pan rather than
+    // a generic button. The active arc grows away from the top-centre detent.
+    const QRectF arc = bounds.adjusted(1.2, 1.2, -1.2, -1.2);
+    QColor idleArc = mixColors(t.textSecondary, t.background,
+                               t.dark ? 0.48 : 0.30);
+    idleArc.setAlphaF(0.72);
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(idleArc, std::max(1.2, side * 0.065),
+                  Qt::SolidLine, Qt::RoundCap));
+    p.drawArc(arc, 225 * 16, -270 * 16);
 
-    // A single physical dial — no outer progress ring. The shadow and the
-    // asymmetric radial light make the object itself readable as something
-    // that can be turned.
+    if (std::abs(m_pan) > 0.002) {
+        QColor active = mixColors(t.accent, t.accentHighlight,
+                                  interaction * 0.45);
+        active.setAlphaF(0.82 + interaction * 0.16);
+        p.setPen(QPen(active, std::max(1.6, side * 0.075),
+                      Qt::SolidLine, Qt::RoundCap));
+        p.drawArc(arc, 90 * 16, int(-m_pan * 135.0 * 16.0));
+    }
+
+    const double bodyInset = std::max(3.6, side * 0.14);
+    const QRectF body = bounds.adjusted(bodyInset, bodyInset,
+                                        -bodyInset, -bodyInset);
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor(0, 0, 0, t.dark ? 105 : 48));
-    p.drawEllipse(body.translated(0.0, 1.8));
+    p.setBrush(QColor(0, 0, 0, t.dark ? 105 : 38));
+    p.drawEllipse(body.translated(0.0, std::max(0.8, side * 0.035)));
 
-    QRadialGradient metal(body.topLeft() + QPointF(side * 0.33, side * 0.28),
-                          side * 0.78);
-    metal.setColorAt(0.0,
-                     mixColors(t.surfaceElevated, t.textPrimary,
-                               t.dark ? 0.30 : 0.10));
-    metal.setColorAt(0.52, mixColors(t.surfaceElevated, t.background, 0.12));
-    metal.setColorAt(1.0,
-                     mixColors(t.surfaceElevated, QColor(0, 0, 0),
-                               t.dark ? 0.43 : 0.16));
-    p.setBrush(metal);
-    p.setPen(QPen(t.sectionDivider(), 1.0));
+    QRadialGradient glass(body.topLeft() +
+                              QPointF(body.width() * 0.31,
+                                      body.height() * 0.24),
+                          body.width() * 0.84);
+    glass.setColorAt(0.0, mixColors(t.surfaceElevated, t.textPrimary,
+                                    t.dark ? 0.19 : 0.30));
+    glass.setColorAt(0.48, mixColors(t.surfaceElevated, t.well(), 0.24));
+    glass.setColorAt(1.0, mixColors(t.well(), t.background,
+                                    t.dark ? 0.58 : 0.24));
+    QColor rim = mixColors(t.sectionDivider(), t.textSecondary,
+                           interaction * 0.26);
+    p.setPen(QPen(rim, 1.0));
+    p.setBrush(glass);
     p.drawEllipse(body);
 
-    // Upper specular picks up the same light direction as the fader caps.
-    QColor sheen = t.ink(t.dark ? 62 : 105);
-    p.setPen(QPen(sheen, 1.0));
+    QColor sheen = t.textPrimary;
+    sheen.setAlphaF(0.10 + interaction * 0.08);
     p.setBrush(Qt::NoBrush);
-    p.drawArc(body.adjusted(1.5, 1.5, -1.5, -1.5), 35 * 16, 110 * 16);
+    p.setPen(QPen(sheen, 1.0, Qt::SolidLine, Qt::RoundCap));
+    p.drawArc(body.adjusted(1.1, 1.1, -1.1, -1.1), 32 * 16, 112 * 16);
 
-    // The value is a small embedded indicator dot on the face. Centre pan puts
-    // it at twelve o'clock; left and right rotate it through the usual 270°.
-    const double angle = (-90.0 + m_pan * 135.0) * kDegToRad;
-    const QPointF indicator(centre.x() + std::cos(angle) * radius * 0.56,
-                            centre.y() + std::sin(angle) * radius * 0.56);
-    const QColor marker = std::abs(m_pan) < 0.005 ? t.textPrimary : t.accentHighlight;
-    QColor markerGlow = marker;
-    markerGlow.setAlpha(t.dark ? 55 : 35);
-    p.setPen(Qt::NoPen);
-    p.setBrush(markerGlow);
-    p.drawEllipse(indicator, 3.3, 3.3);
-    p.setBrush(marker);
-    p.drawEllipse(indicator, 1.7, 1.7);
+    const double angle = (90.0 - m_pan * 135.0) * kDegToRad;
+    const double radius = body.width() / 2.0;
+    const QPointF markerStart(centre.x() + std::cos(angle) * radius * 0.20,
+                              centre.y() - std::sin(angle) * radius * 0.20);
+    const QPointF markerEnd(centre.x() + std::cos(angle) * radius * 0.72,
+                            centre.y() - std::sin(angle) * radius * 0.72);
+    const QColor marker = std::abs(m_pan) < 0.005
+                              ? t.textPrimary
+                              : mixColors(t.accentHighlight, Qt::white,
+                                          t.dark ? 0.18 : 0.0);
+    p.setPen(QPen(marker, std::max(1.3, side * 0.055),
+                  Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(markerStart, markerEnd);
 
-    // A tiny centre dimple makes the rotation axis tangible without turning
-    // back into the old line pointer.
-    p.setBrush(mixColors(t.well(), t.textPrimary, t.dark ? 0.12 : 0.06));
-    p.drawEllipse(centre, 1.15, 1.15);
+    // The zero tick remains visible independently of the pointer position.
+    p.setPen(QPen(t.textSecondary, 1.0, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(centre.x(), bounds.top() + 0.3),
+               QPointF(centre.x(), bounds.top() + std::max(2.0, side * 0.08)));
+
+    if (hasFocus()) {
+        QColor focus = t.accent;
+        focus.setAlpha(220);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(focus, 1.4, Qt::DashLine));
+        p.drawEllipse(bounds.adjusted(0.4, 0.4, -0.4, -0.4));
+    }
 }
 
 void PanKnob::mousePressEvent(QMouseEvent* ev) {
     if (ev->button() != Qt::LeftButton) return;
+    setFocus(Qt::MouseFocusReason);
     m_dragging = true;
     m_dragStart = m_pan;
+    m_dragStartX = int(ev->position().x());
     m_dragStartY = int(ev->position().y());
     showBubble();
+    update();
+    ev->accept();
 }
 
 void PanKnob::showBubble() {
@@ -1659,19 +1704,19 @@ void PanKnob::showBubble() {
 void PanKnob::mouseMoveEvent(QMouseEvent* ev) {
     if (!m_dragging) return;
     const double sensitivity =
-        (ev->modifiers() & Qt::ShiftModifier) ? 400.0 : 120.0;
-    m_pan = std::clamp(
-        m_dragStart - (ev->position().y() - m_dragStartY) / sensitivity,
-        -1.0, 1.0);
-    update();
+        (ev->modifiers() & Qt::ShiftModifier) ? 320.0 : 80.0;
+    const double delta = (ev->position().x() - m_dragStartX) -
+                         (ev->position().y() - m_dragStartY);
+    commit(m_dragStart + delta / sensitivity);
     showBubble();
-    emit panChanged(m_pan);
+    ev->accept();
 }
 
 void PanKnob::mouseReleaseEvent(QMouseEvent*) {
     if (!m_dragging) return;
     m_dragging = false;
     ValueBubble::dismiss();
+    update();
     emit editFinished();
 }
 
@@ -1681,10 +1726,49 @@ void PanKnob::mouseDoubleClickEvent(QMouseEvent* ev) {
         emit automateRequested();
         return;
     }
-    m_pan = 0.0;
+    commit(0.0);
+    emit editFinished();
+}
+
+void PanKnob::wheelEvent(QWheelEvent* ev) {
+    const double step = (ev->modifiers() & Qt::ShiftModifier) ? 0.01 : 0.05;
+    commit(m_pan + (ev->angleDelta().y() >= 0 ? step : -step));
+    emit editFinished();
+    ev->accept();
+}
+
+void PanKnob::keyPressEvent(QKeyEvent* ev) {
+    const double step = (ev->modifiers() & Qt::ShiftModifier) ? 0.01 : 0.05;
+    double next = m_pan;
+    switch (ev->key()) {
+        case Qt::Key_Left:
+        case Qt::Key_Down: next -= step; break;
+        case Qt::Key_Right:
+        case Qt::Key_Up: next += step; break;
+        case Qt::Key_PageDown: next -= 0.25; break;
+        case Qt::Key_PageUp: next += 0.25; break;
+        case Qt::Key_Home: next = -1.0; break;
+        case Qt::Key_End: next = 1.0; break;
+        case Qt::Key_0: next = 0.0; break;
+        default:
+            QWidget::keyPressEvent(ev);
+            return;
+    }
+    commit(next);
+    emit editFinished();
+    ev->accept();
+}
+
+void PanKnob::enterEvent(QEnterEvent*) { m_hoverFade.setTarget(1.0); }
+
+void PanKnob::leaveEvent(QEvent*) { m_hoverFade.setTarget(0.0); }
+
+void PanKnob::commit(double pan) {
+    const double value = std::clamp(pan, -1.0, 1.0);
+    if (std::abs(value - m_pan) < 1e-6) return;
+    m_pan = value;
     update();
     emit panChanged(m_pan);
-    emit editFinished();
 }
 
 void PanKnob::contextMenuEvent(QContextMenuEvent* event) {
@@ -1693,6 +1777,56 @@ void PanKnob::contextMenuEvent(QContextMenuEvent* event) {
         return;
     }
     if (automationContextMenu(this, event)) emit automateRequested();
+}
+
+bool PanKnob::checkInteractionForTest() {
+    PanKnob control;
+    int changes = 0;
+    int finishes = 0;
+    QObject::connect(&control, &PanKnob::panChanged,
+                     [&changes] { ++changes; });
+    QObject::connect(&control, &PanKnob::editFinished,
+                     [&finishes] { ++finishes; });
+
+    const QPointF centre(control.rect().center());
+    QMouseEvent press(QEvent::MouseButtonPress, centre, centre,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    control.mousePressEvent(&press);
+    QMouseEvent move(QEvent::MouseMove, centre + QPointF(80.0, 0.0),
+                     centre + QPointF(80.0, 0.0), Qt::NoButton,
+                     Qt::LeftButton, Qt::NoModifier);
+    control.mouseMoveEvent(&move);
+    QMouseEvent release(QEvent::MouseButtonRelease,
+                        centre + QPointF(80.0, 0.0),
+                        centre + QPointF(80.0, 0.0), Qt::LeftButton,
+                        Qt::NoButton, Qt::NoModifier);
+    control.mouseReleaseEvent(&release);
+    const bool draggedRight = control.pan() > 0.99;
+
+    QMouseEvent reset(QEvent::MouseButtonDblClick, centre, centre,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    control.mouseDoubleClickEvent(&reset);
+    const bool resetToCentre = std::abs(control.pan()) < 1e-9;
+
+    QMouseEvent verticalPress(QEvent::MouseButtonPress, centre, centre,
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    control.mousePressEvent(&verticalPress);
+    QMouseEvent verticalMove(QEvent::MouseMove, centre + QPointF(0.0, 80.0),
+                             centre + QPointF(0.0, 80.0), Qt::NoButton,
+                             Qt::LeftButton, Qt::NoModifier);
+    control.mouseMoveEvent(&verticalMove);
+    QMouseEvent verticalRelease(
+        QEvent::MouseButtonRelease, centre + QPointF(0.0, 80.0),
+        centre + QPointF(0.0, 80.0), Qt::LeftButton, Qt::NoButton,
+        Qt::NoModifier);
+    control.mouseReleaseEvent(&verticalRelease);
+    const bool draggedDown = control.pan() < -0.99;
+    control.mouseDoubleClickEvent(&reset);
+
+    QKeyEvent left(QEvent::KeyPress, Qt::Key_Left, Qt::NoModifier);
+    control.keyPressEvent(&left);
+    return draggedRight && resetToCentre && draggedDown && control.pan() < 0.0 &&
+           changes >= 5 && finishes >= 5;
 }
 
 // ── Knob ──
@@ -2628,20 +2762,60 @@ QWidget* separatorLine(Qt::Orientation orientation, int length,
 // ── ResizeHandle ────────────────────────────────────────────────────────────
 
 ResizeHandle::ResizeHandle(Qt::Orientation orientation, QWidget* parent)
-    : QWidget(parent), m_orientation(orientation) {
-    // Wide enough to grab without hunting, thin enough not to read as a gap.
-    if (orientation == Qt::Horizontal) {
-        setFixedHeight(7);
-        setCursor(Qt::SizeVerCursor);
+    : QWidget(parent), m_orientation(orientation),
+      m_edge(orientation == Qt::Horizontal ? Qt::TopEdge : Qt::RightEdge) {
+    setCursor(orientation == Qt::Horizontal ? Qt::SizeVerCursor
+                                            : Qt::SizeHorCursor);
+    setFocusPolicy(Qt::NoFocus);
+    setAutoFillBackground(false);
+    if (parent) parent->installEventFilter(this);
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+            QOverload<>::of(&QWidget::update));
+    placeOnEdge();
+}
+
+void ResizeHandle::setEdge(Qt::Edge edge) {
+    const bool valid = m_orientation == Qt::Horizontal
+                           ? edge == Qt::TopEdge || edge == Qt::BottomEdge
+                           : edge == Qt::LeftEdge || edge == Qt::RightEdge;
+    if (!valid || m_edge == edge) return;
+    m_edge = edge;
+    placeOnEdge();
+}
+
+void ResizeHandle::placeOnEdge() {
+    QWidget* host = parentWidget();
+    if (!host) return;
+    constexpr int hitBand = 7;
+    if (m_orientation == Qt::Horizontal) {
+        const int y = m_edge == Qt::BottomEdge
+                          ? std::max(0, host->height() - hitBand)
+                          : 0;
+        setGeometry(0, y, host->width(), std::min(hitBand, host->height()));
     } else {
-        setFixedWidth(5);
-        setCursor(Qt::SizeHorCursor);
+        const int x = m_edge == Qt::LeftEdge
+                          ? 0
+                          : std::max(0, host->width() - hitBand);
+        setGeometry(x, 0, std::min(hitBand, host->width()), host->height());
     }
+    raise();
 }
 
 double ResizeHandle::along(const QMouseEvent* ev) const {
     return m_orientation == Qt::Horizontal ? ev->globalPosition().y()
                                            : ev->globalPosition().x();
+}
+
+void ResizeHandle::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    const QColor line = th().sectionDivider();
+    if (m_orientation == Qt::Horizontal) {
+        const int y = m_edge == Qt::BottomEdge ? height() - 1 : 0;
+        painter.fillRect(0, y, width(), 1, line);
+    } else {
+        const int x = m_edge == Qt::RightEdge ? width() - 1 : 0;
+        painter.fillRect(x, 0, 1, height(), line);
+    }
 }
 
 void ResizeHandle::mousePressEvent(QMouseEvent* ev) {
@@ -2664,21 +2838,13 @@ void ResizeHandle::mouseReleaseEvent(QMouseEvent* ev) {
     ev->accept();
 }
 
-void ResizeHandle::paintEvent(QPaintEvent*) {
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.fillRect(rect(), th().separator());
-    // Grip notches across the middle, so it reads as a drag handle.
-    p.setPen(mixColors(th().surfaceElevated, th().textSecondary, 0.35));
-    if (m_orientation == Qt::Horizontal) {
-        const int y = height() / 2;
-        for (int x = width() / 2 - 8; x <= width() / 2 + 8; x += 8)
-            p.drawLine(x, y, x + 3, y);
-    } else {
-        const int x = width() / 2;
-        for (int y = height() / 2 - 8; y <= height() / 2 + 8; y += 8)
-            p.drawLine(x, y, x, y + 3);
+bool ResizeHandle::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == parentWidget() &&
+        (event->type() == QEvent::Resize || event->type() == QEvent::Show ||
+         event->type() == QEvent::LayoutRequest)) {
+        placeOnEdge();
     }
+    return QWidget::eventFilter(watched, event);
 }
 
 std::string NewTrackSpec::create(daw::EngineController& controller) const {
@@ -2697,12 +2863,12 @@ QHash<QAction*, NewTrackSpec> addTrackKindItems(QMenu& menu) {
     static const Entry entries[] = {
         {QT_TRANSLATE_NOOP("ui", "Add Audio Track"), {daw::TrackKind::Audio, false}},
         {QT_TRANSLATE_NOOP("ui", "Add MIDI Track"), {daw::TrackKind::Midi, false}},
-        {QT_TRANSLATE_NOOP("ui", "Add Instrument Track"), {daw::TrackKind::Instrument, false}},
         {QT_TRANSLATE_NOOP("ui", "Add Pattern Track"), {daw::TrackKind::Pattern, true}},
         // A lane with no track over it, for curves that drive anything in the
         // project. The per-track lanes are made with A, not from here.
         {QT_TRANSLATE_NOOP("ui", "Add Automation Track"), {daw::TrackKind::Automation, false}},
         {QT_TRANSLATE_NOOP("ui", "Add Bus Track"), {daw::TrackKind::Bus, false}},
+        {QT_TRANSLATE_NOOP("ui", "Add Send Track"), {daw::TrackKind::Aux, false}},
         // Two folders, because they are two different things: a drawer, and a
         // bus with tracks in it.
         {QT_TRANSLATE_NOOP("ui", "Add Folder"), {daw::TrackKind::Folder, false}},

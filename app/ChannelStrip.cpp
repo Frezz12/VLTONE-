@@ -519,6 +519,7 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
     setAcceptDrops(true);
 
     auto* col = new QVBoxLayout(this);
+    m_mainLayout = col;
     col->setContentsMargins(8, 7, 8, 7);
     col->setSpacing(5);
 
@@ -732,7 +733,12 @@ QWidget* ChannelStrip::buildRouting() {
         return b;
     };
 
-    if (!m_master) {
+    const auto* track = m_master
+                            ? nullptr
+                            : m_controller->project().findTrack(
+                                  m_trackId.toStdString());
+    const bool recordable = track && daw::acceptsRecording(*track);
+    if (recordable) {
         m_inputButton = routingButton(tr("IN"), tr("No Input"));
         auto* inputMenu = new QMenu(m_inputButton);
         connect(inputMenu, &QMenu::aboutToShow, this,
@@ -1659,7 +1665,7 @@ void ChannelStrip::populateOutputMenu(QMenu* menu) {
         if (t.id == m_trackId.toStdString()) continue;
         // A summing folder is a destination like any other bus; routing into
         // one by hand is how a track joins a group without being filed in it.
-        if (t.kind != daw::TrackKind::Bus && t.kind != daw::TrackKind::Aux &&
+        if (t.kind != daw::TrackKind::Bus &&
             t.kind != daw::TrackKind::Group && !daw::isSummingFolder(t))
             continue;
         if (!addedSeparator) {
@@ -1688,9 +1694,7 @@ void ChannelStrip::populateAddSendMenu(QMenu* menu) {
     bool any = false;
     for (const auto& t : m_controller->project().tracks) {
         if (t.id == m_trackId.toStdString()) continue;
-        if (t.kind != daw::TrackKind::Bus && t.kind != daw::TrackKind::Aux &&
-            !daw::isSummingFolder(t))
-            continue;
+        if (t.kind != daw::TrackKind::Aux) continue;
         any = true;
         const QString id = QString::fromStdString(t.id);
         QAction* action = menu->addAction(QString::fromStdString(t.name));
@@ -1700,10 +1704,19 @@ void ChannelStrip::populateAddSendMenu(QMenu* menu) {
             emit structureChanged();
         });
     }
-    if (!any) {
-        QAction* hint = menu->addAction(tr("Add a bus track to send to"));
-        hint->setEnabled(false);
-    }
+    if (any) menu->addSeparator();
+    QAction* create = menu->addAction(tr("Create Send Track"));
+    connect(create, &QAction::triggered, this, [this] {
+        int number = 1;
+        for (const auto& track : m_controller->project().tracks)
+            if (track.kind == daw::TrackKind::Aux) ++number;
+        const std::string destination = m_controller->addTrack(
+            daw::TrackKind::Aux, tr("Send %1").arg(number).toStdString());
+        if (destination.empty()) return;
+        m_controller->addSend(m_trackId.toStdString(), destination);
+        emit edited();
+        emit structureChanged();
+    });
 }
 
 QWidget* ChannelStrip::buildFaderRow() {
@@ -1802,7 +1815,7 @@ QWidget* ChannelStrip::buildButtons() {
         connect(open, &QAbstractButton::clicked, this,
                 [this] { emit patternRequested(m_trackId); });
         row->addWidget(open);
-    } else if (!m_master) {
+    } else if (!m_master && track && daw::acceptsRecording(*track)) {
         m_monitor = new ui::MsrButton("I", th().accent,
                                       tr("Input monitoring"), box);
         connect(m_monitor, &QAbstractButton::toggled, this, [this](bool on) {
@@ -1860,6 +1873,25 @@ void ChannelStrip::setStretchable(bool stretchable) {
     setSizePolicy(QSizePolicy::Fixed,
                   stretchable ? QSizePolicy::Expanding : QSizePolicy::Fixed);
     setMinimumHeight(m_naturalHeight > 0 ? m_naturalHeight : kFallbackHeight);
+    updateGeometry();
+}
+
+void ChannelStrip::setInspectorCompact(bool compact) {
+    if (m_inspectorCompact == compact || !m_mainLayout) return;
+    m_inspectorCompact = compact;
+    m_mainLayout->setContentsMargins(8, compact ? 4 : 7, 8, compact ? 4 : 7);
+    m_mainLayout->setSpacing(compact ? 3 : 5);
+    if (m_meter) m_meter->setMinimumHeight(compact ? 48 : 60);
+    if (m_fader) m_fader->setMinimumHeight(compact ? 48 : 60);
+
+    if (compact) {
+        const int compactHeight =
+            std::max(360, m_mainLayout->minimumSize().height());
+        setFixedHeight(compactHeight);
+    } else {
+        setMaximumHeight(QWIDGETSIZE_MAX);
+        setMinimumHeight(m_naturalHeight > 0 ? m_naturalHeight : kFallbackHeight);
+    }
     updateGeometry();
 }
 
@@ -2112,8 +2144,7 @@ void ChannelStrip::acceptBrowserDrop(const QMimeData* mime) {
         if (!track || !daw::trackAccepts(track->kind, daw::ClipKind::Midi)) {
             QToolTip::showText(
                 QCursor::pos(),
-                tr("%1 is an instrument. Drop it on a MIDI, Instrument, or "
-                   "Pattern track.")
+                tr("%1 is an instrument. Drop it on a MIDI or Pattern track.")
                     .arg(QString::fromStdString(descriptor->name)),
                 this);
             return;

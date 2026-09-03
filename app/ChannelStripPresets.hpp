@@ -11,6 +11,11 @@ inline constexpr const char* kExtension = "vlts";
 /// Calling this ensures both `Presets` and `Presets/Channel Strips` exist.
 QString rootFolder();
 QString stripFolder();
+/// Presets used only by Direct Offline Processing. They deliberately share the
+/// portable VLTS format but live in their own browser-neutral folder.
+QString offlineFolder();
+QStringList offlineFiles();
+QString offlineFilePathForName(const QString& name);
 
 /// Saved Channel Strip presets, ordered by their display names.
 QStringList files();

@@ -39,7 +39,7 @@ inline constexpr int kMinTrackHeaderWidth = 220;
 /// The headers may take the rest of the arrangement, but the resize rail and a
 /// narrow strip of timeline must remain reachable so the gesture is reversible.
 inline constexpr int kMinTimelineWidth = 180;
-inline constexpr int kTransportHeight = 66;
+inline constexpr int kTransportHeight = 76;
 inline constexpr int kBottomBarHeight = 28;
 
 /// The on-screen lane height for a track, clamped to the resizable range. A
@@ -71,7 +71,7 @@ inline QRectF pixelAlignedRect(const QRectF& rect, qreal devicePixelRatio) {
 /// A timeline grid division, measured in beats (one beat = a quarter note).
 struct GridDivision {
     QString name;
-    double beats;   // 0 → grid/snap off
+    double beats;   // 0 → grid/snap off; negative → follow timeline zoom
 };
 
 inline const QVector<GridDivision>& gridDivisions() {
@@ -85,6 +85,8 @@ inline const QVector<GridDivision>& gridDivisions() {
         {QStringLiteral("1/32"), 0.125},
         {QStringLiteral("1/4T"), 2.0 / 3.0},
         {QStringLiteral("1/8T"), 1.0 / 3.0},
+        // Appended so existing saved indices continue to name the same grid.
+        {QStringLiteral("Adaptive"), -1.0},
     };
     return divisions;
 }
@@ -103,8 +105,7 @@ inline constexpr const char* kMetronomeSampleSetting =
 inline constexpr const char* kGridIndexSetting = "transport/gridIndex";
 /// The selected edit tool, as an index (0 Select, 1 Knife, 2 Eraser, 3 Region).
 inline constexpr const char* kEditToolSetting = "transport/editTool";
-/// The tool the modifier key borrows while it is held — Logic's command-click
-/// tool. Same indices as above.
+/// The tool Alt/Option borrows while it is held. Same indices as above.
 inline constexpr const char* kAltEditToolSetting = "transport/editToolAlt";
 /// The main window's geometry, so it reopens where it was left.
 inline constexpr const char* kMainGeometrySetting = "ui/mainGeometry";

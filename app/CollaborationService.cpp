@@ -3,6 +3,7 @@
 #include "AccountService.hpp"
 #include "ProjectSerializer.hpp"
 #include "collaboration/ProjectCommand.hpp"
+#include "collaboration/SharedProjectSnapshot.hpp"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -472,7 +473,7 @@ void CollaborationService::trustedTransportConnected() {
         {QStringLiteral("commandSchemaVersion"),
          int(daw::collab::kProjectCommandSchemaVersion)},
         {QStringLiteral("projectFormatVersion"),
-         daw::ProjectSerializer::kFormatVersion},
+         daw::collab::kSharedProjectFormatVersion},
         {QStringLiteral("afterServerSeq"),
          double(m_bootstrapServerSequence)},
     };

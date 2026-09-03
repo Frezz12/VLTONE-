@@ -49,12 +49,19 @@ void paintPeaks(QPainter& p, const daw::WaveformPeaks* peaks, const QRectF& area
     for (int xi = x0; xi <= x1; ++xi) {
         const double x = double(xi);
         const double sourceSeconds =
-            how.sourceStartSeconds + (x - area.left()) * secondsPerPixel;
-        if (sourceSeconds < 0.0 || sourceSeconds > peaks->durationSeconds)
+            how.reversed
+                ? peaks->durationSeconds - how.sourceStartSeconds -
+                      (x - area.left()) * secondsPerPixel
+                : how.sourceStartSeconds +
+                      (x - area.left()) * secondsPerPixel;
+        const double adjacentSeconds =
+            sourceSeconds + (how.reversed ? -secondsPerPixel : secondsPerPixel);
+        if (std::max(sourceSeconds, adjacentSeconds) < 0.0 ||
+            std::min(sourceSeconds, adjacentSeconds) > peaks->durationSeconds)
             continue;
 
-        const double bStart = sourceSeconds * bps;
-        const double bEnd = (sourceSeconds + secondsPerPixel) * bps;
+        const double bStart = std::min(sourceSeconds, adjacentSeconds) * bps;
+        const double bEnd = std::max(sourceSeconds, adjacentSeconds) * bps;
 
         double hi;
         double lo;

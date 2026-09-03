@@ -82,7 +82,7 @@ bool validProjectMetadata(const CreateCloudProjectInput& input) {
     const QString title = input.title.trimmed();
     const QString engine = input.engineVersion.trimmed();
     const QString minimum = input.minimumAppVersion.trimmed();
-    return input.formatVersion == daw::ProjectSerializer::kFormatVersion &&
+    return input.formatVersion == daw::collab::kSharedProjectFormatVersion &&
            !title.isEmpty() && title.size() <= 160 && !engine.isEmpty() &&
            engine.size() <= 64 && !minimum.isEmpty() && minimum.size() <= 64;
 }
@@ -666,7 +666,7 @@ struct CloudProjectPublisher::Impl {
                view.project.minimumAppVersion ==
                    prepared->metadata.minimumAppVersion &&
                view.project.formatVersion ==
-                   daw::ProjectSerializer::kFormatVersion &&
+                   daw::collab::kSharedProjectFormatVersion &&
                view.project.headSequence == 0 &&
                view.project.snapshotSequence == 0;
     }
@@ -702,7 +702,7 @@ struct CloudProjectPublisher::Impl {
                                       CloudProjectStatus::Active &&
                                   view.role == CloudProjectRole::Owner &&
                                   view.project.formatVersion ==
-                                      daw::ProjectSerializer::kFormatVersion &&
+                                      daw::collab::kSharedProjectFormatVersion &&
                                   view.project.headSequence == 0 &&
                                   view.project.snapshotSequence == 0;
             if (!accepted) {
@@ -983,7 +983,7 @@ struct CloudProjectPublisher::Impl {
         input.uploadId = snapshotUploadId;
         input.sourcePath = snapshotPath;
         input.sequence = 0;
-        input.schemaVersion = daw::ProjectSerializer::kFormatVersion;
+        input.schemaVersion = daw::collab::kSharedProjectFormatVersion;
         input.sha256 = snapshotSha256;
         input.byteSize = snapshotByteSize;
         input.assetIds = snapshotAssetIds;
@@ -1007,7 +1007,7 @@ struct CloudProjectPublisher::Impl {
                               canonicalUuid(result.blobId) == result.blobId &&
                               result.sequence == 0 &&
                               result.schemaVersion ==
-                                  daw::ProjectSerializer::kFormatVersion &&
+                                  daw::collab::kSharedProjectFormatVersion &&
                               result.sha256 == snapshotSha256 &&
                               result.byteSize == snapshotByteSize &&
                               result.assetIds == snapshotAssetIds &&
@@ -1394,7 +1394,7 @@ bool checkCloudProjectPublisherForTest(QString* error) {
     uploading.project.title = input.metadata.title;
     uploading.project.engineVersion = input.metadata.engineVersion;
     uploading.project.minimumAppVersion = input.metadata.minimumAppVersion;
-    uploading.project.formatVersion = daw::ProjectSerializer::kFormatVersion;
+    uploading.project.formatVersion = daw::collab::kSharedProjectFormatVersion;
     uploading.project.status = CloudProjectStatus::Uploading;
     publisher.m_impl->projectReceived(
         publisher.m_impl->createRequestId, CloudRequestKind::CreateProject,
@@ -1466,7 +1466,7 @@ bool checkCloudProjectPublisherForTest(QString* error) {
     snapshot.blobId =
         QStringLiteral("78000000-0000-4000-8000-000000000001");
     snapshot.sequence = 0;
-    snapshot.schemaVersion = daw::ProjectSerializer::kFormatVersion;
+    snapshot.schemaVersion = daw::collab::kSharedProjectFormatVersion;
     snapshot.sha256 = snapshotUpload.second.sha256;
     snapshot.byteSize = snapshotUpload.second.byteSize;
     snapshot.contentType = snapshotUpload.second.contentType;

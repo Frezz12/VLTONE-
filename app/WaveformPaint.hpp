@@ -21,6 +21,9 @@ struct PeakPaint {
     /// past the viewport; a strip passes its rect.
     double clipLeft = 0.0;
     double clipRight = 0.0;
+    /// Read the source envelope from right to left. The source offset remains
+    /// measured in processed audio, matching a sample reversed before playback.
+    bool reversed = false;
     /// Height multiplier, so a clip's gain visibly swells the wave.
     float gain = 1.0f;
     QColor color = QColor(255, 255, 255);

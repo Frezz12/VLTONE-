@@ -1440,6 +1440,106 @@ void verifyAtomicMuteGesture(daw::collab::SharedMutationResult result) {
           "atomic-mute sink detaches before its lifetime ends");
 }
 
+// Track creation has to leave the same document behind whether or not a cloud
+// session is bound. Two ways it used not to, both regressions worth pinning.
+void verifyTrackCreationParity() {
+    {
+        // A Pattern sums by definition, so isSummingFolder() reports true for
+        // it regardless of the field. Writing the field anyway made the local
+        // path disagree with the cloud path, where AddTrack cannot carry it —
+        // and the reducer refuses SetTrackProperty::Summing for non-folders,
+        // so "just send the command" would fail the whole batch.
+        daw::EngineController controller;
+        check(controller.initialize(48000.0, 512, false).isOk(),
+              "pattern parity fixture initializes");
+        const std::string pattern = controller.addPattern("Pattern");
+        const daw::TrackModel* local = controller.project().findTrack(pattern);
+        check(local && !local->summing && daw::isSummingFolder(*local),
+              "a local Pattern sums without carrying the summing field");
+    }
+
+    {
+        daw::EngineController controller;
+        check(controller.initialize(48000.0, 512, false).isOk(),
+              "shared pattern fixture initializes");
+        FakeSharedMutationSink sink;
+        controller.attachSharedMutationSink(sink);
+        const std::string pattern = controller.addPattern("Pattern");
+        const bool sharedOnce = !pattern.empty() && sink.genericCalls == 1;
+        check(sharedOnce &&
+                  std::holds_alternative<
+                      std::shared_ptr<daw::collab::BatchCommand>>(
+                      sink.genericBodies.back()) &&
+                  !commandContainsString(sink.genericBodies.back(), "summing"),
+              "a shared Pattern never sends a summing property the reducer "
+              "would reject");
+        controller.detachSharedMutationSink(sink);
+    }
+
+    {
+        // isFolder() also admits a Pattern, so setFolderSumming used to reach
+        // one and submit a command the reducer rejects.
+        daw::EngineController controller;
+        check(controller.initialize(48000.0, 512, false).isOk(),
+              "pattern summing gate fixture initializes");
+        const std::string pattern = controller.addPattern("Pattern");
+        FakeSharedMutationSink sink;
+        controller.attachSharedMutationSink(sink);
+        controller.setFolderSumming(pattern, false);
+        controller.setFolderSumming(pattern, true);
+        check(sink.genericCalls == 0,
+              "setFolderSumming refuses a Pattern instead of sending a "
+              "doomed command");
+        controller.detachSharedMutationSink(sink);
+    }
+
+    {
+        // automationExpanded is LocalOnly, so no command carries it and each
+        // participant has to set it for themselves. The cloud branch used to
+        // return before doing so, hiding the new lane under a collapsed parent.
+        daw::EngineController controller;
+        check(controller.initialize(48000.0, 512, false).isOk(),
+              "automation lane fixture initializes");
+        const std::string track =
+            controller.addTrack(daw::TrackKind::Audio, "Automated");
+        controller.setAutomationExpanded(track, false);
+        daw::AutomationTarget target;
+        target.kind = daw::AutomationTargetKind::TrackVolume;
+        target.channelId = track;
+
+        FakeSharedMutationSink sink;
+        controller.attachSharedMutationSink(sink);
+        const std::string lane = controller.addAutomationLane(track, target);
+        const daw::TrackModel* owner = controller.project().findTrack(track);
+        check(!lane.empty() && sink.genericCalls == 1 && owner &&
+                  owner->automationExpanded,
+              "a shared automation lane expands its parent locally");
+        controller.detachSharedMutationSink(sink);
+    }
+
+    {
+        // The same call must not expand anything when the session refused it.
+        daw::EngineController controller;
+        check(controller.initialize(48000.0, 512, false).isOk(),
+              "blocked automation lane fixture initializes");
+        const std::string track =
+            controller.addTrack(daw::TrackKind::Audio, "Automated");
+        controller.setAutomationExpanded(track, false);
+        daw::AutomationTarget target;
+        target.kind = daw::AutomationTargetKind::TrackVolume;
+        target.channelId = track;
+
+        FakeSharedMutationSink sink;
+        sink.result = daw::collab::SharedMutationResult::Blocked;
+        controller.attachSharedMutationSink(sink);
+        const std::string lane = controller.addAutomationLane(track, target);
+        const daw::TrackModel* owner = controller.project().findTrack(track);
+        check(lane.empty() && owner && !owner->automationExpanded,
+              "a blocked automation lane leaves the parent untouched");
+        controller.detachSharedMutationSink(sink);
+    }
+}
+
 void verifyLocalFallback() {
     daw::EngineController controller;
     check(controller.initialize(48000.0, 512, false).isOk(),
@@ -1565,6 +1665,7 @@ int main() {
         daw::collab::SharedMutationResult::Submitted);
     verifySharedChannelBatchMutators(
         daw::collab::SharedMutationResult::Blocked);
+    verifyTrackCreationParity();
     verifyLocalFallback();
     verifyAtomicMuteGesture(daw::collab::SharedMutationResult::Submitted);
     verifyAtomicMuteGesture(daw::collab::SharedMutationResult::Blocked);

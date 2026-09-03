@@ -19,7 +19,8 @@ class PluginQuickAdderOverlay;
 
 namespace daw { class EngineController; }
 
-/// Compact plugin finder inside a selected track's context-panel island.
+/// Compact plugin finder inside a selected track or audio clip's context-panel
+/// island.
 ///
 /// Collapsed, it is only a magnifying-glass glyph at the same height as the
 /// other track actions. Expanded, it becomes a one-line search field while the
@@ -40,6 +41,11 @@ public:
     /// (for the "+3" badge) and to seed the "Suggested" section.
     void setTrackId(const QString& trackId);
     QString trackId() const { return m_trackId; }
+
+    /// Route the chosen effect into one audio clip's private Clip FX chain.
+    /// Instruments are omitted in this mode because Clip FX accepts effects.
+    void setClipTarget(const QString& trackId, const QString& clipId);
+    QString clipId() const { return m_clipId; }
 
     /// The accent colour the glass rim and highlights are tinted with.
     void setAccentColor(const QColor& color);
@@ -136,6 +142,7 @@ private:
     // ── State ──
     daw::EngineController* m_controller = nullptr;
     QString m_trackId;
+    QString m_clipId;
     QColor m_accent;
     bool m_expanded = false;
     bool m_hover = false;

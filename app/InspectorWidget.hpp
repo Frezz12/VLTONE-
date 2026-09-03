@@ -2,11 +2,16 @@
 
 #include <QString>
 #include <QWidget>
+#include <QHash>
 
 namespace daw { class EngineController; }
 
 class QLabel;
 class QLineEdit;
+class QAbstractButton;
+class QComboBox;
+class QDoubleSpinBox;
+class QFormLayout;
 class QVBoxLayout;
 class ChannelStrip;
 namespace ui { class IconButton; }
@@ -27,6 +32,9 @@ public:
                              QWidget* parent = nullptr);
 
     void setTrack(const QString& trackId);
+    /// Follow one selected clip without rebuilding the track channel strip.
+    /// An empty clip id restores the ordinary track-only inspector.
+    void setSelection(const QString& trackId, const QString& clipId);
     /// Change identity and rebuild exactly once. Bulk shell refreshes use this
     /// instead of `setTrack()` followed by a second `rebuild()`.
     void rebuildForTrack(const QString& trackId);
@@ -51,6 +59,7 @@ signals:
     void automateControlRequested(const QString& trackId, bool pan);
     void automateMuteRequested(const QString& trackId);
     void automateSendRequested(const QString& trackId, const QString& sendId);
+    void stretchToolRequested();
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -60,10 +69,19 @@ private:
     void applyTheme();
     void pickColor();
     void loadProperties();
+    QWidget* buildClipSection();
+    QDoubleSpinBox* addClipSpin(QFormLayout* form, const QString& label,
+                               const QString& parameterId, double minimum,
+                               double maximum, double step, int decimals,
+                               const QString& suffix = {}, double scale = 1.0);
+    void applyClipParameter(const QString& parameterId, double value);
+    void commitClipParameter(const QString& parameterId, double before);
 
     daw::EngineController* m_controller = nullptr;
     QString m_trackId;
+    QString m_clipId;
     bool m_collapsed = false;
+    bool m_loadingClipControls = false;
 
     QWidget* m_content = nullptr;
     QWidget* m_rail = nullptr;
@@ -74,6 +92,13 @@ private:
     QWidget* m_colorSwatch = nullptr;
     QLabel* m_kindLabel = nullptr;
     QLabel* m_clipsLabel = nullptr;
+    QWidget* m_clipSection = nullptr;
+    QLabel* m_clipNameLabel = nullptr;
+    QWidget* m_clipAdvanced = nullptr;
+    QHash<QString, QDoubleSpinBox*> m_clipSpins;
+    QHash<QString, QComboBox*> m_clipCombos;
+    QHash<QString, QAbstractButton*> m_clipToggles;
+    QHash<QString, double> m_clipGestureStarts;
     QVBoxLayout* m_stripSlot = nullptr;
     ChannelStrip* m_strip = nullptr;
 };

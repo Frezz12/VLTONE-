@@ -104,6 +104,15 @@ add_test(NAME render_test COMMAND render_test)
 set_tests_properties(render_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 
+# Destructive-looking but non-destructive clip processing: atomic bounce,
+# direct-offline caches, invalidation, missing plugins, undo and v8 persistence.
+add_executable(processing_render_test processing_render_test.cpp)
+target_link_libraries(processing_render_test PRIVATE daw_controller)
+
+add_test(NAME processing_render_test COMMAND processing_render_test)
+set_tests_properties(processing_render_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
 # Portable Channel Strip templates: compact VLTS round-trip, cross-channel
 # application, and the guarantee that routing/sends are never part of one.
 add_executable(channel_strip_preset_test channel_strip_preset_test.cpp)
@@ -148,6 +157,15 @@ target_link_libraries(equalizer_test PRIVATE daw_controller)
 
 add_test(NAME equalizer_test COMMAND equalizer_test)
 set_tests_properties(equalizer_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
+# Graphit: stable state/parameters, five voiced EQ/saturation/compressor paths,
+# sample-offset automation, click-safe switching and realtime safety.
+add_executable(graphit_test graphit_test.cpp)
+target_link_libraries(graphit_test PRIVATE daw_controller)
+
+add_test(NAME graphit_test COMMAND graphit_test)
+set_tests_properties(graphit_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 
 # The rebuilt engine: graph compilation, latency compensation, and the

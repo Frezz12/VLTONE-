@@ -27,6 +27,31 @@ AssetKind assetKindFromString(const std::string& name) {
     return AssetKind::Unknown;
 }
 
+std::string toString(PlaybackInjectionStage stage) {
+    switch (stage) {
+        case PlaybackInjectionStage::None: return "none";
+        case PlaybackInjectionStage::TrackSource: return "trackSource";
+        case PlaybackInjectionStage::BeforeTrackFader: return "beforeTrackFader";
+        case PlaybackInjectionStage::BeforeFolderFader: return "beforeFolderFader";
+        case PlaybackInjectionStage::BeforeMasterFx: return "beforeMasterFx";
+        case PlaybackInjectionStage::BeforeMasterFader: return "beforeMasterFader";
+    }
+    return "none";
+}
+
+PlaybackInjectionStage playbackInjectionStageFromString(
+    const std::string& name) {
+    if (name == "trackSource") return PlaybackInjectionStage::TrackSource;
+    if (name == "beforeTrackFader")
+        return PlaybackInjectionStage::BeforeTrackFader;
+    if (name == "beforeFolderFader")
+        return PlaybackInjectionStage::BeforeFolderFader;
+    if (name == "beforeMasterFx") return PlaybackInjectionStage::BeforeMasterFx;
+    if (name == "beforeMasterFader")
+        return PlaybackInjectionStage::BeforeMasterFader;
+    return PlaybackInjectionStage::None;
+}
+
 std::string toString(PluginFormat format) {
     switch (format) {
         case PluginFormat::Clap: return "clap";

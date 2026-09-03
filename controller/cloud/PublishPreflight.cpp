@@ -11,10 +11,11 @@
 namespace daw::cloud {
 namespace {
 
-constexpr std::array<std::string_view, 3> kBuiltinUids{
+constexpr std::array<std::string_view, 4> kBuiltinUids{
     "daw.sampler",
     "daw.equalizer",
     "daw.gravity",
+    "daw.graphit",
 };
 
 bool validSha256(const std::string& value) {

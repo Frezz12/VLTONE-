@@ -161,6 +161,48 @@ for (const [label, cppSignature, nextSignature, schemaDefinition, property] of [
   );
 }
 
+// Shareable built-in plugin uids. This set lives in four places and has drifted
+// before — a uid accepted by the reducer but absent from the schema or the Go
+// validator is a plugin the server silently refuses to relay.
+const builtinUidSchema = schema.$defs.sharedInsert.properties.uid.enum;
+const reducerPath = "controller/collaboration/ProjectReducer.cpp";
+const reducer = read(reducerPath);
+const supportedBuiltinSource = reducer.slice(
+  reducer.indexOf("bool supportedBuiltin"),
+  reducer.indexOf("\n}", reducer.indexOf("bool supportedBuiltin")),
+);
+if (!supportedBuiltinSource) throw new Error(`${reducerPath} is missing supportedBuiltin`);
+assertSameKinds(
+  builtinUidSchema,
+  [...supportedBuiltinSource.matchAll(/uid == "([^"]+)"/g)].map((match) => match[1]),
+  `${reducerPath} supportedBuiltin uid`,
+);
+
+const controllerPath = "controller/EngineController.cpp";
+const controller = read(controllerPath);
+const sharedBuiltinSource = controller.slice(
+  controller.indexOf("bool supportedSharedBuiltin"),
+  controller.indexOf("\n}", controller.indexOf("bool supportedSharedBuiltin")),
+);
+if (!sharedBuiltinSource) {
+  throw new Error(`${controllerPath} is missing supportedSharedBuiltin`);
+}
+assertSameKinds(
+  builtinUidSchema,
+  [...sharedBuiltinSource.matchAll(/uid == "([^"]+)"/g)].map((match) => match[1]),
+  `${controllerPath} supportedSharedBuiltin uid`,
+);
+
+const preflightPath = "controller/cloud/PublishPreflight.cpp";
+const preflight = read(preflightPath);
+const preflightUidMatch = preflight.match(/kBuiltinUids\s*\{([\s\S]*?)\}/);
+if (!preflightUidMatch) throw new Error(`${preflightPath} is missing kBuiltinUids`);
+assertSameKinds(
+  builtinUidSchema,
+  [...preflightUidMatch[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]),
+  `${preflightPath} kBuiltinUids`,
+);
+
 const commandJsonPath = "controller/collaboration/CommandJson.cpp";
 const commandJson = read(commandJsonPath);
 const parseBodySource = commandJson.slice(
@@ -181,6 +223,18 @@ assertSameKinds(
   schemaKinds,
   goSwitchKinds(payloadValidation, "func validateCommandPayloadShape"),
   `${payloadValidationPath} validateCommandPayloadShape`,
+);
+
+const goUidMatch = functionSource(payloadValidation, "func validateSharedInsert").match(
+  /payloadEnum\(body,\s*"uid",([^)]*)\)/,
+);
+if (!goUidMatch) {
+  throw new Error(`${payloadValidationPath} is missing the shared-insert uid enum`);
+}
+assertSameKinds(
+  builtinUidSchema,
+  [...goUidMatch[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]),
+  `${payloadValidationPath} validateSharedInsert uid`,
 );
 
 const metadataPath = "backend/internal/collab/command_validation.go";

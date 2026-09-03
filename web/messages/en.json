@@ -143,10 +143,10 @@
           {
             "id": "tracks-folders",
             "title": "Tracks and folders",
-            "intro": "Audio, MIDI, Instrument, Pattern, and Bus tracks are available. Plain folders organise; summing folders also mix their children.",
+            "intro": "Audio, MIDI, Pattern, Bus, and Send tracks are available. Bus channels receive main outputs; Send channels receive parallel sends. Plain folders organise; summing folders also mix their children.",
             "steps": ["Use Add Track or choose a type from Track.", "Rename and colour the track.", "Select multiple tracks with Shift or Ctrl/Cmd and move them into a new folder.", "Use Folder for organisation or Summing Folder for shared level and processing.", "Collapse folders when their children are not needed on screen."],
             "result": "Tracks are organised by purpose, and summing is used only where it is needed.",
-            "shortcuts": [{"keys": "Ctrl/Cmd+Alt+A", "label": "Audio track"}, {"keys": "Ctrl/Cmd+Alt+M", "label": "MIDI track"}, {"keys": "Ctrl/Cmd+Alt+I", "label": "Instrument track"}, {"keys": "Ctrl/Cmd+Shift+D", "label": "New folder"}],
+            "shortcuts": [{"keys": "Ctrl/Cmd+Alt+A", "label": "Audio track"}, {"keys": "Ctrl/Cmd+Alt+M", "label": "MIDI track"}, {"keys": "Ctrl/Cmd+Shift+D", "label": "New folder"}],
             "problems": [{"problem": "Controls disappear on a deeply nested track.", "fix": "Widen the track header area or reduce nesting; the most important controls remain when space is tight."}],
             "figures": [{"slug": "track-folders", "alt": "Nested folders and selected tracks", "caption": "Folders show hierarchy, while multi-selection packs tracks with one command."}]
           },
@@ -245,7 +245,7 @@
             "id": "sampler",
             "title": "Built-in Sampler",
             "intro": "Sampler loads a local audio file and turns it into an instrument for MIDI clips or the computer keyboard.",
-            "steps": ["Add an Instrument Track and choose Sampler.", "Open its editor and load an audio file.", "Set start/end, root note, envelope, and gain.", "Create a MIDI clip and add notes.", "Save the project; Sampler parameters are stored with the track."],
+            "steps": ["Add a MIDI Track and choose Sampler.", "Open its editor and load an audio file.", "Set start/end, root note, envelope, and gain.", "Create a MIDI clip and add notes.", "Save the project; Sampler parameters are stored with the track."],
             "result": "The sample plays as an instrument and follows project MIDI notes.",
             "problems": [{"problem": "The sample plays at the wrong pitch.", "fix": "Set the correct root note and check transposition."}],
             "figures": [{"slug": "sampler", "alt": "Built-in Sampler editor with a waveform", "caption": "Sampler shows the waveform and its instrumental playback controls.", "ratio": "4 / 3"}]
@@ -254,7 +254,7 @@
             "id": "typing-keyboard",
             "title": "Computer keyboard as MIDI",
             "intro": "Typing Keyboard maps physical keys to musical notes for testing an instrument without a MIDI controller.",
-            "steps": ["Select an Instrument track with a loaded instrument.", "Enable Tools → Typing Keyboard.", "Play the mapped keys and change octave or velocity.", "Disable the mode before using normal one-key commands."],
+            "steps": ["Select a MIDI track with a loaded instrument.", "Enable Tools → Typing Keyboard.", "Play the mapped keys and change octave or velocity.", "Disable the mode before using normal one-key commands."],
             "result": "You can audition and record the instrument without an external MIDI keyboard.",
             "shortcuts": [{"keys": "Ctrl/Cmd+T", "label": "Toggle Typing Keyboard"}],
             "notes": ["Conflicting single-key commands are temporarily released and restored when the mode is disabled."]
@@ -279,10 +279,10 @@
           {
             "id": "routing",
             "title": "Buses, sends, and summing",
-            "intro": "Bus tracks receive other tracks; sends create a parallel route, and a summing folder combines its children.",
-            "steps": ["Create a Bus Track for shared reverb, delay, or group processing.", "Add a send from the source track and set its level.", "Put the effect on the bus; use a wet signal for parallel processing.", "Move a permanent group into a Summing Folder.", "Recheck solo and mute after changing routing."],
+            "intro": "Bus tracks receive main outputs for subgroup processing; Send tracks receive parallel sends, and a summing folder combines its children.",
+            "steps": ["Create a Send Track for shared reverb or delay.", "Add a send from the source track and set its level.", "Put the effect on the Send track and use a fully wet signal.", "Use a Bus Track or Summing Folder for permanent subgroup processing.", "Recheck solo and mute after changing routing."],
             "result": "Shared processing is reused and group level is controlled without duplicate plugins.",
-            "problems": [{"problem": "The effect is doubled or too loud.", "fix": "Check direct output, send level, and dry/wet on the bus."}]
+            "problems": [{"problem": "The effect is doubled or too loud.", "fix": "Check direct output, send level, and dry/wet on the Send track."}]
           },
           {
             "id": "adding-plugins",
@@ -291,7 +291,7 @@
             "steps": ["Choose a track and an empty insert or instrument slot.", "Type part of the name or vendor.", "Put instruments in the instrument slot and processors in inserts.", "Open the plugin editor for native parameters.", "Use Replace or Remove; both changes participate in undo."],
             "result": "The plugin is loaded in the correct slot and processes the live track signal.",
             "shortcuts": [{"keys": "Ctrl/Cmd+F", "label": "Find a plugin for the track"}],
-            "problems": [{"problem": "A plugin cannot be inserted as an instrument.", "fix": "Check its type: an audio effect cannot source an Instrument track."}],
+            "problems": [{"problem": "A plugin cannot be inserted as an instrument.", "fix": "Check its type: an audio effect cannot be used as a MIDI track instrument."}],
             "figures": [{"slug": "plugin-picker", "alt": "Plugin picker with its search field", "caption": "Search filters the list while retaining keyboard focus.", "ratio": "4 / 3"}, {"slug": "plugin-search", "alt": "Inline plugin search in the context panel", "caption": "Inline search expands directly over the selected track."}]
           },
           {

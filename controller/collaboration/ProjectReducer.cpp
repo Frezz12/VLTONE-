@@ -672,7 +672,7 @@ bool pluginIsDeleted(const SharedProjectDocument& state,
 bool supportedBuiltin(const InsertModel& insert) {
     return insert.format == PluginFormat::Internal &&
            (insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
-            insert.uid == "daw.gravity");
+            insert.uid == "daw.gravity" || insert.uid == "daw.graphit");
 }
 
 bool validParameters(const std::vector<InsertParameter>& parameters) {

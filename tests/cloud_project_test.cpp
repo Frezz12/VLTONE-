@@ -126,6 +126,8 @@ int main() {
             builtin("10000000-0000-4000-8000-000000000001", "daw.equalizer"));
         project.masterInserts.push_back(
             builtin("10000000-0000-4000-8000-000000000002", "daw.gravity"));
+        project.masterInserts.push_back(
+            builtin("10000000-0000-4000-8000-000000000003", "daw.graphit"));
         daw::TrackModel track;
         track.id = "20000000-0000-4000-8000-000000000001";
         track.instrument =
@@ -140,7 +142,7 @@ int main() {
 
         const auto report = daw::cloud::inspectForPublishV1(project);
         check(report.canPublish(),
-              "Sampler, Equalizer and Gravity are the complete v1 built-in set");
+              "Sampler, Equalizer, Gravity and Graphit are publishable built-ins");
 
         project.masterInserts.front().stateSchemaVersion = 0;
         check(!daw::cloud::inspectForPublishV1(project).canPublish(),

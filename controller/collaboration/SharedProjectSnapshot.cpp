@@ -529,7 +529,7 @@ audio::Result serializeSharedProjectSnapshot(
     json root{
         {"format", "vlt-shared-project-snapshot"},
         {"schemaVersion", kSharedProjectSnapshotSchemaVersion},
-        {"projectFormatVersion", ProjectSerializer::kFormatVersion},
+        {"projectFormatVersion", kSharedProjectFormatVersion},
         {"serverSequence", document.confirmedSequence},
         {"project", std::move(project)},
         {"deletedTracks", encodeTombstones(document.deletedTracks,
@@ -590,7 +590,7 @@ audio::Result deserializeSharedProjectSnapshot(
         root.value("schemaVersion", 0) !=
             kSharedProjectSnapshotSchemaVersion ||
         root.value("projectFormatVersion", 0) !=
-            ProjectSerializer::kFormatVersion ||
+            kSharedProjectFormatVersion ||
         !root.at("project").is_object()) {
         return invalid("shared snapshot envelope is invalid");
     }

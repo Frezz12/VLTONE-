@@ -125,9 +125,24 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
 
     row->addWidget(ui::separatorLine(Qt::Vertical, 18, this));
 
-    // Timeline zone: the big territory the context island travels over, and
-    // now nothing else.
-    row->addStretch(1);
+    // Timeline zone: the context island travels through its centre, while the
+    // playback-follow switch stays pinned to the far edge above the timeline.
+    auto* timelineZone = new QWidget(this);
+    auto* timelineLayout = new QHBoxLayout(timelineZone);
+    timelineLayout->setContentsMargins(2, 0, 2, 0);
+    timelineLayout->setSpacing(2);
+    timelineLayout->addStretch(1);
+    m_followPlayhead = new ui::IconButton(
+        icons::Glyph::Crosshair,
+        tr("Follow the playhead — P centres it; press again to navigate freely"),
+        timelineZone);
+    m_followPlayhead->setObjectName(QStringLiteral("FollowPlayheadButton"));
+    m_followPlayhead->setCheckable(true);
+    m_followPlayhead->setAccessibleName(tr("Follow the playhead"));
+    connect(m_followPlayhead, &QAbstractButton::toggled, this,
+            &ToolPanel::followPlayheadToggled);
+    timelineLayout->addWidget(m_followPlayhead);
+    row->addWidget(timelineZone, 1);
 
     // Past the stretch, so it sits over the assistant column at the far right.
     moveAiZoneLast();
@@ -145,6 +160,12 @@ void ToolPanel::setRestartMode(bool on) {
 void ToolPanel::setPlayFromClip(bool on) {
     if (m_playFromClip && m_playFromClip->isChecked() != on)
         m_playFromClip->setChecked(on);
+}
+
+void ToolPanel::setFollowPlayhead(bool on) {
+    if (!m_followPlayhead || m_followPlayhead->isChecked() == on) return;
+    QSignalBlocker blocker(m_followPlayhead);
+    m_followPlayhead->setChecked(on);
 }
 
 void ToolPanel::setAutomationVisible(bool visible) {
@@ -224,6 +245,7 @@ void ToolPanel::resizeEvent(QResizeEvent* ev) {
 
 void ToolPanel::applyTheme() {
     const Theme& t = th();
+    if (m_followPlayhead) m_followPlayhead->setActiveColor(t.cursor);
     setStyleSheet(QString(
         "#ToolPanel { background: %1; border-bottom: 1px solid %2; }")
                       .arg(t.headerBackground.name(), t.sectionDivider().name()));

@@ -57,7 +57,8 @@ constexpr int kChipGap = 3;
 
 /// What each part of a row needs before it is worth showing at all.
 constexpr int kFaderMin = 68;
-constexpr int kPanSize = 24;
+constexpr int kPanWidth = 28;
+constexpr int kPanHeight = 28;
 constexpr int kPartGap = 6;
 constexpr int kFullChipStrip = 4 * kChipW + 3 * kChipGap;
 
@@ -318,11 +319,11 @@ QString trackKindName(daw::TrackKind kind) {
     switch (kind) {
         case daw::TrackKind::Audio:      return QObject::tr("Audio track");
         case daw::TrackKind::Midi:       return QObject::tr("MIDI track");
-        case daw::TrackKind::Instrument: return QObject::tr("Instrument track");
+        case daw::TrackKind::Instrument: return QObject::tr("MIDI track");
         case daw::TrackKind::Pattern:    return QObject::tr("Pattern track");
         case daw::TrackKind::Automation: return QObject::tr("Automation lane");
         case daw::TrackKind::Bus:        return QObject::tr("Bus");
-        case daw::TrackKind::Aux:        return QObject::tr("Aux");
+        case daw::TrackKind::Aux:        return QObject::tr("Send track");
         case daw::TrackKind::Group:      return QObject::tr("Group");
         case daw::TrackKind::Master:     return QObject::tr("Master");
         case daw::TrackKind::Folder:     return QObject::tr("Folder");
@@ -336,12 +337,12 @@ icons::Glyph glyphForTrack(const daw::TrackModel& track) {
     switch (track.kind) {
         case daw::TrackKind::Audio:      return icons::Glyph::Waveform;
         case daw::TrackKind::Midi:       return icons::Glyph::MidiKeys;
-        case daw::TrackKind::Instrument: return icons::Glyph::Synth;
+        case daw::TrackKind::Instrument: return icons::Glyph::MidiKeys;
         case daw::TrackKind::Pattern:    return icons::Glyph::Grid;
         case daw::TrackKind::Automation: return icons::Glyph::Automation;
         case daw::TrackKind::Bus:
-        case daw::TrackKind::Aux:
         case daw::TrackKind::Group:      return icons::Glyph::Mixer;
+        case daw::TrackKind::Aux:        return icons::Glyph::ArrowRight;
         case daw::TrackKind::Master:     return icons::Glyph::Headphones;
         case daw::TrackKind::Folder:
             return track.summing ? icons::Glyph::FolderSum : icons::Glyph::Folder;
@@ -458,6 +459,7 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
     const bool folder = daw::isFolder(track);
     const bool pattern = track.kind == daw::TrackKind::Pattern;
     const bool automationLane = daw::isAutomationLane(track);
+    const bool recordable = daw::acceptsRecording(track);
     // A plain folder is a container: no fader, no pan, no meter, nothing in the
     // mixer. A summing folder is a bus, and wears a bus's controls.
     const bool channel = daw::carriesAudio(track);
@@ -542,7 +544,7 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
 
     ui::MsrButton* monitor = nullptr;
     ui::MsrButton* record = nullptr;
-    if (channel && !folder) {
+    if (recordable) {
         monitor = chip("I", th().accent, tr("Input monitoring"));
         monitor->setChecked(track.monitor);
         monitor->setAutoMark(track.monitorAuto);
@@ -622,7 +624,7 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
                 [this, id] { emit automateControlRequested(id, false); });
 
         pan = new ui::PanKnob(container);
-        pan->setFixedSize(kPanSize, kPanSize);
+        pan->setFixedSize(kPanWidth, kPanHeight);
         pan->setPan(track.pan);
         pan->setToolTip(tr("Pan  %1").arg(panText(track.pan)));
         connect(pan, &ui::PanKnob::panChanged, this, [this, id, pan](double v) {
@@ -930,9 +932,9 @@ void TrackListWidget::applyRowAdaptivity(const Row& row) {
         flexible >= kFullChipStrip + kPartGap + kCompactFaderSide;
     const bool showPan =
         normalFader
-            ? flexible >= kFullChipStrip + 2 * kPartGap + kFaderMin + kPanSize
+            ? flexible >= kFullChipStrip + 2 * kPartGap + kFaderMin + kPanWidth
             : flexible >= stackMin + 2 * kPartGap +
-                              kCompactFaderSide + kPanSize;
+                              kCompactFaderSide + kPanWidth;
     row.fader->setCompactKnob(showFader && !normalFader);
     row.fader->setVisible(showFader);
     if (row.pan) row.pan->setVisible(showPan);
@@ -1870,7 +1872,7 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
     QAction* modeGlobal = nullptr;
     QAction* modeOverwrite = nullptr;
     QAction* modeLayers = nullptr;
-    if (!isFolder) {
+    if (daw::acceptsRecording(*track)) {
         QMenu* modes = menu.addMenu(tr("Track Recording Mode"));
         const auto add = [&](const QString& text, daw::TrackRecordMode m) {
             QAction* a = modes->addAction(text);

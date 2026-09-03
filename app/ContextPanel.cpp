@@ -184,6 +184,7 @@ const std::vector<ContextTool>& contextPanelTools() {
         QT_TRANSLATE_NOOP("ContextPanelTools", "Fade in / out"),
         QT_TRANSLATE_NOOP("ContextPanelTools", "Detected BPM and key"),
         QT_TRANSLATE_NOOP("ContextPanelTools", "Duplicate and delete"),
+        QT_TRANSLATE_NOOP("ContextPanelTools", "Clip FX plugin search"),
         QT_TRANSLATE_NOOP("ContextPanelTools", "Enable and editor"),
         QT_TRANSLATE_NOOP("ContextPanelTools", "Enable and Piano Roll"),
         QT_TRANSLATE_NOOP("ContextPanelTools", "Colour"),
@@ -205,6 +206,7 @@ const std::vector<ContextTool>& contextPanelTools() {
         {"clip.fades", "Audio Clip", "Fade in / out"},
         {"clip.analysis", "Audio Clip", "Detected BPM and key"},
         {"clip.edit", "Audio Clip", "Duplicate and delete"},
+        {"clip.plugins", "Audio Clip", "Clip FX plugin search"},
         {"automation.colour", "Automation Clip", "Track colour"},
         {"automation.state", "Automation Clip", "Enable and editor"},
         {"automation.edit", "Automation Clip", "Duplicate and delete"},
@@ -451,8 +453,13 @@ QWidget* ContextPanel::buildAudioClip() {
     };
     if (!clipOf()) return nullptr;
 
-    QHBoxLayout* row = nullptr;
-    QWidget* host = newRow(row);
+    QHBoxLayout* outer = nullptr;
+    QWidget* host = newRow(outer);
+    auto* actionsHost = new QWidget(host);
+    auto* row = new QHBoxLayout(actionsHost);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(6);
+    outer->addWidget(actionsHost, 0, Qt::AlignVCenter);
     std::vector<std::function<void()>> loaders;
 
     if (toolEnabled("clip.colour")) {
@@ -628,6 +635,54 @@ QWidget* ContextPanel::buildAudioClip() {
 
         row->addWidget(duplicate);
         row->addWidget(remove);
+    }
+
+    if (toolEnabled("clip.plugins")) {
+        QWidget* pluginDivider = nullptr;
+        if (row->count() > 0) {
+            pluginDivider = islandDivider(host);
+            outer->addWidget(pluginDivider);
+        }
+        auto* adder = new PluginQuickAdder(m_controller, host);
+        adder->setObjectName(QStringLiteral("ContextPanelClipPluginSearch"));
+        adder->setClipTarget(QString::fromStdString(trackId),
+                             QString::fromStdString(clipId));
+        if (const auto* track = m_controller->project().findTrack(trackId))
+            adder->setAccentColor(colorFromRgb(track->color));
+        outer->addWidget(adder, 0, Qt::AlignVCenter);
+        m_quickAdder = adder;
+
+        connect(adder, &PluginQuickAdder::pluginInserted, this,
+                [this](const QString& insertId, bool) {
+                    if (insertId.isEmpty()) return;
+                    afterEdit(/*structural=*/true);
+                    invalidateBackdrop();
+                });
+        connect(adder, &PluginQuickAdder::editorRequested, this,
+                [this, track = QString::fromStdString(trackId)](
+                    const QString& insertId) {
+                    emit pluginEditorRequested(track, insertId);
+                });
+        connect(adder, &PluginQuickAdder::searchStateChanged, this,
+                [this, host, actionsHost, pluginDivider](bool expanded) {
+                    actionsHost->setVisible(!expanded);
+                    if (pluginDivider) pluginDivider->setVisible(!expanded);
+                    host->resize(host->sizeHint().width(), kRowHeight);
+                    if (QWidget* strip = parentWidget()) strip->setFixedHeight(44);
+                    setGeometry(targetGeometry());
+                    layoutSelf();
+                    invalidateBackdrop();
+                    update();
+                });
+        connect(adder, &PluginQuickAdder::sizeChanged, this, [this, host] {
+            if (!m_content || m_content != host) return;
+            host->resize(host->sizeHint().width(), kRowHeight);
+            if (QWidget* strip = parentWidget()) strip->setFixedHeight(44);
+            setGeometry(targetGeometry());
+            layoutSelf();
+            invalidateBackdrop();
+            update();
+        });
     }
 
     m_applyValues = [loaders = std::move(loaders), this] {
@@ -1953,8 +2008,9 @@ QWidget* ContextPanel::buildContent(Context context) {
 }
 
 void ContextPanel::openPluginSearch() {
-    if (resolve() != Context::Track) return;
-    if (m_context != Context::Track || !m_quickAdder) {
+    const Context target = resolve();
+    if (target != Context::Track && target != Context::AudioClip) return;
+    if (m_context != target || !m_quickAdder) {
         rebuild();
         QTimer::singleShot(kSpringMs + 10, this, [this] {
             if (m_quickAdder) m_quickAdder->openSearch();

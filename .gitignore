@@ -14,6 +14,7 @@ Thumbs.db
 .agents/
 .cache/
 .claude/
+.codex-artifacts/
 .pnpm-store/
 .postman/
 .sisyphus/

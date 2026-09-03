@@ -22,6 +22,7 @@ public:
 
     void setRestartMode(bool on);
     void setPlayFromClip(bool on);
+    void setFollowPlayhead(bool on);
     /// Kept for the shell's benefit; the toggle itself is in the header drawer.
     void setInspectorVisible(bool visible);
     /// Sync the left zone width with the inspector column (collapsed/expanded).
@@ -50,6 +51,7 @@ signals:
     void resized();
     void restartModeToggled(bool on);
     void playFromClipToggled(bool on);
+    void followPlayheadToggled(bool on);
     /// Global reveal/collapse for automation lanes. Checked is the active
     /// state, so pressing the button a second time hides them again.
     void automationVisibilityToggled(bool visible);
@@ -73,6 +75,7 @@ private:
     void moveAiZoneLast();
     ui::IconButton* m_restart = nullptr;
     ui::IconButton* m_playFromClip = nullptr;
+    ui::IconButton* m_followPlayhead = nullptr;
     ui::IconButton* m_createAutomation = nullptr;
     ui::IconButton* m_showAutomation = nullptr;
     QWidget* m_inspectorZone = nullptr;

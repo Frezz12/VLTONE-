@@ -146,6 +146,13 @@ public:
         m_activeColor = c;
         update();
     }
+    /// Optional semantic tint while the button is idle. Checked controls still
+    /// use activeColor, so the two states keep their existing hierarchy.
+    void setIdleColor(const QColor& c) {
+        if (m_idleColor == c) return;
+        m_idleColor = c;
+        update();
+    }
     /// Breathe in the active colour. Used by the transport's Record button
     /// while record is engaged but not yet rolling: the button is lit and
     /// waiting, which a static shade cannot say apart from "recording".
@@ -162,6 +169,7 @@ private:
     bool m_prominent = false;
     bool m_accentTint = false;
     QColor m_activeColor;
+    QColor m_idleColor;
     bool m_pulse = false;
     double m_pulseValue = 0.0;
     QVariantAnimation* m_pulseAnim = nullptr;
@@ -389,7 +397,7 @@ private:
     Fade m_hoverFade{this};
 };
 
-/// Pan knob: a flat ring with an arc from centre to the current value.
+/// Compact circular stereo-pan knob with a centre detent and a bipolar arc.
 class PanKnob : public QWidget {
     Q_OBJECT
 public:
@@ -406,6 +414,7 @@ public:
     void setAutomatable(bool automatable) { m_automatable = automatable; }
     bool isAutomatable() const noexcept { return m_automatable; }
     bool isEditing() const noexcept { return m_dragging; }
+    static bool checkInteractionForTest();
 
 signals:
     void panChanged(double pan);
@@ -420,17 +429,24 @@ protected:
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
     void mouseDoubleClickEvent(QMouseEvent*) override;
+    void wheelEvent(QWheelEvent*) override;
+    void keyPressEvent(QKeyEvent*) override;
     void contextMenuEvent(QContextMenuEvent*) override;
+    void enterEvent(QEnterEvent*) override;
+    void leaveEvent(QEvent*) override;
 
 private:
     /// Float the L/C/R readout above the knob while dragging.
     void showBubble();
+    void commit(double pan);
 
     double m_pan = 0.0;
     double m_dragStart = 0.0;
+    int m_dragStartX = 0;
     int m_dragStartY = 0;
     bool m_dragging = false;
     bool m_automatable = false;
+    Fade m_hoverFade{this};
 };
 
 /// A general-purpose rotary knob with a caption under it.
@@ -648,7 +664,7 @@ private:
     void endEditing();
 };
 
-/// A thin grab strip between two panels: drag it to resize the one beside it.
+/// An invisible hit area laid over a panel edge: drag it to resize that panel.
 ///
 /// The app has no splitters — panel sizes are the owner's business, and each
 /// owner clamps the drag its own way (the mixer against the arrangement's
@@ -663,6 +679,9 @@ public:
     /// mixer); `Qt::Vertical` is a vertical bar that resizes horizontally (a
     /// side panel).
     explicit ResizeHandle(Qt::Orientation orientation, QWidget* parent = nullptr);
+    /// Select which edge of the parent owns the hit area. Vertical handles use
+    /// Left/Right; horizontal handles use Top/Bottom.
+    void setEdge(Qt::Edge edge);
 
     /// Distance from the start of the gesture, so the owner applies it to the
     /// size the panel had when the drag began — applying it to the running size
@@ -671,15 +690,18 @@ public:
     std::function<void()> onDragStart;
 
 protected:
+    void paintEvent(QPaintEvent*) override;
     void mousePressEvent(QMouseEvent* ev) override;
     void mouseMoveEvent(QMouseEvent* ev) override;
     void mouseReleaseEvent(QMouseEvent* ev) override;
-    void paintEvent(QPaintEvent*) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     double along(const QMouseEvent* ev) const;
+    void placeOnEdge();
 
     Qt::Orientation m_orientation;
+    Qt::Edge m_edge;
     double m_start = 0.0;
     bool m_dragging = false;
 };

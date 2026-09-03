@@ -381,6 +381,41 @@ int main() {
               "the copied VLT resolves Sampler audio inside its own Content folder");
     }
 
+    // Pattern sources are one contiguous track block. Adding an ordinary lane
+    // later must not turn it into the insertion point for new Pattern sources.
+    {
+        daw::EngineController p;
+        p.initialize(48000, 512, false);
+        const auto sampler = p.pluginManager().find(
+            daw::plugins::Format::Internal, "daw.sampler");
+        const std::string pattern = p.addPattern("Ordered Pattern");
+        const std::string first = sampler
+            ? p.addPatternInstrument(pattern, *sampler, 0.0)
+            : std::string{};
+        const std::string audio =
+            p.addTrack(daw::TrackKind::Audio, "Outside Audio");
+        const std::string second = sampler
+            ? p.addPatternInstrument(pattern, *sampler, 0.0)
+            : std::string{};
+
+        check(!first.empty() && !second.empty() &&
+                  p.project().indexOf(pattern) == 0 &&
+                  p.project().indexOf(first) == 1 &&
+                  p.project().indexOf(second) == 2 &&
+                  p.project().indexOf(audio) == 3 &&
+                  p.project().findTrack(second)->parentId == pattern,
+              "new Pattern instruments stay inside the contiguous child block");
+        p.undo();
+        check(!p.project().findTrack(second) &&
+                  p.project().indexOf(audio) == 2,
+              "undo removes the newly inserted Pattern instrument");
+        p.redo();
+        check(p.project().indexOf(first) == 1 &&
+                  p.project().indexOf(second) == 2 &&
+                  p.project().indexOf(audio) == 3,
+              "redo restores the Pattern child before later root tracks");
+    }
+
     // Extending one Pattern container changes the gate seen by all of its MIDI
     // children, but it must not fall back to publishing every MIDI track.
     {
@@ -427,6 +462,67 @@ int main() {
                   findClip(p, second, secondClip) != nullptr &&
                   engineNotesFor(p, unrelated) == unrelatedSchedule,
               "Pattern extension redo republishes only linked children");
+    }
+
+    // Moving or copying a linked MIDI clip beyond its owner extends the
+    // visible Pattern instance and keeps that boundary in the same history
+    // action as the child edit.
+    {
+        daw::EngineController p;
+        p.initialize(48000, 512, false);
+        const std::string pattern = p.addPattern("Growing Pattern");
+        const std::string child =
+            p.addTrack(daw::TrackKind::Midi, "Growing Child");
+        p.moveTrackToFolder(child, pattern);
+        const std::string member = p.addMidiClip(child, 0.0, 1.0);
+        const auto* patternTrack = p.project().findTrack(pattern);
+        const std::string owner =
+            patternTrack && !patternTrack->clips.empty()
+                ? patternTrack->clips.front().id
+                : std::string{};
+        const double originalDuration =
+            findClip(p, pattern, owner)->durationSeconds;
+
+        p.beginClipPositionEdit();
+        p.setClipStartSeconds(child, member, 8.0);
+        check(std::fabs(findClip(p, pattern, owner)->durationSeconds - 9.0) <
+                  1e-9,
+              "Pattern boundary follows a linked MIDI drag live");
+        p.setClipStartSeconds(child, member, 3.0);
+        p.endClipPositionEdit("Move Pattern MIDI");
+        check(std::fabs(findClip(p, pattern, owner)->durationSeconds - 4.0) <
+                  1e-9 &&
+                  std::fabs(findClip(p, child, member)->startSeconds - 3.0) <
+                      1e-9,
+              "Pattern boundary uses the final linked MIDI position");
+        p.undo();
+        check(std::fabs(findClip(p, pattern, owner)->durationSeconds -
+                        originalDuration) < 1e-9 &&
+                  std::fabs(findClip(p, child, member)->startSeconds) < 1e-9,
+              "moving Pattern MIDI undoes its position and owner boundary together");
+        p.redo();
+        check(std::fabs(findClip(p, pattern, owner)->durationSeconds - 4.0) <
+                  1e-9 &&
+                  std::fabs(findClip(p, child, member)->startSeconds - 3.0) <
+                      1e-9,
+              "moving Pattern MIDI redoes its owner extension together");
+
+        const std::string copy = p.duplicateClipAt(child, member, 6.0);
+        check(!copy.empty() &&
+                  findClip(p, child, copy)->patternClipId == owner &&
+                  std::fabs(findClip(p, pattern, owner)->durationSeconds - 7.0) <
+                      1e-9,
+              "copying Pattern MIDI extends the same owner clip");
+        p.undo();
+        check(!findClip(p, child, copy) &&
+                  std::fabs(findClip(p, pattern, owner)->durationSeconds - 4.0) <
+                      1e-9,
+              "copy undo restores the previous Pattern boundary");
+        p.redo();
+        check(findClip(p, child, copy) &&
+                  std::fabs(findClip(p, pattern, owner)->durationSeconds - 7.0) <
+                      1e-9,
+              "copy redo restores the extended Pattern boundary");
     }
 
     // Removing a Pattern removes its private source subtree as one object.
@@ -962,6 +1058,41 @@ int main() {
                   r.project().findTrack(src)->sends.empty(),
               "removing a bus clears edges that pointed at it");
         check(r.trackNodes(bus) == nullptr, "the bus's nodes are gone too");
+    }
+
+    // A Send is an aux-return channel, not another name for a Bus. Buses are
+    // main-output destinations; Sends receive parallel send taps and keep the
+    // normal return-channel processing (inserts, pan, fader and output).
+    {
+        daw::EngineController routing;
+        routing.initialize(48000, 512, /*openDevice=*/false);
+        const std::string source =
+            routing.addTrack(daw::TrackKind::Audio, "Send Source");
+        const std::string bus =
+            routing.addTrack(daw::TrackKind::Bus, "Drum Bus");
+        const std::string sendReturn =
+            routing.addTrack(daw::TrackKind::Aux);
+        const auto* returnTrack = routing.project().findTrack(sendReturn);
+
+        check(returnTrack && returnTrack->name == "Send" &&
+                  daw::carriesAudio(*returnTrack) &&
+                  !daw::acceptsRecording(*returnTrack),
+              "Send is a non-recordable aux-return channel");
+        check(returnTrack &&
+                  !daw::trackAccepts(returnTrack->kind, daw::ClipKind::Audio) &&
+                  !daw::trackAccepts(returnTrack->kind, daw::ClipKind::Midi),
+              "Send does not own arrangement clips");
+        check(routing.setTrackOutputBus(source, bus),
+              "Bus remains available as a main output");
+        const std::string sendId = routing.addSend(source, sendReturn);
+        check(!sendId.empty() && routing.trackNodes(sendReturn) != nullptr,
+              "a source can feed the dedicated Send return");
+
+        routing.setTrackArmed(sendReturn, true);
+        routing.setTrackMonitor(sendReturn, true);
+        returnTrack = routing.project().findTrack(sendReturn);
+        check(returnTrack && !returnTrack->armed && !returnTrack->monitor,
+              "Send cannot be armed or input-monitored");
     }
 
     // ── Rendering through the new engine ──

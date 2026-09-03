@@ -36,7 +36,7 @@ struct PublishPreflightReport {
 ///
 /// This is intentionally pure: it never probes a plugin, opens a file or
 /// changes the project. The publish workflow performs this check before it
-/// creates an uploading cloud project. V1 accepts only the three application
+/// creates an uploading cloud project. V1 accepts only the four application
 /// built-ins; a user must remove or manually bounce every other plugin.
 PublishPreflightReport inspectForPublishV1(const ProjectModel& project);
 

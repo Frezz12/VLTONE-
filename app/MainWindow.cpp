@@ -29,8 +29,10 @@
 #include "SessionStatusWidget.hpp"
 #include "FileBrowserPanel.hpp"
 #include "EqualizerPanel.hpp"
+#include "GraphitPanel.hpp"
 #include "GravityPanel.hpp"
 #include "Controls.hpp"
+#include "GlassPanel.hpp"
 #include "Icons.hpp"
 #include "InspectorWidget.hpp"
 #include "InternalEditorFrame.hpp"
@@ -44,10 +46,14 @@
 #include "AutomationEditorWindow.hpp"
 #include "SampleEditorWindow.hpp"
 #include "ExportDialog.hpp"
+#include "BounceInPlaceDialog.hpp"
+#include "OfflineRenderDialog.hpp"
 #include "PluginManagerWindow.hpp"
+#include "PluginQuickAdder.hpp"
 #include "PlatformDiagnostics.hpp"
 #include "PluginPickerMenu.hpp"
 #include "ProjectSerializer.hpp"
+#include "collaboration/SharedProjectSnapshot.hpp"
 #include "ProjectTemplates.hpp"
 #include "RecoveryPrefs.hpp"
 #include "RecoverySupport.hpp"
@@ -62,6 +68,7 @@
 #include "FileTypes.hpp"
 #include "plugins/PluginConvert.hpp"
 #include "Internal/GravityInstance.hpp"
+#include "Internal/GraphitInstance.hpp"
 #include "Internal/EqualizerInstance.hpp"
 #include "TransportBar.hpp"
 #include "TypingKeyboard.hpp"
@@ -134,6 +141,7 @@
 #include "Core/AudioBuffer.hpp"
 
 #include <QDir>
+#include <QDoubleSpinBox>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -981,12 +989,7 @@ MainWindow::MainWindow(bool openDevice, QWidget* parent,
     buildSemanticCommands();
     buildStatusBar();
 
-    // Start with one audio track so the arrangement isn't empty, and select it:
-    // an empty selection means an empty context panel, and a fresh project
-    // would otherwise show nothing until the user clicked something.
-    const std::string first = m_controller.addTrack(daw::TrackKind::Audio, "Audio 1");
     syncViews();
-    selectTrackFromHeader(QString::fromStdString(first));
 
     m_refreshTimer = new QTimer(this);
     connect(m_refreshTimer, &QTimer::timeout, this, &MainWindow::refreshUi);
@@ -2310,7 +2313,7 @@ void MainWindow::onMakeLocalCopy() {
         totalBytes += asset.byteSize;
     }
 
-    QProgressDialog verification(tr("Verifying cloud assetsвЂ¦"), tr("Cancel"),
+    QProgressDialog verification(tr("Verifying cloud assets…"), tr("Cancel"),
                                  0, 1000, this);
     verification.setWindowTitle(tr("Make Local Copy"));
     verification.setWindowModality(Qt::WindowModal);
@@ -3173,7 +3176,7 @@ void MainWindow::onPublishCloudProject() {
     input.metadata.engineVersion =
         version.isEmpty() ? QStringLiteral("0.0.0") : version;
     input.metadata.minimumAppVersion = input.metadata.engineVersion;
-    input.metadata.formatVersion = daw::ProjectSerializer::kFormatVersion;
+    input.metadata.formatVersion = daw::collab::kSharedProjectFormatVersion;
     input.assetSources.reserve(qsizetype(capture->sources.size()));
     for (const auto& source : capture->sources) {
         collab::CloudPublicationAssetSource mapped;
@@ -3681,11 +3684,12 @@ bool MainWindow::checkAutomationForTest() {
 
         const QPoint mid(m_timeline->width() / 2, y);
         send(QEvent::MouseButtonPress, mid, Qt::LeftButton, Qt::LeftButton,
-             Qt::AltModifier);
+             Qt::ControlModifier);
         const QPoint up(mid.x(), mid.y() - 30);
-        send(QEvent::MouseMove, up, Qt::NoButton, Qt::LeftButton, Qt::AltModifier);
+        send(QEvent::MouseMove, up, Qt::NoButton, Qt::LeftButton,
+             Qt::ControlModifier);
         send(QEvent::MouseButtonRelease, up, Qt::LeftButton, Qt::NoButton,
-             Qt::AltModifier);
+             Qt::ControlModifier);
         QApplication::processEvents();
 
         const daw::ClipAutomationModel* bent = curve();
@@ -4464,7 +4468,7 @@ bool MainWindow::checkCycleRegionForTest() {
     m_controller.setLoopEnabled(false);
     QApplication::processEvents();
 
-    // A drag across the strip at the very top of the ruler. Alt is held so the
+    // A drag across the strip at the very top of the ruler. Ctrl is held so the
     // grid cannot round the two ends onto the same beat at whatever zoom the
     // window happens to be at.
     const int y = ui::kLoopStripHeight / 2;
@@ -4474,7 +4478,7 @@ bool MainWindow::checkCycleRegionForTest() {
                           Qt::MouseButtons held) {
         const QPoint at(x, y);
         QMouseEvent ev(type, QPointF(at), QPointF(m_timeline->mapToGlobal(at)),
-                       button, held, Qt::AltModifier);
+                       button, held, Qt::ControlModifier);
         QApplication::sendEvent(m_timeline, &ev);
     };
     send(QEvent::MouseButtonPress, fromX, Qt::LeftButton, Qt::LeftButton);
@@ -4488,10 +4492,8 @@ bool MainWindow::checkCycleRegionForTest() {
         std::fprintf(stderr, "dragging the cycle strip made no region\n");
         return false;
     }
-    // The drag defines; it does not arm. Those are two decisions, and the lit
-    // state means nothing if the first one performs the second.
-    if (m_controller.isLoopEnabled()) {
-        std::fprintf(stderr, "dragging a region armed the cycle by itself\n");
+    if (!m_controller.isLoopEnabled()) {
+        std::fprintf(stderr, "dragging a region did not arm the cycle\n");
         return false;
     }
     // Scrubbing must still work on the rest of the ruler: the strip took a
@@ -4514,9 +4516,7 @@ bool MainWindow::checkCycleRegionForTest() {
         }
     }
 
-    // ── A double-click on the region arms it, and again disarms it ──
-    // The mouse's way of doing what C does, so a region can be marked out and
-    // switched on without leaving the ruler.
+    // A double-click removes both the range and its active state.
     {
         const QPoint on((fromX + toX) / 2, ui::kLoopStripHeight / 2);
         const auto strike = [&](QEvent::Type type, Qt::MouseButton button,
@@ -4533,29 +4533,55 @@ bool MainWindow::checkCycleRegionForTest() {
             QApplication::processEvents();
         };
         doubleClick();
-        if (!m_controller.isLoopEnabled()) {
-            std::fprintf(stderr, "double-clicking the region did not arm it\n");
-            return false;
-        }
-        if (std::abs(m_controller.loopStartSeconds() - from) > 1e-6 ||
-            std::abs(m_controller.loopEndSeconds() - to) > 1e-6) {
-            std::fprintf(stderr, "arming by double-click moved the region\n");
-            return false;
-        }
-        doubleClick();
-        if (m_controller.isLoopEnabled()) {
-            std::fprintf(stderr, "double-clicking it again did not switch it off\n");
-            return false;
-        }
-        if (std::abs(m_controller.loopStartSeconds() - from) > 1e-6 ||
-            std::abs(m_controller.loopEndSeconds() - to) > 1e-6) {
-            std::fprintf(stderr, "switching it off by double-click lost the region\n");
+        if (m_controller.isLoopEnabled() ||
+            m_controller.loopStartSeconds() != 0.0 ||
+            m_controller.loopEndSeconds() != 0.0) {
+            std::fprintf(stderr, "double-clicking the region did not remove it\n");
             return false;
         }
     }
 
-    // Arm it the way C does, and prove the playhead is held inside.
-    m_transport->toggleCycle();
+    // Ctrl/Cmd+B repeats every track inside the loop, advances the loop, and
+    // can be pressed again to continue the chain.
+    const double repeatFrom = m_controller.durationSeconds() + 8.0;
+    const double repeatLength = 2.0;
+    const std::string repeatTrack =
+        m_controller.addTrack(daw::TrackKind::Midi, "Loop repeat check");
+    const std::string repeatClip = m_controller.addMidiClip(
+        repeatTrack, repeatFrom + 0.25, 0.5);
+    m_controller.setLoopRangeSeconds(repeatFrom, repeatFrom + repeatLength);
+    m_controller.setLoopEnabled(true);
+    const bool firstRepeat = m_timeline->repeatSelection();
+    const bool secondRepeat = m_timeline->repeatSelection();
+    bool repeatedTwice = false;
+    if (const auto* track = m_controller.project().findTrack(repeatTrack)) {
+        const auto at = [&](double start) {
+            return std::any_of(track->clips.begin(), track->clips.end(),
+                               [start](const daw::ClipModel& clip) {
+                                   return std::abs(clip.startSeconds - start) <
+                                          1e-6;
+                               });
+        };
+        repeatedTwice = !repeatClip.empty() && track->clips.size() == 3 &&
+                        at(repeatFrom + 0.25) &&
+                        at(repeatFrom + repeatLength + 0.25) &&
+                        at(repeatFrom + 2.0 * repeatLength + 0.25) &&
+                        std::abs(m_controller.loopStartSeconds() -
+                                 (repeatFrom + 2.0 * repeatLength)) < 1e-6 &&
+                        std::abs(m_controller.loopEndSeconds() -
+                                 (repeatFrom + 3.0 * repeatLength)) < 1e-6;
+    }
+    m_timeline->selectClips({});
+    m_controller.removeTrack(repeatTrack);
+    if (!firstRepeat || !secondRepeat || !repeatedTwice) {
+        std::fprintf(stderr, "the loop did not repeat its contents as a chain\n");
+        return false;
+    }
+
+    // Restore the first range and prove the playhead is held inside it.
+    m_controller.setLoopRangeSeconds(from, to);
+    m_controller.setLoopEnabled(true);
+    m_transport->setCycleEnabled(true);
     QApplication::processEvents();
     if (!m_controller.isLoopEnabled()) {
         std::fprintf(stderr, "the cycle did not arm\n");
@@ -4570,7 +4596,8 @@ bool MainWindow::checkCycleRegionForTest() {
         return false;
     }
 
-    m_transport->toggleCycle();
+    m_controller.setLoopEnabled(false);
+    m_transport->setCycleEnabled(false);
     m_controller.setLoopRangeSeconds(0.0, 0.0);
     m_controller.seekSeconds(0.0);
     QApplication::processEvents();
@@ -5108,7 +5135,9 @@ bool MainWindow::checkTrackRowHeightsForTest() {
         const auto insetMatchesGeometry = [&] {
             int overlayTop = m_mixer->y();
             if (m_mixerHandle && !m_mixerHandle->isHidden())
-                overlayTop = std::min(overlayTop, m_mixerHandle->y());
+                overlayTop = std::min(
+                    overlayTop,
+                    m_mixerHandle->mapTo(m_arrangementHost, QPoint()).y());
             const int expected = std::max(
                 0, m_arrangementHost->height() - std::max(0, overlayTop));
             return m_mixer->y() >= 0 &&
@@ -5297,6 +5326,10 @@ bool MainWindow::checkTrackRowHeightsForTest() {
 
 bool MainWindow::checkTimelinePanForTest() {
     if (!m_timeline) return false;
+    const bool savedFollow = m_timeline->followsPlayhead();
+    const double savedPosition = m_controller.positionSeconds();
+    m_timeline->setFollowPlayhead(false);
+    m_controller.seekSeconds(0.0);
     m_timeline->setVerticalScroll(0);
     const double timeBefore = m_timeline->horizontalScrollForTest();
     const int rowsBefore = m_timeline->verticalScroll();
@@ -5321,17 +5354,67 @@ bool MainWindow::checkTimelinePanForTest() {
 
     const bool timeMoved = m_timeline->horizontalScrollForTest() > timeBefore;
     const bool rowsMoved = m_timeline->verticalScroll() > rowsBefore;
-    if (!timeMoved || !rowsMoved) {
+    const double manualScroll = m_timeline->horizontalScrollForTest();
+    m_timeline->ensurePlayheadVisible();
+    const bool independent =
+        std::abs(m_timeline->horizontalScrollForTest() - manualScroll) < 0.001;
+    m_timeline->setFollowPlayhead(true);
+    const bool centred = m_timeline->horizontalScrollForTest() < manualScroll;
+    const bool scrollbarsPresent = m_timeline->hasNavigationControlsForTest();
+
+    m_timeline->setFollowPlayhead(false);
+    m_controller.seekSeconds(savedPosition);
+    m_timeline->setFollowPlayhead(savedFollow);
+
+    if (!timeMoved || !rowsMoved || !independent || !centred ||
+        !scrollbarsPresent) {
         std::fprintf(stderr,
-                     "middle drag did not pan both axes (time %d, tracks %d)\n",
-                     int(timeMoved), int(rowsMoved));
+                     "timeline navigation failed (time %d, tracks %d, "
+                     "independent %d, centred %d, scrollbars %d)\n",
+                     int(timeMoved), int(rowsMoved), int(independent),
+                     int(centred), int(scrollbarsPresent));
     }
-    return timeMoved && rowsMoved;
+    return timeMoved && rowsMoved && independent && centred &&
+           scrollbarsPresent;
 }
 
 bool MainWindow::checkTimelineClipGesturesForTest() {
     if (!m_timeline) return false;
     m_timeline->setTool(TimelineWidget::Tool::Select);
+    m_timeline->setSecondaryTool(TimelineWidget::Tool::Knife);
+    QKeyEvent altPress(QEvent::KeyPress, Qt::Key_Alt, Qt::AltModifier);
+    QApplication::sendEvent(m_timeline, &altPress);
+    const bool borrowedImmediately =
+        m_timeline->activeToolForTest() == TimelineWidget::Tool::Knife;
+    QKeyEvent altRelease(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
+    QApplication::sendEvent(m_timeline, &altRelease);
+    const bool restoredImmediately =
+        m_timeline->activeToolForTest() == TimelineWidget::Tool::Select;
+    if (!borrowedImmediately || !restoredImmediately) {
+        std::fprintf(stderr,
+                     "Alt secondary tool did not switch immediately (%d/%d)\n",
+                     int(borrowedImmediately), int(restoredImmediately));
+        return false;
+    }
+
+    const double savedGrid = m_transport ? m_transport->gridBeats() : 0.25;
+    const bool savedSnap = m_transport ? m_transport->snapEnabled() : true;
+    m_timeline->setGridBeats(-1.0);
+    m_timeline->setSnapEnabled(true);
+    m_timeline->zoomBy(0.000001);
+    const double coarseGridSeconds = m_timeline->snapSeconds();
+    m_timeline->zoomBy(1000000.0);
+    const double fineGridSeconds = m_timeline->snapSeconds();
+    m_timeline->setGridBeats(savedGrid);
+    m_timeline->setSnapEnabled(savedSnap);
+    m_timeline->zoomToFit();
+    if (!(fineGridSeconds > 0.0 &&
+          fineGridSeconds < coarseGridSeconds)) {
+        std::fprintf(stderr,
+                     "adaptive grid did not refine with zoom (%.6f/%.6f)\n",
+                     coarseGridSeconds, fineGridSeconds);
+        return false;
+    }
 
     std::vector<std::string> tracks;
     for (int i = 0; i < 4; ++i) {
@@ -5376,6 +5459,175 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
     const int xA = clipCentreX(tracks[0], first);
     const int xB = clipCentreX(tracks[1], second);
     if (rowA < 0 || rowB < 0 || rowC < 0 || xA < 0 || xB < 0) return false;
+
+    // The Inspector edits the exact same per-clip state as the Sample Editor,
+    // and one finished field edit must be one undo step.
+    std::string audioTrack;
+    std::string audioClip;
+    for (const auto& track : m_controller.project().tracks) {
+        const auto found = std::find_if(
+            track.clips.begin(), track.clips.end(),
+            [](const daw::ClipModel& clip) {
+                return clip.kind == daw::ClipKind::Audio &&
+                       !daw::isLayered(clip);
+            });
+        if (found != track.clips.end()) {
+            audioTrack = track.id;
+            audioClip = found->id;
+            break;
+        }
+    }
+    if (audioTrack.empty() || !m_inspector) {
+        std::fprintf(stderr, "no audio clip for Inspector stretch check\n");
+        return false;
+    }
+    m_selection.setClips({{QString::fromStdString(audioTrack),
+                           QString::fromStdString(audioClip)}});
+    m_selectedTrackId = QString::fromStdString(audioTrack);
+    m_inspector->setSelection(m_selectedTrackId,
+                              QString::fromStdString(audioClip));
+    QApplication::processEvents();
+    auto* pitch = m_inspector->findChild<QDoubleSpinBox*>(
+        QStringLiteral("ClipParameter_stretch.pitch"));
+    const double pitchBefore = m_controller.clipSampleParameter(
+        audioTrack, audioClip, "stretch.pitch");
+    if (!pitch || !pitch->isVisible()) {
+        std::fprintf(stderr, "audio clip controls did not appear in Inspector\n");
+        return false;
+    }
+    pitch->setValue(pitchBefore > 0.0 ? pitchBefore - 1.0
+                                     : pitchBefore + 1.0);
+    QMetaObject::invokeMethod(pitch, "editingFinished", Qt::DirectConnection);
+    if (std::abs(m_controller.clipSampleParameter(
+                     audioTrack, audioClip, "stretch.pitch") - pitchBefore) <
+        0.5) {
+        std::fprintf(stderr, "Inspector pitch did not reach clip state\n");
+        return false;
+    }
+    m_controller.undo();
+    if (std::abs(m_controller.clipSampleParameter(
+                     audioTrack, audioClip, "stretch.pitch") - pitchBefore) >
+        1e-9) {
+        std::fprintf(stderr, "Inspector pitch edit did not undo\n");
+        return false;
+    }
+
+    auto* reverse = m_inspector->findChild<QCheckBox*>(
+        QStringLiteral("ClipParameter_pre.reverse"));
+    if (!reverse) {
+        std::fprintf(stderr, "Inspector Reverse control is missing\n");
+        return false;
+    }
+    const std::uint64_t waveformPaintsBefore =
+        m_timeline->staticFramePaintCountForTest();
+    reverse->setChecked(!reverse->isChecked());
+    QApplication::processEvents();
+    const bool reverseRedrewWaveform =
+        m_timeline->staticFramePaintCountForTest() > waveformPaintsBefore;
+    m_controller.undo();
+    m_inspector->syncFromModel();
+    m_timeline->update();
+    if (!reverseRedrewWaveform) {
+        std::fprintf(stderr, "Reverse did not redraw the clip waveform\n");
+        return false;
+    }
+
+    // Stretching directly on the clip changes duration through stretch.time,
+    // then undo restores both the duration and the ratio.
+    const int audioRow = rowOf(audioTrack);
+    m_timeline->ensureLaneVisible(audioRow);
+    QApplication::processEvents();
+    const int audioX = clipCentreX(audioTrack, audioClip);
+    if (audioRow < 0 || audioX < 0) {
+        std::fprintf(stderr, "audio clip is outside the stretch test view\n");
+        return false;
+    }
+    const QPoint stretchFrom(audioX, m_timeline->laneCentreForTest(audioRow));
+    const QPoint stretchTo = stretchFrom + QPoint(80, 0);
+    const daw::ClipModel* audioBefore = m_controller.audioClip(audioTrack, audioClip);
+    const double stretchBefore = audioBefore ? audioBefore->sampleEdit.stretchTime : 0.0;
+    const double durationBefore = audioBefore ? audioBefore->durationSeconds : 0.0;
+    m_timeline->setTool(TimelineWidget::Tool::Stretch);
+    m_timeline->setSnapEnabled(false);
+    send(QEvent::MouseButtonPress, stretchFrom, Qt::LeftButton,
+         Qt::LeftButton, Qt::NoModifier);
+    send(QEvent::MouseMove, stretchTo, Qt::NoButton,
+         Qt::LeftButton, Qt::NoModifier);
+    send(QEvent::MouseButtonRelease, stretchTo, Qt::LeftButton,
+         Qt::NoButton, Qt::NoModifier);
+    const daw::ClipModel* audioAfter = m_controller.audioClip(audioTrack, audioClip);
+    if (!audioAfter || audioAfter->sampleEdit.stretchTime <= stretchBefore ||
+        audioAfter->durationSeconds <= durationBefore) {
+        std::fprintf(stderr, "Stretch tool did not lengthen the audio clip\n");
+        return false;
+    }
+    m_controller.undo();
+    audioAfter = m_controller.audioClip(audioTrack, audioClip);
+    if (!audioAfter ||
+        std::abs(audioAfter->sampleEdit.stretchTime - stretchBefore) > 1e-9 ||
+        std::abs(audioAfter->durationSeconds - durationBefore) > 1e-9) {
+        std::fprintf(stderr, "Stretch tool edit did not undo\n");
+        return false;
+    }
+    m_timeline->setTool(TimelineWidget::Tool::Select);
+    m_timeline->setSnapEnabled(savedSnap);
+
+    // The circular fade-shape handle is a horizontal direct manipulation: its
+    // position on the half-gain line and the cached shadow must both update in
+    // the same frame. One release remains one undo step.
+    audioAfter = m_controller.audioClip(audioTrack, audioClip);
+    if (!audioAfter) return false;
+    const double fadeInBefore = audioAfter->fadeInSeconds;
+    const double fadeOutBefore = audioAfter->fadeOutSeconds;
+    const double fadeInCurveBefore = audioAfter->fadeInCurve;
+    const double fadeOutCurveBefore = audioAfter->fadeOutCurve;
+    const double testFade = std::max(
+        0.01, std::min(audioAfter->durationSeconds * 0.4, 2.0));
+    m_controller.setClipFade(audioTrack, audioClip, testFade, 0.0);
+    m_controller.setClipFadeCurve(audioTrack, audioClip, true, 0.0);
+    m_timeline->selectClips({{QString::fromStdString(audioTrack),
+                              QString::fromStdString(audioClip)}});
+    m_timeline->update();
+    QApplication::processEvents();
+    const QPoint fadeHandle = m_timeline->fadeCurveHandleForTest(
+        QString::fromStdString(audioTrack), QString::fromStdString(audioClip),
+        true);
+    const std::uint64_t paintsBeforeFadeDrag =
+        m_timeline->staticFramePaintCountForTest();
+    if (fadeHandle.x() < 0) {
+        std::fprintf(stderr, "fade curve handle was not drawable\n");
+        return false;
+    }
+    const QPoint bentFadeHandle = fadeHandle - QPoint(18, 0);
+    send(QEvent::MouseButtonPress, fadeHandle, Qt::LeftButton,
+         Qt::LeftButton, Qt::NoModifier);
+    send(QEvent::MouseMove, bentFadeHandle, Qt::NoButton,
+         Qt::LeftButton, Qt::NoModifier);
+    QApplication::processEvents();
+    audioAfter = m_controller.audioClip(audioTrack, audioClip);
+    const bool fadeBentHorizontally =
+        audioAfter && audioAfter->fadeInCurve > 0.01;
+    const bool fadeShadowRepainted =
+        m_timeline->staticFramePaintCountForTest() > paintsBeforeFadeDrag;
+    send(QEvent::MouseButtonRelease, bentFadeHandle, Qt::LeftButton,
+         Qt::NoButton, Qt::NoModifier);
+    m_controller.undo();
+    audioAfter = m_controller.audioClip(audioTrack, audioClip);
+    const bool fadeUndoRestored =
+        audioAfter && std::abs(audioAfter->fadeInCurve) < 1e-9;
+    if (!fadeBentHorizontally || !fadeShadowRepainted || !fadeUndoRestored) {
+        std::fprintf(stderr,
+                     "horizontal fade curve gesture failed (%d/%d/%d)\n",
+                     int(fadeBentHorizontally), int(fadeShadowRepainted),
+                     int(fadeUndoRestored));
+        return false;
+    }
+    m_controller.setClipFade(audioTrack, audioClip, fadeInBefore,
+                             fadeOutBefore);
+    m_controller.setClipFadeCurve(audioTrack, audioClip, true,
+                                  fadeInCurveBefore);
+    m_controller.setClipFadeCurve(audioTrack, audioClip, false,
+                                  fadeOutCurveBefore);
 
     // Shift-click adds a clip of another lane/type to the current set without
     // copying until a real drag passes the platform threshold.
@@ -5454,8 +5706,8 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
         return false;
     }
 
-    // A marquee pulled above the ruler follows the pointer toward earlier
-    // tracks instead of stopping at the top of the viewport.
+    // A plain empty-space drag is not a marquee. Ctrl turns that same gesture
+    // into one, and a marquee pulled above the ruler auto-scrolls upward.
     for (int i = 0; i < 18; ++i) {
         tracks.push_back(m_controller.addTrack(
             daw::TrackKind::Midi, "Scroll drag " + std::to_string(i + 1)));
@@ -5474,12 +5726,29 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
     send(QEvent::MouseButtonRelease, marqueeOutside, Qt::LeftButton,
          Qt::NoButton, Qt::NoModifier);
     QApplication::processEvents();
-    if (scrollBefore <= 0 || m_timeline->verticalScroll() >= scrollBefore) {
-        std::fprintf(stderr, "a marquee above the ruler did not auto-scroll up\n");
+    const bool plainDragStayedPut =
+        m_timeline->verticalScroll() == scrollBefore;
+    send(QEvent::MouseButtonPress, marqueeStart, Qt::LeftButton,
+         Qt::LeftButton, Qt::ControlModifier);
+    send(QEvent::MouseMove, marqueeOutside, Qt::NoButton, Qt::LeftButton,
+         Qt::ControlModifier);
+    send(QEvent::MouseButtonRelease, marqueeOutside, Qt::LeftButton,
+         Qt::NoButton, Qt::ControlModifier);
+    QApplication::processEvents();
+    if (!plainDragStayedPut || scrollBefore <= 0 ||
+        m_timeline->verticalScroll() >= scrollBefore) {
+        std::fprintf(stderr,
+                     "Ctrl marquee gesture failed (plain=%d, scroll=%d/%d)\n",
+                     int(plainDragStayedPut), scrollBefore,
+                     m_timeline->verticalScroll());
         return false;
     }
 
     m_timeline->clearClipSelection();
+    if (m_transport) {
+        m_timeline->setSecondaryTool(static_cast<TimelineWidget::Tool>(
+            m_transport->secondaryToolIndex()));
+    }
     for (const std::string& track : tracks) m_controller.removeTrack(track);
     syncViews();
     QApplication::processEvents();
@@ -5582,7 +5851,9 @@ bool MainWindow::checkTempoScrubForTest() {
 
     onTempoChanged(original);
     m_transport->syncTempo();
-    const bool scrubbed = raised > original && lowered < raised;
+    const bool scrubbed = raised > original && lowered < raised &&
+                          raised == std::round(raised) &&
+                          lowered == std::round(lowered);
     if (!scrubbed || !enteredTextMode || !leftTextMode) {
         std::fprintf(stderr,
                      "tempo scrub failed (%.1f -> %.1f -> %.1f, text %d/%d)\n",
@@ -5590,6 +5861,96 @@ bool MainWindow::checkTempoScrubForTest() {
                      int(leftTextMode));
     }
     return scrubbed && enteredTextMode && leftTextMode;
+}
+
+bool MainWindow::checkPositionScrubForTest() {
+    if (!m_transport || !m_timeline) return false;
+    auto* position =
+        m_transport->findChild<QLineEdit*>(QStringLiteral("BarsPosition"));
+    if (!position || !position->isReadOnly()) return false;
+
+    const auto scrub = [](QLineEdit* edit, int verticalPixels) {
+        const QPoint start = edit->rect().center();
+        const QPoint finish = start + QPoint(0, verticalPixels);
+        const QPoint globalStart = edit->mapToGlobal(start);
+        const QPoint globalFinish = edit->mapToGlobal(finish);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(start),
+                          QPointF(globalStart), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(edit, &press);
+        QMouseEvent move(QEvent::MouseMove, QPointF(finish),
+                         QPointF(globalFinish), Qt::NoButton,
+                         Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(edit, &move);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(finish),
+                            QPointF(globalFinish), Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(edit, &release);
+    };
+    const auto enter = [](QLineEdit* edit, const QString& value) {
+        const QPoint center = edit->rect().center();
+        const QPoint global = edit->mapToGlobal(center);
+        QMouseEvent doubleClick(QEvent::MouseButtonDblClick, QPointF(center),
+                                QPointF(global), Qt::LeftButton,
+                                Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(edit, &doubleClick);
+        if (edit->isReadOnly()) return false;
+        edit->setText(value);
+        QMetaObject::invokeMethod(edit, "editingFinished", Qt::DirectConnection);
+        return edit->isReadOnly();
+    };
+
+    const double original = m_controller.positionSeconds();
+    const bool originalTimelineMode = m_transport->showsBars();
+    const bool originalPositionMode = m_transport->positionShowsBars();
+    m_transport->setTimeDisplayBars(true);
+    m_controller.seekSeconds(10.0);
+    m_timeline->refreshPlaybackFrame();
+    const int cursorBeforeDrag = m_timeline->displayedPlayheadXForTest();
+    scrub(position, -20);
+    const double afterBarsDrag = m_controller.positionSeconds();
+    const int cursorAfterDrag = m_timeline->displayedPlayheadXForTest();
+
+    const bool barsEntered = enter(position, QStringLiteral("2.1.000"));
+    const double barLength =
+        m_controller.timeSigNumerator() *
+        (4.0 / std::max(1, m_controller.timeSigDenominator()));
+    const double expectedBarSeconds =
+        barLength * 60.0 / std::max(1.0, m_controller.tempo());
+    const bool barsConverted =
+        std::abs(m_controller.positionSeconds() - expectedBarSeconds) < 0.001;
+
+    m_transport->setPositionDisplayBars(false);
+    const bool localClockMode = !m_transport->positionShowsBars() &&
+                                m_transport->showsBars();
+    const bool hasFormatMenu =
+        position->contextMenuPolicy() == Qt::CustomContextMenu;
+    const double beforeClockDrag = m_controller.positionSeconds();
+    scrub(position, 10);
+    const double afterClockDrag = m_controller.positionSeconds();
+    const bool clockEntered = enter(position, QStringLiteral("00.03.25"));
+    const bool clockConverted =
+        std::abs(m_controller.positionSeconds() - 3.25) < 0.001;
+    m_controller.seekSeconds(original);
+    m_transport->setTimeDisplayBars(originalTimelineMode);
+    m_transport->setPositionDisplayBars(originalPositionMode);
+    m_transport->refreshPosition();
+    m_timeline->refreshPlaybackFrame();
+
+    const bool dragged = afterBarsDrag > 10.0 &&
+                         afterClockDrag < beforeClockDrag;
+    const bool cursorMoved = cursorAfterDrag != cursorBeforeDrag;
+    if (!dragged || !barsEntered || !clockEntered || !barsConverted ||
+        !clockConverted || !cursorMoved || !localClockMode || !hasFormatMenu) {
+        std::fprintf(stderr,
+                     "position scrub failed (drag %.3f/%.3f, entry %d/%d, "
+                     "convert %d/%d, cursor %d, local %d, menu %d)\n",
+                     afterBarsDrag, afterClockDrag, int(barsEntered),
+                     int(clockEntered), int(barsConverted), int(clockConverted),
+                     int(cursorMoved), int(localClockMode), int(hasFormatMenu));
+    }
+    return dragged && barsEntered && clockEntered && barsConverted &&
+           clockConverted && cursorMoved && localClockMode && hasFormatMenu;
 }
 
 bool MainWindow::checkAuxiliaryWindowPolicyForTest() {
@@ -5942,26 +6303,23 @@ bool MainWindow::checkEditChordRoutingForTest() {
     // ── A focused text field owns the chord before anything else ──
     // It never sees the key either, for the same reason, so it is served by
     // hand — and the clips behind it are left alone.
-    if (auto* field = findChild<QLineEdit*>()) {
-        m_timeline->selectClips({ui::ClipSel{QString::fromStdString(trackId),
-                                             QString::fromStdString(clipId)}});
-        const QString had = field->text();
-        field->setText(QStringLiteral("automation"));
-        field->selectAll();
-        m_editChordFocusWidgetForTest = field;
-        if (!fire("edit.cutClips")) return false;
-        if (clipCount() != clipsBefore) {
-            std::fprintf(stderr, "Cut in a text field cut a clip\n");
-            return false;
-        }
-        if (!field->text().isEmpty()) {
-            std::fprintf(stderr, "Cut in a text field left '%s' in it\n",
-                         field->text().toUtf8().constData());
-            return false;
-        }
-        m_editChordFocusWidgetForTest.clear();
-        field->setText(had);
+    QLineEdit field;
+    m_timeline->selectClips({ui::ClipSel{QString::fromStdString(trackId),
+                                         QString::fromStdString(clipId)}});
+    field.setText(QStringLiteral("automation"));
+    field.selectAll();
+    m_editChordFocusWidgetForTest = &field;
+    if (!fire("edit.cutClips")) return false;
+    if (clipCount() != clipsBefore) {
+        std::fprintf(stderr, "Cut in a text field cut a clip\n");
+        return false;
     }
+    if (!field.text().isEmpty()) {
+        std::fprintf(stderr, "Cut in a text field left '%s' in it\n",
+                     field.text().toUtf8().constData());
+        return false;
+    }
+    m_editChordFocusWidgetForTest.clear();
 
     // Leave the roll open and in front, with nothing selected in the
     // arrangement — near enough to how this check found the session.
@@ -6040,6 +6398,39 @@ bool MainWindow::checkContextSyncForTest() {
     if (!restored || !replayed) {
         std::fprintf(stderr, "level gesture undo/redo missed its endpoints\n");
         return false;
+    }
+
+    QString audioTrack;
+    QString audioClip;
+    for (const auto& candidateTrack : m_controller.project().tracks) {
+        for (const auto& candidateClip : candidateTrack.clips) {
+            if (candidateClip.kind != daw::ClipKind::Audio) continue;
+            audioTrack = QString::fromStdString(candidateTrack.id);
+            audioClip = QString::fromStdString(candidateClip.id);
+            break;
+        }
+        if (!audioClip.isEmpty()) break;
+    }
+    if (!audioClip.isEmpty()) {
+        m_timeline->selectClips({ui::ClipSel{audioTrack, audioClip}});
+        QEventLoop settle;
+        QTimer::singleShot(360, &settle, &QEventLoop::quit);
+        settle.exec();
+        auto* adder = m_contextPanel->findChild<PluginQuickAdder*>(
+            QStringLiteral("ContextPanelClipPluginSearch"));
+        if (!adder || adder->trackId() != audioTrack ||
+            adder->clipId() != audioClip) {
+            std::fprintf(stderr,
+                         "an audio clip has no correctly routed Clip FX search\n");
+            return false;
+        }
+        m_contextPanel->openPluginSearch();
+        QApplication::processEvents();
+        if (!adder->isExpanded()) {
+            std::fprintf(stderr, "the Clip FX search did not open\n");
+            return false;
+        }
+        adder->closeSearch();
     }
 
     // MIDI is its own clip context, with a direct Piano Roll action. It used
@@ -6536,7 +6927,8 @@ void MainWindow::buildLayout() {
     connect(m_browser, &FileBrowserPanel::projectTemplateTracksRequested, this,
             &MainWindow::addProjectTemplateTracks);
 
-    auto* browserHandle = new ui::ResizeHandle(Qt::Vertical, row);
+    auto* browserHandle = new ui::ResizeHandle(Qt::Vertical, m_browser);
+    browserHandle->setEdge(m_browserOnLeft ? Qt::RightEdge : Qt::LeftEdge);
     browserHandle->onDragStart = [this] { m_browserDragStartWidth = m_browserWidth; };
     browserHandle->onDrag = [this](int delta) {
         // Dragging away from the window's edge widens the panel, which means
@@ -6570,7 +6962,8 @@ void MainWindow::buildLayout() {
         if (localFileDirty) markDirty();
     });
 
-    auto* aiHandle = new ui::ResizeHandle(Qt::Vertical, central);
+    auto* aiHandle = new ui::ResizeHandle(Qt::Vertical, m_aiPanel);
+    aiHandle->setEdge(Qt::LeftEdge);
     aiHandle->onDragStart = [this] { m_aiDragStartWidth = m_aiWidth; };
     aiHandle->onDrag = [this](int delta) {
         // Always on the right, so widening is always dragging left.
@@ -6603,7 +6996,8 @@ void MainWindow::buildLayout() {
     webContainerLayout->setContentsMargins(0, 0, 0, 0);
     webContainerLayout->setSpacing(0);
 
-    auto* webHandle = new ui::ResizeHandle(Qt::Vertical, central);
+    auto* webHandle = new ui::ResizeHandle(Qt::Vertical, m_webContainer);
+    webHandle->setEdge(Qt::LeftEdge);
     webHandle->onDragStart = [this] { m_webDragStartWidth = m_webWidth; };
     webHandle->onDrag = [this](int delta) {
         m_webWidth = std::clamp(m_webDragStartWidth - delta,
@@ -6639,7 +7033,8 @@ void MainWindow::buildLayout() {
     if (m_toolPanel) m_toolPanel->setTrackZoneWidth(m_trackHeaderWidth);
 
     auto* trackHeaderHandle =
-        new ui::ResizeHandle(Qt::Vertical, m_arrangementHost);
+        new ui::ResizeHandle(Qt::Vertical, m_trackList);
+    trackHeaderHandle->setEdge(Qt::RightEdge);
     trackHeaderHandle->setToolTip(
         tr("Drag to resize the track controls"));
     trackHeaderHandle->setAccessibleName(
@@ -6651,13 +7046,9 @@ void MainWindow::buildLayout() {
     };
     trackHeaderHandle->onDrag = [this](int delta) {
         if (!m_arrangementHost || !m_trackList || !m_timeline) return;
-        const int handleWidth = m_trackHeaderHandle
-                                    ? m_trackHeaderHandle->width()
-                                    : 0;
         const int maximum = std::max(
             ui::kMinTrackHeaderWidth,
-            m_arrangementHost->width() - handleWidth -
-                ui::kMinTimelineWidth);
+            m_arrangementHost->width() - ui::kMinTimelineWidth);
         m_trackHeaderWidth = std::clamp(
             m_trackHeaderDragStartWidth + delta,
             ui::kMinTrackHeaderWidth, maximum);
@@ -6672,7 +7063,6 @@ void MainWindow::buildLayout() {
     arrangementRow->setContentsMargins(0, 0, 0, 0);
     arrangementRow->setSpacing(0);
     arrangementRow->addWidget(m_trackList);
-    arrangementRow->addWidget(m_trackHeaderHandle);
     arrangementRow->addWidget(m_timeline, 1);
 
     // The mixer sits in the centre column, so it spans from the track headers
@@ -6684,18 +7074,18 @@ void MainWindow::buildLayout() {
     // and the mixer scrolls, so nothing is ever clipped or folded away.
     m_mixer->setMinimumHeight(140);
 
-    auto* handle = new ui::ResizeHandle(Qt::Horizontal, m_arrangementHost);
+    auto* handle = new ui::ResizeHandle(Qt::Horizontal, m_mixer);
+    handle->setEdge(Qt::TopEdge);
     handle->onDragStart = [this] { m_mixerDragStartHeight = m_mixerHeight; };
     handle->onDrag = [this](int deltaY) {
         // deltaY is measured from where the drag started, so the new height has
         // to come from the height at that moment. Applying it to the running
         // height made every move event compound and the panel jump.
         const int hostH = m_arrangementHost->height();
-        const int handleH = m_mixerHandle ? m_mixerHandle->height() : 0;
         m_mixerHeight = std::clamp(m_mixerDragStartHeight - deltaY,
                                    m_mixer->minimumHeight(),
                                    std::max(m_mixer->minimumHeight(),
-                                            hostH - handleH));
+                                            hostH));
         layoutMixer();
     };
     m_mixerHandle = handle;
@@ -6707,9 +7097,7 @@ void MainWindow::buildLayout() {
     column->addWidget(row, 1);
 
     shell->addWidget(workspace, 1);
-    shell->addWidget(m_webHandle);
     shell->addWidget(m_webContainer);
-    shell->addWidget(m_aiHandle);
     shell->addWidget(m_aiPanel);
 
     setCentralWidget(central);
@@ -6741,6 +7129,23 @@ void MainWindow::buildLayout() {
             800);
     });
     connect(m_transport, &TransportBar::tempoChanged, this, &MainWindow::onTempoChanged);
+    connect(m_transport, &TransportBar::timeSignatureChanged, this,
+            [this](int numerator, int denominator) {
+                const auto result =
+                    m_controller.setTimeSignature(numerator, denominator);
+                if (m_timeline) m_timeline->update();
+                if (m_pianoRoll) m_pianoRoll->refresh();
+                m_selection.refresh();
+                layoutContextPanel();
+                m_transport->refresh();
+                if (daw::collab::marksLocalFileDirty(result)) markDirty();
+            });
+    connect(m_transport, &TransportBar::masterVolumeChanged, this,
+            [this](bool committed) {
+                if (m_mixer) m_mixer->syncFromModel();
+                if (m_inspector) m_inspector->syncFromModel();
+                if (committed) markDirty();
+            });
     connect(m_transport, &TransportBar::saveRequested, this, &MainWindow::onSaveProject);
     connect(m_transport, &TransportBar::openRequested, this, &MainWindow::onOpenProject);
     connect(m_transport, &TransportBar::importRequested, this, &MainWindow::onImportAudio);
@@ -6793,6 +7198,17 @@ void MainWindow::buildLayout() {
             });
     connect(m_transport, &TransportBar::timeFormatChanged, this, [this] {
         m_timeline->setShowBars(m_transport->showsBars());
+    });
+    connect(m_transport, &TransportBar::positionChanged, this, [this] {
+#ifdef DAW_ENABLE_COLLABORATION
+        if (m_collaboration && !m_applyingRemoteTransport) {
+            m_collaboration->localSessionState()
+                ->noteLocalTransportInteraction();
+            publishSessionTransport(true);
+        }
+#endif
+        if (m_timeline) m_timeline->refreshPlaybackFrame();
+        if (m_pianoRoll) m_pianoRoll->refreshPlayhead();
     });
     connect(m_transport, &TransportBar::zoomRequested, this, [this](int dir) {
         if (dir == 0) m_timeline->zoomToFit();
@@ -6875,12 +7291,20 @@ void MainWindow::buildLayout() {
             });
     connect(m_timeline, &TimelineWidget::pluginEditorRequested, this,
             &MainWindow::openPluginEditor);
+    connect(m_timeline, &TimelineWidget::bounceInPlaceRequested, this,
+            &MainWindow::onBounceInPlace);
+    connect(m_timeline, &TimelineWidget::offlineRenderRequested, this,
+            &MainWindow::onOfflineRender);
     connect(m_timeline, &TimelineWidget::projectEdited, this, [this] {
         m_orphanEditorSweepPending = true;
         markDirty();
         // An arrangement edit can retrim or delete the clip being edited, so
         // an open roll follows along.
         if (m_pianoRoll) m_pianoRoll->refresh();
+        if (m_inspector) m_inspector->syncFromModel();
+        for (SampleEditorWindow* editor : m_sampleEditors) {
+            if (editor) editor->refresh();
+        }
     });
     connect(m_timeline, &TimelineWidget::playheadMoved, this, [this] {
 #ifdef DAW_ENABLE_COLLABORATION
@@ -6959,6 +7383,8 @@ void MainWindow::buildLayout() {
     });
     connect(m_mixer, &MixerWidget::pluginEditorRequested, this,
             &MainWindow::openPluginEditor);
+    connect(m_mixer, &MixerWidget::settingsRequested, this,
+            [this] { openSettings(SettingsWindow::kAudioTab); });
     connect(m_mixer, &MixerWidget::automateControlRequested, this,
             [this](const QString& trackId, bool pan) {
                 daw::AutomationTarget target;
@@ -6997,7 +7423,12 @@ void MainWindow::buildLayout() {
         m_trackList->syncTrackValues();
         m_mixer->syncFromModel();
         m_timeline->update();
+        for (SampleEditorWindow* editor : m_sampleEditors) {
+            if (editor) editor->refresh();
+        }
     });
+    connect(m_inspector, &InspectorWidget::stretchToolRequested, this,
+            [this] { setEditTool(6); });
     connect(m_inspector, &InspectorWidget::structureChanged, this, [this] {
         // The inspector has rebuilt its own strip. Refresh the mixer once so
         // its slot list follows without paying this cost for fader gestures.
@@ -7315,9 +7746,9 @@ void MainWindow::populateDemo() {
     // Select the first clip, so a demo/screenshot run shows the context panel
     // in its normal state rather than an empty arrangement.
     if (!demoClip.empty()) {
-        onSelectionChanged(QString::fromStdString(ids[0]));
         m_selection.setClips({{QString::fromStdString(ids[0]),
                                QString::fromStdString(demoClip)}});
+        onSelectionChanged(QString::fromStdString(ids[0]));
         // The clip is flagged expanded above; the lane still has to grow into
         // it, which is what animateClipOpen does.
         m_timeline->animateClipOpen(QString::fromStdString(ids[0]),
@@ -7341,12 +7772,17 @@ void MainWindow::syncViews() {
     }
     if (m_inspector) {
         m_inspector->rebuildForTrack(m_selectedTrackId);
+        m_inspector->setSelection(m_selectedTrackId,
+                                  m_selection.singleClip().clipId);
     }
     if (m_timeline) m_timeline->clampVerticalScroll();
     // Undo, redo, opening a project and deleting a track all come through here,
     // so this one line is what keeps an open piano roll honest — including
     // showing its empty state when the clip it was editing has gone.
     if (m_pianoRoll) m_pianoRoll->refresh();
+    for (SampleEditorWindow* editor : m_sampleEditors) {
+        if (editor) editor->refresh();
+    }
     // And the same for any open curve editor: an undo, a rename or a plugin
     // swapped in the slot it drives all change what its three fields should
     // say. A curve whose clip has gone closes itself rather than editing a
@@ -7505,13 +7941,12 @@ void MainWindow::relayoutRow() {
     const bool onLeft = m_browserOnLeft;
     // Taken out and put back rather than reparented: a QHBoxLayout has no
     // "move this widget" and the four columns are the whole row.
-    for (QWidget* w : {static_cast<QWidget*>(m_browser), m_browserHandle,
+    for (QWidget* w : {static_cast<QWidget*>(m_browser),
                        static_cast<QWidget*>(m_inspector), m_arrangementHost}) {
         if (w) m_rowLayout->removeWidget(w);
     }
     if (onLeft) {
         m_rowLayout->addWidget(m_browser);
-        m_rowLayout->addWidget(m_browserHandle);
         m_rowLayout->addWidget(m_inspector);
         m_rowLayout->addWidget(m_arrangementHost, 1);
     } else {
@@ -7519,9 +7954,10 @@ void MainWindow::relayoutRow() {
         // is the selected track's channel strip and belongs beside its lanes.
         m_rowLayout->addWidget(m_inspector);
         m_rowLayout->addWidget(m_arrangementHost, 1);
-        m_rowLayout->addWidget(m_browserHandle);
         m_rowLayout->addWidget(m_browser);
     }
+    if (auto* handle = qobject_cast<ui::ResizeHandle*>(m_browserHandle))
+        handle->setEdge(onLeft ? Qt::RightEdge : Qt::LeftEdge);
     if (m_browser) m_browser->setOnLeft(onLeft);
     if (m_toolPanel) m_toolPanel->setBrowserOnLeft(onLeft);
     // The mixer overlay is positioned by hand inside the arrangement host, and
@@ -7592,13 +8028,6 @@ void MainWindow::setWebVisible(bool visible, bool persist) {
 void MainWindow::applyRightPanelWidths() {
     const bool webVisible = m_webContainer && !m_webContainer->isHidden();
     const bool aiVisible = m_aiPanel && !m_aiPanel->isHidden();
-    const int handleSpace =
-        (webVisible && m_webHandle ? m_webHandle->width() : 0) +
-        (aiVisible && m_aiHandle ? m_aiHandle->width() : 0);
-    const int trailingGap =
-        aiVisible && m_aiHandle
-            ? m_aiHandle->width()
-            : (webVisible && m_webHandle ? m_webHandle->width() : 0);
 
     // Right panels may consume the whole timeline, but never the track header
     // column or the fixed panels that precede it. The old hard-coded 480 px
@@ -7608,15 +8037,10 @@ void MainWindow::applyRightPanelWidths() {
                                ? std::max(ui::kMinTrackHeaderWidth,
                                           m_trackList->width())
                                : ui::kTrackHeaderWidth;
-    if (m_trackHeaderHandle && !m_trackHeaderHandle->isHidden())
-        workspaceReserve += m_trackHeaderHandle->width();
     if (m_inspector && !m_inspector->isHidden())
         workspaceReserve += m_inspector->width();
-    if (m_browser && !m_browser->isHidden()) {
+    if (m_browser && !m_browser->isHidden())
         workspaceReserve += m_browser->width();
-        if (m_browserHandle && !m_browserHandle->isHidden())
-            workspaceReserve += m_browserHandle->width();
-    }
     // The fixed arrangement columns and the persistent header readouts are two
     // independent constraints on the same workspace. Protect the larger one;
     // this is the value QHBoxLayout was previously guessing from stale child
@@ -7627,13 +8051,11 @@ void MainWindow::applyRightPanelWidths() {
     if (m_workspace && m_workspace->minimumWidth() != workspaceReserve)
         m_workspace->setMinimumWidth(workspaceReserve);
 
-    // Do not allow the window itself into an impossible geometry. Right-panel
-    // surfaces may collapse to zero, but their visible resize rails still need
-    // to stay inside the outer frame.
-    const int shellMinimum = workspaceReserve + handleSpace + trailingGap;
+    // Resize hit areas now live on top of panel edges and consume no layout
+    // width, so the shell minimum is exactly its usable workspace.
+    const int shellMinimum = workspaceReserve;
     if (minimumWidth() != shellMinimum) setMinimumWidth(shellMinimum);
-    const int panelBudget =
-        std::max(0, width() - workspaceReserve - handleSpace - trailingGap);
+    const int panelBudget = std::max(0, width() - workspaceReserve);
 
     int webEffective = webVisible ? std::clamp(m_webWidth,
                                                ui::webprefs::kMinWidth,
@@ -7672,24 +8094,16 @@ void MainWindow::applyRightPanelWidths() {
     if (webVisible) m_webContainer->setFixedWidth(webEffective);
     if (aiVisible) m_aiPanel->setFixedWidth(aiEffective);
 
-    const bool anyRightPanel = webVisible || aiVisible;
-    if (m_timeline) m_timeline->setRightCornerRadius(anyRightPanel ? 22 : 0);
-    if (m_shellLayout) {
-        m_shellLayout->setContentsMargins(
-            0, 0, anyRightPanel ? trailingGap : 0, 0);
-    }
+    if (m_timeline) m_timeline->setRightCornerRadius(0);
+    if (m_shellLayout) m_shellLayout->setContentsMargins(0, 0, 0, 0);
 }
 
 void MainWindow::applyTrackHeaderWidth() {
     if (!m_trackList || !m_timeline || !m_arrangementHost) return;
-    const int handleWidth = m_trackHeaderHandle
-                                ? m_trackHeaderHandle->width()
-                                : 0;
     const int available = m_arrangementHost->width();
     const int maximum = available > 0
                             ? std::max(ui::kMinTrackHeaderWidth,
-                                       available - handleWidth -
-                                           ui::kMinTimelineWidth)
+                                       available - ui::kMinTimelineWidth)
                             : m_trackHeaderWidth;
     const int effective = std::clamp(
         m_trackHeaderWidth, ui::kMinTrackHeaderWidth, maximum);
@@ -7843,7 +8257,6 @@ void MainWindow::layoutMixer() {
     const int hostH = m_arrangementHost->height();
     if (hostH <= 0) return;
     const int minH = m_mixer->minimumHeight();
-    const int handleH = m_mixerHandle ? m_mixerHandle->height() : 0;
     // Preserve the user's requested body height, but position an oversized
     // mixer below a 60 px arrangement reveal instead of giving it a negative
     // y. The parent clips the surplus body; the actual covered pixels and the
@@ -7851,16 +8264,11 @@ void MainWindow::layoutMixer() {
     constexpr int kMinArrangementReveal = 60;
     const int bodyH = std::max(minH, m_mixerHeight);
     const int visibleBodyH = std::min(
-        bodyH, std::max(0, hostH - handleH - kMinArrangementReveal));
-    const int handleY = std::max(0, hostH - visibleBodyH - handleH);
-    const int mixerY = std::min(hostH, handleY + handleH);
+        bodyH, std::max(0, hostH - kMinArrangementReveal));
+    const int mixerY = std::max(0, hostH - visibleBodyH);
     const int w = m_arrangementHost->width();
     m_mixer->setGeometry(0, mixerY, w, bodyH);
     m_mixer->raise();
-    if (m_mixerHandle) {
-        m_mixerHandle->setGeometry(0, handleY, w, handleH);
-        m_mixerHandle->raise();
-    }
     // The mixer covers the bottom of the arrangement rather than shortening it,
     // so the lanes have to be told how much of themselves is hidden — otherwise
     // the last tracks can only be reached by collapsing the mixer.
@@ -7868,7 +8276,7 @@ void MainWindow::layoutMixer() {
         // isVisible() also requires all ancestors to be on-screen. Explicitly
         // hidden is the stable state while constructing/restoring a workspace.
         const int covered = !m_mixer->isHidden()
-                                ? std::min(hostH, visibleBodyH + handleH)
+                                ? std::min(hostH, visibleBodyH)
                                 : 0;
         m_timeline->setBottomInset(covered);
     }
@@ -7937,21 +8345,23 @@ void MainWindow::buildSemanticCommands() {
          QStringLiteral("arrangement.snap"), Risk::Safe,
          [this] { m_transport->setSnapEnabled(false); });
 
-    static constexpr std::array<const char*, 9> kGridCommandIds = {
+    static constexpr std::array<const char*, 10> kGridCommandIds = {
         "edit.grid.off", "edit.grid.whole", "edit.grid.half",
         "edit.grid.quarter", "edit.grid.eighth", "edit.grid.sixteenth",
         "edit.grid.thirtySecond", "edit.grid.quarterTriplet",
-        "edit.grid.eighthTriplet"};
+        "edit.grid.eighthTriplet", "edit.grid.adaptive"};
     const auto& divisions = ui::gridDivisions();
     for (int i = 0; i < int(kGridCommandIds.size()) && i < divisions.size(); ++i) {
+        const QString divisionName =
+            divisions[i].beats < 0.0 ? tr("Adaptive") : divisions[i].name;
         const QString label = i == 0
             ? tr("Turn Grid Off")
-            : tr("Set Grid to %1").arg(divisions[i].name);
+            : tr("Set Grid to %1").arg(divisionName);
         bind(kGridCommandIds[std::size_t(i)], label, kEdit,
              i == 0
                  ? tr("Turn off the arrangement grid division.")
                  : tr("Use %1 as the arrangement grid division.")
-                       .arg(divisions[i].name),
+                       .arg(divisionName),
              QStringLiteral("arrangement.grid"), Risk::Safe,
              [this, i] { m_transport->setGridIndex(i); });
     }
@@ -8134,7 +8544,17 @@ void MainWindow::buildMenus() {
             &QAction::triggered, this, [this] {
                 if (routeEditChord(EditChord::Mute)) return;
                 if (m_timeline->toggleSelectedClipsMuted()) markDirty();
-            });
+             });
+    edit->addSeparator();
+    m_bounceInPlaceAction = addCommand(
+        edit, "timeline.bounce_in_place", tr("Bounce in Place…"), kEdit,
+        QKeySequence(tr("Ctrl+Alt+C")));
+    connect(m_bounceInPlaceAction, &QAction::triggered, this,
+            &MainWindow::onBounceInPlace);
+    m_offlineRenderAction = addCommand(
+        edit, "timeline.offline_render", tr("Offline Render…"), kEdit);
+    connect(m_offlineRenderAction, &QAction::triggered, this,
+            &MainWindow::onOfflineRender);
     edit->addSeparator();
     connect(addCommand(edit, "edit.toggleComp", tr("&Expand Take Layers"), kEdit,
                        QKeySequence(Qt::Key_E)),
@@ -8156,14 +8576,13 @@ void MainWindow::buildMenus() {
     connect(addCommand(track, "track.addMidi", tr("Add &MIDI Track"), kTrack,
                        QKeySequence(tr("Ctrl+Alt+M"))),
             &QAction::triggered, this, &MainWindow::onAddMidiTrack);
-    connect(addCommand(track, "track.addInstrument", tr("Add &Instrument Track"),
-                       kTrack, QKeySequence(tr("Ctrl+Alt+I"))),
-            &QAction::triggered, this, &MainWindow::onAddInstrumentTrack);
     connect(addCommand(track, "track.addPattern", tr("Add &Pattern Track"),
                        kTrack, QKeySequence(tr("Ctrl+Alt+P"))),
             &QAction::triggered, this, &MainWindow::onAddPatternTrack);
     connect(addCommand(track, "track.addBus", tr("Add &Bus Track"), kTrack),
             &QAction::triggered, this, &MainWindow::onAddBusTrack);
+    connect(addCommand(track, "track.addSend", tr("Add &Send Track"), kTrack),
+            &QAction::triggered, this, &MainWindow::onAddSendTrack);
     connect(addCommand(track, "track.duplicate", tr("&Duplicate"), kTrack,
                        QKeySequence(tr("Ctrl+D"))),
             &QAction::triggered, this, &MainWindow::onDuplicateSelectedTrack);
@@ -8480,6 +8899,27 @@ void MainWindow::buildMenus() {
             [this](bool on) { setAiVisible(on); });
 
     view->addSeparator();
+    m_followPlayheadAction = addCommand(
+        view, "view.followPlayhead", tr("Follow &Playhead"), kView,
+        QKeySequence(Qt::Key_P));
+    m_followPlayheadAction->setCheckable(true);
+    const bool followPlayhead =
+        QSettings().value(QStringLiteral("timeline/followPlayhead"), false)
+            .toBool();
+    m_followPlayheadAction->setChecked(followPlayhead);
+    m_timeline->setFollowPlayhead(followPlayhead);
+    m_toolPanel->setFollowPlayhead(followPlayhead);
+    connect(m_followPlayheadAction, &QAction::toggled, this,
+            [this](bool on) {
+                m_timeline->setFollowPlayhead(on);
+                m_toolPanel->setFollowPlayhead(on);
+                QSettings().setValue(
+                    QStringLiteral("timeline/followPlayhead"), on);
+            });
+    connect(m_toolPanel, &ToolPanel::followPlayheadToggled,
+            m_followPlayheadAction, &QAction::setChecked);
+
+    view->addSeparator();
     // Zoom follows the focus. One pair of keys, and whichever panel the user
     // is working in is the one that grows — a second binding for the browser
     // would only be ambiguous with these.
@@ -8517,6 +8957,9 @@ void MainWindow::buildMenus() {
     connect(addCommand(tools, "tool.draw", tr("Draw Tool"), kTools,
                        QKeySequence(Qt::Key_6)),
             &QAction::triggered, this, [this] { setEditTool(5); });
+    connect(addCommand(tools, "tool.stretch", tr("Stretch Tool"), kTools,
+                       QKeySequence(Qt::Key_7)),
+            &QAction::triggered, this, [this] { setEditTool(6); });
     tools->addSeparator();
     m_typingKeyboardAction = addCommand(tools, "tool.typingKeyboard",
                                         tr("Typing &Keyboard"), kTools,
@@ -9065,6 +9508,91 @@ bool MainWindow::openDemoGravity() {
     return false;
 }
 
+bool MainWindow::openDemoGraphit() {
+    const auto graphit = m_controller.pluginManager().find(
+        daw::plugins::Format::Internal, "daw.graphit");
+    if (!graphit) return false;
+
+    for (const auto& track : m_controller.project().tracks) {
+        if (track.kind != daw::TrackKind::Audio) continue;
+        const std::string slot = m_controller.addInsert(track.id, *graphit, 0);
+        if (slot.empty()) return false;
+        if (qEnvironmentVariableIsSet("DAW_SHOT_GRAPHIT")) {
+            m_controller.setInsertParameter(track.id, slot, "amount", 0.78);
+            m_controller.setInsertParameter(track.id, slot, "mode", 2.0);
+        }
+        onTracksChanged();
+        openPluginEditor(QString::fromStdString(track.id),
+                         QString::fromStdString(slot));
+        if (qEnvironmentVariableIsSet("DAW_SHOT_GRAPHIT")) {
+            auto* instance = dynamic_cast<daw::plugins::graphit::GraphitInstance*>(
+                m_controller.insertInstance(track.id, slot));
+            if (instance) {
+                constexpr std::uint32_t frames = 256;
+                std::array<float, frames> inLeft{};
+                std::array<float, frames> inRight{};
+                std::array<float, frames> outLeft{};
+                std::array<float, frames> outRight{};
+                const float* inputs[] = {inLeft.data(), inRight.data()};
+                float* outputs[] = {outLeft.data(), outRight.data()};
+                const bool preparedHere = !instance->isActive();
+                if (preparedHere) instance->activate({48000.0, frames, true});
+                instance->startProcessing();
+                daw::plugins::PluginProcessContext context;
+                context.inputs = inputs;
+                context.inputChannels = 2;
+                context.outputs = outputs;
+                context.outputChannels = 2;
+                context.frames = frames;
+                for (int block = 0; block < 320; ++block) {
+                    for (std::uint32_t i = 0; i < frames; ++i) {
+                        const double at = double(block * int(frames) + int(i));
+                        const float pulse = (int(at) % 2400) < 32 ? 0.32f : 0.0f;
+                        inLeft[i] = float(0.24 * std::sin(at * 0.031) +
+                                          0.14 * std::sin(at * 0.117)) + pulse;
+                        inRight[i] = float(0.22 * std::sin(at * 0.033) +
+                                           0.12 * std::sin(at * 0.109)) + pulse;
+                    }
+                    instance->process(context);
+                }
+                if (preparedHere) {
+                    instance->stopProcessing();
+                    instance->deactivate();
+                }
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+bool MainWindow::checkGraphitPanelForTest() {
+    if (!openDemoGraphit()) return false;
+    QElapsedTimer wait;
+    wait.start();
+    do {
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+        for (PluginEditorWindow* editor : std::as_const(m_pluginEditors)) {
+            if (GraphitPanel* panel = editor->findChild<GraphitPanel*>())
+                return panel->checkForTest();
+        }
+        QThread::msleep(1);
+    } while (wait.elapsed() < 1000);
+    if (qEnvironmentVariableIsSet("DAW_SELFTEST_VERBOSE"))
+        std::fprintf(stderr, "Graphit UI selftest: editor did not become ready\n");
+    return false;
+}
+
+void MainWindow::resizeGraphitForShot() {
+    for (PluginEditorWindow* editor : std::as_const(m_pluginEditors)) {
+        if (!editor || editor->pluginUid() != QStringLiteral("daw.graphit"))
+            continue;
+        if (InternalEditorFrame* frame =
+                m_internalEditorFrames.value(editor, nullptr))
+            frame->resizeForContent(QSize(440, 499));
+    }
+}
+
 bool MainWindow::checkGravityPanelForTest() {
     if (!openDemoGravity()) return false;
     QElapsedTimer wait;
@@ -9367,6 +9895,7 @@ bool MainWindow::checkLayoutIndependentShortcuts() {
         QStringLiteral("transport.forwardBar"),
         QStringLiteral("view.timeBars"),
         QStringLiteral("view.timeClock"),
+        QStringLiteral("view.followPlayhead"),
         QStringLiteral("edit.snapOn"),
         QStringLiteral("edit.snapOff"),
         QStringLiteral("edit.grid.off"),
@@ -9378,6 +9907,7 @@ bool MainWindow::checkLayoutIndependentShortcuts() {
         QStringLiteral("edit.grid.thirtySecond"),
         QStringLiteral("edit.grid.quarterTriplet"),
         QStringLiteral("edit.grid.eighthTriplet"),
+        QStringLiteral("edit.grid.adaptive"),
         QStringLiteral("tool.secondarySelect"),
         QStringLiteral("tool.secondaryKnife"),
         QStringLiteral("tool.secondaryEraser"),
@@ -9415,6 +9945,11 @@ bool MainWindow::checkLayoutIndependentShortcuts() {
     bool idsUnique = true;
     for (const ShortcutManager::Command& command : m_shortcuts->commands())
         idsUnique = uniqueIds.insert(command.id).second && idsUnique;
+    const ShortcutManager::Command* followCommand =
+        m_shortcuts->command(QStringLiteral("view.followPlayhead"));
+    const bool followShortcut =
+        followCommand &&
+        followCommand->defaultSeq == QKeySequence(Qt::Key_P);
 
     const bool snapBefore = m_transport->snapEnabled();
     const bool snapCommands =
@@ -9444,14 +9979,16 @@ bool MainWindow::checkLayoutIndependentShortcuts() {
         m_transport->secondaryToolIndex() == 1;
     m_transport->setSecondaryToolIndex(secondaryBefore);
 
-    const bool semanticCommands = catalogComplete && idsUnique && snapCommands &&
-                                  timeCommands && gridCommand && secondaryCommand;
+    const bool semanticCommands = catalogComplete && idsUnique && followShortcut &&
+                                  snapCommands && timeCommands && gridCommand &&
+                                  secondaryCommand;
     if (!semanticCommands) {
         std::fprintf(stderr,
                      "semantic command catalog: complete=%d unique=%d "
-                     "snap=%d time=%d grid=%d secondary=%d\n",
-                     int(catalogComplete), int(idsUnique), int(snapCommands),
-                     int(timeCommands), int(gridCommand), int(secondaryCommand));
+                     "follow=%d snap=%d time=%d grid=%d secondary=%d\n",
+                     int(catalogComplete), int(idsUnique), int(followShortcut),
+                     int(snapCommands), int(timeCommands), int(gridCommand),
+                     int(secondaryCommand));
     }
     return capturedAsPhysicalB && triggered == 1 && semanticCommands;
 }
@@ -10444,6 +10981,25 @@ void MainWindow::buildStatusBar() {
     }
 #endif
     statusBar()->setSizeGripEnabled(false);
+    // The transport now owns the useful live status. Keep the QStatusBar
+    // object for existing transient notifications, but remove its permanent
+    // bottom strip from the workspace.
+    statusBar()->hide();
+}
+
+bool MainWindow::checkProcessingCommandsForTest() const {
+    bool bounceFound = false;
+    bool offlineFound = false;
+    for (const ShortcutManager::Command& command : m_shortcuts->commands()) {
+        if (command.id == QLatin1String("timeline.bounce_in_place")) {
+            bounceFound = command.action == m_bounceInPlaceAction &&
+                          m_shortcuts->shortcut(command.id) ==
+                              QKeySequence(QStringLiteral("Ctrl+Alt+C"));
+        } else if (command.id == QLatin1String("timeline.offline_render")) {
+            offlineFound = command.action == m_offlineRenderAction;
+        }
+    }
+    return bounceFound && offlineFound;
 }
 
 void MainWindow::publishSessionTransport(bool force) {
@@ -10900,9 +11456,13 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* ev) {
             if (key->isAutoRepeat()) break;
             const bool down = ev->type() == QEvent::KeyPress;
             // Modifier feedback must work even while a text field or the web
-            // panel owns focus. We only observe Alt/Option; the focused widget
-            // still receives it normally.
-            if (key->key() == Qt::Key_Alt) setAutomationModifierHeld(down);
+            // panel owns focus. The focused widget still receives Alt/Option
+            // normally; the arrangement only mirrors its held state so its
+            // secondary cursor changes before the next mouse event.
+            if (key->key() == Qt::Key_Alt) {
+                setAutomationModifierHeld(down);
+                if (m_timeline) m_timeline->setSecondaryToolHeld(down);
+            }
             if (m_webPanel && m_webPanel->ownsFocus()) break;
             // Never while typing: a name field would swallow half its letters.
             if (auto* focus = QApplication::focusWidget();
@@ -10941,6 +11501,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* ev) {
             setAuditionHeld(false);
             setLayerInvertHeld(false);
             setAutomationModifierHeld(false);
+            if (m_timeline) m_timeline->setSecondaryToolHeld(false);
             break;
         default:
             break;
@@ -11542,8 +12103,7 @@ void MainWindow::setTypingKeyboardEnabled(bool enabled) {
             m_selection.singleTrack().toStdString());
         if (target.empty()) {
             statusBar()->showMessage(
-                tr("Typing keyboard on — add a MIDI or instrument track to "
-                   "hear it"),
+                tr("Typing keyboard on — add a MIDI track to hear it"),
                 4000);
         } else {
             statusBar()->showMessage(
@@ -11800,13 +12360,6 @@ void MainWindow::onAddMidiTrack() {
     syncViews();
     markDirty();
 }
-void MainWindow::onAddInstrumentTrack() {
-    const int n = int(m_controller.project().tracks.size()) + 1;
-    m_controller.addTrack(daw::TrackKind::Instrument,
-                          tr("Instrument %1").arg(n).toStdString());
-    syncViews();
-    markDirty();
-}
 void MainWindow::onAddPatternTrack() {
     const int n = int(std::count_if(
                       m_controller.project().tracks.begin(),
@@ -11823,6 +12376,18 @@ void MainWindow::onAddPatternTrack() {
 }
 void MainWindow::onAddBusTrack() {
     m_controller.addTrack(daw::TrackKind::Bus, tr("Bus").toStdString());
+    syncViews();
+    markDirty();
+}
+void MainWindow::onAddSendTrack() {
+    const int n = int(std::count_if(
+                      m_controller.project().tracks.begin(),
+                      m_controller.project().tracks.end(),
+                      [](const daw::TrackModel& track) {
+                          return track.kind == daw::TrackKind::Aux;
+                      })) + 1;
+    m_controller.addTrack(daw::TrackKind::Aux,
+                          tr("Send %1").arg(n).toStdString());
     syncViews();
     markDirty();
 }
@@ -12139,7 +12704,8 @@ void MainWindow::onSelectionChanged(const QString& trackId) {
     // The lanes show the whole selection, not just the row the panels follow.
     m_timeline->setSelectedTracks(m_trackList ? m_trackList->selectedTrackIds()
                                               : QStringList{trackId});
-    if (m_inspector) m_inspector->setTrack(trackId);
+    if (m_inspector)
+        m_inspector->setSelection(trackId, m_selection.singleClip().clipId);
     if (m_mixer) m_mixer->setSelectedTrack(trackId);
 }
 
@@ -12730,14 +13296,32 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
     }
     resize(1180, originalHeight);
     QApplication::processEvents(QEventLoop::AllEvents, 20);
-    const auto* lcd =
-        m_transport->findChild<QWidget*>(QStringLiteral("LcdScreen"));
-    const auto* transportPill =
+    auto* transportPill =
         m_transport->findChild<QWidget*>(QStringLiteral("TransportPill"));
-    const auto* transportButtons =
+    auto* lcdScreen =
+        m_transport->findChild<QWidget*>(QStringLiteral("LcdScreen"));
+    auto* positionSection =
+        m_transport->findChild<QWidget*>(QStringLiteral("PositionSection"));
+    auto* tempoSection =
+        m_transport->findChild<QWidget*>(QStringLiteral("TempoSection"));
+    auto* lcdInset =
+        m_transport->findChild<QWidget*>(QStringLiteral("LcdInsetWell"));
+    auto* spectrum =
+        m_transport->findChild<QWidget*>(QStringLiteral("TransportSpectrum"));
+    auto* transportButtons =
         m_transport->findChild<QWidget*>(QStringLiteral("TransportGroup"));
-    const auto* headerTools =
+    auto* headerTools =
         m_transport->findChild<QWidget*>(QStringLiteral("HeaderToolGroup"));
+    auto* barsPosition =
+        m_transport->findChild<QWidget*>(QStringLiteral("BarsPosition"));
+    auto* timeSignature =
+        m_transport->findChild<QToolButton*>(QStringLiteral("TimeSignatureButton"));
+    auto* stopButton =
+        m_transport->findChild<QAbstractButton*>(QStringLiteral("TransportStop"));
+    auto* playButton =
+        m_transport->findChild<QAbstractButton*>(QStringLiteral("TransportPlay"));
+    auto* recordButton =
+        m_transport->findChild<QAbstractButton*>(QStringLiteral("TransportRecord"));
     auto* leftDock =
         m_transport->findChild<QWidget*>(QStringLiteral("HeaderLeftDock"));
     auto* rightDock =
@@ -12762,23 +13346,60 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
     const bool gridCompact = gridChips.size() == 2 &&
         std::all_of(gridChips.begin(), gridChips.end(),
                     [headerTools](QToolButton* chip) {
-                        return chip->width() <= 32 && chip->menu() &&
+                        return chip->width() <= 64 && chip->menu() &&
                                !chip->menu()->actions().isEmpty() && headerTools &&
                                headerTools->isAncestorOf(chip) &&
-                               chip->toolButtonStyle() == Qt::ToolButtonIconOnly &&
+                               chip->toolButtonStyle() ==
+                                    Qt::ToolButtonTextBesideIcon &&
+                               !chip->text().isEmpty() &&
                                !chip->accessibleName().isEmpty();
                     });
-    const int leftGap = transportButtons && lcd
-                            ? lcd->mapTo(m_transport, QPoint()).x() -
-                                  (transportButtons->mapTo(m_transport, QPoint()).x() +
-                                   transportButtons->width())
-                            : -1;
-    const int rightGap = headerTools && lcd
-                             ? headerTools->mapTo(m_transport, QPoint()).x() -
-                                   (lcd->mapTo(m_transport, QPoint()).x() + lcd->width())
-                             : -1;
-    const bool panelsSeparated = transportPill && transportButtons && headerTools &&
-                                 leftGap >= 0 && std::abs(leftGap - rightGap) <= 1;
+    const QList<QWidget*> requiredControls{
+        transportButtons, lcdScreen, positionSection, headerTools,
+        barsPosition, tempoSection, timeSignature, spectrum,
+        stopButton, playButton, recordButton};
+    const bool requiredVisible = transportPill &&
+        std::all_of(requiredControls.begin(), requiredControls.end(),
+                    [transportPill](QWidget* control) {
+                        if (!control || !control->isVisible()) return false;
+                        const int left = control->mapTo(transportPill, QPoint()).x();
+                        return left >= 0 && left + control->width() <=
+                                                transportPill->width();
+                    });
+    const bool sectionOrder = transportButtons && lcdScreen && headerTools &&
+        transportButtons->x() < lcdScreen->x() &&
+        lcdScreen->x() < headerTools->x();
+    const bool zonesAligned = transportPill && transportButtons && lcdScreen &&
+        headerTools && transportPill->isAncestorOf(transportButtons) &&
+        transportPill->isAncestorOf(lcdScreen) &&
+        transportPill->isAncestorOf(headerTools) &&
+        std::abs(transportButtons->height() - headerTools->height()) <= 4 &&
+        lcdScreen->height() > transportButtons->height() &&
+        lcdScreen->height() > headerTools->height() &&
+        std::abs(transportButtons->geometry().center().y() -
+                 lcdScreen->geometry().center().y()) <= 1 &&
+        std::abs(headerTools->geometry().center().y() -
+                 lcdScreen->geometry().center().y()) <= 1;
+    const bool threeBlockLayout = transportPill && lcdScreen &&
+        !qobject_cast<ui::GlassPanel*>(transportPill) &&
+        qobject_cast<ui::GlassPanel*>(lcdScreen) &&
+        transportPill->findChildren<ui::GlassPanel*>().size() == 1;
+    const auto displayDividers = lcdScreen
+        ? lcdScreen->findChildren<QWidget*>(QStringLiteral("LcdDivider"))
+        : QList<QWidget*>();
+    const bool lcdContent = lcdScreen && positionSection && timeSignature &&
+        tempoSection && lcdInset && spectrum &&
+        lcdScreen->isAncestorOf(lcdInset) &&
+        lcdInset->isAncestorOf(positionSection) &&
+        lcdInset->isAncestorOf(tempoSection) &&
+        lcdInset->isAncestorOf(timeSignature) &&
+        lcdInset->isAncestorOf(spectrum) &&
+        lcdScreen->isAncestorOf(timeSignature) &&
+        positionSection->x() < tempoSection->x() &&
+        tempoSection->x() < timeSignature->x() &&
+        timeSignature->x() < spectrum->x() && displayDividers.size() == 3;
+    const bool signatureMenuComplete = timeSignature && timeSignature->menu() &&
+        timeSignature->menu()->actions().size() == 10;
     const bool clusterCentered = transportPill &&
         std::abs(transportPill->mapTo(m_transport, QPoint()).x() * 2 +
                      transportPill->width() - m_transport->width()) <= 2;
@@ -12788,6 +13409,12 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
         : QList<QAbstractButton*>();
     const bool insetDocksPlaced = leftDock && rightDock && dockReveal &&
         leftDock->isVisible() && rightDock->isVisible() &&
+        transportPill && leftDock->height() < transportPill->height() &&
+        rightDock->height() < transportPill->height() &&
+        std::abs(leftDock->geometry().center().y() -
+                 transportPill->geometry().center().y()) <= 1 &&
+        std::abs(rightDock->geometry().center().y() -
+                 transportPill->geometry().center().y()) <= 1 &&
         std::abs(leftDock->mapTo(m_transport, QPoint()).x() - 14) <= 1 &&
         std::abs(rightDock->mapTo(m_transport, QPoint()).x() +
                      rightDock->width() - m_transport->width() + 14) <= 1 &&
@@ -12821,19 +13448,25 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
           m_aiPanel->width() < 240) ||
         m_trackList->width() < ui::kMinTrackHeaderWidth ||
         !insideShell(m_webContainer) || !insideShell(m_aiPanel) ||
-        !lcd || !lcd->isVisible() || !gridVisible || !gridContained ||
-        !gridCompact || !panelsSeparated || !clusterCentered || hasUndoRedo ||
+        !requiredVisible || !gridVisible || !gridContained ||
+        !gridCompact ||
+        !sectionOrder || !zonesAligned || !threeBlockLayout ||
+        !lcdContent ||
+        !signatureMenuComplete ||
+        !clusterCentered || hasUndoRedo || !statusBar()->isHidden() ||
         !insetDocksPlaced || !drawerInitiallyCompact || !drawerExpanded ||
         !expandedClusterCentered || !drawerCollapsedAgain) {
         std::fprintf(stderr,
                      "web self-test second shrink: window=%d web=%d ai=%d "
-                     "arrangement=%d lcd=%d grid=%d contained=%d compact=%d "
-                     "separated=%d centered=%d gaps=%d/%d undoRedo=%d "
+                     "arrangement=%d required=%d grid=%d "
+                     "contained=%d compact=%d "
+                     "order=%d aligned=%d threeBlocks=%d lcd=%d signature=%d centered=%d undoRedo=%d "
                      "docks=%d drawer=%d/%d/%d expandedCentered=%d min=%d\n",
                      width(), m_webContainer->width(), m_aiPanel->width(),
-                     m_arrangementHost->width(), lcd && lcd->isVisible(),
-                     gridVisible, gridContained, gridCompact, panelsSeparated,
-                     clusterCentered, leftGap, rightGap, hasUndoRedo,
+                     m_arrangementHost->width(), requiredVisible, gridVisible,
+                     gridContained, gridCompact, sectionOrder, zonesAligned,
+                     threeBlockLayout, lcdContent,
+                     signatureMenuComplete, clusterCentered, hasUndoRedo,
                      insetDocksPlaced, drawerInitiallyCompact, drawerExpanded,
                      drawerCollapsedAgain, expandedClusterCentered,
                      m_transport->minimumResponsiveWidth());
@@ -13004,6 +13637,231 @@ void MainWindow::onExport() {
     statusBar()->showMessage(tr("Render finished"), 4000);
 }
 
+void MainWindow::updateLocalProcessingActions() {
+    bool localOnlyAvailable = true;
+#ifdef DAW_ENABLE_COLLABORATION
+    localOnlyAvailable = m_cloudProjectId.isEmpty();
+#endif
+    const bool hasRegion = m_timeline && m_timeline->hasRegionSelection();
+    const bool hasLoop = m_controller.isLoopEnabled() &&
+                         m_controller.loopEndSeconds() >
+                             m_controller.loopStartSeconds();
+    const bool hasClips = !m_selection.clips().isEmpty();
+    if (m_bounceInPlaceAction) {
+        m_bounceInPlaceAction->setEnabled(
+            localOnlyAvailable && (hasRegion || hasLoop || hasClips));
+        m_bounceInPlaceAction->setToolTip(
+            localOnlyAvailable ? tr("Render and insert selected material")
+                               : tr("Local-only in v1"));
+    }
+
+    bool audioOnly = hasClips;
+    for (const ui::ClipSel& selected : m_selection.clips()) {
+        const daw::TrackModel* track =
+            m_controller.project().findTrack(selected.trackId.toStdString());
+        if (!track) {
+            audioOnly = false;
+            break;
+        }
+        const auto clip = std::find_if(
+            track->clips.begin(), track->clips.end(),
+            [&](const daw::ClipModel& item) {
+                return item.id == selected.clipId.toStdString();
+            });
+        if (clip == track->clips.end() || clip->kind != daw::ClipKind::Audio) {
+            audioOnly = false;
+            break;
+        }
+    }
+    if (m_offlineRenderAction) {
+        m_offlineRenderAction->setEnabled(localOnlyAvailable && audioOnly);
+        m_offlineRenderAction->setToolTip(
+            !localOnlyAvailable ? tr("Local-only in v1")
+                                : tr("Available for audio clips only"));
+    }
+    if (m_timeline) m_timeline->setLocalProcessingEnabled(localOnlyAvailable);
+}
+
+void MainWindow::onBounceInPlace() {
+#ifdef DAW_ENABLE_COLLABORATION
+    if (!m_cloudProjectId.isEmpty()) {
+        statusBar()->showMessage(tr("Bounce in Place — Local-only in v1"),
+                                 4000);
+        return;
+    }
+#endif
+    daw::EngineController::BounceRequest request;
+    QString sourceDescription;
+
+    if (m_timeline && m_timeline->hasRegionSelection()) {
+        request.startSeconds = m_timeline->regionStartSeconds();
+        request.endSeconds = m_timeline->regionEndSeconds();
+        const QStringList regionTracks = m_timeline->regionTrackIds();
+        for (const QString& trackId : regionTracks) {
+            const daw::TrackModel* track =
+                m_controller.project().findTrack(trackId.toStdString());
+            if (!track) continue;
+            for (const daw::ClipModel& clip : track->clips) {
+                if (clip.kind == daw::ClipKind::Automation ||
+                    clip.startSeconds >= request.endSeconds ||
+                    clip.startSeconds + m_controller.clipPlaybackDuration(clip) <=
+                        request.startSeconds) {
+                    continue;
+                }
+                request.clips.push_back({track->id, clip.id});
+            }
+        }
+        sourceDescription = tr("Region: %1–%2 s across %3 track(s)")
+                                .arg(request.startSeconds, 0, 'f', 3)
+                                .arg(request.endSeconds, 0, 'f', 3)
+                                .arg(regionTracks.size());
+    } else if (m_controller.isLoopEnabled() &&
+               m_controller.loopEndSeconds() >
+                   m_controller.loopStartSeconds()) {
+        request.startSeconds = m_controller.loopStartSeconds();
+        request.endSeconds = m_controller.loopEndSeconds();
+        QStringList sources;
+        for (const ui::ClipSel& selected : m_selection.clips()) {
+            if (!sources.contains(selected.trackId))
+                sources.push_back(selected.trackId);
+        }
+        if (sources.isEmpty()) sources = selectedTrackIds();
+        for (const QString& id : sources)
+            request.tracks.push_back(id.toStdString());
+        request.fullMix = request.tracks.empty();
+        sourceDescription = request.fullMix
+                                ? tr("Loop: full audible mix, %1–%2 s")
+                                      .arg(request.startSeconds, 0, 'f', 3)
+                                      .arg(request.endSeconds, 0, 'f', 3)
+                                : tr("Loop: %1 track(s), %2–%3 s")
+                                      .arg(request.tracks.size())
+                                      .arg(request.startSeconds, 0, 'f', 3)
+                                      .arg(request.endSeconds, 0, 'f', 3);
+    } else {
+        request.startSeconds = std::numeric_limits<double>::max();
+        request.endSeconds = 0.0;
+        for (const ui::ClipSel& selected : m_selection.clips()) {
+            const daw::TrackModel* track =
+                m_controller.project().findTrack(selected.trackId.toStdString());
+            if (!track) continue;
+            const auto clip = std::find_if(
+                track->clips.begin(), track->clips.end(),
+                [&](const daw::ClipModel& item) {
+                    return item.id == selected.clipId.toStdString();
+                });
+            if (clip == track->clips.end() ||
+                clip->kind == daw::ClipKind::Automation) {
+                continue;
+            }
+            request.clips.push_back({track->id, clip->id});
+            request.startSeconds = std::min(request.startSeconds,
+                                            clip->startSeconds);
+            request.endSeconds = std::max(
+                request.endSeconds,
+                clip->startSeconds + m_controller.clipPlaybackDuration(*clip));
+        }
+        sourceDescription = tr("%1 selected clip(s), %2–%3 s")
+                                .arg(request.clips.size())
+                                .arg(request.startSeconds, 0, 'f', 3)
+                                .arg(request.endSeconds, 0, 'f', 3);
+    }
+
+    if (!(request.endSeconds > request.startSeconds) ||
+        (!request.fullMix && request.clips.empty() && request.tracks.empty())) {
+        statusBar()->showMessage(tr("Select clips, a region, or enable Loop"),
+                                 4000);
+        return;
+    }
+
+    BounceInPlaceDialog dialog(m_controller, std::move(request),
+                               sourceDescription, this);
+    dialog.exec();
+    if (!dialog.rendered()) return;
+    syncViews();
+    m_selection.clear();
+    markDirty();
+    statusBar()->showMessage(tr("Bounce in Place complete"), 4000);
+}
+
+void MainWindow::onOfflineRender() {
+#ifdef DAW_ENABLE_COLLABORATION
+    if (!m_cloudProjectId.isEmpty()) {
+        statusBar()->showMessage(tr("Offline Render — Local-only in v1"), 4000);
+        return;
+    }
+#endif
+    std::vector<daw::EngineController::ClipAddress> clips;
+    for (const ui::ClipSel& selected : m_selection.clips()) {
+        const daw::TrackModel* track =
+            m_controller.project().findTrack(selected.trackId.toStdString());
+        if (!track) continue;
+        const auto clip = std::find_if(
+            track->clips.begin(), track->clips.end(),
+            [&](const daw::ClipModel& item) {
+                return item.id == selected.clipId.toStdString();
+            });
+        if (clip == track->clips.end() || clip->kind != daw::ClipKind::Audio) {
+            QMessageBox::information(
+                this, tr("Offline Render"),
+                tr("Offline Render accepts audio clips only. Use Bounce in "
+                   "Place for MIDI or Pattern clips first."));
+            return;
+        }
+        clips.push_back({track->id, clip->id});
+    }
+    if (clips.empty()) {
+        statusBar()->showMessage(tr("Select one or more audio clips"), 3000);
+        return;
+    }
+
+    const auto primary = m_controller.offlineProcessChain(clips.front());
+    const auto sameChain = [](const daw::EngineController::ChannelSnapshot& a,
+                              const daw::EngineController::ChannelSnapshot& b) {
+        const auto sameParameters = [](const auto& left, const auto& right) {
+            if (left.size() != right.size()) return false;
+            for (std::size_t i = 0; i < left.size(); ++i) {
+                if (left[i].id != right[i].id ||
+                    left[i].value != right[i].value)
+                    return false;
+            }
+            return true;
+        };
+        if (a.inserts.size() != b.inserts.size()) return false;
+        for (std::size_t i = 0; i < a.inserts.size(); ++i) {
+            const auto& left = a.inserts[i];
+            const auto& right = b.inserts[i];
+            if (left.model.format != right.model.format ||
+                left.model.uid != right.model.uid ||
+                left.model.bypassed != right.model.bypassed ||
+                left.model.mix != right.model.mix ||
+                !sameParameters(left.model.parameters,
+                                right.model.parameters) ||
+                !sameParameters(left.model.rightParameters,
+                                right.model.rightParameters) ||
+                left.state != right.state ||
+                left.rightState != right.rightState) {
+                return false;
+            }
+        }
+        return true;
+    };
+    bool chainsDiffer = false;
+    for (std::size_t i = 1; i < clips.size(); ++i) {
+        if (!sameChain(primary, m_controller.offlineProcessChain(clips[i]))) {
+            chainsDiffer = true;
+            break;
+        }
+    }
+
+    OfflineRenderDialog dialog(m_controller, clips, chainsDiffer, this);
+    dialog.exec();
+    if (!dialog.rendered()) return;
+    syncViews();
+    m_selection.refresh();
+    markDirty();
+    statusBar()->showMessage(tr("Offline Render complete"), 4000);
+}
+
 // ── Project I/O ──
 
 void MainWindow::onNewProject() {
@@ -13015,7 +13873,6 @@ void MainWindow::onNewProject() {
     clearCloudProjectBinding(/*cancelPublication=*/true);
 #endif
     m_controller.newProject();
-    const std::string first = m_controller.addTrack(daw::TrackKind::Audio, "Audio 1");
     m_projectPath.clear();
     m_selectedTrackId.clear();
     m_dirty = false;
@@ -13023,7 +13880,6 @@ void MainWindow::onNewProject() {
     m_journalStale = true;
     m_transport->syncTempo();
     syncViews();
-    selectTrackFromHeader(QString::fromStdString(first));
     updateWindowTitle();
 }
 
@@ -13506,6 +14362,7 @@ void MainWindow::syncPlayheadTimer() {
 
 void MainWindow::refreshUi() {
     publishSessionTransport(false);
+    updateLocalProcessingActions();
     const bool realtimeUi = m_controller.isPlaying() || m_controller.isRecording() ||
                             m_controller.isCountingIn();
     const int desiredInterval = realtimeUi ? 33 : 100;

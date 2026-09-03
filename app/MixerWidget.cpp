@@ -9,6 +9,7 @@
 
 #include "EngineController.hpp"
 
+#include <QAbstractButton>
 #include <QCoreApplication>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -26,29 +27,40 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    // ── Header ──
+    // Flat console command bar: it meets the timeline and both side edges
+    // exactly, while the small accent rail gives the title a clear origin.
     m_header = new QWidget(this);
     m_header->setObjectName("MixerHeader");
-    m_header->setFixedHeight(28);
+    m_header->setFixedHeight(32);
     auto* head = new QHBoxLayout(m_header);
-    head->setContentsMargins(12, 0, 12, 0);
-    head->setSpacing(8);
+    head->setContentsMargins(10, 0, 6, 0);
+    head->setSpacing(7);
 
-    auto* glyph = new QLabel(m_header);
-    glyph->setPixmap(icons::icon(icons::Glyph::Mixer, th().accent, 14).pixmap(14, 14));
+    m_headerAccent = new QWidget(m_header);
+    m_headerAccent->setObjectName(QStringLiteral("MixerHeaderAccent"));
+    m_headerAccent->setFixedSize(2, 16);
+    m_headerGlyph = new QLabel(m_header);
+    m_headerGlyph->setFixedSize(16, 16);
     auto* title = new QLabel(tr("MIXER"), m_header);
     title->setObjectName("MixerTitle");
     m_headerCount = new QLabel(m_header);
-    m_statusDot = new QLabel(m_header);
-    m_statusDot->setFixedSize(6, 6);
-    m_statusText = new QLabel(m_header);
+    m_headerCount->setObjectName(QStringLiteral("MixerHeaderCount"));
+    auto* settings = new ui::IconButton(icons::Glyph::Gear,
+                                        tr("Mixer settings"), m_header);
+    settings->setObjectName(QStringLiteral("MixerSettingsButton"));
+    settings->setButtonSize(28, 24);
+    settings->setFocusPolicy(Qt::StrongFocus);
+    settings->setAccessibleName(tr("Mixer settings"));
+    connect(settings, &QAbstractButton::clicked, this,
+            &MixerWidget::settingsRequested);
 
-    head->addWidget(glyph);
+    head->addWidget(m_headerAccent);
+    head->addWidget(m_headerGlyph);
     head->addWidget(title);
+    head->addWidget(ui::separatorLine(Qt::Vertical, 14, m_header));
     head->addWidget(m_headerCount);
     head->addStretch(1);
-    head->addWidget(m_statusDot);
-    head->addWidget(m_statusText);
+    head->addWidget(settings);
     outer->addWidget(m_header);
 
     // ── Strips: scrolling channels on the left, master pinned right ──
@@ -101,12 +113,13 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
 void MixerWidget::applyTheme() {
     const Theme& t = th();
     setStyleSheet(QString(R"(
-#MixerPanel { background: %BG%; border: 1px solid %SECTION%; border-radius: 10px; }
-#MixerHeader { background: %HEADER%; border-top-left-radius: 10px;
-               border-top-right-radius: 10px; border-bottom: 1px solid %SECTION%; }
+#MixerPanel { background: %BG%; border: none; }
+#MixerHeader { background: %HEADER%; border: none;
+               border-top: 1px solid %SECTION%;
+               border-bottom: 1px solid %SECTION%; }
 #MixerTitle { color: %TEXT%; font-size: 10px; font-weight: 700;
               letter-spacing: 0.6px; }
-#MixerHeader QLabel { color: %TEXT2%; font-size: 10px; }
+#MixerHeaderCount { color: %TEXT2%; font-size: 10px; }
 )")
         .replace("%BG%", t.background.name())
         .replace("%SURFACE%", t.surface.name())
@@ -115,6 +128,12 @@ void MixerWidget::applyTheme() {
         .replace("%SECTION%", t.sectionDivider().name())
         .replace("%TEXT2%", t.textSecondary.name())
         .replace("%TEXT%", t.textPrimary.name()));
+    if (m_headerAccent)
+        m_headerAccent->setStyleSheet(
+            QStringLiteral("background: %1;").arg(t.accent.name()));
+    if (m_headerGlyph)
+        m_headerGlyph->setPixmap(
+            icons::icon(icons::Glyph::Mixer, t.accent, 15).pixmap(15, 15));
     update();
 }
 
@@ -150,6 +169,16 @@ bool MixerWidget::checkCollaborationPresenceForTest(QString* error) {
         return fail(QStringLiteral("mixer presence fixture has no tracks"));
 
     MixerWidget mixer(&controller);
+    auto* settings = mixer.findChild<QAbstractButton*>(
+        QStringLiteral("MixerSettingsButton"));
+    int settingsRequests = 0;
+    QObject::connect(&mixer, &MixerWidget::settingsRequested,
+                     [&settingsRequests] { ++settingsRequests; });
+    if (!settings)
+        return fail(QStringLiteral("mixer header has no settings action"));
+    settings->click();
+    if (settingsRequests != 1)
+        return fail(QStringLiteral("mixer settings action is not connected"));
     // The strips sit inside a scroll area, so their geometry only exists after
     // a real layout pass. WA_DontShowOnScreen gives one without a window.
     mixer.setAttribute(Qt::WA_DontShowOnScreen, true);
@@ -371,16 +400,6 @@ void MixerWidget::refreshMeters() {
     for (ChannelStrip* strip : m_strips) {
         if (stripIsVisible(strip)) strip->refreshMeter();
     }
-
-    const bool online = m_controller->isDeviceOpen();
-    if (m_statusInitialized && m_statusOnline == online) return;
-    m_statusInitialized = true;
-    m_statusOnline = online;
-    m_statusDot->setStyleSheet(
-        QString("background: %1; border-radius: 3px;")
-            .arg(online ? QColor(0x4C, 0xC4, 0x8A).name()
-                        : QColor(0xE0, 0x9B, 0x3B).name()));
-    m_statusText->setText(online ? tr("AUDIO ONLINE") : tr("AUDIO OFFLINE"));
 }
 
 void MixerWidget::setSelectedTrack(const QString& trackId) {

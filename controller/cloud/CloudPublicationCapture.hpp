@@ -95,7 +95,7 @@ private:
 
 /// Pure compatibility gate used before a capture allocates state buffers or
 /// creates a staging directory. V1 accepts exactly the built-in Sampler,
-/// Equalizer and Gravity slots; empty slots are ignored.
+/// Equalizer, Gravity and Graphit slots; empty slots are ignored.
 std::vector<PublicationCaptureIssue> inspectCaptureCompatibilityV1(
     const ProjectModel& project);
 

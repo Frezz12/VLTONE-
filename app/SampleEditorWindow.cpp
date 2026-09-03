@@ -43,6 +43,10 @@ void SampleEditorWindow::setSnapProvider(std::function<double()> provider) {
     if (m_panel) m_panel->setSnapProvider(std::move(provider));
 }
 
+void SampleEditorWindow::refresh() {
+    if (m_panel) m_panel->refresh();
+}
+
 QWidget* SampleEditorWindow::collaborationPresenceSurface() const {
     return m_panel;
 }

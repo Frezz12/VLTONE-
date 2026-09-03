@@ -22,11 +22,9 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMetaObject>
-#include <QPainterPath>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
-#include <QRegion>
 #include <QIcon>
 #include <QInputDialog>
 #include <QShortcut>
@@ -280,10 +278,7 @@ WebBrowserPanel::WebBrowserPanel(QWidget* parent) : QWidget(parent) {
     m_profile->setHttpCacheType(QWebEngineProfile::DiskHttpCache);
 
     auto* column = new QVBoxLayout(this);
-    // A small safe inset keeps the controls below the shell's rounded crown.
-    // Everything beneath it is one continuous browser surface rather than a
-    // glass card containing several smaller cards.
-    column->setContentsMargins(1, 7, 1, 1);
+    column->setContentsMargins(0, 0, 0, 0);
     column->setSpacing(0);
     column->addWidget(buildTabStrip());
     column->addWidget(buildToolbar());
@@ -302,7 +297,7 @@ WebBrowserPanel::WebBrowserPanel(QWidget* parent) : QWidget(parent) {
     m_viewFrame->setObjectName(QStringLiteral("WebViewFrame"));
     m_viewFrame->setAttribute(Qt::WA_StyledBackground, true);
     auto* viewLayout = new QVBoxLayout(m_viewFrame);
-    viewLayout->setContentsMargins(1, 1, 1, 1);
+    viewLayout->setContentsMargins(0, 0, 0, 0);
     viewLayout->setSpacing(0);
     m_stack = new QStackedWidget(m_viewFrame);
     m_stack->setObjectName(QStringLiteral("WebViewStack"));
@@ -335,7 +330,6 @@ WebBrowserPanel::WebBrowserPanel(QWidget* parent) : QWidget(parent) {
     m_resizeTimer->setSingleShot(true);
     m_resizeTimer->setInterval(16);
     connect(m_resizeTimer, &QTimer::timeout, this, [this] {
-        updateViewMask();
         const int visibleSlots =
             std::clamp((std::max(width(), 320) - 125) / 105, 1, 6);
         if (visibleSlots != m_bookmarkSlots)
@@ -1776,18 +1770,9 @@ bool WebBrowserPanel::startPageReadyForTest() const {
 
 void WebBrowserPanel::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
-    // At most one native-mask/bookmark pass per frame. The old zero-timeout
-    // scheduling queued one pass per mouse move, so Chromium kept processing
-    // stale resizes after the pointer had already stopped.
+    // At most one responsive bookmark pass per frame. The old zero-timeout
+    // scheduling queued one pass per mouse move after the pointer had stopped.
     if (m_resizeTimer && !m_resizeTimer->isActive()) m_resizeTimer->start();
-}
-
-void WebBrowserPanel::updateViewMask() {
-    if (size().isEmpty()) return;
-    QPainterPath path;
-    path.addRoundedRect(QRectF(rect()), 22, 22);
-    setMask(QRegion(path.toFillPolygon().toPolygon()));
-    if (m_viewFrame) m_viewFrame->clearMask();
 }
 
 void WebBrowserPanel::applyTheme() {
@@ -1812,7 +1797,7 @@ void WebBrowserPanel::applyTheme() {
     }
     setStyleSheet(QString(R"(
 #WebBrowserPanel {
-    background: %SURFACE%; border: 1px solid %DIVIDER%; border-radius: 22px;
+    background: %SURFACE%; border: none; border-radius: 0;
 }
 #WebTabStrip {
     background: transparent; border: none;
@@ -1895,6 +1880,5 @@ QPushButton#WebBookmarksMore:focus { border-color: %ACCENT_HI%; }
         .replace("%ACCENT%", t.accent.name())
         .replace("%TEXT%", t.textPrimary.name())
         .replace("%MUTED%", t.textSecondary.name()));
-    updateViewMask();
     update();
 }

@@ -2,6 +2,7 @@
 
 #include "Controls.hpp"
 #include "EqualizerPanel.hpp"
+#include "GraphitPanel.hpp"
 #include "GravityPanel.hpp"
 #include "InternalEditorFrame.hpp"
 #include "EngineController.hpp"
@@ -13,6 +14,7 @@
 
 #include "Internal/SamplerInstance.hpp"
 #include "Internal/EqualizerInstance.hpp"
+#include "Internal/GraphitInstance.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -419,6 +421,22 @@ void PluginEditorWindow::rebuildEditorContent() {
         // owns the 39 px plugin header above it.
         setMinimumSize(820, 559);
         m_fallbackContentSize = QSize(1040, 680);
+        resize(m_fallbackContentSize);
+    } else if (trustedInternal && descriptorUid == "daw.graphit" &&
+               dynamic_cast<daw::plugins::graphit::GraphitInstance*>(plugin)) {
+        auto* graphitPanel =
+            new GraphitPanel(m_controller, m_channelId, m_insertId, this);
+        m_generic = graphitPanel;
+        connect(graphitPanel, &GraphitPanel::projectEdited, this,
+                &PluginEditorWindow::projectEdited);
+        connect(graphitPanel, &GraphitPanel::automationRequested, this,
+                [this](const QString& parameterId) {
+                    emit automationRequested(m_channelId, m_insertId, parameterId);
+                });
+        m_contentRow->insertWidget(0, m_generic, 1);
+        emit builtInPanelReady(graphitPanel, QStringLiteral("graphit"));
+        setMinimumSize(440, 499);
+        m_fallbackContentSize = QSize(480, 539);
         resize(m_fallbackContentSize);
     } else if (trustedInternal && descriptorUid == "daw.gravity" &&
                dynamic_cast<daw::plugins::gravity::GravityInstance*>(plugin)) {

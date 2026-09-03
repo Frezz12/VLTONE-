@@ -15,9 +15,8 @@ class QScrollArea;
 class ChannelStrip;
 
 /// The mixer console: a scrolling row of channel strips with the master strip
-/// pinned to the right, under a thin header ("MIXER · n channels · audio
-/// online"). It lives in the centre column below the timeline, so it spans from
-/// the track headers to the right edge of the window.
+/// pinned to the right, under a square, edge-to-edge command bar. It lives in
+/// the centre column below the timeline.
 class MixerWidget : public QWidget {
     Q_OBJECT
 public:
@@ -61,6 +60,7 @@ signals:
     void automateControlRequested(const QString& trackId, bool pan);
     void automateMuteRequested(const QString& trackId);
     void automateSendRequested(const QString& trackId, const QString& sendId);
+    void settingsRequested();
 
 private:
     void applyTheme();
@@ -72,9 +72,9 @@ private:
     QRect stripRectFor(const ChannelStrip* strip) const;
 
     daw::EngineController* m_controller = nullptr;
+    QLabel* m_headerGlyph = nullptr;
     QLabel* m_headerCount = nullptr;
-    QLabel* m_statusDot = nullptr;
-    QLabel* m_statusText = nullptr;
+    QWidget* m_headerAccent = nullptr;
     QWidget* m_header = nullptr;
     QScrollArea* m_scroll = nullptr;
     QWidget* m_stripsHost = nullptr;
@@ -82,6 +82,4 @@ private:
     QWidget* m_masterHost = nullptr;
     std::vector<ChannelStrip*> m_strips;
     QString m_selectedTrackId;
-    bool m_statusInitialized = false;
-    bool m_statusOnline = false;
 };
