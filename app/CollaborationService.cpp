@@ -248,6 +248,11 @@ std::optional<PresencePacket> parsePresencePayload(
     packet.sentAtMs = envelope.serverTimeMs > 0 ? envelope.serverTimeMs
                                                 : envelope.sentAtMs;
     packet.phase = phase;
+    // Absent on every kind but presence.click, where the server has already
+    // required one of primary/secondary/middle.
+    packet.button =
+        pointerButtonFromName(payload.value(QStringLiteral("button")).toString())
+            .value_or(PointerButton::Primary);
     const QString precision = payload.value(QStringLiteral("precision")).toString();
     if (precision == QLatin1String("exact")) packet.policy = PresencePolicy::Exact;
     else if (precision == QLatin1String("coarse"))
@@ -658,7 +663,10 @@ bool CollaborationService::sendEnvelope(WireType type,
     envelope.messageId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     envelope.sentAtMs = nowMs();
     envelope.payload = payload;
-    if (ephemeral) envelope.ephemeralSequence = ++m_ephemeralSequence;
+    // Per-kind sequences. The room bus coalesces each kind under its own key
+    // and drains them independently, so a shared counter would let a newer
+    // selection/drag retire an older cursor sample at the receiver's dedupe.
+    if (ephemeral) envelope.ephemeralSequence = ++m_ephemeralSequences[int(type)];
     const QByteArray bytes =
         QJsonDocument(wireEnvelopeToJson(envelope)).toJson(QJsonDocument::Compact);
     if (bytes.size() > m_maxMessageBytes) {
@@ -730,7 +738,8 @@ void CollaborationService::sendPresence(const PresencePacket& packet) {
                packet.phase == PointerPhase::Release) {
         type = WireType::PresenceClick;
         payload.insert(QStringLiteral("phase"), pointerPhaseName(packet.phase));
-        payload.insert(QStringLiteral("button"), QStringLiteral("primary"));
+        payload.insert(QStringLiteral("button"),
+                       pointerButtonName(packet.button));
     }
     sendEnvelope(type, payload, true);
 }
@@ -949,7 +958,7 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
     }
     if (envelope.type == WireType::PresenceJoined) {
         if (const auto participant = participantFromJson(envelope.payload))
-            m_presenceStore.upsertParticipant(*participant);
+            m_presenceStore.noteParticipantConnected(*participant);
         return;
     }
     if (envelope.type == WireType::PresenceLeft) {
@@ -1052,6 +1061,12 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
             emit protocolWarning(error);
             return;
         }
+        packet->channel =
+            envelope.type == WireType::PresenceClick ? PresenceChannel::Click
+            : envelope.type == WireType::PresenceSelection
+                ? PresenceChannel::Selection
+            : envelope.type == WireType::PresenceDrag ? PresenceChannel::Drag
+                                                      : PresenceChannel::Cursor;
         if (envelope.type == WireType::PresenceSelection) {
             packet->selectionChange = true;
             const QJsonArray ids =
@@ -1074,16 +1089,17 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
             }
             packet->drag.destination = packet->point;
         }
-        ParticipantIdentity identity;
-        for (const ParticipantIdentity& participant :
-             m_presenceStore.participants()) {
-            if (participant.participantId == envelope.participantId) {
-                identity = participant;
-                break;
-            }
+        // A cursor may outrun its presence.join. Adopt the sender from the
+        // envelope rather than dropping the packet until the roster catches up;
+        // the store fills in colour and nickname when the join lands.
+        ParticipantIdentity identity =
+            m_presenceStore.participantById(envelope.participantId)
+                .value_or(ParticipantIdentity{});
+        if (identity.participantId.isEmpty()) {
+            identity.participantId = safeSemanticId(envelope.participantId);
+            if (identity.participantId.isEmpty()) return;
         }
-        if (!identity.participantId.isEmpty())
-            m_presenceStore.applyPresence({identity, *packet});
+        m_presenceStore.applyPresence({identity, *packet});
         return;
     }
     if (envelope.type == WireType::OpCommitted ||

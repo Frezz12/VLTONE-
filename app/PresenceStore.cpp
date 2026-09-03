@@ -1,6 +1,7 @@
 #include "PresenceStore.hpp"
 
 #include <QDateTime>
+#include <QSet>
 
 #include <algorithm>
 #include <cmath>
@@ -31,9 +32,14 @@ bool interpolationContextMatches(const SemanticPoint& from,
            from.clipId == to.clipId;
 }
 
+bool hasNormalized(const SemanticPoint& point) {
+    return std::isfinite(point.normalized.x()) &&
+           std::isfinite(point.normalized.y()) &&
+           point.normalized.x() >= 0.0 && point.normalized.y() >= 0.0;
+}
+
 bool hasPosition(const SemanticPoint& point) {
-    return (std::isfinite(point.normalized.x()) && point.normalized.x() >= 0.0 &&
-            std::isfinite(point.normalized.y()) && point.normalized.y() >= 0.0) ||
+    return hasNormalized(point) ||
            (std::isfinite(point.timeSeconds) && point.timeSeconds >= 0.0);
 }
 
@@ -112,6 +118,26 @@ void PresenceStore::upsertParticipant(ParticipantIdentity participant) {
     emit presenceChanged();
 }
 
+void PresenceStore::resetEphemeralState(Entry& entry) {
+    entry.lastSequence.fill(0);
+    entry.packet = PresencePacket();
+    entry.previousPacket = PresencePacket();
+    entry.receivedAtMs = 0;
+    entry.previousReceivedAtMs = 0;
+    entry.hasCursor = false;
+    entry.hasPreviousCursor = false;
+}
+
+void PresenceStore::noteParticipantConnected(ParticipantIdentity participant) {
+    const QString key = participantKey(participant);
+    if (key.isEmpty()) return;
+    upsertParticipant(std::move(participant));
+    const auto it = m_entries.find(key);
+    if (it == m_entries.end()) return;
+    resetEphemeralState(*it);
+    emit presenceChanged();
+}
+
 void PresenceStore::removeParticipant(const QString& participantId) {
     const QString key = safeSemanticId(participantId);
     if (key.isEmpty() || m_entries.remove(key) == 0) return;
@@ -126,12 +152,22 @@ void PresenceStore::applyPresence(const PresenceUpdate& update) {
     upsertParticipant(update.participant);
     auto it = m_entries.find(key);
     if (it == m_entries.end()) return;
-    if (update.packet.clientSequence > 0 && it->lastSequence > 0 &&
-        update.packet.clientSequence <= it->lastSequence) {
-        return;
+    const auto channel = std::size_t(update.packet.channel);
+    if (channel >= it->lastSequence.size()) return;
+    quint64& lastSequence = it->lastSequence[channel];
+    if (update.packet.clientSequence > 0 && lastSequence > 0 &&
+        update.packet.clientSequence <= lastSequence) {
+        // A peer that reconnects keeps its member id but restarts its counters.
+        // The bus holds at most one coalesced packet per key, so a sequence this
+        // far behind cannot be reordering — it is a fresh connection. Recovering
+        // here keeps presence alive even when presence.join was missed.
+        constexpr quint64 kSequenceRestartMargin = 64;
+        if (lastSequence - update.packet.clientSequence < kSequenceRestartMargin)
+            return;
+        resetEphemeralState(*it);
     }
     if (update.packet.clientSequence > 0)
-        it->lastSequence = update.packet.clientSequence;
+        lastSequence = update.packet.clientSequence;
     const qint64 receivedNow = wallClockMs();
     const bool cursorUpdate = !update.packet.selectionChange &&
         update.packet.phase != PointerPhase::Leave &&
@@ -158,6 +194,7 @@ void PresenceStore::applyPresence(const PresenceUpdate& update) {
         merged.selectionChange = true;
         merged.selectionIds = it->packet.selectionIds;
     }
+    const SurfaceKind previousSurface = it->packet.point.surface.kind;
     it->packet = std::move(merged);
     if (cursorUpdate) {
         it->receivedAtMs = receivedNow;
@@ -167,7 +204,12 @@ void PresenceStore::applyPresence(const PresenceUpdate& update) {
         it->hasCursor = false;
         it->hasPreviousCursor = false;
     }
-    emit presenceChanged();
+    const SurfaceKind currentSurface = it->packet.point.surface.kind;
+    emit surfacePresenceChanged(currentSurface);
+    // A pointer that crossed between surfaces must also erase itself from the
+    // one it left.
+    if (previousSurface != currentSurface)
+        emit surfacePresenceChanged(previousSurface);
 }
 
 void PresenceStore::clear() {
@@ -176,6 +218,13 @@ void PresenceStore::clear() {
     m_localParticipantId.clear();
     emit participantsChanged();
     emit presenceChanged();
+}
+
+std::optional<ParticipantIdentity> PresenceStore::participantById(
+    const QString& participantId) const {
+    const auto it = m_entries.constFind(safeSemanticId(participantId));
+    if (it == m_entries.cend()) return std::nullopt;
+    return it->identity;
 }
 
 QVector<ParticipantIdentity> PresenceStore::participants() const {
@@ -207,24 +256,33 @@ QVector<PresenceCursorSnapshot> PresenceStore::cursorsForSurface(
         PresenceCursorSnapshot snapshot{
             entry.identity, entry.packet, entry.receivedAtMs, opacity, false};
         if (entry.hasPreviousCursor &&
-            entry.receivedAtMs > entry.previousReceivedAtMs &&
             interpolationContextMatches(entry.previousPacket.point,
                                         entry.packet.point)) {
-            // Render just behind the newest packet. This turns 20 Hz network
-            // samples into smooth local motion without guessing beyond data.
-            constexpr qint64 kRenderDelayMs = 65;
-            const qint64 targetMs = nowMs - kRenderDelayMs;
-            const qreal progress = std::clamp(
-                qreal(targetMs - entry.previousReceivedAtMs) /
-                    qreal(entry.receivedAtMs - entry.previousReceivedAtMs),
-                qreal(0.0), qreal(1.0));
+            // Walk from the previous sample to the newest one over the span the
+            // sender actually used, so the render stays exactly one packet
+            // behind and network jitter never becomes visible speed. The span
+            // is measured on the server clock stamped into both packets;
+            // arrival times are only the local start of the walk, because two
+            // coalesced packets can share one arrival instant.
+            constexpr qint64 kMinimumSpanMs = 8;
+            constexpr qint64 kMaximumSpanMs = 250;
+            const qint64 sentSpan =
+                entry.packet.sentAtMs > 0 && entry.previousPacket.sentAtMs > 0
+                    ? entry.packet.sentAtMs - entry.previousPacket.sentAtMs
+                    : 0;
+            const qint64 arrivalSpan =
+                entry.receivedAtMs - entry.previousReceivedAtMs;
+            const qint64 spanMs = std::clamp(
+                sentSpan > 0 ? sentSpan : arrivalSpan, kMinimumSpanMs,
+                kMaximumSpanMs);
+            const qint64 elapsed =
+                std::max<qint64>(0, nowMs - entry.receivedAtMs);
+            const qreal progress =
+                std::clamp(qreal(elapsed) / qreal(spanMs), qreal(0.0),
+                           qreal(1.0));
             SemanticPoint& point = snapshot.packet.point;
             const SemanticPoint& previous = entry.previousPacket.point;
-            if (std::isfinite(previous.normalized.x()) &&
-                std::isfinite(previous.normalized.y()) &&
-                previous.normalized.x() >= 0.0 &&
-                previous.normalized.y() >= 0.0 &&
-                point.normalized.x() >= 0.0 && point.normalized.y() >= 0.0) {
+            if (hasNormalized(previous) && hasNormalized(point)) {
                 point.normalized = previous.normalized +
                     (point.normalized - previous.normalized) * progress;
             }
@@ -269,24 +327,119 @@ QColor PresenceStore::stableParticipantColor(const QString& stableId) {
     return palette[hash % std::size(palette)];
 }
 
+bool PresenceStore::checkDeliveryForTest(QString* error) {
+    const auto fail = [error](const QString& message) {
+        if (error) *error = message;
+        return false;
+    };
+    const QString peerId = QStringLiteral("peer-1");
+    ParticipantIdentity peer;
+    peer.participantId = peerId;
+    peer.nickname = QStringLiteral("Peer");
+
+    SurfaceAddress surface{SurfaceKind::Timeline, QStringLiteral("arrangement"),
+                           {}};
+    const auto cursorAt = [&](PresenceChannel channel, quint64 sequence,
+                              qint64 sentAtMs, qreal x) {
+        PresenceUpdate update;
+        update.participant = peer;
+        update.packet.channel = channel;
+        update.packet.clientSequence = sequence;
+        update.packet.sentAtMs = sentAtMs;
+        update.packet.policy = PresencePolicy::Exact;
+        update.packet.point.surface = surface;
+        update.packet.point.normalized = QPointF(x, 0.5);
+        return update;
+    };
+
+    // Read the cursor once its interpolation has settled on the newest sample.
+    // Sampling at "now" would return a point part-way through the walk from the
+    // previous packet, which says nothing about which packet actually won.
+    const auto settledX = [&](PresenceStore& target) {
+        const auto cursors = target.cursorsForSurface(
+            surface, QDateTime::currentMSecsSinceEpoch() + 300);
+        return cursors.isEmpty()
+                   ? qreal(-1.0)
+                   : cursors.front().packet.point.normalized.x();
+    };
+
+    PresenceStore store;
+    store.setLocalParticipantId(QStringLiteral("me"));
+    store.applyPresence(cursorAt(PresenceChannel::Cursor, 5, 1000, 0.5));
+    if (store.cursorsForSurface(surface).size() != 1)
+        return fail(QStringLiteral("first cursor packet was not stored"));
+
+    // A stale cursor sample must lose to the newer one on its own channel.
+    store.applyPresence(cursorAt(PresenceChannel::Cursor, 4, 900, 0.9));
+    if (!qFuzzyCompare(settledX(store), qreal(0.5)))
+        return fail(QStringLiteral("reordered cursor packet was applied"));
+
+    // A different channel carries its own counter. Before the split, a drag or
+    // selection numbered below the cursor high-water mark was silently dropped.
+    PresenceUpdate drag = cursorAt(PresenceChannel::Drag, 2, 1100, 0.7);
+    drag.packet.drag.active = true;
+    drag.packet.drag.kind = QStringLiteral("clip");
+    store.applyPresence(drag);
+    if (!store.cursorsForSurface(surface).front().packet.drag.active)
+        return fail(QStringLiteral("drag lost to the cursor sequence"));
+
+    // Raise the high-water mark, then prove both halves of the restart rule.
+    // A small backwards step is ordinary reordering and must stay rejected --
+    // that guard is what keeps a stale sample from overwriting a fresh one.
+    store.applyPresence(cursorAt(PresenceChannel::Cursor, 200, 2000, 0.4));
+    store.applyPresence(cursorAt(PresenceChannel::Cursor, 190, 1900, 0.95));
+    if (!qFuzzyCompare(settledX(store), qreal(0.4)))
+        return fail(QStringLiteral("a reordered sample beat the newest one"));
+    // A peer that restarts keeps its member id but restarts its counters, so a
+    // sequence this far behind can only be a fresh connection.
+    store.applyPresence(cursorAt(PresenceChannel::Cursor, 1, 5000, 0.25));
+    if (!qFuzzyCompare(settledX(store), qreal(0.25)))
+        return fail(QStringLiteral("reconnected peer stayed deduped forever"));
+
+    // An explicit join is the deterministic path for the same recovery.
+    PresenceStore rejoined;
+    rejoined.setLocalParticipantId(QStringLiteral("me"));
+    rejoined.applyPresence(cursorAt(PresenceChannel::Cursor, 900, 1000, 0.5));
+    rejoined.noteParticipantConnected(peer);
+    if (!rejoined.cursorsForSurface(surface).isEmpty())
+        return fail(QStringLiteral("join did not clear the stale cursor"));
+    rejoined.applyPresence(cursorAt(PresenceChannel::Cursor, 1, 2000, 0.75));
+    if (rejoined.cursorsForSurface(surface).size() != 1)
+        return fail(QStringLiteral("join did not reset the sequence gate"));
+
+    // Two samples that share one arrival instant still interpolate across the
+    // span their sender used, instead of snapping to the newest point.
+    PresenceStore paced;
+    paced.setLocalParticipantId(QStringLiteral("me"));
+    paced.applyPresence(cursorAt(PresenceChannel::Cursor, 1, 10'000, 0.0));
+    paced.applyPresence(cursorAt(PresenceChannel::Cursor, 2, 10'100, 1.0));
+    const auto snapshots = paced.cursorsForSurface(surface);
+    if (snapshots.size() != 1 || !snapshots.front().interpolating)
+        return fail(QStringLiteral("coalesced arrivals disabled interpolation"));
+    if (snapshots.front().packet.point.normalized.x() > 0.5) {
+        return fail(QStringLiteral(
+            "interpolation snapped past the sender's own span"));
+    }
+    return true;
+}
+
 void PresenceStore::expireStaleCursors() {
     const qint64 now = wallClockMs();
-    bool changed = false;
+    // Keep repainting during the fade, but sleep when there is no cursor — and
+    // wake only the surfaces that actually have an expiring or fading pointer.
+    QSet<SurfaceKind> affected;
     for (Entry& entry : m_entries) {
-        if (entry.hasCursor && now - entry.receivedAtMs >= kCursorTtlMs) {
+        if (!entry.hasCursor) continue;
+        const qint64 age = now - entry.receivedAtMs;
+        if (age >= kCursorTtlMs) {
             entry.hasCursor = false;
-            changed = true;
+            affected.insert(entry.packet.point.surface.kind);
+        } else if (age >= kCursorFullyVisibleMs) {
+            affected.insert(entry.packet.point.surface.kind);
         }
     }
-    // Keep repainting during the fade, but sleep when there is no cursor.
-    bool fading = false;
-    for (const Entry& entry : m_entries) {
-        if (entry.hasCursor && now - entry.receivedAtMs >= kCursorFullyVisibleMs) {
-            fading = true;
-            break;
-        }
-    }
-    if (changed || fading) emit presenceChanged();
+    for (const SurfaceKind surface : affected)
+        emit surfacePresenceChanged(surface);
 }
 
 } // namespace collab

@@ -2,6 +2,10 @@
 
 #include <QString>
 #include <QWidget>
+
+#include "CollaborationTypes.hpp"
+
+#include <optional>
 #include <vector>
 
 namespace daw { class EngineController; }
@@ -30,6 +34,21 @@ public:
     double faderGainForTest(const QString& trackId) const;
     void setSelectedTrack(const QString& trackId);
 
+    /// Presence encode/decode, mirroring TimelineWidget's pair. A pointer is
+    /// described by the strip it is over and how far down that strip it sits,
+    /// so a collaborator scrolled to a different part of the console still sees
+    /// it on the right channel — or not at all, rather than on the wrong one.
+    collab::SemanticPoint collaborationPresenceAt(const QPointF& position) const;
+    std::optional<QPointF> collaborationPositionFor(
+        const collab::SemanticPoint& point) const;
+    /// Headless regression: a pointer keeps naming the same channel when the
+    /// console is resized, the master strip is addressed without a track id,
+    /// and a channel this console does not show is hidden rather than mapped
+    /// onto a neighbouring strip.
+    static bool checkCollaborationPresenceForTest(QString* error = nullptr);
+    /// Where a track's strip sits right now, for that regression.
+    QRect stripRectForTrackForTest(const QString& trackId) const;
+
 signals:
     void trackSelected(const QString& trackId);
     void edited(bool localFileDirty = true);
@@ -46,6 +65,11 @@ signals:
 private:
     void applyTheme();
     bool stripIsVisible(const ChannelStrip* strip) const;
+    /// The strip under a point in this widget's coordinates, and where a given
+    /// track's strip currently sits. Null/empty when the console does not show
+    /// that track right now.
+    const ChannelStrip* stripAt(const QPoint& position) const;
+    QRect stripRectFor(const ChannelStrip* strip) const;
 
     daw::EngineController* m_controller = nullptr;
     QLabel* m_headerCount = nullptr;

@@ -4538,6 +4538,11 @@ ApplyResult ProjectReducer::apply(SharedProjectDocument& state,
     return applyImpl(state, command, true, true);
 }
 
+ApplyResult ProjectReducer::applyPrevalidated(SharedProjectDocument& state,
+                                              const ProjectCommand& command) {
+    return applyImpl(state, command, true, true);
+}
+
 std::string ProjectReducer::projectFieldKey(ProjectScalar field) {
     return "project:" + projectScalarName(field);
 }

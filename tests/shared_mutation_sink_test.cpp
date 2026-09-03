@@ -213,58 +213,91 @@ void verifySharedAssetMutationGate() {
     controller.attachSharedMutationSink(commands);
     controller.attachSharedAssetMutationSink(assets);
 
+    // Locates the AddClip / SetClipAsset a submitted body carries, so the two
+    // halves of an optimistic import can be told apart structurally rather
+    // than by counting.
+    const auto addClipIn = [](const daw::collab::CommandBody& body,
+                              const std::string& clip)
+        -> const daw::collab::AddClip* {
+        const auto* batch =
+            std::get_if<std::shared_ptr<daw::collab::BatchCommand>>(&body);
+        if (!batch || !*batch) return nullptr;
+        for (const auto& child : (*batch)->commands) {
+            const auto* value = std::get_if<daw::collab::AddClip>(&child.body);
+            if (value && value->clipId == clip) return value;
+        }
+        return nullptr;
+    };
+    const auto bodyHasSetClipAsset = [](const daw::collab::CommandBody& body) {
+        if (std::get_if<daw::collab::SetClipAsset>(&body)) return true;
+        const auto* batch =
+            std::get_if<std::shared_ptr<daw::collab::BatchCommand>>(&body);
+        if (!batch || !*batch) return false;
+        for (const auto& child : (*batch)->commands) {
+            if (std::get_if<daw::collab::SetClipAsset>(&child.body))
+                return true;
+        }
+        return false;
+    };
+
     const std::string clipId =
         controller.importAudio(tone.string(), trackId, 0.25);
+    const daw::collab::AddClip* sharedClip =
+        commands.genericCalls == 1
+            ? addClipIn(commands.genericBodies.front(), clipId)
+            : nullptr;
+    // The clip is shared the moment it is dropped, carrying no asset: that is
+    // what lets it appear for every participant while the bytes are still
+    // uploading. It must still reach the document only through the command
+    // path, with no local mutation and no legacy undo entry.
     check(!clipId.empty() && assets.requests.size() == 1 &&
-              commands.genericCalls == 0 &&
+              commands.genericCalls == 1 && sharedClip &&
+              sharedClip->trackId == trackId &&
+              sharedClip->kind == daw::ClipKind::Audio &&
+              !bodyHasSetClipAsset(commands.genericBodies.front()) &&
+              !commandContainsString(commands.genericBodies.front(),
+                                     assets.requests.front().sourcePath) &&
               controller.project().findTrack(trackId)->clips.empty() &&
               controller.undoDepth() == undoDepth,
-          "cloud import waits for verification without local mutation or undo");
+          "cloud import shares the clip immediately without its asset");
 
     const auto request = assets.requests.front();
     const daw::AssetRef ready = verifiedAsset(request);
     const auto completed =
         controller.completeSharedAssetMutation(request.requestId, ready);
-    const auto* batch = commands.genericBodies.size() == 1
-        ? std::get_if<std::shared_ptr<daw::collab::BatchCommand>>(
-              &commands.genericBodies.front())
-        : nullptr;
-    const daw::collab::SetClipAsset* assetCommand = nullptr;
-    if (batch && *batch) {
-        for (const auto& child : (*batch)->commands) {
-            if (const auto* value =
-                    std::get_if<daw::collab::SetClipAsset>(&child.body)) {
-                assetCommand = value;
-                break;
-            }
-        }
-    }
+    const daw::collab::SetClipAsset* assetCommand =
+        commands.genericBodies.size() == 2
+            ? std::get_if<daw::collab::SetClipAsset>(
+                  &commands.genericBodies.back())
+            : nullptr;
+    // The verified upload binds the asset as its own operation, so every
+    // participant's already-visible clip becomes audible at that point.
     check(completed == daw::collab::SharedMutationResult::Submitted &&
-              commands.genericCalls == 1 && assetCommand &&
+              commands.genericCalls == 2 && assetCommand &&
               assetCommand->trackId == trackId &&
               assetCommand->clipId == clipId &&
               assetCommand->asset == ready &&
-              !commandContainsString(commands.genericBodies.front(),
+              !commandContainsString(commands.genericBodies.back(),
                                      request.sourcePath) &&
               controller.project().tracks.size() == before.tracks.size() &&
               controller.project().findTrack(trackId)->clips.empty() &&
               controller.undoDepth() == undoDepth,
-          "verified import emits one path-free outer batch and no legacy state");
+          "verified upload binds the asset as its own path-free operation");
     check(controller.completeSharedAssetMutation(request.requestId, ready) ==
                   daw::collab::SharedMutationResult::Blocked &&
-              commands.genericCalls == 1,
+              commands.genericCalls == 2,
           "duplicate verified callback cannot submit twice");
 
     const std::string cancelled =
         controller.importAudio(tone.string(), trackId, 0.5);
     const auto cancelledRequest = assets.requests.back();
     controller.cancelSharedAssetMutation(cancelledRequest.requestId);
-    check(!cancelled.empty() &&
+    check(!cancelled.empty() && commands.genericCalls == 3 &&
               controller.completeSharedAssetMutation(
                   cancelledRequest.requestId,
                   verifiedAsset(cancelledRequest)) ==
                   daw::collab::SharedMutationResult::Blocked &&
-              commands.genericCalls == 1,
+              commands.genericCalls == 3,
           "cancelled generation ignores a late verified callback");
 
     const std::string invalid =
@@ -272,7 +305,7 @@ void verifySharedAssetMutationGate() {
     const auto invalidRequest = assets.requests.back();
     daw::AssetRef wrongMetadata = verifiedAsset(invalidRequest);
     ++wrongMetadata.frames;
-    check(!invalid.empty() &&
+    check(!invalid.empty() && commands.genericCalls == 4 &&
               controller.completeSharedAssetMutation(
                   invalidRequest.requestId, wrongMetadata) ==
                   daw::collab::SharedMutationResult::Blocked &&
@@ -280,14 +313,16 @@ void verifySharedAssetMutationGate() {
                   invalidRequest.requestId,
                   verifiedAsset(invalidRequest)) ==
                   daw::collab::SharedMutationResult::Blocked &&
-              commands.genericCalls == 1,
+              commands.genericCalls == 4,
           "mismatched verified metadata is terminal and cannot submit");
 
+    // The upload is reserved before the clip is shared, so a refusal leaves no
+    // orphaned silent clip behind.
     assets.result = daw::collab::SharedMutationResult::Blocked;
     check(controller.importAudio(tone.string(), trackId, 0.75).empty() &&
-              commands.genericCalls == 1 &&
+              commands.genericCalls == 4 &&
               controller.project().findTrack(trackId)->clips.empty(),
-          "synchronous asset rejection is blocked before mutation");
+          "synchronous asset rejection shares nothing at all");
 
     check(controller.detachSharedAssetMutationSink(assets) &&
               controller.detachSharedMutationSink(commands),
@@ -438,12 +473,17 @@ void verifyVerifiedAssetActions() {
         controller.attachSharedAssetMutationSink(assets);
         const std::string track = controller.importAudioToNewTrack(
             tone.string(), 0.0, "Imported");
-        const bool deferred = !track.empty() && commands.genericCalls == 0 &&
-                              controller.project().tracks.empty();
-        check(deferred && finishLatest(controller, assets, commands, 0) &&
-                  std::holds_alternative<std::shared_ptr<
-                      daw::collab::BatchCommand>>(commands.genericBodies.back()),
-              "new-track import waits for one verified path-free batch");
+        // The track and its clip are shared immediately, as one batch that
+        // carries no asset; the verified asset follows as a bare setAsset.
+        const bool sharedNow =
+            !track.empty() && commands.genericCalls == 1 &&
+            std::holds_alternative<std::shared_ptr<daw::collab::BatchCommand>>(
+                commands.genericBodies.back()) &&
+            controller.project().tracks.empty();
+        check(sharedNow && finishLatest(controller, assets, commands, 1) &&
+                  std::holds_alternative<daw::collab::SetClipAsset>(
+                      commands.genericBodies.back()),
+              "new-track import shares the track now and its asset later");
         controller.detachSharedAssetMutationSink(assets);
         controller.detachSharedMutationSink(commands);
     }

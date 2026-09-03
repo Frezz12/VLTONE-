@@ -655,20 +655,43 @@ func (connection *collaborationRoomConnection) readLoop(ctx context.Context) err
 			continue
 		}
 		var envelope collaborationClientEnvelope
-		messageContext, cancelMessage := context.WithTimeout(ctx,
-			collaborationWSDBTimeout(connection.server.Config.CollabWSDBTimeoutSeconds))
-		if err := decodeCollaborationJSON(data, &envelope); err != nil {
+		decodeErr := decodeCollaborationJSON(data, &envelope)
+		ephemeral := decodeErr == nil &&
+			isCollaborationEphemeral(envelope.Type)
+
+		// A presence or transport relay never reaches the database, so it must
+		// not pay for a per-message deadline: at 20-30 Hz per participant that
+		// was a timer allocation and goroutine bookkeeping on a path that
+		// cannot block on it. Only the store-touching paths get one.
+		handleContext := ctx
+		var cancelHandle context.CancelFunc
+		if !ephemeral {
+			handleContext, cancelHandle = context.WithTimeout(ctx,
+				collaborationWSDBTimeout(connection.server.Config.CollabWSDBTimeoutSeconds))
+		}
+		var handleErr error
+		if decodeErr == nil {
+			handleErr = connection.handleEnvelope(handleContext, envelope)
+		}
+		if decodeErr != nil || handleErr != nil {
 			violations++
-			connection.reject(messageContext, "", "invalid_message",
+			messageID := ""
+			if decodeErr == nil {
+				messageID = envelope.MessageID
+			}
+			// Writing a rejection can read the project, so it always gets its
+			// own deadline even when the message itself was ephemeral.
+			rejectContext, cancelReject := context.WithTimeout(ctx,
+				collaborationWSDBTimeout(connection.server.Config.CollabWSDBTimeoutSeconds))
+			connection.reject(rejectContext, messageID, "invalid_message",
 				"Invalid collaboration message.", false)
-		} else if err := connection.handleEnvelope(messageContext, envelope); err != nil {
-			violations++
-			connection.reject(messageContext, envelope.MessageID, "invalid_message",
-				"Invalid collaboration message.", false)
+			cancelReject()
 		} else {
 			violations = 0
 		}
-		cancelMessage()
+		if cancelHandle != nil {
+			cancelHandle()
+		}
 		if violations >= 3 {
 			return fmt.Errorf("too many invalid collaboration messages")
 		}
@@ -1257,17 +1280,27 @@ func collaborationEnvelope(kind string, payload json.RawMessage,
 	return body
 }
 
+// storedJSONArray forwards a stored JSON array as-is, substituting an empty
+// array for a column that is empty or SQL NULL. Decoding into `any` and
+// re-encoding would allocate a whole map/slice tree per committed operation,
+// per subscriber, to reproduce bytes the database already holds.
+func storedJSONArray(stored []byte) json.RawMessage {
+	trimmed := bytes.TrimSpace(stored)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) ||
+		!json.Valid(trimmed) {
+		return json.RawMessage("[]")
+	}
+	return json.RawMessage(trimmed)
+}
+
 func collaborationCommittedEnvelope(operation model.ProjectOperation) []byte {
-	var preconditions any = []any{}
-	var touchedFields any = []any{}
-	_ = json.Unmarshal(operation.Preconditions, &preconditions)
-	_ = json.Unmarshal(operation.TouchedFields, &touchedFields)
 	command := map[string]any{
 		"schemaVersion": operation.SchemaVersion, "opId": operation.OpID,
 		"transactionId": operation.TransactionID,
 		"baseServerSeq": operation.BaseSeq, "kind": operation.Kind,
 		"payload":       json.RawMessage(operation.Payload),
-		"preconditions": preconditions, "touchedFields": touchedFields,
+		"preconditions": storedJSONArray(operation.Preconditions),
+		"touchedFields": storedJSONArray(operation.TouchedFields),
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"projectId": operation.ProjectID, "serverSeq": operation.Seq,
@@ -1336,11 +1369,17 @@ func isCollaborationEphemeral(kind string) bool {
 		kind == "transport.state" || kind == "transport.follow"
 }
 
+// ephemeralInterval is a server-side floor, not the publishing cadence. It must
+// stay strictly below the client's own 20 Hz cursor throttle: when both sides
+// use the same period, ordinary jitter pushes roughly half of the arrivals just
+// under the window and they are dropped, halving the effective rate at
+// irregular intervals. The room bus already coalesces per key, so a permissive
+// floor costs no extra fan-out.
 func ephemeralInterval(kind string) time.Duration {
 	if kind == "presence.cursor" || kind == "presence.drag" {
-		return 50 * time.Millisecond
+		return 30 * time.Millisecond
 	}
-	return 25 * time.Millisecond
+	return 15 * time.Millisecond
 }
 
 func validateOptionalUUIDJSON(raw json.RawMessage, required bool) error {

@@ -107,6 +107,10 @@ private:
     qsizetype m_completedCount = 0;
     qsizetype m_failedCount = 0;
     qsizetype m_scheduledRetryCount = 0;
+    /// Latches one hydrationSettled per run. pump() settles on its own and both
+    /// completion handlers settle again afterwards, so without this the last
+    /// asset emits the signal two or three times.
+    bool m_settledEmitted = false;
     CloudHydrationState m_state = CloudHydrationState::Idle;
 
     static constexpr qsizetype kMaximumAssetsPerProject = 100000;

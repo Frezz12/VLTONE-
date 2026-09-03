@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStringList>
 #include <QWidget>
+#include "CollaborationTypes.hpp"
 #include "Host/PluginTypes.hpp"
 
 #include <functional>
@@ -68,6 +69,25 @@ public:
     ui::MsrButton* rowChipForTest(const QString& trackId,
                                   const QString& letter) const;
     ui::FaderWidget* rowFaderForTest(const QString& trackId) const;
+
+    /// Which track's row covers `position`, and where that track's row sits
+    /// right now. Presence uses the pair to describe a collaborator's pointer
+    /// as "this track, this far down its row" instead of a fraction of the
+    /// column, which lands on the wrong track whenever two participants are
+    /// scrolled differently or have different row heights.
+    QString trackIdAt(const QPoint& position) const;
+    QRect rowRectForTrack(const QString& trackId) const;
+
+    /// Presence encode/decode, mirroring TimelineWidget's pair. A point inside
+    /// a row is described by its track and how far down that row it sits; the
+    /// ruler above the rows is reported as chrome with no track.
+    collab::SemanticPoint collaborationPresenceAt(const QPointF& position) const;
+    std::optional<QPointF> collaborationPositionFor(
+        const collab::SemanticPoint& point) const;
+    /// Headless regression: a pointer keeps naming the same track when the
+    /// column is scrolled or resized, and a track this column does not show is
+    /// hidden rather than mapped onto a neighbour.
+    static bool checkCollaborationPresenceForTest(QString* error = nullptr);
 
     /// The row that owns the single-track contexts — the last one clicked, or
     /// empty when nothing is selected.

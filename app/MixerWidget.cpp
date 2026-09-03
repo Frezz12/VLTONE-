@@ -1,4 +1,6 @@
 #include "MixerWidget.hpp"
+
+#include <algorithm>
 #include "ChannelStrip.hpp"
 #include "Controls.hpp"
 #include "Icons.hpp"
@@ -7,6 +9,7 @@
 
 #include "EngineController.hpp"
 
+#include <QCoreApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
@@ -131,6 +134,162 @@ void MixerWidget::refreshAutomationValues() {
     for (ChannelStrip* strip : m_strips) {
         if (stripIsVisible(strip)) strip->refreshAutomationValues();
     }
+}
+
+bool MixerWidget::checkCollaborationPresenceForTest(QString* error) {
+    const auto fail = [error](const QString& message) {
+        if (error) *error = message;
+        return false;
+    };
+    daw::EngineController controller;
+    controller.initialize(48000.0, 512, false);
+    const QString trackId =
+        QString::fromStdString(controller.addTrack(daw::TrackKind::Audio, "A"));
+    (void)controller.addTrack(daw::TrackKind::Audio, "B");
+    if (trackId.isEmpty())
+        return fail(QStringLiteral("mixer presence fixture has no tracks"));
+
+    MixerWidget mixer(&controller);
+    // The strips sit inside a scroll area, so their geometry only exists after
+    // a real layout pass. WA_DontShowOnScreen gives one without a window.
+    mixer.setAttribute(Qt::WA_DontShowOnScreen, true);
+    mixer.resize(900, 520);
+    mixer.rebuild();
+    mixer.show();
+    QCoreApplication::sendPostedEvents();
+    if (mixer.layout()) mixer.layout()->activate();
+    QRect strip = mixer.stripRectForTrackForTest(trackId);
+    if (strip.isNull() || strip.height() <= 0)
+        return fail(QStringLiteral("mixer presence fixture has no strips"));
+
+    const QPointF source(strip.center().x(),
+                         strip.top() + strip.height() * 0.75);
+    const collab::SemanticPoint semantic = mixer.collaborationPresenceAt(source);
+    if (semantic.trackId != trackId ||
+        semantic.targetId != QLatin1String("strip") ||
+        std::abs(semantic.laneFraction - 0.75) > 1e-6) {
+        return fail(QStringLiteral("mixer presence lost its channel context"));
+    }
+
+    // A console sized differently must place the same packet on the same
+    // channel, not at the same pixel.
+    mixer.resize(700, 760);
+    QCoreApplication::sendPostedEvents();
+    if (mixer.layout()) mixer.layout()->activate();
+    strip = mixer.stripRectForTrackForTest(trackId);
+    const auto remapped = mixer.collaborationPositionFor(semantic);
+    if (strip.isNull() || !remapped ||
+        std::abs(remapped->y() - (strip.top() + strip.height() * 0.75)) > 1e-6) {
+        return fail(QStringLiteral("mixer presence did not follow the layout"));
+    }
+
+    collab::SemanticPoint absent = semantic;
+    absent.trackId = QStringLiteral("11111111-1111-4111-8111-111111111111");
+    if (mixer.collaborationPositionFor(absent))
+        return fail(QStringLiteral("mixer presence mapped an unknown channel"));
+
+    // The master strip carries no track id, because the wire requires trackId
+    // to be a UUID; it must still be addressable.
+    collab::SemanticPoint master;
+    master.surface = {collab::SurfaceKind::Mixer, QStringLiteral("main"), {}};
+    master.targetId = QStringLiteral("master_strip");
+    master.laneFraction = 0.5;
+    if (!mixer.collaborationPositionFor(master))
+        return fail(QStringLiteral("mixer presence lost the master strip"));
+    return true;
+}
+
+QRect MixerWidget::stripRectForTrackForTest(const QString& trackId) const {
+    for (const ChannelStrip* strip : m_strips) {
+        if (!strip->isMaster() && strip->trackId() == trackId)
+            return stripRectFor(strip);
+    }
+    return {};
+}
+
+QRect MixerWidget::stripRectFor(const ChannelStrip* strip) const {
+    if (!strip || !strip->isVisible()) return {};
+    // Strips live inside a scroll area (and the master inside its own column),
+    // so their geometry is only meaningful once mapped into this widget.
+    const QRect rect(strip->mapTo(const_cast<MixerWidget*>(this), QPoint{}),
+                     strip->size());
+    // A strip scrolled out of the console must not be reported: its mapped
+    // rectangle would still be a valid location on screen.
+    if (!strip->isMaster()) {
+        const QWidget* viewport = m_scroll ? m_scroll->viewport() : nullptr;
+        if (!viewport) return {};
+        const QRect visible(
+            viewport->mapTo(const_cast<MixerWidget*>(this), QPoint{}),
+            viewport->size());
+        const QRect clipped = rect.intersected(visible);
+        if (clipped.isEmpty()) return {};
+        return clipped;
+    }
+    return rect;
+}
+
+const ChannelStrip* MixerWidget::stripAt(const QPoint& position) const {
+    for (const ChannelStrip* strip : m_strips) {
+        const QRect rect = stripRectFor(strip);
+        if (!rect.isNull() && rect.contains(position)) return strip;
+    }
+    return nullptr;
+}
+
+collab::SemanticPoint MixerWidget::collaborationPresenceAt(
+    const QPointF& position) const {
+    collab::SemanticPoint point;
+    point.surface = {collab::SurfaceKind::Mixer, QStringLiteral("main"), {}};
+    point.normalized = collab::normalizedSurfacePoint(position, size());
+    const ChannelStrip* strip = stripAt(position.toPoint());
+    if (!strip) {
+        // The header band, the gap between strips, or the separator.
+        point.targetId = QStringLiteral("console_chrome");
+        return point;
+    }
+    const QRect rect = stripRectFor(strip);
+    // The master strip has no track id, and the server requires trackId to be a
+    // UUID, so it is named through targetId instead.
+    point.targetId = strip->isMaster() ? QStringLiteral("master_strip")
+                                       : QStringLiteral("strip");
+    if (!strip->isMaster()) point.trackId = strip->trackId();
+    if (rect.height() > 0) {
+        point.laneFraction = std::clamp(
+            (position.y() - rect.top()) / double(rect.height()), 0.0, 1.0);
+    }
+    return point;
+}
+
+std::optional<QPointF> MixerWidget::collaborationPositionFor(
+    const collab::SemanticPoint& point) const {
+    if (point.surface.kind != collab::SurfaceKind::Mixer) return std::nullopt;
+    const ChannelStrip* strip = nullptr;
+    if (point.targetId == QLatin1String("master_strip")) {
+        for (const ChannelStrip* candidate : m_strips) {
+            if (candidate->isMaster()) { strip = candidate; break; }
+        }
+    } else if (!point.trackId.isEmpty()) {
+        for (const ChannelStrip* candidate : m_strips) {
+            if (candidate->trackId() == point.trackId) {
+                strip = candidate;
+                break;
+            }
+        }
+    } else {
+        // Console chrome: the horizontal fraction is meaningful there because
+        // the header and separator span the whole widget.
+        if (point.normalized.x() < 0.0 || point.normalized.y() < 0.0)
+            return std::nullopt;
+        return QPointF(point.normalized.x() * width(),
+                       point.normalized.y() * height());
+    }
+    const QRect rect = stripRectFor(strip);
+    // Scrolled out of view, or a track this console does not show. Hiding beats
+    // falling back to a fraction of the widget, which lands on another channel.
+    if (rect.isNull() || rect.height() <= 0) return std::nullopt;
+    const double fraction =
+        point.laneFraction >= 0.0 ? point.laneFraction : 0.5;
+    return QPointF(rect.center().x(), rect.top() + fraction * rect.height());
 }
 
 bool MixerWidget::stripIsVisible(const ChannelStrip* strip) const {

@@ -5,6 +5,7 @@
 #include "PresenceStore.hpp"
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QObject>
 #include <QUrl>
 
@@ -159,7 +160,7 @@ private:
     QString m_hashRoundSessionId;
     quint64 m_hashRoundServerSequence = 0;
     qint64 m_hashRoundDeadlineMs = 0;
-    quint64 m_ephemeralSequence = 0;
+    QHash<int, quint64> m_ephemeralSequences;
     int m_maxMessageBytes = 1024 * 1024;
     bool m_shouldConnect = false;
     bool m_transportConnected = false;

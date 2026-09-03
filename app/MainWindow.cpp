@@ -9,6 +9,7 @@
 #include "AudioPreferences.hpp"
 #include "AccountService.hpp"
 #include "CollaborationService.hpp"
+#include "collaboration/ProjectReducer.hpp"
 #ifdef DAW_ENABLE_COLLABORATION
 #include "AssetCache.hpp"
 #include "CloudProjectPublisher.hpp"
@@ -887,14 +888,43 @@ MainWindow::MainWindow(bool openDevice, QWidget* parent,
                         {collab::SurfaceKind::Transport,
                          QStringLiteral("main"), {}},
                         collab::PresencePolicy::Exact);
-        registerSurface(m_trackList,
-                        {collab::SurfaceKind::TrackList,
-                         QStringLiteral("main"), {}},
-                        collab::PresencePolicy::Exact);
-        registerSurface(m_mixer,
-                        {collab::SurfaceKind::Mixer,
-                         QStringLiteral("main"), {}},
-                        collab::PresencePolicy::Exact);
+        // The track list is described per track, not as a fraction of the
+        // column: two participants scrolled differently, or with different row
+        // heights, otherwise see each other's pointer on the wrong track.
+        collab::PresenceSurfaceRegistration trackListRegistration;
+        trackListRegistration.address = {collab::SurfaceKind::TrackList,
+                                         QStringLiteral("main"), {}};
+        trackListRegistration.policy = collab::PresencePolicy::Exact;
+        trackListRegistration.encode =
+            [this](const QPointF& position) -> std::optional<collab::SemanticPoint> {
+                return m_trackList->collaborationPresenceAt(position);
+            };
+        m_presenceInput->registerSurface(m_trackList, trackListRegistration);
+        m_trackListPresence = new collab::PresenceOverlay(
+            m_trackList, trackListRegistration.address,
+            m_collaboration->presenceStore());
+        m_trackListPresence->setPointMapper(
+            [this](const collab::SemanticPoint& point, const QSize&) {
+                return m_trackList->collaborationPositionFor(point);
+            });
+        // Same reasoning as the track list: the console scrolls, so a fraction
+        // of the widget points at a different channel on every screen.
+        collab::PresenceSurfaceRegistration mixerRegistration;
+        mixerRegistration.address = {collab::SurfaceKind::Mixer,
+                                     QStringLiteral("main"), {}};
+        mixerRegistration.policy = collab::PresencePolicy::Exact;
+        mixerRegistration.encode =
+            [this](const QPointF& position) -> std::optional<collab::SemanticPoint> {
+                return m_mixer->collaborationPresenceAt(position);
+            };
+        m_presenceInput->registerSurface(m_mixer, mixerRegistration);
+        m_mixerPresence = new collab::PresenceOverlay(
+            m_mixer, mixerRegistration.address,
+            m_collaboration->presenceStore());
+        m_mixerPresence->setPointMapper(
+            [this](const collab::SemanticPoint& point, const QSize&) {
+                return m_mixer->collaborationPositionFor(point);
+            });
         registerSurface(m_browser,
                         {collab::SurfaceKind::Browser,
                          QStringLiteral("files"), {}},
@@ -7338,12 +7368,63 @@ void MainWindow::syncViews() {
     layoutContextPanel();
 }
 
-void MainWindow::refreshAfterCollaborationProjection() {
+namespace {
+
+/// True when the projected change can add, remove, reorder or reparent a track
+/// row. Only those need the header stack and the console rebuilt; everything
+/// else — a rename, a fader move, a clip edit — is a value refresh on widgets
+/// that already exist.
+bool collaborationChangeMovesTrackRows(
+    const daw::collab::ChangeImpact& impact) {
+    if (impact.fullProjection) return true;
+    for (const std::string& field : impact.fieldKeys) {
+        if (!field.starts_with("track:")) continue;
+        if (field.ends_with(":lifecycle") || field.ends_with(":position") ||
+            field.ends_with(":parentId")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool collaborationChangeTouchesClipContent(
+    const daw::collab::ChangeImpact& impact) {
+    return impact.fullProjection || !impact.clipIds.empty() ||
+           !impact.noteIds.empty() || !impact.takeIds.empty() ||
+           !impact.compSegmentIds.empty() ||
+           !impact.automationPointIds.empty() ||
+           !impact.controllerLaneIds.empty();
+}
+
+} // namespace
+
+void MainWindow::refreshAfterCollaborationProjection(
+    const daw::collab::ChangeImpact& impact) {
     // The adapter already committed the model/graph transaction.  This is a
     // visual pull only: calling markDirty() or routing through projectEdited()
     // here would turn a remote operation/ack/rebase into a local file edit and
     // can also echo it back through a future command migration.
-    syncViews();
+    //
+    // Every remote operation used to land on syncViews(), which destroys and
+    // re-creates every track row and every channel strip. A peer dragging a
+    // clip emits a stream of operations, so that tore down O(tracks) widgets
+    // dozens of times a second. The reducer already reports what it touched;
+    // honour it instead.
+    if (collaborationChangeMovesTrackRows(impact)) {
+        syncViews();
+    } else {
+        if (m_trackList) m_trackList->syncTrackValues();
+        if (m_mixer) m_mixer->syncFromModel();
+        if (m_inspector) m_inspector->syncFromModel();
+        if (m_timeline) m_timeline->update();
+        if (collaborationChangeTouchesClipContent(impact)) {
+            if (m_pianoRoll) m_pianoRoll->refresh();
+            for (AutomationEditorWindow* editor : m_automationEditors.values())
+                editor->refresh();
+        }
+        m_selection.refresh();
+        layoutContextPanel();
+    }
     if (m_transport) m_transport->refresh();
     if (m_contextPanel) m_contextPanel->refresh();
 }

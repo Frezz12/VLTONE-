@@ -2266,6 +2266,35 @@ void TimelineWidget::drawLanes(QPainter& p) {
                 drawGainHandle(p, clip, r,
                                isClipSelected(QString::fromStdString(clip.id)));
             }
+            // An audio clip shared before its bytes finished uploading has no
+            // asset yet. On the importing machine it plays from the dropped
+            // file and is only marked as not yet synchronised; everywhere else
+            // it is silent, so it is drawn as a placeholder rather than as an
+            // ordinary clip somebody could mistake for audible material.
+            if (clip.kind == daw::ClipKind::Audio && clip.asset.empty()) {
+                const bool mine =
+                    !m_controller->pendingLocalAudioPath(clip.id).empty();
+                p.setPen(Qt::NoPen);
+                p.setBrush(QColor(18, 20, 24, mine ? 40 : 120));
+                p.drawRoundedRect(r, 4.0, 4.0);
+                QPen hatch(QColor(255, 255, 255, mine ? 70 : 110), 1.0,
+                           Qt::DashLine);
+                p.setPen(hatch);
+                p.setBrush(Qt::NoBrush);
+                p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 4.0, 4.0);
+                if (r.width() > 74.0 && r.height() > 18.0) {
+                    const QFont previousFont = p.font();
+                    QFont badgeFont = previousFont;
+                    badgeFont.setPointSizeF(
+                        std::max(7.0, previousFont.pointSizeF() - 1.0));
+                    p.setFont(badgeFont);
+                    p.setPen(QColor(236, 238, 243, 210));
+                    p.drawText(r.adjusted(6.0, 0.0, -6.0, -4.0),
+                               Qt::AlignBottom | Qt::AlignLeft,
+                               mine ? tr("Uploading…") : tr("Awaiting upload"));
+                    p.setFont(previousFont);
+                }
+            }
             if (clip.muted) {
                 // Grey the content, not merely the border: mute remains clear
                 // even on tracks whose own colour is already subdued.

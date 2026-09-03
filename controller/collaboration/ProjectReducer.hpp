@@ -64,6 +64,15 @@ public:
     static ApplyResult apply(SharedProjectDocument& state,
                              const ProjectCommand& command);
 
+    /// Same reducer, minus the structural guards on the command itself (id
+    /// shape, touched-field count, serialized batch size). Only for replaying a
+    /// command this process already accepted once: those guards inspect the
+    /// command and not the state, so re-running them per rebase is pure cost,
+    /// and a rebase replays the whole pending queue on every remote operation.
+    /// Never call this on a command that arrived from outside.
+    static ApplyResult applyPrevalidated(SharedProjectDocument& state,
+                                         const ProjectCommand& command);
+
     static std::string projectFieldKey(ProjectScalar field);
     static std::string trackFieldKey(const std::string& trackId,
                                      TrackProperty property);

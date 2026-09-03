@@ -2859,7 +2859,13 @@ ToolResult callTool(EngineController& c, const std::string& name,
             if (toTrackId.empty()) return fail("move_to_track needs 'toTrackId'");
             if (!c.project().findTrack(toTrackId))
                 return fail(unknownTrack(c, toTrackId));
+            // Bracketed on purpose: endClipPositionEdit is the routed
+            // mutation. Calling moveClipToTrack bare would edit the document
+            // directly, which under a cloud binding is invisible to everyone
+            // else and cannot be undone.
+            c.beginClipPositionEdit();
             c.moveClipToTrack(trackId, clipId, toTrackId);
+            c.endClipPositionEdit("Move Clip To Track");
             return done(json{{"trackId", toTrackId}, {"clipId", clipId}});
         }
         if (action == "rename") {

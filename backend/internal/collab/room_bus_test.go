@@ -69,6 +69,57 @@ func TestRoomBusEphemeralIsLatestOnlyPerKey(t *testing.T) {
 	}
 }
 
+func TestRoomBusEphemeralDrainsInPublishOrder(t *testing.T) {
+	bus := NewInProcessRoomBus()
+	projectID := uuid.New()
+	receiver, err := bus.Subscribe(projectID, uuid.New(), uuid.New(), uuid.New(), uuid.New(), 4, DefaultRoomQueueBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keys chosen so publish order is the reverse of lexicographic order. A
+	// sorted drain would hand "presence.click" to the client before the cursor
+	// sample that was actually sent first, and the receiver's per-kind sequence
+	// gate would then discard the older packet outright.
+	publishOrder := []string{
+		"presence.selection:z", "presence.cursor:b", "presence.click:a",
+	}
+	for _, key := range publishOrder {
+		bus.Publish(projectID, uuid.Nil, RoomMessage{
+			Data: []byte(key), Ephemeral: true, EphemeralKey: key,
+		})
+	}
+	for _, want := range publishOrder {
+		if got := string(nextRoomMessage(t, receiver).Data); got != want {
+			t.Fatalf("ephemeral drain order = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestRoomBusEphemeralCoalescingKeepsQueuePosition(t *testing.T) {
+	bus := NewInProcessRoomBus()
+	projectID := uuid.New()
+	receiver, err := bus.Subscribe(projectID, uuid.New(), uuid.New(), uuid.New(), uuid.New(), 4, DefaultRoomQueueBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bus.Publish(projectID, uuid.Nil, RoomMessage{
+		Data: []byte("first"), Ephemeral: true, EphemeralKey: "presence.cursor:a",
+	})
+	bus.Publish(projectID, uuid.Nil, RoomMessage{
+		Data: []byte("other"), Ephemeral: true, EphemeralKey: "presence.cursor:b",
+	})
+	// Replacing a pending value must not move that participant to the back of
+	// the queue, otherwise a peer that keeps moving starves behind quieter ones.
+	bus.Publish(projectID, uuid.Nil, RoomMessage{
+		Data: []byte("newest"), Ephemeral: true, EphemeralKey: "presence.cursor:a",
+	})
+	for _, want := range []string{"newest", "other"} {
+		if got := string(nextRoomMessage(t, receiver).Data); got != want {
+			t.Fatalf("coalesced drain = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestRoomBusDisconnectsSlowDurableConsumer(t *testing.T) {
 	bus := NewInProcessRoomBus()
 	projectID := uuid.New()

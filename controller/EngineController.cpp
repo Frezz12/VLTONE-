@@ -983,6 +983,134 @@ EngineController::EngineController()
         });
 }
 
+std::string EngineController::submitOptimisticSharedAudioClip(
+    collab::SharedAssetMutationRequest request, const std::string& trackId,
+    ClipModel clip, const std::string& afterId, std::string undoLabel) {
+    if (!clip.asset.empty()) return {};
+    retireOrphanedPendingAudioImports();
+    const std::string clipId = clip.id;
+    const std::string requestId = request.requestId;
+    const std::string sourcePath = request.sourcePath;
+
+    // Reserve the upload first. prepare() answers synchronously and only ever
+    // completes through the event loop, so the clip below is always durable
+    // before its asset operation is built. Reserving first also means a refusal
+    // (offline, read-only) leaves no permanently silent clip behind.
+    PendingSharedAssetMutation pending;
+    pending.expected = expectedSharedAudioAsset(request);
+    pending.complete = [trackId, clipId, undoLabel](
+                           EngineController& controller,
+                           const AssetRef& verifiedAsset) {
+        // Only the audio is missing by now; the clip itself is already shared.
+        // Whether it still exists is the reducer's call, not ours: it rejects a
+        // clip.setAsset for a clip that has since been deleted, and duplicating
+        // that check here would also depend on the projection having caught up.
+        const collab::SharedMutationResult result =
+            controller.submitSharedMutation(
+                collab::CommandBody{collab::SetClipAsset{trackId, clipId,
+                                                         verifiedAsset}},
+                undoLabel);
+        // The cache now holds the same bytes under the verified hash, so the
+        // local override has done its job and the ordinary asset path takes
+        // over. Keeping it would pin the original source file forever.
+        if (result == collab::SharedMutationResult::Submitted)
+            controller.m_pendingLocalAudio.erase(clipId);
+        return result;
+    };
+    if (prepareSharedAssetMutation(std::move(request), std::move(pending)) !=
+        collab::SharedMutationResult::Submitted) {
+        return {};
+    }
+
+    auto batch = std::make_shared<collab::BatchCommand>();
+    if (!appendSharedClip(batch, trackId, clip, afterId) ||
+        !sharedBatchApplies(m_project, batch)) {
+        cancelSharedAssetMutation(requestId);
+        return {};
+    }
+    m_pendingLocalAudio[clipId] = {sourcePath, requestId};
+    if (submitSharedMutation(collab::CommandBody{std::move(batch)},
+                             std::move(undoLabel)) !=
+        collab::SharedMutationResult::Submitted) {
+        m_pendingLocalAudio.erase(clipId);
+        cancelSharedAssetMutation(requestId);
+        return {};
+    }
+    return clipId;
+}
+
+std::string EngineController::submitOptimisticSharedAudioTrack(
+    collab::SharedAssetMutationRequest request, TrackModel track,
+    const std::string& afterId) {
+    if (track.clips.size() != 1 || !track.clips.front().asset.empty())
+        return {};
+    const std::string trackId = track.id;
+    const std::string clipId = track.clips.front().id;
+    const std::string requestId = request.requestId;
+    const std::string sourcePath = request.sourcePath;
+    static constexpr const char* kLabel = "Import Audio to New Track";
+
+    PendingSharedAssetMutation pending;
+    pending.expected = expectedSharedAudioAsset(request);
+    pending.complete = [trackId, clipId](EngineController& controller,
+                                         const AssetRef& verifiedAsset) {
+        const collab::SharedMutationResult result =
+            controller.submitSharedMutation(
+                collab::CommandBody{collab::SetClipAsset{trackId, clipId,
+                                                         verifiedAsset}},
+                kLabel);
+        if (result == collab::SharedMutationResult::Submitted)
+            controller.m_pendingLocalAudio.erase(clipId);
+        return result;
+    };
+    if (prepareSharedAssetMutation(std::move(request), std::move(pending)) !=
+        collab::SharedMutationResult::Submitted) {
+        return {};
+    }
+
+    auto batch = std::make_shared<collab::BatchCommand>();
+    if (!appendSharedTrack(batch, track, afterId) ||
+        !sharedBatchApplies(m_project, batch)) {
+        cancelSharedAssetMutation(requestId);
+        return {};
+    }
+    m_pendingLocalAudio[clipId] = {sourcePath, requestId};
+    if (submitSharedMutation(collab::CommandBody{std::move(batch)}, kLabel) !=
+        collab::SharedMutationResult::Submitted) {
+        m_pendingLocalAudio.erase(clipId);
+        cancelSharedAssetMutation(requestId);
+        return {};
+    }
+    return trackId;
+}
+
+std::string EngineController::pendingLocalAudioPath(
+    const std::string& clipId) const {
+    const auto found = m_pendingLocalAudio.find(clipId);
+    return found == m_pendingLocalAudio.end() ? std::string()
+                                              : found->second.sourcePath;
+}
+
+void EngineController::retireOrphanedPendingAudioImports() {
+    if (m_pendingLocalAudio.empty()) return;
+    std::vector<std::string> orphaned;
+    for (const auto& [clipId, pending] : m_pendingLocalAudio) {
+        bool live = false;
+        for (const TrackModel& track : m_project.tracks) {
+            for (const ClipModel& clip : track.clips) {
+                if (clip.id == clipId) { live = true; break; }
+            }
+            if (live) break;
+        }
+        if (!live) orphaned.push_back(clipId);
+    }
+    for (const std::string& clipId : orphaned) {
+        const std::string requestId = m_pendingLocalAudio[clipId].requestId;
+        m_pendingLocalAudio.erase(clipId);
+        if (!requestId.empty()) cancelSharedAssetMutation(requestId);
+    }
+}
+
 collab::SharedMutationResult EngineController::submitSharedMutation(
     collab::CommandBody body, std::string undoLabel,
     std::optional<std::string> transactionId) {
@@ -1270,6 +1398,73 @@ bool EngineController::setClipAudioFile(const std::string& trackId,
         after.fadeOutSeconds = std::min(after.fadeOutSeconds, after.durationSeconds);
     } else {
         after.channels = 0;
+    }
+
+    if (cloudProjectBound()) {
+        // This used to write straight into m_project and push onto the legacy
+        // undo stack, which is disabled under a cloud binding — so replacing a
+        // clip's audio was invisible to everyone else and could not be undone.
+        // It follows the optimistic import shape: the new geometry and the
+        // cleared asset go out now, the verified asset follows.
+        const std::string label =
+            filePath.empty() ? "Clear Clip Sample" : "Replace Clip Sample";
+        auto batch = std::make_shared<collab::BatchCommand>();
+        appendCommand(batch, collab::SetClipProperty{
+            trackId, clipId, collab::ClipProperty::Name, after.name});
+        appendCommand(batch, collab::SetClipProperty{
+            trackId, clipId, collab::ClipProperty::OffsetSeconds,
+            after.offsetSeconds});
+        appendCommand(batch, collab::SetClipProperty{
+            trackId, clipId, collab::ClipProperty::DurationSeconds,
+            after.durationSeconds});
+        appendCommand(batch, collab::SetClipFade{
+            trackId, clipId, after.fadeInSeconds, after.fadeOutSeconds});
+        appendCommand(batch, collab::SetClipMusicalAnalysis{
+            trackId, clipId, after.musicalAnalysis});
+        // Dropping the old asset is the honest intermediate state: the clip is
+        // being given different audio, so it is silent for everyone until the
+        // replacement is durable. The importer keeps hearing it locally.
+        appendCommand(batch,
+                      collab::SetClipAsset{trackId, clipId, AssetRef{}});
+        if (!sharedBatchApplies(m_project, batch)) return false;
+
+        if (filePath.empty()) {
+            return submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                        label) ==
+                   collab::SharedMutationResult::Submitted;
+        }
+
+        auto request = sharedAudioRequest(filePath);
+        if (!request) return false;
+        const std::string requestId = request->requestId;
+        PendingSharedAssetMutation pending;
+        pending.expected = expectedSharedAudioAsset(*request);
+        pending.complete = [trackId, clipId, label](
+                               EngineController& controller,
+                               const AssetRef& verifiedAsset) {
+            const collab::SharedMutationResult result =
+                controller.submitSharedMutation(
+                    collab::CommandBody{collab::SetClipAsset{
+                        trackId, clipId, verifiedAsset}},
+                    label);
+            if (result == collab::SharedMutationResult::Submitted)
+                controller.m_pendingLocalAudio.erase(clipId);
+            return result;
+        };
+        if (prepareSharedAssetMutation(std::move(*request),
+                                       std::move(pending)) !=
+            collab::SharedMutationResult::Submitted) {
+            return false;
+        }
+        m_pendingLocalAudio[clipId] = {filePath, requestId};
+        if (submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                 label) !=
+            collab::SharedMutationResult::Submitted) {
+            m_pendingLocalAudio.erase(clipId);
+            cancelSharedAssetMutation(requestId);
+            return false;
+        }
+        return true;
     }
 
     auto apply = [this, trackId, clipId](const ClipModel& value) {
@@ -4047,6 +4242,7 @@ audio::Result EngineController::materializeCollaborationProject(
     built = rebuildGraph();
     if (!built) return restorePrevious(built);
     if (clearLegacyUndo) m_undo.clear();
+    retireOrphanedPendingAudioImports();
     return built;
 }
 
@@ -4277,6 +4473,10 @@ audio::Result EngineController::projectCollaborationChange(
         m_recoveryPluginStateCache.clear();
         m_recoveryPluginCaptureCursor = 0;
     }
+    // An undone or remotely deleted import leaves an upload with nothing to
+    // attach to. This is the point where the document has settled, so it is
+    // where that upload is called off.
+    retireOrphanedPendingAudioImports();
     return audio::Result::ok();
 }
 
@@ -8723,34 +8923,15 @@ std::string EngineController::importAudioToNewTrack(
         clip.channels = int(request->channels);
         clip.color = track.color;
         clip.musicalAnalysis = analysis;
-        clip.asset = expectedSharedAudioAsset(*request);
+        // Empty on purpose: the track and its clip go out now, the verified
+        // asset follows. See submitOptimisticSharedAudioTrack.
+        clip.asset = {};
         track.clips.push_back(clip);
-        const std::string trackId = track.id;
         const std::string afterId = m_project.tracks.empty()
             ? std::string()
             : m_project.tracks.back().id;
-
-        PendingSharedAssetMutation pending;
-        pending.expected = clip.asset;
-        pending.complete =
-            [track = std::move(track), afterId](
-                EngineController& controller,
-                const AssetRef& verifiedAsset) mutable {
-                track.clips.front().asset = verifiedAsset;
-                auto batch = std::make_shared<collab::BatchCommand>();
-                if (!appendSharedTrack(batch, track, afterId) ||
-                    !sharedBatchApplies(controller.m_project, batch)) {
-                    return collab::SharedMutationResult::Blocked;
-                }
-                return controller.submitSharedMutation(
-                    collab::CommandBody{std::move(batch)},
-                    "Import Audio to New Track");
-            };
-        return prepareSharedAssetMutation(std::move(*request),
-                                          std::move(pending)) ==
-                       collab::SharedMutationResult::Submitted
-                   ? trackId
-                   : std::string{};
+        return submitOptimisticSharedAudioTrack(std::move(*request),
+                                                std::move(track), afterId);
     }
 
     const std::size_t undoStart = m_undo.depth();
@@ -8800,32 +8981,16 @@ std::string EngineController::importAudio(const std::string& filePath,
         clip.channels = int(request->channels);
         clip.color = track->color;
         clip.musicalAnalysis = analysis;
-        clip.asset = expectedSharedAudioAsset(*request);
-        const std::string clipId = clip.id;
+        // Deliberately left empty: appendSharedClip omits clip.setAsset for an
+        // empty ref, which is what makes the clip submittable before its bytes
+        // exist anywhere. The asset arrives as its own operation below.
+        clip.asset = {};
         const std::string afterId = track->clips.empty()
             ? std::string()
             : track->clips.back().id;
-
-        PendingSharedAssetMutation pending;
-        pending.expected = clip.asset;
-        pending.complete =
-            [trackId, clip = std::move(clip), afterId](
-                EngineController& controller,
-                const AssetRef& verifiedAsset) mutable {
-                clip.asset = verifiedAsset;
-                auto batch = std::make_shared<collab::BatchCommand>();
-                if (!appendSharedClip(batch, trackId, clip, afterId) ||
-                    !sharedBatchApplies(controller.m_project, batch)) {
-                    return collab::SharedMutationResult::Blocked;
-                }
-                return controller.submitSharedMutation(
-                    collab::CommandBody{std::move(batch)}, "Import Audio");
-            };
-        return prepareSharedAssetMutation(std::move(*request),
-                                          std::move(pending)) ==
-                       collab::SharedMutationResult::Submitted
-                   ? clipId
-                   : std::string{};
+        return submitOptimisticSharedAudioClip(std::move(*request), trackId,
+                                               std::move(clip), afterId,
+                                               "Import Audio");
     }
 
     auto samples = loadSamples(filePath);
@@ -9664,6 +9829,13 @@ void EngineController::moveClipToTrack(const std::string& fromTrackId,
     // The destination has to take this kind of clip — audio onto an audio lane,
     // MIDI onto a MIDI/instrument lane, and nothing at all onto a folder or bus.
     if (!trackAccepts(to->kind, it->kind)) return;
+
+    // Outside a position-edit bracket this writes straight into the document,
+    // and endClipPositionEdit is what turns a lane crossing into a command.
+    // Under a cloud binding an unbracketed move would therefore be a silent
+    // local-only divergence; refusing is the honest answer. Every caller that
+    // needs it already brackets, or now does.
+    if (!m_clipPositionEdit.active && cloudProjectBound()) return;
 
     const std::size_t sourceIndex =
         std::size_t(it - from->clips.begin());
@@ -11359,6 +11531,30 @@ std::string EngineController::insertClipCopy(const std::string& trackId,
     }
     auto* track = m_project.findTrack(trackId);
     if (!track || !trackAccepts(track->kind, source.kind)) return {};
+
+    if (cloudProjectBound()) {
+        // Paste went straight into m_project and the legacy undo stack, which
+        // is disabled under a cloud binding — so the pasted clip existed only
+        // on this machine and could not be undone. duplicateClip has always
+        // routed through the command path; this is the same shape.
+        ClipModel copy = source;
+        mintClipIdentities(copy, {}, true);
+        copy.startSeconds = std::max(0.0, startSeconds);
+        auto batch = std::make_shared<collab::BatchCommand>();
+        if (!appendSharedClip(batch, trackId, copy,
+                              track->clips.empty()
+                                  ? std::string()
+                                  : track->clips.back().id) ||
+            !sharedBatchApplies(m_project, batch)) {
+            return {};
+        }
+        const std::string pastedId = copy.id;
+        return submitSharedMutation(collab::CommandBody{std::move(batch)},
+                                    "Duplicate Clip") ==
+                       collab::SharedMutationResult::Submitted
+                   ? pastedId
+                   : std::string{};
+    }
 
     ClipModel copy = source;
     copy.id = newUuid();

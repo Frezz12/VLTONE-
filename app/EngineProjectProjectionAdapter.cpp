@@ -273,6 +273,14 @@ public:
                     } else {
                         clip.filePath = path.toStdString();
                     }
+                } else if (engine && clip.kind == daw::ClipKind::Audio) {
+                    // A clip shared ahead of its upload carries no asset yet.
+                    // On the importing machine it still plays, straight from
+                    // the file that was dropped; everywhere else it stays
+                    // silent until clip.setAsset arrives. This override lives
+                    // only on the runtime copy — the canonical document never
+                    // sees a local path.
+                    clip.filePath = engine->pendingLocalAudioPath(clip.id);
                 }
                 for (daw::TakeModel& take : clip.takes) {
                     take.filePath.clear();

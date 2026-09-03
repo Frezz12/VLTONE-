@@ -68,6 +68,7 @@ CloudSharedAssetMutationBridge::~CloudSharedAssetMutationBridge() {
         m_coordinator->cancel();
     }
     invalidateActive(false);
+    discardQueued();
     if (m_controller) {
         m_controller->detachSharedAssetMutationSink(*this);
         m_controller = nullptr;
@@ -81,7 +82,7 @@ QString CloudSharedAssetMutationBridge::currentProjectId() const {
 daw::collab::SharedMutationResult
 CloudSharedAssetMutationBridge::prepare(
     daw::collab::SharedAssetMutationRequest request) {
-    if (!m_coordinator || !m_service || !m_controller || active() ||
+    if (!m_coordinator || !m_service || !m_controller ||
         !m_service->canSubmitOperations()) {
         return daw::collab::SharedMutationResult::Blocked;
     }
@@ -100,6 +101,18 @@ CloudSharedAssetMutationBridge::prepare(
     input.sampleRate = request.sampleRate;
     input.channels = request.channels;
     input.frames = request.frames;
+
+    // The coordinator owns exactly one generation at a time. Refusing here is
+    // what made a multi-file drop import only its first file, so queue instead
+    // and start the next one when this batch reaches a terminal state. Every
+    // caller still gets Submitted, so every clip appears immediately.
+    if (active()) {
+        constexpr qsizetype kMaximumQueuedImports = 64;
+        if (m_queued.size() >= kMaximumQueuedImports)
+            return daw::collab::SharedMutationResult::Blocked;
+        m_queued.push_back(input);
+        return daw::collab::SharedMutationResult::Submitted;
+    }
 
     m_projectId = projectId;
     m_requestId = input.uploadId;
@@ -154,20 +167,65 @@ void CloudSharedAssetMutationBridge::handleBatchReady(
     if (!identityMatches && m_controller)
         m_controller->cancelSharedAssetMutation(requestId.toStdString());
     emit completed(submitted);
+    startNextQueued();
 }
 
 void CloudSharedAssetMutationBridge::handleBatchFailed(
     quint64 generation, const QString& safeMessage, bool retryable) {
     if (generation != m_generation || !active()) return;
     emit failed(safeMessage, retryable);
-    if (!retryable) invalidateActive(false);
+    // A retryable failure keeps this request current so Retry can pick it up;
+    // the queue waits behind it. A permanent one moves on.
+    if (!retryable) {
+        invalidateActive(false);
+        startNextQueued();
+    }
 }
 
 void CloudSharedAssetMutationBridge::handleBatchCancelled(
     quint64 generation) {
     if (generation != m_generation || !active()) return;
     invalidateActive(false);
+    // Cancelling an import cancels the ones queued behind it too, rather than
+    // silently promoting the next file the user did not ask about.
+    discardQueued();
     emit cancelled();
+}
+
+bool CloudSharedAssetMutationBridge::startNextQueued() {
+    while (!m_queued.isEmpty()) {
+        const CloudSharedAssetMutationInput input = m_queued.takeFirst();
+        const QString projectId = currentProjectId();
+        // A queued import belongs to the project it was dropped into. If the
+        // binding moved on, retire it instead of pushing it somewhere else.
+        if (!m_coordinator || !m_service || !m_controller ||
+            projectId.isEmpty() || projectId != input.projectId ||
+            !m_service->canSubmitOperations()) {
+            if (m_controller) {
+                m_controller->cancelSharedAssetMutation(
+                    input.uploadId.toStdString());
+            }
+            continue;
+        }
+        m_projectId = input.projectId;
+        m_requestId = input.uploadId;
+        m_generation = m_coordinator->generation() + 1;
+        if (m_generation == 0) ++m_generation;
+        emit activeChanged(true);
+        if (m_coordinator->begin({input}) == m_generation) return true;
+        invalidateActive(false);
+    }
+    return false;
+}
+
+void CloudSharedAssetMutationBridge::discardQueued() {
+    const QList<CloudSharedAssetMutationInput> queued = std::move(m_queued);
+    m_queued.clear();
+    for (const CloudSharedAssetMutationInput& input : queued) {
+        if (m_controller)
+            m_controller->cancelSharedAssetMutation(
+                input.uploadId.toStdString());
+    }
 }
 
 void CloudSharedAssetMutationBridge::invalidateActive(bool notify) {

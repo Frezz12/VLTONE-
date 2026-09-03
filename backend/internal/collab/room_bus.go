@@ -22,6 +22,9 @@ var ErrRoomSubscriptionClosed = errors.New("room subscription closed")
 // RoomMessage is already encoded protocol data. The bus intentionally does
 // not understand the musical document or WebSocket framing, which keeps the
 // single-process implementation replaceable by Redis/NATS later.
+// RoomMessage fans out to every subscriber of a room. Data is shared with
+// them rather than copied per subscriber, so a producer must hand over a buffer
+// it will not touch again, and consumers must treat it as read-only.
 type RoomMessage struct {
 	Data      []byte
 	Ephemeral bool
@@ -117,8 +120,14 @@ type RoomSubscription struct {
 	wakeEphemeral    chan struct{}
 	done             chan struct{}
 
-	mu                sync.Mutex
+	mu sync.Mutex
+	// ephemeral coalesces the newest value per key; ephemeralOrder preserves
+	// the order those keys first went pending. Draining by sorted key instead
+	// would serve "presence.click" before "presence.cursor" and the smallest
+	// participant UUID before every other peer, reordering one sender's own
+	// packets and starving the rest under load.
 	ephemeral         map[string]RoomMessage
+	ephemeralOrder    []string
 	queueByteCapacity int64
 	queuedBytes       atomic.Int64
 	closeInfo         RoomClose
@@ -205,8 +214,12 @@ func (b *InProcessRoomBus) Publish(projectID, senderParticipantID uuid.UUID,
 	b.mu.RUnlock()
 
 	for _, subscription := range targets {
+		// Data is shared, not copied per subscriber. Producers hand Publish a
+		// freshly marshalled buffer and never touch it again, and every consumer
+		// only measures its length or writes it to a socket. Copying it once per
+		// subscriber made a room of N participants cost O(N^2) allocations per
+		// second at presence rates.
 		copyMessage := message
-		copyMessage.Data = append([]byte(nil), message.Data...)
 		if message.Ephemeral {
 			if !subscription.enqueueEphemeral(copyMessage) {
 				subscription.Close(RoomClose{
@@ -258,8 +271,8 @@ func (b *InProcessRoomBus) PublishFinal(projectID uuid.UUID, message RoomMessage
 	delete(b.subscriptions, projectID)
 	b.mu.Unlock()
 	for _, subscription := range targets {
+		// Shared for the same reason as Publish above.
 		copyMessage := message
-		copyMessage.Data = append([]byte(nil), message.Data...)
 		if !subscription.enqueueFinal(copyMessage, closeInfo) {
 			subscription.markClosed(RoomClose{
 				Code: "slow_consumer", Reason: "final room message exceeded queue",
@@ -410,6 +423,9 @@ func (s *RoomSubscription) enqueueEphemeral(message RoomMessage) bool {
 		return false
 	}
 	s.ephemeral[key] = message
+	if !exists {
+		s.ephemeralOrder = append(s.ephemeralOrder, key)
+	}
 	s.mu.Unlock()
 	select {
 	case s.wakeEphemeral <- struct{}{}:
@@ -444,13 +460,38 @@ func (s *RoomSubscription) takeEphemeral() (RoomMessage, bool) {
 		s.mu.Unlock()
 		return RoomMessage{}, false
 	}
-	keys := make([]string, 0, len(s.ephemeral))
-	for key := range s.ephemeral {
-		keys = append(keys, key)
+	var message RoomMessage
+	found := false
+	for len(s.ephemeralOrder) != 0 {
+		key := s.ephemeralOrder[0]
+		s.ephemeralOrder = s.ephemeralOrder[1:]
+		pending, exists := s.ephemeral[key]
+		if !exists {
+			continue
+		}
+		delete(s.ephemeral, key)
+		message = pending
+		found = true
+		break
 	}
-	sort.Strings(keys)
-	message := s.ephemeral[keys[0]]
-	delete(s.ephemeral, keys[0])
+	if !found {
+		// Defensive invariant repair: the map is non-empty, so the order slice
+		// must have lost a key. Rebuild it rather than stranding queued bytes.
+		s.ephemeralOrder = s.ephemeralOrder[:0]
+		for key := range s.ephemeral {
+			s.ephemeralOrder = append(s.ephemeralOrder, key)
+		}
+		sort.Strings(s.ephemeralOrder)
+		s.mu.Unlock()
+		select {
+		case s.wakeEphemeral <- struct{}{}:
+		default:
+		}
+		return RoomMessage{}, false
+	}
+	if len(s.ephemeralOrder) == 0 {
+		s.ephemeralOrder = nil
+	}
 	s.adjustQueuedBytes(-int64(len(message.Data)))
 	more := len(s.ephemeral) != 0
 	s.mu.Unlock()

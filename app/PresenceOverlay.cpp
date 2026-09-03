@@ -42,8 +42,14 @@ PresenceOverlay::PresenceOverlay(QWidget* surface, SurfaceAddress address,
     setAccessibleName(tr("Collaborator pointers"));
     if (m_surface) m_surface->installEventFilter(this);
     if (m_store) {
+        // Roster-wide changes still reach every overlay, but ordinary cursor
+        // traffic only wakes the surface it belongs to.
         connect(m_store, &PresenceStore::presenceChanged, this,
                 &PresenceOverlay::onPresenceChanged);
+        connect(m_store, &PresenceStore::surfacePresenceChanged, this,
+                [this](SurfaceKind surface) {
+                    if (surface == m_address.kind) onPresenceChanged();
+                });
     }
     m_animationTimer.setInterval(33);
     m_animationTimer.setTimerType(Qt::PreciseTimer);
@@ -61,7 +67,10 @@ void PresenceOverlay::setPointMapper(PointMapper mapper) {
 bool PresenceOverlay::eventFilter(QObject* watched, QEvent* event) {
     if (watched == m_surface && event &&
         (event->type() == QEvent::Resize || event->type() == QEvent::Show ||
-         event->type() == QEvent::LayoutRequest)) {
+         event->type() == QEvent::LayoutRequest ||
+         // A sibling added after us would otherwise cover the pointers. This
+         // replaces the per-packet raise() that used to restack at 20 Hz.
+         event->type() == QEvent::ChildAdded)) {
         syncGeometry();
     }
     return QWidget::eventFilter(watched, event);
@@ -80,7 +89,6 @@ void PresenceOverlay::syncGeometry() {
 }
 
 void PresenceOverlay::onPresenceChanged() {
-    raise();
     update();
     if (!m_reduceMotion && !m_animationTimer.isActive())
         m_animationTimer.start();
@@ -99,7 +107,13 @@ void PresenceOverlay::paintEvent(QPaintEvent*) {
     for (const PresenceCursorSnapshot& cursor : cursors) {
         animationNeeded = animationNeeded || cursor.interpolating;
         const auto position = mapPoint(cursor.packet.point);
-        if (!position) continue;
+        // A peer scrolled elsewhere, or a semantic mapper with no match, yields
+        // a point outside this widget. Clamping it would park their pointer on
+        // the border of a surface they are not actually looking at.
+        if (!position || !std::isfinite(position->x()) ||
+            !std::isfinite(position->y()) || !rect().contains(position->toPoint())) {
+            continue;
+        }
         painter.save();
         painter.setOpacity(std::clamp(cursor.opacity, qreal(0.0), qreal(1.0)));
         const QColor color = cursor.participant.color.isValid()
@@ -107,8 +121,7 @@ void PresenceOverlay::paintEvent(QPaintEvent*) {
                                  : PresenceStore::stableParticipantColor(
                                        cursor.participant.participantId);
 
-        const QPointF p(std::clamp(position->x(), 2.0, qreal(width() - 2)),
-                        std::clamp(position->y(), 2.0, qreal(height() - 2)));
+        const QPointF p = *position;
         QPainterPath arrow;
         arrow.moveTo(p);
         arrow.lineTo(p + QPointF(3.5, 17.0));
@@ -145,8 +158,8 @@ void PresenceOverlay::paintEvent(QPaintEvent*) {
             const QString activity = cursor.packet.drag.active
                 ? tr("Dragging")
                 : tr("%1 selected").arg(cursor.packet.selectionIds.size());
-            const int width = metrics.horizontalAdvance(activity) + 12;
-            const QRectF badge(label.left(), label.bottom() + 3, width,
+            const int badgeWidth = metrics.horizontalAdvance(activity) + 12;
+            const QRectF badge(label.left(), label.bottom() + 3, badgeWidth,
                                metrics.height() + 4);
             painter.setBrush(QColor(18, 20, 24, 220));
             painter.setPen(QPen(color, 1.0));
@@ -164,8 +177,16 @@ void PresenceOverlay::paintEvent(QPaintEvent*) {
                 QColor ring = color;
                 ring.setAlphaF(m_reduceMotion ? 0.8 : 1.0 - progress);
                 painter.setBrush(Qt::NoBrush);
-                painter.setPen(QPen(ring, 2.0));
+                // A secondary or middle click reads differently from a plain
+                // one, so it should not look identical on someone else's
+                // screen: dashes for secondary, a doubled ring for middle.
+                QPen ringPen(ring, 2.0);
+                if (cursor.packet.button == PointerButton::Secondary)
+                    ringPen.setStyle(Qt::DashLine);
+                painter.setPen(ringPen);
                 painter.drawEllipse(p, radius, radius);
+                if (cursor.packet.button == PointerButton::Middle)
+                    painter.drawEllipse(p, radius * 0.55, radius * 0.55);
                 animationNeeded = animationNeeded || !m_reduceMotion;
             }
         }

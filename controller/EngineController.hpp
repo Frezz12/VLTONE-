@@ -1611,13 +1611,49 @@ public:
     audio::Result setSampleRateHz(double hz);
     audio::Result setBufferSizeFrames(uint32_t frames);
 
+    /// Local source for an audio clip that is already shared but whose bytes
+    /// have not finished uploading. It exists only on the importing machine and
+    /// never reaches a command or the canonical document; it is what lets the
+    /// clip play here the instant it is dropped, while every other participant
+    /// sees it silent until clip.setAsset lands. Empty when the clip is not
+    /// awaiting an upload.
+    std::string pendingLocalAudioPath(const std::string& clipId) const;
+
 private:
     class DeviceCallback;   // bridges the PortAudio callback to the engine
 
     collab::SharedMutationResult submitSharedMutation(
         collab::CommandBody body, std::string undoLabel,
         std::optional<std::string> transactionId = std::nullopt);
+    /// Shares an imported audio clip before its bytes exist in the cloud.
+    /// `clip` must carry an empty asset: the clip.add batch goes out now, so
+    /// the clip appears for every participant immediately, and the verified
+    /// AssetRef follows as its own clip.setAsset once the upload lands. Until
+    /// then the clip is silent for everyone except the importer, who plays it
+    /// from the local cache. Returns the clip id, or empty when nothing was
+    /// shared.
+    std::string submitOptimisticSharedAudioClip(
+        collab::SharedAssetMutationRequest request, const std::string& trackId,
+        ClipModel clip, const std::string& afterId, std::string undoLabel);
+    /// Same contract for a drop onto empty space, which shares a new track and
+    /// its single clip together. Returns the track id.
+    std::string submitOptimisticSharedAudioTrack(
+        collab::SharedAssetMutationRequest request, TrackModel track,
+        const std::string& afterId);
     bool cloudProjectBound();
+
+    /// Bookkeeping for a clip shared ahead of its upload: where it plays from
+    /// on this machine, and which asset request is still in flight for it.
+    struct PendingLocalAudio {
+        std::string sourcePath;
+        std::string requestId;
+    };
+    /// clipId -> that bookkeeping.
+    std::unordered_map<std::string, PendingLocalAudio> m_pendingLocalAudio;
+    /// Cancels the upload behind any pending import whose clip has gone —
+    /// undone, deleted here, or deleted by another participant. Without this an
+    /// undone import would keep uploading bytes nothing will ever reference.
+    void retireOrphanedPendingAudioImports();
 
     /// Rebuild the whole node graph from the document and publish it.
     audio::Result rebuildGraph(bool reconfigurePlugins = false);
