@@ -19,6 +19,9 @@
 #include "CloudSessionLifecycleController.hpp"
 #include "EngineProjectProjectionAdapter.hpp"
 #include "PresenceInputRouter.hpp"
+#include "PresenceStore.hpp"
+#include "MixerWidget.hpp"
+#include "TrackListWidget.hpp"
 #include "RecordingLeaseCoordinator.hpp"
 #include "PianoRollWindow.hpp"
 #include "AutomationEditorWindow.hpp"
@@ -442,7 +445,17 @@ int main(int argc, char** argv) {
                          collaborationError.toUtf8().constData());
             return 41;
         }
+        if (!collab::PresenceStore::checkDeliveryForTest(&collaborationError)) {
+            std::fprintf(stderr,
+                         "collaboration presence delivery check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 56;
+        }
         if (!collab::checkCollaborationPresenceGeometryForTest(
+                &collaborationError) ||
+            !TrackListWidget::checkCollaborationPresenceForTest(
+                &collaborationError) ||
+            !MixerWidget::checkCollaborationPresenceForTest(
                 &collaborationError) ||
             !PianoRollView::checkCollaborationPresenceForTest(
                 &collaborationError) ||
@@ -714,10 +727,17 @@ int main(int argc, char** argv) {
         }
     } sharedMutationSinkDetach{window.collaborationEngineController(),
                                &collaborationCommandBridge};
+    // lastProjectionImpact() is assigned at the top of the projection pass and
+    // the signal is emitted at its end, so it is exactly the impact that was
+    // just materialized. Passing it through lets the window refresh only what
+    // moved instead of rebuilding every track row and channel strip.
     QObject::connect(
         &collaborationProjection,
         &collab::EngineProjectProjectionAdapter::projectionSucceeded,
-        &window, &MainWindow::refreshAfterCollaborationProjection);
+        &window, [&window, &collaborationProjection] {
+            window.refreshAfterCollaborationProjection(
+                collaborationProjection.lastProjectionImpact());
+        });
     QObject::connect(
         &collaborationProjection,
         &collab::EngineProjectProjectionAdapter::projectionFailed,

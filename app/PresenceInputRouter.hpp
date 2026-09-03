@@ -67,13 +67,23 @@ private:
     PresencePacket packetFor(const Match& match, QWidget* target,
                              const QPointF& localPosition,
                              PointerPhase phase) const;
-    void queueMove(PresencePacket packet);
+    void queueMove(QWidget* target, const QPointF& localPosition);
     void sendNow(PresencePacket packet);
     void flushMove();
 
+    /// The raw sample a throttled move is holding. Building the packet is the
+    /// expensive half — sensitivity classification walks every ancestor widget
+    /// and the point is sanitised field by field — and mouse moves arrive far
+    /// faster than the 20 Hz wire budget, so the sample is kept cheap and the
+    /// packet is built once, at flush time.
+    struct PendingMove {
+        QPointer<QWidget> target;
+        QPointF localPosition;
+    };
+
     QHash<QWidget*, PresenceSurfaceRegistration> m_surfaces;
     QPointer<QWidget> m_lastSurface;
-    std::optional<PresencePacket> m_pendingMove;
+    std::optional<PendingMove> m_pendingMove;
     QTimer m_moveTimer;
     QElapsedTimer m_lastMoveSent;
     quint64 m_sequence = 0;

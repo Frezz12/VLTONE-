@@ -156,6 +156,7 @@ void CloudProjectAssetHydrator::cancel() {
     m_completedCount = 0;
     m_failedCount = 0;
     m_scheduledRetryCount = 0;
+    m_settledEmitted = false;
     setState(CloudHydrationState::Idle);
 }
 
@@ -203,6 +204,7 @@ void CloudProjectAssetHydrator::retryFailed() {
         retrying.push_back(std::move(item));
     }
     if (retrying.isEmpty()) return;
+    m_settledEmitted = false;
     m_failed.clear();
     m_failedCount = std::max<qsizetype>(
         0, m_failedCount - retrying.size());
@@ -216,6 +218,7 @@ void CloudProjectAssetHydrator::appendAssets(
     const QList<daw::AssetRef>& assets,
     const QStringList& priorityAssetIds) {
     if (m_projectId.isEmpty()) return;
+    m_settledEmitted = false;
 
     QHash<QString, int> priority;
     for (int index = 0; index < priorityAssetIds.size(); ++index) {
@@ -289,7 +292,10 @@ void CloudProjectAssetHydrator::pump() {
         while (!m_queue.isEmpty()) {
             const Item item = m_queue.takeFirst();
             const QString assetId = normalizedAssetId(item.asset);
-            if (item.generation != m_generation) continue;
+            if (item.generation != m_generation) {
+                m_totalCount = std::max<qsizetype>(0, m_totalCount - 1);
+                continue;
+            }
             m_failed.insert(assetId, item);
             ++m_failedCount;
             emit assetUnavailable(
@@ -309,7 +315,12 @@ void CloudProjectAssetHydrator::pump() {
         // hit instead of a second network transfer.
         if (candidate == m_queue.end()) break;
         Item item = m_queue.takeAt(candidate - m_queue.begin());
-        if (item.generation != m_generation) continue;
+        if (item.generation != m_generation) {
+            // A stale item never reaches completed or failed, so leaving it in
+            // the total would freeze progress short of its own end.
+            m_totalCount = std::max<qsizetype>(0, m_totalCount - 1);
+            continue;
+        }
         if (m_cache->contains(item.asset)) {
             m_knownIdentities.remove(normalizedAssetId(item.asset));
             m_failed.remove(normalizedAssetId(item.asset));
@@ -354,12 +365,15 @@ void CloudProjectAssetHydrator::handleCompleted(
                           m_cache->contains(expected.asset);
     m_knownIdentities.remove(assetId);
     if (accepted) {
-        m_failed.remove(assetId);
+        if (m_failed.remove(assetId) != 0)
+            m_failedCount = std::max<qsizetype>(0, m_failedCount - 1);
         ++m_completedCount;
     } else {
         m_knownIdentities.insert(assetId, assetIdentity(expected.asset));
+        // The same asset can fail more than once across retries. Counting each
+        // arrival would drift the tally away from what retryFailed() can act on.
+        if (!m_failed.contains(assetId)) ++m_failedCount;
         m_failed.insert(assetId, expected);
-        ++m_failedCount;
         emit assetUnavailable(assetId,
                               QStringLiteral("Downloaded asset is unavailable"),
                               true);
@@ -397,11 +411,13 @@ void CloudProjectAssetHydrator::handleFailed(
             pump();
         });
     } else {
-        if (error.retryable)
+        if (error.retryable) {
+            if (!m_failed.contains(assetId)) ++m_failedCount;
             m_failed.insert(assetId, item);
-        else
+        } else {
             m_knownIdentities.remove(assetId);
-        ++m_failedCount;
+            if (m_failed.remove(assetId) == 0) ++m_failedCount;
+        }
         emit assetUnavailable(
             assetId,
             error.safeMessage.isEmpty()
@@ -422,6 +438,8 @@ void CloudProjectAssetHydrator::finishIfSettled() {
     }
     setState(m_failedCount > 0 ? CloudHydrationState::Degraded
                                : CloudHydrationState::Ready);
+    if (m_settledEmitted) return;
+    m_settledEmitted = true;
     emit hydrationSettled(m_projectId, m_failedCount);
 }
 

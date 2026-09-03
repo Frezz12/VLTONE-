@@ -66,6 +66,12 @@ QString AssetCache::resolve(const daw::AssetRef& asset) const {
         QReadLocker locker(&m_lock);
         if (!validHash(hash) && !asset.assetId.empty())
             hash = m_assetHashes.value(QString::fromStdString(asset.assetId));
+        const auto cached = m_resolved.constFind(hash);
+        if (cached != m_resolved.cend()) {
+            if (asset.byteSize > 0 && cached->second != asset.byteSize)
+                return {};
+            return cached->first;
+        }
     }
     const QString path = pathForHash(hash);
     if (path.isEmpty())
@@ -73,9 +79,15 @@ QString AssetCache::resolve(const daw::AssetRef& asset) const {
     const QFileInfo info(path);
     if (!info.isFile())
         return {};
-    if (asset.byteSize > 0 && quint64(info.size()) != asset.byteSize)
+    const quint64 actualBytes = quint64(info.size());
+    if (asset.byteSize > 0 && actualBytes != asset.byteSize)
         return {};
-    return info.absoluteFilePath();
+    const QString absolute = info.absoluteFilePath();
+    {
+        QWriteLocker locker(&m_lock);
+        m_resolved.insert(hash, {absolute, actualBytes});
+    }
+    return absolute;
 }
 
 bool AssetCache::hashFile(const QString& path, QString* hash, quint64* bytes,

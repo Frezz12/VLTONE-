@@ -2485,11 +2485,13 @@ void routingPluginAssetReducerAndWire() {
 struct RecordingAdapter final : ProjectProjectionAdapter {
     int calls = 0;
     bool sawFullProjection = false;
+    bool sawFieldKeys = false;
     std::vector<ProjectionOrigin> origins;
     void projectChanged(const SharedProjectDocument&, const ChangeImpact& impact,
                         ProjectionOrigin origin) override {
         ++calls;
         sawFullProjection = sawFullProjection || impact.fullProjection;
+        sawFieldKeys = sawFieldKeys || !impact.fieldKeys.empty();
         origins.push_back(origin);
     }
 };
@@ -2742,8 +2744,43 @@ void gatewayOptimisticConfirmedReplay() {
     check(gateway.receiveConfirmed(gap).code == GatewayCode::SequenceGap &&
               gateway.confirmed().confirmedSequence == 3,
           "gateway refuses a confirmed sequence gap");
-    check(adapter.calls >= 3 && adapter.sawFullProjection,
+    // Ordinary traffic must reach the adapter with a described impact and
+    // WITHOUT fullProjection: claiming it forced the engine through
+    // materializeCollaborationProject, which drops the decoded-audio caches and
+    // rebuilds the graph on every remote edit made while a local command was in
+    // flight. fullProjection is reserved for a rebase that actually lost work.
+    check(adapter.calls >= 3 && adapter.sawFieldKeys &&
+              !adapter.sawFullProjection,
           "gateway reports projection impacts through the adapter seam");
+
+    RecordingAdapter dropAdapter;
+    CommandGateway dropGateway({}, &dropAdapter);
+    ProjectCommand baseTempo = command(
+        "rebase-base", SetProjectScalar{ProjectScalar::Tempo, 128.0});
+    baseTempo.meta.serverSequence = 1;
+    check(dropGateway.receiveConfirmed(baseTempo).accepted(),
+          "rebase-drop fixture establishes a field writer");
+    // Guarded on the writer it was built against, exactly as the reducer's own
+    // inverse commands are.
+    ProjectCommand guardedLocal = command(
+        "rebase-guarded", SetProjectScalar{ProjectScalar::Tempo, 129.0});
+    guardedLocal.conditions.push_back(
+        FieldWriterIs{"project:tempo", baseTempo.meta.operationId});
+    check(dropGateway.submit(guardedLocal).accepted() &&
+              dropGateway.pending().size() == 1,
+          "rebase-drop fixture queues a guarded local command");
+    const bool fullBeforeDrop = dropAdapter.sawFullProjection;
+    // A remote write to the guarded field invalidates the pending command, so
+    // the replay drops it. That leaves a hole no replayed impact describes and
+    // is the one case that must still report fullProjection.
+    ProjectCommand remoteTempo = command(
+        "rebase-drop-remote", SetProjectScalar{ProjectScalar::Tempo, 150.0});
+    remoteTempo.meta.serverSequence = 2;
+    const GatewayUpdate dropped = dropGateway.receiveConfirmed(remoteTempo);
+    check(dropped.accepted() && dropGateway.pending().empty() &&
+              dropped.droppedPendingOperationIds.size() == 1 &&
+              !fullBeforeDrop && dropAdapter.sawFullProjection,
+          "a rebase that drops a pending command still reports fullProjection");
 
     RecordingAdapter staleAckAdapter;
     CommandGateway staleAckGateway({}, &staleAckAdapter);

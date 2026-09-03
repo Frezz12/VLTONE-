@@ -7,6 +7,8 @@
 #include <QReadWriteLock>
 #include <QString>
 
+#include <utility>
+
 namespace collab {
 
 struct AssetCacheResult {
@@ -65,6 +67,13 @@ private:
     QString m_rootDirectory;
     mutable QReadWriteLock m_lock;
     QHash<QString, QString> m_assetHashes;
+    /// Content hash -> {absolute path, on-disk size} for blobs already proven
+    /// present. resolve() is called for every clip, take, plugin state and
+    /// sampler binding on every projection, i.e. on every remote operation, and
+    /// each miss used to cost a QFileInfo stat on the UI thread. Blobs are
+    /// immutable and content-addressed, so a hit never needs re-checking; the
+    /// entry is only added once the file has been seen.
+    mutable QHash<QString, std::pair<QString, quint64>> m_resolved;
 };
 
 bool checkAssetCacheForTest(QString* error = nullptr);

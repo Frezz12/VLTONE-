@@ -157,6 +157,24 @@ QString pointerPhaseName(PointerPhase phase) {
     return enumName("move");
 }
 
+QString pointerButtonName(PointerButton button) {
+    switch (button) {
+        case PointerButton::Primary: return enumName("primary");
+        case PointerButton::Secondary: return enumName("secondary");
+        case PointerButton::Middle: return enumName("middle");
+    }
+    return enumName("primary");
+}
+
+std::optional<PointerButton> pointerButtonFromName(const QString& name) {
+    for (int value = int(PointerButton::Primary);
+         value <= int(PointerButton::Middle); ++value) {
+        const auto button = PointerButton(value);
+        if (pointerButtonName(button) == name) return button;
+    }
+    return std::nullopt;
+}
+
 std::optional<PointerPhase> pointerPhaseFromName(const QString& name) {
     if (name == QLatin1String("move")) return PointerPhase::Move;
     if (name == QLatin1String("press")) return PointerPhase::Press;
@@ -212,11 +230,36 @@ std::optional<WireType> wireTypeFromName(const QString& name) {
 
 bool isWireSafeSemanticId(const QString& value) {
     if (value.isEmpty() || value.size() > 160) return false;
-    static const QRegularExpression plain(
-        QStringLiteral("^[A-Za-z0-9_.:@-]+$"));
-    static const QRegularExpression hashed(
-        QStringLiteral("^sha256:[0-9a-f]{32}$"));
-    return plain.match(value).hasMatch() || hashed.match(value).hasMatch();
+    // This sits on both presence hot paths: roughly six calls per outgoing
+    // point and two per incoming packet, at 20-30 Hz per participant. The two
+    // QRegularExpression matches this replaces each allocated a match object
+    // per call. The accepted language is unchanged: either the plain set
+    // [A-Za-z0-9_.:@-]+, or exactly "sha256:" followed by 32 lowercase hex.
+    static const QLatin1String hashedPrefix("sha256:");
+    if (value.size() == hashedPrefix.size() + 32 &&
+        value.startsWith(hashedPrefix)) {
+        bool hashed = true;
+        for (qsizetype index = hashedPrefix.size(); index < value.size();
+             ++index) {
+            const char16_t code = value.at(index).unicode();
+            if (!((code >= u'0' && code <= u'9') ||
+                  (code >= u'a' && code <= u'f'))) {
+                hashed = false;
+                break;
+            }
+        }
+        if (hashed) return true;
+    }
+    for (const QChar character : value) {
+        const char16_t code = character.unicode();
+        const bool plain = (code >= u'A' && code <= u'Z') ||
+                           (code >= u'a' && code <= u'z') ||
+                           (code >= u'0' && code <= u'9') || code == u'_' ||
+                           code == u'.' || code == u':' || code == u'@' ||
+                           code == u'-';
+        if (!plain) return false;
+    }
+    return true;
 }
 
 QString safeSemanticId(const QString& value) {
@@ -337,6 +380,7 @@ QJsonObject presencePacketToJson(const PresencePacket& packet) {
         {QStringLiteral("client_sequence"), QString::number(packet.clientSequence)},
         {QStringLiteral("sent_at_ms"), QString::number(packet.sentAtMs)},
         {QStringLiteral("phase"), pointerPhaseName(packet.phase)},
+        {QStringLiteral("button"), pointerButtonName(packet.button)},
         {QStringLiteral("policy"), packet.policy == PresencePolicy::Exact
                                       ? QStringLiteral("exact")
                                       : packet.policy == PresencePolicy::Coarse
@@ -369,6 +413,12 @@ std::optional<PresencePacket> presencePacketFromJson(const QJsonObject& json,
         setError(error, QStringLiteral("invalid pointer phase"));
         return std::nullopt;
     }
+    const auto button =
+        pointerButtonFromName(json.value(QStringLiteral("button")).toString());
+    if (!button) {
+        setError(error, QStringLiteral("invalid pointer button"));
+        return std::nullopt;
+    }
     const QString policyName = json.value(QStringLiteral("policy")).toString();
     PresencePolicy policy = PresencePolicy::Hidden;
     if (policyName == QLatin1String("exact")) policy = PresencePolicy::Exact;
@@ -386,6 +436,7 @@ std::optional<PresencePacket> presencePacketFromJson(const QJsonObject& json,
         0, integerValue(json.value(QStringLiteral("client_sequence")))));
     packet.sentAtMs = integerValue(json.value(QStringLiteral("sent_at_ms")));
     packet.phase = *phase;
+    packet.button = *button;
     packet.policy = policy;
     packet.point = *point;
     packet.selectionChange =
@@ -499,6 +550,7 @@ bool checkCollaborationProtocolForTest(QString* error) {
     source.clientSequence = 42;
     source.sentAtMs = 123456;
     source.phase = PointerPhase::Press;
+    source.button = PointerButton::Secondary;
     source.policy = PresencePolicy::Exact;
     source.point.surface = {SurfaceKind::Timeline, QStringLiteral("arrangement"), {}};
     source.point.timeSeconds = 12.5;
@@ -510,9 +562,20 @@ bool checkCollaborationProtocolForTest(QString* error) {
 
     const auto decoded = presencePacketFromJson(presencePacketToJson(source), error);
     if (!decoded || decoded->clientSequence != source.clientSequence ||
-        decoded->phase != source.phase || decoded->point.trackId != source.point.trackId ||
+        decoded->phase != source.phase || decoded->button != source.button ||
+        decoded->point.trackId != source.point.trackId ||
         std::abs(decoded->point.timeSeconds - source.point.timeSeconds) > 1e-9) {
         setError(error, QStringLiteral("presence payload did not round-trip"));
+        return false;
+    }
+    // The three names are the server's own vocabulary for presence.click; the
+    // decoder there rejects unknown fields, so the spelling must not drift.
+    if (pointerButtonName(PointerButton::Primary) != QLatin1String("primary") ||
+        pointerButtonName(PointerButton::Secondary) !=
+            QLatin1String("secondary") ||
+        pointerButtonName(PointerButton::Middle) != QLatin1String("middle") ||
+        pointerButtonFromName(QStringLiteral("nonsense"))) {
+        setError(error, QStringLiteral("pointer button vocabulary drifted"));
         return false;
     }
 

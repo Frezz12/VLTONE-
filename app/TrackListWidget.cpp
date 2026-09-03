@@ -1151,6 +1151,108 @@ const TrackListWidget::GroupGesture& TrackListWidget::beginGroupGesture(
 
 // ── Selection ──────────────────────────────────────────────────────────────
 
+collab::SemanticPoint TrackListWidget::collaborationPresenceAt(
+    const QPointF& position) const {
+    collab::SemanticPoint point;
+    point.surface = {collab::SurfaceKind::TrackList, QStringLiteral("main"),
+                     {}};
+    point.normalized = collab::normalizedSurfacePoint(position, size());
+    const QRect rowRect =
+        rowRectForTrack(trackIdAt(position.toPoint()));
+    if (rowRect.isNull() || rowRect.height() <= 0) {
+        // Above the rows, or past the last one: report the chrome so the
+        // pointer still shows without claiming a track it is not over.
+        point.targetId = QStringLiteral("column_chrome");
+        return point;
+    }
+    point.trackId = trackIdAt(position.toPoint());
+    point.targetId = QStringLiteral("row");
+    point.laneFraction =
+        std::clamp((position.y() - rowRect.top()) / double(rowRect.height()),
+                   0.0, 1.0);
+    return point;
+}
+
+std::optional<QPointF> TrackListWidget::collaborationPositionFor(
+    const collab::SemanticPoint& point) const {
+    if (point.surface.kind != collab::SurfaceKind::TrackList)
+        return std::nullopt;
+    const double x = point.normalized.x() >= 0.0
+                         ? point.normalized.x() * width()
+                         : width() * 0.5;
+    if (point.trackId.isEmpty()) {
+        // Chrome, or a pointer sent before this column knew the track.
+        if (point.normalized.y() < 0.0) return std::nullopt;
+        return QPointF(x, point.normalized.y() * height());
+    }
+    const QRect rowRect = rowRectForTrack(point.trackId);
+    // The track is not in this column at all — scrolled far away, filtered out,
+    // or already deleted here. Hiding is correct: a fallback would put their
+    // pointer on somebody else's row.
+    if (rowRect.isNull() || rowRect.height() <= 0) return std::nullopt;
+    const double fraction =
+        point.laneFraction >= 0.0 ? point.laneFraction : 0.5;
+    return QPointF(x, rowRect.top() + fraction * rowRect.height());
+}
+
+bool TrackListWidget::checkCollaborationPresenceForTest(QString* error) {
+    const auto fail = [error](const QString& message) {
+        if (error) *error = message;
+        return false;
+    };
+    daw::EngineController controller;
+    controller.initialize(48000.0, 512, false);
+    const QString first =
+        QString::fromStdString(controller.addTrack(daw::TrackKind::Audio, "A"));
+    const QString second =
+        QString::fromStdString(controller.addTrack(daw::TrackKind::Audio, "B"));
+    if (first.isEmpty() || second.isEmpty())
+        return fail(QStringLiteral("track list presence fixture has no tracks"));
+
+    TrackListWidget list(&controller);
+    list.resize(240, 600);
+    list.rebuild();
+    list.setVerticalScroll(0);
+    QRect row = list.rowRectForTrack(second);
+    if (row.isNull() || row.height() <= 0)
+        return fail(QStringLiteral("track list presence fixture has no rows"));
+
+    const QPointF source(120.0, row.top() + row.height() * 0.25);
+    const collab::SemanticPoint semantic = list.collaborationPresenceAt(source);
+    if (semantic.trackId != second ||
+        semantic.targetId != QLatin1String("row") ||
+        std::abs(semantic.laneFraction - 0.25) > 1e-6) {
+        return fail(QStringLiteral("track list presence lost its track context"));
+    }
+
+    // The whole point of the semantic form: after a scroll the same packet must
+    // land on the same track, not on the pixel it originally came from.
+    list.setVerticalScroll(40);
+    row = list.rowRectForTrack(second);
+    const auto remapped = list.collaborationPositionFor(semantic);
+    if (row.isNull() || !remapped ||
+        std::abs(remapped->y() - (row.top() + row.height() * 0.25)) > 1e-6) {
+        return fail(QStringLiteral("track list presence did not follow scroll"));
+    }
+
+    collab::SemanticPoint absent = semantic;
+    absent.trackId = QStringLiteral("11111111-1111-4111-8111-111111111111");
+    if (list.collaborationPositionFor(absent))
+        return fail(QStringLiteral("track list presence mapped an unknown track"));
+    return true;
+}
+
+QString TrackListWidget::trackIdAt(const QPoint& position) const {
+    const int row = rowAtPosition(position);
+    if (row < 0 || std::size_t(row) >= m_rows.size()) return {};
+    return QString::fromStdString(m_rows[std::size_t(row)].id);
+}
+
+QRect TrackListWidget::rowRectForTrack(const QString& trackId) const {
+    const int index = rowIndexOf(trackId);
+    return index < 0 ? QRect() : rowGeometry(std::size_t(index));
+}
+
 int TrackListWidget::rowIndexOf(const QString& id) const {
     for (size_t i = 0; i < m_rows.size(); ++i) {
         if (QString::fromStdString(m_rows[i].id) == id) return int(i);

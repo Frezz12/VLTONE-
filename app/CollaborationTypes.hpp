@@ -53,6 +53,11 @@ enum class SurfaceKind {
 };
 
 enum class PointerPhase { Move, Press, Release, Leave };
+
+/// Which button a Press/Release carries. The wire vocabulary is fixed by the
+/// server, which accepts exactly primary|secondary|middle on presence.click and
+/// forbids the field on every other presence kind.
+enum class PointerButton : quint8 { Primary, Secondary, Middle };
 enum class TransportMode { Independent, FollowHost, FollowParticipant };
 
 /// A surface is identified semantically, never by QWidget address, native
@@ -88,10 +93,20 @@ struct DragPreview {
     SemanticPoint destination;
 };
 
+/// One presence wire kind. Each channel carries its own monotonic sequence,
+/// because the room bus coalesces and drains the four kinds independently: a
+/// single shared counter lets a newer selection or drag retire an older cursor
+/// sample that has not been delivered yet.
+enum class PresenceChannel : quint8 { Cursor, Click, Selection, Drag };
+
+inline constexpr int kPresenceChannelCount = 4;
+
 struct PresencePacket {
+    PresenceChannel channel = PresenceChannel::Cursor;
     quint64 clientSequence = 0;
     qint64 sentAtMs = 0;
     PointerPhase phase = PointerPhase::Move;
+    PointerButton button = PointerButton::Primary;
     PresencePolicy policy = PresencePolicy::Hidden;
     SemanticPoint point;
     bool selectionChange = false;
@@ -191,6 +206,8 @@ QString surfaceKindName(SurfaceKind kind);
 std::optional<SurfaceKind> surfaceKindFromName(const QString& name);
 QString pointerPhaseName(PointerPhase phase);
 std::optional<PointerPhase> pointerPhaseFromName(const QString& name);
+QString pointerButtonName(PointerButton button);
+std::optional<PointerButton> pointerButtonFromName(const QString& name);
 QString wireTypeName(WireType type);
 std::optional<WireType> wireTypeFromName(const QString& name);
 

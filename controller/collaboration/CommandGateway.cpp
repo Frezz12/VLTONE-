@@ -66,14 +66,16 @@ GatewayUpdate CommandGateway::submit(ProjectCommand command) {
 }
 
 ChangeImpact CommandGateway::rebasePending(std::vector<std::string>& dropped) {
+    const std::size_t droppedBefore = dropped.size();
     m_optimistic = m_confirmed;
     std::vector<ProjectCommand> kept;
     kept.reserve(m_pending.size());
     ChangeImpact impact;
-    impact.fullProjection = true;
     impact.documentChanged = true;
     for (ProjectCommand& pending : m_pending) {
-        ApplyResult replayed = ProjectReducer::apply(m_optimistic, pending);
+        // Already validated when it was submitted, and unchanged since.
+        ApplyResult replayed =
+            ProjectReducer::applyPrevalidated(m_optimistic, pending);
         if (!replayed.accepted()) {
             dropped.push_back(pending.meta.operationId);
             continue;
@@ -82,6 +84,15 @@ ChangeImpact CommandGateway::rebasePending(std::vector<std::string>& dropped) {
         kept.push_back(std::move(pending));
     }
     m_pending = std::move(kept);
+    // Rolling back and replaying is a client-side bookkeeping step: every kept
+    // command reports what it touched, and the caller merges the confirmed
+    // command's own impact. Only a command that vanished during the replay
+    // leaves an undescribed hole, so only that case needs the whole project
+    // reprojected. Claiming fullProjection unconditionally forced the engine
+    // down materializeCollaborationProject, which drops the decoded-audio
+    // caches and rebuilds the graph on every remote edit made while the local
+    // user had anything in flight.
+    impact.fullProjection = dropped.size() != droppedBefore;
     return impact;
 }
 
@@ -118,6 +129,10 @@ GatewayUpdate CommandGateway::receiveConfirmed(ProjectCommand command) {
             });
             ChangeImpact impact =
                 rebasePending(update.droppedPendingOperationIds);
+            // The stale acknowledgement retired an optimistic command that the
+            // confirmed document does not carry, so nothing above describes the
+            // hole it leaves behind.
+            impact.fullProjection = true;
             update.code = GatewayCode::Duplicate;
             update.apply.code = ApplyCode::Duplicate;
             update.apply.impact = impact;
@@ -181,6 +196,10 @@ GatewayUpdate CommandGateway::rejectPending(const std::string& operationId,
     }
     m_pending.erase(found);
     ChangeImpact impact = rebasePending(update.droppedPendingOperationIds);
+    // The rejected command is gone before the replay starts, so it is in
+    // neither the kept nor the dropped set and its effect must be undone
+    // wholesale.
+    impact.fullProjection = true;
     update.code = GatewayCode::Accepted;
     update.apply.code = ApplyCode::Applied;
     update.apply.message = std::move(reason);

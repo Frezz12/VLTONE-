@@ -7,6 +7,7 @@
 #include <QDateTime>
 #include <QDialog>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QSpinBox>
@@ -40,6 +41,14 @@ QString safeTargetId(QWidget* widget, QWidget* root) {
         if (current == root) break;
     }
     return {};
+}
+
+bool surfaceContains(const QWidget* root, const QPointF& local) {
+    if (!root) return false;
+    const QSizeF size(root->size());
+    return std::isfinite(local.x()) && std::isfinite(local.y()) &&
+           local.x() >= 0.0 && local.y() >= 0.0 &&
+           local.x() <= size.width() && local.y() <= size.height();
 }
 
 bool safeControlOptIn(QWidget* widget, QWidget* root) {
@@ -179,14 +188,48 @@ bool PresenceInputRouter::eventFilter(QObject* watched, QEvent* event) {
     auto* mouse = static_cast<QMouseEvent*>(event);
     const QPointF local = QPointF(match->root->mapFromGlobal(
         mouse->globalPosition().toPoint()));
+    // A grabbed drag, a popup whose parent chain reaches this surface, or a
+    // child that overflows the root all deliver coordinates outside the root.
+    // normalizedSurfacePoint() would clamp those onto the border and park the
+    // remote pointer at the edge of the canvas, so publish a Leave instead.
+    if (!surfaceContains(match->root, local)) {
+        if (m_lastSurface == match->root) {
+            PresencePacket packet;
+            packet.phase = PointerPhase::Leave;
+            packet.policy = PresencePolicy::Hidden;
+            packet.point.surface = match->registration.address;
+            sendNow(std::move(packet));
+            m_lastSurface.clear();
+        }
+        return QObject::eventFilter(watched, event);
+    }
     PointerPhase phase = PointerPhase::Move;
     if (event->type() == QEvent::MouseButtonPress) phase = PointerPhase::Press;
     else if (event->type() == QEvent::MouseButtonRelease)
         phase = PointerPhase::Release;
-    PresencePacket packet = packetFor(*match, target, local, phase);
     m_lastSurface = match->root;
-    if (phase == PointerPhase::Move) queueMove(std::move(packet));
-    else sendNow(std::move(packet));
+    if (phase == PointerPhase::Move) {
+        // Deliberately before packetFor(): a move that the 20 Hz throttle is
+        // going to discard must not pay for the ancestor walks and the point
+        // sanitisation first. Mouse moves arrive at 60-120 Hz, so most of that
+        // work was being thrown away directly on the input path.
+        queueMove(target, local);
+    } else {
+        PresencePacket packet = packetFor(*match, target, local, phase);
+        // Only a press/release names a button; a move reports NoButton.
+        switch (mouse->button()) {
+            case Qt::RightButton:
+                packet.button = PointerButton::Secondary;
+                break;
+            case Qt::MiddleButton:
+                packet.button = PointerButton::Middle;
+                break;
+            default:
+                packet.button = PointerButton::Primary;
+                break;
+        }
+        sendNow(std::move(packet));
+    }
     return QObject::eventFilter(watched, event);
 }
 
@@ -204,6 +247,11 @@ bool PresenceInputRouter::isSensitiveWidget(QWidget* widget, QWidget* root) {
         if (explicitlyHidden(current) || qobject_cast<QTextEdit*>(current) ||
             qobject_cast<QPlainTextEdit*>(current) ||
             qobject_cast<QDialog*>(current) ||
+            qobject_cast<QMenu*>(current) ||
+            // Menus, tooltips and combo popups are separate top levels whose
+            // parent chain still reaches the surface underneath them.
+            (current->windowFlags() & Qt::Popup) == Qt::Popup ||
+            (current->windowFlags() & Qt::ToolTip) == Qt::ToolTip ||
             (qobject_cast<QComboBox*>(current) &&
              qobject_cast<QComboBox*>(current)->isEditable()) ||
             current->inherits("QWebEngineView") ||
@@ -320,13 +368,16 @@ PresencePacket PresenceInputRouter::packetFor(
     return packet;
 }
 
-void PresenceInputRouter::queueMove(PresencePacket packet) {
+void PresenceInputRouter::queueMove(QWidget* target,
+                                   const QPointF& localPosition) {
     const qint64 elapsed = m_lastMoveSent.elapsed();
     if (elapsed >= kMoveIntervalMs && !m_moveTimer.isActive()) {
-        sendNow(std::move(packet));
+        if (const auto match = matchSurface(target))
+            sendNow(packetFor(*match, target, localPosition,
+                              PointerPhase::Move));
         return;
     }
-    m_pendingMove = std::move(packet);
+    m_pendingMove = PendingMove{QPointer<QWidget>(target), localPosition};
     const int remaining = std::max(1, kMoveIntervalMs - int(elapsed));
     if (!m_moveTimer.isActive()) m_moveTimer.start(remaining);
 }
@@ -340,13 +391,18 @@ void PresenceInputRouter::sendNow(PresencePacket packet) {
 }
 
 void PresenceInputRouter::flushMove() {
-    if (!m_pendingMove || !m_enabled) {
-        m_pendingMove.reset();
-        return;
-    }
-    PresencePacket packet = std::move(*m_pendingMove);
+    const std::optional<PendingMove> sample = std::move(m_pendingMove);
     m_pendingMove.reset();
-    sendNow(std::move(packet));
+    if (!sample || !m_enabled) return;
+    QWidget* target = sample->target.data();
+    if (!target) return;
+    const auto match = matchSurface(target);
+    if (!match) return;
+    // Re-check containment at flush time: the widget may have been resized or
+    // scrolled since the sample was taken.
+    if (!surfaceContains(match->root, sample->localPosition)) return;
+    sendNow(packetFor(*match, target, sample->localPosition,
+                      PointerPhase::Move));
 }
 
 bool PresenceInputRouter::checkSafetyForTest(QString* error) {

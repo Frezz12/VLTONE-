@@ -870,10 +870,18 @@ public:
           m_length(length) {}
 
     bool open(OpenMode mode) override {
-        if (mode != QIODevice::ReadOnly || m_length == 0 ||
+        if (mode != QIODevice::ReadOnly ||
             m_offset > quint64(std::numeric_limits<qint64>::max()) ||
             m_length > quint64(std::numeric_limits<qint64>::max()) ||
-            !m_file.open(QIODevice::ReadOnly) ||
+            m_offset > std::numeric_limits<quint64>::max() - m_length ||
+            !m_file.open(QIODevice::ReadOnly)) {
+            return false;
+        }
+        // The source was hashed in an earlier pass. Refusing a slice that no
+        // longer fits the file turns a truncation race into a clean failure
+        // here instead of a stalled or short PUT body later.
+        const qint64 available = m_file.size();
+        if (available < 0 || quint64(available) < m_offset + m_length ||
             !m_file.seek(qint64(m_offset))) {
             return false;
         }
@@ -900,8 +908,14 @@ protected:
         const qint64 requested =
             qint64(std::min<quint64>(remaining, quint64(maximum)));
         const qint64 count = m_file.read(data, requested);
-        if (count > 0) m_position += quint64(count);
-        return count;
+        if (count > 0) {
+            m_position += quint64(count);
+            return count;
+        }
+        // A local file that yields nothing while the declared slice still has
+        // bytes left was truncated or replaced under us. Reporting 0 would let
+        // Qt hang on a Content-Length it can never satisfy, so fail the body.
+        return count < 0 ? count : qint64(-1);
     }
     qint64 writeData(const char*, qint64) override { return -1; }
 
@@ -957,6 +971,14 @@ struct CloudAssetTransferManager::Impl {
             bool hashPinned = false;
             QString pinnedSha256;
             quint64 pinnedByteSize = 0;
+
+            // Sliced hashing pass. Held across event-loop turns so one large
+            // source cannot monopolise the single transfer worker.
+            std::unique_ptr<QFile> hashSource;
+            std::unique_ptr<QCryptographicHash> hashDigest;
+            quint64 hashedBytes = 0;
+            quint64 hashPublishedBytes = 0;
+            qint64 hashDeclaredSize = 0;
 
             bool multipartPlanKnown = false;
             quint64 multipartPartSize = 0;
@@ -1221,6 +1243,10 @@ struct CloudAssetTransferManager::Impl {
         void fail(Job& job, CloudTransferError error) {
             if (job.terminal || job.failed) return;
             cleanupNetwork(job);
+            // A sliced hashing pass may still hold the source open. Its next
+            // turn is a no-op once the job is failed, so close it here rather
+            // than pinning the descriptor until the job is erased.
+            releaseHashState(job);
             job.failed = true;
             const bool cancelled =
                 error.code == CloudTransferErrorCode::Cancelled;
@@ -1393,34 +1419,83 @@ struct CloudAssetTransferManager::Impl {
                               QStringLiteral("Upload source size is invalid")));
                 return;
             }
-            QCryptographicHash digest(QCryptographicHash::Sha256);
+            // One worker thread serves every transfer, so hashing a multi
+            // gigabyte source in a single pass would stall unrelated uploads,
+            // downloads and hydration behind it. Digest a bounded slice per
+            // event-loop turn instead and let the queue keep breathing.
+            job.hashSource = std::make_unique<QFile>(job.sourcePath);
+            if (!job.hashSource->open(QIODevice::ReadOnly)) {
+                job.hashSource.reset();
+                fail(job, transferFailure(
+                              CloudTransferErrorCode::FileUnavailable,
+                              QStringLiteral("Upload source is unavailable")));
+                return;
+            }
+            job.hashDigest = std::make_unique<QCryptographicHash>(
+                QCryptographicHash::Sha256);
+            job.hashedBytes = 0;
+            job.hashPublishedBytes = 0;
+            job.hashDeclaredSize = declaredSize;
+            continueHashing(job.id, job.requestGeneration);
+        }
+
+        void continueHashing(quint64 id, int generation) {
+            Job* current = matching(id, generation);
+            if (!current) return;
+            Job& job = *current;
+            if (!job.hashSource || !job.hashDigest) return;
+            if (wasCancelled(job)) {
+                releaseHashState(job);
+                fail(job, transferFailure(
+                              CloudTransferErrorCode::Cancelled,
+                              QStringLiteral("Cloud transfer was cancelled")));
+                return;
+            }
+
+            constexpr quint64 kHashSliceBytes = 8ULL * 1024 * 1024;
             QByteArray block(kIoBlockBytes, Qt::Uninitialized);
-            quint64 total = 0;
-            quint64 lastPublished = 0;
-            while (true) {
-                if (wasCancelled(job)) {
-                    fail(job, transferFailure(
-                                  CloudTransferErrorCode::Cancelled,
-                                  QStringLiteral("Cloud transfer was cancelled")));
-                    return;
-                }
-                const qint64 count = input.read(block.data(), block.size());
+            quint64 sliced = 0;
+            bool finished = false;
+            while (sliced < kHashSliceBytes) {
+                const qint64 count =
+                    job.hashSource->read(block.data(), block.size());
                 if (count < 0) {
+                    releaseHashState(job);
                     fail(job, transferFailure(
                                   CloudTransferErrorCode::FileReadFailure,
                                   QStringLiteral("Could not read upload source")));
                     return;
                 }
-                if (count == 0) break;
-                digest.addData(QByteArrayView(block.constData(), count));
-                total += quint64(count);
-                if (total - lastPublished >= 16ULL * 1024 * 1024) {
-                    publishProgress(job, total, quint64(declaredSize));
-                    lastPublished = total;
+                if (count == 0) {
+                    finished = true;
+                    break;
                 }
+                job.hashDigest->addData(
+                    QByteArrayView(block.constData(), count));
+                job.hashedBytes += quint64(count);
+                sliced += quint64(count);
             }
+            if (job.hashedBytes - job.hashPublishedBytes >=
+                    16ULL * 1024 * 1024 ||
+                finished) {
+                publishProgress(job, job.hashedBytes,
+                                quint64(job.hashDeclaredSize));
+                job.hashPublishedBytes = job.hashedBytes;
+            }
+            if (!finished) {
+                QMetaObject::invokeMethod(
+                    this, [this, id, generation] {
+                        continueHashing(id, generation);
+                    },
+                    Qt::QueuedConnection);
+                return;
+            }
+
+            const quint64 total = job.hashedBytes;
+            const qint64 declaredSize = job.hashDeclaredSize;
             const QString computed =
-                QString::fromLatin1(digest.result().toHex());
+                QString::fromLatin1(job.hashDigest->result().toHex());
+            releaseHashState(job);
             if (total != quint64(declaredSize) ||
                 (!job.sha256.isEmpty() && job.sha256 != computed) ||
                 (job.byteSize != 0 && job.byteSize != total)) {
@@ -1683,6 +1758,22 @@ struct CloudAssetTransferManager::Impl {
                             finishApi(id, generation, guard, expectedStatus);
                     });
             timeout->start();
+        }
+
+        // Every transfer timer in this worker is an inactivity watchdog, not a
+        // wall-clock deadline. A 5 MiB multipart part or a large asset download
+        // legitimately outlives m_timeoutMs on an ordinary uplink, so observed
+        // progress must re-arm the timer instead of racing it.
+        static void releaseHashState(Job& job) {
+            job.hashSource.reset();
+            job.hashDigest.reset();
+            job.hashedBytes = 0;
+            job.hashPublishedBytes = 0;
+            job.hashDeclaredSize = 0;
+        }
+
+        static void touchTimeout(Job& job) {
+            if (job.timeout) job.timeout->start();
         }
 
         Job* matching(quint64 id, int generation,
@@ -2132,6 +2223,7 @@ struct CloudAssetTransferManager::Impl {
                             std::min(current->byteSize,
                                      base + quint64(sent)),
                             current->byteSize);
+                        touchTimeout(*current);
                     });
             connect(reply, &QNetworkReply::finished, this,
                     [this, id = job.id, generation,
@@ -2516,6 +2608,7 @@ struct CloudAssetTransferManager::Impl {
                                                                HttpStatusCodeAttribute)
                                                .toInt();
                         if (status == 200) {
+                            touchTimeout(*current);
                             drainDownload(*current, guard);
                         } else if (guard->bytesAvailable() >
                                    kMaximumProviderResponseBytes) {

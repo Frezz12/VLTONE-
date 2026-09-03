@@ -70,6 +70,8 @@ struct TransportFrame;
 /// pill and inset panel toggles, then a row of [inspector | arrangement over
 /// mixer], and finally the status bar. Owns the EngineController and drives it
 /// from user actions; a refresh timer pulls playhead/meters back for display.
+namespace daw::collab { struct ChangeImpact; }
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
@@ -98,8 +100,11 @@ public:
         return &m_controller;
     }
     /// Re-read the already projected model without marking a local file dirty
-    /// or emitting the legacy projectEdited signal.
-    void refreshAfterCollaborationProjection();
+    /// or emitting the legacy projectEdited signal. `impact` is the reducer's
+    /// own account of what changed; it decides whether the track rows and
+    /// console are rebuilt or merely re-read.
+    void refreshAfterCollaborationProjection(
+        const daw::collab::ChangeImpact& impact);
 
 #ifdef DAW_ENABLE_COLLABORATION
     /// App-lifetime cloud services are constructed beside the account and
@@ -744,6 +749,8 @@ private:
     collab::CollaborationService* m_collaboration = nullptr;
     collab::PresenceInputRouter* m_presenceInput = nullptr;
     collab::PresenceOverlay* m_timelinePresence = nullptr;
+    collab::PresenceOverlay* m_trackListPresence = nullptr;
+    collab::PresenceOverlay* m_mixerPresence = nullptr;
     collab::PresenceOverlay* m_pianoRollPresence = nullptr;
     collab::SessionStatusWidget* m_sessionStatus = nullptr;
 #ifdef DAW_ENABLE_COLLABORATION
