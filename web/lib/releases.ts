@@ -16,7 +16,9 @@ export type PublicRelease = {
   artifacts: ReleaseArtifact[]; screenshots: ReleaseScreenshot[]; page_url: string; published_at: string;
 };
 
-const origin = () => (process.env.VLT_API_ORIGIN ?? "http://localhost:8080").replace(/\/$/, "");
+const origin = () => (process.env.VLT_API_ORIGIN ?? "http://localhost:8080")
+  .replace(/\/+$/, "")
+  .replace(/\/v1$/, "");
 
 export async function getReleases(locale: string) {
   const response = await fetch(`${origin()}/v1/releases?locale=${encodeURIComponent(locale)}`, { cache: "no-store" });

@@ -17,6 +17,7 @@
 #include <QPainterPath>
 #include <QSettings>
 #include <QStyle>
+#include <QTimer>
 #include <QVariantAnimation>
 #include <QWheelEvent>
 
@@ -100,6 +101,7 @@ public:
         : QWidget(parent), m_owner(owner) {
         setMouseTracking(true);
         setFocusPolicy(Qt::NoFocus);
+        setAttribute(Qt::WA_NoMousePropagation);
         setAttribute(Qt::WA_TranslucentBackground);
         setAccessibleName(PluginQuickAdder::tr("Plugin search results"));
         hide();
@@ -117,6 +119,11 @@ protected:
     }
     void mouseMoveEvent(QMouseEvent* event) override {
         if (m_owner) m_owner->overlayMouseMove(event);
+        event->accept();
+    }
+    void mouseReleaseEvent(QMouseEvent* event) override {
+        if (m_owner) m_owner->overlayMouseRelease(event);
+        event->accept();
     }
     void leaveEvent(QEvent*) override {
         if (m_owner) m_owner->overlayLeave();
@@ -613,6 +620,18 @@ void PluginQuickAdder::insertCurrent(bool openEditor, bool keepOpen) {
     emit pluginInserted(insertId, openEditor);
 }
 
+void PluginQuickAdder::queueInsertCurrent(bool openEditor, bool keepOpen) {
+    if (m_activationQueued || m_loading || !visibleAt(m_highlight)) return;
+    m_activationQueued = true;
+    // Adding an insert synchronously refreshes the mixer and may rebuild this
+    // whole context island. Let the current pointer/key dispatch finish first,
+    // so the event cannot fall through to the timeline underneath the overlay.
+    QTimer::singleShot(0, this, [this, openEditor, keepOpen] {
+        m_activationQueued = false;
+        insertCurrent(openEditor, keepOpen);
+    });
+}
+
 void PluginQuickAdder::showOverlay() {
     if (!m_expanded || !window()) return;
     if (!m_overlay) {
@@ -846,16 +865,40 @@ void PluginQuickAdder::overlayMousePress(QMouseEvent* event) {
         setHighlight(row.visibleIndex);
         const Entry* entry = visibleAt(row.visibleIndex);
         if (!entry) return;
-        // Only the visible star itself toggles Favorite. The rest of the row,
-        // including the right-hand padding, always performs the primary action.
+        m_pressedVisibleIndex = row.visibleIndex;
         const QRect starHit(row.rect.right() - 24, row.rect.top(), 24,
                             row.rect.height());
-        if (starHit.contains(event->position().toPoint())) {
-            toggleFavorite(*entry);
-        } else {
-            insertCurrent(/*openEditor=*/true,
-                          event->modifiers().testFlag(Qt::ShiftModifier));
+        m_pressedFavorite = starHit.contains(event->position().toPoint());
+        event->accept();
+        return;
+    }
+}
+
+void PluginQuickAdder::overlayMouseRelease(QMouseEvent* event) {
+    const int pressedIndex = m_pressedVisibleIndex;
+    const bool favorite = m_pressedFavorite;
+    m_pressedVisibleIndex = -1;
+    m_pressedFavorite = false;
+    if (event->button() != Qt::LeftButton || pressedIndex < 0) return;
+
+    for (const HitRow& row : hitRows()) {
+        if (row.kind != HitRow::Kind::Plugin ||
+            row.visibleIndex != pressedIndex ||
+            !row.rect.contains(event->position().toPoint())) {
+            continue;
         }
+        const QRect starHit(row.rect.right() - 24, row.rect.top(), 24,
+                            row.rect.height());
+        const bool releasedOnFavorite =
+            starHit.contains(event->position().toPoint());
+        if (favorite != releasedOnFavorite) return;
+        const Entry* entry = visibleAt(pressedIndex);
+        if (!entry) return;
+        if (favorite)
+            toggleFavorite(*entry);
+        else
+            queueInsertCurrent(/*openEditor=*/true,
+                               event->modifiers().testFlag(Qt::ShiftModifier));
         event->accept();
         return;
     }
@@ -941,8 +984,8 @@ void PluginQuickAdder::keyPressEvent(QKeyEvent* event) {
         move(-1);
         event->accept();
     } else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
-        insertCurrent(/*openEditor=*/true,
-                      event->modifiers().testFlag(Qt::ShiftModifier));
+        queueInsertCurrent(/*openEditor=*/true,
+                           event->modifiers().testFlag(Qt::ShiftModifier));
         event->accept();
     } else {
         QWidget::keyPressEvent(event);
@@ -953,6 +996,22 @@ bool PluginQuickAdder::eventFilter(QObject* watched, QEvent* event) {
     if (m_expanded && watched == window() &&
         (event->type() == QEvent::Resize || event->type() == QEvent::Move)) {
         positionOverlay();
+    }
+    if (watched == m_search && event->type() == QEvent::ShortcutOverride) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        switch (key->key()) {
+            case Qt::Key_Escape:
+            case Qt::Key_Down:
+            case Qt::Key_Up:
+            case Qt::Key_Tab:
+            case Qt::Key_Backtab:
+            case Qt::Key_Return:
+            case Qt::Key_Enter:
+                key->accept();
+                return true;
+            default:
+                break;
+        }
     }
     if (watched == m_search && event->type() == QEvent::KeyPress) {
         auto* key = static_cast<QKeyEvent*>(event);
@@ -979,6 +1038,67 @@ bool PluginQuickAdder::eventFilter(QObject* watched, QEvent* event) {
         if (!insideInline && !insideOverlay) closeSearch();
     }
     return QWidget::eventFilter(watched, event);
+}
+
+bool PluginQuickAdder::checkInteractionForTest() {
+    daw::EngineController probe;
+    const auto graphit = probe.pluginManager().find(
+        daw::plugins::Format::Internal, "daw.graphit");
+    if (!graphit) return false;
+
+    const QString trackId = QString::fromStdString(
+        probe.addTrack(daw::TrackKind::Audio, "Quick Add Probe"));
+    QWidget root;
+    root.resize(640, 420);
+    PluginQuickAdder adder(&probe, &root);
+    adder.move(40, 40);
+    adder.setTrackId(trackId);
+    root.show();
+
+    int inserted = 0;
+    QObject::connect(&adder, &PluginQuickAdder::pluginInserted, &adder,
+                     [&inserted](const QString& id, bool) {
+                         if (!id.isEmpty()) ++inserted;
+                     });
+
+    const auto openOnGraphit = [&adder] {
+        adder.openSearch();
+        if (adder.m_expandAnim->state() == QAbstractAnimation::Running)
+            adder.m_expandAnim->setCurrentTime(adder.m_expandAnim->duration());
+        adder.m_search->setText(QStringLiteral("Graphit"));
+        QApplication::processEvents();
+        return adder.m_overlay && adder.m_overlay->isVisible() &&
+               adder.visibleAt(adder.m_highlight);
+    };
+
+    if (!openOnGraphit()) return false;
+    const QPoint rowPoint(kSide + 16, kListTop + kPluginHeight / 2);
+    QMouseEvent click(QEvent::MouseButtonPress, QPointF(rowPoint),
+                      QPointF(adder.m_overlay->mapToGlobal(rowPoint)),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(adder.m_overlay, &click);
+    const bool heldByOverlay = click.isAccepted() && inserted == 0;
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(rowPoint),
+                        QPointF(adder.m_overlay->mapToGlobal(rowPoint)),
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(adder.m_overlay, &release);
+    QApplication::processEvents();
+    const bool pointerPicked = heldByOverlay && release.isAccepted() &&
+                               inserted == 1;
+
+    if (!openOnGraphit()) return false;
+    QKeyEvent shortcut(QEvent::ShortcutOverride, Qt::Key_Return,
+                       Qt::NoModifier);
+    shortcut.setAccepted(false);
+    QApplication::sendEvent(adder.m_search, &shortcut);
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    enter.setAccepted(false);
+    QApplication::sendEvent(adder.m_search, &enter);
+    QApplication::processEvents();
+    const bool keyboardPicked = shortcut.isAccepted() && enter.isAccepted() &&
+                                inserted == 2;
+    root.hide();
+    return pointerPicked && keyboardPicked;
 }
 
 void PluginQuickAdder::focusInEvent(QFocusEvent* event) {

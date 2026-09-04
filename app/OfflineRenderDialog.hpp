@@ -11,7 +11,9 @@ class QLabel;
 class QListWidget;
 class QProgressBar;
 class QPushButton;
-class QToolButton;
+class QVBoxLayout;
+class QWidget;
+class ChannelStrip;
 
 /// A headless draft plugin rack for non-destructive clip processing.
 class OfflineRenderDialog final : public QDialog {
@@ -24,12 +26,11 @@ public:
     ~OfflineRenderDialog() override;
 
     bool rendered() const noexcept { return m_rendered; }
+    void reject() override;
 
 private:
-    void refreshChain(const QString& keepSlot = {});
-    QString selectedSlot() const;
-    void moveSelected(int delta);
-    void openSelectedEditor();
+    void rebuildRack();
+    void openEditor(const QString& insertId);
     void reloadPresets();
     void loadPreset();
     void savePreset();
@@ -41,13 +42,10 @@ private:
     std::string m_chainTrackId;
 
     QLabel* m_warning = nullptr;
-    QListWidget* m_chain = nullptr;
-    QToolButton* m_add = nullptr;
-    QPushButton* m_remove = nullptr;
-    QPushButton* m_up = nullptr;
-    QPushButton* m_down = nullptr;
-    QPushButton* m_bypass = nullptr;
-    QPushButton* m_edit = nullptr;
+    QListWidget* m_clipList = nullptr;
+    QWidget* m_rackHost = nullptr;
+    QVBoxLayout* m_rackLayout = nullptr;
+    ChannelStrip* m_rack = nullptr;
     QComboBox* m_presets = nullptr;
     QPushButton* m_loadPreset = nullptr;
     QPushButton* m_savePreset = nullptr;

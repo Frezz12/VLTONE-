@@ -118,6 +118,21 @@ int main() {
     check(ctrl.initialize(48000, 512, /*openDevice=*/false).isOk(),
           "controller initialises offline");
 
+    {
+        daw::EngineController themed;
+        themed.initialize(48000, 512, /*openDevice=*/false);
+        themed.setDefaultTrackColor(0xD12A3Bu);
+        const std::string audio = themed.addTrack(daw::TrackKind::Audio);
+        const std::string midi = themed.addTrack(daw::TrackKind::Midi);
+        check(themed.project().findTrack(audio)->color == 0xD12A3B &&
+                  themed.project().findTrack(midi)->color == 0xD12A3B,
+              "new tracks use the configured theme accent");
+        themed.newProject(/*createDefaultAudioTrack=*/true);
+        check(themed.project().tracks.size() == 1 &&
+                  themed.project().tracks.front().color == 0xD12A3B,
+              "a new project's default audio track uses the theme accent");
+    }
+
     // ── Tracks ──
     const std::string t1 = ctrl.addTrack(daw::TrackKind::Audio, "Guitar");
     check(!t1.empty() && ctrl.project().tracks.size() == 1,
@@ -142,14 +157,17 @@ int main() {
     {
         daw::EngineController imported;
         imported.initialize(48000, 512, /*openDevice=*/false);
+        imported.setDefaultTrackColor(0xD12A3Bu);
         const std::size_t before = imported.undoDepth();
         const std::string newTrack =
             imported.importAudioToNewTrack(tonePath, 2.0, "Downloaded Tone");
         const auto* model = imported.project().findTrack(newTrack);
         check(model && model->kind == daw::TrackKind::Audio &&
                   model->name == "Downloaded Tone" && model->clips.size() == 1 &&
+                  model->color == 0xD12A3B &&
+                  model->clips.front().color == 0xD12A3B &&
                   std::fabs(model->clips.front().startSeconds - 2.0) < 1e-9,
-              "downloaded audio creates a named audio track at the playhead");
+              "downloaded audio creates an accent-coloured track at the playhead");
         check(imported.undoDepth() == before + 1,
               "new-track audio import records one undo entry");
         imported.undo();
@@ -974,6 +992,12 @@ int main() {
         fresh.newProject();
         check(fresh.waveforms().entryCount() == 0,
               "new project releases its waveform cache");
+        fresh.newProject(/*createDefaultAudioTrack=*/true);
+        check(fresh.project().tracks.size() == 1 &&
+                  fresh.project().tracks.front().kind ==
+                      daw::TrackKind::Audio &&
+                  !fresh.canUndo(),
+              "application new project starts with one clean audio track");
     }
 
     // ── Routing graph ──

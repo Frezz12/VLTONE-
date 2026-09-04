@@ -22,6 +22,27 @@ SelectionTint& cachedSelectionTint() {
     return tint;
 }
 
+double readPlayheadWidth() {
+    const double stored =
+        QSettings().value(kPlayheadWidthSetting, kPlayheadWidthDefault)
+            .toDouble();
+    if (!(stored > 0.0)) return kPlayheadWidthDefault;
+    return std::clamp(stored, kPlayheadWidthMin, kPlayheadWidthMax);
+}
+
+double& cachedPlayheadWidth() {
+    // Read on every playhead frame, which is every 16 ms while the transport
+    // runs — the same reasoning as the selection tint: read once, and keep the
+    // cache in step through the only public setter.
+    static double width = readPlayheadWidth();
+    return width;
+}
+
+bool& cachedPlayheadTrail() {
+    static bool trail = QSettings().value(kPlayheadTrailSetting, true).toBool();
+    return trail;
+}
+
 } // namespace
 
 SelectionTint selectionTint() {
@@ -48,6 +69,26 @@ QColor selectionWash(const QColor& trackColor) {
     // difference against the row it is sitting on. Its own colour is what the
     // eye is already using to find this track.
     return mixColors(trackColor, t.textPrimary, t.dark ? 0.10 : 0.0);
+}
+
+double playheadWidth() {
+    return cachedPlayheadWidth();
+}
+
+void setPlayheadWidth(double pixels) {
+    const double value =
+        std::clamp(pixels, kPlayheadWidthMin, kPlayheadWidthMax);
+    cachedPlayheadWidth() = value;
+    QSettings().setValue(kPlayheadWidthSetting, value);
+}
+
+bool playheadTrail() {
+    return cachedPlayheadTrail();
+}
+
+void setPlayheadTrail(bool enabled) {
+    cachedPlayheadTrail() = enabled;
+    QSettings().setValue(kPlayheadTrailSetting, enabled);
 }
 
 } // namespace ui

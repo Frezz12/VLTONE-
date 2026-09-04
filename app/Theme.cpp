@@ -121,6 +121,20 @@ ThemeManager::ThemeManager() {
              QColor(185, 186, 189), QColor(151, 154, 158),
              QColor(31, 122, 150, 56),
              QColor(213, 214, 217), QColor(222, 223, 226)),
+        // Neither a dark room nor a sheet of paper: the mid-grey a hardware
+        // console is moulded in. Light palettes in this application had only
+        // near-white surfaces, where every well, groove and shadow had almost
+        // no room left to recede into. Starting the surfaces two shades down
+        // gives the whole depth vocabulary somewhere to go in both directions.
+        make("graphite", "Graphite Grey", false,
+             QColor(158, 160, 163), QColor(182, 184, 188),
+             QColor(200, 202, 206),
+             QColor(24, 26, 29), QColor(78, 82, 88),
+             QColor(38, 110, 134), QColor(54, 138, 164),
+             QColor(44, 86, 102), QColor(30, 36, 44),
+             QColor(140, 142, 146), QColor(112, 114, 118),
+             QColor(38, 110, 134, 64),
+             QColor(146, 148, 152), QColor(152, 154, 158)),
         make("dark", "Dark", true,
              grey(20), grey(31), grey(38),
              grey(242), grey(153),
@@ -645,6 +659,7 @@ QLabel[role="section"] { color: %TEXT2%; font-size: 10px; font-weight: 700; }
    `ui::paintSlider` paints by hand for the faders, so a plain QSlider in the
    settings or a generic plugin editor is not a different control. The handle is
    10px in a 14px groove: 2px of track shows all the way round it. */
+QSlider { outline: none; }
 QSlider::groove:horizontal {
     height: 14px; background: %WELL%; border: none; border-radius: 7px;
 }
@@ -663,6 +678,7 @@ QSlider::handle:horizontal:hover, QSlider::handle:horizontal:pressed {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 %GLASS_LIT%, stop:1 %GLASS_HI%);
 }
+QSlider::groove:horizontal:focus { border: 1px solid %ACCENT%; }
 QSlider::groove:vertical {
     width: 14px; background: %WELL%; border: none; border-radius: 7px;
 }
@@ -681,6 +697,7 @@ QSlider::handle:vertical:hover, QSlider::handle:vertical:pressed {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 %GLASS_LIT%, stop:1 %GLASS_HI%);
 }
+QSlider::groove:vertical:focus { border: 1px solid %ACCENT%; }
 )")
         .replace("%TEXT%", c(t.textPrimary))
         .replace("%TEXT2%", c(t.textSecondary))

@@ -10,6 +10,7 @@
 #include <QKeySequence>
 #include <QLineEdit>
 #include <QMenu>
+#include <QProxyStyle>
 #include <QSettings>
 #include <QTimer>
 #include <QWidgetAction>
@@ -27,6 +28,20 @@ namespace {
 /// an answer any more, and the query is what wants narrowing.
 constexpr int kMaxMatches = 40;
 constexpr auto kSearchFilterObjectName = "PluginPickerSearchFilter";
+
+/// Native QMenu otherwise turns a tall plugin group into several columns on
+/// platforms whose style disables menu scrolling. A plugin catalogue is much
+/// easier to scan as Logic's adjacent one-column lists, with the standard menu
+/// scrollers keeping each column inside the screen.
+class ScrollablePluginMenuStyle final : public QProxyStyle {
+public:
+    int styleHint(StyleHint hint, const QStyleOption* option,
+                  const QWidget* widget,
+                  QStyleHintReturn* returnData = nullptr) const override {
+        if (hint == QStyle::SH_Menu_Scrollable) return 1;
+        return QProxyStyle::styleHint(hint, option, widget, returnData);
+    }
+};
 
 [[maybe_unused]] const char* const kTranslatableCategoryNames[] = {
     QT_TRANSLATE_NOOP("PluginPickerMenu", "Reverb"),
@@ -212,6 +227,12 @@ private:
 
 void applyDarkPluginMenuStyle(QMenu* menu) {
     if (!menu) return;
+    if (!menu->property("pluginPickerScrollable").toBool()) {
+        auto* style = new ScrollablePluginMenuStyle;
+        style->setParent(menu);
+        menu->setStyle(style);
+        menu->setProperty("pluginPickerScrollable", true);
+    }
     const Theme& theme = th();
     const QColor hover = mixColors(theme.well(), theme.textPrimary, 0.14);
     const QColor selected = mixColors(theme.well(), theme.accent, 0.20);

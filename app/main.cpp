@@ -34,6 +34,7 @@
 #include "SettingsWindow.hpp"
 #include "GlassPanel.hpp"
 #include "Controls.hpp"
+#include "PluginQuickAdder.hpp"
 #include "Theme.hpp"
 
 #include <QApplication>
@@ -426,6 +427,10 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "pan control interaction failed\n");
             return 39;
         }
+        if (!PluginQuickAdder::checkInteractionForTest()) {
+            std::fprintf(stderr, "quick plugin search interaction failed\n");
+            return 29;
+        }
     }
     if (selftest && !ui::checkAudioPreferencesRoundTripForTest()) {
         std::fprintf(stderr, "audio preferences did not round-trip\n");
@@ -469,6 +474,11 @@ int main(int argc, char** argv) {
                 &collaborationError)) {
             std::fprintf(stderr,
                          "collaboration surface geometry check failed: %s\n",
+                         collaborationError.toUtf8().constData());
+            return 40;
+        }
+        if (!TrackListWidget::checkButtonPaintForTest(&collaborationError)) {
+            std::fprintf(stderr, "track button paint check failed: %s\n",
                          collaborationError.toUtf8().constData());
             return 40;
         }
@@ -872,6 +882,17 @@ int main(int argc, char** argv) {
         if (shootAutomation)
             window.openAutomationEditorForShot(
                 QString::fromUtf8(std::getenv("DAW_SHOT_AUTOMATION_EDITOR")));
+        // DAW_SHOT_PLAYHEAD="<seconds>" parks the playhead away from zero, and
+        // DAW_SHOT_ROLLING starts the transport so its motion trail is present
+        // in the grab. Pair the second with DAW_SHOT_DELAY to choose how far
+        // into playback the picture is taken.
+        if (const char* head = std::getenv("DAW_SHOT_PLAYHEAD")) {
+            const double seconds = std::atof(head);
+            const bool rolling = std::getenv("DAW_SHOT_ROLLING") != nullptr;
+            QTimer::singleShot(0, &window, [&window, seconds, rolling] {
+                window.placePlayheadForShot(seconds, rolling);
+            });
+        }
         // DAW_SHOT_CYCLE="from,to" arms a cycle region over those seconds.
         if (const char* cycle = std::getenv("DAW_SHOT_CYCLE")) {
             const QStringList parts = QString::fromUtf8(cycle).split(',');

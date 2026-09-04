@@ -44,8 +44,106 @@ namespace {
 constexpr auto kUserPresetKey = "equalizer/userPresets.v1";
 
 QColor bandColor(int band, bool dark) {
-    return QColor::fromHsv((band * 47 + 188) % 360, dark ? 174 : 205,
-                           dark ? 242 : 190);
+    return EqualizerGraph::colorForBand(band, dark);
+}
+
+/// The plate the band inspector is drawn on. It floats inside the graph rather
+/// than sitting in a row underneath it, which is the point: the three knobs
+/// that matter sit on top of the curve they edit, so the eye never leaves the
+/// band it is moving. Painted rather than made of glass — this is over a busy,
+/// constantly repainting plot, and a backdrop capture per frame would be paid
+/// for on every analyzer tick.
+class OverlayPlate final : public QWidget {
+public:
+    static constexpr int kMargin = 7;   // room for the plate's own shadow
+
+    explicit OverlayPlate(QWidget* parent = nullptr) : QWidget(parent) {
+        setAttribute(Qt::WA_StyledBackground, false);
+        connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+                QOverload<>::of(&QWidget::update));
+    }
+
+    void setAccent(const QColor& accent) {
+        if (m_accent == accent) return;
+        m_accent = accent;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const Theme& t = th();
+        const QRectF plate =
+            QRectF(rect()).adjusted(kMargin + 0.5, kMargin + 0.5,
+                                    -kMargin - 0.5, -kMargin - 0.5);
+        if (plate.width() < 2.0 || plate.height() < 2.0) return;
+        QPainterPath shape;
+        shape.addRoundedRect(plate, 10, 10);
+
+        // It has to read as lifted off a plot it partly covers, so the shadow
+        // is heavier than the chrome's — this is the one surface in the window
+        // that is genuinely floating.
+        for (int i = kMargin; i >= 1; --i) {
+            const qreal k = 1.0 - qreal(i) / qreal(kMargin);
+            const int alpha = int(std::lround(46.0 * k * k));
+            if (alpha <= 0) continue;
+            QPainterPath halo;
+            halo.addRoundedRect(plate.adjusted(-i, -i * 0.6, i, i * 1.3),
+                                10 + i, 10 + i);
+            p.fillPath(halo, QColor(0, 0, 0, alpha));
+        }
+
+        QLinearGradient body(plate.topLeft(), plate.bottomLeft());
+        body.setColorAt(0.0, mixColors(t.surfaceElevated, t.background,
+                                       t.dark ? 0.42 : 0.10));
+        body.setColorAt(1.0, mixColors(t.surface, t.background,
+                                       t.dark ? 0.66 : 0.26));
+        p.fillPath(shape, body);
+
+        // A hairline of the band's own colour along the top edge: the plate
+        // says which band it belongs to before you read a word on it.
+        p.setBrush(Qt::NoBrush);
+        if (m_accent.isValid()) {
+            QColor edge = m_accent;
+            edge.setAlpha(t.dark ? 150 : 190);
+            p.setPen(QPen(edge, 1.6));
+            p.drawLine(QPointF(plate.left() + 11, plate.top() + 0.8),
+                       QPointF(plate.right() - 11, plate.top() + 0.8));
+        }
+        QColor rim = mixColors(t.separator(), t.textPrimary, t.dark ? 0.10 : 0.0);
+        p.setPen(QPen(rim, 1.0));
+        p.drawPath(shape);
+    }
+
+private:
+    QColor m_accent;
+};
+
+/// A Catmull-Rom spline through the samples, emitted as cubic Béziers. Every
+/// trace in this graph is a sampled function drawn at a width where the samples
+/// are several pixels apart, so joining them with segments shows the sampling
+/// instead of the signal. The tangent at each point is the slope between its
+/// neighbours, which is what keeps the curve from overshooting on a spectrum
+/// that can jump 40 dB between two bins.
+QPainterPath smoothThrough(const std::vector<QPointF>& points) {
+    QPainterPath path;
+    if (points.empty()) return path;
+    path.moveTo(points.front());
+    if (points.size() < 3) {
+        for (std::size_t i = 1; i < points.size(); ++i) path.lineTo(points[i]);
+        return path;
+    }
+    for (std::size_t i = 0; i + 1 < points.size(); ++i) {
+        const QPointF& p0 = points[i == 0 ? 0 : i - 1];
+        const QPointF& p1 = points[i];
+        const QPointF& p2 = points[i + 1];
+        const QPointF& p3 = points[i + 2 < points.size() ? i + 2 : i + 1];
+        // A sixth of the neighbour span is the standard uniform Catmull-Rom
+        // tangent scale; anything larger loops on steep sections.
+        path.cubicTo(p1 + (p2 - p0) / 6.0, p2 - (p3 - p1) / 6.0, p2);
+    }
+    return path;
 }
 
 bool containsBand(const std::vector<int>& bands, int band) {
@@ -82,7 +180,9 @@ QWidget* controlCell(QWidget* control, const QString& caption, QWidget* parent) 
     layout->addWidget(control, 0, Qt::AlignHCenter);
     auto* label = new QLabel(caption.toUpper(), cell);
     label->setAlignment(Qt::AlignCenter);
-    label->setStyleSheet(QStringLiteral("font-size: 9px; color: palette(mid);"));
+    label->setStyleSheet(
+        QStringLiteral("font-size: 9px; letter-spacing: 0.6px; color: %1;")
+            .arg(mixColors(th().textSecondary, th().textPrimary, 0.25).name()));
     layout->addWidget(label);
     return cell;
 }
@@ -102,9 +202,10 @@ EqualizerGraph::EqualizerGraph(QWidget* parent) : QWidget(parent) {
 void EqualizerGraph::setData(
     const std::array<eq::BandState, eq::kBandCount>& bands,
     const std::array<double, 256>& response, const eq::Telemetry& telemetry,
-    bool linearPhase, double displayRange) {
+    bool linearPhase, double displayRange, const CurveSet& bandCurves) {
     m_bands = bands;
     m_response = response;
+    m_bandCurves = bandCurves;
     m_telemetry = telemetry;
     m_linearPhase = linearPhase;
     m_displayRange = std::clamp(displayRange, 3.0, 30.0);
@@ -121,7 +222,7 @@ void EqualizerGraph::setSelection(std::vector<int> bands) {
 }
 
 QRectF EqualizerGraph::plotRect() const {
-    return QRectF(rect()).adjusted(42.0, 13.0, -13.0, -27.0);
+    return QRectF(rect()).adjusted(12.0, 12.0, -44.0, -23.0);
 }
 
 double EqualizerGraph::xForFrequency(double frequency) const {
@@ -182,126 +283,320 @@ void EqualizerGraph::choose(int band, Qt::KeyboardModifiers modifiers) {
     if (selectionChanged) selectionChanged(m_selection);
 }
 
+QColor EqualizerGraph::colorForBand(int band, bool dark) {
+    // Curated hues rather than a rotation. An even rotation of the wheel puts
+    // near-identical colours next to each other at the band counts people
+    // actually use, and the whole reason a band is coloured is so its fill can
+    // be told from its neighbour's at a glance.
+    static constexpr int kHues[] = {316, 190, 264, 142, 44, 8,
+                                    288, 168, 218, 96, 26, 340};
+    const int hue = kHues[std::size_t(band < 0 ? 0 : band) % std::size(kHues)];
+    return QColor::fromHsv(hue, dark ? 168 : 205, dark ? 246 : 190);
+}
+
+void EqualizerGraph::setOverlay(QWidget* overlay) {
+    m_overlay = overlay;
+    placeOverlay();
+}
+
+void EqualizerGraph::placeOverlay() {
+    if (!m_overlay) return;
+    const QRectF plot = plotRect();
+    const QSize wanted = m_overlay->sizeHint().expandedTo(
+        m_overlay->minimumSizeHint());
+    const int w = std::min(wanted.width(), int(plot.width()));
+    const int h = wanted.height();
+    // Centred on the plot and hung off its lower edge, where a response curve
+    // has the least to say — the same place Pro-Q parks it.
+    const int x = int(plot.center().x()) - w / 2;
+    const int y = int(plot.bottom()) - h - 6;
+    m_overlay->setGeometry(x, std::max(int(plot.top()), y), w, h);
+    m_overlay->raise();
+}
+
+void EqualizerGraph::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    placeOverlay();
+}
+
 void EqualizerGraph::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     const Theme& theme = th();
-    painter.fillRect(rect(), theme.well());
     const QRectF plot = plotRect();
 
+    // ── The plate ──
+    // Darker than any panel around it. An equalizer graph is a lit instrument
+    // face: everything drawn on it is colour, so the ground has to give all of
+    // it up.
+    const QColor ground = theme.dark
+        ? mixColors(theme.background, QColor(0, 0, 0), 0.55)
+        : mixColors(theme.well(), QColor(0, 0, 0), 0.06);
+    painter.fillRect(rect(), ground);
     QLinearGradient bed(plot.topLeft(), plot.bottomLeft());
-    QColor top = theme.surface;
-    QColor bottom = theme.background;
-    top.setAlpha(theme.dark ? 135 : 205);
-    bottom.setAlpha(theme.dark ? 210 : 235);
-    bed.setColorAt(0.0, top);
-    bed.setColorAt(1.0, bottom);
+    bed.setColorAt(0.0, mixColors(ground, theme.textPrimary, theme.dark ? 0.045 : 0.0));
+    bed.setColorAt(0.55, ground);
+    bed.setColorAt(1.0, mixColors(ground, QColor(0, 0, 0), theme.dark ? 0.22 : 0.05));
     painter.fillRect(plot, bed);
 
+    // ── Grid ──
     static constexpr double frequencies[]{20, 50, 100, 200, 500, 1000,
                                            2000, 5000, 10000, 20000};
-    painter.setFont(QFont(painter.font().family(), 8));
+    QFont scaleFont = painter.font();
+    scaleFont.setPixelSize(9);
+    painter.setFont(scaleFont);
+    const QColor gridSoft = mixColors(ground, theme.textPrimary,
+                                      theme.dark ? 0.085 : 0.14);
+    const QColor gridHard = mixColors(ground, theme.textPrimary,
+                                      theme.dark ? 0.15 : 0.24);
+    const QColor scaleInk = mixColors(ground, theme.textPrimary,
+                                      theme.dark ? 0.42 : 0.62);
     for (double frequency : frequencies) {
         const double x = xForFrequency(frequency);
-        painter.setPen(QPen(frequency == 1000 ? theme.gridLineStrong
-                                              : theme.gridLine, 1.0));
+        painter.setPen(QPen(frequency == 1000 ? gridHard : gridSoft, 1.0));
         painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
-        painter.setPen(theme.textSecondary);
+        painter.setPen(scaleInk);
         const QString label = frequency >= 1000
             ? QStringLiteral("%1k").arg(frequency / 1000.0, 0, 'g', 2)
             : QString::number(int(frequency));
-        painter.drawText(QRectF(x - 18, plot.bottom() + 3, 36, 17),
+        painter.drawText(QRectF(x - 18, plot.bottom() + 4, 36, 15),
                          Qt::AlignHCenter | Qt::AlignTop, label);
     }
+    // The decibel scale reads down the right-hand gutter, off the plot, so no
+    // number ever sits on top of a curve.
     for (double gain : {-m_displayRange, -m_displayRange * 0.5, 0.0,
                         m_displayRange * 0.5, m_displayRange}) {
         const double y = yForGain(gain);
-        painter.setPen(QPen(std::abs(gain) < 0.01 ? theme.gridLineStrong
-                                                  : theme.gridLine, 1.0));
+        const bool zero = std::abs(gain) < 0.01;
+        painter.setPen(QPen(zero ? gridHard : gridSoft, 1.0));
         painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
-        painter.setPen(theme.textSecondary);
-        painter.drawText(QRectF(2, y - 8, 35, 16), Qt::AlignRight | Qt::AlignVCenter,
+        painter.setPen(zero ? gridHard : scaleInk);
+        painter.drawText(QRectF(plot.right() + 5, y - 8, 34, 16),
+                         Qt::AlignLeft | Qt::AlignVCenter,
                          QStringLiteral("%1%2").arg(gain > 0 ? "+" : "")
                                                .arg(gain, 0, 'g', 2));
     }
 
     painter.save();
     painter.setClipRect(plot);
-    auto drawSpectrum = [&](const std::array<float, eq::kSpectrumBinCount>& spectrum,
-                            const QColor& color, Qt::PenStyle style, double width) {
-        QPainterPath path;
+
+    // ── Analyzer ──
+    // Filled for the input and a line for the output: two shapes rather than
+    // two lines of similar weight, or the eye cannot separate them from the
+    // band curves drawn over the top.
+    const auto spectrumPath = [&](const std::array<float, eq::kSpectrumBinCount>& spectrum,
+                                  bool close) {
+        std::vector<QPointF> points;
+        points.reserve(spectrum.size());
         for (std::size_t i = 0; i < spectrum.size(); ++i) {
             const double frequency = 20.0 * std::pow(1000.0,
                 double(i) / double(spectrum.size() - 1));
-            const double x = xForFrequency(frequency);
             const double level = std::clamp(double(spectrum[i]), -96.0, 6.0);
-            const double y = plot.bottom() - (level + 96.0) / 102.0 * plot.height();
-            if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
+            points.emplace_back(xForFrequency(frequency),
+                                plot.bottom() -
+                                    (level + 96.0) / 102.0 * plot.height());
         }
-        painter.setPen(QPen(color, width, style, Qt::RoundCap, Qt::RoundJoin));
-        painter.drawPath(path);
+        QPainterPath path = smoothThrough(points);
+        if (close && !points.empty()) {
+            path.lineTo(plot.right(), plot.bottom() + 2);
+            path.lineTo(plot.left(), plot.bottom() + 2);
+            path.closeSubpath();
+        }
+        return path;
     };
-    QColor pre = theme.textSecondary; pre.setAlpha(115);
-    QColor post = theme.accentHighlight; post.setAlpha(185);
-    QColor side = Theme::automationAccent(); side.setAlpha(155);
-    drawSpectrum(m_telemetry.pre, pre, Qt::DashLine, 1.0);
-    drawSpectrum(m_telemetry.post, post, Qt::SolidLine, 1.25);
-    drawSpectrum(m_telemetry.sidechain, side, Qt::DotLine, 1.0);
+    QColor preFill = mixColors(ground, theme.textPrimary, theme.dark ? 0.20 : 0.30);
+    preFill.setAlpha(theme.dark ? 120 : 90);
+    painter.fillPath(spectrumPath(m_telemetry.pre, true), preFill);
+    QColor postInk = mixColors(theme.textPrimary, ground, theme.dark ? 0.28 : 0.30);
+    postInk.setAlpha(theme.dark ? 150 : 170);
+    painter.setPen(QPen(postInk, 1.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(spectrumPath(m_telemetry.post, false));
+    if (std::any_of(m_telemetry.sidechain.begin(), m_telemetry.sidechain.end(),
+                    [](float v) { return v > -95.0f; })) {
+        QColor side = Theme::automationAccent();
+        side.setAlpha(140);
+        painter.setPen(QPen(side, 1.0, Qt::DotLine));
+        painter.drawPath(spectrumPath(m_telemetry.sidechain, false));
+    }
 
-    QPainterPath response;
+    // ── One filled shape per band ──
+    // This is the whole reason the graph is legible with a dozen bands on it:
+    // the bump you see belongs to a colour, and the colour belongs to a handle
+    // and to the knobs in the inspector.
+    const double zeroY = yForGain(0.0);
+    for (int band = 0; band < int(eq::kBandCount); ++band) {
+        const eq::BandState& state = m_bands[std::size_t(band)];
+        if (!state.enabled) continue;
+        const Curve& curve = m_bandCurves[std::size_t(band)];
+        const bool flat = std::all_of(curve.begin(), curve.end(),
+                                      [](float v) { return std::abs(v) < 0.02f; });
+        if (flat) continue;
+
+        std::vector<QPointF> linePoints;
+        linePoints.reserve(kCurvePoints);
+        for (int i = 0; i < kCurvePoints; ++i) {
+            const double frequency = 10.0 * std::pow(3000.0,
+                double(i) / double(kCurvePoints - 1));
+            linePoints.emplace_back(xForFrequency(frequency),
+                                    yForGain(double(curve[std::size_t(i)])));
+        }
+        const QPainterPath line = smoothThrough(linePoints);
+        QPainterPath area = line;
+        area.lineTo(plot.right(), zeroY);
+        area.lineTo(plot.left(), zeroY);
+        area.closeSubpath();
+
+        const QColor color = colorForBand(band, theme.dark);
+        const bool selected = containsBand(m_selection, band);
+        QLinearGradient wash(0, plot.top(), 0, plot.bottom());
+        QColor strong = color;
+        strong.setAlpha(selected ? (theme.dark ? 96 : 78)
+                                 : (theme.dark ? 58 : 48));
+        QColor faint = color;
+        faint.setAlpha(selected ? 34 : 20);
+        wash.setColorAt(0.0, strong);
+        wash.setColorAt(0.5, faint);
+        wash.setColorAt(1.0, strong);
+        painter.fillPath(area, wash);
+
+        QColor edge = color;
+        edge.setAlpha(selected ? 235 : 150);
+        painter.setPen(QPen(edge, selected ? 1.8 : 1.2, Qt::SolidLine,
+                            Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPath(line);
+
+        // Dynamics: the band's other extreme, dashed, with the span between the
+        // two shaded. A dynamic band is a range, not a value, and the graph has
+        // to say so without being read.
+        if (state.dynamicEnabled && std::abs(state.dynamicRangeDb) > 0.01) {
+            // The band curve scales with its own gain, so the moved shape is
+            // the same shape at the range's gain.
+            const double scale = std::abs(state.gainDb) > 0.01
+                ? (state.gainDb + state.dynamicRangeDb) / state.gainDb
+                : 0.0;
+            std::vector<QPointF> targetPoints;
+            targetPoints.reserve(kCurvePoints);
+            for (int i = 0; i < kCurvePoints; ++i) {
+                const double frequency = 10.0 * std::pow(3000.0,
+                    double(i) / double(kCurvePoints - 1));
+                const double db = std::abs(state.gainDb) > 0.01
+                    ? double(curve[std::size_t(i)]) * scale
+                    : 0.0;
+                targetPoints.emplace_back(xForFrequency(frequency), yForGain(db));
+            }
+            const QPainterPath target = smoothThrough(targetPoints);
+            std::vector<QPointF> back(linePoints.rbegin(), linePoints.rend());
+            QPainterPath span = target;
+            span.connectPath(smoothThrough(back));
+            span.closeSubpath();
+            QColor range = color;
+            range.setAlpha(selected ? 40 : 22);
+            painter.fillPath(span, range);
+            QColor dash = color;
+            dash.setAlpha(selected ? 170 : 105);
+            QPen dashed(dash, 1.1, Qt::DashLine);
+            dashed.setDashPattern({4.0, 3.0});
+            painter.setPen(dashed);
+            painter.drawPath(target);
+        }
+    }
+
+    // ── The sum ──
+    // One bright line over everything, no fill. The fills belong to the bands;
+    // filling the total as well buried them.
+    std::vector<QPointF> responsePoints;
+    responsePoints.reserve(m_response.size());
     for (std::size_t i = 0; i < m_response.size(); ++i) {
         const double frequency = 10.0 * std::pow(3000.0,
             double(i) / double(m_response.size() - 1));
-        const QPointF point(xForFrequency(frequency), yForGain(m_response[i]));
-        if (i == 0) response.moveTo(point); else response.lineTo(point);
+        responsePoints.emplace_back(xForFrequency(frequency),
+                                    yForGain(m_response[i]));
     }
-    QColor fill = theme.accent;
-    fill.setAlpha(theme.dark ? 28 : 20);
-    QPainterPath area = response;
-    area.lineTo(plot.right(), yForGain(0.0));
-    area.lineTo(plot.left(), yForGain(0.0));
-    area.closeSubpath();
-    painter.fillPath(area, fill);
-    painter.setPen(QPen(theme.accentHighlight, 2.4, Qt::SolidLine,
+    const QPainterPath response = smoothThrough(responsePoints);
+    QColor sumGlow = theme.accentHighlight;
+    sumGlow.setAlpha(60);
+    painter.setPen(QPen(sumGlow, 5.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(response);
+    painter.setPen(QPen(theme.accentHighlight, 1.9, Qt::SolidLine,
                         Qt::RoundCap, Qt::RoundJoin));
     painter.drawPath(response);
 
+    // ── Handles ──
     for (int band = 0; band < int(eq::kBandCount); ++band) {
         const eq::BandState& state = m_bands[std::size_t(band)];
         if (!state.enabled) continue;
         const QPointF point = bandPoint(band);
-        QColor color = bandColor(band, theme.dark);
+        const QColor color = colorForBand(band, theme.dark);
         const bool selected = containsBand(m_selection, band);
+
         if (state.dynamicEnabled && std::abs(state.dynamicRangeDb) > 0.01) {
-            QColor range = color; range.setAlpha(52);
-            painter.setPen(QPen(range, selected ? 5.0 : 3.0, Qt::SolidLine,
+            const double targetY = yForGain(state.gainDb + state.dynamicRangeDb);
+            QColor rail = color;
+            rail.setAlpha(selected ? 120 : 70);
+            painter.setPen(QPen(rail, selected ? 2.6 : 1.8, Qt::SolidLine,
                                 Qt::RoundCap));
-            painter.drawLine(point, QPointF(point.x(),
-                yForGain(state.gainDb + state.dynamicRangeDb)));
+            painter.drawLine(point, QPointF(point.x(), targetY));
+            // The live reading: where the band actually sits right now.
+            const double live = double(m_telemetry.dynamicGainDb[std::size_t(band)]);
+            if (std::abs(live) > 0.05) {
+                const double liveY = yForGain(state.gainDb + live);
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(color);
+                painter.drawEllipse(QPointF(point.x(), liveY), 3.0, 3.0);
+            }
+            QPainterPath cap;
+            const double dir = targetY < point.y() ? -1.0 : 1.0;
+            cap.moveTo(point.x() - 4.0, targetY);
+            cap.lineTo(point.x() + 4.0, targetY);
+            cap.lineTo(point.x(), targetY + dir * 5.0);
+            cap.closeSubpath();
+            QColor tip = color;
+            tip.setAlpha(selected ? 210 : 130);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(tip);
+            painter.drawPath(cap);
         }
+
         if (selected) {
-            QColor halo = color; halo.setAlpha(72);
-            painter.setPen(QPen(halo, 5.0));
+            QColor halo = color;
+            halo.setAlpha(60);
+            painter.setPen(QPen(halo, 6.0));
             painter.setBrush(Qt::NoBrush);
-            painter.drawEllipse(point, 11.0, 11.0);
+            painter.drawEllipse(point, 11.5, 11.5);
         }
-        painter.setPen(QPen(theme.dark ? QColor(255,255,255,225)
-                                     : QColor(0,0,0,205), 1.2));
-        painter.setBrush(color);
-        painter.drawEllipse(point, selected ? 8.0 : 6.5, selected ? 8.0 : 6.5);
-        painter.setPen(theme.dark ? Qt::black : Qt::white);
-        painter.drawText(QRectF(point.x() - 8, point.y() - 8, 16, 16),
+        const double r = selected ? 8.0 : 6.5;
+        QRadialGradient bead(point - QPointF(0, r * 0.35), r * 1.6);
+        bead.setColorAt(0.0, color.lighter(135));
+        bead.setColorAt(1.0, color.darker(118));
+        painter.setPen(QPen(theme.dark ? QColor(255, 255, 255, 210)
+                                       : QColor(0, 0, 0, 190), 1.2));
+        painter.setBrush(bead);
+        painter.drawEllipse(point, r, r);
+
+        QFont numberFont = painter.font();
+        numberFont.setPixelSize(selected ? 10 : 9);
+        numberFont.setBold(true);
+        painter.setFont(numberFont);
+        painter.setPen(color.value() > 150 ? QColor(20, 22, 26)
+                                           : QColor(245, 246, 248));
+        painter.drawText(QRectF(point.x() - 9, point.y() - 9, 18, 18),
                          Qt::AlignCenter, QString::number(band + 1));
+        painter.setFont(scaleFont);
+
         if (m_linearPhase && state.type == eq::FilterType::AllPass) {
             painter.setPen(QPen(Theme::record(), 2.0));
-            painter.drawLine(point + QPointF(-6,-6), point + QPointF(6,6));
-            painter.drawLine(point + QPointF(6,-6), point + QPointF(-6,6));
+            painter.drawLine(point + QPointF(-6, -6), point + QPointF(6, 6));
+            painter.drawLine(point + QPointF(6, -6), point + QPointF(-6, 6));
         }
     }
     painter.restore();
 
-    painter.setPen(QPen(theme.separator(), 1.0));
     painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(mixColors(ground, theme.textPrimary,
+                                  theme.dark ? 0.16 : 0.22), 1.0));
     painter.drawRect(plot);
     if (hasFocus()) {
         painter.setPen(QPen(theme.accentHighlight, 2.0));
@@ -442,7 +737,7 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
       m_channelId(std::move(channelId)), m_insertId(std::move(insertId)),
       m_channelKey(m_channelId.toStdString()), m_insertKey(m_insertId.toStdString()) {
     setObjectName(QStringLiteral("EqualizerPanel"));
-    setMinimumSize(820, 520);
+    setMinimumSize(880, 560);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAccessibleName(tr("VLT Equalizer editor"));
 
@@ -495,38 +790,108 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     m_graph = new EqualizerGraph(this);
     root->addWidget(m_graph, 1);
 
-    m_bandPanel = new QWidget(this);
+    // The instrument's own chrome. Combo boxes and checks default to the
+    // application's panel styling, which is built for a light grey strip, not
+    // for a near-black plate floating on a plot.
+    const auto restyle = [this] {
+        const Theme& t = th();
+        const QColor field = mixColors(t.surfaceElevated, t.background,
+                                       t.dark ? 0.55 : 0.12);
+        const QColor edge = mixColors(t.separator(), t.textPrimary, 0.10);
+        setStyleSheet(QString(R"(
+#EqualizerPanel QComboBox {
+    background: %1; border: 1px solid %2; border-radius: 9px;
+    padding: 3px 10px; color: %3; min-height: 20px;
+}
+#EqualizerPanel QComboBox:hover { border-color: %4; background: %6; }
+#EqualizerPanel QComboBox:focus { border-color: %4; }
+#EqualizerPanel QComboBox::drop-down { width: 16px; border: none; }
+#EqualizerPanel QComboBox QAbstractItemView {
+    background: %1; border: 1px solid %2; border-radius: 8px;
+    padding: 3px; selection-background-color: %4; color: %3;
+}
+#EqualizerPanel QPushButton {
+    background: %1; border: 1px solid %2; border-radius: 9px;
+    padding: 3px 12px; color: %3; min-height: 20px;
+}
+#EqualizerPanel QPushButton:hover { background: %6; border-color: %4; }
+#EqualizerPanel QPushButton:checked { background: %4; border-color: %4; color: %7; }
+#EqualizerPanel QCheckBox { color: %3; spacing: 6px; }
+#EqualizerPanel QCheckBox::indicator {
+    width: 14px; height: 14px; border-radius: 5px;
+    border: 1px solid %2; background: %1;
+}
+#EqualizerPanel QCheckBox::indicator:hover { border-color: %4; }
+#EqualizerPanel QCheckBox::indicator:checked {
+    background: %4; border-color: %4;
+}
+#EqualizerPanel QCheckBox::indicator:disabled { border-color: %2; background: %6; }
+#EqualizerBandLabel { color: %4; font-weight: 700; letter-spacing: 0.6px; }
+#EqualizerPanel QPushButton#EqualizerBandClose {
+    border: none; border-radius: 10px; background: transparent;
+    color: %5; font-size: 15px; font-weight: 700;
+    padding: 0 0 2px 0; min-width: 0; min-height: 0;
+}
+#EqualizerPanel QPushButton#EqualizerBandClose:hover {
+    background: %6; color: %3;
+}
+)").arg(field.name(), edge.name(), t.textPrimary.name(), t.accent.name(),
+        t.textSecondary.name(),
+        mixColors(field, t.textPrimary, 0.10).name(),
+        (t.accent.value() > 150 ? QColor(18, 20, 24) : QColor(245, 246, 248))
+            .name()));
+    };
+    restyle();
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this, restyle);
+
+    // The inspector is a child of the graph, not a row beneath it: it floats
+    // over the curve it edits and is only there while a band is selected.
+    auto* plate = new OverlayPlate(m_graph);
+    m_bandPanel = plate;
     m_bandPanel->setAccessibleName(tr("Selected band controls"));
-    auto* bandRow = new QHBoxLayout(m_bandPanel);
-    bandRow->setContentsMargins(4, 3, 4, 3);
-    bandRow->setSpacing(6);
-    auto* bandLabel = new QLabel(tr("No band selected"), m_bandPanel);
+    m_bandPanel->hide();
+    constexpr int kPlateEdge = OverlayPlate::kMargin;
+    auto* plateStack = new QVBoxLayout(m_bandPanel);
+    plateStack->setContentsMargins(kPlateEdge + 9, kPlateEdge + 6,
+                                   kPlateEdge + 9, kPlateEdge + 6);
+    plateStack->setSpacing(5);
+
+    auto* bandRowHost = new QWidget(m_bandPanel);
+    auto* bandRow = new QHBoxLayout(bandRowHost);
+    bandRow->setContentsMargins(0, 0, 0, 0);
+    bandRow->setSpacing(7);
+    plateStack->addWidget(bandRowHost);
+
+    auto* bandLabel = new QLabel(tr("Band"), bandRowHost);
     bandLabel->setObjectName(QStringLiteral("EqualizerBandLabel"));
-    bandLabel->setMinimumWidth(76);
+    bandLabel->setMinimumWidth(52);
     bandRow->addWidget(bandLabel);
 
-    m_type = new QComboBox(m_bandPanel);
+    m_type = new QComboBox(bandRowHost);
     m_type->setAccessibleName(tr("Filter type"));
     for (const QString& name : {tr("Bell"), tr("Low Shelf"), tr("High Shelf"),
              tr("Low Cut"), tr("High Cut"), tr("Notch"), tr("Band Pass"),
              tr("Tilt"), tr("All Pass")})
         m_type->addItem(name);
-    m_slope = new QComboBox(m_bandPanel);
+    m_slope = new QComboBox(bandRowHost);
     m_slope->setAccessibleName(tr("Filter slope"));
     for (int slope : {6, 12, 18, 24, 36, 48, 72, 96})
         m_slope->addItem(QStringLiteral("%1 dB/oct").arg(slope));
-    m_placement = new QComboBox(m_bandPanel);
+    m_placement = new QComboBox(bandRowHost);
     m_placement->setAccessibleName(tr("Band channel placement"));
     m_placement->addItems({tr("Stereo"), tr("Left"), tr("Right"), tr("Mid"), tr("Side")});
-    bandRow->addWidget(controlCell(m_type, tr("Type"), m_bandPanel));
-    bandRow->addWidget(controlCell(m_slope, tr("Slope"), m_bandPanel));
-    bandRow->addWidget(controlCell(m_placement, tr("Placement"), m_bandPanel));
+    for (QComboBox* combo : {m_type, m_slope, m_placement})
+        combo->setMinimumWidth(84);
+    bandRow->addWidget(controlCell(m_type, tr("Type"), bandRowHost));
+    bandRow->addWidget(controlCell(m_slope, tr("Slope"), bandRowHost));
 
-    auto makeBandKnob = [this, bandRow](const QString& key, eq::BandParam field,
-                                        const QString& caption, int diameter) {
+    auto makeBandKnob = [this, bandRow, bandRowHost](const QString& key,
+                                                     eq::BandParam field,
+                                                     const QString& caption,
+                                                     int diameter) {
         const QString example = bandId(0, field);
         const ParameterInfo* info = parameterInfo(example);
-        auto* knob = new ui::Knob({}, m_bandPanel);
+        auto* knob = new ui::Knob({}, bandRowHost);
         if (info) {
             knob->setRange(info->minValue, info->maxValue);
             knob->setDefaultValue(info->defaultValue);
@@ -540,6 +905,7 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
             knob->setAccessibleName(caption);
             knob->setAutomatable(info->isAutomatable);
         }
+        knob->setVisualStyle(ui::Knob::VisualStyle::Graphite);
         knob->setBare(diameter);
         connect(knob, &ui::Knob::valueChanged, this,
                 [this, field](double value) {
@@ -556,24 +922,41 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
             if (band >= 0) emit automationRequested(bandId(band, field));
         });
         m_knobs.insert(key, knob);
-        bandRow->addWidget(controlCell(knob, caption, m_bandPanel));
+        bandRow->addWidget(controlCell(knob, caption, bandRowHost));
         return knob;
     };
+    // The three that matter, big and in the middle — this row is the reason the
+    // plate exists.
     makeBandKnob(QStringLiteral("$band.frequency"), eq::BandParam::Frequency,
-                 tr("Frequency"), 48);
+                 tr("Freq"), 46);
     makeBandKnob(QStringLiteral("$band.gain"), eq::BandParam::Gain,
-                 tr("Gain"), 48);
-    makeBandKnob(QStringLiteral("$band.q"), eq::BandParam::Q, tr("Q"), 48);
-    m_dynamic = new QCheckBox(tr("Dynamics"), m_bandPanel);
+                 tr("Gain"), 56);
+    makeBandKnob(QStringLiteral("$band.q"), eq::BandParam::Q, tr("Q"), 46);
+    bandRow->addWidget(controlCell(m_placement, tr("Channel"), bandRowHost));
+    m_dynamic = new QCheckBox(tr("Dynamic"), bandRowHost);
     m_dynamic->setAccessibleName(tr("Enable dynamics for selected band"));
     bandRow->addWidget(m_dynamic);
-    root->addWidget(m_bandPanel);
 
-    m_dynamicPanel = new QWidget(this);
+    // U+00D7, not one of the prettier crosses: this glyph has to exist in
+    // whatever UI font the platform hands us.
+    auto* closeBand = new QPushButton(QString(QChar(0x00D7)), bandRowHost);
+    closeBand->setObjectName(QStringLiteral("EqualizerBandClose"));
+    closeBand->setFlat(true);
+    closeBand->setFixedSize(20, 20);
+    closeBand->setToolTip(tr("Deselect band"));
+    closeBand->setAccessibleName(tr("Deselect band"));
+    connect(closeBand, &QPushButton::clicked, this, [this] { selectBands({}); });
+    bandRow->addWidget(closeBand, 0, Qt::AlignTop);
+
+    // Dynamics live on the same plate, one row down, so turning them on grows
+    // the inspector instead of opening a second panel somewhere else.
+    m_dynamicPanel = new QWidget(m_bandPanel);
     m_dynamicPanel->setAccessibleName(tr("Selected band dynamics"));
+    m_dynamicPanel->hide();
+    plateStack->addWidget(m_dynamicPanel);
     auto* dynamicsRow = new QHBoxLayout(m_dynamicPanel);
-    dynamicsRow->setContentsMargins(84, 2, 4, 3);
-    dynamicsRow->setSpacing(7);
+    dynamicsRow->setContentsMargins(0, 3, 0, 0);
+    dynamicsRow->setSpacing(6);
     auto makeDynamicsKnob = [this, dynamicsRow](const QString& key,
                                                  eq::BandParam field,
                                                  const QString& caption) {
@@ -591,7 +974,8 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
             knob->setAccessibleName(caption);
             knob->setAutomatable(info->isAutomatable);
         }
-        knob->setBare(42);
+        knob->setVisualStyle(ui::Knob::VisualStyle::Graphite);
+        knob->setBare(38);
         connect(knob, &ui::Knob::valueChanged, this, [this, field](double value) {
             if (m_refreshing || m_graph->selection().empty()) return;
             std::vector<QString> ids;
@@ -621,16 +1005,19 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     makeDynamicsKnob(QStringLiteral("$band.detector.high"), eq::BandParam::DetectorHigh,
                      tr("Detector High"));
     m_dynamicAuto = new QCheckBox(tr("Auto"), m_dynamicPanel);
-    m_external = new QCheckBox(tr("External SC"), m_dynamicPanel);
+    m_external = new QCheckBox(tr("Ext SC"), m_dynamicPanel);
     m_detectorMode = new QComboBox(m_dynamicPanel);
     m_detectorMode->addItems({tr("Band detector"), tr("Free detector")});
+    m_detectorMode->setMinimumWidth(112);
     m_dynamicAuto->setAccessibleName(tr("Automatic dynamics timing and threshold"));
     m_external->setAccessibleName(tr("Use external sidechain"));
     m_detectorMode->setAccessibleName(tr("Dynamics detector range mode"));
     dynamicsRow->addWidget(m_dynamicAuto);
     dynamicsRow->addWidget(m_external);
     dynamicsRow->addWidget(m_detectorMode);
-    root->addWidget(m_dynamicPanel);
+    dynamicsRow->addStretch(1);
+
+    m_graph->setOverlay(m_bandPanel);
 
     auto* bottom = new QHBoxLayout;
     bottom->setSpacing(6);
@@ -840,6 +1227,7 @@ ui::Knob* EqualizerPanel::makeKnob(const QString& id, const QString& caption, in
         knob->setToolTip(QString::fromStdString(info->name));
         knob->setAutomatable(info->isAutomatable);
     }
+    knob->setVisualStyle(ui::Knob::VisualStyle::Graphite);
     knob->setBare(size);
     knob->setValue(readParameter(id));
     connect(knob, &ui::Knob::valueChanged, this, [this, id](double value) {
@@ -1263,14 +1651,31 @@ void EqualizerPanel::updateAnalyzerConfig() {
 void EqualizerPanel::refreshBandControls() {
     const int band = selectedBand();
     const bool selected = band >= 0;
-    m_bandPanel->setEnabled(selected);
+    // Nothing selected means no inspector at all — an empty plate parked over
+    // the curve is just something in the way.
+    m_bandPanel->setVisible(selected);
     QLabel* label = m_bandPanel->findChild<QLabel*>(QStringLiteral("EqualizerBandLabel"));
-    if (label) label->setText(selected ? tr("Band %1").arg(band + 1)
-                                      : tr("No band selected"));
+    if (label) label->setText(selected ? tr("Band %1").arg(band + 1) : tr("Band"));
     if (!selected) {
         m_dynamicPanel->hide();
         return;
     }
+    // The plate, its top edge and its three rings all take the band's colour,
+    // so the inspector and the handle on the curve are visibly the same object.
+    const QColor accent = EqualizerGraph::colorForBand(band, th().dark);
+    // The plate is ours, built a few lines into the constructor; a qobject_cast
+    // would want a Q_OBJECT on a class that only exists inside this file.
+    static_cast<OverlayPlate*>(m_bandPanel)->setAccent(accent);
+    for (const QString& key : {QStringLiteral("$band.frequency"),
+                               QStringLiteral("$band.gain"),
+                               QStringLiteral("$band.q"),
+                               QStringLiteral("$band.dynamic.range"),
+                               QStringLiteral("$band.dynamic.threshold"),
+                               QStringLiteral("$band.dynamic.attack"),
+                               QStringLiteral("$band.dynamic.release"),
+                               QStringLiteral("$band.detector.low"),
+                               QStringLiteral("$band.detector.high")})
+        if (ui::Knob* knob = m_knobs.value(key)) knob->setArcColor(accent);
     eq::EqualizerInstance* instance = equalizerInstance();
     if (!instance) return;
     const eq::BandState state = instance->bandState(std::uint32_t(band));
@@ -1306,6 +1711,10 @@ void EqualizerPanel::refreshBandControls() {
         state.type == eq::FilterType::HighShelf || state.type == eq::FilterType::Tilt;
     m_dynamic->setEnabled(supportsDynamics);
     m_dynamicPanel->setVisible(supportsDynamics && state.dynamicEnabled);
+    // The plate changes height when dynamics open or close, so it has to be
+    // re-placed against the plot's lower edge.
+    m_bandPanel->adjustSize();
+    m_graph->setOverlay(m_bandPanel);
     if (ui::Knob* threshold = m_knobs.value(QStringLiteral("$band.dynamic.threshold")))
         threshold->setEnabled(!state.dynamicAuto);
     for (const QString& key : {QStringLiteral("$band.detector.low"),
@@ -1341,6 +1750,7 @@ void EqualizerPanel::refresh() {
     eq::Telemetry telemetry;
     std::array<eq::BandState, eq::kBandCount> bands{};
     std::array<double, 256> response{};
+    EqualizerGraph::CurveSet curves{};
     if (eq::EqualizerInstance* instance = equalizerInstance()) {
         telemetry = instance->consumeTelemetry();
         for (std::uint32_t band = 0; band < eq::kBandCount; ++band)
@@ -1349,6 +1759,17 @@ void EqualizerPanel::refresh() {
             const double frequency = 10.0 * std::pow(3000.0,
                 double(i) / double(response.size() - 1));
             response[i] = instance->responseDb(frequency);
+        }
+        // Only the enabled bands are walked. A session rarely uses more than a
+        // handful, and this runs on the refresh timer.
+        for (std::uint32_t band = 0; band < eq::kBandCount; ++band) {
+            if (!bands[band].enabled) continue;
+            for (int i = 0; i < EqualizerGraph::kCurvePoints; ++i) {
+                const double frequency = 10.0 * std::pow(3000.0,
+                    double(i) / double(EqualizerGraph::kCurvePoints - 1));
+                curves[band][std::size_t(i)] =
+                    float(instance->bandResponseDb(band, frequency));
+            }
         }
         const char active = instance->activeComparison();
         m_a->setChecked(active == 'A');
@@ -1401,7 +1822,7 @@ void EqualizerPanel::refresh() {
     const double range = m_displayRange->currentData().toDouble();
     m_graph->setData(bands, response, telemetry,
                      m_mode->currentIndex() == int(eq::ProcessingMode::LinearPhase),
-                     range > 0.0 ? range : 12.0);
+                     range > 0.0 ? range : 12.0, curves);
     refreshBandControls();
     m_refreshing = false;
 }
@@ -1436,7 +1857,7 @@ bool EqualizerPanel::checkForTest() {
     bool accessible = m_graph->focusPolicy() == Qt::StrongFocus &&
                       !m_graph->accessibleName().isEmpty();
     for (ui::Knob* knob : std::as_const(m_knobs))
-        accessible = accessible && knob->focusPolicy() == Qt::StrongFocus &&
+        accessible = accessible && knob->focusPolicy() == Qt::TabFocus &&
                      !knob->accessibleName().isEmpty();
     equalizerInstance()->loadState(saved);
     refresh();

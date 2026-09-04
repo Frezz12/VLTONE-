@@ -6,6 +6,7 @@
 #include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
+#include <QTransform>
 #include <QRandomGenerator>
 #include <QSettings>
 #include <QTimer>
@@ -302,15 +303,44 @@ void GlassPanel::paintEvent(QPaintEvent*) {
     const qreal radius = std::min<qreal>(m_radius, plate.height() / 2.0);
 
     // ── Shadow ──
-    // A stack of ever-larger, ever-fainter copies of the shape: cheaper than a
-    // real gaussian and, at this size, indistinguishable from one. Attached at
-    // the top there is nothing above to cast onto, so it only spreads downwards.
-    for (int i = m_shadowMargin; i >= 1; --i) {
-        const qreal up = m_topAttached ? 0.0 : i * 0.6;
-        QPainterPath halo;
-        halo.addRoundedRect(plate.adjusted(-i, -up, i, i * 1.2), radius + i,
-                            radius + i);
-        p.fillPath(halo, QColor(0, 0, 0, theme.dark ? 9 : 7));
+    // A stack of ever-larger, ever-fainter copies of *this plate's own
+    // silhouette*: cheaper than a real gaussian and, at this size,
+    // indistinguishable from one. Attached at the top there is nothing above to
+    // cast onto, so it only spreads downwards and sideways.
+    //
+    // Two things it used to get wrong. It stacked plain rounded rectangles, so
+    // a flared or subclassed outline grew grey wings in the corners where the
+    // two shapes disagreed; scaling the real shape keeps the silhouette. And
+    // every ring carried the same alpha, which is a hard-edged slab rather than
+    // a falloff — barely visible on a dark palette, but on a light one it read
+    // as a smudge of dirt under the panel. The ramp is quadratic so the density
+    // collapses within a couple of pixels of the edge.
+    const QRectF halo = shape.boundingRect();
+    if (halo.width() > 1.0 && halo.height() > 1.0) {
+        // Pure black under a light palette reads as grime. A very dark, faintly
+        // cool grey sits on warm greys as a shadow instead.
+        const QColor ink = theme.dark ? QColor(0, 0, 0)
+                                      : mixColors(theme.surface,
+                                                  QColor(10, 14, 22), 0.86);
+        const qreal anchorY = m_topAttached ? halo.top() : halo.center().y();
+        for (int i = m_shadowMargin; i >= 1; --i) {
+            const qreal t = qreal(i) / qreal(m_shadowMargin);
+            const qreal falloff = (1.0 - t) * (1.0 - t);
+            const int alpha =
+                int(std::lround((theme.dark ? 30.0 : 20.0) * falloff));
+            if (alpha <= 0) continue;
+
+            const qreal down = m_topAttached ? i * 1.2 : i * 2.0;
+            QTransform grow;
+            grow.translate(halo.center().x(), anchorY);
+            grow.scale((halo.width() + 2 * i) / halo.width(),
+                       (halo.height() + down) / halo.height());
+            grow.translate(-halo.center().x(), -anchorY);
+
+            QColor ring = ink;
+            ring.setAlpha(alpha);
+            p.fillPath(grow.map(shape), ring);
+        }
     }
 
     p.save();

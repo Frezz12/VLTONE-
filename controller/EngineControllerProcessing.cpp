@@ -312,6 +312,8 @@ audio::Result EngineController::bounceInPlace(
             const std::size_t sourceIndex = source
                 ? m_project.indexOf(sourceId)
                 : m_project.tracks.size();
+            const ChannelSnapshot sourceStrip =
+                source ? copyChannelStrip(sourceId, true) : ChannelSnapshot{};
             const bool replaceOnSource =
                 request.destination == BounceDestination::Replace && source &&
                 source->kind == TrackKind::Audio;
@@ -329,7 +331,34 @@ audio::Result EngineController::bounceInPlace(
                     (void)moveTrack(destination, sourceIndex + 1,
                                     sourceParent);
                 }
+                if (TrackModel* target = m_project.findTrack(destination);
+                    target && source) {
+                    // TrackSource and BeforeTrackFader leave the source
+                    // channel's fader live. Move those settings to the channel
+                    // that now owns playback; later capture points already
+                    // contain them in the rendered file.
+                    if (job.injection.stage ==
+                            PlaybackInjectionStage::TrackSource ||
+                        job.injection.stage ==
+                            PlaybackInjectionStage::BeforeTrackFader) {
+                        target->volume = sourceStrip.volume;
+                        target->pan = sourceStrip.pan;
+                        target->mono = sourceStrip.mono;
+                    }
+                    target->outputBusId = sourceStrip.outputBusId;
+                    if (!printSends) {
+                        target->sends = sourceStrip.sends;
+                        for (SendModel& send : target->sends)
+                            send.id = newUuid();
+                    }
+                    if (!printTrack && !sourceStrip.inserts.empty() &&
+                        !pasteChannelInserts(destination, sourceStrip)) {
+                        committed = false;
+                        break;
+                    }
+                }
             }
+            if (!committed) break;
             for (const ClipAddress& address : job.affected)
                 affectRange(address, replaceOnSource);
 
@@ -348,10 +377,22 @@ audio::Result EngineController::bounceInPlace(
             bounced->pan = 0.0f;
             bounced->fadeInSeconds = 0.0;
             bounced->fadeOutSeconds = 0.0;
-            job.injection.anchorChannelId =
-                job.injection.anchorChannelId.empty() ? destination
-                                                       : job.injection.anchorChannelId;
-            bounced->playbackInjection = job.injection;
+            // A clip created on a new track belongs to that track's channel
+            // strip. Keeping the source injection here made the arrangement
+            // and the graph disagree: mute/fader/pan on the visible bounce
+            // track did nothing while the old track still controlled it.
+            // Injection is only needed when replacing material on its existing
+            // channel, where it prevents an already printed stage running
+            // twice.
+            if (replaceOnSource) {
+                job.injection.anchorChannelId =
+                    job.injection.anchorChannelId.empty()
+                        ? destination
+                        : job.injection.anchorChannelId;
+                bounced->playbackInjection = job.injection;
+            } else {
+                bounced->playbackInjection = {};
+            }
             out.outputs.push_back(
                 {job.sourceTrackId, destination, clipId, job.file});
         }

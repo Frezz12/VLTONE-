@@ -1369,13 +1369,17 @@ private:
 };
 
 MiniSlider::MiniSlider(icons::Glyph glyph, const QString& tip, QWidget* parent)
-    : QWidget(parent), m_glyph(glyph) {
+    : QWidget(parent), m_glyph(glyph),
+      m_twoAxisDrag(glyph == icons::Glyph::Volume ||
+                    glyph == icons::Glyph::Pan) {
     setFixedSize(24, 20);
-    setCursor(Qt::SizeHorCursor);
+    setCursor(m_twoAxisDrag ? Qt::SizeAllCursor : Qt::SizeHorCursor);
     setToolTip(tip);
     setAccessibleName(tip);
-    setAccessibleDescription(
-        tr("Drag horizontally to adjust; double-click to reset."));
+    setAccessibleDescription(m_twoAxisDrag
+        ? tr("Drag right or up to increase, left or down to decrease; "
+             "double-click to reset.")
+        : tr("Drag horizontally to adjust; double-click to reset."));
     setMouseTracking(true);
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             QOverload<>::of(&QWidget::update));
@@ -1401,10 +1405,6 @@ void MiniSlider::openFlyoutForTest() {
 
 void MiniSlider::setRotary(bool rotary) {
     m_rotary = rotary;
-    setCursor(rotary ? Qt::SizeVerCursor : Qt::SizeHorCursor);
-    setAccessibleDescription(
-        rotary ? tr("Drag vertically to adjust; double-click to reset.")
-               : tr("Drag horizontally to adjust; double-click to reset."));
     update();
 }
 
@@ -1527,23 +1527,32 @@ void MiniSlider::mousePressEvent(QMouseEvent* ev) {
     m_dragging = true;
     m_dragStartValue = m_value;
     m_dragStartX = int(ev->position().x());
+    m_dragStartY = int(ev->position().y());
     ValueBubble::showFor(this, QPoint(width() / 2, 0), text());
     update();
+    ev->accept();
 }
 
 void MiniSlider::mouseMoveEvent(QMouseEvent* ev) {
     if (!m_dragging) return;
     const double fine = (ev->modifiers() & Qt::ShiftModifier) ? 0.25 : 1.0;
-    const double moved = ev->position().x() - m_dragStartX;
+    // Match the full-size pan knob: either useful axis works, and diagonals
+    // remain one continuous gesture. Right/up raise the value; left/down lower
+    // it. This is especially handy on the context strip's tiny 24 px targets.
+    const double horizontal = ev->position().x() - m_dragStartX;
+    const double vertical = ev->position().y() - m_dragStartY;
+    const double moved = m_twoAxisDrag ? horizontal - vertical : horizontal;
     commit(m_dragStartValue + (m_inverted ? -moved : moved) * m_step * fine);
+    ev->accept();
 }
 
-void MiniSlider::mouseReleaseEvent(QMouseEvent*) {
+void MiniSlider::mouseReleaseEvent(QMouseEvent* event) {
     if (!m_dragging) return;
     m_dragging = false;
     ValueBubble::dismiss();
     update();
     emit editFinished();
+    event->accept();
 }
 
 void MiniSlider::mouseDoubleClickEvent(QMouseEvent* event) {
@@ -1577,7 +1586,9 @@ void MiniSlider::wheelEvent(QWheelEvent* ev) {
 PanKnob::PanKnob(QWidget* parent) : QWidget(parent) {
     setFixedSize(30, 30);
     setCursor(Qt::SizeAllCursor);
-    setFocusPolicy(Qt::StrongFocus);
+    // Keyboard users keep a visible focus target, but a mouse drag no longer
+    // leaves a ring around the knob after every adjustment.
+    setFocusPolicy(Qt::TabFocus);
     setAccessibleName(tr("Pan"));
     setToolTip(
         tr("Pan · drag horizontally or vertically · double-click to centre"));
@@ -1674,14 +1685,13 @@ void PanKnob::paintEvent(QPaintEvent*) {
         QColor focus = t.accent;
         focus.setAlpha(220);
         p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(focus, 1.4, Qt::DashLine));
+        p.setPen(QPen(focus, 1.4, Qt::SolidLine));
         p.drawEllipse(bounds.adjusted(0.4, 0.4, -0.4, -0.4));
     }
 }
 
 void PanKnob::mousePressEvent(QMouseEvent* ev) {
     if (ev->button() != Qt::LeftButton) return;
-    setFocus(Qt::MouseFocusReason);
     m_dragging = true;
     m_dragStart = m_pan;
     m_dragStartX = int(ev->position().x());
@@ -1781,6 +1791,11 @@ void PanKnob::contextMenuEvent(QContextMenuEvent* event) {
 
 bool PanKnob::checkInteractionForTest() {
     PanKnob control;
+    Knob parameter(QStringLiteral("TEST"));
+    ModeSwitch mode(QStringLiteral("A"), QStringLiteral("B"));
+    const bool mouseFocusRemoved = control.focusPolicy() == Qt::TabFocus &&
+                                   parameter.focusPolicy() == Qt::TabFocus &&
+                                   mode.focusPolicy() == Qt::TabFocus;
     int changes = 0;
     int finishes = 0;
     QObject::connect(&control, &PanKnob::panChanged,
@@ -1825,8 +1840,8 @@ bool PanKnob::checkInteractionForTest() {
 
     QKeyEvent left(QEvent::KeyPress, Qt::Key_Left, Qt::NoModifier);
     control.keyPressEvent(&left);
-    return draggedRight && resetToCentre && draggedDown && control.pan() < 0.0 &&
-           changes >= 5 && finishes >= 5;
+    return mouseFocusRemoved && draggedRight && resetToCentre && draggedDown &&
+           control.pan() < 0.0 && changes >= 5 && finishes >= 5;
 }
 
 // ── Knob ──
@@ -1848,7 +1863,7 @@ Knob::Knob(const QString& caption, QWidget* parent)
     : QWidget(parent), m_caption(caption) {
     setFixedSize(kKnobSize + 12, kKnobSize + kKnobCaptionHeight);
     setCursor(Qt::SizeVerCursor);
-    setFocusPolicy(Qt::StrongFocus);
+    setFocusPolicy(Qt::TabFocus);
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             QOverload<>::of(&QWidget::update));
 }
@@ -1891,6 +1906,12 @@ void Knob::setBare(int diameter) {
     m_bare = diameter;
     m_caption.clear();
     setFixedSize(diameter, diameter);
+    update();
+}
+
+void Knob::setArcColor(const QColor& color) {
+    if (m_arcColor == color) return;
+    m_arcColor = color;
     update();
 }
 
@@ -1956,6 +1977,7 @@ void Knob::paintEvent(QPaintEvent*) {
 
     const bool digital = m_visualStyle == VisualStyle::SamplerDigital;
     const bool gravityStyle = m_visualStyle == VisualStyle::Gravity;
+    const bool graphiteStyle = m_visualStyle == VisualStyle::Graphite;
     const int size = m_bare ? m_bare
                             : digital ? kSamplerKnobSize
                                       : (m_compact ? kKnobCompactSize : kKnobSize);
@@ -1965,6 +1987,118 @@ void Knob::paintEvent(QPaintEvent*) {
     const QPointF centre = ring.center();
     const double radius = ring.width() / 2.0;
     const double pen = m_bare ? 2.0 : (digital ? 2.4 : (m_compact ? 2.5 : 3.0));
+
+    if (graphiteStyle) {
+        // Graphit's dial, scaled down. That control is a single 220 px machined
+        // knob; the equalizer needs a dozen of them at a third of the size, so
+        // every dimension here is a fraction of the radius rather than a fixed
+        // number of pixels — otherwise the collar eats the body and the ticks
+        // vanish. The arc colour carries through, which is what lets the
+        // equalizer paint a band's three rings in that band's own colour.
+        const double f = fraction();
+        const double interaction = m_dragging ? 1.0 : m_hoverFade.value();
+        const QColor accent = m_arcColor.isValid() ? m_arcColor : t.accent;
+        const QColor lit = mixColors(QColor(0xF1, 0xF3, 0xF2), accent, 0.55);
+
+        // The tick ring reads the value at sizes where an arc would be a smear.
+        const int tickCount = radius > 26.0 ? 25 : 17;
+        for (int tick = 0; tick < tickCount; ++tick) {
+            const double tf = double(tick) / double(tickCount - 1);
+            const double angle = (225.0 - tf * 270.0) * kDegToRad;
+            const bool active = m_bipolar
+                ? tf >= std::min(0.5, f) && tf <= std::max(0.5, f)
+                : tf <= f + 1.0e-9;
+            const bool major = tick % 4 == 0;
+            const double outer = radius - 0.6;
+            const double inner = outer - radius * (major ? 0.26 : 0.17);
+            QColor ink = active ? lit : mixColors(t.well(), t.textSecondary, 0.30);
+            ink.setAlpha(active ? 235 : 80);
+            p.setPen(QPen(ink, active ? std::max(1.2, radius * 0.075)
+                                      : std::max(0.8, radius * 0.045),
+                          Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(QPointF(centre.x() + std::cos(angle) * inner,
+                               centre.y() - std::sin(angle) * inner),
+                       QPointF(centre.x() + std::cos(angle) * outer,
+                               centre.y() - std::sin(angle) * outer));
+        }
+
+        const QRectF collar = ring.adjusted(radius * 0.30, radius * 0.30,
+                                            -radius * 0.30, -radius * 0.30);
+        if (collar.width() < 6.0) return;
+
+        // Seated, not floating: a stack of soft ellipses under the collar is
+        // what makes the machined body read as a physical part.
+        p.setPen(Qt::NoPen);
+        for (int layer = 0; layer < 4; ++layer) {
+            const double spread = double(layer) * radius * 0.045;
+            p.setBrush(QColor(0, 0, 0, 62 - layer * 13));
+            p.drawEllipse(collar.adjusted(-spread, -spread, spread, spread)
+                              .translated(0.0, radius * 0.10 + layer * 0.5));
+        }
+
+        QRadialGradient bezel(collar.topLeft() + QPointF(collar.width() * 0.30,
+                                                         collar.height() * 0.22),
+                              collar.width() * 0.85);
+        bezel.setColorAt(0.0, QColor(0x58, 0x5A, 0x5C));
+        bezel.setColorAt(0.48, QColor(0x2C, 0x2E, 0x30));
+        bezel.setColorAt(0.80, QColor(0x15, 0x16, 0x18));
+        bezel.setColorAt(1.0, QColor(0x05, 0x06, 0x07));
+        p.setPen(QPen(QColor(0x05, 0x06, 0x07), std::max(1.0, radius * 0.055)));
+        p.setBrush(bezel);
+        p.drawEllipse(collar);
+
+        const double lipInset = std::max(1.6, collar.width() * 0.13);
+        const QRectF body = collar.adjusted(lipInset, lipInset,
+                                            -lipInset, -lipInset);
+        QLinearGradient graphite(body.topLeft(), body.bottomLeft());
+        graphite.setColorAt(0.0, QColor(0x3D, 0x3F, 0x41));
+        graphite.setColorAt(0.40, QColor(0x29, 0x2B, 0x2D));
+        graphite.setColorAt(0.72, QColor(0x1C, 0x1E, 0x20));
+        graphite.setColorAt(1.0, QColor(0x12, 0x13, 0x15));
+        p.setPen(QPen(QColor(0x09, 0x0A, 0x0B), std::max(0.9, radius * 0.04)));
+        p.setBrush(graphite);
+        p.drawEllipse(body);
+
+        QRadialGradient gloss(body.topLeft() + QPointF(body.width() * 0.28,
+                                                       body.height() * 0.20),
+                              body.width() * 0.66);
+        gloss.setColorAt(0.0, QColor(255, 255, 255, 38));
+        gloss.setColorAt(0.50, QColor(255, 255, 255, 9));
+        gloss.setColorAt(1.0, QColor(255, 255, 255, 0));
+        p.setPen(Qt::NoPen);
+        p.setBrush(gloss);
+        p.drawEllipse(body.adjusted(1.0, 1.0, -1.0, -1.0));
+
+        // One lit arc up top and one dark arc below: the two specular hints
+        // that turn a flat disc into a turned metal edge.
+        p.setBrush(Qt::NoBrush);
+        const double lipInset2 = std::max(1.0, radius * 0.08);
+        p.setPen(QPen(QColor(255, 255, 255, 42 + int(interaction * 26)),
+                      std::max(0.9, radius * 0.05), Qt::SolidLine, Qt::RoundCap));
+        p.drawArc(collar.adjusted(lipInset2, lipInset2, -lipInset2, -lipInset2),
+                  28 * 16, 124 * 16);
+        p.setPen(QPen(QColor(0, 0, 0, 150), std::max(1.1, radius * 0.06),
+                      Qt::SolidLine, Qt::RoundCap));
+        p.drawArc(collar.adjusted(lipInset2, lipInset2, -lipInset2, -lipInset2),
+                  205 * 16, 130 * 16);
+
+        const double angle = (225.0 - f * 270.0) * kDegToRad;
+        p.setPen(QPen(lit, std::max(1.6, radius * 0.11), Qt::SolidLine,
+                      Qt::RoundCap));
+        p.drawLine(QPointF(centre.x() + std::cos(angle) * body.width() * 0.12,
+                           centre.y() - std::sin(angle) * body.width() * 0.12),
+                   QPointF(centre.x() + std::cos(angle) * body.width() * 0.42,
+                           centre.y() - std::sin(angle) * body.width() * 0.42));
+
+        if (hasFocus()) {
+            QColor focus = accent;
+            focus.setAlpha(230);
+            p.setPen(QPen(focus, 1.6, Qt::SolidLine));
+            p.setBrush(Qt::NoBrush);
+            p.drawEllipse(ring.adjusted(-1.0, -1.0, 1.0, 1.0));
+        }
+        return;
+    }
 
     if (gravityStyle) {
         const double f = fraction();
@@ -2029,7 +2163,7 @@ void Knob::paintEvent(QPaintEvent*) {
         if (hasFocus()) {
             QColor focus = accent;
             focus.setAlpha(230);
-            p.setPen(QPen(focus, 2.0, Qt::DashLine));
+            p.setPen(QPen(focus, 2.0, Qt::SolidLine));
             p.drawEllipse(ring.adjusted(-1.0, -1.0, 1.0, 1.0));
         }
         return;
@@ -2132,7 +2266,7 @@ void Knob::paintEvent(QPaintEvent*) {
             QColor focus = t.accent;
             focus.setAlpha(150);
             p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(focus, 1.0, Qt::DashLine));
+            p.setPen(QPen(focus, 1.0, Qt::SolidLine));
             p.drawEllipse(ring.adjusted(-1.0, -1.0, 1.0, 1.0));
         }
 
@@ -2174,7 +2308,8 @@ void Knob::paintEvent(QPaintEvent*) {
     const double sweep = m_bipolar ? (f - 0.5) * 270.0 : f * 270.0;
     const double from = m_bipolar ? 90.0 : 225.0;
     const bool atRest = std::abs(sweep) < 0.5;
-    p.setPen(QPen(atRest ? t.textSecondary : t.accent, pen));
+    const QColor arc = m_arcColor.isValid() ? m_arcColor : t.accent;
+    p.setPen(QPen(atRest ? t.textSecondary : arc, pen));
     p.drawArc(ring, int(from * 16), int(-sweep * 16 * (m_bipolar ? 1.0 : 1.0)));
 
     p.setPen(Qt::NoPen);
@@ -2334,9 +2469,9 @@ ModeSwitch::ModeSwitch(const QString& leftLabel, const QString& rightLabel,
     setCursor(Qt::PointingHandCursor);
     setFixedHeight(24);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    // Focusable by click only, like every other control in the shell: nothing
-    // may take the keyboard on its own, or the transport keys stop working.
-    setFocusPolicy(Qt::ClickFocus);
+    // Keyboard focus remains available without a mouse click stealing the
+    // transport keys or leaving a ring behind.
+    setFocusPolicy(Qt::TabFocus);
     setAttribute(Qt::WA_Hover, true);
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, [this] {
         m_active = th().accent;
@@ -2447,7 +2582,7 @@ void ModeSwitch::paintEvent(QPaintEvent*) {
 
     if (hasFocus()) {
         p.setPen(QPen(mixColors(t.accent, t.textPrimary, 0.3), 1,
-                      Qt::DotLine));
+                      Qt::SolidLine));
         p.setBrush(Qt::NoBrush);
         p.drawRoundedRect(track.adjusted(1, 1, -1, -1), radius, radius);
     }
@@ -2808,13 +2943,29 @@ double ResizeHandle::along(const QMouseEvent* ev) const {
 
 void ResizeHandle::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    const QColor line = th().sectionDivider();
+    const Theme& t = th();
+    const QColor line = t.sectionDivider();
+    // A seam, not a stripe. The dark line is the gap between two panels and the
+    // pale one just inside it is the near panel's lit edge — one pixel of
+    // relief is the whole difference between columns that read as separate
+    // planes and a single flat sheet with a pencil mark on it.
+    QColor lit(255, 255, 255);
+    lit.setAlpha(t.dark ? 14 : 132);
+
     if (m_orientation == Qt::Horizontal) {
-        const int y = m_edge == Qt::BottomEdge ? height() - 1 : 0;
+        const bool bottom = m_edge == Qt::BottomEdge;
+        const int y = bottom ? height() - 1 : 0;
+        const int inner = bottom ? y - 1 : y + 1;
         painter.fillRect(0, y, width(), 1, line);
+        if (inner >= 0 && inner < height())
+            painter.fillRect(0, inner, width(), 1, lit);
     } else {
-        const int x = m_edge == Qt::RightEdge ? width() - 1 : 0;
+        const bool right = m_edge == Qt::RightEdge;
+        const int x = right ? width() - 1 : 0;
+        const int inner = right ? x - 1 : x + 1;
         painter.fillRect(x, 0, 1, height(), line);
+        if (inner >= 0 && inner < width())
+            painter.fillRect(inner, 0, 1, height(), lit);
     }
 }
 

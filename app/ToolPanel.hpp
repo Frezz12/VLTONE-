@@ -52,6 +52,8 @@ signals:
     void restartModeToggled(bool on);
     void playFromClipToggled(bool on);
     void followPlayheadToggled(bool on);
+    /// Display-only scale for audio waveforms in arrangement clips.
+    void waveformScaleChanged(double scale);
     /// Global reveal/collapse for automation lanes. Checked is the active
     /// state, so pressing the button a second time hides them again.
     void automationVisibilityToggled(bool visible);
@@ -66,6 +68,7 @@ signals:
 
 protected:
     void resizeEvent(QResizeEvent*) override;
+    void paintEvent(QPaintEvent*) override;
 
 private:
     void applyTheme();
@@ -76,6 +79,7 @@ private:
     ui::IconButton* m_restart = nullptr;
     ui::IconButton* m_playFromClip = nullptr;
     ui::IconButton* m_followPlayhead = nullptr;
+    ui::IconButton* m_waveformScale = nullptr;
     ui::IconButton* m_createAutomation = nullptr;
     ui::IconButton* m_showAutomation = nullptr;
     QWidget* m_inspectorZone = nullptr;

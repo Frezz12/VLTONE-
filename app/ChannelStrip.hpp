@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QSet>
 #include <QWidget>
 
 #include <functional>
@@ -15,6 +16,7 @@ namespace plugins { struct PluginDescriptor; }
 } // namespace daw
 
 class QLabel;
+class QAbstractButton;
 class QMenu;
 /// Defined in the .cpp: the I/O plate the strip's routing rows are made of.
 class RoutingField;
@@ -31,7 +33,8 @@ class ChannelStrip : public QWidget {
     Q_OBJECT
 public:
     ChannelStrip(daw::EngineController* controller, const QString& trackId,
-                 bool master, QWidget* parent = nullptr);
+                 bool master, QWidget* parent = nullptr,
+                 bool insertsOnly = false);
 
     const QString& trackId() const { return m_trackId; }
     bool isMaster() const { return m_master; }
@@ -163,6 +166,13 @@ private:
     QWidget* buildSlotRow(QToolButton* slot, const QString& channel,
                           const QString& slotId, bool bypassed,
                           bool instrument);
+    /// A bypass drag paints the first button's new state over every insert
+    /// button the pointer crosses. Keeping it here (rather than in each row)
+    /// lets the gesture survive the pointer leaving its source button.
+    void applyInsertBypassPaint(QAbstractButton* button);
+    void applyInsertBypassPaintAlong(const QPoint& fromGlobal,
+                                     const QPoint& toGlobal);
+    void finishInsertBypassPaint();
     void populateInputMenu(class QMenu* menu);
     void populateOutputMenu(QMenu* menu);
     void populateAddSendMenu(QMenu* menu);
@@ -173,6 +183,7 @@ private:
     daw::EngineController* m_controller = nullptr;
     QString m_trackId;
     bool m_master = false;
+    bool m_insertsOnly = false;
     bool m_selected = false;
 
     ui::FaderWidget* m_fader = nullptr;
@@ -205,4 +216,11 @@ private:
     /// True while a plugin or preset from the browser is routed through this
     /// strip (including one of its drop-enabled child wells).
     bool m_browserDropActive = false;
+    bool m_insertBypassPaintPending = false;
+    bool m_insertBypassPainting = false;
+    bool m_insertBypassPaintTarget = false;
+    QPoint m_insertBypassPressGlobal;
+    QPoint m_insertBypassLastGlobal;
+    QSet<QString> m_insertBypassPainted;
+    std::uint64_t m_insertBypassUndoGroupId = 0;
 };

@@ -11,7 +11,6 @@ class QAction;
 class QLabel;
 class QLineEdit;
 class QToolButton;
-class SpectrumMeter;
 namespace ui { class IconButton; }
 
 /// The top chrome: three compact control blocks centred as one cluster, with
@@ -21,7 +20,6 @@ class TransportBar : public QWidget {
 public:
     explicit TransportBar(daw::EngineController* controller,
                           QWidget* parent = nullptr);
-    ~TransportBar() override;
 
     /// Pull position/tempo/state from the controller (called by the UI timer).
     void refresh();
@@ -157,7 +155,13 @@ private:
     QWidget* m_transportGroup = nullptr;
     QWidget* m_lcdScreen = nullptr;
     QWidget* m_positionGroup = nullptr;
-    QWidget* m_tempoGroup = nullptr;
+    /// Tempo, time signature, grid and time format in one 2x2 socket.
+    QWidget* m_statsGroup = nullptr;
+    QLabel* m_positionIcon = nullptr;
+    QLabel* m_tempoIcon = nullptr;
+    QLabel* m_signatureIcon = nullptr;
+    QLabel* m_gridIcon = nullptr;
+    QLabel* m_formatIcon = nullptr;
     ui::IconButton* m_toStartButton = nullptr;
     ui::IconButton* m_rewindButton = nullptr;
     ui::IconButton* m_stopButton = nullptr;
@@ -181,7 +185,6 @@ private:
     QToolButton* m_timeFormatButton = nullptr;
     QToolButton* m_gridButton = nullptr;
     QToolButton* m_timeSignatureButton = nullptr;
-    SpectrumMeter* m_spectrum = nullptr;
     QList<QAction*> m_timeSignatureActions;
     QToolButton* m_toolButton = nullptr;
     QList<QAction*> m_toolActions;

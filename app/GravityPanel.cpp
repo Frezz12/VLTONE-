@@ -1321,7 +1321,7 @@ bool GravityPanel::checkForTest() {
     bool knobsAccessible = true;
     for (ui::Knob* knob : std::as_const(m_knobs)) {
         knobsAccessible = knobsAccessible &&
-            knob->focusPolicy() == Qt::StrongFocus &&
+            knob->focusPolicy() == Qt::TabFocus &&
             !knob->accessibleName().isEmpty();
     }
     const bool keyboardAccessible = knobsAccessible &&

@@ -88,8 +88,9 @@ allow request bodies up to 2 GiB and upload timeouts of at least 30 minutes. The
 admin uses its dedicated `/release-upload` streaming route for these requests.
 
 Before running the normal DAW, keep the API running. Development defaults to
-`http://localhost:8080/v1`; override it with `VLT_API_ORIGIN`. The value is the
-versioned API base URL (for production, `https://vltstudio.ru/api/v1`). Headless CTest and
+`http://localhost:8080/v1`; override it with `VLT_API_ORIGIN`. The value may be
+the API origin or its versioned base URL (for production, `https://vltstudio.ru/api`
+or `https://vltstudio.ru/api/v1`). Headless CTest and
 `--selftest` use the in-process test account backend and do not expose a shipping
 authorization-bypass flag.
 
@@ -211,8 +212,8 @@ That last run covers Unicode, spaces and quoting in the deployed executable,
 Qt WebEngine helper and scanner paths. Artifacts are written to
 `build-windows\artifacts`:
 
-- `VLT-Studio-Pro-0.1.4-windows-x64.zip` — CI/developer artifact;
-- `VLT-Studio-Pro-0.1.4-x64-Setup.exe` — production installer.
+- `VLT-Studio-Pro-0.1.6-windows-x64.zip` — CI/developer artifact;
+- `VLT-Studio-Pro-0.1.6-x64-Setup.exe` — production installer.
 
 The computed install prefix is always the absolute
 `<repository>\build-windows\stage`; no machine-specific path is stored in the

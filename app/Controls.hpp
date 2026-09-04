@@ -380,6 +380,7 @@ private:
     bool pointerNearby() const;
 
     icons::Glyph m_glyph;
+    bool m_twoAxisDrag = false;
     double m_value = 0.0;
     double m_min = 0.0;
     double m_max = 1.0;
@@ -392,6 +393,7 @@ private:
     std::function<QString(double)> m_formatter;
     double m_dragStartValue = 0.0;
     int m_dragStartX = 0;
+    int m_dragStartY = 0;
     bool m_dragging = false;
     bool m_hover = false;
     Fade m_hoverFade{this};
@@ -458,7 +460,7 @@ private:
 class Knob : public QWidget {
     Q_OBJECT
 public:
-    enum class VisualStyle { Standard, SamplerDigital, Gravity };
+    enum class VisualStyle { Standard, SamplerDigital, Gravity, Graphite };
 
     Knob(const QString& caption, QWidget* parent = nullptr);
 
@@ -490,6 +492,13 @@ public:
     /// went down, so leaving a detent costs exactly as much movement as
     /// entering it did, and a whole gesture never accumulates a drift.
     void setDetent(std::function<double(double)> detent);
+
+    /// Paint the value arc in something other than the theme accent. The
+    /// equalizer's band inspector tints its three rings with the selected
+    /// band's own colour: that tint is what ties the knobs to the handle on the
+    /// curve, so moving one never leaves you wondering which band you are on.
+    /// An invalid colour (the default) restores the accent.
+    void setArcColor(const QColor& color);
 
     /// Hand Alt/Option+double-click (or a latched automation-create mode) to
     /// automation. A plain double-click always resets to the parameter default.
@@ -535,6 +544,7 @@ private:
     double m_min = 0.0;
     double m_max = 1.0;
     double m_default = 0.0;
+    QColor m_arcColor;
     bool m_bipolar = false;
     bool m_stepped = false;
     bool m_compact = false;

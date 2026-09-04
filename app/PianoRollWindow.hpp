@@ -442,7 +442,7 @@ private:
     /// vectors retain capacity during ordinary edits; their revision tokens
     /// make steady repaints allocation-free.
     void invalidateDocumentPaintCaches();
-    void seekToLocalBeat(double beats);
+    void seekToLocalBeat(double beats, bool snapping = false);
 
     // ── The cycle region ──
     //
@@ -532,6 +532,12 @@ private:
     /// Selected notes in their current live-drag state. Mouse moves update this
     /// compact K-note vector instead of rescanning every note in the clip.
     std::vector<daw::NoteModel> m_moveWorking;
+    /// Shift-drag keeps the original notes in place and turns this captured
+    /// selection into copies only after the pointer clears the drag threshold.
+    bool m_duplicateDragPending = false;
+    bool m_duplicateDragCreated = false;
+    bool m_shiftClickDeselectPending = false;
+    QPointF m_movePress;
     /// Latest visible geometry for a resize/draw. `m_resizeOrig` remains the
     /// immutable delta source while this vector follows the pointer.
     std::vector<daw::NoteModel> m_geometryPaintNotes;

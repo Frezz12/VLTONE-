@@ -8,7 +8,9 @@ const allowed = /^v1\/admin\/releases\/[0-9a-f-]+\/(artifacts\/[a-z-]+|screensho
 async function forward(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
   const path = (await context.params).path.join("/");
   if (!allowed.test(path)) return Response.json({ code: "upload_route_invalid", message: "Upload route is not allowed." }, { status: 404 });
-  const origin = (process.env.VLT_API_ORIGIN ?? "http://localhost:8080").replace(/\/$/, "");
+  const origin = (process.env.VLT_API_ORIGIN ?? "http://localhost:8080")
+    .replace(/\/+$/, "")
+    .replace(/\/v1$/, "");
   const headers = new Headers();
   for (const name of ["content-type", "content-length", "cookie", "origin", "x-csrf-token"]) {
     const value = request.headers.get(name);

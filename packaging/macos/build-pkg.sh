@@ -33,7 +33,7 @@ ARTIFACT_NAME="VLT-Studio-Pro"
 IDENTIFIER="com.vltstudio.pro"
 # The project's own version, not the `cmake_minimum_required` line above it.
 VERSION="${1:-$(sed -n 's/^[[:space:]]*VERSION[[:space:]]*\([0-9][0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt" | head -1)}"
-VERSION="${VERSION:-0.1.5}"
+VERSION="${VERSION:-0.1.6}"
 PKG="$BUILD/$ARTIFACT_NAME-$VERSION.pkg"
 DMG="$BUILD/$ARTIFACT_NAME-$VERSION.dmg"
 # A distributable build must use the hosted account platform. Local developer

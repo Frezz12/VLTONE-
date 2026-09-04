@@ -33,6 +33,59 @@ const emptyRelease = (): Release => ({
   artifacts: [], screenshots: [], created_at: "", updated_at: "",
 });
 
+const release016Template = (): Release => ({
+  ...emptyRelease(),
+  version: "0.1.6",
+  summary_ru: "Улучшенный Bounce in Place и Offline Render, новые сценарии редактирования и более удобная работа с плагинами.",
+  summary_en: "Improved Bounce in Place and Offline Render, new editing workflows, and a more convenient plug-in experience.",
+  features_ru: [
+    "Offline Render показывает выбранные клипы и применяемые insert-эффекты.",
+    "В Piano Roll Shift-перетаскивание копирует одну ноту или всю выбранную группу.",
+    "Добавлена опциональная нижняя панель с текущей загрузкой аудиопроцессора.",
+    "Новый проект открывается с выбранной аудиодорожкой и открытым микшером.",
+    "Встроенные эффекты Equalizer, Gravity и Graphit доступны в insert-цепочке.",
+  ],
+  features_en: [
+    "Offline Render now lists the selected clips and insert effects being applied.",
+    "Shift-drag in Piano Roll duplicates a single note or the entire selected group.",
+    "Added an optional bottom status bar with live audio CPU usage.",
+    "New projects open with one selected audio track and the mixer visible.",
+    "Built-in Equalizer, Gravity, and Graphit effects are available in the insert chain.",
+  ],
+  changes_ru: [
+    "Выделение рамкой на таймлайне снова работает обычным перетаскиванием, а второй инструмент назначен на Ctrl.",
+    "Плейхед перемещается только с линейки и привязывается к сетке; то же поведение добавлено в Piano Roll.",
+    "Follow Playhead перенесён в левую панель, а на его прежнем месте добавлен визуальный масштаб волны клипа.",
+    "Громкость и панорама в контекстной панели поддерживают вертикальное и горизонтальное перетаскивание.",
+    "Новые дорожки получают акцентный цвет текущей темы.",
+    "Меню плагинов стало компактным, многоуровневым и прокручиваемым; быстрый поиск поддерживает Enter.",
+  ],
+  changes_en: [
+    "Timeline marquee selection works with a plain drag again, while the secondary tool is assigned to Ctrl.",
+    "The playhead moves only from the ruler and snaps to the grid; Piano Roll now follows the same behavior.",
+    "Follow Playhead moved to the left toolbar, and its former slot now controls visual clip waveform scale.",
+    "Volume and pan controls in the context panel support both vertical and horizontal dragging.",
+    "New tracks inherit the current theme accent color.",
+    "The plug-in menu is now compact, hierarchical, and scrollable; quick search supports Enter.",
+  ],
+  fixes_ru: [
+    "Исправлена маршрутизация Bounce in Place: новый клип звучит через новую дорожку, а не через исходную.",
+    "Исправлен выбор плагина мышью в быстром поиске.",
+    "Правый клик на таймлайне корректно включает ластик, удаляет клипы и снимает выделение в пустой области.",
+    "Mute, Solo и bypass insert-эффектов можно менять проводкой по нескольким элементам.",
+    "Убраны лишние пунктирные обводки у слайдеров.",
+    "Исправлено открытие страницы версии и загрузка файлов при API-адресе с суффиксом /v1.",
+  ],
+  fixes_en: [
+    "Fixed Bounce in Place routing so the new clip plays through its new track instead of the source track.",
+    "Fixed mouse selection in the quick plug-in search.",
+    "Right-click on the timeline now activates the eraser, deletes clips, and clears selection on empty space.",
+    "Mute, Solo, and insert bypass can be painted across multiple controls with one drag.",
+    "Removed unwanted dotted focus outlines around sliders.",
+    "Fixed release page loading and file uploads when the API URL includes the /v1 suffix.",
+  ],
+});
+
 function lines(value: string) { return value.split("\n").map((item) => item.trim()).filter(Boolean); }
 function readableBytes(value: number) {
   if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} ГиБ`;
@@ -68,6 +121,7 @@ export function ReleaseRegistry() {
   const [shotFile, setShotFile] = useState<File>();
   const [shotRU, setShotRU] = useState("");
   const [shotEN, setShotEN] = useState("");
+  const shotInput = useRef<HTMLInputElement>(null);
   const errorSummary = useRef<HTMLDivElement>(null);
 
   async function load(preferred?: string) {
@@ -85,6 +139,7 @@ export function ReleaseRegistry() {
 
   function choose(item: Release) { setDraft(item); setStatus(""); setFieldErrors({}); }
   function startNew() { setDraft(emptyRelease()); setStatus(""); setFieldErrors({}); }
+  function useRelease016Template() { setDraft(release016Template()); setStatus("Шаблон 0.1.6 заполнен. Проверьте текст и сохраните черновик."); setFieldErrors({}); }
   function setList(field: ListField, value: string) { setDraft({ ...draft, [field]: lines(value) }); }
   function fail(reason: unknown) {
     const failure = reason as APIError;
@@ -139,15 +194,17 @@ export function ReleaseRegistry() {
   }
 
   async function uploadArtifact(kind: ArtifactKind, file?: File) {
-    if (!session || !draft.id || !file) return;
+    if (!session || !file) return;
     const existing = draft.artifacts.find((item) => item.kind === kind);
     if (existing && !window.confirm(`Заменить ${existing.file_name} файлом ${file.name}?`)) return;
     setStatus(""); setFieldErrors({}); setUploadProgress((value) => ({ ...value, [kind]: 0 }));
-    const body = new FormData(); body.append("file", file);
     try {
-      await uploadWithProgress(`/release-upload/v1/admin/releases/${draft.id}/artifacts/${kind}`, "PUT", body, session.csrf_token,
+      const target = draft.id ? draft : await save(false);
+      if (!target) return;
+      const body = new FormData(); body.append("file", file);
+      await uploadWithProgress(`/release-upload/v1/admin/releases/${target.id}/artifacts/${kind}`, "PUT", body, session.csrf_token,
         (value) => setUploadProgress((current) => ({ ...current, [kind]: value })));
-      await load(draft.id); setStatus(`${file.name} загружен.`);
+      await load(target.id); setStatus(`${file.name} загружен.`);
     } catch (reason) { fail(reason); }
     finally { setUploadProgress((value) => { const next = { ...value }; delete next[kind]; return next; }); }
   }
@@ -161,13 +218,17 @@ export function ReleaseRegistry() {
   }
 
   async function uploadScreenshot() {
-    if (!session || !draft.id || !shotFile) return;
-    const body = new FormData(); body.append("file", shotFile); body.append("caption_ru", shotRU); body.append("caption_en", shotEN);
+    if (!session || !shotFile) return;
     setUploadProgress((value) => ({ ...value, screenshot: 0 }));
     try {
-      await uploadWithProgress(`/release-upload/v1/admin/releases/${draft.id}/screenshots`, "POST", body, session.csrf_token,
+      const target = draft.id ? draft : await save(false);
+      if (!target) return;
+      const body = new FormData(); body.append("file", shotFile); body.append("caption_ru", shotRU); body.append("caption_en", shotEN);
+      await uploadWithProgress(`/release-upload/v1/admin/releases/${target.id}/screenshots`, "POST", body, session.csrf_token,
         (value) => setUploadProgress((current) => ({ ...current, screenshot: value })));
-      setShotFile(undefined); setShotRU(""); setShotEN(""); await load(draft.id); setStatus("Скриншот добавлен.");
+      setShotFile(undefined); setShotRU(""); setShotEN("");
+      if (shotInput.current) shotInput.current.value = "";
+      await load(target.id); setStatus("Скриншот добавлен.");
     } catch (reason) { fail(reason); }
     finally { setUploadProgress((value) => { const next = { ...value }; delete next.screenshot; return next; }); }
   }
@@ -206,7 +267,7 @@ export function ReleaseRegistry() {
       </div></section>
 
       <div className="release-editor">
-        <section className="vlt-card vlt-card-pad"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">{draft.id ? `Версия ${draft.version || "без номера"}` : "Новый черновик"}</h2>{draft.status === "published" && <span className="vlt-badge vlt-badge-accent">Опубликован</span>}</div>
+        <section className="vlt-card vlt-card-pad"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">{draft.id ? `Версия ${draft.version || "без номера"}` : "Новый черновик"}</h2>{draft.status === "published" ? <span className="vlt-badge vlt-badge-accent">Опубликован</span> : !draft.id && <button className="vlt-button vlt-button-secondary" type="button" onClick={useRelease016Template} disabled={busy}><PackageOpen size={16} aria-hidden />Заполнить 0.1.6</button>}</div>
           <div className="release-form">
             <label className="vlt-label" htmlFor="release-version">Версия X.Y.Z<input id="release-version" className="vlt-input vlt-code" value={draft.version} disabled={draft.status === "published"} placeholder="0.1.2" onChange={(event) => setDraft({ ...draft, version: event.target.value })} />{fieldError("version")}</label>
             <label className="vlt-label" htmlFor="release-summary_ru">Кратко — русский<textarea id="release-summary_ru" className="vlt-input" value={draft.summary_ru} onChange={(event) => setDraft({ ...draft, summary_ru: event.target.value })} />{fieldError("summary_ru")}</label>
@@ -216,13 +277,13 @@ export function ReleaseRegistry() {
           <div className="vlt-row release-actions"><button className="vlt-button" onClick={() => void save()} disabled={busy}><Save size={16} aria-hidden />{busy ? "Сохранение…" : "Сохранить черновик"}</button><button className="vlt-button vlt-button-secondary" onClick={() => void publish()} disabled={busy || draft.status === "published"}><Rocket size={16} aria-hidden />Опубликовать</button>{draft.id && draft.status === "draft" && <button className="vlt-button vlt-button-danger" onClick={() => void removeDraft()} disabled={busy}><Trash2 size={16} aria-hidden />Удалить черновик</button>}</div>
         </section>
 
-        <section className="vlt-card vlt-card-pad" id="release-artifacts"><h2 className="vlt-section-title">Установщики</h2><p className="vlt-subtitle">До 2 ГиБ на файл. Сначала сохраните новый черновик.</p>{fieldError("artifacts")}<div className="artifact-grid">{artifactDefinitions.map((definition) => {
+        <section className="vlt-card vlt-card-pad" id="release-artifacts"><h2 className="vlt-section-title">Установщики</h2><p className="vlt-subtitle">До 2 ГиБ на файл. Новый черновик сохранится автоматически перед загрузкой.</p>{fieldError("artifacts")}<div className="artifact-grid">{artifactDefinitions.map((definition) => {
           const artifact = draft.artifacts.find((item) => item.kind === definition.kind); const progress = uploadProgress[definition.kind];
-          return <article className="artifact-card" key={definition.kind}><FileArchive size={19} aria-hidden /><div><strong>{definition.title}</strong><small>{artifact ? `${artifact.file_name} · ${readableBytes(artifact.bytes)}` : definition.help}</small>{artifact && <code title={artifact.sha256}>{artifact.sha256.slice(0, 16)}…</code>}</div><label className="vlt-button vlt-button-secondary artifact-upload">{progress === undefined ? <><Upload size={15} aria-hidden />{artifact ? "Заменить" : "Загрузить"}</> : `${progress}%`}<input type="file" accept={definition.accept} disabled={!draft.id || progress !== undefined} onChange={(event) => { void uploadArtifact(definition.kind, event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>{artifact && <button className="artifact-delete" type="button" onClick={() => void deleteArtifact(artifact)} aria-label={`Удалить ${artifact.file_name}`}><Trash2 size={16} aria-hidden /></button>}{progress !== undefined && <progress max="100" value={progress} aria-label={`Загрузка ${definition.title}`} />}</article>;
+          return <article className="artifact-card" key={definition.kind}><FileArchive size={19} aria-hidden /><div><strong>{definition.title}</strong><small>{artifact ? `${artifact.file_name} · ${readableBytes(artifact.bytes)}` : definition.help}</small>{artifact && <code title={artifact.sha256}>{artifact.sha256.slice(0, 16)}…</code>}</div><label className="vlt-button vlt-button-secondary artifact-upload">{progress === undefined ? <><Upload size={15} aria-hidden />{artifact ? "Заменить" : "Загрузить"}</> : `${progress}%`}<input type="file" accept={definition.accept} disabled={busy || progress !== undefined} onChange={(event) => { void uploadArtifact(definition.kind, event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>{artifact && <button className="artifact-delete" type="button" onClick={() => void deleteArtifact(artifact)} aria-label={`Удалить ${artifact.file_name}`}><Trash2 size={16} aria-hidden /></button>}{progress !== undefined && <progress max="100" value={progress} aria-label={`Загрузка ${definition.title}`} />}</article>;
         })}</div></section>
 
         <section className="vlt-card vlt-card-pad" id="release-screenshots"><h2 className="vlt-section-title">Скриншоты</h2><p className="vlt-subtitle">До 10 изображений JPEG, PNG или WebP по 10 МБ.</p>{fieldError("screenshots")}
-          <div className="screenshot-upload-form"><label className="vlt-label">Изображение<input className="vlt-input" type="file" accept="image/jpeg,image/png,image/webp" disabled={!draft.id} onChange={(event) => setShotFile(event.target.files?.[0])} /></label><label className="vlt-label">Подпись RU<input className="vlt-input" value={shotRU} onChange={(event) => setShotRU(event.target.value)} /></label><label className="vlt-label">Caption EN<input className="vlt-input" value={shotEN} onChange={(event) => setShotEN(event.target.value)} /></label><button className="vlt-button" disabled={!draft.id || !shotFile || uploadProgress.screenshot !== undefined} onClick={() => void uploadScreenshot()}><ImagePlus size={16} aria-hidden />{uploadProgress.screenshot === undefined ? "Добавить" : `${uploadProgress.screenshot}%`}</button></div>
+          <div className="screenshot-upload-form"><label className="vlt-label">Изображение<input ref={shotInput} className="vlt-input" type="file" accept="image/jpeg,image/png,image/webp" disabled={busy || uploadProgress.screenshot !== undefined} onChange={(event) => setShotFile(event.target.files?.[0])} /></label><label className="vlt-label">Подпись RU<input className="vlt-input" value={shotRU} onChange={(event) => setShotRU(event.target.value)} /></label><label className="vlt-label">Caption EN<input className="vlt-input" value={shotEN} onChange={(event) => setShotEN(event.target.value)} /></label><button className="vlt-button" disabled={busy || !shotFile || uploadProgress.screenshot !== undefined} onClick={() => void uploadScreenshot()}><ImagePlus size={16} aria-hidden />{uploadProgress.screenshot === undefined ? "Добавить" : `${uploadProgress.screenshot}%`}</button></div>
           <div className="release-screenshot-list">{draft.screenshots.map((item) => <article className="release-screenshot-card" key={item.id}><img src={`/api${item.url}`} width={item.width} height={item.height} alt={item.caption_ru || item.caption_en || "Скриншот релиза"} loading="lazy" /><div><label className="vlt-label">Подпись RU<input className="vlt-input" value={item.caption_ru} onChange={(event) => editShot(item.id, { caption_ru: event.target.value })} /></label><label className="vlt-label">Caption EN<input className="vlt-input" value={item.caption_en} onChange={(event) => editShot(item.id, { caption_en: event.target.value })} /></label><label className="vlt-label">Порядок<input className="vlt-input" type="number" value={item.sort_order} onChange={(event) => editShot(item.id, { sort_order: Number(event.target.value) })} /></label><div className="vlt-row"><button className="vlt-button vlt-button-secondary" onClick={() => void saveShot(item)}>Сохранить</button><button className="vlt-button vlt-button-danger" onClick={() => void deleteShot(item)}><Trash2 size={16} aria-hidden />Удалить</button></div></div></article>)}</div>
         </section>
         {status && <p className="release-status" role="status">{status}</p>}

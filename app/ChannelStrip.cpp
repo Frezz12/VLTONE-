@@ -23,6 +23,7 @@
 #include <QFileInfo>
 #include <QInputDialog>
 #include <QLabel>
+#include <QLineF>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
@@ -504,9 +505,30 @@ private:
 
 ChannelStrip::ChannelStrip(daw::EngineController* controller,
                            const QString& trackId, bool master,
-                           QWidget* parent)
+                           QWidget* parent, bool insertsOnly)
     : QWidget(parent), m_controller(controller), m_trackId(trackId),
-      m_master(master) {
+      m_master(master), m_insertsOnly(insertsOnly) {
+    if (m_insertsOnly) {
+        setMinimumWidth(kStripWidth);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setAttribute(Qt::WA_StyledBackground, true);
+        setAcceptDrops(true);
+
+        auto* col = new QVBoxLayout(this);
+        m_mainLayout = col;
+        col->setContentsMargins(8, 7, 8, 7);
+        col->addWidget(buildInserts());
+        for (QWidget* child : findChildren<QWidget*>())
+            child->installEventFilter(this);
+
+        connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+                &ChannelStrip::applyTheme);
+        applyTheme();
+        m_naturalHeight = sizeHint().height();
+        setFixedHeight(m_naturalHeight);
+        return;
+    }
+
     setFixedWidth(kStripWidth);
     // The strip never goes below the height at which the whole console is
     // visible (set once it has been measured, below). A mixer pane shorter than
@@ -679,6 +701,12 @@ QWidget* ChannelStrip::buildSlotRow(QToolButton* slot, const QString& channel,
     power->setCheckable(true);
     power->setChecked(bypassed);
     power->setActiveColor(Theme::mute());
+    if (!instrument) {
+        power->setProperty("insertBypassPaint", true);
+        power->setProperty("insertBypassChannel", channel);
+        power->setProperty("insertBypassSlot", slotId);
+        power->installEventFilter(this);
+    }
     // clicked, not toggled: setChecked above must not fire the handler.
     connect(power, &QAbstractButton::clicked, this,
             [this, channel, slotId](bool on) {
@@ -2180,7 +2208,57 @@ void ChannelStrip::acceptBrowserDrop(const QMimeData* mime) {
 }
 
 bool ChannelStrip::eventFilter(QObject* watched, QEvent* event) {
-    (void)watched;
+    auto* paintButton = qobject_cast<QAbstractButton*>(watched);
+    if (paintButton && paintButton->property("insertBypassPaint").toBool()) {
+        auto* mouse = dynamic_cast<QMouseEvent*>(event);
+        if (event->type() == QEvent::MouseButtonPress && mouse &&
+            mouse->button() == Qt::LeftButton) {
+            if (m_insertBypassUndoGroupId != 0) {
+                m_controller->releaseUndoGroup(
+                    daw::EngineController::UndoGroup{m_insertBypassUndoGroupId});
+            }
+            m_insertBypassPaintPending = true;
+            m_insertBypassPainting = false;
+            m_insertBypassPaintTarget = !paintButton->isChecked();
+            m_insertBypassPressGlobal = mouse->globalPosition().toPoint();
+            m_insertBypassLastGlobal = m_insertBypassPressGlobal;
+            m_insertBypassPainted.clear();
+            m_insertBypassUndoGroupId = 0;
+            return QWidget::eventFilter(watched, event);
+        }
+        if (event->type() == QEvent::MouseMove && mouse &&
+            m_insertBypassPaintPending &&
+            (mouse->buttons() & Qt::LeftButton)) {
+            const QPoint now = mouse->globalPosition().toPoint();
+            if (!m_insertBypassPainting &&
+                (now - m_insertBypassPressGlobal).manhattanLength() <
+                    QApplication::startDragDistance()) {
+                return QWidget::eventFilter(watched, event);
+            }
+            m_insertBypassPainting = true;
+            m_insertBypassUndoGroupId = m_controller->beginUndoGroup().id;
+            paintButton->setDown(false);
+            applyInsertBypassPaintAlong(m_insertBypassLastGlobal, now);
+            m_insertBypassLastGlobal = now;
+            return true;
+        }
+        if (event->type() == QEvent::MouseButtonRelease && mouse &&
+            mouse->button() == Qt::LeftButton && m_insertBypassPaintPending) {
+            if (m_insertBypassPainting) {
+                paintButton->setDown(false);
+                applyInsertBypassPaintAlong(
+                    m_insertBypassLastGlobal,
+                    mouse->globalPosition().toPoint());
+                finishInsertBypassPaint();
+                return true;
+            }
+
+            // No drag: leave the button's existing click path untouched.
+            m_insertBypassPaintPending = false;
+            return QWidget::eventFilter(watched, event);
+        }
+    }
+
     if (event->type() == QEvent::DragEnter) {
         auto* drag = static_cast<QDragEnterEvent*>(event);
         if (!hasBrowserDrop(drag->mimeData()))
@@ -2213,6 +2291,90 @@ bool ChannelStrip::eventFilter(QObject* watched, QEvent* event) {
         return true;
     }
     return QWidget::eventFilter(watched, event);
+}
+
+void ChannelStrip::applyInsertBypassPaint(QAbstractButton* button) {
+    if (!button) return;
+    const QString channel = button->property("insertBypassChannel").toString();
+    const QString slot = button->property("insertBypassSlot").toString();
+    const QString key = channel + QChar('\n') + slot;
+    if (channel.isEmpty() || slot.isEmpty() || m_insertBypassPainted.contains(key))
+        return;
+
+    m_insertBypassPainted.insert(key);
+    m_controller->setInsertBypassed(channel.toStdString(), slot.toStdString(),
+                                    m_insertBypassPaintTarget);
+    bool modelState = button->isChecked();
+    if (const auto* inserts = m_controller->channelInserts(channel.toStdString())) {
+        const auto found = std::find_if(
+            inserts->begin(), inserts->end(), [&](const daw::InsertModel& insert) {
+                return insert.id == slot.toStdString();
+            });
+        if (found != inserts->end()) modelState = found->bypassed;
+    }
+    button->setChecked(modelState);
+
+    // The hover action may be hidden once the pointer is grabbed by the first
+    // button. Update the row plate too, so every crossed slot visibly dims in
+    // the same frame as its audio is bypassed.
+    if (QWidget* row = button->parentWidget()) {
+        if (auto* plate = row->findChild<QToolButton*>(
+                QStringLiteral("SlotButton"), Qt::FindDirectChildrenOnly)) {
+            plate->setProperty("bypassed", modelState);
+            plate->style()->unpolish(plate);
+            plate->style()->polish(plate);
+            plate->update();
+        }
+    }
+}
+
+void ChannelStrip::applyInsertBypassPaintAlong(const QPoint& fromGlobal,
+                                               const QPoint& toGlobal) {
+    const QLineF path(fromGlobal, toGlobal);
+    for (auto* button : findChildren<QAbstractButton*>()) {
+        if (!button->property("insertBypassPaint").toBool()) continue;
+        const QRectF hit(QRect(button->mapToGlobal(QPoint{}), button->size()));
+        bool crossed = hit.contains(fromGlobal) || hit.contains(toGlobal);
+        if (!crossed) {
+            const QLineF edges[] = {
+                QLineF(hit.topLeft(), hit.topRight()),
+                QLineF(hit.topRight(), hit.bottomRight()),
+                QLineF(hit.bottomRight(), hit.bottomLeft()),
+                QLineF(hit.bottomLeft(), hit.topLeft())};
+            QPointF intersection;
+            for (const QLineF& edge : edges) {
+                if (path.intersects(edge, &intersection) ==
+                    QLineF::BoundedIntersection) {
+                    crossed = true;
+                    break;
+                }
+            }
+        }
+        if (crossed) applyInsertBypassPaint(button);
+    }
+}
+
+void ChannelStrip::finishInsertBypassPaint() {
+    if (!m_insertBypassPaintPending) return;
+    const auto group = daw::EngineController::UndoGroup{
+        m_insertBypassUndoGroupId};
+    const bool bypassing = m_insertBypassPaintTarget;
+    const bool changed = !m_insertBypassPainted.isEmpty();
+    m_insertBypassPaintPending = false;
+    m_insertBypassPainting = false;
+    m_insertBypassUndoGroupId = 0;
+    m_insertBypassPainted.clear();
+
+    if (changed) {
+        m_controller->collapseUndo(
+            group, bypassing ? "Bypass Inserts" : "Enable Inserts");
+        emit edited();
+        // Mixer, Inspector and Offline Render rebuild once, after the pointer
+        // is released, instead of deleting the row halfway through the drag.
+        emit structureChanged();
+    } else {
+        m_controller->releaseUndoGroup(group);
+    }
 }
 
 void ChannelStrip::dragEnterEvent(QDragEnterEvent* ev) {
@@ -2351,13 +2513,15 @@ QLabel { color: %TEXT2%; font-size: 10px; }
         .replace("%BYPASS%", mixColors(Theme::mute(), t.background, 0.45).name())
         .replace("%ACCENT%", t.accent.name()));
 
-    m_namePlateStyleKey.clear();
-    if (m_master) {
-        updateNamePlate(tr("MASTER"), 0x888888);
-    } else if (const auto* track =
-                   m_controller->project().findTrack(m_trackId.toStdString())) {
-        updateNamePlate(QString::fromStdString(track->name).toUpper(),
-                        track->color);
+    if (!m_insertsOnly) {
+        m_namePlateStyleKey.clear();
+        if (m_master) {
+            updateNamePlate(tr("MASTER"), 0x888888);
+        } else if (const auto* track = m_controller->project().findTrack(
+                       m_trackId.toStdString())) {
+            updateNamePlate(QString::fromStdString(track->name).toUpper(),
+                            track->color);
+        }
     }
     update();
 }

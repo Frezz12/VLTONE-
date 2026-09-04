@@ -31,7 +31,9 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QCheckBox>
 #include <QRadioButton>
+#include <QSlider>
 #include <QScrollArea>
 #include <QScreen>
 #include <QShowEvent>
@@ -142,6 +144,8 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     };
 
     m_audioPage = new AudioSettingsPage(m_controller, this);
+    connect(m_audioPage, &AudioSettingsPage::cpuStatusBarVisibilityChanged,
+            this, &SettingsWindow::cpuStatusBarVisibilityChanged);
     addPage(m_audioPage, tr("Audio"));
     addPage(new TransportSettingsPage(m_controller, this), tr("Transport"));
     m_recordingPage = new RecordingSettingsPage(m_controller, this);
@@ -507,6 +511,41 @@ QWidget* SettingsWindow::buildThemesTab() {
 
     col->addWidget(m_themeList, 1);
 
+    // The playhead. Thickness is a real preference rather than a default worth
+    // defending: the same hairline that is right on a sparse arrangement is
+    // invisible over dense waveforms on a high-density screen.
+    auto* headGroup = new QGroupBox(tr("Playhead"), page);
+    auto* headCol = new QVBoxLayout(headGroup);
+    auto* widthRow = new QHBoxLayout;
+    auto* widthLabel = new QLabel(tr("Line thickness"), headGroup);
+    auto* widthSlider = new QSlider(Qt::Horizontal, headGroup);
+    // Tenths of a pixel: the default is 1.6, and whole steps would take that
+    // choice away.
+    widthSlider->setRange(int(std::lround(ui::kPlayheadWidthMin * 10.0)),
+                          int(std::lround(ui::kPlayheadWidthMax * 10.0)));
+    widthSlider->setSingleStep(1);
+    widthSlider->setPageStep(5);
+    widthSlider->setValue(int(std::lround(ui::playheadWidth() * 10.0)));
+    widthSlider->setAccessibleName(tr("Playhead line thickness in pixels"));
+    auto* widthValue = new QLabel(headGroup);
+    widthValue->setMinimumWidth(48);
+    widthValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    const auto showWidth = [widthValue](double pixels) {
+        widthValue->setText(tr("%1 px").arg(pixels, 0, 'f', 1));
+    };
+    showWidth(ui::playheadWidth());
+    widthRow->addWidget(widthLabel);
+    widthRow->addWidget(widthSlider, 1);
+    widthRow->addWidget(widthValue);
+    headCol->addLayout(widthRow);
+
+    auto* trail = new QCheckBox(tr("Leave a glowing trail while it moves"),
+                                headGroup);
+    trail->setChecked(ui::playheadTrail());
+    trail->setAccessibleName(tr("Playhead motion trail"));
+    headCol->addWidget(trail);
+    col->addWidget(headGroup);
+
     // How a selected track is washed. It belongs beside the palette because it
     // is a palette decision, and it is a real choice rather than a default:
     // the track's own colour tells you *which* track at a glance, while a
@@ -535,6 +574,27 @@ QWidget* SettingsWindow::buildThemesTab() {
     tintCol->addWidget(byColour);
     tintCol->addWidget(neutral);
     col->addWidget(tintGroup);
+
+
+    // Nothing owns the playhead as a widget property either; the arrangement
+    // reads these while painting, so a theme refresh is again the honest way to
+    // ask every surface to repaint.
+    const auto repaintSurfaces = [this] {
+        ThemeManager::instance().apply();
+        emit selectionTintChanged();
+    };
+    connect(widthSlider, &QSlider::valueChanged, this,
+            [showWidth, repaintSurfaces](int tenths) {
+                const double pixels = double(tenths) / 10.0;
+                ui::setPlayheadWidth(pixels);
+                showWidth(ui::playheadWidth());
+                repaintSurfaces();
+            });
+    connect(trail, &QCheckBox::toggled, this,
+            [repaintSurfaces](bool on) {
+                ui::setPlayheadTrail(on);
+                repaintSurfaces();
+            });
     return page;
 }
 

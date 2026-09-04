@@ -23,6 +23,7 @@
 
 class QLabel;
 class QMenu;
+class QProgressBar;
 class QResizeEvent;
 class QTimer;
 class QAction;
@@ -163,6 +164,13 @@ public:
     /// Scroll the arrangement down by `px` (screenshot hook — a grab cannot
     /// turn a wheel).
     void scrollArrangement(int px);
+
+    /// Put the playhead at `seconds`, optionally with the transport running
+    /// (screenshot hook). The cursor's own appearance — its thickness and the
+    /// trail it drags while moving — is otherwise unphotographable: at rest it
+    /// sits on the arrangement's left edge with half of it clipped away, and
+    /// the trail exists only while the head is travelling.
+    void placePlayheadForShot(double seconds, bool rolling);
 
     /// Stage a take that is *running*, so the arrangement's growing clip can be
     /// photographed. `mode` is "layers" to punch into the demo's layered clip
@@ -658,6 +666,7 @@ private:
     void setEditTool(int index);
     void buildLayout();
     void buildStatusBar();
+    void setCpuStatusBarVisible(bool visible);
     void publishSessionTransport(bool force = false);
     void applySessionTransport(const collab::TransportFrame& frame);
     void updateWindowTitle();
@@ -755,6 +764,9 @@ private:
     bool doSave(const QString& packageDir);
     bool saveProjectAs();
     bool maybeSaveChanges();
+    /// Reset to the ready-to-record shell state used by a clean launch and
+    /// File > New Project: one selected audio track with the mixer visible.
+    void initializeBlankProject();
     QString chooseProjectTemplate();
     bool createProjectFromTemplatePath(const QString& packageDir);
     void addProjectTemplateTracks(const QString& packageDir);
@@ -844,6 +856,8 @@ private:
 
     QLabel* m_statusLeft = nullptr;
     QLabel* m_statusRight = nullptr;
+    QLabel* m_cpuStatusIcon = nullptr;
+    QProgressBar* m_cpuStatusMeter = nullptr;
     QAction* m_showMixerAction = nullptr;
     QAction* m_showInspectorAction = nullptr;
     QAction* m_showContextPanelAction = nullptr;

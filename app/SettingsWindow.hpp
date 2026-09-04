@@ -65,6 +65,8 @@ signals:
     void accountLogoutRequested();
     /// The global recording mode changed on the Recording tab.
     void recordModeChanged();
+    /// The optional compact audio-CPU strip changed on the Audio tab.
+    void cpuStatusBarVisibilityChanged(bool visible);
     /// How selected tracks are tinted changed on the Themes tab.
     void selectionTintChanged();
     void restartRequested();

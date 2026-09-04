@@ -39,7 +39,7 @@ inline constexpr int kMinTrackHeaderWidth = 220;
 /// The headers may take the rest of the arrangement, but the resize rail and a
 /// narrow strip of timeline must remain reachable so the gesture is reversible.
 inline constexpr int kMinTimelineWidth = 180;
-inline constexpr int kTransportHeight = 76;
+inline constexpr int kTransportHeight = 80;
 inline constexpr int kBottomBarHeight = 28;
 
 /// The on-screen lane height for a track, clamped to the resizable range. A
@@ -109,6 +109,9 @@ inline constexpr const char* kEditToolSetting = "transport/editTool";
 inline constexpr const char* kAltEditToolSetting = "transport/editToolAlt";
 /// The main window's geometry, so it reopens where it was left.
 inline constexpr const char* kMainGeometrySetting = "ui/mainGeometry";
+/// Whether the compact audio-CPU status strip is shown below the workspace.
+inline constexpr const char* kCpuStatusBarVisibleSetting =
+    "ui/showCpuStatusBar";
 /// User-chosen width of the track-header column.
 inline constexpr const char* kTrackHeaderWidthSetting = "ui/trackHeaderWidth";
 
@@ -126,5 +129,22 @@ void setSelectionTint(SelectionTint tint);
 /// place the two modes are resolved, so the headers and the lanes cannot
 /// disagree about what "selected" looks like.
 QColor selectionWash(const QColor& trackColor);
+
+/// How thick the playhead line is drawn, in pixels. A hairline is right on a
+/// sparse arrangement and invisible on a dense one at a high pixel density, and
+/// which of those someone is looking at is not something the application knows.
+inline constexpr const char* kPlayheadWidthSetting = "ui/playheadWidth";
+inline constexpr double kPlayheadWidthMin = 1.0;
+inline constexpr double kPlayheadWidthMax = 6.0;
+inline constexpr double kPlayheadWidthDefault = 1.6;
+double playheadWidth();
+void setPlayheadWidth(double pixels);
+
+/// Whether a moving playhead drags a short luminous trail behind it. It reads
+/// as motion at a glance, which is also why it is optional: over a long session
+/// it is one more thing moving in the corner of the eye.
+inline constexpr const char* kPlayheadTrailSetting = "ui/playheadTrail";
+bool playheadTrail();
+void setPlayheadTrail(bool enabled);
 
 } // namespace ui

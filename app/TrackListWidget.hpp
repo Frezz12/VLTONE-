@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QRect>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -17,6 +18,7 @@
 namespace daw { class EngineController; struct TrackModel; }
 class QVBoxLayout;
 class QLabel;
+class QAbstractButton;
 namespace ui { class LevelMeter; class FaderWidget; class PanKnob;
                class MsrButton; class IconButton; }
 
@@ -88,6 +90,8 @@ public:
     /// column is scrolled or resized, and a track this column does not show is
     /// hidden rather than mapped onto a neighbour.
     static bool checkCollaborationPresenceForTest(QString* error = nullptr);
+    /// Headless regression for drag-painting M/S across several row chips.
+    static bool checkButtonPaintForTest(QString* error = nullptr);
 
     /// The row that owns the single-track contexts — the last one clicked, or
     /// empty when nothing is selected.
@@ -239,6 +243,13 @@ private:
     void applyToGroup(const QString& id,
                       const std::function<void(const std::string&)>& act);
     void applyMuteToGroup(const QString& id, bool muted);
+    /// Paint one M/S state over the row buttons crossed by a vertical drag.
+    /// A click keeps the existing selected-track group behaviour; only a real
+    /// drag switches to per-row painting.
+    void applyTrackButtonPaint(QAbstractButton* button);
+    void applyTrackButtonPaintAlong(const QPoint& fromGlobal,
+                                    const QPoint& toGlobal);
+    void finishTrackButtonPaint();
     /// Move every selected track's level with the one being dragged, keeping
     /// the ratios they started the drag with.
     void applyGroupGain(const QString& id, float gain);
@@ -295,6 +306,15 @@ private:
     /// chip driven for every selected row re-emits `toggled` on each of them,
     /// and each of those would drive the group again.
     bool m_applyingGroup = false;
+
+    bool m_trackButtonPaintPending = false;
+    bool m_trackButtonPainting = false;
+    bool m_trackButtonPaintTarget = false;
+    bool m_trackButtonPaintLocalFileDirty = false;
+    QString m_trackButtonPaintRole;
+    QPoint m_trackButtonPaintPressGlobal;
+    QPoint m_trackButtonPaintLastGlobal;
+    QSet<QString> m_trackButtonPainted;
 
     bool m_pressing = false;
     bool m_dragging = false;

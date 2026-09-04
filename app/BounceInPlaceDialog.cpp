@@ -136,14 +136,18 @@ BounceInPlaceDialog::BounceInPlaceDialog(
             &BounceInPlaceDialog::updateSummary);
     connect(m_renderButton, &QPushButton::clicked, this,
             &BounceInPlaceDialog::startRender);
-    connect(m_buttons, &QDialogButtonBox::rejected, this, [this] {
-        if (m_rendering)
-            m_cancelRequested = true;
-        else
-            reject();
-    });
+    connect(m_buttons, &QDialogButtonBox::rejected, this,
+            &BounceInPlaceDialog::reject);
 
     syncControls();
+}
+
+void BounceInPlaceDialog::reject() {
+    if (m_rendering) {
+        m_cancelRequested = true;
+        return;
+    }
+    QDialog::reject();
 }
 
 void BounceInPlaceDialog::syncControls() {

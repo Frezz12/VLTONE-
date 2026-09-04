@@ -62,6 +62,9 @@ public:
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
 
+    /// Headless regression for pointer ownership and Enter activation.
+    static bool checkInteractionForTest();
+
 signals:
     /// A plugin was chosen. `insertId` is the new slot id ("" if it failed to
     /// load). `openEditor` is true when the caller should also open the GUI.
@@ -116,6 +119,7 @@ private:
     void updateGeometryForState();
     void animateTo(bool expanded);
     void collapseImmediatelyForEditor();
+    void queueInsertCurrent(bool openEditor, bool keepOpen = false);
     void insertCurrent(bool openEditor, bool keepOpen = false);
     void setHighlight(int index);
     void toggleFavorite(const Entry& entry);
@@ -131,6 +135,7 @@ private:
     QRect listViewport() const;
     void paintOverlay(QPaintEvent*);
     void overlayMousePress(QMouseEvent*);
+    void overlayMouseRelease(QMouseEvent*);
     void overlayMouseMove(QMouseEvent*);
     void overlayLeave();
     void overlayWheel(QWheelEvent*);
@@ -148,7 +153,10 @@ private:
     bool m_hover = false;
     bool m_pressed = false;
     bool m_loading = false;
+    bool m_activationQueued = false;
     int m_highlight = -1;
+    int m_pressedVisibleIndex = -1;
+    bool m_pressedFavorite = false;
     int m_scrollOffset = 0;
     double m_expandProgress = 0.0;   // 0 = collapsed, 1 = expanded
 

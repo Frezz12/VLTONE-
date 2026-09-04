@@ -24,6 +24,11 @@ test("admin saves a draft, uploads an installer, and publishes it", async ({ pag
     return route.fulfill({ json: release });
   });
   await page.route("**/release-upload/**", async (route) => {
+    if (new URL(route.request().url()).pathname.endsWith("/screenshots")) {
+      const screenshot = { id: "30000000-0000-4000-8000-000000000001", caption_ru: "Микшер", caption_en: "Mixer", sort_order: 0, width: 1280, height: 720, sha256: "b".repeat(64), url: "/v1/releases/0.1.6/screenshots/30000000-0000-4000-8000-000000000001" };
+      release = { ...release, screenshots: [screenshot] };
+      return route.fulfill({ status: 201, json: screenshot });
+    }
     const artifact = { id: "20000000-0000-4000-8000-000000000001", kind: "windows-exe", platform: "windows", label: "Windows Setup", file_name: "VLT-Setup.exe", bytes: 12, sha256: "a".repeat(64), download_url: "/v1/releases/0.1.2/download/windows-exe", updated_at: "2026-08-29T10:05:00Z" };
     release = { ...release, artifacts: [artifact] };
     await route.fulfill({ json: artifact });
@@ -35,16 +40,23 @@ test("admin saves a draft, uploads an installer, and publishes it", async ({ pag
   const errorSummary = page.locator(".release-error-summary");
   await expect(errorSummary).toBeVisible();
   await expect(errorSummary).toBeFocused();
-  await page.getByLabel("Версия X.Y.Z").fill("0.1.2");
-  await page.getByLabel("Кратко — русский").fill("Новая версия");
-  await page.getByLabel("Summary — English").fill("New release");
-  await page.getByRole("button", { name: "Сохранить черновик" }).click();
-  await expect(page.getByText("Черновик сохранён.")).toBeVisible();
+  await page.getByRole("button", { name: "Новый релиз" }).click();
+  await page.getByRole("button", { name: "Заполнить 0.1.6" }).click();
+  await expect(page.getByLabel("Версия X.Y.Z")).toHaveValue("0.1.6");
+  await expect(page.getByLabel("Кратко — русский")).toHaveValue(/Bounce in Place/);
 
+  // Choosing a file on a new release must create its draft automatically.
   await page.getByLabel("Загрузить").first().setInputFiles({ name: "VLT-Setup.exe", mimeType: "application/octet-stream", buffer: Buffer.from("installer") });
   await expect(page.getByText("VLT-Setup.exe · 1 КиБ")).toBeVisible();
+  await page.getByLabel("Изображение").setInputFiles({ name: "mixer.png", mimeType: "image/png", buffer: Buffer.from("png") });
+  await page.getByLabel("Подпись RU").fill("Микшер");
+  await page.getByLabel("Caption EN").fill("Mixer");
+  await page.getByRole("button", { name: "Добавить" }).click();
+  await expect(page.getByText("Скриншот добавлен.")).toBeVisible();
   await page.getByRole("button", { name: "Опубликовать" }).click();
-  await expect(page.getByText("Версия 0.1.2 опубликована.")).toBeVisible();
+  await expect(page.getByText("Версия 0.1.6 опубликована.")).toBeVisible();
   await expect(page.getByText("Опубликован", { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 800, height: 375 });
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

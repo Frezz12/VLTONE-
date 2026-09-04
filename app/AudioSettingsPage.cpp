@@ -1,7 +1,9 @@
 #include "AudioSettingsPage.hpp"
 #include "AudioPreferences.hpp"
 #include "EngineController.hpp"
+#include "UiConstants.hpp"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -12,6 +14,7 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSettings>
 #include <QSet>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
@@ -91,6 +94,19 @@ AudioSettingsPage::AudioSettingsPage(daw::EngineController* controller,
     m_bufferNote->setStyleSheet(QStringLiteral("color:#c08040;"));
     m_bufferNote->setVisible(false);
     layout->addWidget(m_bufferNote);
+
+    m_cpuStatusBar = new QCheckBox(
+        tr("Show audio CPU load in the bottom status bar"), this);
+    m_cpuStatusBar->setObjectName(QStringLiteral("ShowCpuStatusBar"));
+    m_cpuStatusBar->setAccessibleName(
+        tr("Show audio CPU load in the bottom status bar"));
+    m_cpuStatusBar->setChecked(
+        QSettings().value(ui::kCpuStatusBarVisibleSetting, true).toBool());
+    connect(m_cpuStatusBar, &QCheckBox::toggled, this, [this](bool visible) {
+        QSettings().setValue(ui::kCpuStatusBarVisibleSetting, visible);
+        emit cpuStatusBarVisibilityChanged(visible);
+    });
+    layout->addWidget(m_cpuStatusBar);
     layout->addStretch(1);
 
     m_controlPanel = new QPushButton(tr("Hardware Setup..."));
@@ -455,7 +471,11 @@ void AudioSettingsPage::apply() {
 bool AudioSettingsPage::checkForTest() const {
     if (!m_driverCombo || !m_asioDeviceCombo || !m_outputCombo ||
         !m_inputCombo || !m_inputConfig || !m_outputConfig ||
-        !m_controlPanel) return false;
+        !m_controlPanel || !m_cpuStatusBar ||
+        m_cpuStatusBar->isChecked() !=
+            QSettings().value(ui::kCpuStatusBarVisibleSetting, true).toBool()) {
+        return false;
+    }
     const QString driver = m_driverCombo->currentData().toString();
     const QComboBox* output = isAsioSelected() ? m_asioDeviceCombo : m_outputCombo;
     for (int row = 0; row < output->count(); ++row) {

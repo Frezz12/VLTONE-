@@ -57,7 +57,8 @@ if (process.env.VLT_API_ORIGIN) {
   const rewriteGroups = Object.values(manifest.rewrites ?? {});
   const apiRewrite = rewriteGroups.flat().find((rewrite) => rewrite.source === "/api/:path*");
   if (!apiRewrite) throw new Error("standalone API rewrite is missing");
-  apiRewrite.destination = `${apiOrigin.toString().replace(/\/$/, "")}/:path*`;
+  const apiRoot = apiOrigin.toString().replace(/\/+$/, "").replace(/\/v1$/, "");
+  apiRewrite.destination = `${apiRoot}/:path*`;
   await writeFile(manifestPath, JSON.stringify(manifest), "utf8");
 }
 

@@ -34,11 +34,12 @@ class QScrollBar;
 /// The arrangement timeline: a bar/beat ruler, one lane per track with its clips
 /// drawn as rounded rectangles, the grid at the division chosen in the transport
 /// bar, and the playhead. With the Select tool clips can be selected, dragged
-/// (snapping to the grid, Ctrl bypasses), trimmed by their edges and faded by
-/// their top corners; several clips can be Ctrl-drag-selected and moved or cut
+/// (snapping to the grid, Alt bypasses), trimmed by their edges and faded by
+/// their top corners; several clips can be marquee-selected and moved or cut
 /// together. Overlapping clips crossfade. Audio files can be dropped in from the
-/// file manager. The Knife tool splits clips and the Eraser deletes them.
-/// Empty space seeks; dragging in the ruler scrubs. Wheel scrolls, Ctrl+wheel
+/// file manager. The Knife tool splits clips; the Eraser tool or a held right
+/// mouse button deletes clips without changing the selected toolbar tool.
+/// Empty space rubber-band-selects; dragging in the ruler scrubs. Wheel scrolls, Ctrl+wheel
 /// zooms, Shift+wheel moves through time, and dragging with the middle mouse
 /// button grabs the arrangement in both axes. Rendered with QPainter — the
 /// cross-platform replacement for the macOS Metal renderer.
@@ -49,7 +50,8 @@ public:
     ///   Select       — move clips, trim by their edges, fade by their top
     ///                  corners, adjust gain by the handle at the bottom.
     ///   Knife        — click a clip to split it (all selected clips, if several).
-    ///   Eraser       — click (or drag across) clips to delete them.
+    ///   Eraser       — click (or drag across) clips to delete them; right-drag
+    ///                  borrows this behavior from any active tool.
     ///   SelectRegion — drag a time region; delete or drag its contents.
     /// Appended, never inserted: the transport's chip menu addresses a tool by its
 /// index and stores that index, so renumbering one would silently change
@@ -61,7 +63,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
     ~TimelineWidget() override;
 
     void setTool(Tool tool);
-    /// The tool Alt/Option borrows while it is held: the pointer changes at key
+    /// The tool Ctrl borrows while it is held: the pointer changes at key
     /// press, before the next mouse event, and returns on release.
     void setSecondaryTool(Tool tool);
     void setSecondaryToolHeld(bool held);
@@ -104,6 +106,11 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
     /// is the grid the user can actually see, at the current tempo.
     double snapSeconds() const;
     void setShowBars(bool showBars);
+
+    /// Scale only the painted audio envelope. Playback gain and clip gain stay
+    /// untouched; 1.0 is the default waveform height.
+    void setWaveformScale(double scale);
+    double waveformScale() const { return m_waveformScale; }
 
     void zoomBy(double factor);
     void zoomToFit();
@@ -354,6 +361,7 @@ private:
     bool duplicateClipDrag();
     void moveClipDragToLane(int grabbedLane);
     void autoScrollMarquee(const QPoint& pointer);
+    bool eraseClipsAlong(const QPoint& from, const QPoint& to);
 
     // ── The cycle region ──
     /// What a press in the cycle strip is doing.
@@ -573,6 +581,15 @@ private:
     void trimMidiPreviewCache(const MidiPreviewCacheEntry* keepEntry);
     /// Bounding box of the cursor line and its ruler handle at `x`.
     QRect playheadDirtyRect(int x) const;
+
+public:
+    /// Seed the playhead's motion trail (screenshot hook). A grab runs without
+    /// an audio device, so the transport never advances and a trail measured
+    /// from how far the head moved between two frames is always zero — the same
+    /// reason MainWindow seeds a staged take's clock.
+    void seedPlayheadTrailForShot(double pixels, int direction);
+
+private:
     void drawFades(QPainter& p, const daw::ClipModel& clip, const QRectF& r);
     /// The take running on `lane`, drawn as the clip it is about to become:
     /// the track's colour (or the colour of the take it will land as, when a
@@ -650,6 +667,13 @@ private:
     /// Last cursor x requested or painted. Playback invalidates this narrow
     /// strip and the new one instead of repainting every lane.
     std::optional<int> m_lastPlayheadX;
+    /// Length in pixels of the trail the playhead drags behind it, and which
+    /// way it is going. Derived from how far the head actually moved between
+    /// two frames, so it lengthens with the scroll speed and collapses on its
+    /// own when the transport stops.
+    double m_playheadTrailPx = 0.0;
+    int m_playheadTrailDir = 1;
+    bool m_playheadTrailSeeded = false;
     QPixmap m_staticFrame;
     bool m_staticFrameValid = false;
     std::uint64_t m_staticFramePaintCount = 0;
@@ -677,17 +701,18 @@ private:
     double m_gridBeats = 0.25;      // 1/16 by default
     bool m_snapEnabled = true;
     bool m_showBars = true;
+    double m_waveformScale = 1.0;
 
     Tool m_tool = Tool::Select;
     Tool m_secondaryTool = Tool::Knife;
     /// True while the modifier is down, as read off the last input event. The
     /// tool every gesture actually uses is `tool()`, never `m_tool`.
-    bool m_altToolHeld = false;
+    bool m_secondaryToolHeld = false;
     /// The tool in force right now.
-    Tool tool() const { return m_altToolHeld ? m_secondaryTool : m_tool; }
+    Tool tool() const { return m_secondaryToolHeld ? m_secondaryTool : m_tool; }
     /// Re-read the modifier from an event; returns true when it changed, so the
     /// caller can repaint the cursor.
-    bool trackAltTool(Qt::KeyboardModifiers modifiers);
+    bool trackSecondaryTool(Qt::KeyboardModifiers modifiers);
 
     // Drag state.
     // Middle-button pan is deliberately independent of the selected edit tool:
@@ -836,8 +861,11 @@ private:
     bool m_dropActive = false;
     int m_dropLane = -1;
 
-    // Eraser drag: clips already deleted in this stroke, so we don't re-hit.
+    // Eraser drag. Right-button strokes borrow it without changing the active
+    // toolbar tool, matching the Piano Roll note eraser.
     bool m_erasing = false;
+    QPoint m_lastErasePoint;
+    bool m_suppressContextMenu = false;
 
     // Comp editor. Expanding grows the lane (see CompLayout.hpp), so the
     // animation is per *track* — one timer walks the factor and both this widget

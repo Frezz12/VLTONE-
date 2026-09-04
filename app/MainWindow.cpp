@@ -122,6 +122,7 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QProgressDialog>
+#include <QProgressBar>
 #include <QTextEdit>
 #include <QThreadPool>
 #include <QToolButton>
@@ -785,6 +786,14 @@ struct MainWindow::CloudRecordingRuntime {
 MainWindow::MainWindow(bool openDevice, QWidget* parent,
                        collab::CollaborationService* collaboration)
     : QMainWindow(parent), m_collaboration(collaboration) {
+    const auto syncDefaultTrackColor = [this] {
+        m_controller.setDefaultTrackColor(
+            uint32_t(th().accent.rgb()) & 0x00FFFFFFu);
+    };
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+            syncDefaultTrackColor);
+    syncDefaultTrackColor();
+
     const ui::AudioPreferences audioPreferences = openDevice
         ? ui::loadAudioPreferences()
         : ui::AudioPreferences{};
@@ -989,7 +998,10 @@ MainWindow::MainWindow(bool openDevice, QWidget* parent,
     buildSemanticCommands();
     buildStatusBar();
 
-    syncViews();
+    if (openDevice)
+        initializeBlankProject();
+    else
+        syncViews();
 
     m_refreshTimer = new QTimer(this);
     connect(m_refreshTimer, &QTimer::timeout, this, &MainWindow::refreshUi);
@@ -3684,12 +3696,12 @@ bool MainWindow::checkAutomationForTest() {
 
         const QPoint mid(m_timeline->width() / 2, y);
         send(QEvent::MouseButtonPress, mid, Qt::LeftButton, Qt::LeftButton,
-             Qt::ControlModifier);
+             Qt::AltModifier);
         const QPoint up(mid.x(), mid.y() - 30);
         send(QEvent::MouseMove, up, Qt::NoButton, Qt::LeftButton,
-             Qt::ControlModifier);
+             Qt::AltModifier);
         send(QEvent::MouseButtonRelease, up, Qt::LeftButton, Qt::NoButton,
-             Qt::ControlModifier);
+             Qt::AltModifier);
         QApplication::processEvents();
 
         const daw::ClipAutomationModel* bent = curve();
@@ -4468,7 +4480,7 @@ bool MainWindow::checkCycleRegionForTest() {
     m_controller.setLoopEnabled(false);
     QApplication::processEvents();
 
-    // A drag across the strip at the very top of the ruler. Ctrl is held so the
+    // A drag across the strip at the very top of the ruler. Alt is held so the
     // grid cannot round the two ends onto the same beat at whatever zoom the
     // window happens to be at.
     const int y = ui::kLoopStripHeight / 2;
@@ -4478,7 +4490,7 @@ bool MainWindow::checkCycleRegionForTest() {
                           Qt::MouseButtons held) {
         const QPoint at(x, y);
         QMouseEvent ev(type, QPointF(at), QPointF(m_timeline->mapToGlobal(at)),
-                       button, held, Qt::ControlModifier);
+                       button, held, Qt::AltModifier);
         QApplication::sendEvent(m_timeline, &ev);
     };
     send(QEvent::MouseButtonPress, fromX, Qt::LeftButton, Qt::LeftButton);
@@ -5017,6 +5029,65 @@ bool MainWindow::checkTrackSelectionForTest() {
     globalTrackKey(Qt::Key_M);
     globalTrackKey(Qt::Key_S);
 
+    // Dragging down an M/S column paints only the rows crossed, even when the
+    // source belongs to a larger selection. The whole sweep is one undo step.
+    const auto paintChips = [&](const QString& role, size_t first,
+                                size_t last) -> bool {
+        auto* source = m_trackList->rowChipForTest(
+            QString::fromStdString(ids[first]), role);
+        auto* target = m_trackList->rowChipForTest(
+            QString::fromStdString(ids[last]), role);
+        if (!source || !target) return false;
+        const QPoint from = source->rect().center();
+        const QPoint globalFrom = source->mapToGlobal(from);
+        const QPoint globalTo = target->mapToGlobal(target->rect().center());
+        const QPoint to = source->mapFromGlobal(globalTo);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(from),
+                          QPointF(globalFrom), Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
+        QApplication::sendEvent(source, &press);
+        QMouseEvent move(QEvent::MouseMove, QPointF(to), QPointF(globalTo),
+                         Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(source, &move);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(to),
+                            QPointF(globalTo), Qt::LeftButton, Qt::NoButton,
+                            Qt::NoModifier);
+        QApplication::sendEvent(source, &release);
+        QApplication::processEvents();
+        return true;
+    };
+    {
+        if (!paintChips(QStringLiteral("M"), 0, 1) ||
+            !m_controller.project().findTrack(ids[0])->muted ||
+            !m_controller.project().findTrack(ids[1])->muted ||
+            m_controller.project().findTrack(ids[2])->muted) {
+            std::fprintf(stderr,
+                         "mute paint did not stop at the crossed rows\n");
+            return false;
+        }
+        const std::vector<std::string> reset{ids[0], ids[1]};
+        m_controller.setTracksMuted(reset, false);
+        m_trackList->syncTrackValues();
+        if (m_controller.project().findTrack(ids[0])->muted ||
+            m_controller.project().findTrack(ids[1])->muted) {
+            std::fprintf(stderr, "mute paint fixture did not reset\n");
+            return false;
+        }
+    }
+    {
+        if (!paintChips(QStringLiteral("S"), 1, 2) ||
+            m_controller.project().findTrack(ids[0])->soloed ||
+            !m_controller.project().findTrack(ids[1])->soloed ||
+            !m_controller.project().findTrack(ids[2])->soloed) {
+            std::fprintf(stderr,
+                         "solo paint did not stop at the crossed rows\n");
+            return false;
+        }
+        m_controller.setTrackSoloed(ids[1], false);
+        m_controller.setTrackSoloed(ids[2], false);
+        m_trackList->syncTrackValues();
+    }
+
     // The fader, driven by a real drag: the other selected tracks follow by
     // ratio, so the balance they started with survives.
     {
@@ -5382,18 +5453,59 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
     if (!m_timeline) return false;
     m_timeline->setTool(TimelineWidget::Tool::Select);
     m_timeline->setSecondaryTool(TimelineWidget::Tool::Knife);
-    QKeyEvent altPress(QEvent::KeyPress, Qt::Key_Alt, Qt::AltModifier);
-    QApplication::sendEvent(m_timeline, &altPress);
+    QKeyEvent ctrlPress(QEvent::KeyPress, Qt::Key_Control,
+                        Qt::ControlModifier);
+    QApplication::sendEvent(m_timeline, &ctrlPress);
     const bool borrowedImmediately =
         m_timeline->activeToolForTest() == TimelineWidget::Tool::Knife;
-    QKeyEvent altRelease(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
-    QApplication::sendEvent(m_timeline, &altRelease);
+    QKeyEvent ctrlRelease(QEvent::KeyRelease, Qt::Key_Control,
+                          Qt::NoModifier);
+    QApplication::sendEvent(m_timeline, &ctrlRelease);
     const bool restoredImmediately =
         m_timeline->activeToolForTest() == TimelineWidget::Tool::Select;
     if (!borrowedImmediately || !restoredImmediately) {
         std::fprintf(stderr,
-                     "Alt secondary tool did not switch immediately (%d/%d)\n",
+                     "Ctrl secondary tool did not switch immediately (%d/%d)\n",
                      int(borrowedImmediately), int(restoredImmediately));
+        return false;
+    }
+
+    auto* waveformScale = m_toolPanel
+                              ? m_toolPanel->findChild<QWidget*>(
+                                    QStringLiteral("WaveformScaleButton"))
+                              : nullptr;
+    if (!waveformScale) return false;
+    m_timeline->setWaveformScale(1.0);
+    const QPointF scaleFrom(waveformScale->rect().center());
+    const QPointF scaleTo = scaleFrom - QPointF(0.0, 40.0);
+    QMouseEvent scalePress(
+        QEvent::MouseButtonPress, scaleFrom,
+        QPointF(waveformScale->mapToGlobal(scaleFrom.toPoint())), Qt::LeftButton,
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(waveformScale, &scalePress);
+    QMouseEvent scaleMove(
+        QEvent::MouseMove, scaleTo,
+        QPointF(waveformScale->mapToGlobal(scaleTo.toPoint())), Qt::NoButton,
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(waveformScale, &scaleMove);
+    QMouseEvent scaleRelease(
+        QEvent::MouseButtonRelease, scaleTo,
+        QPointF(waveformScale->mapToGlobal(scaleTo.toPoint())), Qt::LeftButton,
+        Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(waveformScale, &scaleRelease);
+    const bool waveformGrew = m_timeline->waveformScale() > 1.0;
+    QMouseEvent scaleReset(
+        QEvent::MouseButtonDblClick, scaleFrom,
+        QPointF(waveformScale->mapToGlobal(scaleFrom.toPoint())), Qt::LeftButton,
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(waveformScale, &scaleReset);
+    const bool waveformReset =
+        std::abs(m_timeline->waveformScale() - 1.0) < 1e-9;
+    if (!waveformGrew || !waveformReset) {
+        std::fprintf(stderr,
+                     "waveform display scale failed (grow=%d reset=%d value=%.3f)\n",
+                     int(waveformGrew), int(waveformReset),
+                     m_timeline->waveformScale());
         return false;
     }
 
@@ -5706,8 +5818,47 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
         return false;
     }
 
-    // A plain empty-space drag is not a marquee. Ctrl turns that same gesture
-    // into one, and a marquee pulled above the ruler auto-scrolls upward.
+    // The right button borrows the eraser without changing tools. One
+    // coalesced diagonal move must catch both clips and fold into one undo.
+    const QPoint eraseFirst(xA, m_timeline->laneCentreForTest(rowB));
+    const QPoint eraseSecond(xB, m_timeline->laneCentreForTest(rowC));
+    send(QEvent::MouseButtonPress, eraseFirst, Qt::RightButton,
+         Qt::RightButton, Qt::NoModifier);
+    send(QEvent::MouseMove, eraseSecond, Qt::NoButton,
+         Qt::RightButton, Qt::NoModifier);
+    send(QEvent::MouseButtonRelease, eraseSecond, Qt::RightButton,
+         Qt::NoButton, Qt::NoModifier);
+    QApplication::processEvents();
+    const bool firstErased = !hasClip(tracks[1], first);
+    const bool secondErased = !hasClip(tracks[2], second);
+    if (!firstErased || !secondErased) {
+        std::fprintf(stderr,
+                     "right-button clip eraser failed (first=%d second=%d)\n",
+                     int(firstErased), int(secondErased));
+        return false;
+    }
+    m_controller.undo();
+    if (!hasClip(tracks[1], first) || !hasClip(tracks[2], second)) {
+        std::fprintf(stderr, "right-button clip erase did not undo atomically\n");
+        return false;
+    }
+
+    m_timeline->selectClips({
+        {QString::fromStdString(tracks[1]), QString::fromStdString(first)},
+        {QString::fromStdString(tracks[2]), QString::fromStdString(second)}});
+    const QPoint blankRightClick(xA, m_timeline->laneCentreForTest(rowA));
+    send(QEvent::MouseButtonPress, blankRightClick, Qt::RightButton,
+         Qt::RightButton, Qt::NoModifier);
+    send(QEvent::MouseButtonRelease, blankRightClick, Qt::RightButton,
+         Qt::NoButton, Qt::NoModifier);
+    if (!m_selection.clips().isEmpty()) {
+        std::fprintf(stderr,
+                     "right-clicking empty timeline space kept clip selection\n");
+        return false;
+    }
+
+    // A plain empty-space drag is a marquee, and pulling it above the ruler
+    // auto-scrolls upward without moving the transport playhead.
     for (int i = 0; i < 18; ++i) {
         tracks.push_back(m_controller.addTrack(
             daw::TrackKind::Midi, "Scroll drag " + std::to_string(i + 1)));
@@ -5719,6 +5870,8 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
     const QPoint marqueeStart(m_timeline->width() - 12,
                               m_timeline->height() - 12);
     const QPoint marqueeOutside(marqueeStart.x(), ui::kRulerHeight - 30);
+    const double playheadBeforeMarquee = 0.137;
+    m_controller.seekSeconds(playheadBeforeMarquee);
     send(QEvent::MouseButtonPress, marqueeStart, Qt::LeftButton,
          Qt::LeftButton, Qt::NoModifier);
     send(QEvent::MouseMove, marqueeOutside, Qt::NoButton, Qt::LeftButton,
@@ -5726,21 +5879,36 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
     send(QEvent::MouseButtonRelease, marqueeOutside, Qt::LeftButton,
          Qt::NoButton, Qt::NoModifier);
     QApplication::processEvents();
-    const bool plainDragStayedPut =
-        m_timeline->verticalScroll() == scrollBefore;
-    send(QEvent::MouseButtonPress, marqueeStart, Qt::LeftButton,
-         Qt::LeftButton, Qt::ControlModifier);
-    send(QEvent::MouseMove, marqueeOutside, Qt::NoButton, Qt::LeftButton,
-         Qt::ControlModifier);
-    send(QEvent::MouseButtonRelease, marqueeOutside, Qt::LeftButton,
-         Qt::NoButton, Qt::ControlModifier);
-    QApplication::processEvents();
-    if (!plainDragStayedPut || scrollBefore <= 0 ||
+    const bool contentDidNotSeek =
+        std::abs(m_controller.positionSeconds() - playheadBeforeMarquee) < 1e-9;
+    if (!contentDidNotSeek || scrollBefore <= 0 ||
         m_timeline->verticalScroll() >= scrollBefore) {
         std::fprintf(stderr,
-                     "Ctrl marquee gesture failed (plain=%d, scroll=%d/%d)\n",
-                     int(plainDragStayedPut), scrollBefore,
+                     "plain marquee gesture failed (seek=%d, scroll=%d/%d)\n",
+                     int(contentDidNotSeek), scrollBefore,
                      m_timeline->verticalScroll());
+        return false;
+    }
+
+    m_timeline->setGridBeats(0.25);
+    m_timeline->setSnapEnabled(true);
+    const double rulerGrid = m_timeline->snapSeconds();
+    const QPoint rulerAt(m_timeline->width() / 3,
+                         (ui::kLoopStripHeight + ui::kRulerHeight) / 2);
+    send(QEvent::MouseButtonPress, rulerAt, Qt::LeftButton, Qt::LeftButton,
+         Qt::NoModifier);
+    send(QEvent::MouseButtonRelease, rulerAt, Qt::LeftButton, Qt::NoButton,
+         Qt::NoModifier);
+    const double snappedRulerPosition = m_controller.positionSeconds();
+    const bool rulerSeekSnapped = rulerGrid > 0.0 &&
+        std::abs(snappedRulerPosition / rulerGrid -
+                 std::round(snappedRulerPosition / rulerGrid)) < 1e-7;
+    m_timeline->setGridBeats(savedGrid);
+    m_timeline->setSnapEnabled(savedSnap);
+    if (!rulerSeekSnapped) {
+        std::fprintf(stderr,
+                     "timeline ruler seek did not snap (position %.6f, grid %.6f)\n",
+                     snappedRulerPosition, rulerGrid);
         return false;
     }
 
@@ -5790,6 +5958,24 @@ bool MainWindow::checkSettingsViewportForTest() {
                              Qt::ScrollBarAlwaysOff;
         }
     }
+
+    auto* cpuToggle = m_settingsWindow->findChild<QCheckBox*>(
+        QStringLiteral("ShowCpuStatusBar"));
+    bool cpuStatusSynced = cpuToggle && m_cpuStatusMeter &&
+        m_cpuStatusMeter->accessibleName() == tr("Audio CPU load") &&
+        (statusBar()->isHidden() != cpuToggle->isChecked());
+    if (cpuToggle) {
+        const bool original = cpuToggle->isChecked();
+        cpuToggle->setChecked(!original);
+        QApplication::processEvents();
+        cpuStatusSynced = cpuStatusSynced &&
+            (statusBar()->isHidden() != cpuToggle->isChecked());
+        cpuToggle->setChecked(original);
+        QApplication::processEvents();
+        cpuStatusSynced = cpuStatusSynced &&
+            (statusBar()->isHidden() != original);
+    }
+    scrollable = scrollable && cpuStatusSynced;
 
     InternalEditorFrame* frame =
         m_internalEditorFrames.value(m_settingsWindow, nullptr);
@@ -6349,14 +6535,16 @@ bool MainWindow::checkContextSyncForTest() {
     // Several real mouse moves in one grab: the mixer must follow every sample,
     // but history must see only the press and release endpoints.
     const QPoint start = level->rect().center();
-    const QPoint finish = start - QPoint(8, 0);
+    // A downward throw is the new compact-strip gesture for reducing level;
+    // horizontal throws remain supported by the same delta calculation.
+    const QPoint finish = start + QPoint(0, 8);
     const QPoint globalStart = level->mapToGlobal(start);
     QMouseEvent press(QEvent::MouseButtonPress, QPointF(start),
                       QPointF(globalStart), Qt::LeftButton, Qt::LeftButton,
                       Qt::NoModifier);
     QApplication::sendEvent(level, &press);
-    for (int dx : {2, 5, 8}) {
-        const QPoint at = start - QPoint(dx, 0);
+    for (int dy : {2, 5, 8}) {
+        const QPoint at = start + QPoint(0, dy);
         QMouseEvent move(QEvent::MouseMove, QPointF(at),
                          QPointF(level->mapToGlobal(at)), Qt::NoButton,
                          Qt::LeftButton, Qt::NoModifier);
@@ -6372,7 +6560,7 @@ bool MainWindow::checkContextSyncForTest() {
     if (!track) return false;
     const double shown = m_mixer->faderGainForTest(trackId);
     if (std::abs(shown - double(track->volume)) > 0.001 ||
-        std::abs(shown - before) < 0.0001) {
+        shown >= before - 0.0001) {
         std::fprintf(stderr,
                      "context panel level did not reach the mixer: strip %.4f, "
                      "document %.4f, before %.4f\n",
@@ -7183,6 +7371,8 @@ void MainWindow::buildLayout() {
                 m_automationCreationLatched = enabled;
                 updateAutomationCreationMode();
             });
+    connect(m_toolPanel, &ToolPanel::waveformScaleChanged, m_timeline,
+            &TimelineWidget::setWaveformScale);
     connect(m_toolPanel, &ToolPanel::addTrackRequested, this,
             &MainWindow::onAddAudioTrack);
     connect(m_toolPanel, &ToolPanel::addTrackMenuRequested, this,
@@ -9622,6 +9812,18 @@ void MainWindow::resizeGravityForShot() {
     }
 }
 
+void MainWindow::placePlayheadForShot(double seconds, bool rolling) {
+    m_controller.seekSeconds(std::max(0.0, seconds));
+    if (rolling) {
+        if (!m_controller.isPlaying()) onPlayPause();
+        // Seeded rather than played: a screenshot run has no audio device, so
+        // the transport never advances and the trail would measure zero. The
+        // staged recording shot seeds its clock for the same reason.
+        if (m_timeline) m_timeline->seedPlayheadTrailForShot(30.0, 1);
+    }
+    syncViews();
+}
+
 bool MainWindow::openDemoEqualizer() {
     const auto equalizer = m_controller.pluginManager().find(
         daw::plugins::Format::Internal, "daw.equalizer");
@@ -9641,6 +9843,25 @@ bool MainWindow::openDemoEqualizer() {
                     daw::plugins::equalizer::EqualizerInstance*>(
                     m_controller.insertInstance(track.id, slot)))
                 instance->setPresetReference("factory", "Vocal Cleanup");
+            // DAW_SHOT_EQUALIZER_DYN turns the first band — the one the panel
+            // opens on — into a dynamic bell, so the inspector's second row and
+            // the graph's range shading are both reachable from a grab rather
+            // than only by hand.
+            if (qEnvironmentVariableIsSet("DAW_SHOT_EQUALIZER_DYN")) {
+                namespace eq = daw::plugins::equalizer;
+                const auto set = [&](eq::BandParam field, double value) {
+                    m_controller.setInsertParameter(
+                        track.id, slot,
+                        eq::parameterId(eq::bandParameter(0, field)), value);
+                };
+                set(eq::BandParam::Enabled, 1.0);
+                set(eq::BandParam::Type, double(int(eq::FilterType::Bell)));
+                set(eq::BandParam::Frequency, 320.0);
+                set(eq::BandParam::Gain, 6.0);
+                set(eq::BandParam::Q, 1.4);
+                set(eq::BandParam::DynamicEnabled, 1.0);
+                set(eq::BandParam::DynamicRange, -9.0);
+            }
         }
         onTracksChanged();
         openPluginEditor(QString::fromStdString(track.id),
@@ -10567,10 +10788,66 @@ bool MainWindow::checkPluginAutoOpenForTest() {
     QApplication::processEvents();
 
     const auto* loaded = probe.project().findTrack(track);
-    return loaded && loaded->instrument.isLoaded() &&
-           instrumentMenu->actions().isEmpty() &&
-           requestedChannel == QString::fromStdString(track) &&
-           requestedSlot == QString::fromStdString(loaded->instrument.id);
+    const bool autoOpened = loaded && loaded->instrument.isLoaded() &&
+        instrumentMenu->actions().isEmpty() &&
+        requestedChannel == QString::fromStdString(track) &&
+        requestedSlot == QString::fromStdString(loaded->instrument.id);
+    if (!autoOpened) return false;
+
+    // The bypass buttons are hover actions, so exercise their event filter
+    // directly: a sweep over two inserts changes both and folds history once.
+    const auto effect = probe.pluginManager().find(
+        daw::plugins::Format::Internal, "daw.graphit");
+    if (!effect) return false;
+    const std::string firstInsert = probe.addInsert(track, *effect);
+    const std::string secondInsert = probe.addInsert(track, *effect);
+    if (firstInsert.empty() || secondInsert.empty()) return false;
+
+    ChannelStrip rack(&probe, QString::fromStdString(track), false);
+    rack.resize(rack.sizeHint());
+    rack.show();
+    QApplication::processEvents();
+    QAbstractButton* firstPower = nullptr;
+    QAbstractButton* secondPower = nullptr;
+    for (QAbstractButton* button : rack.findChildren<QAbstractButton*>()) {
+        const QString slot = button->property("insertBypassSlot").toString();
+        if (slot == QString::fromStdString(firstInsert)) firstPower = button;
+        if (slot == QString::fromStdString(secondInsert)) secondPower = button;
+    }
+    if (!firstPower || !secondPower) return false;
+
+    const std::size_t undoBefore = probe.undoDepth();
+    const QPoint from = firstPower->rect().center();
+    const QPoint globalFrom = firstPower->mapToGlobal(from);
+    const QPoint globalTo =
+        secondPower->mapToGlobal(secondPower->rect().center());
+    const QPoint to = firstPower->mapFromGlobal(globalTo);
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(from),
+                      QPointF(globalFrom), Qt::LeftButton, Qt::LeftButton,
+                      Qt::NoModifier);
+    QApplication::sendEvent(firstPower, &press);
+    QMouseEvent move(QEvent::MouseMove, QPointF(to), QPointF(globalTo),
+                     Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(firstPower, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(to),
+                        QPointF(globalTo), Qt::LeftButton, Qt::NoButton,
+                        Qt::NoModifier);
+    QApplication::sendEvent(firstPower, &release);
+
+    loaded = probe.project().findTrack(track);
+    if (!loaded || loaded->inserts.size() < 2 ||
+        !loaded->inserts[loaded->inserts.size() - 2].bypassed ||
+        !loaded->inserts.back().bypassed ||
+        probe.undoDepth() != std::min(undoBefore + 1, probe.undoLimit())) {
+        std::fprintf(stderr,
+                     "insert bypass paint missed a slot or was not atomic\n");
+        return false;
+    }
+    probe.undo();
+    loaded = probe.project().findTrack(track);
+    return loaded && loaded->inserts.size() >= 2 &&
+           !loaded->inserts[loaded->inserts.size() - 2].bypassed &&
+           !loaded->inserts.back().bypassed;
 }
 
 bool MainWindow::checkPluginSearchFocusForTest() {
@@ -10601,6 +10878,10 @@ bool MainWindow::checkPluginSearchFocusForTest() {
         delete menu;
         return false;
     }
+    const bool singleScrollableColumns =
+        menu->style()->styleHint(QStyle::SH_Menu_Scrollable, nullptr, menu) &&
+        submenu->style()->styleHint(QStyle::SH_Menu_Scrollable, nullptr,
+                                    submenu);
 
     // This is the state produced by moving through a vendor/category with the
     // mouse: the child QMenu, rather than the line edit, receives the key.
@@ -10642,7 +10923,8 @@ bool MainWindow::checkPluginSearchFocusForTest() {
                                         edit->text() == QStringLiteral("и");
     menu->close();
     delete menu;
-    return focusedOnOpen && routed && shortcutStayedInSearch;
+    return focusedOnOpen && routed && shortcutStayedInSearch &&
+           singleScrollableColumns;
 }
 
 void MainWindow::openSettings(int tab) {
@@ -10668,6 +10950,9 @@ void MainWindow::openSettings(int tab) {
         // other rather than the two drifting apart.
         connect(m_settingsWindow, &SettingsWindow::recordModeChanged, m_transport,
                 &TransportBar::refresh);
+        connect(m_settingsWindow,
+                &SettingsWindow::cpuStatusBarVisibilityChanged, this,
+                &MainWindow::setCpuStatusBarVisible);
         connect(m_settingsWindow, &SettingsWindow::browserSettingsChanged, this,
                 [this] {
                     if (m_browser) m_browser->reloadSettings();
@@ -10971,9 +11256,33 @@ void MainWindow::setEditTool(int index) {
 
 void MainWindow::buildStatusBar() {
     m_statusLeft = new QLabel(this);
+    m_statusLeft->setAccessibleName(tr("Audio and project status"));
     m_statusRight = new QLabel(this);
+    m_statusRight->setObjectName(QStringLiteral("CpuLoadPercent"));
+    m_statusRight->setMinimumWidth(54);
+    m_statusRight->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+    auto* cpuStatus = new QWidget(this);
+    cpuStatus->setObjectName(QStringLiteral("CpuLoadStatus"));
+    cpuStatus->setToolTip(tr("Audio processing CPU load"));
+    cpuStatus->setAccessibleName(tr("Audio processing CPU load"));
+    auto* cpuRow = new QHBoxLayout(cpuStatus);
+    cpuRow->setContentsMargins(2, 0, 2, 0);
+    cpuRow->setSpacing(5);
+    m_cpuStatusIcon = new QLabel(cpuStatus);
+    m_cpuStatusIcon->setFixedSize(14, 14);
+    m_cpuStatusMeter = new QProgressBar(cpuStatus);
+    m_cpuStatusMeter->setObjectName(QStringLiteral("CpuLoadMeter"));
+    m_cpuStatusMeter->setAccessibleName(tr("Audio CPU load"));
+    m_cpuStatusMeter->setRange(0, 100);
+    m_cpuStatusMeter->setTextVisible(false);
+    m_cpuStatusMeter->setFixedSize(68, 6);
+    cpuRow->addWidget(m_cpuStatusIcon);
+    cpuRow->addWidget(m_cpuStatusMeter);
+    cpuRow->addWidget(m_statusRight);
+
     statusBar()->addWidget(m_statusLeft);
-    statusBar()->addPermanentWidget(m_statusRight);
+    statusBar()->addPermanentWidget(cpuStatus);
 #ifdef DAW_ENABLE_COLLABORATION
     if (m_collaboration) {
         m_sessionStatus = new collab::SessionStatusWidget(m_collaboration, this);
@@ -10981,10 +11290,28 @@ void MainWindow::buildStatusBar() {
     }
 #endif
     statusBar()->setSizeGripEnabled(false);
-    // The transport now owns the useful live status. Keep the QStatusBar
-    // object for existing transient notifications, but remove its permanent
-    // bottom strip from the workspace.
-    statusBar()->hide();
+    statusBar()->setFixedHeight(22);
+
+    const auto applyCpuTheme = [this] {
+        if (!m_cpuStatusIcon || !m_cpuStatusMeter) return;
+        m_cpuStatusIcon->setPixmap(
+            icons::svgIcon(QStringLiteral("cpu.svg"), th().textSecondary, 14)
+                .pixmap(14, 14));
+        m_cpuStatusMeter->setStyleSheet(QString(R"(
+QProgressBar { border: none; border-radius: 3px; background: %1; }
+QProgressBar::chunk { border-radius: 3px; background: %2; }
+)")
+            .arg(th().well().name(), th().accent.name()));
+    };
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+            applyCpuTheme);
+    applyCpuTheme();
+    setCpuStatusBarVisible(
+        QSettings().value(ui::kCpuStatusBarVisibleSetting, true).toBool());
+}
+
+void MainWindow::setCpuStatusBarVisible(bool visible) {
+    statusBar()->setVisible(visible);
 }
 
 bool MainWindow::checkProcessingCommandsForTest() const {
@@ -11456,13 +11783,13 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* ev) {
             if (key->isAutoRepeat()) break;
             const bool down = ev->type() == QEvent::KeyPress;
             // Modifier feedback must work even while a text field or the web
-            // panel owns focus. The focused widget still receives Alt/Option
-            // normally; the arrangement only mirrors its held state so its
-            // secondary cursor changes before the next mouse event.
+            // panel owns focus. Alt/Option remains the momentary automation
+            // gesture; Ctrl borrows the arrangement's secondary tool.
             if (key->key() == Qt::Key_Alt) {
                 setAutomationModifierHeld(down);
-                if (m_timeline) m_timeline->setSecondaryToolHeld(down);
             }
+            if (key->key() == Qt::Key_Control && m_timeline)
+                m_timeline->setSecondaryToolHeld(down);
             if (m_webPanel && m_webPanel->ownsFocus()) break;
             // Never while typing: a name field would swallow half its letters.
             if (auto* focus = QApplication::focusWidget();
@@ -13302,12 +13629,8 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
         m_transport->findChild<QWidget*>(QStringLiteral("LcdScreen"));
     auto* positionSection =
         m_transport->findChild<QWidget*>(QStringLiteral("PositionSection"));
-    auto* tempoSection =
-        m_transport->findChild<QWidget*>(QStringLiteral("TempoSection"));
-    auto* lcdInset =
-        m_transport->findChild<QWidget*>(QStringLiteral("LcdInsetWell"));
-    auto* spectrum =
-        m_transport->findChild<QWidget*>(QStringLiteral("TransportSpectrum"));
+    auto* statsSection =
+        m_transport->findChild<QWidget*>(QStringLiteral("StatsSection"));
     auto* transportButtons =
         m_transport->findChild<QWidget*>(QStringLiteral("TransportGroup"));
     auto* headerTools =
@@ -13345,18 +13668,19 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
                     });
     const bool gridCompact = gridChips.size() == 2 &&
         std::all_of(gridChips.begin(), gridChips.end(),
-                    [headerTools](QToolButton* chip) {
-                        return chip->width() <= 64 && chip->menu() &&
-                               !chip->menu()->actions().isEmpty() && headerTools &&
-                               headerTools->isAncestorOf(chip) &&
+                    [statsSection](QToolButton* chip) {
+                        return chip->width() <= 70 && chip->menu() &&
+                               !chip->menu()->actions().isEmpty() &&
+                               statsSection &&
+                               statsSection->isAncestorOf(chip) &&
                                chip->toolButtonStyle() ==
-                                    Qt::ToolButtonTextBesideIcon &&
+                                    Qt::ToolButtonTextOnly &&
                                !chip->text().isEmpty() &&
                                !chip->accessibleName().isEmpty();
                     });
     const QList<QWidget*> requiredControls{
         transportButtons, lcdScreen, positionSection, headerTools,
-        barsPosition, tempoSection, timeSignature, spectrum,
+        barsPosition, statsSection, timeSignature,
         stopButton, playButton, recordButton};
     const bool requiredVisible = transportPill &&
         std::all_of(requiredControls.begin(), requiredControls.end(),
@@ -13380,24 +13704,18 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
                  lcdScreen->geometry().center().y()) <= 1 &&
         std::abs(headerTools->geometry().center().y() -
                  lcdScreen->geometry().center().y()) <= 1;
+    // The chassis is painted metal, not another pane of glass; the three
+    // plates it frames are the glass ones.
     const bool threeBlockLayout = transportPill && lcdScreen &&
         !qobject_cast<ui::GlassPanel*>(transportPill) &&
         qobject_cast<ui::GlassPanel*>(lcdScreen) &&
-        transportPill->findChildren<ui::GlassPanel*>().size() == 1;
-    const auto displayDividers = lcdScreen
-        ? lcdScreen->findChildren<QWidget*>(QStringLiteral("LcdDivider"))
-        : QList<QWidget*>();
+        transportPill->findChildren<ui::GlassPanel*>().size() == 3;
     const bool lcdContent = lcdScreen && positionSection && timeSignature &&
-        tempoSection && lcdInset && spectrum &&
-        lcdScreen->isAncestorOf(lcdInset) &&
-        lcdInset->isAncestorOf(positionSection) &&
-        lcdInset->isAncestorOf(tempoSection) &&
-        lcdInset->isAncestorOf(timeSignature) &&
-        lcdInset->isAncestorOf(spectrum) &&
-        lcdScreen->isAncestorOf(timeSignature) &&
-        positionSection->x() < tempoSection->x() &&
-        tempoSection->x() < timeSignature->x() &&
-        timeSignature->x() < spectrum->x() && displayDividers.size() == 3;
+        statsSection &&
+        lcdScreen->isAncestorOf(positionSection) &&
+        lcdScreen->isAncestorOf(statsSection) &&
+        statsSection->isAncestorOf(timeSignature) &&
+        positionSection->x() < statsSection->x();
     const bool signatureMenuComplete = timeSignature && timeSignature->menu() &&
         timeSignature->menu()->actions().size() == 10;
     const bool clusterCentered = transportPill &&
@@ -13453,7 +13771,9 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
         !sectionOrder || !zonesAligned || !threeBlockLayout ||
         !lcdContent ||
         !signatureMenuComplete ||
-        !clusterCentered || hasUndoRedo || !statusBar()->isHidden() ||
+        !clusterCentered || hasUndoRedo ||
+        statusBar()->isHidden() ==
+            QSettings().value(ui::kCpuStatusBarVisibleSetting, true).toBool() ||
         !insetDocksPlaced || !drawerInitiallyCompact || !drawerExpanded ||
         !expandedClusterCentered || !drawerCollapsedAgain) {
         std::fprintf(stderr,
@@ -13864,6 +14184,18 @@ void MainWindow::onOfflineRender() {
 
 // ── Project I/O ──
 
+void MainWindow::initializeBlankProject() {
+    m_controller.newProject(/*createDefaultAudioTrack=*/true);
+    const auto& tracks = m_controller.project().tracks;
+    m_selectedTrackId = tracks.empty()
+                            ? QString()
+                            : QString::fromStdString(tracks.front().id);
+    syncViews();
+    if (!m_selectedTrackId.isEmpty())
+        selectTrackFromHeader(m_selectedTrackId);
+    setMixerVisible(true);
+}
+
 void MainWindow::onNewProject() {
 #ifdef DAW_ENABLE_COLLABORATION
     if (!prepareCloudRecordingForProjectTransition()) return;
@@ -13872,14 +14204,12 @@ void MainWindow::onNewProject() {
 #ifdef DAW_ENABLE_COLLABORATION
     clearCloudProjectBinding(/*cancelPublication=*/true);
 #endif
-    m_controller.newProject();
     m_projectPath.clear();
-    m_selectedTrackId.clear();
     m_dirty = false;
     m_journal.setProjectPath({}, {});
     m_journalStale = true;
     m_transport->syncTempo();
-    syncViews();
+    initializeBlankProject();
     updateWindowTitle();
 }
 
@@ -14423,11 +14753,16 @@ void MainWindow::refreshUi() {
                              .arg(m_controller.project().tracks.size())
                              .arg(displayProjectName(m_controller.projectName()));
     if (m_statusLeft->text() != left) m_statusLeft->setText(left);
-    const QString right = tr("DSP %1%   %2")
-                              .arg(int(m_controller.dspLoad() * 100))
-                              .arg(m_controller.isPlaying() ? tr("Playing")
-                                                            : tr("Stopped"));
-    if (m_statusRight->text() != right) m_statusRight->setText(right);
+    const int cpuPercent = std::clamp(
+        int(std::lround(double(m_controller.dspLoad()) * 100.0)), 0, 999);
+    if (m_cpuStatusMeter)
+        m_cpuStatusMeter->setValue(std::min(cpuPercent, 100));
+    const QString right = tr("CPU %1%").arg(cpuPercent);
+    if (m_statusRight->text() != right) {
+        m_statusRight->setText(right);
+        m_statusRight->setAccessibleName(
+            tr("Audio CPU load: %1 percent").arg(cpuPercent));
+    }
 
     // "From clip": loop the selected clip — as soon as the playhead reaches the
     // clip's end it snaps back to its start and keeps playing, so playback

@@ -719,17 +719,19 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         break;
     }
     case Glyph::Pan: {
-        // A line with an arrowhead at each end: the axis the value moves along.
-        QPen pen(c, 1.7);
+        // A compact pan dial rather than a generic resize arrow. The centre
+        // detent and angled pointer echo the mixer knob even at island size.
+        QPen pen(c, 1.55);
         pen.setCapStyle(Qt::RoundCap);
         pen.setJoinStyle(Qt::RoundJoin);
         p.setPen(pen);
         p.setBrush(Qt::NoBrush);
-        p.drawLine(QPointF(5.5, 12), QPointF(18.5, 12));
-        p.drawLine(QPointF(8.5, 8.8), QPointF(5.3, 12));
-        p.drawLine(QPointF(8.5, 15.2), QPointF(5.3, 12));
-        p.drawLine(QPointF(15.5, 8.8), QPointF(18.7, 12));
-        p.drawLine(QPointF(15.5, 15.2), QPointF(18.7, 12));
+        p.drawArc(QRectF(6.0, 6.0, 12.0, 12.0), 220 * 16, -260 * 16);
+        p.drawLine(QPointF(12.0, 12.0), QPointF(15.2, 8.8));
+        p.setPen(QPen(c, 1.25, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(12.0, 4.8), QPointF(12.0, 6.7));
+        p.drawLine(QPointF(4.7, 15.4), QPointF(6.3, 14.5));
+        p.drawLine(QPointF(19.3, 15.4), QPointF(17.7, 14.5));
         break;
     }
     case Glyph::FadeIn:

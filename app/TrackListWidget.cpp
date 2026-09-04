@@ -22,6 +22,7 @@
 #include <QHBoxLayout>
 #include <QHash>
 #include <QLabel>
+#include <QLineF>
 #include <QSignalBlocker>
 #include <QLinearGradient>
 #include <QMenu>
@@ -522,6 +523,9 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
     if (!automationLane) {
         mute = chip("M", Theme::mute(),
                     folder ? tr("Mute folder") : tr("Mute"));
+        mute->setProperty("trackButtonPaintRole", QStringLiteral("mute"));
+        mute->setProperty("trackButtonPaintId", id);
+        mute->installEventFilter(this);
         mute->setChecked(track.muted);
         if (channel) {
             mute->setAutomatable(true);
@@ -534,6 +538,9 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
                 });
 
         solo = chip("S", Theme::solo(), tr("Solo"));
+        solo->setProperty("trackButtonPaintRole", QStringLiteral("solo"));
+        solo->setProperty("trackButtonPaintId", id);
+        solo->installEventFilter(this);
         solo->setChecked(track.soloed);
         connect(solo, &QAbstractButton::toggled, this, [this, id](bool on) {
             applyToGroup(id, [&](const std::string& target) {
@@ -1244,6 +1251,84 @@ bool TrackListWidget::checkCollaborationPresenceForTest(QString* error) {
     return true;
 }
 
+bool TrackListWidget::checkButtonPaintForTest(QString* error) {
+    const auto fail = [error](const QString& message) {
+        if (error) *error = message;
+        return false;
+    };
+    daw::EngineController controller;
+    controller.initialize(48000.0, 512, false);
+    const QString first = QString::fromStdString(
+        controller.addTrack(daw::TrackKind::Audio, "Paint A"));
+    const QString second = QString::fromStdString(
+        controller.addTrack(daw::TrackKind::Audio, "Paint B"));
+    const QString third = QString::fromStdString(
+        controller.addTrack(daw::TrackKind::Audio, "Paint C"));
+    if (first.isEmpty() || second.isEmpty() || third.isEmpty())
+        return fail(QStringLiteral("track button paint fixture has no tracks"));
+
+    TrackListWidget list(&controller);
+    list.resize(240, 600);
+    list.rebuild();
+    list.setSelectedTracks({first, second, third}, first);
+    list.show();
+    QApplication::processEvents();
+
+    const auto paint = [&](const QString& role, const QString& fromId,
+                           const QString& toId) {
+        auto* source = list.rowChipForTest(fromId, role);
+        auto* target = list.rowChipForTest(toId, role);
+        if (!source || !target) return false;
+        const QPoint from = source->rect().center();
+        const QPoint globalFrom = source->mapToGlobal(from);
+        const QPoint globalTo = target->mapToGlobal(target->rect().center());
+        const QPoint to = source->mapFromGlobal(globalTo);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(from),
+                          QPointF(globalFrom), Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
+        QApplication::sendEvent(source, &press);
+        QMouseEvent move(QEvent::MouseMove, QPointF(to), QPointF(globalTo),
+                         Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(source, &move);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(to),
+                            QPointF(globalTo), Qt::LeftButton, Qt::NoButton,
+                            Qt::NoModifier);
+        QApplication::sendEvent(source, &release);
+        QApplication::processEvents();
+        return true;
+    };
+
+    if (!paint(QStringLiteral("M"), first, second))
+        return fail(QStringLiteral("mute paint controls are missing"));
+    const auto* a = controller.project().findTrack(first.toStdString());
+    const auto* b = controller.project().findTrack(second.toStdString());
+    const auto* c = controller.project().findTrack(third.toStdString());
+    if (!a || !b || !c || !a->muted || !b->muted || c->muted)
+        return fail(QStringLiteral("mute paint escaped the crossed rows"));
+    const std::vector<std::string> muteReset{
+        first.toStdString(), second.toStdString()};
+    controller.setTracksMuted(muteReset, false);
+    list.syncTrackValues();
+
+    if (!paint(QStringLiteral("S"), second, third))
+        return fail(QStringLiteral("solo paint controls are missing"));
+    a = controller.project().findTrack(first.toStdString());
+    b = controller.project().findTrack(second.toStdString());
+    c = controller.project().findTrack(third.toStdString());
+    if (!a || !b || !c || a->soloed || !b->soloed || !c->soloed)
+        return fail(QStringLiteral("solo paint escaped the crossed rows"));
+    controller.setTrackSoloed(second.toStdString(), false);
+    controller.setTrackSoloed(third.toStdString(), false);
+    a = controller.project().findTrack(first.toStdString());
+    b = controller.project().findTrack(second.toStdString());
+    c = controller.project().findTrack(third.toStdString());
+    if (!a || !b || !c || a->muted || b->muted || c->muted ||
+        a->soloed || b->soloed || c->soloed) {
+        return fail(QStringLiteral("track paint fixture did not reset"));
+    }
+    return true;
+}
+
 QString TrackListWidget::trackIdAt(const QPoint& position) const {
     const int row = rowAtPosition(position);
     if (row < 0 || std::size_t(row) >= m_rows.size()) return {};
@@ -1665,6 +1750,60 @@ void TrackListWidget::dropEvent(QDropEvent* ev) {
 bool TrackListWidget::eventFilter(QObject* obj, QEvent* ev) {
     auto* w = qobject_cast<QWidget*>(obj);
     if (!w) return QWidget::eventFilter(obj, ev);
+
+    const QString paintRole = w->property("trackButtonPaintRole").toString();
+    if (!paintRole.isEmpty()) {
+        auto* button = qobject_cast<QAbstractButton*>(w);
+        auto* mouse = dynamic_cast<QMouseEvent*>(ev);
+        if (button && ev->type() == QEvent::MouseButtonPress && mouse &&
+            mouse->button() == Qt::LeftButton) {
+            m_trackButtonPaintPending = true;
+            m_trackButtonPainting = false;
+            m_trackButtonPaintTarget = !button->isChecked();
+            m_trackButtonPaintLocalFileDirty = false;
+            m_trackButtonPaintRole = paintRole;
+            m_trackButtonPaintPressGlobal = mouse->globalPosition().toPoint();
+            m_trackButtonPaintLastGlobal = m_trackButtonPaintPressGlobal;
+            m_trackButtonPainted.clear();
+            return QWidget::eventFilter(obj, ev);
+        }
+        if (button && ev->type() == QEvent::MouseMove && mouse &&
+            m_trackButtonPaintPending &&
+            paintRole == m_trackButtonPaintRole &&
+            (mouse->buttons() & Qt::LeftButton)) {
+            const QPoint now = mouse->globalPosition().toPoint();
+            if (!m_trackButtonPainting &&
+                (now - m_trackButtonPaintPressGlobal).manhattanLength() <
+                    QApplication::startDragDistance()) {
+                return QWidget::eventFilter(obj, ev);
+            }
+            m_trackButtonPainting = true;
+            button->setDown(false);
+            applyTrackButtonPaintAlong(m_trackButtonPaintLastGlobal, now);
+            m_trackButtonPaintLastGlobal = now;
+            return true;
+        }
+        if (button && ev->type() == QEvent::MouseButtonRelease && mouse &&
+            mouse->button() == Qt::LeftButton && m_trackButtonPaintPending &&
+            paintRole == m_trackButtonPaintRole) {
+            if (m_trackButtonPainting) {
+                button->setDown(false);
+                applyTrackButtonPaintAlong(
+                    m_trackButtonPaintLastGlobal,
+                    mouse->globalPosition().toPoint());
+                finishTrackButtonPaint();
+                return true;
+            }
+
+            // No drag: let the normal toggled handler keep its existing
+            // selected-track group semantics.
+            m_trackButtonPaintPending = false;
+            m_trackButtonPaintRole.clear();
+            return QWidget::eventFilter(obj, ev);
+        }
+        return QWidget::eventFilter(obj, ev);
+    }
+
     const QVariant id = w->property("trackId");
     if (!id.isValid()) return QWidget::eventFilter(obj, ev);
 
@@ -1788,6 +1927,80 @@ bool TrackListWidget::eventFilter(QObject* obj, QEvent* ev) {
         break;
     }
     return QWidget::eventFilter(obj, ev);
+}
+
+void TrackListWidget::applyTrackButtonPaint(QAbstractButton* button) {
+    if (!button) return;
+    const QString role = button->property("trackButtonPaintRole").toString();
+    const QString id = button->property("trackButtonPaintId").toString();
+    if (role != m_trackButtonPaintRole || id.isEmpty() ||
+        m_trackButtonPainted.contains(id)) {
+        return;
+    }
+
+    m_trackButtonPainted.insert(id);
+    if (role == QStringLiteral("mute")) {
+        const std::vector<std::string> target{id.toStdString()};
+        const auto result = m_controller->setTracksMuted(
+            target, m_trackButtonPaintTarget);
+        m_trackButtonPaintLocalFileDirty =
+            m_trackButtonPaintLocalFileDirty ||
+            daw::collab::marksLocalFileDirty(result);
+    } else {
+        m_controller->setTrackSoloed(id.toStdString(),
+                                     m_trackButtonPaintTarget);
+        m_trackButtonPaintLocalFileDirty = true;
+    }
+
+    const auto* track = m_controller->project().findTrack(id.toStdString());
+    const bool modelState = track &&
+        (role == QStringLiteral("mute") ? track->muted : track->soloed);
+    const QSignalBlocker blocker(button);
+    button->setChecked(modelState);
+}
+
+void TrackListWidget::applyTrackButtonPaintAlong(const QPoint& fromGlobal,
+                                                 const QPoint& toGlobal) {
+    const QLineF path(fromGlobal, toGlobal);
+    for (const Row& row : m_rows) {
+        QAbstractButton* button = m_trackButtonPaintRole == QStringLiteral("mute")
+                                      ? row.mute
+                                      : row.solo;
+        if (!button || !button->isVisible()) continue;
+        const QRectF hit(QRect(button->mapToGlobal(QPoint{}), button->size()));
+        bool crossed = hit.contains(fromGlobal) || hit.contains(toGlobal);
+        if (!crossed) {
+            const QLineF edges[] = {
+                QLineF(hit.topLeft(), hit.topRight()),
+                QLineF(hit.topRight(), hit.bottomRight()),
+                QLineF(hit.bottomRight(), hit.bottomLeft()),
+                QLineF(hit.bottomLeft(), hit.topLeft())};
+            QPointF intersection;
+            for (const QLineF& edge : edges) {
+                if (path.intersects(edge, &intersection) ==
+                    QLineF::BoundedIntersection) {
+                    crossed = true;
+                    break;
+                }
+            }
+        }
+        if (crossed) applyTrackButtonPaint(button);
+    }
+}
+
+void TrackListWidget::finishTrackButtonPaint() {
+    if (!m_trackButtonPaintPending) return;
+    const bool changed = !m_trackButtonPainted.isEmpty();
+    const bool localFileDirty = m_trackButtonPaintLocalFileDirty;
+    m_trackButtonPaintPending = false;
+    m_trackButtonPainting = false;
+    m_trackButtonPaintRole.clear();
+    m_trackButtonPainted.clear();
+
+    if (changed) {
+        syncTrackValues();
+        emit tracksChanged(localFileDirty);
+    }
 }
 
 void TrackListWidget::contextMenuEvent(QContextMenuEvent* ev) {

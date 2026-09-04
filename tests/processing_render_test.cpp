@@ -149,6 +149,45 @@ int main() {
               "non-audio bounce destination is immediately after its source");
     }
 
+    // A bounce placed on a new audio track must follow that track's channel
+    // strip. The old semantic injection anchored it to the source track, so
+    // moving the clip looked right while the source fader/mute still owned it.
+    {
+        daw::EngineController controller;
+        controller.initialize(48000, 256, false);
+        const std::string source =
+            controller.addTrack(daw::TrackKind::Audio, "Route Source");
+        controller.setTrackVolume(source, 0.4f);
+        controller.setTrackPan(source, -0.25f);
+        const std::string clip = controller.importAudio(tone, source, 0.0);
+        daw::EngineController::BounceRequest request;
+        request.clips = {{source, clip}};
+        request.startSeconds = 0.0;
+        request.endSeconds = 0.2;
+        request.destination =
+            daw::EngineController::BounceDestination::NewTrack;
+        daw::EngineController::BounceReport report;
+        check(controller.bounceInPlace(request, {}, report).isOk() &&
+                  report.outputs.size() == 1,
+              "Bounce in Place creates a new audio track");
+        const daw::ClipModel* bounced =
+            report.outputs.empty()
+                ? nullptr
+                : findClip(controller,
+                           report.outputs.front().destinationTrackId,
+                           report.outputs.front().clipId);
+        check(bounced && !bounced->playbackInjection.active(),
+              "new-track bounce follows its visible channel strip");
+        const daw::TrackModel* destination =
+            report.outputs.empty()
+                ? nullptr
+                : controller.project().findTrack(
+                      report.outputs.front().destinationTrackId);
+        check(destination && std::abs(destination->volume - 0.4f) < 1e-6f &&
+                  std::abs(destination->pan + 0.25f) < 1e-6f,
+              "new-track bounce moves the still-live fader and pan");
+    }
+
     // A real built-in effect exercises state capture, cache playback and the
     // package's Content/State round-trip without depending on machine plugins.
     {

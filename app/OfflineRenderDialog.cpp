@@ -1,9 +1,9 @@
 #include "OfflineRenderDialog.hpp"
 
+#include "ChannelStrip.hpp"
 #include "ChannelStripPreset.hpp"
 #include "ChannelStripPresets.hpp"
 #include "PluginEditorWindow.hpp"
-#include "PluginPickerMenu.hpp"
 
 #include <QApplication>
 #include <QAbstractItemView>
@@ -11,6 +11,7 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFileInfo>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
@@ -20,9 +21,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
-#include <QSignalBlocker>
 #include <QTimer>
-#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -41,6 +40,19 @@ OfflineRenderDialog::OfflineRenderDialog(
                              controller.bufferSizeFrames(), false);
     if (ready) m_chainTrackId = m_scratch.addTrack(daw::TrackKind::Audio,
                                                    "Offline Processing");
+    m_scratch.setPluginRetiringCallback(
+        [this](const std::string& channelId, const std::string& slotId) {
+            const QString channel = QString::fromStdString(channelId);
+            const QString slot = QString::fromStdString(slotId);
+            for (PluginEditorWindow* editor :
+                 findChildren<PluginEditorWindow*>()) {
+                if (editor->channelId() != channel ||
+                    editor->insertId() != slot)
+                    continue;
+                editor->detachFromPlugin();
+                editor->close();
+            }
+        });
 
     if (!m_clips.empty() && !m_chainTrackId.empty()) {
         const auto initial = m_controller.offlineProcessChain(m_clips.front());
@@ -69,36 +81,52 @@ OfflineRenderDialog::OfflineRenderDialog(
     }
     root->addWidget(m_warning);
 
-    m_chain = new QListWidget(this);
-    m_chain->setAccessibleName(tr("Offline plugin chain"));
-    m_chain->setAlternatingRowColors(true);
-    m_chain->setSelectionMode(QAbstractItemView::SingleSelection);
-    root->addWidget(m_chain, 1);
+    auto* clipsBox = new QGroupBox(
+        tr("Selected clips (%1)").arg(m_clips.size()), this);
+    auto* clipsLayout = new QVBoxLayout(clipsBox);
+    m_clipList = new QListWidget(clipsBox);
+    m_clipList->setAccessibleName(tr("Clips to process"));
+    m_clipList->setSelectionMode(QAbstractItemView::NoSelection);
+    m_clipList->setAlternatingRowColors(true);
+    for (const auto& address : m_clips) {
+        const daw::TrackModel* track =
+            m_controller.project().findTrack(address.trackId);
+        if (!track) continue;
+        const auto clip = std::find_if(
+            track->clips.begin(), track->clips.end(),
+            [&](const daw::ClipModel& item) {
+                return item.id == address.clipId;
+            });
+        if (clip == track->clips.end()) continue;
+        QString clipName = QString::fromStdString(clip->name);
+        if (clipName.isEmpty())
+            clipName = QFileInfo(QString::fromStdString(clip->filePath))
+                           .completeBaseName();
+        if (clipName.isEmpty()) clipName = tr("Audio clip");
+        const double end = clip->startSeconds +
+                           m_controller.clipPlaybackDuration(*clip);
+        auto* item = new QListWidgetItem(
+            tr("%1 — %2  (%3–%4 s)")
+                .arg(QString::fromStdString(track->name), clipName)
+                .arg(clip->startSeconds, 0, 'f', 3)
+                .arg(end, 0, 'f', 3),
+            m_clipList);
+        item->setToolTip(tr("Track: %1\nClip: %2")
+                             .arg(QString::fromStdString(track->name),
+                                  clipName));
+    }
+    const int clipRows = std::clamp(m_clipList->count(), 1, 4);
+    m_clipList->setFixedHeight(
+        clipRows * m_clipList->sizeHintForRow(0) +
+        2 * m_clipList->frameWidth() + 4);
+    clipsLayout->addWidget(m_clipList);
+    root->addWidget(clipsBox);
 
-    auto* tools = new QHBoxLayout;
-    m_add = new QToolButton(this);
-    m_add->setText(tr("Add Plugin"));
-    m_add->setPopupMode(QToolButton::InstantPopup);
-    m_add->setMenu(ui::buildLazyPluginMenu(
-        m_add, &m_scratch, false,
-        [this](const daw::plugins::PluginDescriptor& plugin) {
-            const std::string id =
-                m_scratch.addInsert(m_chainTrackId, plugin);
-            refreshChain(QString::fromStdString(id));
-        }));
-    m_remove = new QPushButton(tr("Remove"), this);
-    m_up = new QPushButton(tr("Up"), this);
-    m_down = new QPushButton(tr("Down"), this);
-    m_bypass = new QPushButton(tr("Bypass"), this);
-    m_edit = new QPushButton(tr("Open Editor"), this);
-    tools->addWidget(m_add);
-    tools->addWidget(m_remove);
-    tools->addWidget(m_up);
-    tools->addWidget(m_down);
-    tools->addWidget(m_bypass);
-    tools->addWidget(m_edit);
-    tools->addStretch(1);
-    root->addLayout(tools);
+    m_rackHost = new QWidget(this);
+    m_rackHost->setAccessibleName(tr("Offline processing inserts"));
+    m_rackLayout = new QVBoxLayout(m_rackHost);
+    m_rackLayout->setContentsMargins(0, 0, 0, 0);
+    root->addWidget(m_rackHost);
 
     auto* presets = new QHBoxLayout;
     auto* presetLabel = new QLabel(tr("Chain preset"), this);
@@ -134,54 +162,29 @@ OfflineRenderDialog::OfflineRenderDialog(
     m_renderButton->setDefault(true);
     root->addWidget(m_buttons);
 
-    connect(m_chain, &QListWidget::itemSelectionChanged, this,
-            [this] { refreshChain(selectedSlot()); });
-    connect(m_chain, &QListWidget::itemDoubleClicked, this,
-            [this] { openSelectedEditor(); });
-    connect(m_remove, &QPushButton::clicked, this, [this] {
-        const QString id = selectedSlot();
-        if (id.isEmpty()) return;
-        m_scratch.removeInsert(m_chainTrackId, id.toStdString());
-        refreshChain();
-    });
-    connect(m_up, &QPushButton::clicked, this,
-            [this] { moveSelected(-1); });
-    connect(m_down, &QPushButton::clicked, this,
-            [this] { moveSelected(1); });
-    connect(m_bypass, &QPushButton::clicked, this, [this] {
-        const QString id = selectedSlot();
-        const auto* insertModels = m_scratch.channelInserts(m_chainTrackId);
-        if (id.isEmpty() || !insertModels) return;
-        const auto found = std::find_if(insertModels->begin(), insertModels->end(),
-                                       [&](const daw::InsertModel& slot) {
-                                           return slot.id == id.toStdString();
-                                       });
-        if (found == insertModels->end()) return;
-        m_scratch.setInsertBypassed(m_chainTrackId, found->id,
-                                    !found->bypassed);
-        refreshChain(id);
-    });
-    connect(m_edit, &QPushButton::clicked, this,
-            &OfflineRenderDialog::openSelectedEditor);
     connect(m_loadPreset, &QPushButton::clicked, this,
             &OfflineRenderDialog::loadPreset);
     connect(m_savePreset, &QPushButton::clicked, this,
             &OfflineRenderDialog::savePreset);
     connect(m_renderButton, &QPushButton::clicked, this,
             &OfflineRenderDialog::startRender);
-    connect(m_buttons, &QDialogButtonBox::rejected, this, [this] {
-        if (m_rendering)
-            m_cancelRequested = true;
-        else
-            reject();
-    });
+    connect(m_buttons, &QDialogButtonBox::rejected, this,
+            &OfflineRenderDialog::reject);
 
     reloadPresets();
-    refreshChain();
+    rebuildRack();
     if (!ready || m_chainTrackId.empty()) {
         m_renderButton->setEnabled(false);
         m_status->setText(tr("Could not create the offline plugin rack"));
     }
+}
+
+void OfflineRenderDialog::reject() {
+    if (m_rendering) {
+        m_cancelRequested = true;
+        return;
+    }
+    QDialog::reject();
 }
 
 OfflineRenderDialog::~OfflineRenderDialog() {
@@ -190,71 +193,42 @@ OfflineRenderDialog::~OfflineRenderDialog() {
         editor->detachFromPlugin();
         delete editor;
     }
+    m_scratch.setPluginRetiringCallback({});
     m_scratch.shutdown();
 }
 
-QString OfflineRenderDialog::selectedSlot() const {
-    const QListWidgetItem* item = m_chain->currentItem();
-    return item ? item->data(Qt::UserRole).toString() : QString();
-}
-
-void OfflineRenderDialog::refreshChain(const QString& keepSlot) {
-    const QString selected = keepSlot.isEmpty() ? selectedSlot() : keepSlot;
-    const QSignalBlocker blocker(m_chain);
-    m_chain->clear();
-    const auto* insertModels = m_scratch.channelInserts(m_chainTrackId);
-    if (insertModels) {
-        int row = 0;
-        for (const daw::InsertModel& slot : *insertModels) {
-            const bool available =
-                m_scratch.insertInstance(m_chainTrackId, slot.id) != nullptr;
-            QString label = QString::fromStdString(slot.name);
-            if (!available) label += tr(" — Not Available");
-            if (slot.bypassed) label += tr(" — Bypassed");
-            auto* item = new QListWidgetItem(label, m_chain);
-            item->setData(Qt::UserRole, QString::fromStdString(slot.id));
-            if (QString::fromStdString(slot.id) == selected)
-                m_chain->setCurrentRow(row);
-            ++row;
-        }
+void OfflineRenderDialog::rebuildRack() {
+    if (m_rack) {
+        m_rackLayout->removeWidget(m_rack);
+        m_rack->deleteLater();
+        m_rack = nullptr;
     }
-    const bool has = m_chain->currentItem();
-    m_remove->setEnabled(has && !m_rendering);
-    m_up->setEnabled(has && m_chain->currentRow() > 0 && !m_rendering);
-    m_down->setEnabled(has && m_chain->currentRow() + 1 < m_chain->count() &&
-                       !m_rendering);
-    m_bypass->setEnabled(has && !m_rendering);
-    m_edit->setEnabled(has && !m_rendering);
-    if (has) {
-        const auto* currentSlots = m_scratch.channelInserts(m_chainTrackId);
-        const int row = m_chain->currentRow();
-        if (currentSlots && row >= 0 && row < int(currentSlots->size())) {
-            m_bypass->setText((*currentSlots)[std::size_t(row)].bypassed
-                                  ? tr("Enable")
-                                  : tr("Bypass"));
-        }
-    }
+    if (m_chainTrackId.empty()) return;
+    m_rack = new ChannelStrip(&m_scratch,
+                              QString::fromStdString(m_chainTrackId), false,
+                              m_rackHost, true);
+    m_rack->setEnabled(!m_rendering);
+    m_rackLayout->addWidget(m_rack);
+    connect(m_rack, &ChannelStrip::editorRequested, this,
+            [this](const QString&, const QString& insertId) {
+                openEditor(insertId);
+            });
+    connect(m_rack, &ChannelStrip::structureChanged, this,
+            &OfflineRenderDialog::rebuildRack, Qt::QueuedConnection);
 }
 
-void OfflineRenderDialog::moveSelected(int delta) {
-    const QString id = selectedSlot();
-    const int target = m_chain->currentRow() + delta;
-    if (id.isEmpty() || target < 0 || target >= m_chain->count()) return;
-    m_scratch.moveInsert(m_chainTrackId, id.toStdString(), std::size_t(target));
-    refreshChain(id);
-}
-
-void OfflineRenderDialog::openSelectedEditor() {
-    const QString id = selectedSlot();
-    if (id.isEmpty()) return;
-    if (!m_scratch.insertInstance(m_chainTrackId, id.toStdString())) {
+void OfflineRenderDialog::openEditor(const QString& insertId) {
+    if (insertId.isEmpty()) return;
+    if (!m_scratch.insertInstance(m_chainTrackId, insertId.toStdString())) {
         QMessageBox::information(this, tr("Offline Render"),
                                  tr("This plugin is not available."));
         return;
     }
     auto* editor = new PluginEditorWindow(
-        &m_scratch, QString::fromStdString(m_chainTrackId), id, this);
+        &m_scratch, QString::fromStdString(m_chainTrackId), insertId, this);
     editor->setAttribute(Qt::WA_DeleteOnClose);
+    connect(editor, &PluginEditorWindow::projectEdited, this,
+            &OfflineRenderDialog::rebuildRack, Qt::QueuedConnection);
     editor->show();
     editor->prepareNativeHostHierarchy();
     QTimer::singleShot(0, editor, &PluginEditorWindow::initializeEditor);
@@ -282,19 +256,8 @@ void OfflineRenderDialog::loadPreset() {
                               QString::fromStdString(result.message()));
         return;
     }
-    if (preset.inserts.empty()) {
-        std::vector<std::string> ids;
-        if (const auto* insertModels =
-                m_scratch.channelInserts(m_chainTrackId)) {
-            for (const daw::InsertModel& slot : *insertModels)
-                ids.push_back(slot.id);
-        }
-        for (const std::string& id : ids)
-            m_scratch.removeInsert(m_chainTrackId, id);
-    } else {
-        (void)m_scratch.pasteChannelInserts(m_chainTrackId, preset);
-    }
-    refreshChain();
+    (void)m_scratch.pasteChannelInserts(m_chainTrackId, preset);
+    rebuildRack();
 }
 
 void OfflineRenderDialog::savePreset() {
@@ -330,12 +293,13 @@ void OfflineRenderDialog::startRender() {
     m_rendering = true;
     m_cancelRequested = false;
     m_renderButton->setEnabled(false);
-    m_add->setEnabled(false);
+    if (m_rack) m_rack->setEnabled(false);
+    for (PluginEditorWindow* editor : findChildren<PluginEditorWindow*>())
+        editor->setEnabled(false);
     m_presets->setEnabled(false);
     m_loadPreset->setEnabled(false);
     m_savePreset->setEnabled(false);
     m_includeTail->setEnabled(false);
-    refreshChain(selectedSlot());
     m_status->setText(tr("Rendering…"));
 
     const auto chain = m_scratch.copyChannelStrip(m_chainTrackId, false);
@@ -353,7 +317,9 @@ void OfflineRenderDialog::startRender() {
         },
         report);
     m_rendering = false;
-    m_add->setEnabled(true);
+    if (m_rack) m_rack->setEnabled(true);
+    for (PluginEditorWindow* editor : findChildren<PluginEditorWindow*>())
+        editor->setEnabled(true);
     m_presets->setEnabled(true);
     m_savePreset->setEnabled(true);
     m_includeTail->setEnabled(true);
@@ -361,7 +327,6 @@ void OfflineRenderDialog::startRender() {
     if (report.cancelled || m_cancelRequested) {
         m_status->setText(tr("Cancelled — the project was not changed"));
         m_renderButton->setEnabled(true);
-        refreshChain(selectedSlot());
         return;
     }
     if (!result) {
@@ -369,7 +334,6 @@ void OfflineRenderDialog::startRender() {
         QMessageBox::critical(this, tr("Offline Render"),
                               QString::fromStdString(result.message()));
         m_renderButton->setEnabled(true);
-        refreshChain(selectedSlot());
         return;
     }
     m_progress->setValue(1000);

@@ -460,6 +460,24 @@ QString noteName(int pitch) {
     return QString::fromStdString(mt::pitchName(pitch));
 }
 
+QPainterPath roundedPlayheadTriangle(QPointF a, QPointF b, QPointF c,
+                                     qreal radius) {
+    const auto step = [](const QPointF& from, const QPointF& to, qreal distance) {
+        const QPointF vector = to - from;
+        const qreal length = std::sqrt(QPointF::dotProduct(vector, vector));
+        return length > 0.0 ? from + vector * (distance / length) : from;
+    };
+    QPainterPath path;
+    path.moveTo(step(a, c, radius));
+    path.quadTo(a, step(a, b, radius));
+    path.lineTo(step(b, a, radius));
+    path.quadTo(b, step(b, c, radius));
+    path.lineTo(step(c, b, radius));
+    path.quadTo(c, step(c, a, radius));
+    path.closeSubpath();
+    return path;
+}
+
 /// Piano keys meet the window with a square edge and round only at the playing
 /// end. A fully rounded rectangle starts outside the widget at x=0, so Qt clips
 /// its antialiased corners and makes the left edge look bitten away.
@@ -526,8 +544,11 @@ PianoRollView::~PianoRollView() {
     cancelControllerLaneWrite();
     commitPendingErase();
     if (m_gestureUndoActive || m_selectionEditUndoActive) {
-        m_controller->endNoteEdit(m_eraseChanged ? "Erase Notes"
-                                                  : "Edit Notes");
+        m_controller->endNoteEdit(m_eraseChanged
+                                      ? "Erase Notes"
+                                      : (m_duplicateDragCreated
+                                             ? "Duplicate Notes"
+                                             : "Edit Notes"));
     }
     stopAudition();
 }
@@ -537,8 +558,11 @@ void PianoRollView::setClip(const QString& trackId, const QString& clipId) {
     finishWheelNoteEdit();
     commitPendingErase();
     if (m_gestureUndoActive || m_selectionEditUndoActive) {
-        m_controller->endNoteEdit(m_eraseChanged ? "Erase Notes"
-                                                  : "Edit Notes");
+        m_controller->endNoteEdit(m_eraseChanged
+                                      ? "Erase Notes"
+                                      : (m_duplicateDragCreated
+                                             ? "Duplicate Notes"
+                                             : "Edit Notes"));
         m_gestureUndoActive = false;
         m_selectionEditUndoActive = false;
     }
@@ -557,6 +581,9 @@ void PianoRollView::setClip(const QString& trackId, const QString& clipId) {
     m_moving = m_resizing = m_resizingLeft = false;
     m_resizeOrig.clear();
     m_moveWorking.clear();
+    m_duplicateDragPending = false;
+    m_duplicateDragCreated = false;
+    m_shiftClickDeselectPending = false;
     m_geometryPaintNotes.clear();
     m_noteUpdateScratch.clear();
     m_laneOrig.clear();
@@ -846,6 +873,7 @@ bool PianoRollView::checkInteractionGesturesForTest() {
     const QString originalPrimary = m_primary;
     const Tool originalTool = m_tool;
     const double originalGrid = m_gridBeats;
+    const bool originalSnap = m_snapEnabled;
     const bool originalAdaptive = m_adaptiveSnap;
     const bool originalLane = m_showVelocityLane;
     const LaneParam originalLaneParam = m_laneParam;
@@ -936,6 +964,28 @@ bool PianoRollView::checkInteractionGesturesForTest() {
     seekToLocalBeat(localSeekBeat);
     const bool localPlayheadMapped =
         std::abs(m_controller->positionSeconds() - expectedSeek) < 1e-4;
+
+    // Ruler positioning follows the same visible grid as note edits. Use an
+    // off-grid click so this exercises the pointer route, not just conversion.
+    m_gridBeats = 0.25;
+    m_snapEnabled = true;
+    constexpr double rawRulerBeat = 0.63;
+    const QPointF rulerAt(beatsToX(rawRulerBeat),
+                          (ui::kLoopStripHeight + ui::kRulerHeight) * 0.5);
+    QMouseEvent rulerPress(QEvent::MouseButtonPress, rulerAt,
+                           QPointF(mapToGlobal(rulerAt.toPoint())),
+                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(this, &rulerPress);
+    QMouseEvent rulerRelease(QEvent::MouseButtonRelease, rulerAt,
+                             QPointF(mapToGlobal(rulerAt.toPoint())),
+                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(this, &rulerRelease);
+    const double expectedRulerSeek =
+        current->startSeconds +
+        daw::beatsToSeconds(snapBeats(rawRulerBeat, true),
+                            m_controller->project().tempo);
+    const bool rulerSeekSnapped =
+        std::abs(m_controller->positionSeconds() - expectedRulerSeek) < 1e-4;
 
     // Three narrow notes with gaps between them. A single coalesced move from
     // the first to the third must erase the middle one too.
@@ -1038,6 +1088,51 @@ bool PianoRollView::checkInteractionGesturesForTest() {
         std::abs(trimmedClip->notes[1].lengthBeats - 0.75) < 1e-9;
     const std::string trimUndoLabel = m_controller->undoLabel();
     const bool groupTrimAtomic = trimUndoLabel == "Edit Notes";
+
+    // Shift-drag clones the captured selection and moves the clones together.
+    // Original ids and positions remain untouched and one undo removes both.
+    mt::Notes duplicateNotes = {makeNote("duplicate-a", 0.5, 0.5),
+                                makeNote("duplicate-b", 1.5, 0.5)};
+    replaceNotes(duplicateNotes, "Prepare Shift Duplicate Check");
+    m_selected = {QStringLiteral("duplicate-a"),
+                  QStringLiteral("duplicate-b")};
+    m_primary = QStringLiteral("duplicate-a");
+    const QPointF duplicateFrom = noteRect(duplicateNotes[0]).center();
+    const QPointF duplicateTo =
+        duplicateFrom + QPointF(effectivePixelsPerBeat(), 0.0);
+    QMouseEvent duplicatePress(
+        QEvent::MouseButtonPress, duplicateFrom,
+        QPointF(mapToGlobal(duplicateFrom.toPoint())), Qt::LeftButton,
+        Qt::LeftButton, Qt::ShiftModifier);
+    QApplication::sendEvent(this, &duplicatePress);
+    QMouseEvent duplicateMove(
+        QEvent::MouseMove, duplicateTo,
+        QPointF(mapToGlobal(duplicateTo.toPoint())), Qt::NoButton,
+        Qt::LeftButton, Qt::ShiftModifier);
+    QApplication::sendEvent(this, &duplicateMove);
+    QMouseEvent duplicateRelease(
+        QEvent::MouseButtonRelease, duplicateTo,
+        QPointF(mapToGlobal(duplicateTo.toPoint())), Qt::LeftButton,
+        Qt::NoButton, Qt::ShiftModifier);
+    QApplication::sendEvent(this, &duplicateRelease);
+    const auto* duplicatedClip = clip();
+    bool copiesMovedTogether = duplicatedClip && duplicatedClip->notes.size() == 4 &&
+                               m_selected.size() == 2;
+    bool copyAtOneAndHalf = false;
+    bool copyAtTwoAndHalf = false;
+    if (duplicatedClip) {
+        for (const auto& copied : duplicatedClip->notes) {
+            if (!m_selected.contains(QString::fromStdString(copied.id))) continue;
+            copyAtOneAndHalf |= std::abs(copied.startBeats - 1.5) < 1e-9;
+            copyAtTwoAndHalf |= std::abs(copied.startBeats - 2.5) < 1e-9;
+        }
+    }
+    copiesMovedTogether = copiesMovedTogether && copyAtOneAndHalf &&
+                          copyAtTwoAndHalf &&
+                          m_controller->undoLabel() == "Duplicate Notes";
+    m_controller->undo();
+    const bool duplicateUndoAtomic = clip() && clip()->notes.size() == 2;
+    m_primary.clear();
 
     // The context-panel velocity is a group offset, not an absolute value.
     // A soft/loud pair must keep the same interval after the slider moves.
@@ -1386,6 +1481,7 @@ bool PianoRollView::checkInteractionGesturesForTest() {
     m_primary = originalPrimary;
     m_tool = originalTool;
     m_gridBeats = originalGrid;
+    m_snapEnabled = originalSnap;
     m_adaptiveSnap = originalAdaptive;
     m_showVelocityLane = originalLane;
     m_laneParam = originalLaneParam;
@@ -1410,10 +1506,11 @@ bool PianoRollView::checkInteractionGesturesForTest() {
     emit viewportChanged();
     update();
     const bool ok = noteStylesClean && keyboardShapeClean &&
-                    localPlayheadMapped &&
+                    localPlayheadMapped && rulerSeekSnapped &&
                     blankRightClearsSelection &&
                     eraseDeferred && sweptAll && brushSafe && singleHidden && groupOffset &&
-                    groupTrim && groupTrimAtomic && dynamicsPreserved &&
+                    groupTrim && groupTrimAtomic && copiesMovedTogether &&
+                    duplicateUndoAtomic && dynamicsPreserved &&
                     velocityAtomic && velocityCeilingIndependent &&
                     deletedTogether && undoneTogether && redoneTogether &&
                     repeatChains && loopRepeatChains && shortcutsRouted &&
@@ -1423,17 +1520,19 @@ bool PianoRollView::checkInteractionGesturesForTest() {
                     controllerLaneCoalesced;
     if (!ok) {
         std::fprintf(stderr,
-                     "piano-roll view checks: styles=%d keyboard=%d seek=%d deselect=%d deferErase=%d erase=%d "
+                     "piano-roll view checks: styles=%d keyboard=%d seek=%d ruler=%d deselect=%d deferErase=%d erase=%d "
                      "brush=%d single=%d "
-                     "offset=%d trim=%d trimUndo=%d dynamics=%d velocityUndo=%d "
+                     "offset=%d trim=%d trimUndo=%d shiftCopy=%d copyUndo=%d dynamics=%d velocityUndo=%d "
                      "ceiling=%d delete=%d undo=%d redo=%d repeat=%d loop=%d keys=%d "
                      "previewCommit=%d index=%d cache=%d editIndex=%d "
                      "lookup=%d(%zu comparisons) controller=%d(%zu writes)\n",
                      int(noteStylesClean), int(keyboardShapeClean),
                      int(localPlayheadMapped),
+                     int(rulerSeekSnapped),
                      int(blankRightClearsSelection),
                      int(eraseDeferred), int(sweptAll), int(brushSafe), int(singleHidden),
                      int(groupOffset), int(groupTrim), int(groupTrimAtomic),
+                     int(copiesMovedTogether), int(duplicateUndoAtomic),
                      int(dynamicsPreserved), int(velocityAtomic),
                      int(velocityCeilingIndependent),
                      int(deletedTogether), int(undoneTogether),
@@ -1702,10 +1801,11 @@ PianoRollView::LoopGrab PianoRollView::loopGrabAt(double x) const {
     return LoopGrab::Create;
 }
 
-void PianoRollView::seekToLocalBeat(double beats) {
+void PianoRollView::seekToLocalBeat(double beats, bool snapping) {
     const auto* c = clip();
     if (!c || !m_controller) return;
-    const double localBeat = std::clamp(beats, 0.0, clipBeats());
+    const double localBeat =
+        std::clamp(snapBeats(beats, snapping), 0.0, clipBeats());
     const double absoluteSeconds =
         c->startSeconds +
         daw::beatsToSeconds(localBeat, m_controller->project().tempo);
@@ -3097,15 +3197,23 @@ void PianoRollView::paintEvent(QPaintEvent* event) {
         if (beats >= 0.0 && beats <= totalBeats) {
             const double x = beatsToX(beats);
             if (x >= keyWidth && x <= width()) {
-                p.setPen(QPen(t.accent, 1.5));
-                p.drawLine(QPointF(x, gridTop - 1.0),
-                           QPointF(x, fieldBottom));
-                QPainterPath marker;
-                marker.moveTo(x - 5.0, 0.0);
-                marker.lineTo(x + 5.0, 0.0);
-                marker.lineTo(x, 7.0);
-                marker.closeSubpath();
-                p.fillPath(marker, t.accent);
+                const double playheadWidth = ui::playheadWidth();
+                p.save();
+                p.setRenderHint(QPainter::Antialiasing, true);
+                QColor halo = t.cursor;
+                halo.setAlpha(t.dark ? 58 : 44);
+                p.setPen(QPen(halo, playheadWidth + 3.0));
+                p.drawLine(QPointF(x, 0.0), QPointF(x, fieldBottom));
+                p.setPen(QPen(t.cursor, playheadWidth));
+                p.drawLine(QPointF(x, 0.0), QPointF(x, fieldBottom));
+                const double half =
+                    7.0 + (playheadWidth - ui::kPlayheadWidthDefault) * 0.6;
+                p.setPen(Qt::NoPen);
+                p.setBrush(t.cursor);
+                p.drawPath(roundedPlayheadTriangle(
+                    QPointF(x, 12.0), QPointF(x - half, 0.0),
+                    QPointF(x + half, 0.0), 3.0));
+                p.restore();
             }
         }
     }
@@ -3778,7 +3886,9 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
     if (pos.y() < ui::kRulerHeight) {
         if (ev->button() == Qt::LeftButton && pos.x() >= keyboardWidth()) {
             m_scrubbingPlayhead = true;
-            seekToLocalBeat(xToBeats(pos.x()));
+            const bool snapOn =
+                m_snapEnabled != bool(ev->modifiers() & Qt::AltModifier);
+            seekToLocalBeat(xToBeats(pos.x()), snapOn);
             setCursor(Qt::SizeHorCursor);
             ev->accept();
         }
@@ -3792,6 +3902,9 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
     }
     const bool snapOn = m_snapEnabled != bool(ev->modifiers() & Qt::AltModifier);
     const bool additive = ev->modifiers() & Qt::ShiftModifier;
+    m_duplicateDragPending = false;
+    m_duplicateDragCreated = false;
+    m_shiftClickDeselectPending = false;
 
     // The right button erases in every mode — the reason there is no eraser
     // tool to switch to. Holding it and sweeping rubs out a run of notes.
@@ -3929,11 +4042,8 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
         const auto* n = note(hit);
         if (!n) return;
 
-        if (additive) {
-            toggleSelected(hit);
-            update();
-            return;                 // shift-click selects, it does not drag
-        }
+        const bool wasSelected = m_selected.contains(hit);
+        if (additive && !wasSelected) toggleSelected(hit);
         // Clicking a note that is already part of a multi-selection keeps the
         // selection, so a group can be dragged; clicking elsewhere replaces it.
         if (!m_selected.contains(hit)) selectOnly(hit);
@@ -3941,9 +4051,14 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
         m_grabBeats = xToBeats(pos.x()) - n->startBeats;
         // The left edge resizes from the head, keeping the note's end put.
         const bool onLeftEdge = pos.x() <= noteRect(*n).left() + kEdgePx;
-        m_resizing = onEdge || onLeftEdge;
-        m_resizingLeft = onLeftEdge && !onEdge;
+        // Shift owns duplication even at an edge; copied notes move as a group
+        // while every original stays exactly where it was.
+        m_resizing = !additive && (onEdge || onLeftEdge);
+        m_resizingLeft = m_resizing && onLeftEdge && !onEdge;
         m_moving = !m_resizing;
+        m_duplicateDragPending = additive;
+        m_shiftClickDeselectPending = additive && wasSelected;
+        m_movePress = pos;
         m_resizeOrig.clear();
         m_moveWorking.clear();
         if (m_resizing || m_moving) {
@@ -4033,7 +4148,9 @@ void PianoRollView::mouseMoveEvent(QMouseEvent* ev) {
     }
 
     if (m_scrubbingPlayhead) {
-        seekToLocalBeat(xToBeats(pos.x()));
+        const bool snapOn =
+            m_snapEnabled != bool(ev->modifiers() & Qt::AltModifier);
+        seekToLocalBeat(xToBeats(pos.x()), snapOn);
         return;
     }
     const bool snapOn = m_snapEnabled != bool(ev->modifiers() & Qt::AltModifier);
@@ -4114,6 +4231,41 @@ void PianoRollView::mouseMoveEvent(QMouseEvent* ev) {
     if (m_stretching) {
         updateStretch(xToBeats(pos.x()), stretchSnapEnabled());
         return;
+    }
+
+    if (m_moving && m_duplicateDragPending) {
+        if ((pos - m_movePress).manhattanLength() <
+            QApplication::startDragDistance()) {
+            return;
+        }
+        const auto* current = clip();
+        if (!current || m_moveWorking.empty()) return;
+
+        mt::Notes merged = current->notes;
+        std::vector<daw::NoteModel> copies;
+        copies.reserve(m_moveWorking.size());
+        QSet<QString> copiedIds;
+        QString copiedPrimary;
+        const std::string primaryId = m_primary.toStdString();
+        for (const daw::NoteModel& source : m_moveWorking) {
+            daw::NoteModel copy = source;
+            copy.id = daw::newUuid();
+            if (source.id == primaryId)
+                copiedPrimary = QString::fromStdString(copy.id);
+            copiedIds.insert(QString::fromStdString(copy.id));
+            merged.push_back(copy);
+            copies.push_back(std::move(copy));
+        }
+        m_controller->setClipNotes(m_trackId.toStdString(), m_clipId.toStdString(),
+                                   std::move(merged), "Duplicate Notes");
+        invalidateSoundingPitchIndex();
+        m_moveWorking = std::move(copies);
+        m_selected = std::move(copiedIds);
+        m_primary = copiedPrimary;
+        m_duplicateDragPending = false;
+        m_duplicateDragCreated = true;
+        m_shiftClickDeselectPending = false;
+        emit selectionChanged();
     }
 
     if (!m_moving && !m_resizing) {
@@ -4237,16 +4389,31 @@ void PianoRollView::mouseReleaseEvent(QMouseEvent* ev) {
         return;
     }
     if (m_scrubbingPlayhead) {
-        seekToLocalBeat(xToBeats(ev->position().x()));
+        const bool snapOn =
+            m_snapEnabled != bool(ev->modifiers() & Qt::AltModifier);
+        seekToLocalBeat(xToBeats(ev->position().x()), snapOn);
         m_scrubbingPlayhead = false;
         updateCursor(ev->position());
         ev->accept();
         return;
     }
+    if (m_duplicateDragPending &&
+        (ev->position() - m_movePress).manhattanLength() >=
+            QApplication::startDragDistance()) {
+        // Some platforms coalesce the final movement into the release event.
+        // Feed that endpoint through the normal move path so a quick
+        // Shift-drag cannot degrade into a Shift-click.
+        QMouseEvent finalMove(QEvent::MouseMove, ev->position(),
+                              ev->globalPosition(), Qt::NoButton,
+                              Qt::LeftButton, ev->modifiers());
+        mouseMoveEvent(&finalMove);
+    }
+    if (m_duplicateDragPending && m_shiftClickDeselectPending)
+        toggleSelected(m_primary);
     // One signal per gesture, not per move: the moves themselves are live edits.
     const bool changed =
-        m_moving || m_resizing || m_laneDragging || m_eraseChanged || m_muting ||
-        m_stretching;
+        (m_moving && !m_duplicateDragPending) || m_resizing || m_laneDragging ||
+        m_eraseChanged || m_muting || m_stretching;
     if (m_lanePointDrag >= 0 || !m_lanePointsBefore.empty()) {
         // Mouse systems may deliver the release at a position for which no final
         // move event was sent. Fold that exact endpoint into the working vector,
@@ -4273,8 +4440,11 @@ void PianoRollView::mouseReleaseEvent(QMouseEvent* ev) {
     }
     if (m_erasing) commitPendingErase();
     if (m_gestureUndoActive) {
-        m_controller->endNoteEdit(m_eraseChanged ? "Erase Notes"
-                                                 : "Edit Notes");
+        m_controller->endNoteEdit(m_eraseChanged
+                                      ? "Erase Notes"
+                                      : (m_duplicateDragCreated
+                                             ? "Duplicate Notes"
+                                             : "Edit Notes"));
         m_gestureUndoActive = false;
     }
     m_moving = false;
@@ -4282,6 +4452,9 @@ void PianoRollView::mouseReleaseEvent(QMouseEvent* ev) {
     m_resizingLeft = false;
     m_resizeOrig.clear();
     m_moveWorking.clear();
+    m_duplicateDragPending = false;
+    m_duplicateDragCreated = false;
+    m_shiftClickDeselectPending = false;
     m_geometryPaintNotes.clear();
     m_laneDragging = false;
     m_marquee = false;

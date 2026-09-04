@@ -26,6 +26,7 @@
 #include <QHash>
 #include <QInputDialog>
 #include <QKeyEvent>
+#include <QLineF>
 #include <QLineEdit>
 #include <QLinearGradient>
 #include <QMenu>
@@ -106,6 +107,25 @@ const QCursor& arrangementToolCursor(icons::Glyph glyph) {
                                                       : QPoint(12, 12);
     return *cache.insert(int(glyph),
                          QCursor(pixmap, hot.x(), hot.y()));
+}
+
+bool segmentCrossesRect(const QPointF& from, const QPointF& to,
+                        const QRectF& rect) {
+    const QRectF target = rect.adjusted(-1.5, -1.5, 1.5, 1.5);
+    if (target.contains(from) || target.contains(to)) return true;
+    const QLineF stroke(from, to);
+    if (stroke.length() < 0.01) return false;
+    const QLineF edges[] = {
+        QLineF(target.topLeft(), target.topRight()),
+        QLineF(target.topRight(), target.bottomRight()),
+        QLineF(target.bottomRight(), target.bottomLeft()),
+        QLineF(target.bottomLeft(), target.topLeft()),
+    };
+    for (const QLineF& edge : edges) {
+        if (stroke.intersects(edge, nullptr) == QLineF::BoundedIntersection)
+            return true;
+    }
+    return false;
 }
 
 double fadeGainAt(double normalised, double curve) {
@@ -1132,7 +1152,7 @@ void TimelineWidget::drawKnifeGuide(QPainter& p) {
     if (!hitTestClip(pos, hit)) return;
     const bool snapOn =
         m_snapEnabled &&
-        !(QApplication::keyboardModifiers() & Qt::ControlModifier);
+        !(QApplication::keyboardModifiers() & Qt::AltModifier);
     const double at = snap(xToSeconds(pos.x()), snapOn);
     const Theme& t = th();
 
@@ -1177,18 +1197,18 @@ void TimelineWidget::setTool(Tool tool) {
 
 void TimelineWidget::setSecondaryTool(Tool tool) {
     m_secondaryTool = tool;
-    if (m_altToolHeld) refreshToolCursor();
+    if (m_secondaryToolHeld) refreshToolCursor();
 }
 
 void TimelineWidget::setSecondaryToolHeld(bool held) {
-    if (held == m_altToolHeld) return;
-    m_altToolHeld = held;
+    if (held == m_secondaryToolHeld) return;
+    m_secondaryToolHeld = held;
     refreshToolCursor();
 }
 
-bool TimelineWidget::trackAltTool(Qt::KeyboardModifiers modifiers) {
-    const bool held = modifiers.testFlag(Qt::AltModifier);
-    if (held == m_altToolHeld) return false;
+bool TimelineWidget::trackSecondaryTool(Qt::KeyboardModifiers modifiers) {
+    const bool held = modifiers.testFlag(Qt::ControlModifier);
+    if (held == m_secondaryToolHeld) return false;
     setSecondaryToolHeld(held);
     return true;
 }
@@ -1218,6 +1238,14 @@ void TimelineWidget::setGridBeats(double beats) {
 
 void TimelineWidget::setSnapEnabled(bool enabled) {
     m_snapEnabled = enabled;
+}
+
+void TimelineWidget::setWaveformScale(double scale) {
+    const double next = std::clamp(scale, 0.25, 4.0);
+    if (std::abs(next - m_waveformScale) < 1.0e-9) return;
+    m_waveformScale = next;
+    m_staticFrameValid = false;
+    update();
 }
 
 void TimelineWidget::setShowBars(bool showBars) {
@@ -2057,6 +2085,44 @@ bool TimelineWidget::hitTestClip(const QPoint& pos, ClipHit& out) const {
     return false;
 }
 
+bool TimelineWidget::eraseClipsAlong(const QPoint& from, const QPoint& to) {
+    QVector<ClipRef> hits;
+    const auto& project = m_controller->project();
+    const auto& rows = daw::visibleTracks(project);
+    for (int lane = 0; lane < int(rows.size()); ++lane) {
+        const auto& track = project.tracks[rows[std::size_t(lane)].index];
+        for (const auto& clip : track.clips) {
+            if (!segmentCrossesRect(QPointF(from), QPointF(to),
+                                    clipRect(lane, clip))) {
+                continue;
+            }
+            hits.push_back({QString::fromStdString(track.id),
+                            QString::fromStdString(clip.id)});
+        }
+    }
+    if (hits.isEmpty()) return false;
+
+    for (const ClipRef& hit : std::as_const(hits)) {
+        m_controller->removeClip(hit.trackId.toStdString(),
+                                 hit.clipId.toStdString());
+    }
+    m_selection.removeIf([this](const ClipRef& selected) {
+        return !findClipModel(selected.trackId, selected.clipId);
+    });
+    if (!m_selectedClipId.isEmpty()) {
+        const bool primaryStillExists = std::any_of(
+            m_selection.begin(), m_selection.end(), [this](const ClipRef& ref) {
+                return ref.clipId == m_selectedClipId;
+            });
+        if (!primaryStillExists) m_selectedClipId.clear();
+    }
+    markProjectGestureChanged();
+    publishSelection();
+    emit projectEdited();
+    update();
+    return true;
+}
+
 void TimelineWidget::setFollowPlayhead(bool follow) {
     if (m_followPlayhead == follow) return;
     m_followPlayhead = follow;
@@ -2082,9 +2148,22 @@ void TimelineWidget::ensurePlayheadVisible() {
 }
 
 QRect TimelineWidget::playheadDirtyRect(int x) const {
-    // The ruler handle reaches seven pixels either side of the line. Two extra
-    // pixels cover its antialiased edge and the 1.6 px cursor pen.
-    return QRect(x - 9, 0, 19, height()).intersected(rect());
+    // The ruler handle reaches seven pixels either side of the line; the pen
+    // and its antialiased edge take a couple more, and the motion trail can
+    // reach much further behind it. Widening symmetrically costs one narrow
+    // strip per frame and saves this from having to know which way the
+    // transport is travelling — the damage for the old and the new position
+    // are unioned anyway.
+    const int reach = 9 + int(std::ceil(ui::playheadWidth())) +
+                      int(std::ceil(m_playheadTrailPx));
+    return QRect(x - reach, 0, reach * 2 + 1, height()).intersected(rect());
+}
+
+void TimelineWidget::seedPlayheadTrailForShot(double pixels, int direction) {
+    m_playheadTrailPx = std::clamp(pixels, 0.0, 52.0);
+    m_playheadTrailDir = direction >= 0 ? 1 : -1;
+    m_playheadTrailSeeded = m_playheadTrailPx > 0.0;
+    update();
 }
 
 void TimelineWidget::refreshPlaybackFrame() {
@@ -2104,6 +2183,20 @@ void TimelineWidget::refreshPlaybackFrame() {
     }
 
     if (m_lastPlayheadX && *m_lastPlayheadX == currentX) return;
+
+    // The trail is motion made visible, so it is measured from motion: the
+    // distance covered since the last frame, smoothed so a single jittery tick
+    // cannot flick it. Both the damage rect and the paint read it, and the
+    // damage has to be computed with the value the paint will use — so update
+    // it before either.
+    if (m_lastPlayheadX) {
+        const int delta = currentX - *m_lastPlayheadX;
+        if (delta != 0) m_playheadTrailDir = delta > 0 ? 1 : -1;
+        const double wanted = std::min(52.0, std::abs(double(delta)) * 7.0);
+        m_playheadTrailPx = m_playheadTrailPx * 0.55 + wanted * 0.45;
+    } else {
+        m_playheadTrailPx = 0.0;
+    }
 
     QRegion dirty;
     if (m_lastPlayheadX)
@@ -3812,8 +3905,10 @@ void TimelineWidget::drawRecordingEnvelope(QPainter& p,
         const double timelineTime =
             span.startSeconds + (captureTime - span.captureOffsetSeconds);
         const double x = (timelineTime - m_scrollSeconds) * m_pixelsPerSecond;
-        upper.append(QPointF(x, mid - double(peak) * half));
-        lower.append(QPointF(x, mid + double(peak) * half));
+        const double displayedPeak =
+            std::clamp(double(peak) * m_waveformScale, 0.0, 1.0);
+        upper.append(QPointF(x, mid - displayedPeak * half));
+        lower.append(QPointF(x, mid + displayedPeak * half));
     }
     if (upper.size() < 2) return;
 
@@ -3922,7 +4017,7 @@ void TimelineWidget::drawPeaks(QPainter& p, const daw::WaveformPeaks* peaks,
     how.clipLeft = painted.left();
     how.clipRight = painted.right();
     how.reversed = reversed;
-    how.gain = gain;
+    how.gain = float(double(gain) * m_waveformScale);
     how.color = color;
     ui::paintPeaks(p, peaks, area, how);
 }
@@ -4168,17 +4263,59 @@ void TimelineWidget::drawMidiNotes(QPainter& p, const daw::ClipModel& clip,
 
 void TimelineWidget::drawPlayhead(QPainter& p) {
     const Theme& t = th();
+    const double width = ui::playheadWidth();
     const int x = secondsToX(m_controller->presentationPositionSeconds());
-    if (x < -6 || x > width() + 6) return;
+    const int reach = 12 + int(std::ceil(width + m_playheadTrailPx));
+    if (x < -reach || x > this->width() + reach) return;
 
-    p.setPen(QPen(t.cursor, 1.6));
-    p.drawLine(x, 0, x, height());
+    const bool rolling = m_playheadTrailSeeded || m_controller->isPlaying() ||
+                         m_controller->isRecording();
+    const double trail =
+        rolling && ui::playheadTrail() ? m_playheadTrailPx : 0.0;
 
-    // Ruler handle so the playhead is grabbable and visible at a glance.
+    p.save();
+    // The trail and the halo are soft shapes on a grid of hard ones; without
+    // this they land on pixel boundaries and flicker as the head advances.
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    // ── The trail ──
+    // A wash that falls away behind the head, in the cursor's own colour. It
+    // has to stay faint: the point is that the eye catches which way time is
+    // running, not that there is a comet on the arrangement.
+    if (trail > 1.0) {
+        const double from = double(x);
+        const double to = from - m_playheadTrailDir * trail;
+        QLinearGradient wash(from, 0.0, to, 0.0);
+        QColor near = t.cursor;
+        near.setAlpha(t.dark ? 84 : 66);
+        QColor far = t.cursor;
+        far.setAlpha(0);
+        wash.setColorAt(0.0, near);
+        wash.setColorAt(0.45, QColor(near.red(), near.green(), near.blue(),
+                                     near.alpha() / 3));
+        wash.setColorAt(1.0, far);
+        p.fillRect(QRectF(std::min(from, to), 0.0, trail, double(height())),
+                   wash);
+    }
+
+    // ── The line ──
+    // A soft halo under it, so a one-pixel cursor still reads over a busy clip
+    // and a six-pixel one does not look like a pasted rectangle.
+    QColor halo = t.cursor;
+    halo.setAlpha(t.dark ? 58 : 44);
+    p.setPen(QPen(halo, width + 3.0));
+    p.drawLine(QPointF(x, 0.0), QPointF(x, double(height())));
+    p.setPen(QPen(t.cursor, width));
+    p.drawLine(QPointF(x, 0.0), QPointF(x, double(height())));
+
+    // Ruler handle so the playhead is grabbable and visible at a glance. It
+    // grows a little with the line, or a thick cursor outgrows its own grip.
+    const double half = 7.0 + (width - ui::kPlayheadWidthDefault) * 0.6;
     p.setPen(Qt::NoPen);
     p.setBrush(t.cursor);
-    p.drawPath(roundedTriangle(QPointF(x, 12.0), QPointF(x - 7.0, 0.0),
-                               QPointF(x + 7.0, 0.0), 3.0));
+    p.drawPath(roundedTriangle(QPointF(x, 12.0), QPointF(x - half, 0.0),
+                               QPointF(x + half, 0.0), 3.0));
+    p.restore();
 }
 
 void TimelineWidget::setRightCornerRadius(int radius) {
@@ -4443,6 +4580,7 @@ void TimelineWidget::updateCursor(const QPoint& pos) {
 
 void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
     setFocus(Qt::MouseFocusReason);
+    if (ev->button() != Qt::RightButton) m_suppressContextMenu = false;
     if (ev->button() == Qt::MiddleButton) {
         m_panning = true;
         m_panLastPosition = ev->position().toPoint();
@@ -4450,11 +4588,31 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         ev->accept();
         return;
     }
-    if (ev->button() != Qt::LeftButton) return;
+    if (ev->button() != Qt::LeftButton && ev->button() != Qt::RightButton)
+        return;
+    const QPoint pos = ev->position().toPoint();
+    if (ev->button() == Qt::RightButton) {
+        // As in the Piano Roll, the right button is a momentary eraser over
+        // editable content. A blank click only clears clip selection.
+        if (pos.y() < ui::kRulerHeight) return;
+        m_suppressContextMenu = true;
+        ClipHit hit;
+        if (!hitTestClip(pos, hit)) {
+            clearClipSelection();
+            ev->accept();
+            return;
+        }
+        beginProjectGesture(tr("Erase Clips"));
+        m_erasing = true;
+        m_lastErasePoint = pos;
+        setCursor(arrangementToolCursor(icons::Glyph::Eraser));
+        eraseClipsAlong(pos, pos);
+        ev->accept();
+        return;
+    }
     // Read the modifier before anything decides what this click means: the
     // gesture that follows belongs to whichever tool is in force now.
-    trackAltTool(ev->modifiers());
-    const QPoint pos = ev->position().toPoint();
+    trackSecondaryTool(ev->modifiers());
 
     // The cycle strip sits above the bar numbers and owns its own band of the
     // ruler: dragging there defines the region the playhead goes round, and
@@ -4474,7 +4632,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         }
 
         const bool snapOn =
-            m_snapEnabled && !(ev->modifiers() & Qt::ControlModifier);
+            m_snapEnabled && !(ev->modifiers() & Qt::AltModifier);
         m_loopGrab = loopGrabAt(pos.x());
         const double at = std::max(0.0, snap(xToSeconds(pos.x()), snapOn));
         switch (m_loopGrab) {
@@ -4505,7 +4663,10 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
 
     if (pos.y() < ui::kRulerHeight) {
         m_scrubbing = true;
-        m_controller->seekSeconds(std::max(0.0, xToSeconds(pos.x())));
+        const bool snapOn =
+            m_snapEnabled && !(ev->modifiers() & Qt::AltModifier);
+        m_controller->seekSeconds(
+            std::max(0.0, snap(xToSeconds(pos.x()), snapOn)));
         emit playheadMoved();
         setCursor(Qt::SizeHorCursor);
         update();
@@ -4543,7 +4704,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
     ClipHit hit;
     const bool over = hitTestClip(pos, hit);
     const bool snapOn =
-        m_snapEnabled && !(ev->modifiers() & Qt::ControlModifier);
+        m_snapEnabled && !(ev->modifiers() & Qt::AltModifier);
 
     // Double-click opens a curve's editor — but only where the pointer is not
     // already editing the curve: on the grip strip, or under a tool that treats
@@ -4613,10 +4774,10 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
             m_pointDrag = point;
             selectAutomationClip(point.trackId, point.clipId);
 
-            // Ctrl over a run bends it. The same modifier that turns snapping
+            // Alt over a run bends it. The same modifier that turns snapping
             // off elsewhere, and for the same reason: it is the "shape this
             // freely" key.
-            if ((ev->modifiers() & Qt::ControlModifier) && point.index < 0 &&
+            if ((ev->modifiers() & Qt::AltModifier) && point.index < 0 &&
                 point.segment >= 0) {
                 m_bendingSegment = true;
                 m_bendStartY = pos.y();
@@ -4735,7 +4896,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         const daw::ClipModel* clip = findClipModel(take.trackId, take.clipId);
         if (!clip) return;
         const bool snapOn =
-            m_snapEnabled && !(ev->modifiers() & Qt::ControlModifier);
+            m_snapEnabled && !(ev->modifiers() & Qt::AltModifier);
         m_swiping = true;
         m_swipeTrackId = take.trackId;
         m_swipeClipId = take.clipId;
@@ -4974,16 +5135,8 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
     if (tool() == Tool::Eraser) {
         beginProjectGesture(tr("Erase Clips"));
         m_erasing = true;
-        if (over) {
-            m_controller->removeClip(hit.trackId.toStdString(),
-                                     hit.clipId.toStdString());
-            markProjectGestureChanged();
-            m_selection.removeIf(
-                [&](const ClipRef& r) { return r.clipId == hit.clipId; });
-            if (m_selectedClipId == hit.clipId) m_selectedClipId.clear();
-            emit projectEdited();
-            update();
-        }
+        m_lastErasePoint = pos;
+        eraseClipsAlong(pos, pos);
         return;
     }
 
@@ -5149,17 +5302,13 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         return;
     }
 
-    // Empty space always deselects and seeks. A drag becomes a rubber-band
-    // only while Ctrl is held, keeping an ordinary drag free of selection.
+    // Empty space belongs to rubber-band selection. A click clears the current
+    // selection but never seeks; transport positioning is owned by the ruler.
     m_selection.clear();
     m_selectedClipId.clear();
-    m_marqueeActive = ev->modifiers().testFlag(Qt::ControlModifier);
-    if (m_marqueeActive) {
-        m_marqueeOrigin = pos;
-        m_marqueeCurrent = pos;
-    }
-    m_controller->seekSeconds(std::max(0.0, xToSeconds(pos.x())));
-    emit playheadMoved();
+    m_marqueeActive = true;
+    m_marqueeOrigin = pos;
+    m_marqueeCurrent = pos;
     update();
 }
 
@@ -5173,7 +5322,11 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
         update();
         return;
     }
-    if (m_projectGestureActive && !(ev->buttons() & Qt::LeftButton)) {
+    const bool projectGestureButtonHeld =
+        m_erasing
+            ? bool(ev->buttons() & (Qt::LeftButton | Qt::RightButton))
+            : bool(ev->buttons() & Qt::LeftButton);
+    if (m_projectGestureActive && !projectGestureButtonHeld) {
         cancelProjectGesture();
         updateCursor(ev->position().toPoint());
         update();
@@ -5200,10 +5353,10 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
     }
     // Not during a drag: a gesture keeps the tool it started with, however the
     // hand moves on the keyboard halfway through it.
-    if (!(ev->buttons() & Qt::LeftButton)) trackAltTool(ev->modifiers());
+    if (!(ev->buttons() & Qt::LeftButton)) trackSecondaryTool(ev->modifiers());
     const QPoint pos = ev->position().toPoint();
     const bool snapOn =
-        m_snapEnabled && !(ev->modifiers() & Qt::ControlModifier);
+        m_snapEnabled && !(ev->modifiers() & Qt::AltModifier);
 
     if (m_drawingCurve) {
         paintCurveAt(pos, snapOn);
@@ -5287,7 +5440,8 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
     }
 
     if (m_scrubbing) {
-        m_controller->seekSeconds(std::max(0.0, xToSeconds(pos.x())));
+        m_controller->seekSeconds(
+            std::max(0.0, snap(xToSeconds(pos.x()), snapOn)));
         emit playheadMoved();
         update();
         return;
@@ -5313,7 +5467,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
     if (m_swiping) {
         updateSwipe(pos,
                     m_snapEnabled &&
-                        !(ev->modifiers() & Qt::ControlModifier));
+                        !(ev->modifiers() & Qt::AltModifier));
         return;
     }
 
@@ -5339,7 +5493,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
     // tool; pending/moving are properties of the selection itself.
     if (m_regionPicking || m_regionMovePending || m_regionMoving) {
         const bool snapOn =
-            m_snapEnabled && !(ev->modifiers() & Qt::ControlModifier);
+            m_snapEnabled && !(ev->modifiers() & Qt::AltModifier);
         if (m_regionPicking) {
             updateRegionFromDrag(pos, snapOn);
             update();
@@ -5511,15 +5665,8 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
 
     // Eraser stroke: delete any clip dragged over.
     if (m_erasing) {
-        ClipHit hit;
-        if (hitTestClip(pos, hit)) {
-            m_controller->removeClip(hit.trackId.toStdString(),
-                                     hit.clipId.toStdString());
-            markProjectGestureChanged();
-            if (m_selectedClipId == hit.clipId) m_selectedClipId.clear();
-            emit projectEdited();
-            update();
-        }
+        eraseClipsAlong(m_lastErasePoint, pos);
+        m_lastErasePoint = pos;
         return;
     }
 
@@ -5681,6 +5828,18 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
         ev->accept();
         return;
     }
+    if (m_scrubbing) {
+        const bool snapOn =
+            m_snapEnabled && !(ev->modifiers() & Qt::AltModifier);
+        m_controller->seekSeconds(std::max(
+            0.0, snap(xToSeconds(ev->position().toPoint().x()), snapOn)));
+        emit playheadMoved();
+        m_scrubbing = false;
+        updateCursor(ev->position().toPoint());
+        update();
+        ev->accept();
+        return;
+    }
     if (m_expandDrag) {
         // Released without travelling far enough: treat it as a plain click on
         // the clip so the edge is not a dead strip.
@@ -5763,7 +5922,7 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
     if (m_marqueeActive) {
         m_marqueeActive = false;
         const QRect box = QRect(m_marqueeOrigin, m_marqueeCurrent).normalized();
-        // A bare click (no drag) leaves the selection empty — it was just a seek.
+        // A bare click (no drag) leaves the selection empty.
         if (box.width() > 3 || box.height() > 3) {
             m_selection.clear();
             const auto& project = m_controller->project();
@@ -5785,7 +5944,10 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
         }
         update();
     }
-    if (m_erasing) finishProjectGesture();
+    if (m_erasing) {
+        eraseClipsAlong(m_lastErasePoint, ev->position().toPoint());
+        finishProjectGesture();
+    }
     m_erasing = false;
     m_scrubbing = false;
     updateCursor(ev->position().toPoint());
@@ -5804,6 +5966,7 @@ bool TimelineWidget::event(QEvent* e) {
          m_clipTrimEditOpen) &&
         (e->type() == QEvent::UngrabMouse || e->type() == QEvent::Hide)) {
         cancelProjectGesture();
+        m_erasing = false;
     }
     if (m_stretching &&
         (e->type() == QEvent::UngrabMouse || e->type() == QEvent::Hide)) {
@@ -5889,6 +6052,11 @@ void TimelineWidget::wheelEvent(QWheelEvent* ev) {
 }
 
 void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
+    if (m_suppressContextMenu) {
+        m_suppressContextMenu = false;
+        ev->accept();
+        return;
+    }
     // Take rows first: they are inside a lane but below the clip bodies, so a
     // right-click there is about the take, not the clip above it.
     TakeHit takeHit;
@@ -6386,7 +6554,7 @@ void TimelineWidget::dropEvent(QDropEvent* ev) {
 
     const QPoint pos = ev->position().toPoint();
     const bool snapOn =
-        m_snapEnabled && !(ev->modifiers() & Qt::ControlModifier);
+        m_snapEnabled && !(ev->modifiers() & Qt::AltModifier);
     const double start = snap(std::max(0.0, xToSeconds(pos.x())), snapOn);
 
     // The first file drops onto the lane under the cursor when that lane can

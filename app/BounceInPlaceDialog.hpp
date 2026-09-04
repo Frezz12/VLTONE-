@@ -22,6 +22,7 @@ public:
                         QWidget* parent = nullptr);
 
     bool rendered() const noexcept { return m_rendered; }
+    void reject() override;
 
 private:
     void syncControls();

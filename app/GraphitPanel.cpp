@@ -148,7 +148,7 @@ protected:
                     centre.y() - std::sin(angle) * body.width() * 0.40));
 
         if (hasFocus()) {
-            painter.setPen(QPen(kAccent, 2.0, Qt::DashLine));
+            painter.setPen(QPen(kAccent, 2.0, Qt::SolidLine));
             painter.drawEllipse(ring.adjusted(-2.0, -2.0, 2.0, 2.0));
         }
     }
@@ -161,7 +161,7 @@ public:
         setRange(-100, 100);
         setSingleStep(5);
         setPageStep(25);
-        setFocusPolicy(Qt::StrongFocus);
+        setFocusPolicy(Qt::TabFocus);
         setCursor(Qt::PointingHandCursor);
     }
 
@@ -200,7 +200,7 @@ protected:
 
         if (hasFocus()) {
             painter.setBrush(Qt::NoBrush);
-            painter.setPen(QPen(kAccent, 1.0, Qt::DashLine));
+            painter.setPen(QPen(kAccent, 1.0, Qt::SolidLine));
             painter.drawRoundedRect(QRectF(rect()).adjusted(1.0, 1.0,
                                                            -1.0, -1.0),
                                     4.0, 4.0);
@@ -696,9 +696,9 @@ bool GraphitPanel::checkForTest() {
     m_activeButton->click();
     const bool active = !m_bypassed && m_activeButton->isChecked();
 
-    bool accessible = m_amount->focusPolicy() == Qt::StrongFocus &&
+    bool accessible = m_amount->focusPolicy() == Qt::TabFocus &&
                       !m_amount->accessibleName().isEmpty() &&
-                      m_priority->focusPolicy() == Qt::StrongFocus &&
+                      m_priority->focusPolicy() == Qt::TabFocus &&
                       !m_priority->accessibleName().isEmpty() &&
                       m_activeButton->focusPolicy() == Qt::StrongFocus &&
                       !m_activeButton->accessibleName().isEmpty();

@@ -3578,7 +3578,7 @@ unsigned EngineController::workerCount() const { return m_engine.workerCount(); 
 
 // ── Document ───────────────────────────────────────────────────────────────
 
-void EngineController::newProject() {
+void EngineController::newProject(bool createDefaultAudioTrack) {
     m_project = ProjectModel{};
     m_project.sampleRate = m_sampleRate;
     m_undo.clear();
@@ -3595,6 +3595,14 @@ void EngineController::newProject() {
     m_channels.clear();
     m_engine.transport().stop();
     m_engine.transport().seek(0);
+    if (createDefaultAudioTrack) {
+        TrackModel track;
+        track.id = newUuid();
+        track.kind = TrackKind::Audio;
+        track.name = "Audio 1";
+        track.color = colorForNewTrack(track.kind);
+        m_project.tracks.push_back(std::move(track));
+    }
     rebuildGraph();
 }
 
@@ -5589,12 +5597,20 @@ double EngineController::loopEndSeconds() const {
 
 // ── Tracks ─────────────────────────────────────────────────────────────────
 
+void EngineController::setDefaultTrackColor(uint32_t rgb) {
+    m_defaultTrackColor = rgb & 0x00FFFFFFu;
+}
+
+uint32_t EngineController::colorForNewTrack(TrackKind kind) const {
+    return m_defaultTrackColor.value_or(defaultTrackColor(kind));
+}
+
 std::string EngineController::addTrack(TrackKind kind, const std::string& name) {
     TrackModel model;
     model.id = newUuid();
     model.kind = kind;
     model.name = name.empty() ? defaultTrackName(kind) : name;
-    model.color = defaultTrackColor(kind);
+    model.color = colorForNewTrack(kind);
     const std::string afterId = m_project.tracks.empty()
         ? std::string()
         : m_project.tracks.back().id;
@@ -5615,8 +5631,8 @@ std::string EngineController::addFolder(bool summing, const std::string& name) {
     // Two different things deserve two different default names: one is a bus
     // with tracks in it, the other is a drawer.
     model.name = !name.empty() ? name : (summing ? "Group" : "Folder");
-    model.color = defaultTrackColor(summing ? TrackKind::Group
-                                            : TrackKind::Folder);
+    model.color = colorForNewTrack(summing ? TrackKind::Group
+                                           : TrackKind::Folder);
     if (cloudProjectBound()) {
         auto batch = std::make_shared<collab::BatchCommand>();
         appendCommand(batch, collab::AddTrack{
@@ -5645,7 +5661,7 @@ std::string EngineController::addPattern(const std::string& name) {
     // SetTrackProperty::Summing for non-folders. Setting it locally would make
     // the local and cloud paths disagree over a field nothing reads.
     model.name = name.empty() ? "Pattern" : name;
-    model.color = defaultTrackColor(TrackKind::Pattern);
+    model.color = colorForNewTrack(TrackKind::Pattern);
 
     // A Pattern is visible and editable on the arrangement from the moment it
     // is created. The child tracks carry the notes and audio routing; this clip
@@ -5783,7 +5799,7 @@ std::string EngineController::addPatternInstrument(
         lane.kind = TrackKind::Instrument;
         lane.name = descriptor.name.empty() ? std::string("Instrument")
                                              : descriptor.name;
-        lane.color = defaultTrackColor(lane.kind);
+        lane.color = colorForNewTrack(lane.kind);
         lane.parentId = patternId;
         lane.outputBusId = patternId;
         lane.instrument = std::move(clean);
@@ -5893,7 +5909,7 @@ std::string EngineController::addPatternSample(const std::string& patternId,
         lane.name = platform::pathToUtf8(
             platform::pathFromUtf8(filePath).stem());
         if (lane.name.empty()) lane.name = "Sample";
-        lane.color = defaultTrackColor(lane.kind);
+        lane.color = colorForNewTrack(lane.kind);
         lane.parentId = patternId;
         lane.outputBusId = patternId;
         lane.instrument = std::move(clean);
@@ -7087,8 +7103,8 @@ std::string EngineController::packIntoFolder(
         folder.kind = TrackKind::Folder;
         folder.summing = summing;
         folder.name = !name.empty() ? name : (summing ? "Group" : "Folder");
-        folder.color = defaultTrackColor(summing ? TrackKind::Group
-                                                 : TrackKind::Folder);
+        folder.color = colorForNewTrack(summing ? TrackKind::Group
+                                                : TrackKind::Folder);
         folder.parentId = parentId;
         auto batch = std::make_shared<collab::BatchCommand>();
         const std::string beforeFirst = firstIndex == 0
@@ -9403,7 +9419,7 @@ std::string EngineController::importAudioToNewTrack(
         track.id = newUuid();
         track.kind = TrackKind::Audio;
         track.name = std::move(name);
-        track.color = defaultTrackColor(track.kind);
+        track.color = colorForNewTrack(track.kind);
         ClipModel clip;
         clip.id = newUuid();
         clip.kind = ClipKind::Audio;
@@ -13672,7 +13688,7 @@ std::vector<std::string> EngineController::importMidiFile(
                 if (lane.name.empty())
                     lane.name = stem + " " + std::to_string(index + 1);
                 if (lane.name.empty()) lane.name = defaultTrackName(lane.kind);
-                lane.color = defaultTrackColor(lane.kind);
+                lane.color = colorForNewTrack(lane.kind);
                 lane.parentId = importedParentId;
                 lane.outputBusId = importedOutputBusId;
                 clip.color = lane.color;
@@ -13818,7 +13834,7 @@ std::vector<std::string> EngineController::importMidiFile(
             model.id = newUuid();
             model.kind = TrackKind::Instrument;
             model.name = name.empty() ? defaultTrackName(model.kind) : name;
-            model.color = defaultTrackColor(model.kind);
+            model.color = colorForNewTrack(model.kind);
             model.parentId = importedParentId;
             model.outputBusId = importedOutputBusId;
             m_project.tracks.push_back(std::move(model));

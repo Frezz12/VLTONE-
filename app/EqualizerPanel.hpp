@@ -2,7 +2,9 @@
 
 #include "Internal/EqualizerInstance.hpp"
 
+#include <QColor>
 #include <QHash>
+#include <QPointer>
 #include <QString>
 #include <QWidget>
 
@@ -26,13 +28,29 @@ namespace daw { class EngineController; }
 class EqualizerGraph final : public QWidget {
     Q_OBJECT
 public:
+    /// Samples per band curve. Each enabled band draws its own filled shape, so
+    /// this is walked once per band per repaint — dense enough that a 96 dB/oct
+    /// cut has no visible corners, cheap enough at twenty-four of them.
+    static constexpr int kCurvePoints = 240;
+    using Curve = std::array<float, kCurvePoints>;
+    using CurveSet = std::array<Curve, daw::plugins::equalizer::kBandCount>;
+
     explicit EqualizerGraph(QWidget* parent = nullptr);
 
     void setData(const std::array<daw::plugins::equalizer::BandState,
                                   daw::plugins::equalizer::kBandCount>& bands,
                  const std::array<double, 256>& response,
                  const daw::plugins::equalizer::Telemetry& telemetry,
-                 bool linearPhase, double displayRange);
+                 bool linearPhase, double displayRange,
+                 const CurveSet& bandCurves);
+
+    /// The band inspector floats over the curve instead of sitting under it, so
+    /// the graph owns its placement.
+    void setOverlay(QWidget* overlay);
+
+    /// The colour a band's curve, fill and handle are drawn in. The inspector
+    /// tints itself to match whatever is selected.
+    static QColor colorForBand(int band, bool dark);
     void setSelection(std::vector<int> bands);
     const std::vector<int>& selection() const noexcept { return m_selection; }
 
@@ -58,8 +76,10 @@ protected:
     void wheelEvent(QWheelEvent*) override;
     void keyPressEvent(QKeyEvent*) override;
     void contextMenuEvent(QContextMenuEvent*) override;
+    void resizeEvent(QResizeEvent*) override;
 
 private:
+    void placeOverlay();
     QRectF plotRect() const;
     QPointF bandPoint(int band) const;
     int bandAt(const QPointF& point) const;
@@ -73,6 +93,8 @@ private:
     std::array<daw::plugins::equalizer::BandState,
                daw::plugins::equalizer::kBandCount> m_bands{};
     std::array<double, 256> m_response{};
+    CurveSet m_bandCurves{};
+    QPointer<QWidget> m_overlay;
     daw::plugins::equalizer::Telemetry m_telemetry;
     std::vector<int> m_selection;
     QPointF m_pressPosition;

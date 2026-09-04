@@ -6,14 +6,115 @@
 
 #include <QAbstractButton>
 #include <QHBoxLayout>
-#include <QSignalBlocker>
+#include <QKeyEvent>
+#include <QLinearGradient>
+#include <QMouseEvent>
+#include <QPainter>
 #include <QResizeEvent>
+#include <QSignalBlocker>
+
+#include <algorithm>
+#include <cmath>
+#include <functional>
+
+namespace {
+
+class WaveformScaleButton final : public ui::IconButton {
+public:
+    using Change = std::function<void(double)>;
+
+    explicit WaveformScaleButton(Change change, QWidget* parent)
+        : ui::IconButton(
+              icons::Glyph::Waveform,
+              QObject::tr("Waveform height: drag or use Up/Down; double-click or Home resets"),
+              parent),
+          m_change(std::move(change)) {
+        setObjectName(QStringLiteral("WaveformScaleButton"));
+        setAccessibleName(QObject::tr("Waveform display height"));
+        setFocusPolicy(Qt::StrongFocus);
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::LeftButton) {
+            m_dragging = true;
+            m_startY = event->globalPosition().y();
+            m_startValue = m_value;
+            setCursor(Qt::SizeVerCursor);
+        }
+        ui::IconButton::mousePressEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override {
+        if (!m_dragging) {
+            ui::IconButton::mouseMoveEvent(event);
+            return;
+        }
+        setValue(m_startValue *
+                 std::pow(2.0, (m_startY - event->globalPosition().y()) / 80.0));
+        ui::ValueBubble::showFor(
+            this, rect().center(),
+            QObject::tr("Waveform %1%").arg(int(std::lround(m_value * 100.0))));
+        event->accept();
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override {
+        const bool wasDragging = m_dragging;
+        m_dragging = false;
+        if (wasDragging) {
+            ui::ValueBubble::dismiss();
+            setCursor(Qt::PointingHandCursor);
+        }
+        ui::IconButton::mouseReleaseEvent(event);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* event) override {
+        if (event->button() != Qt::LeftButton) {
+            ui::IconButton::mouseDoubleClickEvent(event);
+            return;
+        }
+        setValue(1.0);
+        event->accept();
+    }
+
+    void keyPressEvent(QKeyEvent* event) override {
+        if (event->key() == Qt::Key_Up) {
+            setValue(m_value * std::pow(2.0, 0.125));
+        } else if (event->key() == Qt::Key_Down) {
+            setValue(m_value / std::pow(2.0, 0.125));
+        } else if (event->key() == Qt::Key_Home) {
+            setValue(1.0);
+        } else {
+            ui::IconButton::keyPressEvent(event);
+            return;
+        }
+        event->accept();
+    }
+
+private:
+    void setValue(double value) {
+        const double next = std::clamp(value, 0.25, 4.0);
+        if (std::abs(next - m_value) < 1.0e-9) return;
+        m_value = next;
+        if (m_change) m_change(m_value);
+    }
+
+    Change m_change;
+    double m_value = 1.0;
+    double m_startValue = 1.0;
+    double m_startY = 0.0;
+    bool m_dragging = false;
+};
+
+}  // namespace
 
 ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     setObjectName("ToolPanel");
     // Tall enough to hold the context-panel island with its shadow: a child
     // can't paint outside its parent, so the strip has to make room.
     setFixedHeight(44);
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+            QOverload<>::of(&QWidget::update));
 
     auto* row = new QHBoxLayout(this);
     row->setContentsMargins(8, 2, 8, 2);
@@ -115,33 +216,37 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     connect(m_showAutomation, &QAbstractButton::toggled, this,
             &ToolPanel::automationVisibilityToggled);
 
+    m_followPlayhead = new ui::IconButton(
+        icons::Glyph::SkipEnd,
+        tr("Follow the playhead — P centres it; press again to navigate freely"),
+        m_trackZone);
+    m_followPlayhead->setObjectName(QStringLiteral("FollowPlayheadButton"));
+    m_followPlayhead->setCheckable(true);
+    m_followPlayhead->setAccessibleName(tr("Follow the playhead"));
+    connect(m_followPlayhead, &QAbstractButton::toggled, this,
+            &ToolPanel::followPlayheadToggled);
+
     tz->addWidget(m_restart);
     tz->addWidget(m_playFromClip);
     tz->addWidget(m_createAutomation);
     tz->addWidget(m_showAutomation);
+    tz->addWidget(m_followPlayhead);
     tz->addStretch(1);
     m_trackZone->setFixedWidth(ui::kTrackHeaderWidth);
     row->addWidget(m_trackZone);
 
     row->addWidget(ui::separatorLine(Qt::Vertical, 18, this));
 
-    // Timeline zone: the context island travels through its centre, while the
-    // playback-follow switch stays pinned to the far edge above the timeline.
+    // Timeline zone: the context island travels through its centre. The far
+    // edge holds a display-only vertical zoom for audio waveforms.
     auto* timelineZone = new QWidget(this);
     auto* timelineLayout = new QHBoxLayout(timelineZone);
     timelineLayout->setContentsMargins(2, 0, 2, 0);
     timelineLayout->setSpacing(2);
     timelineLayout->addStretch(1);
-    m_followPlayhead = new ui::IconButton(
-        icons::Glyph::Crosshair,
-        tr("Follow the playhead — P centres it; press again to navigate freely"),
-        timelineZone);
-    m_followPlayhead->setObjectName(QStringLiteral("FollowPlayheadButton"));
-    m_followPlayhead->setCheckable(true);
-    m_followPlayhead->setAccessibleName(tr("Follow the playhead"));
-    connect(m_followPlayhead, &QAbstractButton::toggled, this,
-            &ToolPanel::followPlayheadToggled);
-    timelineLayout->addWidget(m_followPlayhead);
+    m_waveformScale = new WaveformScaleButton(
+        [this](double scale) { emit waveformScaleChanged(scale); }, timelineZone);
+    timelineLayout->addWidget(m_waveformScale);
     row->addWidget(timelineZone, 1);
 
     // Past the stretch, so it sits over the assistant column at the far right.
@@ -238,6 +343,26 @@ void ToolPanel::setBrowserOnLeft(bool onLeft) {
     moveAiZoneLast();
 }
 
+void ToolPanel::paintEvent(QPaintEvent*) {
+    // The header is a plate above this strip, not a band printed on the same
+    // sheet. A short cast shadow along the top edge is what makes the workspace
+    // read as sitting *under* the transport: without it the two fuse into one
+    // field of the same grey and the window loses its top storey.
+    QPainter p(this);
+    const Theme& t = th();
+    constexpr int kDepth = 10;
+    QColor ink = t.dark ? QColor(0, 0, 0)
+                        : mixColors(t.surface, QColor(10, 14, 22), 0.86);
+    QLinearGradient cast(0, 0, 0, kDepth);
+    ink.setAlpha(t.dark ? 82 : 66);
+    cast.setColorAt(0.0, ink);
+    ink.setAlpha(t.dark ? 24 : 20);
+    cast.setColorAt(0.45, ink);
+    ink.setAlpha(0);
+    cast.setColorAt(1.0, ink);
+    p.fillRect(QRect(0, 0, width(), kDepth), cast);
+}
+
 void ToolPanel::resizeEvent(QResizeEvent* ev) {
     QWidget::resizeEvent(ev);
     emit resized();
@@ -245,7 +370,11 @@ void ToolPanel::resizeEvent(QResizeEvent* ev) {
 
 void ToolPanel::applyTheme() {
     const Theme& t = th();
-    if (m_followPlayhead) m_followPlayhead->setActiveColor(t.cursor);
+    if (m_followPlayhead) {
+        m_followPlayhead->setActiveColor(t.cursor);
+        m_followPlayhead->setIcon(
+            icons::svgIcon(QStringLiteral("signpost.svg"), t.textPrimary, 18));
+    }
     setStyleSheet(QString(
         "#ToolPanel { background: %1; border-bottom: 1px solid %2; }")
                       .arg(t.headerBackground.name(), t.sectionDivider().name()));

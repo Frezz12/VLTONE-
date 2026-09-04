@@ -9,6 +9,7 @@
 namespace daw { class EngineController; }
 
 class QComboBox;
+class QCheckBox;
 class QLabel;
 class QPushButton;
 
@@ -23,6 +24,9 @@ public:
 
     void apply();
     bool checkForTest() const;
+
+signals:
+    void cpuStatusBarVisibilityChanged(bool visible);
 
 private slots:
     void populateDeviceLists();
@@ -58,6 +62,7 @@ private:
     QLabel* m_bufferNote = nullptr;
     QPushButton* m_controlPanel = nullptr;
     QLabel* m_deviceNote = nullptr;
+    QCheckBox* m_cpuStatusBar = nullptr;
 
     QString m_channelDeviceUid;
     std::vector<int> m_inputSelectors;

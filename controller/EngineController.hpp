@@ -237,7 +237,9 @@ public:
     double sampleRate() const { return m_sampleRate; }
 
     // ── Document ──
-    void newProject();
+    /// Reset the document. The application shell asks for one ready-to-record
+    /// audio lane; low-level callers keep the historically empty document.
+    void newProject(bool createDefaultAudioTrack = false);
     const ProjectModel& project() const { return m_project; }
     const std::string& projectName() const { return m_project.name; }
     void setProjectName(std::string name);
@@ -372,6 +374,9 @@ public:
     double loopEndSeconds() const;
 
     // ── Tracks ──
+    /// Override the colour assigned to tracks created from now on. The UI
+    /// keeps this aligned with the active theme; existing tracks are untouched.
+    void setDefaultTrackColor(uint32_t rgb);
     /// Returns the new track id, or empty if a bound cloud session refused the
     /// mutation. In a session the optimistic projection has already landed by
     /// the time this returns, so `project().findTrack(returned)` resolves
@@ -1695,6 +1700,8 @@ public:
 private:
     class DeviceCallback;   // bridges the PortAudio callback to the engine
 
+    uint32_t colorForNewTrack(TrackKind kind) const;
+
     collab::SharedMutationResult submitSharedMutation(
         collab::CommandBody body, std::string undoLabel,
         std::optional<std::string> transactionId = std::nullopt);
@@ -1838,6 +1845,7 @@ private:
     std::unique_ptr<DeviceCallback> m_callback;
 
     ProjectModel m_project;
+    std::optional<uint32_t> m_defaultTrackColor;
     collab::SharedMutationSink* m_sharedMutationSink = nullptr;
     collab::SharedAssetMutationSink* m_sharedAssetMutationSink = nullptr;
     struct PendingSharedAssetMutation {
