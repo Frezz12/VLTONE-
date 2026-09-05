@@ -63,40 +63,37 @@ Result probeAudioFile(const std::string& path, AudioFileInfo& out) {
     return Result::ok();
 }
 
-Result decodeAudioFile(const std::string& path, DecodedAudio& out) {
-    SF_INFO info{};
-    SNDFILE* file = openSoundFile(path, SFM_READ, &info);
-    if (!file) {
-        return Result::fail(EngineError::UnsupportedFormat,
-                            std::string("sf_open failed: ") +
-                                sf_strerror(nullptr));
+Result decodeAudioFile(const std::string& path, DecodedAudio& out,
+                       const DecodeOptions& options) {
+    try {
+        if (options.keepGoing && !options.keepGoing())
+            return Result::fail(EngineError::InvalidArgument, "cancelled");
+        AudioFileReader reader;
+        if (const auto opened = reader.open(path); !opened) return opened;
+        const auto info = reader.info();
+        if (info.channels > 32 || info.frames >
+            options.maxBytes / sizeof(float) / info.channels)
+            return Result::fail(EngineError::UnsupportedFormat,
+                                "audio exceeds the in-memory decode budget; use the streaming reader");
+        DecodedAudio decoded;
+        decoded.channels = info.channels;
+        decoded.sampleRate = info.sampleRate;
+        decoded.interleaved.resize(std::size_t(info.frames) * info.channels);
+        while (decoded.frames < info.frames) {
+            if (options.keepGoing && !options.keepGoing())
+                return Result::fail(EngineError::InvalidArgument, "cancelled");
+            const auto count = std::min<FrameCount>(8192, info.frames - decoded.frames);
+            const auto read = reader.read(decoded.interleaved.data() +
+                std::size_t(decoded.frames) * info.channels, count);
+            if (read == 0)
+                return Result::fail(EngineError::UnsupportedFormat, "truncated audio file");
+            decoded.frames += read;
+        }
+        out = std::move(decoded);
+        return Result::ok();
+    } catch (const std::exception& error) {
+        return Result::fail(EngineError::UnsupportedFormat, error.what());
     }
-
-    if (info.channels <= 0 || info.frames <= 0) {
-        sf_close(file);
-        return Result::fail(EngineError::UnsupportedFormat,
-                            "file has no decodable audio");
-    }
-
-    out.channels = static_cast<ChannelCount>(info.channels);
-    out.sampleRate = static_cast<SampleRate>(info.samplerate);
-    out.interleaved.assign(
-        static_cast<size_t>(info.frames) * info.channels, 0.0f);
-
-    // sf_readf_float delivers interleaved float regardless of the file's
-    // on-disk encoding, which is exactly the layout DecodedAudio wants.
-    const sf_count_t framesRead =
-        sf_readf_float(file, out.interleaved.data(), info.frames);
-    sf_close(file);
-
-    if (framesRead <= 0) {
-        return Result::fail(EngineError::UnsupportedFormat,
-                            "decoded zero frames");
-    }
-
-    out.frames = static_cast<FrameCount>(framesRead);
-    out.interleaved.resize(static_cast<size_t>(framesRead) * info.channels);
-    return Result::ok();
 }
 
 struct AudioFileReader::Impl {
@@ -107,7 +104,10 @@ struct AudioFileReader::Impl {
 AudioFileReader::AudioFileReader() : m_impl(std::make_unique<Impl>()) {}
 AudioFileReader::~AudioFileReader() { close(); }
 AudioFileReader::AudioFileReader(AudioFileReader&&) noexcept = default;
-AudioFileReader& AudioFileReader::operator=(AudioFileReader&&) noexcept = default;
+AudioFileReader& AudioFileReader::operator=(AudioFileReader&& other) noexcept {
+    if (this != &other) { close(); m_impl = std::move(other.m_impl); }
+    return *this;
+}
 
 Result AudioFileReader::open(const std::string& path) {
     close();

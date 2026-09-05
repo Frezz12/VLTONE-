@@ -1,6 +1,7 @@
 #include "WaveformCache.hpp"
 
 #include "platform/AudioFileDecoder.hpp"
+#include "SampleLoader.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -47,7 +48,7 @@ const WaveformPeaks* WaveformCache::cached(const std::string& filePath) const {
     auto found = m_cache.find(filePath);
     if (found == m_cache.end()) return nullptr;
     touch(found->second);
-    return found->second.peaks.isValid() ? &found->second.peaks : nullptr;
+    return found->second.peaks->isValid() ? found->second.peaks.get() : nullptr;
 }
 
 const WaveformPeaks* WaveformCache::storeDecoded(
@@ -56,41 +57,45 @@ const WaveformPeaks* WaveformCache::storeDecoded(
     if (filePath.empty()) return nullptr;
     Entry& entry = m_cache[filePath];
     m_bytes -= std::min(m_bytes, entry.bytes);
-    buildPeaks(decoded, entry.peaks);
-    entry.bytes = waveformBytes(entry.peaks);
+    entry.peaks = std::make_shared<WaveformPeaks>();
+    buildPeaks(decoded, *entry.peaks);
+    entry.bytes = waveformBytes(*entry.peaks);
     m_bytes += entry.bytes;
     touch(entry);
     evictToBudget(filePath);
-    return entry.peaks.isValid() ? &entry.peaks : nullptr;
+    return entry.peaks->isValid() ? entry.peaks.get() : nullptr;
 }
 
-void buildPeaks(const audio::platform::DecodedAudio& decoded, WaveformPeaks& out) {
+template<class Read>
+void buildPeaksImpl(std::size_t frames, std::size_t channelCount, double sampleRate,
+                    Read read, WaveformPeaks& out, const std::function<bool()>& keepGoing) {
     out = WaveformPeaks{};
-    if (decoded.frames == 0 || decoded.channels == 0 || decoded.sampleRate <= 0.0) {
+    if (frames == 0 || channelCount == 0 || sampleRate <= 0.0) {
         return;
     }
 
-    const double duration = double(decoded.frames) / double(decoded.sampleRate);
+    const double duration = double(frames) / double(sampleRate);
     constexpr size_t kMaxBucketsPerFile = 4'000'000; // ~32 MB base envelope
     const size_t buckets = std::clamp<size_t>(
         size_t(std::ceil(duration * kPeakBucketsPerSecond)), 1,
         kMaxBucketsPerFile);
     const double framesPerBucket =
-        std::max(1.0, double(decoded.frames) / double(buckets));
+        std::max(1.0, double(frames) / double(buckets));
 
     out.minima.assign(buckets, 0.0f);
     out.maxima.assign(buckets, 0.0f);
     out.durationSeconds = duration;
     out.bucketsPerSecond = double(buckets) / duration;
-    out.channels = int(decoded.channels);
+    out.channels = int(channelCount);
 
-    const auto channels = size_t(decoded.channels);
+    const auto channels = size_t(channelCount);
     const float channelScale = 1.0f / float(channels);
 
     for (size_t bucket = 0; bucket < buckets; ++bucket) {
+        if (bucket % 128 == 0 && keepGoing && !keepGoing()) { out = {}; return; }
         const size_t first = size_t(bucket * framesPerBucket);
         size_t last = size_t((bucket + 1) * framesPerBucket);
-        last = std::min<size_t>(last, size_t(decoded.frames));
+        last = std::min<size_t>(last, size_t(frames));
         if (first >= last) continue;
 
         float lo = 0.0f;
@@ -98,9 +103,8 @@ void buildPeaks(const audio::platform::DecodedAudio& decoded, WaveformPeaks& out
         bool seeded = false;
         for (size_t frame = first; frame < last; ++frame) {
             float sum = 0.0f;
-            const size_t base = frame * channels;
             for (size_t ch = 0; ch < channels; ++ch) {
-                sum += decoded.interleaved[base + ch];
+                sum += read(frame, ch);
             }
             const float value = sum * channelScale;
             if (!seeded) {
@@ -146,12 +150,37 @@ void buildPeaks(const audio::platform::DecodedAudio& decoded, WaveformPeaks& out
     }
 }
 
+void buildPeaks(const audio::platform::DecodedAudio& decoded, WaveformPeaks& out) {
+    buildPeaksImpl(decoded.frames, decoded.channels, decoded.sampleRate,
+        [&](std::size_t frame, std::size_t ch) {
+            return decoded.interleaved[frame * decoded.channels + ch];
+        }, out, {});
+}
+void buildPeaks(const engine::SampleBuffer& buffer, WaveformPeaks& out,
+                const std::function<bool()>& keepGoing) {
+    buildPeaksImpl(buffer.frames(), buffer.channels(), buffer.sampleRate(),
+        [&](std::size_t frame, std::size_t ch) { return buffer.channel(ch)[frame]; },
+        out, keepGoing);
+}
+const WaveformPeaks* WaveformCache::storeSample(
+    const std::string& filePath, const engine::SampleBuffer& buffer) {
+    Entry& entry = m_cache[filePath];
+    m_bytes -= std::min(m_bytes, entry.bytes);
+    entry.peaks = std::make_shared<WaveformPeaks>();
+    buildPeaks(buffer, *entry.peaks);
+    entry.bytes = waveformBytes(*entry.peaks);
+    m_bytes += entry.bytes;
+    touch(entry);
+    evictToBudget(filePath);
+    return entry.peaks->isValid() ? entry.peaks.get() : nullptr;
+}
+
 const WaveformPeaks* WaveformCache::peaks(const std::string& filePath) {
     if (filePath.empty()) return nullptr;
     auto found = m_cache.find(filePath);
     if (found != m_cache.end()) {
         touch(found->second);
-        return found->second.peaks.isValid() ? &found->second.peaks : nullptr;
+        return found->second.peaks->isValid() ? found->second.peaks.get() : nullptr;
     }
 
     // Remember failures too: an empty entry stops us re-decoding a file that
@@ -159,9 +188,9 @@ const WaveformPeaks* WaveformCache::peaks(const std::string& filePath) {
     Entry& failed = m_cache.try_emplace(filePath).first->second;
     touch(failed);
 
-    audio::platform::DecodedAudio decoded;
-    if (!audio::platform::decodeAudioFile(filePath, decoded)) return nullptr;
-    return storeDecoded(filePath, decoded);
+    std::shared_ptr<const engine::SampleBuffer> buffer;
+    if (!loadSampleBuffer(filePath, buffer)) return nullptr;
+    return storeSample(filePath, *buffer);
 }
 
 } // namespace daw

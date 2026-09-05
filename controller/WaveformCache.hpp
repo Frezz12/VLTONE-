@@ -1,6 +1,8 @@
 #pragma once
 
 #include "platform/AudioFileDecoder.hpp"
+#include "Audio/SampleBuffer.hpp"
+#include <functional>
 
 #include <cstddef>
 #include <cstdint>
@@ -43,6 +45,8 @@ inline constexpr double kPeakBucketsPerSecond = 1000.0;
 /// browser decodes a file once on a worker and gets both the audio and its
 /// envelope out of that single decode.
 void buildPeaks(const audio::platform::DecodedAudio& decoded, WaveformPeaks& out);
+void buildPeaks(const engine::SampleBuffer& buffer, WaveformPeaks& out,
+                const std::function<bool()>& keepGoing = {});
 
 /// Decodes files once and keeps their envelopes, keyed by absolute path.
 /// Control-thread only: `peaks()` decodes on a miss, which is slow for long
@@ -70,6 +74,8 @@ public:
         const audio::platform::DecodedAudio& decoded);
 
     void clear();
+    const WaveformPeaks* storeSample(const std::string& filePath,
+                                     const engine::SampleBuffer& buffer);
     std::size_t byteSize() const noexcept { return m_bytes; }
     std::size_t entryCount() const noexcept { return m_cache.size(); }
 
@@ -80,7 +86,7 @@ public:
 
 private:
     struct Entry {
-        WaveformPeaks peaks;
+        std::shared_ptr<WaveformPeaks> peaks = std::make_shared<WaveformPeaks>();
         std::size_t bytes = 0;
         mutable std::uint64_t lastUse = 0;
     };

@@ -201,6 +201,8 @@ public:
         bool fullMix = false;
         double startSeconds = 0.0;
         double endSeconds = 0.0;
+        /// Negative preserves all prior plugin history; zero disables warm-up.
+        double preRollSeconds = -1.0;
         rendering::Tail tail = rendering::Tail::None;
         double tailSilenceDb = -96.0;
         double tailHoldSeconds = 0.3;
@@ -613,6 +615,9 @@ public:
     ChannelSnapshot offlineProcessChain(const ClipAddress& clip) const;
     bool offlineProcessCacheValid(const ClipAddress& clip) const;
     double clipPlaybackDuration(const ClipModel& clip) const;
+    /// Paint/hit-test views of the last validated playback source: no file I/O.
+    double clipDisplayDuration(const ClipModel& clip) const;
+    const std::string& clipDisplayFilePath(const ClipModel& clip) const;
     const std::string& clipPlaybackFilePath(const ClipModel& clip) const;
 
     struct OfflineRenderReport {
@@ -1612,6 +1617,7 @@ public:
     void undo();
     void redo();
     bool canUndo() const { return m_undo.canUndo(); }
+    bool offlineRenderInProgress() const noexcept { return m_exportInProgress; }
     bool canRedo() const { return m_undo.canRedo(); }
     /// What the next undo/redo would actually do, for menu items that name it
     /// ("Undo Quantize") instead of leaving the user to guess.
@@ -1764,6 +1770,15 @@ private:
     void syncAllNotes();
     /// Turn a track's plugin-parameter lanes into curves on the plugin nodes.
     void syncTrackAutomation(const TrackModel& track);
+    using AutomationClipIndex = std::unordered_map<std::string, std::vector<const ClipModel*>>;
+    const AutomationClipIndex* m_automationClipIndex = nullptr;
+    struct AutomationIndexScope {
+        EngineController& owner;
+        std::optional<AutomationClipIndex> index;
+        explicit AutomationIndexScope(EngineController& controller);
+        ~AutomationIndexScope();
+    };
+    std::vector<const ClipModel*> automationClipsForTrack(const std::string& channelId) const;
     void followPassiveAutomation(const AutomationTarget& target,
                                  double normalized);
     void syncAllAutomation();
@@ -1960,6 +1975,13 @@ private:
     /// gated on `context.playing`, which an offline pass asserts — so without
     /// this an enabled click lands in the exported file.
     bool m_renderingPass = false;
+    bool m_isRenderClone = false;
+    mutable std::unordered_map<std::string, std::string> m_clipDisplayPaths;
+    bool m_exportInProgress = false;
+    std::function<bool()> m_sampleLoadContinue;
+    audio::Result renderProjectPass(const rendering::Spec& spec,
+        const std::function<bool(const rendering::Progress&)>& onProgress,
+        rendering::Report& out);
     /// Move the whole session to another sample rate, dropping the decoded-clip
     /// caches that were converted for the old one. Used by a render that writes
     /// at a rate the project does not run at, in both directions.
@@ -2033,6 +2055,7 @@ private:
                                 const std::string& sourceTrackId) const;
     ChannelSnapshot m_channelClipboard;
     std::unordered_map<std::string, std::shared_ptr<const engine::SampleBuffer>> m_samples;
+    std::unordered_map<std::string, std::shared_ptr<const engine::SampleBuffer>> m_sourceSamples;
     /// One baked clip sample, and the two things that decide whether it is
     /// still valid: the file it came from and the precomputed settings it was
     /// rendered through. Keyed by clip id, so a clip that is deleted or given a

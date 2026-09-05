@@ -21,6 +21,7 @@ public:
         std::function<void()> undo;
         std::function<void()> redo;
         std::uint64_t sequence = 0;
+        std::size_t bytes = 256;
     };
 
     /// Stable token for a compound operation. Unlike a depth marker it remains
@@ -32,16 +33,23 @@ public:
         explicit operator bool() const noexcept { return id != 0; }
     };
 
-    explicit UndoStack(size_t limit = 100) : m_limit(limit) {}
+    explicit UndoStack(size_t limit = 100,
+                       size_t byteBudget = 128u * 1024u * 1024u)
+        : m_limit(limit), m_byteBudget(byteBudget) {}
 
     /// Record an operation that has *already* been performed.
     void push(std::string label,
               std::function<void()> undo,
-              std::function<void()> redo) {
+              std::function<void()> redo, std::size_t bytes = 256) {
         if (m_applying) return;
         m_redoStack.clear();
-        m_undoStack.push_back({std::move(label), std::move(undo),
-                               std::move(redo), m_nextSequence++});
+        // Transactional copies of history share immutable closures. Captured
+        // note arrays and project snapshots are never deep-copied with a stack.
+        struct Actions { std::function<void()> undo, redo; };
+        auto actions = std::make_shared<Actions>(Actions{std::move(undo), std::move(redo)});
+        m_undoStack.push_back({std::move(label),
+            [actions] { if (actions->undo) actions->undo(); },
+            [actions] { if (actions->redo) actions->redo(); }, m_nextSequence++, bytes});
         ++m_revision;
         trimToLimit();
     }
@@ -49,6 +57,12 @@ public:
     /// The cap. Past it the oldest entry is dropped for every new one, so the
     /// depth stops growing — which a caller that counts entries has to know.
     std::size_t limit() const noexcept { return m_limit; }
+    std::size_t estimatedBytes() const noexcept {
+        std::size_t total = 0;
+        for (const auto& e : m_undoStack) total += e.bytes;
+        for (const auto& e : m_redoStack) total += e.bytes;
+        return total;
+    }
 
     bool canUndo() const { return !m_undoStack.empty(); }
     bool canRedo() const { return !m_redoStack.empty(); }
@@ -184,6 +198,7 @@ public:
     }
 
     void clear() {
+        ++m_revision;
         m_undoStack.clear();
         m_redoStack.clear();
         m_activeGroups.clear();
@@ -219,6 +234,8 @@ private:
 
     void collapseRange(EntryIterator first, std::string label) {
         const std::uint64_t sequence = first->sequence;
+        std::size_t bytes = 0;
+        for (auto it = first; it != m_undoStack.end(); ++it) bytes += it->bytes;
         auto entries = std::make_shared<std::vector<Entry>>(
             std::make_move_iterator(first),
             std::make_move_iterator(m_undoStack.end()));
@@ -233,21 +250,29 @@ private:
                  for (const Entry& entry : *entries)
                      if (entry.redo) entry.redo();
              },
-             sequence});
+             sequence, bytes});
         // A collapse only ever describes work just done, so the redo branch is
         // already dead; clearing it keeps that explicit.
         m_redoStack.clear();
     }
 
     void trimToLimit() {
-        if (!m_activeGroups.empty() || m_undoStack.size() <= m_limit) return;
-        const std::size_t excess = m_undoStack.size() - m_limit;
+        if (!m_activeGroups.empty()) return;
+        std::size_t excess = m_undoStack.size() > m_limit ? m_undoStack.size() - m_limit : 0;
+        std::size_t bytes = estimatedBytes();
+        for (std::size_t i = 0; i < excess; ++i) bytes -= m_undoStack[i].bytes;
+        // Keep the most recent action even if that one snapshot alone exceeds
+        // the budget. Large projects retain useful Undo without keeping 100
+        // full-document copies alive.
+        while (bytes > m_byteBudget && excess + 1 < m_undoStack.size())
+            bytes -= m_undoStack[excess++].bytes;
         m_undoStack.erase(
             m_undoStack.begin(),
             m_undoStack.begin() + static_cast<std::ptrdiff_t>(excess));
     }
 
     size_t m_limit;
+    size_t m_byteBudget;
     bool m_applying = false;
     std::uint64_t m_nextSequence = 1;
     std::uint64_t m_nextGroupId = 1;

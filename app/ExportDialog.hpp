@@ -35,12 +35,9 @@ class SelectionModel;
 /// a single pass — which is why the mixdown and every stem it writes are
 /// guaranteed to be the same render.
 ///
-/// The render runs on the GUI thread. `EngineController` is not thread-safe
-/// against the main window's polling, and an offline pass parks live audio for
-/// its whole duration anyway, so there is no background render to be had
-/// without a second graph. The dialog therefore disables the main window, stops
-/// its refresh timer and pumps events from the progress callback, which is what
-/// keeps Cancel alive.
+/// Plugin control operations run on the GUI thread. The controller renders an
+/// isolated graph and throttles event-loop progress updates, keeping this
+/// modal dialog and its Cancel button responsive.
 class ExportDialog : public QDialog {
     Q_OBJECT
 public:

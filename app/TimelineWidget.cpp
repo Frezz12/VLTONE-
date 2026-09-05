@@ -481,7 +481,7 @@ void TimelineWidget::captureClipDragOrigins() {
             m_moveGuideStart = std::min(m_moveGuideStart, clip.startSeconds);
             m_moveGuideEnd = std::max(
                 m_moveGuideEnd,
-                clip.startSeconds + m_controller->clipPlaybackDuration(clip));
+                clip.startSeconds + m_controller->clipDisplayDuration(clip));
             if (lane >= 0) {
                 m_moveGuideLaneA = std::min(m_moveGuideLaneA, lane);
                 m_moveGuideLaneB = std::max(m_moveGuideLaneB, lane);
@@ -831,7 +831,7 @@ bool TimelineWidget::repeatSelection() {
                 // twice, once here and once with the Pattern parent.
                 if (!clip.patternClipId.empty()) continue;
                 const double end =
-                    clip.startSeconds + m_controller->clipPlaybackDuration(clip);
+                    clip.startSeconds + m_controller->clipDisplayDuration(clip);
                 if (end <= loopFrom || clip.startSeconds >= loopTo) continue;
                 candidates.push_back(
                     {track.id, clip.id, clip.startSeconds, end});
@@ -940,7 +940,7 @@ bool TimelineWidget::repeatSelection() {
             if (clip.id != ref.clipId.toStdString()) continue;
             if (selectedPatternClips.contains(clip.patternClipId)) break;
             const double end =
-                clip.startSeconds + m_controller->clipPlaybackDuration(clip);
+                clip.startSeconds + m_controller->clipDisplayDuration(clip);
             sources.push_back({ref.trackId, ref.clipId, clip.startSeconds, end});
             first = std::min(first, clip.startSeconds);
             last = std::max(last, end);
@@ -1015,7 +1015,7 @@ double TimelineWidget::selectedClipEndSeconds() const {
         for (const auto& clip : track.clips) {
             if (QString::fromStdString(clip.id) == m_selectedClipId) {
                 return clip.startSeconds +
-                       m_controller->clipPlaybackDuration(clip);
+                       m_controller->clipDisplayDuration(clip);
             }
         }
     }
@@ -1054,7 +1054,7 @@ TimelineWidget::regionClipCandidates(double r0, double r1) const {
         const auto& track = project.tracks[rows[size_t(lane)].index];
         for (const auto& clip : track.clips) {
             const double end =
-                clip.startSeconds + m_controller->clipPlaybackDuration(clip);
+                clip.startSeconds + m_controller->clipDisplayDuration(clip);
             if (end <= r0 || clip.startSeconds >= r1) continue;
             candidates.push_back(
                 {track.id, clip.id, clip.startSeconds, end});
@@ -1630,7 +1630,7 @@ bool TimelineWidget::selectionSpanX(int& left, int& right) const {
                 lo = std::min(lo, secondsToX(clip.startSeconds));
                 hi = std::max(
                     hi, secondsToX(clip.startSeconds +
-                                   m_controller->clipPlaybackDuration(clip)));
+                                   m_controller->clipDisplayDuration(clip)));
             }
             break;
         }
@@ -1669,7 +1669,7 @@ QRectF TimelineWidget::clipRect(int lane, const daw::ClipModel& clip) const {
     const int h = laneBodyHeightAt(lane);
     const int x = secondsToX(clip.startSeconds);
     const int w = std::max(
-        2, int(m_controller->clipPlaybackDuration(clip) * m_pixelsPerSecond));
+        2, int(m_controller->clipDisplayDuration(clip) * m_pixelsPerSecond));
     return QRectF(x, y + kClipVerticalInset, w,
                   std::max(2, h - 2 * kClipVerticalInset));
 }
@@ -1681,7 +1681,7 @@ QRectF TimelineWidget::compRect(int lane, const daw::ClipModel& clip) const {
     if (bottom <= top) return {};
     const int x = secondsToX(clip.startSeconds);
     const int w = std::max(
-        2, int(m_controller->clipPlaybackDuration(clip) * m_pixelsPerSecond));
+        2, int(m_controller->clipDisplayDuration(clip) * m_pixelsPerSecond));
     return QRectF(x, top, w, bottom - top);
 }
 
@@ -2055,7 +2055,7 @@ bool TimelineWidget::hitTestClip(const QPoint& pos, ClipHit& out) const {
     if (pos.y() > laneTop(lane) + laneBodyHeightAt(lane)) return false;
     for (const auto& clip : track.clips) {
         const int x = secondsToX(clip.startSeconds);
-        const double visibleDuration = m_controller->clipPlaybackDuration(clip);
+        const double visibleDuration = m_controller->clipDisplayDuration(clip);
         const int w = std::max(2, int(visibleDuration * m_pixelsPerSecond));
         if (pos.x() >= x && pos.x() <= x + w) {
             out.trackId = QString::fromStdString(track.id);
@@ -2675,7 +2675,7 @@ void TimelineWidget::drawLanes(QPainter& p) {
         const auto bodyRect = [&](const daw::ClipModel& clip) {
             const int x = secondsToX(clip.startSeconds);
             const int w = std::max(
-                2, int(m_controller->clipPlaybackDuration(clip) *
+                2, int(m_controller->clipDisplayDuration(clip) *
                        m_pixelsPerSecond));
             return QRectF(x, laneY + kClipVerticalInset, w,
                           std::max(2, bodyH - 2 * kClipVerticalInset));
@@ -2687,7 +2687,7 @@ void TimelineWidget::drawLanes(QPainter& p) {
             if (bottom <= top) return QRectF{};
             const int x = secondsToX(clip.startSeconds);
             const int w = std::max(
-                2, int(m_controller->clipPlaybackDuration(clip) *
+                2, int(m_controller->clipDisplayDuration(clip) *
                        m_pixelsPerSecond));
             return QRectF(x, top, w, bottom - top);
         };
@@ -2834,7 +2834,7 @@ void TimelineWidget::drawLanes(QPainter& p) {
             if (channels <= 0 && clip.kind == daw::ClipKind::Audio) {
                 if (const auto* pk =
                         m_controller->waveforms().cached(
-                            m_controller->clipPlaybackFilePath(clip))) {
+                            m_controller->clipDisplayFilePath(clip))) {
                     channels = pk->channels;
                 }
             }
@@ -4123,7 +4123,7 @@ void TimelineWidget::drawGainHandle(QPainter& p, const daw::ClipModel& clip,
 
 void TimelineWidget::drawWaveform(QPainter& p, const daw::ClipModel& clip,
                                   const QRectF& area) {
-    const std::string& path = m_controller->clipPlaybackFilePath(clip);
+    const std::string& path = m_controller->clipDisplayFilePath(clip);
     const bool processed = path != clip.filePath;
     drawPeaks(p, m_controller->waveforms().cached(path),
               processed ? 0.0 : clip.offsetSeconds, area,

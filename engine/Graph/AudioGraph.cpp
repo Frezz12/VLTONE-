@@ -91,7 +91,10 @@ Status AudioGraph::connect(NodeId producer, NodeId consumer, InputRole role) {
     if (producer == consumer) return fail(EngineError::CycleDetected);
 
     auto& inputs = m_nodes[consumer].inputs;
-    const auto existing = std::find_if(
+    const auto& outputs = m_nodes[producer].outputs;
+    const bool newPair = outputs.size() < inputs.size() &&
+        std::find(outputs.begin(), outputs.end(), consumer) == outputs.end();
+    const auto existing = newPair ? inputs.end() : std::find_if(
         inputs.begin(), inputs.end(), [producer, role](const Connection& input) {
             return input.producer == producer && input.role == role;
         });
@@ -292,30 +295,21 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
 
     // ── Edges, with a delay line wherever a path arrives early ──
     BufferAllocator allocator;
-    std::vector<std::uint32_t> remainingConsumers(order.size(), 0);
-    for (std::uint32_t i = 0; i < order.size(); ++i) {
-        remainingConsumers[i] = std::uint32_t(m_nodes[order[i]].outputs.size());
-    }
 
-    // Reachability, one bit per node: ancestors[i] holds every node that is
-    // guaranteed to have finished before i starts. It is what makes buffer
-    // recycling safe under parallel execution.
-    const std::size_t words = (order.size() + 63) / 64;
-    std::vector<std::uint64_t> ancestors(words * order.size(), 0);
-    auto ancestorsOf = [&](std::uint32_t index) {
-        return std::span<std::uint64_t>(ancestors.data() + std::size_t(index) * words,
-                                        words);
+    // Transfer reusable slots along one chosen dependency edge. A token is
+    // owned by exactly one future node, and every reader of its old contents
+    // has finished before that node starts. This replaces the V-by-V ancestor
+    // matrix with O(V + E) bookkeeping. Fan-out outputs are conservatively kept
+    // for the block; ordinary channel chains still alternate two buffers.
+    struct FreeList { std::uint32_t head = kInvalidNode, tail = kInvalidNode; };
+    std::vector<FreeList> available(order.size());
+    std::vector<std::uint32_t> nextFree;
+    auto append = [&](FreeList& list, std::uint32_t buffer) {
+        if (list.tail != kInvalidNode) nextFree[list.tail] = buffer;
+        else list.head = buffer;
+        list.tail = buffer;
+        nextFree[buffer] = kInvalidNode;
     };
-    for (std::uint32_t i = 0; i < order.size(); ++i) {
-        auto self = ancestorsOf(i);
-        for (const Connection& input : m_nodes[order[i]].inputs) {
-            const NodeId producer = input.producer;
-            const std::uint32_t p = denseIndex[producer];
-            auto parent = ancestorsOf(p);
-            for (std::size_t w = 0; w < words; ++w) self[w] |= parent[w];
-            self[p / 64] |= std::uint64_t(1) << (p % 64);
-        }
-    }
 
     std::uint32_t midiBufferCount = 0;
     for (std::uint32_t i = 0; i < order.size(); ++i) {
@@ -386,24 +380,31 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
         }
 
         // The node writes into a buffer of its own …
-        entry.outputBuffer = std::uint32_t(allocator.acquire(ancestorsOf(i)));
+        auto& free = available[i];
+        if (free.head != kInvalidNode) {
+            entry.outputBuffer = free.head;
+            free.head = nextFree[free.head];
+            if (free.head == kInvalidNode) free.tail = kInvalidNode;
+        } else {
+            entry.outputBuffer = std::uint32_t(allocator.acquireExclusive());
+        }
+        nextFree.resize(allocator.bufferCount(), kInvalidNode);
 
-        // … and every input buffer whose last consumer this was goes back on
-        // the free list, tagged with the nodes that read it, so buffer count
-        // tracks the graph's width rather than its size.
+        // A sole reader makes this input reusable only AFTER this node.
         for (const Connection& input : slot.inputs) {
-            const NodeId producer = input.producer;
-            const std::uint32_t producerIndex = denseIndex[producer];
-            if (--remainingConsumers[producerIndex] == 0 &&
-                (m_sink == kInvalidNode || producerIndex != denseIndex[m_sink])) {
-                std::vector<std::uint32_t> readers;
-                readers.reserve(m_nodes[producer].outputs.size());
-                for (NodeId consumer : m_nodes[producer].outputs) {
-                    readers.push_back(denseIndex[consumer]);
-                }
-                allocator.release(compiled->nodes[producerIndex].outputBuffer,
-                                  std::move(readers));
-            }
+            const auto producerIndex = denseIndex[input.producer];
+            if (m_nodes[input.producer].outputs.size() == 1 &&
+                input.producer != m_sink)
+                append(free, compiled->nodes[producerIndex].outputBuffer);
+        }
+        if (free.head != kInvalidNode && !slot.outputs.empty()) {
+            const auto successor = *std::min_element(slot.outputs.begin(), slot.outputs.end(),
+                [&](NodeId a, NodeId b) { return denseIndex[a] < denseIndex[b]; });
+            auto& destination = available[denseIndex[successor]];
+            if (destination.tail != kInvalidNode) nextFree[destination.tail] = free.head;
+            else destination.head = free.head;
+            destination.tail = free.tail;
+            free = {};
         }
     }
 

@@ -61,6 +61,13 @@ BounceInPlaceDialog::BounceInPlaceDialog(
     m_end->setValue(m_baseRequest.endSeconds);
     rangeForm->addRow(tr("Start"), m_start);
     rangeForm->addRow(tr("End"), m_end);
+    m_preRoll = new QDoubleSpinBox(rangeBox);
+    m_preRoll->setRange(-1.0, 86400.0);
+    m_preRoll->setDecimals(1);
+    m_preRoll->setSuffix(tr(" s"));
+    m_preRoll->setSpecialValueText(tr("From project start"));
+    m_preRoll->setToolTip(tr("Audio processed before the selection to restore effect tails. A shorter warm-up renders faster but may change long reverb or delay tails."));
+    rangeForm->addRow(tr("Effect warm-up"), m_preRoll);
     root->addWidget(rangeBox);
 
     auto* fxBox = new QGroupBox(tr("Processing to print"), this);
@@ -112,6 +119,7 @@ BounceInPlaceDialog::BounceInPlaceDialog(
 
     QSettings settings;
     settings.beginGroup(QLatin1String(kSettings));
+    m_preRoll->setValue(settings.value("preRoll", -1.0).toDouble());
     m_clipFx->setChecked(settings.value("clipFx", true).toBool());
     m_trackFx->setChecked(settings.value("trackFx", true).toBool());
     m_sends->setChecked(settings.value("sends", false).toBool());
@@ -160,6 +168,7 @@ void BounceInPlaceDialog::syncControls() {
 daw::EngineController::BounceRequest
 BounceInPlaceDialog::requestFromControls() const {
     auto request = m_baseRequest;
+    request.preRollSeconds = m_preRoll->value();
     if (m_ending->currentIndex() == 2) {
         request.startSeconds = m_start->value();
         request.endSeconds = m_end->value();
@@ -246,6 +255,7 @@ void BounceInPlaceDialog::startRender() {
     QSettings settings;
     settings.beginGroup(QLatin1String(kSettings));
     settings.setValue("clipFx", m_clipFx->isChecked());
+    settings.setValue("preRoll", m_preRoll->value());
     settings.setValue("trackFx", m_trackFx->isChecked());
     settings.setValue("sends", m_sends->isChecked());
     settings.setValue("summing", m_summing->isChecked());
@@ -259,6 +269,7 @@ void BounceInPlaceDialog::startRender() {
     m_ending->setEnabled(false);
     m_start->setEnabled(false);
     m_end->setEnabled(false);
+    m_preRoll->setEnabled(false);
     for (QCheckBox* box : {m_clipFx, m_trackFx, m_sends, m_summing,
                            m_masterFx})
         box->setEnabled(false);
@@ -271,14 +282,23 @@ void BounceInPlaceDialog::startRender() {
         [this](const daw::rendering::Progress& progress) {
             m_progress->setValue(
                 std::clamp(int(progress.fraction * 1000.0), 0, 1000));
+            if (progress.stage == daw::rendering::Progress::Stage::Preparing)
+                m_status->setText(tr("Preparing audio and plugins…"));
+            else if (progress.stage == daw::rendering::Progress::Stage::PreRoll)
+                m_status->setText(tr("Warming up effects: %1 of %2 seconds")
+                    .arg(progress.renderedSeconds, 0, 'f', 1)
+                    .arg(progress.totalSeconds, 0, 'f', 1));
+            else {
             m_status->setText(tr("Rendering %1 of %2 seconds")
                                   .arg(progress.renderedSeconds, 0, 'f', 1)
                                   .arg(progress.totalSeconds, 0, 'f', 1));
+            }
             QApplication::processEvents();
             return !m_cancelRequested;
         },
         report);
     m_rendering = false;
+    m_preRoll->setEnabled(true);
     if (report.cancelled || m_cancelRequested) {
         m_status->setText(tr("Cancelled — the project was not changed"));
         m_ending->setEnabled(true);

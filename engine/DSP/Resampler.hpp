@@ -113,14 +113,10 @@ inline std::size_t resampledFrameCount(std::size_t frames, double sourceRate,
 /// Edges are handled by clamping to the first and last frame, the same as the
 /// interpolator this replaces: a clip does not know what came before it, and
 /// clamping is quieter than the ringing zero-padding would produce.
-inline std::vector<float> resampleInterleaved(const std::vector<float>& input,
-                                              std::size_t channels,
-                                              std::size_t inputFrames,
-                                              double sourceRate,
-                                              double targetRate) {
-    if (channels == 0 || inputFrames == 0) return input;
-    if (sourceRate <= 0.0 || targetRate <= 0.0) return input;
-
+template<class Read, class Write, class Continue>
+inline bool resampleFrames(std::size_t channels, std::size_t inputFrames,
+                           double sourceRate, double targetRate,
+                           Read read, Write write, Continue keepGoing) {
     const std::size_t outputFrames =
         resampledFrameCount(inputFrames, sourceRate, targetRate);
 
@@ -174,11 +170,10 @@ inline std::vector<float> resampleInterleaved(const std::vector<float>& input,
         bank.resize(width);
     }
 
-    std::vector<float> output(outputFrames * channels, 0.0f);
-    std::vector<double> accumulator(channels);
     const auto last = std::ptrdiff_t(inputFrames) - 1;
 
     for (std::size_t frame = 0; frame < outputFrames; ++frame) {
+        if (frame % 4096 == 0 && !keepGoing()) return false;
         std::ptrdiff_t base = 0;
         const float* weights = bank.data();
         if (polyphase) {
@@ -192,61 +187,38 @@ inline std::vector<float> resampleInterleaved(const std::vector<float>& input,
         }
 
         const std::ptrdiff_t first = base - taps + 1;
-        float* destination = &output[frame * channels];
-
-        // The whole window is inside the buffer for all but the first and last
-        // few dozen frames, so that case gets a straight loop with no clamping.
-        // Mono and stereo are spelled out because the accumulator has to live in
-        // registers: left as an indexed vector the compiler cannot prove it does
-        // not alias the input, and reloads it on every tap — which measured as
-        // most of the running time.
-        if (first >= 0 && first + std::ptrdiff_t(width) <= last + 1) {
-            const float* source = &input[std::size_t(first) * channels];
-            if (channels == 1) {
-                double sum = 0.0;
-                for (std::size_t tap = 0; tap < width; ++tap) {
-                    sum += double(source[tap]) * weights[tap];
-                }
-                destination[0] = float(sum);
-                continue;
-            }
-            if (channels == 2) {
-                double left = 0.0;
-                double right = 0.0;
-                for (std::size_t tap = 0; tap < width; ++tap) {
-                    const float weight = weights[tap];
-                    left += double(source[tap * 2]) * weight;
-                    right += double(source[tap * 2 + 1]) * weight;
-                }
-                destination[0] = float(left);
-                destination[1] = float(right);
-                continue;
-            }
-            std::fill(accumulator.begin(), accumulator.end(), 0.0);
-            for (std::size_t tap = 0; tap < width; ++tap) {
-                const float weight = weights[tap];
-                for (std::size_t channel = 0; channel < channels; ++channel) {
-                    accumulator[channel] += double(source[channel]) * weight;
-                }
-                source += channels;
-            }
-        } else {
-            std::fill(accumulator.begin(), accumulator.end(), 0.0);
-            for (std::size_t tap = 0; tap < width; ++tap) {
-                const float weight = weights[tap];
-                const std::ptrdiff_t index = std::clamp<std::ptrdiff_t>(
-                    first + std::ptrdiff_t(tap), 0, last);
-                const float* source = &input[std::size_t(index) * channels];
-                for (std::size_t channel = 0; channel < channels; ++channel) {
-                    accumulator[channel] += double(source[channel]) * weight;
-                }
-            }
-        }
-
         for (std::size_t channel = 0; channel < channels; ++channel) {
-            destination[channel] = float(accumulator[channel]);
+            double sum = 0.0;
+            if (first >= 0 && first + std::ptrdiff_t(width) <= last + 1) {
+                for (std::size_t tap = 0; tap < width; ++tap)
+                    sum += double(read(std::size_t(first) + tap, channel)) * weights[tap];
+            } else {
+                for (std::size_t tap = 0; tap < width; ++tap) {
+                    const auto index = std::clamp<std::ptrdiff_t>(
+                        first + std::ptrdiff_t(tap), 0, last);
+                    sum += double(read(std::size_t(index), channel)) * weights[tap];
+                }
+            }
+            write(frame, channel, float(sum));
         }
     }
+    return true;
+}
+
+inline std::vector<float> resampleInterleaved(const std::vector<float>& input,
+                                              std::size_t channels,
+                                              std::size_t inputFrames,
+                                              double sourceRate,
+                                              double targetRate) {
+    if (channels == 0 || inputFrames == 0 || sourceRate <= 0 || targetRate <= 0)
+        return input;
+    std::vector<float> output(
+        resampledFrameCount(inputFrames, sourceRate, targetRate) * channels);
+    resampleFrames(channels, inputFrames, sourceRate, targetRate,
+        [&](std::size_t frame, std::size_t ch) { return input[frame * channels + ch]; },
+        [&](std::size_t frame, std::size_t ch, float value) {
+            output[frame * channels + ch] = value;
+        }, [] { return true; });
     return output;
 }
 

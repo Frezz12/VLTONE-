@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <functional>
 
 /// The sampler's precomputed effects: baked into the sample once, on a
 /// background worker, instead of costing anything per voice or GUI tick.
@@ -57,10 +58,11 @@ struct PrecomputeSettings {
 struct PrecomputeCancellation {
     const std::atomic<std::uint64_t>* generation = nullptr;
     std::uint64_t expected = 0;
+    const std::function<bool()>* keepGoing = nullptr;
 
-    bool requested() const noexcept {
-        return generation &&
-               generation->load(std::memory_order_acquire) != expected;
+    bool requested() const {
+        return (generation && generation->load(std::memory_order_acquire) != expected) ||
+               (keepGoing && *keepGoing && !(*keepGoing)());
     }
 };
 

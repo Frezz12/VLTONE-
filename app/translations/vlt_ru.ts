@@ -1590,6 +1590,26 @@ Will be skipped: %3</source>
         <source>Bounce complete</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Preparing audio and plugins…</source>
+        <translation>Подготовка аудио и плагинов…</translation>
+    </message>
+    <message>
+        <source>Warming up effects: %1 of %2 seconds</source>
+        <translation>Прогрев эффектов: %1 из %2 секунд</translation>
+    </message>
+    <message>
+        <source>From project start</source>
+        <translation>С начала проекта</translation>
+    </message>
+    <message>
+        <source>Effect warm-up</source>
+        <translation>Прогрев эффектов</translation>
+    </message>
+    <message>
+        <source>Audio processed before the selection to restore effect tails. A shorter warm-up renders faster but may change long reverb or delay tails.</source>
+        <translation>Обработка аудио перед выделением для восстановления хвостов эффектов. Короткий прогрев ускоряет рендер, но может изменить длинные хвосты реверберации и задержки.</translation>
+    </message>
 </context>
 <context>
     <name>BrowserSettingsPage</name>
@@ -3679,6 +3699,14 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message>
         <source>Untitled</source>
         <translation>Без названия</translation>
+    </message>
+    <message>
+        <source>Preparing audio and plugins…</source>
+        <translation>Подготовка аудио и плагинов…</translation>
+    </message>
+    <message>
+        <source>Warming up effects: %1 of %2 seconds</source>
+        <translation>Прогрев эффектов: %1 из %2 секунд</translation>
     </message>
 </context>
 <context>
@@ -7583,6 +7611,14 @@ Clip: %2</source>
     <message>
         <source>Offline render complete</source>
         <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Preparing audio and plugins…</source>
+        <translation>Подготовка аудио и плагинов…</translation>
+    </message>
+    <message>
+        <source>Warming up effects: %1 of %2 seconds</source>
+        <translation>Прогрев эффектов: %1 из %2 секунд</translation>
     </message>
 </context>
 <context>

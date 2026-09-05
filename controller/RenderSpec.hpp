@@ -96,6 +96,8 @@ struct Spec {
 
 /// Where a render has got to, for a progress bar.
 struct Progress {
+    enum class Stage { Preparing, PreRoll, Rendering };
+    Stage stage = Stage::Rendering;
     double fraction = 0.0;
     /// The range being rendered, in seconds — for a "3:12 of 4:05" readout.
     double renderedSeconds = 0.0;

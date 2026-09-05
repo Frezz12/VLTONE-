@@ -1036,6 +1036,7 @@ int main(int argc, char** argv) {
         const bool shootSampler = shotSampler != nullptr;
         if (shootSampler) window.openDemoSampler(QString::fromUtf8(shotSampler));
         // DAW_SHOT_CLOUD opens the cloud project browser.
+#ifdef DAW_ENABLE_COLLABORATION
         const bool shotCloud = std::getenv("DAW_SHOT_CLOUD") != nullptr;
         if (shotCloud) {
             QTimer::singleShot(0, &window,
@@ -1049,6 +1050,10 @@ int main(int argc, char** argv) {
                 window.openJoinSessionDialog(QString::fromUtf8(shotJoin));
             });
         }
+#else
+        const bool shotCloud = false;
+        const char* shotJoin = nullptr;
+#endif
         // DAW_SHOT_GRAPHIT opens the compact built-in one-knob saturator.
         const bool shootGraphit = std::getenv("DAW_SHOT_GRAPHIT") != nullptr;
         if (shootGraphit) window.openDemoGraphit();

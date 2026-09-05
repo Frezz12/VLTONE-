@@ -48,6 +48,11 @@ public:
     }
 
     void load();
+    void copyCatalogFrom(const PluginManager& source) {
+        if (&source == this) return;
+        const std::scoped_lock lock(m_mutex, source.m_mutex);
+        m_cache = source.m_cache;
+    }
     bool save() const;
 
     // ── Search paths ──

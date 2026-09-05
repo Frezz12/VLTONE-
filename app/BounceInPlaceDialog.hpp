@@ -36,6 +36,7 @@ private:
     QComboBox* m_ending = nullptr;
     QDoubleSpinBox* m_start = nullptr;
     QDoubleSpinBox* m_end = nullptr;
+    QDoubleSpinBox* m_preRoll = nullptr;
     QCheckBox* m_clipFx = nullptr;
     QCheckBox* m_trackFx = nullptr;
     QCheckBox* m_sends = nullptr;

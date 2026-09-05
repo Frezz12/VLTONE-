@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Common/Types.hpp"
+#include "Memory/SampleStorage.hpp"
 
 #include <memory>
 #include <vector>
@@ -16,7 +17,7 @@ namespace daw::engine {
 class SampleBuffer {
 public:
     SampleBuffer(ChannelCount channels, FrameCount frames, SampleRate rate)
-        : m_storage(std::size_t(channels) * frames, 0.0f),
+        : m_storage(std::size_t(channels) * frames),
           m_channels(channels), m_frames(frames), m_sampleRate(rate) {}
 
     /// Build from interleaved decoder output.
@@ -36,6 +37,7 @@ public:
     ChannelCount channels() const noexcept { return m_channels; }
     FrameCount frames() const noexcept { return m_frames; }
     SampleRate sampleRate() const noexcept { return m_sampleRate; }
+    bool fileBacked() const noexcept { return m_storage.fileBacked(); }
 
     const float* channel(ChannelCount index) const noexcept {
         // Mono sources feed every output channel rather than only the left.
@@ -48,7 +50,7 @@ public:
     }
 
 private:
-    std::vector<float> m_storage;
+    SampleStorage m_storage;
     ChannelCount m_channels;
     FrameCount m_frames;
     SampleRate m_sampleRate;

@@ -27,6 +27,19 @@ find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
 find_package(RtMidi CONFIG REQUIRED)
 qt_standard_project_setup()   # enables AUTOMOC / AUTOUIC / AUTORCC
 
+if(DAW_BUILD_TESTS)
+    qt_add_executable(render_ui_test
+        ../tests/render_ui_test.cpp
+        PreviewLoader.cpp PreviewLoader.hpp
+        ExportDialog.cpp ExportDialog.hpp ExportPrefs.cpp
+        SelectionModel.cpp SelectionModel.hpp Theme.cpp)
+    target_include_directories(render_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(render_ui_test PRIVATE daw_controller Qt6::Widgets)
+    add_test(NAME render_ui_test COMMAND render_ui_test)
+    set_tests_properties(render_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+endif()
+
 # Headers are listed too so AUTOMOC always sees the Q_OBJECT classes that live
 # in them, even for files added after the last configure.
 file(GLOB DAW_APP_SOURCES CONFIGURE_DEPENDS

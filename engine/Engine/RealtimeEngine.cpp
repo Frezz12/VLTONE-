@@ -8,7 +8,9 @@
 
 namespace daw::engine {
 
-RealtimeEngine::RenderGate::RenderGate(RealtimeEngine& engine) : m_engine(engine) {
+RealtimeEngine::RenderGate::RenderGate(RealtimeEngine& engine)
+    : m_engine(engine), m_lock(engine.m_controlMutex) {
+    if (m_engine.m_gateDepth++ != 0) return;
     m_engine.m_gateRequested.store(true);
     // Spin rather than sleep: this closes in at most one block period, and the
     // control thread has nothing useful to do with the interval anyway.
@@ -16,7 +18,7 @@ RealtimeEngine::RenderGate::RenderGate(RealtimeEngine& engine) : m_engine(engine
 }
 
 RealtimeEngine::RenderGate::~RenderGate() {
-    m_engine.m_gateRequested.store(false);
+    if (--m_engine.m_gateDepth == 0) m_engine.m_gateRequested.store(false);
 }
 
 RealtimeEngine::RealtimeEngine(unsigned threadCount) : m_processor(threadCount) {}
@@ -33,6 +35,8 @@ Status RealtimeEngine::prepare(SampleRate sampleRate, FrameCount maxBlockSize,
     // the scratch `process()` reads. Park the renderer first — the device
     // callback may well be mid-block.
     const RenderGate gate(*this);
+
+    if (m_offlineActive) return fail(EngineError::NotCompiled);
 
     m_prepareInfo.sampleRate = sampleRate;
     m_prepareInfo.maxBlockSize = maxBlockSize;
@@ -111,6 +115,8 @@ void RealtimeEngine::removeMasterSpectrumConsumer() noexcept {
 }
 
 Status RealtimeEngine::commitGraph(bool reconfigureNodes) {
+    const std::lock_guard controlLock(m_controlMutex);
+    if (m_offlineActive) return fail(EngineError::NotCompiled);
     // Invalidated nodes may be deactivated and have their scratch reallocated
     // during compile. In that case the complete compile must be inside the
     // gate, not merely the final atomic publication.
@@ -265,6 +271,7 @@ Status RealtimeEngine::renderOffline(
     SamplePos startSample, SamplePos endSample, FrameCount blockSize,
     const std::function<bool(const AudioBlock&, FrameCount)>& sink,
     OfflineOptions options) {
+    const RenderGate renderGate(*this);
     if (endSample <= startSample) return fail(EngineError::InvalidArgument);
     const FrameCount block = std::min(blockSize, m_prepareInfo.maxBlockSize);
     if (block == 0) return fail(EngineError::BlockTooLarge);
@@ -273,8 +280,12 @@ Status RealtimeEngine::renderOffline(
     // mutable DSP/plugin state. Park live rendering for the complete pass and
     // serialize analysis/export callers; sharing either concurrently corrupts
     // dependency counters, delay lines and plugin state.
-    const std::lock_guard offlineLock(m_offlineMutex);
-    const RenderGate renderGate(*this);
+    if (m_offlineActive) return fail(EngineError::NotCompiled);
+    struct OfflineScope {
+        bool& active;
+        explicit OfflineScope(bool& flag) : active(flag) { active = true; }
+        ~OfflineScope() { active = false; }
+    } offlineScope(m_offlineActive);
 
     const auto snapshot = m_processor.graph();
     if (!snapshot) return fail(EngineError::NotCompiled);
@@ -284,12 +295,6 @@ Status RealtimeEngine::renderOffline(
     // the same prepare data apart from the mode bit.
     PrepareInfo offlineInfo = m_prepareInfo;
     offlineInfo.offline = true;
-    for (const auto& entry : snapshot->nodes) {
-        if (!entry.node->isPreparedFor(offlineInfo)) {
-            entry.node->prepare(offlineInfo);
-            entry.node->markPrepared(offlineInfo);
-        }
-    }
 
     const auto resetDelayState = [&] {
         for (const auto& delay : snapshot->delays) delay->reset();
@@ -299,8 +304,6 @@ Status RealtimeEngine::renderOffline(
     // A render is a fresh pass: reset every node so ramps start at their target
     // and filters start silent. Audio and MIDI compensation queues are one piece
     // of that state; retaining either would leak the live pass into the export.
-    for (const auto& entry : snapshot->nodes) entry.node->reset();
-    resetDelayState();
 
     AudioBlock output(m_offlinePointers.data(), m_prepareInfo.channels, block);
     const auto restoreRealtime = [&] {
@@ -320,6 +323,16 @@ Status RealtimeEngine::renderOffline(
     // that changes is that nothing has to finish inside a block period, so the
     // pool is free to use every core.
     try {
+        for (const auto& entry : snapshot->nodes) {
+            if (!entry.node->isPreparedFor(offlineInfo)) {
+                entry.node->invalidatePrepare();
+                entry.node->prepare(offlineInfo);
+                entry.node->markPrepared(offlineInfo);
+            }
+        }
+
+        for (const auto& entry : snapshot->nodes) entry.node->reset();
+        resetDelayState();
         for (SamplePos position = startSample; position < endSample; position += block) {
             const FrameCount frames =
                 FrameCount(std::min<SamplePos>(block, endSample - position));
@@ -336,10 +349,10 @@ Status RealtimeEngine::renderOffline(
             if (!sink(output, frames)) break;
         }
     } catch (...) {
-        restoreRealtime();
+        try { restoreRealtime(); } catch (...) { m_processor.setGraph({}); }
         throw;
     }
-    restoreRealtime();
+    try { restoreRealtime(); } catch (...) { m_processor.setGraph({}); throw; }
     return {};
 }
 

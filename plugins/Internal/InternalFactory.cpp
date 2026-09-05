@@ -5,6 +5,7 @@
 #include "Internal/EqualizerInstance.hpp"
 #include "Internal/SampleDecoder.hpp"
 #include "Internal/SamplerInstance.hpp"
+#include <mutex>
 
 namespace daw::plugins {
 namespace {
@@ -15,15 +16,26 @@ sampler::SampleDecodeFn& decoderSlot() {
     static sampler::SampleDecodeFn decoder;
     return decoder;
 }
+std::mutex& decoderMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
 
 } // namespace
 
 namespace sampler {
 
-void setSampleDecoder(SampleDecodeFn decoder) { decoderSlot() = std::move(decoder); }
+void setSampleDecoder(SampleDecodeFn decoder) {
+    const std::lock_guard lock(decoderMutex());
+    decoderSlot() = std::move(decoder);
+}
 
 std::shared_ptr<const engine::SampleBuffer> decodeSample(const std::string& path) {
-    const SampleDecodeFn& decoder = decoderSlot();
+    SampleDecodeFn decoder;
+    {
+        const std::lock_guard lock(decoderMutex());
+        decoder = decoderSlot();
+    }
     if (!decoder || path.empty()) return nullptr;
     return decoder(path);
 }

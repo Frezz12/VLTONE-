@@ -38,5 +38,6 @@ signals:
     void failed(const QString& path, const QString& reason);
 
 private:
-    std::shared_ptr<std::atomic<quint64>> m_generation;
+    struct State;
+    std::shared_ptr<State> m_state;
 };

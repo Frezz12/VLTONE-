@@ -865,27 +865,30 @@ void ExportDialog::startRender() {
     m_status->setText(tr("Rendering…"));
     m_status->show();
 
-    // The controller is single-threaded against the main window's polling, so
-    // the render runs here and the rest of the application is shut out for its
-    // duration. Only this dialog stays live, which is what makes Cancel work
-    // without letting anything else touch the engine mid-pass.
-    QWidget* main = parentWidget() ? parentWidget()->window() : nullptr;
-    if (main) main->setEnabled(false);
+    // Modality blocks edits in the parent. Disabling the parent also disables
+    // its child dialog, including Cancel.
 
     daw::rendering::Report report;
     const auto result = m_controller.renderProject(
         spec,
         [this](const rd::Progress& progress) {
             m_progress->setValue(int(progress.fraction * 1000));
+            if (progress.stage == daw::rendering::Progress::Stage::Preparing)
+                m_status->setText(tr("Preparing audio and plugins…"));
+            else if (progress.stage == daw::rendering::Progress::Stage::PreRoll)
+                m_status->setText(tr("Warming up effects: %1 of %2 seconds")
+                    .arg(progress.renderedSeconds, 0, 'f', 1)
+                    .arg(progress.totalSeconds, 0, 'f', 1));
+            else {
             m_status->setText(tr("Rendering %1 of %2")
                                   .arg(formatTime(progress.renderedSeconds))
                                   .arg(formatTime(progress.totalSeconds)));
+            }
             QCoreApplication::processEvents();
             return !m_cancelRequested;
         },
         report);
 
-    if (main) main->setEnabled(true);
     m_rendering = false;
     m_progress->hide();
     m_renderButton->setEnabled(true);

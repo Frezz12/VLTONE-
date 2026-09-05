@@ -7310,6 +7310,7 @@ bool MainWindow::flushRecoveryForTest() {
 }
 
 void MainWindow::sampleForRecovery() {
+    if (m_controller.offlineRenderInProgress()) return;
     if (!m_journal.running()) return;
     // Opaque plugin saveState calls must remain on the plugin/UI thread, and a
     // vendor is free to take an unbounded amount of time in one. Never put that
@@ -15297,6 +15298,7 @@ void MainWindow::syncPlayheadTimer() {
 }
 
 void MainWindow::refreshUi() {
+    if (m_controller.offlineRenderInProgress()) return;
     publishSessionTransport(false);
     updateLocalProcessingActions();
     const bool realtimeUi = m_controller.isPlaying() || m_controller.isRecording() ||

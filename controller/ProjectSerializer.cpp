@@ -785,7 +785,12 @@ audio::Result documentFromJson(ProjectModel& out, const json& root,
         return audio::Result::fail(audio::EngineError::UnsupportedFormat,
                                    "project document is not a JSON object");
     }
-    const std::string format = root.value("format", "");
+    const auto formatValue = root.find("format");
+    if (formatValue == root.end() || !formatValue->is_string()) {
+        return audio::Result::fail(audio::EngineError::UnsupportedFormat,
+                                   "project format must be a string");
+    }
+    const std::string format = formatValue->get<std::string>();
     if (format != "vlt-project" && format != "daw-project") {
         return audio::Result::fail(audio::EngineError::UnsupportedFormat,
                                    "not a VLT project");
@@ -1120,8 +1125,10 @@ audio::Result ProjectSerializer::save(const ProjectModel& project,
     const audio::Result saved = saveDocument(
         persisted, platform::pathToUtf8(manifest), MediaPaths::Basenames);
     if (saved && manifest.filename() != fs::path(kProjectFile)) {
+        const fs::path legacy = platform::pathFromUtf8(packageDir) / kProjectFile;
         ec.clear();
-        fs::remove(platform::pathFromUtf8(packageDir) / kProjectFile, ec);
+        const bool sameFile = fs::equivalent(manifest, legacy, ec);
+        if (!ec && !sameFile) fs::remove(legacy, ec);
     }
     return saved;
 }

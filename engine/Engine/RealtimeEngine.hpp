@@ -58,6 +58,7 @@ public:
 
     private:
         RealtimeEngine& m_engine;
+        std::unique_lock<std::recursive_mutex> m_lock;
     };
 
     explicit RealtimeEngine(unsigned threadCount = 0);
@@ -179,13 +180,15 @@ private:
     // returns while a block is still running.
     std::atomic<bool> m_gateRequested{false};
     std::atomic<bool> m_rendering{false};
+    // Only control threads lock this mutex. Nested gates retain the outer
+    // owner's exclusion, and different control threads cannot overlap.
+    std::recursive_mutex m_controlMutex;
+    unsigned m_gateDepth = 0;
+    bool m_offlineActive = false;
 
     // Offline rendering borrows this instead of the device's output buffer.
     std::vector<float> m_offlineStorage;
     std::vector<float*> m_offlinePointers;
-    /// Offline callers may originate from export and analysis workers. They
-    /// share the graph and its scratch, so only one may own it at a time.
-    std::mutex m_offlineMutex;
 };
 
 } // namespace daw::engine

@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <functional>
 
 // Portable audio-file decoding. Replaces the macOS ExtAudioFile /
 // CoreFoundation path. Backed by libsndfile, which decodes WAV/AIFF/FLAC/
@@ -25,7 +26,12 @@ struct DecodedAudio {
 
 /// Decode an entire file into interleaved float samples. On failure the Result
 /// carries a human-readable message from the decoder.
-Result decodeAudioFile(const std::string& path, DecodedAudio& out);
+struct DecodeOptions {
+    std::size_t maxBytes = 256u * 1024u * 1024u;
+    std::function<bool()> keepGoing;
+};
+Result decodeAudioFile(const std::string& path, DecodedAudio& out,
+                       const DecodeOptions& options = {});
 
 /// True if the (lower-case, no dot) extension is one we can decode.
 bool isDecodableExtension(const std::string& extLower);

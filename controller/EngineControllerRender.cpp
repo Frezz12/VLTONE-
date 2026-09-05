@@ -1,7 +1,10 @@
 #include "EngineController.hpp"
+#include "RenderOutput.hpp"
 #include "platform/PathUtils.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <system_error>
@@ -45,7 +48,14 @@ std::string uniquePath(const std::string& dir, const std::string& stem,
         std::string path = platform::pathToUtf8(
             platform::pathFromUtf8(dir) /
             (name + "." + std::string(extension)));
-        if (taken.insert(path).second) return path;
+        std::string key = path;
+        std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) {
+            return char(std::tolower(c));
+        });
+        std::error_code ec;
+        if (!fs::exists(platform::pathFromUtf8(path), ec) && !ec &&
+            taken.insert(key).second) return path;
+        if (ec) throw fs::filesystem_error("cannot select export path", ec);
     }
 }
 
@@ -56,6 +66,115 @@ float dbToLinear(double db) { return float(std::pow(10.0, db / 20.0)); }
 // ── Offline render ─────────────────────────────────────────────────────────
 
 audio::Result EngineController::renderProject(
+    const rendering::Spec& spec,
+    const std::function<bool(const rendering::Progress&)>& onProgress,
+    rendering::Report& out) {
+    out = {};
+    if (m_exportInProgress)
+        return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                   "a render is already in progress");
+    struct BusyScope {
+        bool& flag;
+        explicit BusyScope(bool& value) : flag(value) { flag = true; }
+        ~BusyScope() { flag = false; }
+    } busy(m_exportInProgress);
+    bool cancelled = false;
+    auto lastProgress = std::chrono::steady_clock::time_point{};
+    const auto preparing = [&] {
+        if (cancelled) return false;
+        const auto now = std::chrono::steady_clock::now();
+        if (onProgress && now - lastProgress >= std::chrono::milliseconds(33)) {
+            lastProgress = now;
+            rendering::Progress progress;
+            progress.stage = rendering::Progress::Stage::Preparing;
+            cancelled = !onProgress(progress);
+        }
+        return !cancelled;
+    };
+    try {
+        if (!preparing()) { out.cancelled = true; return audio::Result::ok(); }
+        stop();
+        // Pending clip edits are already in the document. Bake them in the
+        // isolated controller, where progress/cancellation can safely run.
+
+        // Capture on the plugin control thread. The offline controller owns
+        // its document, nodes, plugin instances, scheduler and rate; only
+        // immutable sample data is shared with the live session. UI timers and
+        // queued collaboration updates can therefore run at progress points.
+        recovery::RecoverySnapshot snapshot;
+        {
+            const engine::RealtimeEngine::RenderGate gate(m_engine);
+            snapshot = captureRecoverySnapshot();
+        }
+        EngineController scratch;
+        scratch.m_isRenderClone = true;
+        scratch.m_renderingPass = true;
+        const double rate = spec.sampleRate > 0.0 ? spec.sampleRate : m_sampleRate;
+        if (!std::isfinite(rate) || rate < 1000 || rate > 768000)
+            return audio::Result::fail(audio::EngineError::InvalidArgument, "invalid render sample rate");
+        if (const auto ready = scratch.initialize(rate, m_bufferSize, false); !ready) return ready;
+        scratch.m_pluginManager.copyCatalogFrom(m_pluginManager);
+        scratch.m_project = std::move(snapshot.project);
+        scratch.m_sourceSamples = m_sourceSamples;
+        if (std::abs(rate - m_sampleRate) <= 0.01) {
+            scratch.m_samples = m_samples;
+            scratch.m_clipSampleCache = m_clipSampleCache;
+            scratch.m_sharedClipSampleCache = m_sharedClipSampleCache;
+        }
+        scratch.m_sampleLoadContinue = preparing;
+        scratch.m_engine.transport().setTempo(scratch.m_project.tempo);
+        scratch.m_engine.transport().setTimeSignature(scratch.m_project.timeSigNumerator,
+                                                     scratch.m_project.timeSigDenominator);
+        scratch.m_engine.transport().setLoopRange(scratch.toSamples(m_project.loopStartSeconds),
+                                                  scratch.toSamples(m_project.loopEndSeconds));
+        scratch.m_engine.transport().setLoopEnabled(m_project.loopEnabled);
+        if (const auto built = scratch.rebuildGraph(); !built) return built;
+
+        std::unordered_map<std::string, const std::vector<std::uint8_t>*> states;
+        for (const auto& state : snapshot.pluginStates) states[state.fileName] = &state.bytes;
+        const auto restoreSlot = [&](const std::string& channelId, const InsertModel& slot) {
+            if (!preparing()) return;
+            InsertSlot* live = scratch.liveInsertSlot(channelId, slot.id);
+            if (!live) return;
+            const auto restoreNode = [&](const std::shared_ptr<plugins::PluginNode>& node,
+                                          const std::string& file,
+                                          const std::vector<InsertParameter>& parameters) {
+                if (!node || !node->instance()) return;
+                if (const auto state = states.find(file); state != states.end()) {
+                    if (!node->instance()->loadState(*state->second))
+                        throw std::runtime_error("cannot restore render plugin state: " + slot.name);
+                }
+                if (auto* sampler = dynamic_cast<plugins::sampler::SamplerInstance*>(node->instance());
+                    sampler && !sampler->samplePath().empty() && !sampler->rawSample())
+                    throw std::runtime_error("cannot load render sampler source: " + sampler->samplePath());
+                scratch.applyStoredParameters(*node, parameters);
+                node->invalidatePrepare();
+            };
+            restoreNode(live->node, slot.stateFile, slot.parameters);
+            restoreNode(live->rightNode, slot.rightStateFile, slot.rightParameters);
+        };
+        for (const TrackModel& track : scratch.m_project.tracks) {
+            if (track.instrument.isLoaded()) restoreSlot(track.id, track.instrument);
+            for (const auto& slot : track.inserts) restoreSlot(track.id, slot);
+            for (const auto& slot : track.samplerFx.inserts) restoreSlot(track.id, slot);
+            for (const auto& clip : track.clips)
+                for (const auto& slot : clip.inserts) restoreSlot(track.id, slot);
+        }
+        for (const auto& slot : scratch.m_project.masterInserts)
+            restoreSlot(kMasterChannelId, slot);
+        if (cancelled) { out.cancelled = true; return audio::Result::ok(); }
+        const auto result = scratch.renderProjectPass(spec, onProgress, out);
+        if (cancelled) { out.cancelled = true; return audio::Result::ok(); }
+        return result;
+    } catch (const std::exception& error) {
+        if (cancelled) { out.cancelled = true; return audio::Result::ok(); }
+        return audio::Result::fail(audio::EngineError::Unknown, error.what());
+    } catch (...) {
+        return audio::Result::fail(audio::EngineError::Unknown, "render failed with an unexpected exception");
+    }
+}
+
+audio::Result EngineController::renderProjectPass(
     const rendering::Spec& spec,
     const std::function<bool(const rendering::Progress&)>& onProgress,
     rendering::Report& out) {
@@ -118,108 +237,29 @@ audio::Result EngineController::renderProject(
                 std::to_string(int(targetRate)) + " Hz");
     }
 
-    // ── Everything below is undone on the way out, however we leave ──
-    //
-    // Each guard restores by writing the document back and rebuilding the
-    // graph: `syncSlots` pushes every `bypassed` flag to its live plugin on
-    // every rebuild, so putting the model right is enough to put the audio
-    // right, and hand-set bypasses survive exactly as they were.
-    // Declared before the guard so that the guard is destroyed first and its
-    // restoration still runs with the undo stack suspended.
+    // This controller belongs exclusively to the offline job. Its temporary
+    // bypass/solo/tap configuration is discarded with it, so restoration never
+    // rebuilds or overwrites the live session on an error path.
     UndoStack::Suspend quiet(m_undo);
-
-    struct Restore {
-        EngineController* owner = nullptr;
-        double sampleRate = 0.0;
-        bool rateChanged = false;
-        /// Insert slot uuid to the flag it had. Keyed by uuid rather than by
-        /// pointer because a pointer into a vector element is only as stable as
-        /// the vector, and this has to hold for the whole pass.
-        std::unordered_map<std::string, bool> inserts;
-        std::unordered_map<std::string, std::pair<bool, bool>> muteSolo;
-        std::unordered_map<std::string, bool> clipMutes;
-        std::unordered_map<std::string, bool> sends;
-        bool touchedGraph = false;
-
-        void restoreSlots(std::vector<InsertModel>& slots) {
-            for (InsertModel& slot : slots) {
-                auto found = inserts.find(slot.id);
-                if (found != inserts.end()) slot.bypassed = found->second;
-            }
-        }
-
-        ~Restore() {
-            if (!owner) return;
-            if (!inserts.empty()) {
-                restoreSlots(owner->m_project.masterInserts);
-                for (TrackModel& track : owner->m_project.tracks) {
-                    restoreSlots(track.inserts);
-                    restoreSlots(track.samplerFx.inserts);
-                    for (ClipModel& clip : track.clips) restoreSlots(clip.inserts);
-                }
-            }
-            for (TrackModel& track : owner->m_project.tracks) {
-                auto found = muteSolo.find(track.id);
-                if (found == muteSolo.end()) continue;
-                track.muted = found->second.first;
-                track.soloed = found->second.second;
-            }
-            for (TrackModel& track : owner->m_project.tracks) {
-                for (ClipModel& clip : track.clips) {
-                    if (const auto found = clipMutes.find(clip.id);
-                        found != clipMutes.end()) {
-                        clip.muted = found->second;
-                    }
-                }
-                for (SendModel& send : track.sends) {
-                    if (const auto found = sends.find(send.id);
-                        found != sends.end()) {
-                        send.enabled = found->second;
-                    }
-                }
-            }
-            owner->m_renderTaps.clear();
-            owner->m_renderTapsAtSource = false;
-            owner->m_renderingPass = false;
-            if (rateChanged) owner->applyRenderSampleRate(sampleRate);
-            if (touchedGraph || rateChanged) {
-                // `syncSlots` pushes every model `bypassed` flag to its live
-                // plugin on every rebuild, so putting the document right is what
-                // puts the audio right — and hand-set bypasses come back exactly
-                // as they were.
-                (void)owner->rebuildGraph();
-                owner->syncAllTrackGains();
-            }
-        }
-    } restore;
-    restore.owner = this;
-    restore.sampleRate = m_sampleRate;
-    // Set before the rebuild below so the metronome is left out of the graph:
-    // the click gates on `context.playing`, which an offline pass asserts, and
-    // it renders its count-in ahead of even that gate.
-    restore.touchedGraph = true;
     m_renderingPass = true;
 
     // ── Bypass ──
-    auto rememberAndBypass = [&restore](std::vector<InsertModel>& slots) {
+    auto bypassSlots = [](std::vector<InsertModel>& slots) {
         for (InsertModel& slot : slots) {
-            restore.inserts.emplace(slot.id, slot.bypassed);
             slot.bypassed = true;
         }
     };
     if (spec.bypassChannelInserts) {
         for (TrackModel& track : m_project.tracks) {
-            rememberAndBypass(track.inserts);
-            rememberAndBypass(track.samplerFx.inserts);
-            for (ClipModel& clip : track.clips) rememberAndBypass(clip.inserts);
+            bypassSlots(track.inserts);
+            bypassSlots(track.samplerFx.inserts);
+            for (ClipModel& clip : track.clips) bypassSlots(clip.inserts);
         }
-        restore.touchedGraph = true;
     }
     if (spec.bypassClipInserts && !spec.bypassChannelInserts) {
         for (TrackModel& track : m_project.tracks)
             for (ClipModel& clip : track.clips)
-                rememberAndBypass(clip.inserts);
-        restore.touchedGraph = true;
+                bypassSlots(clip.inserts);
     }
     if (spec.bypassTrackInserts && !spec.bypassChannelInserts) {
         const std::unordered_set<std::string> sources(
@@ -234,10 +274,9 @@ audio::Result EngineController::renderProject(
                 (sources.empty() && !ordinarySource)) {
                 continue;
             }
-            rememberAndBypass(track.inserts);
-            rememberAndBypass(track.samplerFx.inserts);
+            bypassSlots(track.inserts);
+            bypassSlots(track.samplerFx.inserts);
         }
-        restore.touchedGraph = true;
     }
     if (spec.bypassSummingInserts && !spec.bypassChannelInserts) {
         for (TrackModel& track : m_project.tracks) {
@@ -246,22 +285,18 @@ audio::Result EngineController::renderProject(
                 track.kind != TrackKind::Folder) {
                 continue;
             }
-            rememberAndBypass(track.inserts);
+            bypassSlots(track.inserts);
         }
-        restore.touchedGraph = true;
     }
     if (spec.bypassSends) {
         for (TrackModel& track : m_project.tracks) {
             for (SendModel& send : track.sends) {
-                restore.sends.emplace(send.id, send.enabled);
                 send.enabled = false;
             }
         }
-        restore.touchedGraph = true;
     }
     if (spec.bypassMasterChain) {
-        rememberAndBypass(m_project.masterInserts);
-        restore.touchedGraph = true;
+        bypassSlots(m_project.masterInserts);
     }
 
     // Isolate the requested musical material without touching automation
@@ -292,37 +327,29 @@ audio::Result EngineController::renderProject(
                     : (trackIds.contains(track.id) ||
                        (!clip.patternClipId.empty() &&
                         patternOwners.contains(clip.patternClipId)));
-                restore.clipMutes.emplace(clip.id, clip.muted);
                 clip.muted = !allowed;
                 channelHasSource |= allowed;
             }
             if (channelHasSource) sourceChannels.insert(track.id);
         }
         for (TrackModel& track : m_project.tracks) {
-            restore.muteSolo.try_emplace(
-                track.id, std::pair{track.muted, track.soloed});
             track.soloed = sourceChannels.contains(track.id);
             if (track.soloed) track.muted = false;
         }
-        restore.touchedGraph = true;
     }
 
     // ── Mute and solo ──
     if (spec.ignoreMuteSolo) {
         for (TrackModel& track : m_project.tracks) {
             if (!track.muted && !track.soloed) continue;
-            restore.muteSolo.emplace(track.id,
-                                     std::pair{track.muted, track.soloed});
             track.muted = false;
             track.soloed = false;
         }
-        restore.touchedGraph = true;
     }
 
     // ── Sample rate ──
     if (std::abs(targetRate - m_sampleRate) > 0.01) {
         applyRenderSampleRate(targetRate);
-        restore.rateChanged = true;
     }
 
     // ── Taps ──
@@ -342,7 +369,6 @@ audio::Result EngineController::renderProject(
             "too many stems in one render (" + std::to_string(stems.size()) +
                 "); the limit is " + std::to_string(kMaxRenderStems));
     }
-    restore.touchedGraph = true;
 
     // One rebuild puts the taps, the bypasses, the mutes and the rate into the
     // graph together, rather than recompiling once per change.
@@ -382,6 +408,7 @@ audio::Result EngineController::renderProject(
     const std::string extension =
         std::string(audio::platform::extensionFor(spec.file.container));
 
+    rendering::OutputTransaction files;
     struct Sink {
         audio::platform::AudioFileWriter writer;
         std::string path;
@@ -397,7 +424,7 @@ audio::Result EngineController::renderProject(
         Sink sink;
         sink.tap = tap;
         sink.path = uniquePath(spec.outputDir, stem, extension, taken);
-        ioStatus = sink.writer.open(sink.path, spec.file, m_sampleRate,
+        ioStatus = sink.writer.open(files.stage(sink.path), spec.file, m_sampleRate,
                                     fileChannels, expectedFrames);
         if (!ioStatus) return;
 
@@ -428,8 +455,6 @@ audio::Result EngineController::renderProject(
     auto discard = [&sinks] {
         for (Sink& sink : sinks) {
             (void)sink.writer.close();
-            std::error_code ignored;
-            fs::remove(sink.path, ignored);
         }
     };
     if (!ioStatus) {
@@ -471,6 +496,7 @@ audio::Result EngineController::renderProject(
         return sink.writer.write(offsetChannels.data(), frames);
     };
 
+    auto lastProgress = std::chrono::steady_clock::time_point{};
     auto renderStatus = m_engine.renderOffline(
         renderStart, renderEnd, m_bufferSize,
         [&](const engine::AudioBlock& block, engine::FrameCount frames) {
@@ -523,10 +549,15 @@ audio::Result EngineController::renderProject(
                 if (quietFor >= holdSamples) return false;
             }
 
-            if (onProgress) {
+            const auto now = std::chrono::steady_clock::now();
+            if (onProgress && (now - lastProgress >= std::chrono::milliseconds(33) ||
+                               position >= renderEnd)) {
+                lastProgress = now;
                 rendering::Progress progress;
-                progress.renderedSeconds = double(written) / m_sampleRate;
-                progress.totalSeconds = double(expectedFrames) / m_sampleRate;
+                progress.stage = position <= from + latency
+                    ? rendering::Progress::Stage::PreRoll : rendering::Progress::Stage::Rendering;
+                progress.renderedSeconds = double(position - renderStart) / m_sampleRate;
+                progress.totalSeconds = double(renderEnd - renderStart) / m_sampleRate;
                 progress.fraction =
                     progress.totalSeconds > 0.0
                         ? std::clamp(progress.renderedSeconds /
@@ -558,10 +589,10 @@ audio::Result EngineController::renderProject(
             discard();
             return closed;
         }
-        out.files.push_back(sink.path);
     }
+    if (const auto committed = files.commit(); !committed) return committed;
+    for (const Sink& sink : sinks) out.files.push_back(sink.path);
     out.renderedSeconds = double(written) / m_sampleRate;
-    flushSamplerPrecompute();
     return audio::Result::ok();
 }
 

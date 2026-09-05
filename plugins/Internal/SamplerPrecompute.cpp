@@ -11,12 +11,44 @@ namespace {
 
 constexpr double kPi = std::numbers::pi;
 
-using Channels = std::vector<std::vector<float>>;
+// Growing scratch uses the same evictable storage as final PCM. Large baked
+// effects must not reintroduce full-file heap copies behind the stream decoder.
+class SampleScratch {
+public:
+    SampleScratch() = default;
+    explicit SampleScratch(std::size_t size, float = 0.0f) { resize(size); }
+    SampleScratch(SampleScratch&&) noexcept = default;
+    SampleScratch& operator=(SampleScratch&&) noexcept = default;
+    std::size_t size() const noexcept { return m_size; }
+    bool empty() const noexcept { return m_size == 0; }
+    float& operator[](std::size_t i) { return m_storage->data()[i]; }
+    const float& operator[](std::size_t i) const { return m_storage->data()[i]; }
+    void reserve(std::size_t capacity) {
+        if (capacity <= m_capacity) return;
+        auto storage = std::make_unique<engine::SampleStorage>(capacity);
+        if (m_size) std::copy_n(m_storage->data(), m_size, storage->data());
+        m_storage = std::move(storage);
+        m_capacity = capacity;
+    }
+    void resize(std::size_t size, float value = 0.0f) {
+        reserve(size);
+        if (size > m_size) std::fill_n(m_storage->data() + m_size, size - m_size, value);
+        m_size = size;
+    }
+    void push_back(float value) {
+        if (m_size == m_capacity) reserve(std::max<std::size_t>(1, m_capacity * 2));
+        (*this)[m_size++] = value;
+    }
+private:
+    std::unique_ptr<engine::SampleStorage> m_storage;
+    std::size_t m_size = 0, m_capacity = 0;
+};
+using Channels = std::vector<SampleScratch>;
 
 constexpr std::size_t kCancellationStride = 4096;
 
 inline bool cancelled(const PrecomputeCancellation& cancellation,
-                      std::size_t index = 0) noexcept {
+                      std::size_t index = 0) {
     return (index % kCancellationStride == 0) && cancellation.requested();
 }
 
@@ -140,9 +172,9 @@ bool applyReverb(Channels& channels, double amount, int type, double sampleRate,
     const double stretch = type == 1 ? 1.8 : 1.0;
 
     for (std::size_t ch = 0; ch < channels.size(); ++ch) {
-        std::vector<float>& data = channels[ch];
+        SampleScratch& data = channels[ch];
         data.resize(data.size() + tailFrames, 0.0f);
-        std::vector<float> wet(data.size(), 0.0f);
+        SampleScratch wet(data.size());
 
         for (std::size_t c = 0; c < combs.size(); ++c) {
             // A few samples of offset per channel is what keeps the two sides
@@ -190,16 +222,16 @@ bool applyStereoDelay(Channels& channels, double amount, double sampleRate,
     const std::size_t delay = std::size_t(amount * 0.030 * sampleRate);
     if (delay == 0) return true;
 
-    const std::vector<float> right = channels[1];
-    for (std::size_t i = 0; i < channels[1].size(); ++i) {
+    const auto& right = channels[1];
+    for (std::size_t i = channels[1].size(); i-- > 0;) {
         if (cancelled(cancellation, i)) return false;
         const float delayed = i >= delay ? right[i - delay] : 0.0f;
         channels[1][i] = float(right[i] * (1.0 - amount * 0.5) + delayed * amount * 0.5);
     }
-    const std::vector<float> left = channels[0];
+    const auto& left = channels[0];
     const std::size_t half = delay / 2;
     if (half == 0) return true;
-    for (std::size_t i = 0; i < channels[0].size(); ++i) {
+    for (std::size_t i = channels[0].size(); i-- > 0;) {
         if (cancelled(cancellation, i)) return false;
         const float delayed = i >= half ? left[i - half] : 0.0f;
         channels[0][i] = float(left[i] * (1.0 - amount * 0.25) + delayed * amount * 0.25);
@@ -288,7 +320,7 @@ bool PrecomputeSettings::isNeutral() const noexcept {
 std::shared_ptr<const engine::SampleBuffer> precompute(
     const engine::SampleBuffer& raw, const PrecomputeSettings& settings,
     engine::FrameCount& baseFrames,
-    PrecomputeCancellation cancellation) {
+    PrecomputeCancellation cancellation) try {
     const engine::ChannelCount rawChannels = std::max<engine::ChannelCount>(raw.channels(), 1);
     const engine::FrameCount rawFrames = raw.frames();
     baseFrames = rawFrames;
@@ -307,7 +339,7 @@ std::shared_ptr<const engine::SampleBuffer> precompute(
     for (engine::ChannelCount ch = 0; ch < channelCount; ++ch) {
         if (cancellation.requested()) return nullptr;
         const float* source = raw.channel(std::min<engine::ChannelCount>(ch, rawChannels - 1));
-        std::vector<float>& destination = channels[ch];
+        SampleScratch& destination = channels[ch];
         destination.reserve(rawFrames);
         for (std::size_t i = 0; i < rawFrames; ++i) {
             if (cancelled(cancellation, i)) return nullptr;
@@ -420,7 +452,7 @@ std::shared_ptr<const engine::SampleBuffer> precompute(
     auto out = std::make_shared<engine::SampleBuffer>(channelCount, frames, sampleRate);
     for (engine::ChannelCount ch = 0; ch < channelCount; ++ch) {
         float* destination = out->writableChannel(ch);
-        const std::vector<float>& source = channels[ch];
+        const SampleScratch& source = channels[ch];
         const std::size_t count = std::min<std::size_t>(frames, source.size());
         for (std::size_t i = 0; i < count; ++i) {
             if (cancelled(cancellation, i)) return nullptr;
@@ -429,6 +461,8 @@ std::shared_ptr<const engine::SampleBuffer> precompute(
     }
     baseFrames = std::min(baseFrames, frames);
     return out;
+} catch (const std::exception&) {
+    return nullptr;
 }
 
 } // namespace daw::plugins::sampler

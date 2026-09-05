@@ -309,9 +309,17 @@ void OfflineRenderDialog::startRender() {
         [this](const daw::rendering::Progress& progress) {
             m_progress->setValue(
                 std::clamp(int(progress.fraction * 1000.0), 0, 1000));
+            if (progress.stage == daw::rendering::Progress::Stage::Preparing)
+                m_status->setText(tr("Preparing audio and plugins…"));
+            else if (progress.stage == daw::rendering::Progress::Stage::PreRoll)
+                m_status->setText(tr("Warming up effects: %1 of %2 seconds")
+                    .arg(progress.renderedSeconds, 0, 'f', 1)
+                    .arg(progress.totalSeconds, 0, 'f', 1));
+            else {
             m_status->setText(tr("Rendering %1 of %2 seconds")
                                   .arg(progress.renderedSeconds, 0, 'f', 1)
                                   .arg(progress.totalSeconds, 0, 'f', 1));
+            }
             QApplication::processEvents();
             return !m_cancelRequested;
         },

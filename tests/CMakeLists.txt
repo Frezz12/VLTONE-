@@ -101,6 +101,9 @@ add_executable(render_test render_test.cpp)
 target_link_libraries(render_test PRIVATE daw_controller)
 
 add_test(NAME render_test COMMAND render_test)
+add_executable(render_safety_test render_safety_test.cpp)
+target_link_libraries(render_safety_test PRIVATE daw_controller)
+add_test(NAME render_safety_test COMMAND render_safety_test)
 set_tests_properties(render_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 

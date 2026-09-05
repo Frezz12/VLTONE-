@@ -203,6 +203,18 @@ audio::Result EngineController::bounceInPlace(
         }
     }
 
+    // With no active instruments/effects there is no DSP history to warm.
+    const auto hasPlugin = [](const auto& slots) {
+        return std::any_of(slots.begin(), slots.end(), [](const InsertModel& slot) {
+            return slot.isLoaded() && !slot.bypassed;
+        });
+    };
+    bool needsWarmup = hasPlugin(m_project.masterInserts);
+    for (const auto& track : m_project.tracks) {
+        needsWarmup |= track.instrument.isLoaded() || hasPlugin(track.inserts) || hasPlugin(track.samplerFx.inserts);
+        for (const auto& clip : track.clips) needsWarmup |= hasPlugin(clip.inserts);
+    }
+    const auto sourceRevision = projectRevision();
     std::vector<std::string> stagedFiles;
     for (std::size_t index = 0; index < jobs.size(); ++index) {
         BounceJob& job = jobs[index];
@@ -214,7 +226,9 @@ audio::Result EngineController::bounceInPlace(
         spec.range = rendering::Range::Custom;
         spec.customStartSeconds = request.startSeconds;
         spec.customEndSeconds = request.endSeconds;
-        spec.preRollSeconds = request.startSeconds;
+        spec.preRollSeconds = request.preRollSeconds < 0.0
+            ? request.startSeconds : std::min(request.preRollSeconds, request.startSeconds);
+        if (!needsWarmup) spec.preRollSeconds = 0.0;
         spec.tail = request.tail;
         spec.tailSilenceDb = request.tailSilenceDb;
         spec.tailHoldSeconds = request.tailHoldSeconds;
@@ -241,7 +255,8 @@ audio::Result EngineController::bounceInPlace(
             total.renderedSeconds =
                 double(index) * one.totalSeconds + one.renderedSeconds;
             total.totalSeconds = double(jobs.size()) * one.totalSeconds;
-            return onProgress(total);
+            const bool proceed = onProgress(total);
+            return proceed && projectRevision() == sourceRevision;
         };
         audio::Result result = renderProject(spec, progress, rendered);
         if (!result || rendered.cancelled || rendered.files.size() != 1) {
@@ -452,6 +467,7 @@ audio::Result EngineController::renderClipsOffline(
         }
     }
 
+    const auto sourceRevision = projectRevision();
     const bool hasEnabled = std::any_of(
         chain.inserts.begin(), chain.inserts.end(),
         [](const ChainSlotSnapshot& slot) { return !slot.model.bypassed; });
@@ -515,7 +531,8 @@ audio::Result EngineController::renderClipsOffline(
                     double(index) * one.totalSeconds + one.renderedSeconds;
                 total.totalSeconds =
                     double(addresses.size()) * one.totalSeconds;
-                return onProgress(total);
+                const bool proceed = onProgress(total);
+                return proceed && projectRevision() == sourceRevision;
             };
             audio::Result result = scratch.renderProject(spec, progress, rendered);
             if (!result || rendered.cancelled || rendered.files.size() != 1) {
