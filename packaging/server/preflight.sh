@@ -59,6 +59,9 @@ available_kib="$(df -Pk "$APP_ROOT" | awk 'NR==2 {print $4}')"
     die "at least 5 GiB free space is required"
 
 if [[ "${COLLABORATION_ENABLED:-false}" == true ]]; then
+    require VLT_INVITE_CODE_PEPPER
+    [[ "$VLT_INVITE_CODE_PEPPER" != *CHANGE_ME* ]] ||
+        die "VLT_INVITE_CODE_PEPPER still contains CHANGE_ME"
     [[ "${COLLAB_RECORDING_ENABLED:-false}" == false ]] || die "cloud recording must remain disabled for V1"
     # Per-account entitlement is managed in the admin UI and defaults to
     # false in PostgreSQL. This optional env list remains an emergency OR

@@ -4,6 +4,7 @@
 #include "SelectionModel.hpp"
 #include "ExportPrefs.hpp"
 #include "Theme.hpp"
+#include "GlassPanel.hpp"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -13,7 +14,15 @@
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFormLayout>
-#include <QFormLayout>
+#include <QFontInfo>
+#include <QBuffer>
+#include <QDesktopServices>
+#include <QImageReader>
+#include <QSettings>
+#include <QScreen>
+#include <QTabWidget>
+#include <QTabBar>
+#include <QUrl>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -100,15 +109,34 @@ QString formatTime(double seconds) {
         .arg(total % 60, 2, 10, QLatin1Char('0'));
 }
 
+double luminance(const QColor& color) {
+    auto linear = [](double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); };
+    return 0.2126 * linear(color.redF()) + 0.7152 * linear(color.greenF()) + 0.0722 * linear(color.blueF());
+}
+
+QColor readableOn(QColor foreground, const QColor& background) {
+    const double bg = luminance(background);
+    const QColor ink = bg > 0.179 ? QColor(Qt::black) : QColor(Qt::white);
+    for (int step = 0; step <= 20; ++step) {
+        const QColor candidate = mixColors(foreground, ink, step / 20.0);
+        const double fg = luminance(candidate);
+        if ((std::max(fg, bg) + 0.05) / (std::min(fg, bg) + 0.05) >= 4.5) return candidate;
+    }
+    return ink;
+}
+
 } // namespace
 
 ExportDialog::ExportDialog(daw::EngineController& controller,
-                           const ui::SelectionModel* selection, QWidget* parent)
+                           const ui::SelectionModel* selection, QWidget* parent,
+                           const QString& projectPath)
     : QDialog(parent), m_controller(controller), m_selection(selection) {
     setWindowTitle(tr("Render — %1").arg(QApplication::applicationName()));
     setModal(true);
     setSizeGripEnabled(true);
-    resize(640, 860);
+    setObjectName(QStringLiteral("ExportDialog"));
+    resize(1020, 860);
+    if (screen()) resize(size().boundedTo(screen()->availableGeometry().size() - QSize(40, 60)));
 
     buildUi();
 
@@ -117,7 +145,10 @@ ExportDialog::ExportDialog(daw::EngineController& controller,
     populateContainers();
 
     const rd::Spec remembered = ui::exportprefs::load();
-    m_folder->setText(QDir::toNativeSeparators(ui::exportprefs::lastFolder()));
+    const QString folder = projectPath.isEmpty() ? ui::exportprefs::lastFolder()
+        : (QFileInfo(projectPath).isFile() ? QFileInfo(projectPath).absolutePath()
+                                         : QDir(projectPath).absolutePath());
+    m_folder->setText(QDir::toNativeSeparators(folder));
     QString projectName =
         QString::fromStdString(m_controller.projectName()).trimmed();
     if (projectName == QLatin1String("Untitled"))
@@ -148,6 +179,15 @@ ExportDialog::ExportDialog(daw::EngineController& controller,
     }
     m_fileChannels->setCurrentIndex(
         remembered.channels == rd::Channels::Mono ? 1 : 0);
+    repopulateEncodings();
+    const int rememberedEncoding = m_encoding->findData(int(remembered.file.encoding));
+    if (rememberedEncoding >= 0) m_encoding->setCurrentIndex(rememberedEncoding);
+    if (isLossy(ap::Container(m_container->currentData().toInt()))) {
+        const int quality = remembered.file.container == ap::Container::Mp3
+            ? remembered.file.bitrateKbps : int(std::lround(remembered.file.vbrQuality * 100));
+        const int index = m_quality->findData(quality);
+        if (index >= 0) m_quality->setCurrentIndex(index);
+    }
 
     m_writeMixdown->setChecked(remembered.writeMixdown);
     m_bypassInserts->setChecked(remembered.bypassChannelInserts);
@@ -155,7 +195,11 @@ ExportDialog::ExportDialog(daw::EngineController& controller,
     m_ignoreMuteSolo->setChecked(remembered.ignoreMuteSolo);
     m_preFaderStems->setChecked(remembered.stemsPreFader);
     m_dither->setChecked(remembered.file.dither);
-    m_artist->setText(QString::fromStdString(remembered.tags.artist));
+    m_artist->setText(QString::fromStdString(m_controller.project().author.empty()
+        ? remembered.tags.artist : m_controller.project().author));
+    m_openAfterRender->setChecked(QSettings().value("export/openAfterRender", false).toBool());
+    if (!m_controller.project().coverImagePath.empty())
+        loadCover(QString::fromStdString(m_controller.project().coverImagePath));
     m_preRoll->setValue(remembered.preRollSeconds);
 
     m_tail->setCurrentIndex(int(remembered.tail));
@@ -165,7 +209,7 @@ ExportDialog::ExportDialog(daw::EngineController& controller,
 
     switch (remembered.range) {
         case rd::Range::CycleRegion: m_rangeCycle->setChecked(true); break;
-        case rd::Range::Custom: m_rangeCustom->setChecked(true); break;
+        case rd::Range::Custom: m_rangeWhole->setChecked(true); break;
         case rd::Range::WholeProject: m_rangeWhole->setChecked(true); break;
     }
     m_populating = false;
@@ -176,6 +220,8 @@ ExportDialog::ExportDialog(daw::EngineController& controller,
 
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             &ExportDialog::applyTheme);
+    connect(&ThemeManager::instance(), &ThemeManager::fontChanged, this,
+            &ExportDialog::applyTheme);
     applyTheme();
 }
 
@@ -183,8 +229,29 @@ ExportDialog::ExportDialog(daw::EngineController& controller,
 
 void ExportDialog::buildUi() {
     auto* shell = new QVBoxLayout(this);
-    shell->setContentsMargins(12, 12, 12, 12);
-    shell->setSpacing(10);
+    shell->setContentsMargins(16, 12, 16, 16);
+    shell->setSpacing(12);
+
+    auto* header = new ui::GlassPanel(this);
+    header->setShadowMargin(4);
+    header->setCornerRadius(16);
+    header->setSubtleVerticalGradient(true);
+    auto* headerRow = new QHBoxLayout(header);
+    m_headerRow = headerRow;
+    headerRow->setContentsMargins(22, 18, 22, 18);
+    auto* heading = new QVBoxLayout;
+    auto* title = new QLabel(tr("Render your track"), header);
+    title->setObjectName(QStringLiteral("ExportHeading"));
+    heading->addWidget(title);
+    auto* subtitle = new QLabel(tr("Choose the sound, range and track details."), header);
+    subtitle->setWordWrap(true);
+    subtitle->setObjectName(QStringLiteral("ExportSubtitle"));
+    heading->addWidget(subtitle);
+    headerRow->addLayout(heading, 1);
+    m_previewFormat = new QLabel(header);
+    m_previewFormat->setObjectName(QStringLiteral("ExportFormatBadge"));
+    headerRow->addWidget(m_previewFormat);
+    shell->addWidget(header);
 
     // The form is taller than a laptop screen once every section is open, so it
     // scrolls inside the dialog instead of pushing the Render button off the
@@ -194,12 +261,23 @@ void ExportDialog::buildUi() {
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* page = new QWidget(scroll);
+    m_page = page;
+    page->setObjectName(QStringLiteral("ExportPage"));
     scroll->setWidget(page);
     shell->addWidget(scroll, 1);
 
-    auto* root = new QVBoxLayout(page);
+    auto* root = new QHBoxLayout(page);
+    m_columns = root;
     root->setContentsMargins(0, 0, 0, 0);
-    root->setSpacing(10);
+    root->setSpacing(14);
+    auto* left = new QVBoxLayout;
+    auto* right = new QVBoxLayout;
+    left->setSpacing(12);
+    right->setSpacing(12);
+    root->addLayout(left, 3);
+    root->addLayout(right, 2);
+    auto* advanced = new QTabWidget(page);
+    advanced->setObjectName(QStringLiteral("ExportAdvanced"));
 
     auto rebuildSummary = [this] {
         if (!m_populating) updateSummary();
@@ -216,29 +294,85 @@ void ExportDialog::buildUi() {
         auto* form = new QFormLayout(box);
         auto* row = new QHBoxLayout;
         m_folder = new QLineEdit(box);
+        m_folder->setObjectName(QStringLiteral("ExportFolder"));
         m_browse = new QPushButton(tr("Browse…"), box);
         row->addWidget(m_folder, 1);
         row->addWidget(m_browse);
         form->addRow(tr("Folder"), row);
         m_baseName = new QLineEdit(box);
+        m_baseName->setObjectName(QStringLiteral("ExportName"));
         form->addRow(tr("Name"), m_baseName);
-        m_title = new QLineEdit(box);
-        m_title->setPlaceholderText(tr("defaults to each file's name"));
-        m_artist = new QLineEdit(box);
-        m_comment = new QLineEdit(box);
-        form->addRow(tr("Title"), m_title);
-        form->addRow(tr("Artist"), m_artist);
-        form->addRow(tr("Comment"), m_comment);
-        root->addWidget(box);
+        left->addWidget(box);
 
         connect(m_browse, &QPushButton::clicked, this, [this] {
             const QString chosen = QFileDialog::getExistingDirectory(
                 this, tr("Render into folder"), m_folder->text());
-            if (!chosen.isEmpty()) {
-                m_folder->setText(QDir::toNativeSeparators(chosen));
-            }
+            if (!chosen.isEmpty()) m_folder->setText(QDir::toNativeSeparators(chosen));
         });
         connect(m_baseName, &QLineEdit::textChanged, this, rebuildSummary);
+        connect(m_folder, &QLineEdit::textChanged, this, rebuildSummary);
+    }
+
+    // The artwork and tags stay together, like the track a player will show.
+    {
+        auto* box = new QGroupBox(tr("Track details"), page);
+        auto* column = new QVBoxLayout(box);
+        auto* coverRow = new QHBoxLayout;
+        m_cover = new QPushButton(tr("Add cover"), box);
+        m_cover->setObjectName(QStringLiteral("ExportCover"));
+        m_cover->setFixedSize(124, 124);
+        m_cover->setIconSize(QSize(112, 112));
+        m_cover->setAccessibleName(tr("Choose track cover"));
+        coverRow->addWidget(m_cover);
+        auto* caption = new QVBoxLayout;
+        m_previewTitle = new QLabel(box);
+        m_previewTitle->setTextFormat(Qt::PlainText);
+        m_previewTitle->setWordWrap(true);
+        m_previewTitle->setObjectName(QStringLiteral("ExportTrackTitle"));
+        caption->addWidget(m_previewTitle);
+        m_coverHint = new QLabel(box);
+        m_coverHint->setTextFormat(Qt::PlainText);
+        m_coverHint->setObjectName(QStringLiteral("ExportCoverHint"));
+        m_coverHint->setWordWrap(true);
+        caption->addWidget(m_coverHint);
+        m_removeCover = new QPushButton(tr("Remove cover"), box);
+        m_removeCover->setObjectName(QStringLiteral("ExportRemoveCover"));
+        caption->addWidget(m_removeCover, 0, Qt::AlignLeft);
+        caption->addStretch();
+        coverRow->addLayout(caption, 1);
+        column->addLayout(coverRow);
+        auto* form = new QFormLayout;
+        column->addLayout(form);
+        m_title = new QLineEdit(box);
+        m_title->setPlaceholderText(tr("defaults to each file's name"));
+        m_artist = new QLineEdit(box);
+        m_comment = new QLineEdit(box);
+        m_album = new QLineEdit(box);
+        m_title->setObjectName(QStringLiteral("ExportTitle"));
+        m_artist->setObjectName(QStringLiteral("ExportArtist"));
+        m_album->setObjectName(QStringLiteral("ExportAlbum"));
+        form->addRow(tr("Title"), m_title);
+        form->addRow(tr("Artist"), m_artist);
+        form->addRow(tr("Album"), m_album);
+        form->addRow(tr("Comment"), m_comment);
+        right->addWidget(box);
+
+        connect(m_cover, &QPushButton::clicked, this, [this] {
+            const QString chosen = QFileDialog::getOpenFileName(this, tr("Choose track cover"),
+                m_coverPath.isEmpty() ? m_folder->text() : m_coverPath,
+                tr("Cover images (*.jpg *.jpeg *.png)"));
+            if (!chosen.isEmpty() && !loadCover(chosen)) {
+                QMessageBox::warning(this, tr("Could not load cover"),
+                    tr("Choose a valid PNG or JPEG image up to 10 MB and 8000 × 8000 pixels."));
+            }
+        });
+        connect(m_removeCover, &QPushButton::clicked, this, [this] {
+            m_coverData.clear();
+            m_coverPath.clear();
+            updateCover();
+            updateSummary();
+        });
+        connect(m_title, &QLineEdit::textChanged, this, rebuildSummary);
     }
 
     // ── What to write ──
@@ -247,11 +381,13 @@ void ExportDialog::buildUi() {
         auto* column = new QVBoxLayout(m_stemsBox);
         m_writeMixdown = new QCheckBox(tr("Master mix"), m_stemsBox);
         m_writeStems = new QCheckBox(tr("Separate stems"), m_stemsBox);
+        m_writeStems->setObjectName(QStringLiteral("ExportStems"));
         column->addWidget(m_writeMixdown);
         column->addWidget(m_writeStems);
 
         m_channels = new QListWidget(m_stemsBox);
         m_channels->setMinimumHeight(120);
+        m_channels->setMaximumHeight(144);
         column->addWidget(m_channels, 1);
 
         auto* buttons = new QHBoxLayout;
@@ -268,7 +404,7 @@ void ExportDialog::buildUi() {
         m_stemWarning->setWordWrap(true);
         m_stemWarning->hide();
         column->addWidget(m_stemWarning);
-        root->addWidget(m_stemsBox, 1);
+        right->addWidget(m_stemsBox);
 
         auto setAll = [this](Qt::CheckState state) {
             for (int i = 0; i < m_channels->count(); ++i) {
@@ -303,7 +439,7 @@ void ExportDialog::buildUi() {
 
     // ── Range and tail ──
     {
-        auto* box = new QGroupBox(tr("Range"), this);
+        auto* box = new QWidget(advanced);
         auto* grid = new QGridLayout(box);
         m_rangeWhole = new QRadioButton(tr("Whole project"), box);
         m_rangeCycle = new QRadioButton(tr("Cycle region"), box);
@@ -347,10 +483,12 @@ void ExportDialog::buildUi() {
         tailRow->addWidget(new QLabel(tr("Tail"), box));
         tailRow->addWidget(m_tail);
         tailRow->addWidget(m_tailSeconds);
-        tailRow->addWidget(m_tailSilenceDb);
-        tailRow->addWidget(m_tailMaxSeconds);
         tailRow->addStretch(1);
         grid->addLayout(tailRow, 3, 0, 1, 2);
+        auto* silenceRow = new QHBoxLayout;
+        silenceRow->addWidget(m_tailSilenceDb);
+        silenceRow->addWidget(m_tailMaxSeconds);
+        grid->addLayout(silenceRow, 4, 0, 1, 2);
 
         auto* preRollRow = new QHBoxLayout;
         m_preRoll = new QDoubleSpinBox(box);
@@ -363,9 +501,9 @@ void ExportDialog::buildUi() {
         preRollRow->addWidget(new QLabel(tr("Pre-roll"), box));
         preRollRow->addWidget(m_preRoll);
         preRollRow->addStretch(1);
-        grid->addLayout(preRollRow, 4, 0, 1, 2);
+        grid->addLayout(preRollRow, 5, 0, 1, 2);
         connect(m_preRoll, &QDoubleSpinBox::valueChanged, this, rebuildSummary);
-        root->addWidget(box);
+        advanced->addTab(box, tr("Range & tail"));
 
         for (QRadioButton* button :
              {m_rangeWhole, m_rangeCycle, m_rangeSelection, m_rangeCustom}) {
@@ -385,7 +523,7 @@ void ExportDialog::buildUi() {
 
     // ── Processing ──
     {
-        auto* box = new QGroupBox(tr("Processing"), this);
+        auto* box = new QWidget(advanced);
         auto* column = new QVBoxLayout(box);
         m_bypassInserts = new QCheckBox(tr("Bypass channel effects"), box);
         m_bypassMaster = new QCheckBox(tr("Bypass master chain"), box);
@@ -405,7 +543,8 @@ void ExportDialog::buildUi() {
             column->addWidget(box2);
             connect(box2, &QCheckBox::toggled, this, rebuildSummary);
         }
-        root->addWidget(box);
+        column->addStretch();
+        advanced->addTab(box, tr("Processing"));
     }
 
     // ── Format ──
@@ -414,6 +553,7 @@ void ExportDialog::buildUi() {
         auto* form = new QFormLayout(box);
         m_formatForm = form;
         m_container = new QComboBox(box);
+        m_container->setObjectName(QStringLiteral("ExportContainer"));
         m_encoding = new QComboBox(box);
         m_quality = new QComboBox(box);
         m_sampleRate = new QComboBox(box);
@@ -425,12 +565,12 @@ void ExportDialog::buildUi() {
         form->addRow(tr("Quality"), m_quality);
         form->addRow(tr("Sample rate"), m_sampleRate);
         form->addRow(tr("Channels"), m_fileChannels);
-        root->addWidget(box);
+        left->addWidget(box);
 
         connect(m_container, &QComboBox::currentIndexChanged, this, [this] {
             if (m_populating) return;
-            repopulateEncodings();
             repopulateSampleRates();
+            repopulateEncodings();
             syncEnabledState();
             updateSummary();
         });
@@ -444,49 +584,110 @@ void ExportDialog::buildUi() {
         connect(m_fileChannels, &QComboBox::currentIndexChanged, this,
                 [this] {
                     if (m_populating) return;
+                    repopulateSampleRates();
                     repopulateEncodings();
+                    syncEnabledState();
                     updateSummary();
                 });
     }
 
-    root->addStretch(1);
+    left->addWidget(advanced);
+    left->addStretch(1);
+    right->addStretch(1);
+
+    auto* footer = new ui::GlassPanel(this);
+    footer->setShadowMargin(4);
+    footer->setCornerRadius(14);
+    footer->setSubtleVerticalGradient(true);
+    auto* footerLayout = new QVBoxLayout(footer);
+    footerLayout->setContentsMargins(18, 14, 18, 14);
+    footerLayout->setSpacing(10);
+    shell->addWidget(footer);
+    // A routing warning must remain visible even when the channel list scrolls.
+    footerLayout->addWidget(m_stemWarning);
 
     m_summary = new QLabel(this);
     m_summary->setObjectName(QStringLiteral("ExportSummary"));
     m_summary->setWordWrap(true);
-    shell->addWidget(m_summary);
+    footerLayout->addWidget(m_summary);
 
     m_progress = new QProgressBar(this);
-    m_progress->setTextVisible(false);
-    m_progress->setFixedHeight(6);
+    m_progress->setFormat(QStringLiteral("%p%"));
+    m_progress->setFixedHeight(18);
     m_progress->hide();
-    shell->addWidget(m_progress);
+    footerLayout->addWidget(m_progress);
 
     m_status = new QLabel(this);
     m_status->setObjectName(QStringLiteral("ExportStatus"));
     m_status->hide();
-    shell->addWidget(m_status);
+    m_status->setWordWrap(true);
+    footerLayout->addWidget(m_status);
+
+    auto* actions = new QHBoxLayout;
+    m_actions = actions;
+    m_openAfterRender = new QCheckBox(tr("Open folder after render"), this);
+    m_openAfterRender->setObjectName(QStringLiteral("ExportOpenAfterRender"));
+    actions->addWidget(m_openAfterRender);
+    m_openFolder = new QPushButton(tr("Open folder"), this);
+    m_openFolder->setObjectName(QStringLiteral("ExportOpenFolder"));
+    m_openFolder->hide();
+    actions->addWidget(m_openFolder);
+    connect(m_openFolder, &QPushButton::clicked, this, &ExportDialog::openRenderedFolder);
+    actions->addStretch();
 
     m_buttons = new QDialogButtonBox(QDialogButtonBox::Ok |
                                          QDialogButtonBox::Cancel,
                                      this);
     m_renderButton = m_buttons->button(QDialogButtonBox::Ok);
+    m_buttons->button(QDialogButtonBox::Cancel)->setText(tr("Cancel"));
     m_renderButton->setText(tr("Render"));
+    m_renderButton->setObjectName(QStringLiteral("ExportRender"));
     m_renderButton->setDefault(true);
-    shell->addWidget(m_buttons);
+    actions->addWidget(m_buttons);
+    actions->setAlignment(m_buttons, Qt::AlignRight);
+    footerLayout->addLayout(actions);
 
     connect(m_buttons, &QDialogButtonBox::accepted, this,
             &ExportDialog::startRender);
-    connect(m_buttons, &QDialogButtonBox::rejected, this, [this] {
-        // While a render is running, Cancel stops it rather than closing the
-        // dialog out from under a pass that is still writing files.
-        if (m_rendering) {
-            m_cancelRequested = true;
-            m_status->setText(tr("Cancelling…"));
-        } else {
-            reject();
-        }
-    });
+    connect(m_buttons, &QDialogButtonBox::rejected, this, &ExportDialog::reject);
+    for (auto* button : findChildren<QPushButton*>()) {
+        button->setAutoDefault(false);
+        button->setCursor(Qt::PointingHandCursor);
+    }
+    m_renderButton->setDefault(true);
+    for (auto* form : findChildren<QFormLayout*>()) {
+        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        form->setHorizontalSpacing(12);
+        form->setVerticalSpacing(8);
+    }
+    for (auto* field : {m_folder, m_baseName, m_title, m_artist, m_album, m_comment}) {
+        connect(field, &QLineEdit::textChanged, field, [field](const QString& text) {
+            field->setToolTip(text);
+        });
+    }
+    m_folder->setAccessibleName(tr("Folder"));
+    m_channels->setAccessibleName(tr("Separate stems"));
+    m_rangeStart->setAccessibleName(tr("Range start"));
+    m_rangeEnd->setAccessibleName(tr("Range end"));
+    m_tail->setAccessibleName(tr("Tail"));
+    m_tailSeconds->setAccessibleName(tr("Tail length"));
+    m_tailSilenceDb->setAccessibleName(tr("Silence threshold"));
+    m_tailMaxSeconds->setAccessibleName(tr("Maximum tail length"));
+    m_preRoll->setAccessibleName(tr("Pre-roll"));
+    m_tailSilenceDb->setToolTip(tr("Silence threshold"));
+    m_tailMaxSeconds->setToolTip(tr("Maximum tail length"));
+    m_progress->setAccessibleName(tr("Render progress"));
+    const QList<QWidget*> focusOrder{m_folder, m_browse, m_baseName, m_container,
+        m_encoding, m_quality, m_sampleRate, m_fileChannels, advanced->tabBar(),
+        m_rangeWhole, m_rangeCycle, m_rangeSelection, m_rangeCustom, m_rangeStart,
+        m_rangeEnd, m_tail, m_tailSeconds, m_tailSilenceDb, m_tailMaxSeconds, m_preRoll,
+        m_bypassInserts, m_bypassMaster, m_ignoreMuteSolo, m_preFaderStems, m_dither,
+        m_cover, m_removeCover, m_title, m_artist, m_album, m_comment,
+        m_writeMixdown, m_writeStems, m_channels, m_allChannels, m_selectedChannels,
+        m_noChannels, m_openAfterRender, m_openFolder, m_renderButton,
+        m_buttons->button(QDialogButtonBox::Cancel)};
+    for (int i = 1; i < focusOrder.size(); ++i) setTabOrder(focusOrder[i - 1], focusOrder[i]);
 }
 
 // ── Population ─────────────────────────────────────────────────────────────
@@ -571,6 +772,10 @@ void ExportDialog::repopulateEncodings() {
     }
 
     const QSignalBlocker qualityBlocker(m_quality);
+    const QVariant previousQuality = m_quality->currentData();
+    const bool sameContainer = m_quality->property("container").isValid()
+        && m_quality->property("container").toInt() == int(container);
+    m_quality->setProperty("container", int(container));
     m_quality->clear();
     if (container == ap::Container::Mp3) {
         for (int kbps : kMp3Bitrates) {
@@ -584,6 +789,10 @@ void ExportDialog::repopulateEncodings() {
             m_quality->addItem(tr("Quality %1%").arg(step), step);
         }
         m_quality->setCurrentIndex(3);  // 90%
+    }
+    if (sameContainer && previousQuality.isValid()) {
+        const int index = m_quality->findData(previousQuality);
+        if (index >= 0) m_quality->setCurrentIndex(index);
     }
 }
 
@@ -675,6 +884,10 @@ void ExportDialog::syncEnabledState() {
     m_allChannels->setEnabled(stems);
     m_selectedChannels->setEnabled(stems);
     m_noChannels->setEnabled(stems);
+    m_channels->setVisible(stems);
+    m_allChannels->setVisible(stems);
+    m_selectedChannels->setVisible(stems);
+    m_noChannels->setVisible(stems);
     // Pre-fader capture is a property of a stem; with only a mixdown to write
     // there is nothing for it to apply to.
     m_preFaderStems->setEnabled(stems);
@@ -698,6 +911,9 @@ void ExportDialog::syncEnabledState() {
     const auto container = ap::Container(m_container->currentData().toInt());
     m_formatForm->setRowVisible(m_quality, isLossy(container));
     m_formatForm->setRowVisible(m_encoding, !isLossy(container));
+    const auto encoding = ap::Encoding(m_encoding->currentData().toInt());
+    m_dither->setEnabled(encoding == ap::Encoding::Int16 || encoding == ap::Encoding::Int24);
+    updateCover();
 
     if (!m_rendering) {
         m_renderButton->setEnabled(m_writeMixdown->isChecked() ||
@@ -775,12 +991,21 @@ void ExportDialog::updateSummary() {
 
     QString text = (files == 1 ? tr("1 file") : tr("%1 files").arg(files)) +
                    QStringLiteral(" · ") + formatTime(seconds) +
-                   QStringLiteral(" · ~") + formatSize(bytes);
+                   QStringLiteral(" · ~") + formatSize(bytes + spec.tags.coverArt.size() * files);
+    if (spec.tail == rd::Tail::UntilSilence) text += tr(" + effect tail");
     if (spec.file.container == ap::Container::Flac) {
         text += tr(" (FLAC will be smaller)");
     }
     if (files == 0) text = tr("Nothing selected to render.");
     m_summary->setText(text);
+    m_previewTitle->setText(m_title->text().trimmed().isEmpty()
+        ? m_baseName->text().trimmed() : m_title->text().trimmed());
+    m_previewFormat->setText(QStringLiteral("%1  /  %2 kHz\n%3  ·  %4")
+        .arg(m_container->currentText()).arg(rate / 1000.0, 0, 'g', 5)
+        .arg(isLossy(spec.file.container) ? m_quality->currentText() : m_encoding->currentText())
+        .arg(m_fileChannels->currentText()));
+    if (!m_rendering) m_renderButton->setEnabled(files > 0 && !m_folder->text().trimmed().isEmpty()
+        && seconds > 0 && m_encoding->count() > 0);
 
     const QString warning = stemSelectionWarning();
     m_stemWarning->setText(warning);
@@ -839,10 +1064,77 @@ daw::rendering::Spec ExportDialog::collectSpec() const {
     spec.tags.title = m_title->text().trimmed().toStdString();
     spec.tags.artist = m_artist->text().trimmed().toStdString();
     spec.tags.comment = m_comment->text().trimmed().toStdString();
+    spec.tags.album = m_album->text().trimmed().toStdString();
+    if (spec.file.container == ap::Container::Mp3)
+        spec.tags.coverArt.assign(m_coverData.begin(), m_coverData.end());
     return spec;
 }
 
 // ── Rendering ──────────────────────────────────────────────────────────────
+
+bool ExportDialog::loadCover(const QString& path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 || file.size() > 10 * 1024 * 1024)
+        return false;
+    QByteArray data = file.readAll();
+    QBuffer buffer(&data);
+    buffer.open(QIODevice::ReadOnly);
+    QImageReader reader(&buffer);
+    const auto format = reader.format();
+    const QSize size = reader.size();
+    if ((format != "jpeg" && format != "png") || !size.isValid()
+        || size.width() > 8000 || size.height() > 8000) return false;
+    reader.setAutoTransform(true);
+    reader.setScaledSize(size.scaled(QSize(224, 224), Qt::KeepAspectRatio));
+    const QImage preview = reader.read();
+    if (preview.isNull()) return false;
+    m_coverData = std::move(data);
+    m_coverPath = path;
+    m_cover->setIcon(QPixmap::fromImage(preview));
+    updateCover();
+    if (!m_populating) updateSummary();
+    return true;
+}
+
+void ExportDialog::resizeEvent(QResizeEvent* event) {
+    QDialog::resizeEvent(event);
+    if (m_columns) m_columns->setDirection(width() < 900 ? QBoxLayout::TopToBottom
+                                                       : QBoxLayout::LeftToRight);
+    if (m_actions) m_actions->setDirection(width() < 740 ? QBoxLayout::TopToBottom
+                                                      : QBoxLayout::LeftToRight);
+    if (m_headerRow) m_headerRow->setDirection(width() < 680 ? QBoxLayout::TopToBottom
+                                                         : QBoxLayout::LeftToRight);
+}
+
+void ExportDialog::updateCover() {
+    const bool mp3 = ap::Container(m_container->currentData().toInt()) == ap::Container::Mp3;
+    const bool hasCover = !m_coverData.isEmpty();
+    m_cover->setEnabled(mp3);
+    m_cover->setText(hasCover ? QString() : tr("+ Add cover"));
+    if (!hasCover) m_cover->setIcon(QIcon());
+    m_cover->setToolTip(hasCover ? tr("Replace cover") : tr("Choose track cover"));
+    m_removeCover->setVisible(hasCover);
+    m_coverHint->setText(!mp3 ? tr("Choose MP3 to embed a cover.")
+        : hasCover ? tr("Cover embedded in MP3\n%1").arg(QFileInfo(m_coverPath).fileName())
+                   : tr("PNG or JPEG\nUp to 10 MB"));
+}
+
+void ExportDialog::reject() {
+    if (m_rendering) {
+        m_cancelRequested = true;
+        m_status->setText(tr("Cancelling…"));
+        return;
+    }
+    if (!m_renderedFile.isEmpty()) accept();
+    else QDialog::reject();
+}
+
+void ExportDialog::openRenderedFolder() {
+    if (m_renderedFile.isEmpty()) return;
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(m_renderedFile).absolutePath())))
+        m_status->setText(tr("Could not open folder: %1")
+            .arg(QDir::toNativeSeparators(QFileInfo(m_renderedFile).absolutePath())));
+}
 
 void ExportDialog::startRender() {
     if (m_rendering) return;
@@ -853,12 +1145,20 @@ void ExportDialog::startRender() {
         return;
     }
 
-    ui::exportprefs::save(spec);
+    rd::Spec remembered = spec;
+    remembered.range = m_rangeCycle->isChecked() ? rd::Range::CycleRegion : rd::Range::WholeProject;
+    ui::exportprefs::save(remembered);
     ui::exportprefs::setLastFolder(m_folder->text());
+    QSettings().setValue("export/openAfterRender", m_openAfterRender->isChecked());
 
     m_rendering = true;
     m_cancelRequested = false;
     m_renderButton->setEnabled(false);
+    m_page->setEnabled(false);
+    m_openAfterRender->setEnabled(false);
+    m_openFolder->hide();
+    m_renderedFile.clear();
+    m_buttons->button(QDialogButtonBox::Cancel)->setText(tr("Cancel"));
     m_progress->setRange(0, 1000);
     m_progress->setValue(0);
     m_progress->show();
@@ -890,8 +1190,11 @@ void ExportDialog::startRender() {
         report);
 
     m_rendering = false;
+    m_page->setEnabled(true);
+    m_openAfterRender->setEnabled(true);
     m_progress->hide();
-    m_renderButton->setEnabled(true);
+    syncEnabledState();
+    updateSummary();
 
     if (!result) {
         m_status->setText(tr("Render failed."));
@@ -903,36 +1206,105 @@ void ExportDialog::startRender() {
         m_status->setText(tr("Cancelled — nothing was written."));
         return;
     }
-    accept();
+    m_progress->setValue(1000);
+    m_progress->show();
+    m_status->setText(tr("Render complete — %1").arg(
+        report.files.size() == 1 ? tr("1 file") : tr("%1 files").arg(report.files.size())));
+    m_buttons->button(QDialogButtonBox::Cancel)->setText(tr("Close"));
+    if (!report.files.empty()) {
+        m_renderedFile = QString::fromStdString(report.files.front());
+        m_openFolder->show();
+        if (m_openAfterRender->isChecked()) openRenderedFolder();
+    }
+    for (auto* panel : findChildren<ui::GlassPanel*>()) panel->flashConfirm();
 }
 
 // ── Theme ──────────────────────────────────────────────────────────────────
 
 void ExportDialog::applyTheme() {
     const Theme& t = th();
-    // Lists, group boxes and the progress bar are not covered by the global
-    // stylesheet, so without this the dialog falls back to raw Fusion and reads
-    // as a different application.
+    const int bodySize = std::max(13, QFontInfo(QApplication::font()).pixelSize());
+    const QColor input = t.dark ? mixColors(t.surface, t.background, 0.3) : t.surfaceElevated;
+    const QColor secondary = readableOn(readableOn(t.textSecondary, t.background), t.surface);
     setStyleSheet(QString(R"(
-QGroupBox { border: 1px solid %SEP%; border-radius: 8px; margin-top: 9px;
-            padding-top: 10px; }
-QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px;
-                   color: %TEXT2%; font-size: 11px; font-weight: 700; }
+QWidget { font-size: %FONT%px; }
+#ExportDialog, #ExportPage, QScrollArea { background: %BG%; color: %TEXT%; }
+QLabel, QCheckBox, QRadioButton { color: %TEXT%; background: transparent; }
+QGroupBox { background: %SURFACE%; border: 1px solid %SEP%; border-radius: 14px;
+            margin-top: 0; padding: 34px 16px 16px; }
+QGroupBox::title { subcontrol-origin: margin; left: 16px; top: 12px; padding: 0;
+                   color: %TEXT%; font-size: %FONT%px; font-weight: 600; }
+QLineEdit, QComboBox, QDoubleSpinBox { background: %INPUT%; color: %TEXT%;
+    border: 1px solid %SEP%; border-radius: 7px; padding: 7px 9px; min-height: 20px;
+    selection-background-color: %ACCENT%; selection-color: %ACCENT_INK%; }
+QLineEdit { placeholder-text-color: %PLACEHOLDER%; }
+QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus { border-color: %ACCENT%; }
+QLineEdit:disabled, QComboBox:disabled, QDoubleSpinBox:disabled { color: %MUTED%; }
+QPushButton { background: %ELEVATED%; color: %TEXT%; border: 1px solid %SEP%;
+    border-radius: 8px; padding: 7px 12px; min-height: 20px; }
+QPushButton:hover { background: %HOVER%; border-color: %ACCENT%; }
+QPushButton:pressed { background: %TINT%; }
+QPushButton:focus { border-color: %ACCENT%; }
+QPushButton:disabled { color: %MUTED%; background: %SURFACE%; }
+QCheckBox, QRadioButton { spacing: 8px; padding: 4px 0; }
+QCheckBox::indicator:unchecked, QRadioButton::indicator:unchecked {
+    border: 1px solid %CONTROL_BORDER%; background: %WELL%; width: 12px; height: 12px; border-radius: 3px; }
+QRadioButton::indicator:unchecked { border-radius: 7px; }
+QCheckBox::indicator:hover, QRadioButton::indicator:hover { border-color: %ACCENT%; }
+QCheckBox:disabled, QRadioButton:disabled { color: %MUTED%; }
+QCheckBox:focus, QRadioButton:focus { color: %TEXT%; background: %TINT%; border-radius: 4px; }
+#ExportCover { background: %INPUT%; border: 1px dashed %CONTROL_BORDER%; border-radius: 12px; padding: 4px;
+    min-width: 114px; max-width: 114px; min-height: 114px; max-height: 114px; }
+#ExportCover:hover { background: %HOVER%; border-style: solid; }
+#ExportCover:disabled { background: %WELL%; border-color: %SEP%; }
+#ExportRender { background: %ACCENT%; color: %ACCENT_INK%; font-weight: 700; min-width: 100px; }
+#ExportRender:hover { background: %ACCENT_HOVER%; color: %ACCENT_HOVER_INK%; }
+#ExportRender:pressed { background: %ACCENT%; color: %ACCENT_INK%; }
+#ExportRender:focus { border: 1px solid %TEXT%; }
+#ExportRender:disabled { background: %SURFACE%; color: %MUTED%; }
+#ExportHeading { font-size: %HEADING%px; font-weight: 700; color: %TEXT%; }
+#ExportTrackTitle { font-size: %TITLE%px; font-weight: 600; }
+#ExportSubtitle, #ExportCoverHint { color: %TEXT2%; }
+#ExportFormatBadge { color: %TEXT%; background: transparent; border: none; padding: 8px 0; }
+QTabWidget::pane { background: %SURFACE%; border: 1px solid %SEP%; border-radius: 12px; padding: 8px; }
+QTabBar::tab { color: %TEXT2%; background: transparent; padding: 9px 16px; margin: 0 4px 8px 0; border-radius: 7px; }
+QTabBar::tab:selected { color: %TEXT%; background: %ELEVATED%; }
+QTabBar::tab:hover { background: %TINT%; }
 QListWidget { background: %WELL%; border: 1px solid %SEP%; border-radius: 7px;
-              alternate-background-color: %ALT%; outline: none; }
-QListWidget::item { padding: 3px 6px; border: none; }
-QListWidget::item:selected { background: %ACCENT%; color: white; }
-QProgressBar { background: %WELL%; border: none; border-radius: 3px; }
-QProgressBar::chunk { background: %ACCENT%; border-radius: 3px; }
-#ExportSummary, #ExportStatus { color: %TEXT2%; font-size: 11px; }
-#ExportWarning { color: %WARN%; font-size: 11px; }
+              alternate-background-color: %ALT%; color: %TEXT%; }
+QListWidget::item { padding: 5px 6px; border: none; }
+QListWidget::item:selected { background: %TINT%; color: %TEXT%; }
+QProgressBar { background: %WELL%; color: %TEXT%; border: none; border-radius: 5px; text-align: center; }
+QProgressBar::chunk { background: %TINT%; border-radius: 5px; }
+#ExportSummary { color: %TEXT%; font-size: %SUMMARY%px; font-weight: 600; }
+#ExportStatus { color: %TEXT2%; }
+#ExportWarning { color: %WARN%; }
 )")
+                       .replace("%FONT%", QString::number(bodySize))
+                       .replace("%HEADING%", QString::number(bodySize + 10))
+                       .replace("%TITLE%", QString::number(bodySize + 4))
+                       .replace("%SUMMARY%", QString::number(bodySize + 1))
+                       .replace("%INPUT%", input.name())
+                       .replace("%PLACEHOLDER%", readableOn(t.textSecondary, input).name())
+                       .replace("%BG%", t.background.name())
+                       .replace("%SURFACE%", t.surface.name())
+                       .replace("%ELEVATED%", t.surfaceElevated.name())
+                       .replace("%TEXT%", t.textPrimary.name())
+                       .replace("%MUTED%", mixColors(t.textSecondary, t.surface, 0.35).name())
+                       .replace("%HOVER%", mixColors(t.surfaceElevated, t.accent, 0.14).name())
+                       .replace("%TINT%", mixColors(t.surface, t.accent, 0.16).name())
+                       .replace("%ACCENT_INK%", readableOn(t.textPrimary, t.accent).name())
+                       .replace("%ACCENT_HOVER_INK%", readableOn(t.textPrimary, t.accentHighlight).name())
+                       .replace("%ACCENT_HOVER%", t.accentHighlight.name())
                        .replace("%WELL%", t.well().name())
                        .replace("%ALT%", mixColors(t.well(), t.surface, 0.45).name())
                        .replace("%SEP%", t.separator().name())
+                       .replace("%CONTROL_BORDER%", mixColors(t.surface, t.textSecondary, 0.7).name())
                        .replace("%ACCENT%", t.accent.name())
-                       .replace("%WARN%", Theme::record().name())
-                       .replace("%TEXT2%", t.textSecondary.name()));
+                       .replace("%WARN%", readableOn(Theme::record(), t.surfaceElevated).name())
+                       .replace("%TEXT2%", secondary.name()));
+    for (auto* panel : findChildren<ui::GlassPanel*>())
+        panel->setAccentColor(mixColors(t.surfaceElevated, t.accent, 0.18));
 }
 
 void ExportDialog::stageStemsForShot() {

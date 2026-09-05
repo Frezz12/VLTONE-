@@ -126,6 +126,9 @@ struct FileTags {
     /// the Broadcast Wave time reference, which is how a post-production tool
     /// drops a stem back at the right place instead of at zero.
     std::uint64_t timeReferenceSamples = 0;
+    std::string album;
+    /// PNG or JPEG front cover, at most 10 MiB. Embedded in MP3 on close.
+    std::vector<std::uint8_t> coverArt;
 };
 
 /// The file extension, without the dot, a container is written with.

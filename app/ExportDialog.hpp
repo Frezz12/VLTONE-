@@ -3,11 +3,13 @@
 #include "RenderSpec.hpp"
 
 #include <QDialog>
+#include <QByteArray>
 
 #include <string>
 #include <vector>
 
 class QCheckBox;
+class QBoxLayout;
 class QComboBox;
 class QDialogButtonBox;
 class QDoubleSpinBox;
@@ -42,7 +44,8 @@ class ExportDialog : public QDialog {
     Q_OBJECT
 public:
     ExportDialog(daw::EngineController& controller,
-                 const ui::SelectionModel* selection, QWidget* parent = nullptr);
+                 const ui::SelectionModel* selection, QWidget* parent = nullptr,
+                 const QString& projectPath = {});
 
     /// Exercised by --selftest: the dialog builds, its channel list is
     /// populated, and the format menus agree with what this build can write.
@@ -79,6 +82,11 @@ private:
     bool selectionRange(double& start, double& end) const;
 
     void startRender();
+    bool loadCover(const QString& path);
+    void updateCover();
+    void openRenderedFolder();
+    void reject() override;
+    void resizeEvent(QResizeEvent* event) override;
 
     daw::EngineController& m_controller;
     const ui::SelectionModel* m_selection = nullptr;
@@ -121,6 +129,21 @@ private:
     QLineEdit* m_title = nullptr;
     QLineEdit* m_artist = nullptr;
     QLineEdit* m_comment = nullptr;
+    QLineEdit* m_album = nullptr;
+    QPushButton* m_cover = nullptr;
+    QPushButton* m_removeCover = nullptr;
+    QLabel* m_coverHint = nullptr;
+    QByteArray m_coverData;
+    QString m_coverPath;
+    QCheckBox* m_openAfterRender = nullptr;
+    QPushButton* m_openFolder = nullptr;
+    QString m_renderedFile;
+    QWidget* m_page = nullptr;
+    QBoxLayout* m_columns = nullptr;
+    QBoxLayout* m_actions = nullptr;
+    QBoxLayout* m_headerRow = nullptr;
+    QLabel* m_previewTitle = nullptr;
+    QLabel* m_previewFormat = nullptr;
     /// Kept so a row can be hidden label and all: hiding only the field leaves
     /// an orphaned caption behind.
     QFormLayout* m_formatForm = nullptr;

@@ -14309,6 +14309,13 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
         ? rightDock->findChildren<QAbstractButton*>(
               QString(), Qt::FindDirectChildrenOnly)
         : QList<QAbstractButton*>();
+    const auto hasRightDockButton = [&rightDockButtons](const char* name) {
+        return std::any_of(rightDockButtons.begin(), rightDockButtons.end(),
+                           [name](QAbstractButton* button) {
+                               return button->objectName() ==
+                                      QString::fromLatin1(name);
+                           });
+    };
     const bool insetDocksPlaced = leftDock && rightDock && dockReveal &&
         leftDock->isVisible() && rightDock->isVisible() &&
         transportPill && leftDock->height() < transportPill->height() &&
@@ -14320,7 +14327,10 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
         std::abs(leftDock->mapTo(m_transport, QPoint()).x() - 14) <= 1 &&
         std::abs(rightDock->mapTo(m_transport, QPoint()).x() +
                      rightDock->width() - m_transport->width() + 14) <= 1 &&
-        rightDockButtons.size() == 2;
+        rightDockButtons.size() == 3 &&
+        hasRightDockButton("HeaderWebButton") &&
+        hasRightDockButton("HeaderNotebookButton") &&
+        hasRightDockButton("HeaderAiButton");
     const int collapsedDockWidth = leftDock ? leftDock->width() : 0;
     const bool drawerInitiallyCompact = dockBrowser && !dockBrowser->isVisible();
     if (dockReveal) dockReveal->click();
@@ -14521,14 +14531,15 @@ void MainWindow::onImportAudio() {
 }
 
 bool MainWindow::checkExportDialogForTest() {
-    ExportDialog dialog(m_controller, &m_selection, this);
+    ExportDialog dialog(m_controller, &m_selection, this, m_projectPath);
     return dialog.checkForTest();
 }
 
 void MainWindow::openExportDialogForShot(bool stems) {
-    auto* dialog = new ExportDialog(m_controller, &m_selection, this);
+    auto* dialog = new ExportDialog(m_controller, &m_selection, this, m_projectPath);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setModal(false);
+    dialog->resize(1020, 860);
     if (stems) dialog->stageStemsForShot();
     dialog->show();
 }
@@ -14536,7 +14547,7 @@ void MainWindow::openExportDialogForShot(bool stems) {
 void MainWindow::onExport() {
     // Modal and short-lived: a render takes over the engine while it runs, so
     // there is nothing useful to do with a second one open beside it.
-    ExportDialog dialog(m_controller, &m_selection, this);
+    ExportDialog dialog(m_controller, &m_selection, this, m_projectPath);
     if (dialog.exec() != QDialog::Accepted) return;
     statusBar()->showMessage(tr("Render finished"), 4000);
 }

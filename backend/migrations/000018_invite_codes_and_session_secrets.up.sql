@@ -17,7 +17,7 @@ CREATE UNIQUE INDEX project_invites_code_lookup_key
 ALTER TABLE project_live_sessions
     ADD COLUMN password_hash text,
     ADD COLUMN password_set_at timestamptz,
-    CHECK ((password_hash IS NULL) = (password_set_at IS NULL));
+    ADD CHECK ((password_hash IS NULL) = (password_set_at IS NULL));
 
 -- Redemption attempts, for the per-account and per-IP sliding windows. Without
 -- these, the per-invite counter does nothing against an attacker spraying

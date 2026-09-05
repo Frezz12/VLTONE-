@@ -797,7 +797,11 @@ int main() {
 
             EngineController reopened;
             reopened.initialize(48000, 512, false);
-            check(reopened.openProject(package).isOk(), "and reopens");
+            const audio::Result reopenedResult = reopened.openProject(package);
+            if (!reopenedResult)
+                std::printf("      reopen error: %s\n",
+                            reopenedResult.message().c_str());
+            check(reopenedResult.isOk(), "and reopens");
             const TrackModel* reloaded = reopened.project().tracks.empty()
                                              ? nullptr
                                              : &reopened.project().tracks.front();

@@ -96,6 +96,7 @@ copy_next_app admin
 cp backend/migrations/*.sql "$stage/migrations/"
 cp -aL packaging/server/. "$stage/ops/"
 chmod 0755 "$stage/ops/"*.sh
+chmod 0644 "$stage/ops/systemd/"*.service
 printf '%s\n' "$VERSION" > "$stage/VERSION"
 git rev-parse HEAD > "$stage/BUILD_COMMIT"
 

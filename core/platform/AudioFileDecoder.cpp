@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cmath>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <string>
@@ -345,11 +346,107 @@ bool isWriteSpecSupported(const WriteSpec& spec, ChannelCount channels,
     return sf_format_check(&info) != 0;
 }
 
+namespace {
+
+std::string_view coverMime(const std::vector<std::uint8_t>& data) {
+    constexpr std::array<std::uint8_t, 8> png{137, 80, 78, 71, 13, 10, 26, 10};
+    if (data.size() >= png.size() && std::equal(png.begin(), png.end(), data.begin()))
+        return "image/png";
+    if (data.size() >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff)
+        return "image/jpeg";
+    return {};
+}
+
+// libsndfile's MP3 writer can emit only ID3v1 text. Write ID3v2.4 for a front
+// cover and full UTF-8 titles (https://id3.org/id3v2.4.0-frames).
+// The render owns an unpublished temporary file until close succeeds. Move
+// its audio backwards in bounded blocks; even a long render stays bounded.
+Result embedMp3Tags(const std::string& path, const FileTags& tags) {
+    if (tags.title.empty() && tags.artist.empty() && tags.album.empty()
+        && tags.comment.empty() && tags.software.empty() && tags.coverArt.empty()) return Result::ok();
+    const auto fail = [] {
+        return Result::fail(EngineError::FileWriteError, "could not embed MP3 metadata");
+    };
+    std::fstream file(daw::platform::pathFromUtf8(path),
+                      std::ios::binary | std::ios::in | std::ios::out);
+    if (!file) return fail();
+    file.seekg(0, std::ios::end);
+    const std::streamoff length = file.tellg();
+    file.seekg(0);
+    std::array<unsigned char, 10> header{};
+    if (!file.read(reinterpret_cast<char*>(header.data()), header.size())) return fail();
+    std::uint32_t oldSize = 0;
+    std::streamoff audioStart = 0;
+    if (header[0] == 'I' && header[1] == 'D' && header[2] == '3') {
+        // These are fresh libsndfile files, never arbitrary imported tags.
+        // Refuse flags we cannot preserve rather than damage their metadata.
+        if ((header[3] != 3 && header[3] != 4) || header[4] || header[5]) return fail();
+        for (int i = 6; i < 10; ++i) {
+            if (header[i] & 0x80) return fail();
+            oldSize = (oldSize << 7) | header[i];
+        }
+        audioStart = 10 + oldSize;
+        if (audioStart > length || oldSize > 32 * 1024 * 1024) return fail();
+    }
+    header = {'I', 'D', '3', 4, 0, 0, 0, 0, 0, 0};
+    std::vector<char> body;
+    auto addFrame = [&](std::string_view id, const std::string& payload) {
+        body.insert(body.end(), id.begin(), id.end());
+        for (int i = 3; i >= 0; --i) body.push_back(char((payload.size() >> (i * 7)) & 0x7f));
+        body.insert(body.end(), {0, 0});
+        body.insert(body.end(), payload.begin(), payload.end());
+    };
+    auto textFrame = [&](std::string_view id, const std::string& value) {
+        if (!value.empty()) addFrame(id, std::string(1, char(3)) + value);
+    };
+    textFrame("TIT2", tags.title);
+    textFrame("TPE1", tags.artist);
+    textFrame("TALB", tags.album);
+    textFrame("TSSE", tags.software);
+    if (!tags.comment.empty()) addFrame("COMM", std::string("\3eng\0", 5) + tags.comment);
+    if (!tags.coverArt.empty()) {
+        std::string payload(1, '\0');
+        payload += coverMime(tags.coverArt);
+        payload.append("\0\3\0", 3); // MIME terminator, front cover, empty description
+        payload.append(reinterpret_cast<const char*>(tags.coverArt.data()), tags.coverArt.size());
+        addFrame("APIC", payload);
+    }
+    if (body.empty()) return Result::ok();
+    // Retain space if a future codec writes a larger tag, so the copy only
+    // ever moves forward in the file and can safely proceed back to front.
+    body.resize(std::max<std::size_t>(body.size(), oldSize), 0);
+    const auto tagSize = std::uint32_t(body.size());
+    for (int i = 0; i < 4; ++i) header[6 + i] = (tagSize >> ((3 - i) * 7)) & 0x7f;
+
+    const std::streamoff shift = 10 + tagSize - audioStart;
+    std::array<char, 64 * 1024> block;
+    for (std::streamoff end = length; end > audioStart;) {
+        const auto count = std::min<std::streamoff>(block.size(), end - audioStart);
+        end -= count;
+        file.seekg(end);
+        if (!file.read(block.data(), count)) return fail();
+        file.seekp(end + shift);
+        if (!file.write(block.data(), count)) return fail();
+    }
+    file.seekp(0);
+    file.write(reinterpret_cast<const char*>(header.data()), header.size());
+    file.write(body.data(), body.size());
+    file.flush();
+    if (!file) return fail();
+    file.close();
+    return file.fail() ? fail() : Result::ok();
+}
+
+} // namespace
+
 struct AudioFileWriter::Impl {
     SNDFILE* file = nullptr;
     ChannelCount channels = 0;
     std::vector<float> interleaved;
     std::string error;
+    std::string path;
+    bool mp3 = false;
+    FileTags tags;
     /// Bits in the target fixed-point word, or zero for float and lossy
     /// encodings, which are written straight through as floats.
     int integerBits = 0;
@@ -430,6 +527,9 @@ Result AudioFileWriter::open(const std::string& path, const WriteSpec& spec,
     }
 
     m_impl->channels = channels;
+    m_impl->path = path;
+    m_impl->mp3 = spec.container == Container::Mp3;
+    m_impl->tags = {};
     m_impl->integerBits = integerBitsFor(spec.encoding);
     // 32-bit integer resolution is already far below any noise floor, so dither
     // there would only add audible noise for nothing.
@@ -441,6 +541,16 @@ Result AudioFileWriter::open(const std::string& path, const WriteSpec& spec,
 
 Result AudioFileWriter::setTags(const FileTags& tags) {
     if (!m_impl || !m_impl->file) return Result::fail(EngineError::NotInitialized);
+    if (m_impl->mp3 && !tags.coverArt.empty()) {
+        if (tags.coverArt.size() > 10 * 1024 * 1024 || coverMime(tags.coverArt).empty())
+            return Result::fail(EngineError::InvalidArgument, "MP3 cover must be PNG or JPEG up to 10 MiB");
+    }
+    if (m_impl->mp3) {
+        for (const auto* text : {&tags.title, &tags.artist, &tags.album, &tags.comment, &tags.software})
+            if (text->size() > 1024 * 1024)
+                return Result::fail(EngineError::InvalidArgument, "MP3 text tag is too large");
+        m_impl->tags = tags;
+    }
 
     // Return values are ignored on purpose: a container that cannot carry a
     // given string says so, and that is not a reason to fail a render.
@@ -451,6 +561,7 @@ Result AudioFileWriter::setTags(const FileTags& tags) {
     put(SF_STR_ARTIST, tags.artist);
     put(SF_STR_COMMENT, tags.comment);
     put(SF_STR_SOFTWARE, tags.software);
+    put(SF_STR_ALBUM, tags.album);
 
     // The Broadcast Wave time reference is what lets a stem be dropped back at
     // its own timeline position rather than at zero. Only the RIFF-family
@@ -535,10 +646,10 @@ Result AudioFileWriter::close() {
     SNDFILE* file = m_impl->file;
     m_impl->file = nullptr;
     const int result = sf_close(file);
-    return result == 0
-               ? Result::ok()
-               : Result::fail(EngineError::FileWriteError,
-                              "failed to finalize audio file");
+    if (result != 0) return Result::fail(EngineError::FileWriteError,
+                                       "failed to finalize audio file");
+    if (m_impl->mp3) return embedMp3Tags(m_impl->path, m_impl->tags);
+    return Result::ok();
 }
 
 } // namespace audio::platform

@@ -3380,6 +3380,40 @@ The plugin is still listed from an earlier scan but its module no longer offers 
 </context>
 <context>
     <name>ExportDialog</name>
+    <message><source>Choose the sound, range and track details.</source><translation>Настройте звук, диапазон и информацию о треке.</translation></message>
+    <message><source>Range start</source><translation>Начало диапазона</translation></message>
+    <message><source>Range end</source><translation>Конец диапазона</translation></message>
+    <message><source>Tail length</source><translation>Длина хвоста</translation></message>
+    <message><source>Silence threshold</source><translation>Порог тишины</translation></message>
+    <message><source>Maximum tail length</source><translation>Максимальная длина хвоста</translation></message>
+    <message><source>Render progress</source><translation>Прогресс рендера</translation></message>
+    <message><source>Render your track</source><translation>Рендер трека</translation></message>
+    <message><source>The final sound. Ready to share.</source><translation>Последний штрих перед публикацией.</translation></message>
+    <message><source>Track details</source><translation>Информация о треке</translation></message>
+    <message><source>Add cover</source><translation>Добавить обложку</translation></message>
+    <message><source>+ Add cover</source><translation>+ Обложка</translation></message>
+    <message><source>Choose track cover</source><translation>Выбрать обложку трека</translation></message>
+    <message><source>Replace cover</source><translation>Заменить обложку</translation></message>
+    <message><source>Remove cover</source><translation>Удалить обложку</translation></message>
+    <message><source>Album</source><translation>Альбом</translation></message>
+    <message><source>Cover images (*.jpg *.jpeg *.png)</source><translation>Обложки (*.jpg *.jpeg *.png)</translation></message>
+    <message><source>Could not load cover</source><translation>Не удалось загрузить обложку</translation></message>
+    <message><source>Choose a valid PNG or JPEG image up to 10 MB and 8000 × 8000 pixels.</source><translation>Выберите изображение PNG или JPEG размером до 10 МБ и 8000 × 8000 пикселей.</translation></message>
+    <message><source>Range &amp; tail</source><translation>Диапазон и хвост</translation></message>
+    <message><source>Open folder after render</source><translation>Открыть папку после рендера</translation></message>
+    <message><source>Open folder</source><translation>Открыть папку</translation></message>
+    <message><source> + effect tail</source><translation> + хвост эффектов</translation></message>
+    <message><source>Choose MP3 to embed a cover.</source><translation>Выберите MP3, чтобы добавить обложку.</translation></message>
+    <message><source>Cover embedded in MP3
+%1</source><translation>Обложка внутри MP3
+%1</translation></message>
+    <message><source>PNG or JPEG
+Up to 10 MB</source><translation>PNG или JPEG
+До 10 МБ</translation></message>
+    <message><source>Could not open folder: %1</source><translation>Не удалось открыть папку: %1</translation></message>
+    <message><source>Render complete — %1</source><translation>Рендер завершён — %1</translation></message>
+    <message><source>Cancel</source><translation>Отмена</translation></message>
+    <message><source>Close</source><translation>Закрыть</translation></message>
     <message>
         <source>WAV</source>
         <translation>WAV</translation>
