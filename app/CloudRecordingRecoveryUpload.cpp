@@ -59,6 +59,10 @@ bool canonicalUuid(const QString& value) {
                                           std::size_t(utf8.size())));
 }
 
+bool optionalCanonicalUuid(std::string_view value) {
+    return value.empty() || canonicalUuid(value);
+}
+
 QString uuidText(const std::string& value) {
     return QString::fromLatin1(value.data(), qsizetype(value.size()));
 }
@@ -265,12 +269,13 @@ bool structurallyValidIdentities(
         for (const CloudRecordingCapture& capture : run.captures) {
             if (!canonicalUuid(capture.captureId) ||
                 !canonicalUuid(capture.trackId) ||
-                !canonicalUuid(capture.leaseId) ||
+                !optionalCanonicalUuid(capture.leaseId) ||
                 !canonicalUuid(capture.uploadId) ||
                 !canonicalUuid(capture.assetId) ||
                 !captureIds.insert(capture.captureId).second ||
                 !trackIds.insert(capture.trackId).second ||
-                !leaseIds.insert(capture.leaseId).second ||
+                (!capture.leaseId.empty() &&
+                 !leaseIds.insert(capture.leaseId).second) ||
                 !uploadIds.insert(capture.uploadId).second ||
                 !assetIds.insert(capture.assetId).second ||
                 capture.localWavPath.empty() ||
@@ -452,6 +457,17 @@ bool checkCloudRecordingRecoveryUploadForTest(QString* error) {
             prepared.recordings[1].uploadId) {
         return failTest(error,
                         QStringLiteral("valid recovery upload was not adapted"));
+    }
+    CloudRecordingRecoveryManifest leaseFree = valid;
+    for (auto& capture : leaseFree.runs[0].captures)
+        capture.leaseId.clear();
+    const auto leaseFreePrepared =
+        prepareCloudRecordingRecoveryUpload(leaseFree, runId);
+    if (!leaseFreePrepared ||
+        !leaseFreePrepared.correlations[0].capturedLeaseId.isEmpty()) {
+        return failTest(
+            error,
+            QStringLiteral("v3 lease-free recovery upload was not adapted"));
     }
 
     const auto missing = prepareCloudRecordingRecoveryUpload(

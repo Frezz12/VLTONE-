@@ -109,8 +109,9 @@ void snapshotParameters(plugins::PluginInstance& instance,
         // that newer value; querying the processor in this short interval would
         // roll the recovery snapshot back by one block.
         if (!storedIds.insert(parameter.id).second) continue;
-        destination.push_back(
-            InsertParameter{parameter.id, instance.parameterValue(parameter.index)});
+        const double value = instance.parameterValue(parameter.index);
+        if (std::isfinite(value))
+            destination.push_back(InsertParameter{parameter.id, value});
     }
 }
 
@@ -426,9 +427,19 @@ bool supportedSharedBuiltin(const InsertModel& insert) {
             insert.uid == "daw.gravity" || insert.uid == "daw.graphit");
 }
 
+bool supportedSharedPlugin(const InsertModel& insert) {
+    if (supportedSharedBuiltin(insert)) return true;
+    const bool external = insert.format == PluginFormat::Clap ||
+                          insert.format == PluginFormat::Vst3 ||
+                          insert.format == PluginFormat::AudioUnit ||
+                          insert.format == PluginFormat::Vst;
+    return external && !insert.uid.empty() && !insert.vendor.empty() &&
+           !insert.pluginVersion.empty() && insert.stateSchemaVersion >= 0;
+}
+
 bool cleanSharedInsert(const InsertModel& source, InsertModel& copy,
                        bool mintId) {
-    if (!source.isLoaded() || !supportedSharedBuiltin(source)) return false;
+    if (!source.isLoaded() || !supportedSharedPlugin(source)) return false;
     copy = source;
     if (mintId) copy.id = newUuid();
     copy.path.clear();
@@ -470,7 +481,7 @@ bool appendSharedChainReplacement(
     const std::vector<InsertModel>& current,
     const std::vector<EngineController::ChainSlotSnapshot>& source) {
     for (const InsertModel& insert : current) {
-        if (!insert.isLoaded() || !supportedSharedBuiltin(insert)) return false;
+        if (!insert.isLoaded() || !supportedSharedPlugin(insert)) return false;
         appendCommand(batch,
                       collab::DeletePluginInsert{location, insert.id});
     }
@@ -3615,6 +3626,12 @@ void EngineController::setProjectName(std::string name) {
     m_project.name = std::move(name);
 }
 
+void EngineController::setProjectMetadata(std::string author,
+                                          std::string coverImagePath) {
+    m_project.author = std::move(author);
+    m_project.coverImagePath = std::move(coverImagePath);
+}
+
 audio::Result EngineController::saveProject(const std::string& packageDir) {
     m_project.sampleRate = m_sampleRate;
     const audio::Result stateResult = writePluginState(m_project, packageDir);
@@ -3664,18 +3681,23 @@ cloud::CloudPublicationCapture EngineController::captureCloudPublicationV1(
             issueForSlot(
                 cloud::PublicationCaptureIssueKind::MissingLivePlugin, slot,
                 location,
-                "the built-in slot has no live instance to capture");
+                "the plugin slot has no live instance to capture");
             return;
         }
 
         const plugins::PluginDescriptor& descriptor = left->descriptor();
-        if (descriptor.format != plugins::Format::Internal ||
-            descriptor.uid != slot.uid || descriptor.version.empty() ||
-            descriptor.stateSchemaVersion <= 0) {
+        const bool internal = slot.format == PluginFormat::Internal;
+        if (descriptor.format != toHostFormat(slot.format) ||
+            descriptor.uid != slot.uid || descriptor.vendor != slot.vendor ||
+            descriptor.version.empty() ||
+            (internal ? descriptor.stateSchemaVersion <= 0
+                      : descriptor.stateSchemaVersion < 0)) {
             issueForSlot(
-                cloud::PublicationCaptureIssueKind::UnknownInternalPlugin,
+                internal
+                    ? cloud::PublicationCaptureIssueKind::UnknownInternalPlugin
+                    : cloud::PublicationCaptureIssueKind::PluginStateCaptureFailed,
                 slot, location,
-                "the live built-in does not expose exact v1 version/state-schema metadata");
+                "the live plugin does not match its exact shared contract");
             return;
         }
         slot.pluginVersion = descriptor.version;
@@ -3701,7 +3723,7 @@ cloud::CloudPublicationCapture EngineController::captureCloudPublicationV1(
             issueForSlot(
                 cloud::PublicationCaptureIssueKind::PluginStateCaptureFailed,
                 slot, state.location,
-                "the built-in plugin could not serialize its state");
+                "the plugin could not serialize its state");
             return;
         }
 
@@ -3861,7 +3883,7 @@ cloud::CloudPublicationCapture EngineController::captureCloudPublicationV1(
                     cloud::PublicationCaptureIssueKind::MissingLocalSource,
                     state.location + "/binding:" + binding.key,
                     binding.asset.assetId, slot.uid, slot.name,
-                    "this built-in asset binding has no local capture adapter"});
+                    "this plugin asset binding has no local capture adapter"});
             }
         }
     }
@@ -7387,9 +7409,10 @@ std::string EngineController::addInsert(const std::string& channelId,
 
     const size_t at = std::min(index, slots->size());
     if (cloudProjectBound()) {
-        if (slot.format != PluginFormat::Internal) return {};
+        InsertModel shared;
+        if (!cleanSharedInsert(slot, shared, false)) return {};
         const auto result = submitSharedMutation(
-            collab::AddPluginInsert{channelPluginLocation(channelId), slot,
+            collab::AddPluginInsert{channelPluginLocation(channelId), shared,
                                     previousIdAt(*slots, at)},
             "Add " + descriptor.name);
         return result == collab::SharedMutationResult::Submitted ? slot.id
@@ -7430,7 +7453,6 @@ void EngineController::removeInsert(const std::string& channelId,
     if (found == slots->end()) return;
 
     if (cloudProjectBound()) {
-        if (found->format != PluginFormat::Internal) return;
         (void)submitSharedMutation(
             collab::DeletePluginInsert{channelPluginLocation(channelId),
                                        insertId},
@@ -7471,7 +7493,6 @@ void EngineController::moveInsert(const std::string& channelId,
     if (from == to) return;
 
     if (cloudProjectBound()) {
-        if (found->format != PluginFormat::Internal) return;
         std::vector<InsertModel> scratch = *slots;
         InsertModel moved = scratch[from];
         scratch.erase(scratch.begin() + std::ptrdiff_t(from));
@@ -7513,13 +7534,11 @@ bool EngineController::replaceInsert(const std::string& channelId,
     InsertModel replacement = before;
     applyDescriptor(replacement, descriptor);
     if (cloudProjectBound()) {
-        if (before.format != PluginFormat::Internal ||
-            replacement.format != PluginFormat::Internal) {
-            return false;
-        }
+        InsertModel shared;
+        if (!cleanSharedInsert(replacement, shared, false)) return false;
         const auto result = submitSharedMutation(
             collab::ReplacePluginInsert{channelPluginLocation(channelId),
-                                        insertId, replacement},
+                                        insertId, shared},
             "Replace " + before.name);
         return result == collab::SharedMutationResult::Submitted;
     }
@@ -7598,7 +7617,6 @@ void EngineController::setAllInsertsBypassed(const std::string& channelId,
         auto batch = std::make_shared<collab::BatchCommand>();
         for (const InsertModel& slot : *slots) {
             if (slot.bypassed == bypassed) continue;
-            if (slot.format != PluginFormat::Internal) return;
             appendCommand(batch, collab::SetPluginProperty{
                 channelPluginLocation(channelId), slot.id,
                 collab::PluginProperty::Bypassed, bypassed});
@@ -7836,10 +7854,11 @@ std::string EngineController::addSamplerFxInsert(
     applyDescriptor(slot, descriptor);
     const size_t at = std::min(index, slots->size());
     if (cloudProjectBound()) {
-        if (slot.format != PluginFormat::Internal) return {};
+        InsertModel shared;
+        if (!cleanSharedInsert(slot, shared, false)) return {};
         const auto result = submitSharedMutation(
             collab::AddPluginInsert{
-                {collab::PluginChain::SamplerFx, trackId, {}}, slot,
+                {collab::PluginChain::SamplerFx, trackId, {}}, shared,
                 previousIdAt(*slots, at)},
             "Add Sampler FX " + descriptor.name);
         return result == collab::SharedMutationResult::Submitted ? slot.id
@@ -7886,7 +7905,6 @@ void EngineController::removeSamplerFxInsert(const std::string& trackId,
                                     });
     if (found == slots->end()) return;
     if (cloudProjectBound()) {
-        if (found->format != PluginFormat::Internal) return;
         (void)submitSharedMutation(
             collab::DeletePluginInsert{
                 {collab::PluginChain::SamplerFx, trackId, {}}, insertId},
@@ -7927,7 +7945,6 @@ void EngineController::moveSamplerFxInsert(const std::string& trackId,
     const size_t to = std::min(targetIndex, slots->size() - 1);
     if (from == to) return;
     if (cloudProjectBound()) {
-        if (found->format != PluginFormat::Internal) return;
         std::vector<InsertModel> scratch = *slots;
         InsertModel moved = scratch[from];
         scratch.erase(scratch.begin() + std::ptrdiff_t(from));
@@ -7968,12 +7985,12 @@ bool EngineController::replaceSamplerFxInsert(
     InsertModel replacement = before;
     applyDescriptor(replacement, descriptor);
     if (cloudProjectBound()) {
-        if (before.format != PluginFormat::Internal ||
-            replacement.format != PluginFormat::Internal) return false;
+        InsertModel shared;
+        if (!cleanSharedInsert(replacement, shared, false)) return false;
         const auto result = submitSharedMutation(
             collab::ReplacePluginInsert{
                 {collab::PluginChain::SamplerFx, trackId, {}}, insertId,
-                replacement},
+                shared},
             "Replace Sampler FX " + before.name);
         return result == collab::SharedMutationResult::Submitted;
     }
@@ -8013,7 +8030,6 @@ void EngineController::setAllSamplerFxBypassed(const std::string& trackId,
         auto batch = std::make_shared<collab::BatchCommand>();
         for (const InsertModel& slot : *slots) {
             if (slot.bypassed == bypassed) continue;
-            if (slot.format != PluginFormat::Internal) return;
             appendCommand(batch, collab::SetPluginProperty{
                 {collab::PluginChain::SamplerFx, trackId, {}}, slot.id,
                 collab::PluginProperty::Bypassed, bypassed});
@@ -8120,10 +8136,11 @@ std::string EngineController::addClipFxInsert(
     applyDescriptor(slot, descriptor);
     const size_t at = std::min(index, slots->size());
     if (cloudProjectBound()) {
-        if (slot.format != PluginFormat::Internal) return {};
+        InsertModel shared;
+        if (!cleanSharedInsert(slot, shared, false)) return {};
         const auto result = submitSharedMutation(
             collab::AddPluginInsert{
-                {collab::PluginChain::Clip, trackId, clipId}, slot,
+                {collab::PluginChain::Clip, trackId, clipId}, shared,
                 previousIdAt(*slots, at)},
             "Add Clip FX " + descriptor.name);
         return result == collab::SharedMutationResult::Submitted ? slot.id
@@ -8166,7 +8183,6 @@ void EngineController::removeClipFxInsert(const std::string& trackId,
                                     });
     if (found == slots->end()) return;
     if (cloudProjectBound()) {
-        if (found->format != PluginFormat::Internal) return;
         (void)submitSharedMutation(
             collab::DeletePluginInsert{
                 {collab::PluginChain::Clip, trackId, clipId}, insertId},
@@ -8205,7 +8221,6 @@ void EngineController::moveClipFxInsert(const std::string& trackId,
     const size_t to = std::min(targetIndex, slots->size() - 1);
     if (from == to) return;
     if (cloudProjectBound()) {
-        if (found->format != PluginFormat::Internal) return;
         std::vector<InsertModel> scratch = *slots;
         InsertModel moved = scratch[from];
         scratch.erase(scratch.begin() + std::ptrdiff_t(from));
@@ -8245,12 +8260,12 @@ bool EngineController::replaceClipFxInsert(
     InsertModel replacement = before;
     applyDescriptor(replacement, descriptor);
     if (cloudProjectBound()) {
-        if (before.format != PluginFormat::Internal ||
-            replacement.format != PluginFormat::Internal) return false;
+        InsertModel shared;
+        if (!cleanSharedInsert(replacement, shared, false)) return false;
         const auto result = submitSharedMutation(
             collab::ReplacePluginInsert{
                 {collab::PluginChain::Clip, trackId, clipId}, insertId,
-                replacement},
+                shared},
             "Replace Clip FX " + before.name);
         return result == collab::SharedMutationResult::Submitted;
     }
@@ -8289,7 +8304,6 @@ void EngineController::setAllClipFxBypassed(const std::string& trackId,
         auto batch = std::make_shared<collab::BatchCommand>();
         for (const InsertModel& slot : *slots) {
             if (slot.bypassed == bypassed) continue;
-            if (slot.format != PluginFormat::Internal) return;
             appendCommand(batch, collab::SetPluginProperty{
                 {collab::PluginChain::Clip, trackId, clipId}, slot.id,
                 collab::PluginProperty::Bypassed, bypassed});
@@ -9058,11 +9072,7 @@ bool EngineController::loadInstrumentSampler(const std::string& trackId,
         auto request = sharedAudioRequest(filePath);
         if (!request) return false;
         const InsertModel before = track->instrument;
-        if (!before.id.empty() &&
-            (before.format != PluginFormat::Internal ||
-             !supportedSharedBuiltin(before))) {
-            return false;
-        }
+        if (!before.id.empty() && !supportedSharedPlugin(before)) return false;
 
         PendingSharedAssetMutation pending;
         pending.expected = expectedSharedAudioAsset(*request);
@@ -9245,8 +9255,43 @@ bool EngineController::pumpPluginEvents() {
     bool changed = false;
     bool needsRebuild = false;
     bool needsReconfigure = false;
+    struct NativeParameterEdit {
+        collab::PluginLocation location;
+        std::string channelId;
+        std::string insertId;
+        std::string parameterId;
+        double before = 0.0;
+        double after = 0.0;
+        bool right = false;
+    };
+    std::vector<NativeParameterEdit> nativeParameterEdits;
+    const auto rememberNativeEdit = [&](const collab::PluginLocation& location,
+                                        const std::string& channelId,
+                                        const std::string& insertId,
+                                        const std::string& parameterId,
+                                        double before, double after,
+                                        bool right) {
+        auto found = std::find_if(
+            nativeParameterEdits.begin(), nativeParameterEdits.end(),
+            [&](const NativeParameterEdit& value) {
+                return value.location == location &&
+                       value.channelId == channelId &&
+                       value.insertId == insertId &&
+                       value.parameterId == parameterId &&
+                       value.right == right;
+            });
+        if (found == nativeParameterEdits.end()) {
+            nativeParameterEdits.push_back(
+                {location, channelId, insertId, parameterId, before, after,
+                 right});
+        } else {
+            found->after = after;
+        }
+    };
 
-    auto pumpSlot = [&](const std::string& channelId, InsertSlot& slot) {
+    auto pumpSlot = [&](const std::string& channelId,
+                        const collab::PluginLocation& location,
+                        InsertSlot& slot) {
         plugins::PluginEvent event;
         if (slot.node) {
             slot.node->beginMainThreadPump();
@@ -9307,8 +9352,10 @@ bool EngineController::pumpPluginEvents() {
                     if (InsertModel* model =
                             mutableInsertSlot(channelId, slot.slotId)) {
                         bool found = false;
+                        double before = event.value;
                         for (InsertParameter& parameter : model->parameters) {
                             if (parameter.id != parameterId) continue;
+                            before = parameter.value;
                             parameter.value = event.value;
                             found = true;
                         }
@@ -9316,6 +9363,9 @@ bool EngineController::pumpPluginEvents() {
                             model->parameters.push_back(
                                 InsertParameter{parameterId, event.value});
                         }
+                        rememberNativeEdit(location, channelId, slot.slotId,
+                                           parameterId, before, event.value,
+                                           false);
                     }
                     writeAutomationPoint(channelId, slot.slotId, parameterId,
                                          event.value);
@@ -9363,8 +9413,10 @@ bool EngineController::pumpPluginEvents() {
             const std::string& parameterId = parameters[event.paramIndex].id;
             if (InsertModel* model = mutableInsertSlot(channelId, slot.slotId)) {
                 bool found = false;
+                double before = event.value;
                 for (InsertParameter& parameter : model->rightParameters) {
                     if (parameter.id != parameterId) continue;
+                    before = parameter.value;
                     parameter.value = event.value;
                     found = true;
                 }
@@ -9372,6 +9424,8 @@ bool EngineController::pumpPluginEvents() {
                     model->rightParameters.push_back(
                         InsertParameter{parameterId, event.value});
                 }
+                rememberNativeEdit(location, channelId, slot.slotId,
+                                   parameterId, before, event.value, true);
             }
             changed = true;
         }
@@ -9380,13 +9434,46 @@ bool EngineController::pumpPluginEvents() {
     for (auto& entry : m_channels) {
         // The instrument as well as the inserts — it is a plugin slot too, and
         // one that never got its main-thread turn before this.
-        for (InsertSlot& slot : entry.second.instrument) pumpSlot(entry.first, slot);
-        for (InsertSlot& slot : entry.second.samplerInserts) pumpSlot(entry.first, slot);
-        for (auto& [clipId, clipFx] : entry.second.clipFx) {
-            (void)clipId;
-            for (InsertSlot& slot : clipFx.inserts) pumpSlot(entry.first, slot);
+        for (InsertSlot& slot : entry.second.instrument) {
+            pumpSlot(entry.first,
+                     {collab::PluginChain::Instrument, entry.first, {}}, slot);
         }
-        for (InsertSlot& slot : entry.second.inserts) pumpSlot(entry.first, slot);
+        for (InsertSlot& slot : entry.second.samplerInserts) {
+            pumpSlot(entry.first,
+                     {collab::PluginChain::SamplerFx, entry.first, {}}, slot);
+        }
+        for (auto& [clipId, clipFx] : entry.second.clipFx) {
+            for (InsertSlot& slot : clipFx.inserts) {
+                pumpSlot(entry.first,
+                         {collab::PluginChain::Clip, entry.first, clipId}, slot);
+            }
+        }
+        for (InsertSlot& slot : entry.second.inserts) {
+            pumpSlot(entry.first, channelPluginLocation(entry.first), slot);
+        }
+    }
+
+    // Native editors never bypass the collaboration command path. Coalesce a
+    // burst drained in this control-thread turn to one durable parameter
+    // operation; the audio callback only ever wrote the lock-free event ring.
+    if (cloudProjectBound()) {
+        for (const NativeParameterEdit& edit : nativeParameterEdits) {
+            if (edit.before == edit.after) continue;
+            const auto result = submitSharedMutation(
+                collab::SetPluginParameter{
+                    edit.location, edit.insertId,
+                    edit.parameterId, edit.after, edit.right},
+                "Edit Plugin Parameter");
+            if (result != collab::SharedMutationResult::Blocked) continue;
+            if (InsertModel* model =
+                    mutableInsertSlot(edit.channelId, edit.insertId)) {
+                auto& values = edit.right ? model->rightParameters
+                                          : model->parameters;
+                for (InsertParameter& parameter : values)
+                    if (parameter.id == edit.parameterId)
+                        parameter.value = edit.before;
+            }
+        }
     }
 
     if (needsRebuild) {
@@ -12464,14 +12551,13 @@ bool EngineController::setTrackInstrumentPlugin(
         if (after.id.empty()) {
             body = collab::DeletePluginInsert{location, before.id};
         } else if (before.id.empty()) {
-            if (after.format != PluginFormat::Internal ||
-                after.uid != "daw.sampler") return false;
-            body = collab::AddPluginInsert{location, after, {}};
+            InsertModel shared;
+            if (!cleanSharedInsert(after, shared, false)) return false;
+            body = collab::AddPluginInsert{location, shared, {}};
         } else {
-            if (before.format != PluginFormat::Internal ||
-                after.format != PluginFormat::Internal ||
-                after.uid != "daw.sampler") return false;
-            body = collab::ReplacePluginInsert{location, before.id, after};
+            InsertModel shared;
+            if (!cleanSharedInsert(after, shared, false)) return false;
+            body = collab::ReplacePluginInsert{location, before.id, shared};
         }
         const auto result = submitSharedMutation(
             std::move(body), after.name.empty() ? "Remove Instrument"
@@ -15170,9 +15256,6 @@ bool EngineController::startRecordingTracksExactly(
 
 bool EngineController::startRecordingTracksImpl(
     const std::vector<std::string>& trackIds, bool requireEveryTarget) {
-    // Production V1 deliberately keeps recording local-only.  This boundary
-    // also protects non-UI callers and stale shortcuts.
-    if (cloudProjectBound()) return false;
     if (isRecording() || trackIds.empty()) return false;
     if (requireEveryTarget && !canStartRecordingTracksExactly(trackIds))
         return false;
@@ -15316,7 +15399,6 @@ bool EngineController::armCountInExactly(
 bool EngineController::armCountInImpl(
     const std::vector<std::string>& trackIds, int beats,
     bool requireEveryTarget) {
-    if (cloudProjectBound()) return false;
     if (isRecording() || trackIds.empty()) return false;
     if (requireEveryTarget && !canStartRecordingTracksExactly(trackIds))
         return false;
@@ -17277,15 +17359,19 @@ audio::AudioDeviceConfig EngineController::audioConfiguration() const {
 
 audio::Result EngineController::applyAudioConfiguration(
     const audio::AudioDeviceConfig& config) {
+    const bool resumePlayback = isPlaying() && !isRecording();
     if (!m_liveDeviceAllowed) {
         const bool rateChanged = std::abs(config.sampleRate - m_sampleRate) > 0.01;
+        const bool bufferChanged = config.bufferSize != m_bufferSize;
         m_bufferSize = config.bufferSize;
         if (rateChanged)
             applyRenderSampleRate(config.sampleRate);
-        else
+        else if (bufferChanged)
             (void)m_engine.prepare(m_sampleRate, m_bufferSize, 2);
         m_project.sampleRate = m_sampleRate;
-        return rebuildGraph();
+        auto rebuilt = rateChanged ? rebuildGraph() : audio::Result::ok();
+        if (resumePlayback) m_engine.transport().play();
+        return rebuilt;
     }
 
     // A newly opened stream may start immediately. Keep it silent until the
@@ -17295,27 +17381,30 @@ audio::Result EngineController::applyAudioConfiguration(
     if (!applied) {
         m_devices->setAudioCallback(m_callback.get());
         m_deviceOpen = m_devices->isRunning();
+        if (resumePlayback) m_engine.transport().play();
         return applied;
     }
 
     const double settledRate = m_devices->sampleRate();
     const uint32_t settledBuffer = m_devices->bufferSize();
     const bool rateChanged = std::abs(settledRate - m_sampleRate) > 0.01;
+    const bool bufferChanged = settledBuffer != m_bufferSize;
     m_bufferSize = settledBuffer;
     if (rateChanged) {
         applyRenderSampleRate(settledRate);
-    } else {
+    } else if (bufferChanged) {
         (void)m_engine.prepare(m_sampleRate, m_bufferSize, 2);
         m_recorder->initialize(m_sampleRate, 2);
     }
     m_project.sampleRate = m_sampleRate;
-    auto rebuilt = rebuildGraph();
+    auto rebuilt = rateChanged ? rebuildGraph() : audio::Result::ok();
 
     m_devices->setAudioCallback(m_callback.get());
     audio::Result started = audio::Result::ok();
     if (!m_devices->isRunning()) started = m_devices->start();
     m_deviceOpen = bool(started) && m_devices->isRunning();
     if (!started) return started;
+    if (resumePlayback) m_engine.transport().play();
     return rebuilt;
 }
 
@@ -17341,20 +17430,25 @@ audio::Result EngineController::probeDevice(const std::string& uid,
 
 audio::Result EngineController::showDeviceControlPanel(const std::string& uid,
                                                        void* nativeWindow) {
+    const bool resumePlayback = isPlaying() && !isRecording();
     m_devices->setAudioCallback(nullptr);
     auto shown = m_devices->showControlPanel(uid, nativeWindow);
     if (shown) {
         const double settledRate = m_devices->sampleRate();
-        m_bufferSize = m_devices->bufferSize();
-        if (std::abs(settledRate - m_sampleRate) > 0.01)
+        const uint32_t settledBuffer = m_devices->bufferSize();
+        const bool rateChanged = std::abs(settledRate - m_sampleRate) > 0.01;
+        const bool bufferChanged = settledBuffer != m_bufferSize;
+        m_bufferSize = settledBuffer;
+        if (rateChanged)
             applyRenderSampleRate(settledRate);
-        else
+        else if (bufferChanged)
             (void)m_engine.prepare(m_sampleRate, m_bufferSize, 2);
         m_project.sampleRate = m_sampleRate;
-        (void)rebuildGraph();
+        if (rateChanged) (void)rebuildGraph();
     }
     m_devices->setAudioCallback(m_callback.get());
     m_deviceOpen = m_devices->isRunning();
+    if (resumePlayback) m_engine.transport().play();
     return shown;
 }
 

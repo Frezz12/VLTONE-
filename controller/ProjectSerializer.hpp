@@ -8,13 +8,13 @@
 namespace daw {
 
 /// Reads and writes projects in the cross-platform VLT format: a package
-/// directory (extension `.vlt`) containing a clickable `Project.vlt` manifest,
+/// directory (extension `.vlt`) containing a same-named clickable manifest,
 /// a `Content/` folder with copies of every referenced audio file, and a
 /// `State/` folder holding each loaded plugin's opaque state chunk — so a
 /// project is self-contained and portable across machines.
 ///
 /// Plugin state is kept in files rather than inline in the JSON because
-/// `Project.vlt` is written pretty-printed: a couple of megabytes of preset
+/// The manifest is written pretty-printed: a couple of megabytes of preset
 /// data per instrument would turn it into a slow, unreadable single-line blob.
 /// The JSON carries only the basename, resolved against the package on load,
 /// exactly as clip media already is.
@@ -102,6 +102,10 @@ public:
     static std::string mediaPath(const std::string& packageDir);
     /// `<packageDir>/State` — where plugin state chunks live.
     static std::string statePath(const std::string& packageDir);
+    /// Existing manifest, preferring `<name>.vlt` and accepting legacy
+    /// `Project.vlt` / `project.json`; returns the preferred path for a new
+    /// package when none exists yet.
+    static std::string manifestPath(const std::string& packageDir);
 };
 
 } // namespace daw

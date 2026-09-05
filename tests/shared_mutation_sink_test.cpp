@@ -887,19 +887,15 @@ void verifyNonAssetExitGates(
               controller.undoDepth() == undoDepth,
           "cloud project blocks legacy plugin slots, snapshots and undo groups");
 
-    const auto* recordingTrackBefore = controller.project().findTrack(audioId);
-    const bool armedBefore = recordingTrackBefore->armed;
-    const bool monitorBefore = recordingTrackBefore->monitor;
-    check(!controller.startRecording(audioId) &&
-              !controller.startRecordingTracks({audioId}) &&
-              !controller.startRecordingTracksExactly({audioId}) &&
-              !controller.armCountIn({audioId}, 2) &&
-              !controller.armCountInExactly({audioId}, 2) &&
-              !controller.tickCountIn(1.0) && !controller.isRecording() &&
-              !controller.isCountingIn() &&
-              controller.project().findTrack(audioId)->armed == armedBefore &&
-              controller.project().findTrack(audioId)->monitor == monitorBefore,
-          "cloud recording and count-in are blocked before local state changes");
+    const int callsBeforeCountIn = sink.genericCalls;
+    check(controller.armCountInExactly({audioId}, 2) &&
+              controller.isCountingIn() && !controller.isRecording() &&
+              sink.genericCalls == callsBeforeCountIn,
+          "cloud count-in is an independent local transport action");
+    controller.cancelCountIn();
+    check(!controller.isCountingIn() && !controller.isRecording() &&
+              sink.genericCalls == callsBeforeCountIn,
+          "cancelling cloud count-in remains local");
 
     const int callsBeforePreview = sink.genericCalls;
     for (int index = 0; index < 100; ++index) {
@@ -1311,9 +1307,9 @@ void verifyCapabilityLedger() {
               capabilityOf("beginUndoGroup") ==
                   MutationCapability::BlockedV1 &&
               capabilityOf("startRecording") ==
-                  MutationCapability::BlockedV1 &&
+                  MutationCapability::LocalOnly &&
               capabilityOf("armCountIn") ==
-                  MutationCapability::BlockedV1 &&
+                  MutationCapability::LocalOnly &&
               capabilityOf("commitComp") == MutationCapability::BlockedV1 &&
               capabilityOf("cropToComp") == MutationCapability::BlockedV1 &&
               capabilityOf("undo") == MutationCapability::BlockedV1 &&
@@ -1540,6 +1536,133 @@ void verifyTrackCreationParity() {
     }
 }
 
+/// Reproduces what the real gateway does and the fake sinks above do not: a
+/// submit projects optimistically and hands back a rebuilt document on the same
+/// stack, replacing m_project.tracks wholesale before the mutator that called
+/// submit has returned. Every TrackModel*/ClipModel* into the old document dies
+/// at that moment. Running the cloud branches through this under ASan is what
+/// turns "nobody holds a pointer across a submit" from a review promise into a
+/// checked property.
+class ReprojectingSharedMutationSink final
+    : public daw::collab::SharedMutationSink {
+public:
+    daw::EngineController* owner = nullptr;
+    int submits = 0;
+
+    bool handlesCloudBinding() override { return true; }
+
+    daw::collab::SharedMutationResult submit(
+        daw::collab::SharedMutationRequest) override {
+        ++submits;
+        reproject();
+        return daw::collab::SharedMutationResult::Submitted;
+    }
+
+    daw::collab::SharedMutationResult setTimeSignature(int, int) override {
+        return reprojected();
+    }
+    daw::collab::SharedMutationResult setProjectKey(int,
+                                                    std::string_view) override {
+        return reprojected();
+    }
+    daw::collab::SharedMutationResult setAiInstructions(
+        std::string_view) override {
+        return reprojected();
+    }
+    daw::collab::SharedMutationResult renameTrack(std::string_view,
+                                                  std::string_view) override {
+        return reprojected();
+    }
+    daw::collab::SharedMutationResult setTrackMuted(std::string_view,
+                                                    bool) override {
+        return reprojected();
+    }
+    daw::collab::SharedMutationResult setTracksMuted(
+        std::span<const std::string>, bool) override {
+        return reprojected();
+    }
+    daw::collab::SharedMutationResult clearAllMutes(
+        std::span<const std::string>) override {
+        return reprojected();
+    }
+
+private:
+    daw::collab::SharedMutationResult reprojected() {
+        ++submits;
+        reproject();
+        return daw::collab::SharedMutationResult::Submitted;
+    }
+
+    // A byte-identical document still reallocates the vectors, which is the
+    // whole point: identity of the data is not identity of the storage.
+    void reproject() {
+        if (!owner) return;
+        daw::ProjectModel next = owner->project();
+        (void)owner->materializeCollaborationProject(std::move(next), false);
+    }
+};
+
+// Drive the cloud branches of the mutators most likely to hold a raw pointer
+// into m_project across their submit. The assertions are deliberately weak —
+// the point is that the calls survive the document being swapped underneath
+// them, which ASan/UBSan turn into a hard failure.
+void verifyPointerSafetyAcrossSubmit() {
+    daw::EngineController controller;
+    check(controller.initialize(48000.0, 512, false).isOk(),
+          "pointer safety fixture initializes");
+
+    const std::string audio =
+        controller.addTrack(daw::TrackKind::Audio, "Audio");
+    const std::string midi = controller.addTrack(daw::TrackKind::Midi, "MIDI");
+    const std::string bus = controller.addTrack(daw::TrackKind::Bus, "Bus");
+    const std::string clip = controller.addMidiClip(midi, 0.0, 4.0);
+    const std::string note = controller.addNote(midi, clip, 60, 0.0, 1.0, 100);
+    const std::string pattern = controller.addPattern("Pattern");
+    const std::string child =
+        controller.addTrack(daw::TrackKind::Midi, "Pattern Child");
+    controller.moveTrackToFolder(child, pattern);
+    const std::string send = controller.addSend(audio, bus);
+    const std::string folder = controller.addFolder(true, "Group");
+    check(!audio.empty() && !midi.empty() && !clip.empty() && !note.empty() &&
+              !pattern.empty() && !send.empty() && !folder.empty(),
+          "pointer safety fixture has stable entities");
+
+    ReprojectingSharedMutationSink sink;
+    sink.owner = &controller;
+    controller.attachSharedMutationSink(sink);
+
+    // Each of these takes a different route into m_project before submitting.
+    controller.renameTrack(midi, "Renamed");
+    controller.setTrackVolume(audio, 0.5f);
+    controller.setTrackPan(audio, -0.25f);
+    controller.setTrackMuted(audio, true);
+    controller.setTrackColor(audio, 0x223344);
+    controller.setTrackOutputBus(audio, bus);
+    controller.setSendLevel(audio, send, 0.5f);
+    controller.commitSendLevelEdit(audio, send, 0.25f);
+    controller.setSendPreFader(audio, send, true);
+    controller.setSendEnabled(audio, send, false);
+    controller.setNoteVelocity(midi, clip, note, 90);
+    controller.setNoteMuted(midi, clip, note, true);
+    controller.setNote(midi, clip, note, 62, 0.5, 1.5);
+    controller.setClipStartSeconds(midi, clip, 1.0);
+    controller.setClipName(midi, clip, "Renamed clip");
+    controller.setClipMuted(midi, clip, true);
+    controller.moveTrackToFolder(audio, folder);
+    controller.setFolderSumming(folder, false);
+    controller.addPatternClip(pattern, 4.0, 2.0);
+    controller.duplicateClip(midi, clip);
+    controller.splitClip(midi, clip, 2.0);
+    controller.addMidiClip(midi, 8.0, 2.0);
+    controller.addTrack(daw::TrackKind::Audio, "Late");
+    controller.removeTrack(bus);
+
+    check(sink.submits > 0 &&
+              controller.project().findTrack(midi) != nullptr,
+          "cloud mutators survive the document being reprojected mid-submit");
+    controller.detachSharedMutationSink(sink);
+}
+
 void verifyLocalFallback() {
     daw::EngineController controller;
     check(controller.initialize(48000.0, 512, false).isOk(),
@@ -1666,6 +1789,7 @@ int main() {
     verifySharedChannelBatchMutators(
         daw::collab::SharedMutationResult::Blocked);
     verifyTrackCreationParity();
+    verifyPointerSafetyAcrossSubmit();
     verifyLocalFallback();
     verifyAtomicMuteGesture(daw::collab::SharedMutationResult::Submitted);
     verifyAtomicMuteGesture(daw::collab::SharedMutationResult::Blocked);

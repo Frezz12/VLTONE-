@@ -36,10 +36,6 @@ const (
 	webCookie   = "vlt_web_session"
 	adminCookie = "vlt_admin_session"
 	maxJSONBody = 2 << 20
-	// This is a protocol/product capability, not a runtime feature flag. V1
-	// rejects every recording entry point even when a Config is constructed
-	// directly by a test or an embedding process.
-	cloudRecordingEnabledV1 = false
 )
 
 type Server struct {
@@ -111,7 +107,7 @@ func New(cfg config.Config, db *gorm.DB) (*Server, error) {
 	return &Server{
 		Config: cfg, DB: db, Signer: auth.NewSigner(cfg.SigningSeed),
 		Quota: quota.Service{DB: db, GlobalMonthlyLimit: cfg.AIGlobalMonthlyLimit}, limiter: newRateLimiter(),
-		Collab:             collab.NewStore(db, cfg.CollabMaxParticipants),
+		Collab:             newCollabStore(db, cfg),
 		CollabAssets:       collaborationAssets,
 		Rooms:              collab.NewInProcessRoomBus(),
 		Hashes:             collab.NewHashCoordinator(),
@@ -204,6 +200,8 @@ func (s *Server) Router() http.Handler {
 			r.Post(projectsPath+"/{projectID}/sessions/{sessionID}/join", s.joinProjectSession)
 			r.Post(projectsPath+"/{projectID}/sessions/{sessionID}/leave", s.leaveProjectSession)
 			r.Post(projectsPath+"/{projectID}/sessions/{sessionID}/heartbeat", s.heartbeatProjectSession)
+			r.Put(projectsPath+"/{projectID}/sessions/{sessionID}/readiness", s.updateProjectSessionReadiness)
+			r.Post(projectsPath+"/{projectID}/sessions/{sessionID}/activate", s.activateProjectSession)
 			r.Post(projectsPath+"/{projectID}/sessions/{sessionID}/host", s.handoffProjectSessionHost)
 			r.Delete(projectsPath+"/{projectID}/sessions/{sessionID}", s.endProjectSession)
 			r.Post(projectsPath+"/{projectID}/sessions/{sessionID}/leases", s.acquireTrackLease)
@@ -341,11 +339,15 @@ func (s *Server) meta(w http.ResponseWriter, _ *http.Request) {
 		"offline_hours":   72, "access_token_minutes": 15,
 		"public_key": s.Signer.PublicKeyBase64(),
 		"collaboration": map[string]any{
-			"enabled": s.Config.CollaborationEnabled, "protocol": collab.CollaborationProtocol,
-			"project_format":   collab.CollaborationProjectFormatVersion,
-			"command_schema":   collab.CollaborationCommandSchemaVersion,
+			"enabled": s.Config.CollaborationEnabled, "protocol": collab.CollaborationProtocolV3,
+			"protocols": []string{collab.CollaborationProtocolV2,
+				collab.CollaborationProtocolV3},
+			"project_format": collab.CollaborationProjectFormatVersion,
+			"command_schema": collab.CollaborationCommandSchemaV3,
+			"command_schemas": []int{collab.CollaborationCommandSchemaVersion,
+				collab.CollaborationCommandSchemaV3},
 			"max_participants": s.Config.CollabMaxParticipants,
-			"recording":        cloudRecordingEnabledV1,
+			"recording":        s.Config.CollabRecordingEnabled,
 		},
 	})
 }
@@ -501,4 +503,14 @@ func pageLimit(r *http.Request) int {
 		return 50
 	}
 	return limit
+}
+
+// newCollabStore wires the invite-code pepper through. Config.Load refuses to
+// start with a short or missing pepper when collaboration is enabled, so an
+// empty value here means collaboration is off and the store simply declines to
+// mint codes.
+func newCollabStore(db *gorm.DB, cfg config.Config) *collab.Store {
+	store := collab.NewStore(db, cfg.CollabMaxParticipants)
+	store.InviteCodePepper = cfg.InviteCodePepper
+	return store
 }

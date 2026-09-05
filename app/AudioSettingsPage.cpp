@@ -450,6 +450,7 @@ void AudioSettingsPage::apply() {
     }
     const auto result = m_controller->applyAudioConfiguration(config);
     if (!result) {
+        syncSettledConfiguration();
         m_bufferNote->setText(
             tr("Could not apply this configuration. The previous audio device "
                "is still active."));

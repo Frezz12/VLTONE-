@@ -503,6 +503,55 @@ func TestRecordingCommitPayloadIsStrictAndTrackComplete(t *testing.T) {
 	}
 }
 
+func TestRecordingCommitV3AllowsOnlyLeaseFreeNewClips(t *testing.T) {
+	trackID, clipID, assetID := uuid.New(), uuid.New(), uuid.New()
+	add := map[string]any{
+		"kind": "clip.add",
+		"payload": map[string]any{
+			"trackId": trackID.String(), "clipId": clipID.String(),
+			"clipKind": "audio", "name": "Concurrent take",
+			"startSeconds": 2.0, "durationSeconds": 1.0, "color": 0,
+		},
+		"preconditions": []any{},
+	}
+	setAsset := map[string]any{
+		"kind": "clip.setAsset",
+		"payload": map[string]any{
+			"trackId": trackID.String(), "clipId": clipID.String(),
+			"asset": map[string]any{
+				"assetId": assetID.String(), "sha256": strings.Repeat("d", 64),
+				"kind": "audio", "byteSize": 512, "originalName": "take.wav",
+			},
+		},
+		"preconditions": []any{},
+	}
+	validateV3 := func(commands []any) error {
+		raw, err := json.Marshal(map[string]any{"leases": []any{}, "commands": commands})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return validateCommandPayloadShapeForSchema("recording.commit", raw, true,
+			CollaborationCommandSchemaV3)
+	}
+	if err := validateV3([]any{add, setAsset}); err != nil {
+		t.Fatalf("lease-free v3 new clip was rejected: %v", err)
+	}
+	if err := validateV3([]any{setAsset}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("lease-free mutation of an existing clip returned %v", err)
+	}
+	otherClip := map[string]any{
+		"kind": "clip.setProperty",
+		"payload": map[string]any{
+			"trackId": trackID.String(), "clipId": uuid.NewString(),
+			"property": "gain", "value": 0.5,
+		},
+		"preconditions": []any{},
+	}
+	if err := validateV3([]any{add, otherClip}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("lease-free cross-clip mutation returned %v", err)
+	}
+}
+
 func TestRecordingCommitBaseSequenceAllowsSafeRebaseCandidate(t *testing.T) {
 	if err := validateOperationBaseSeq("recording.commit", 12, 12); err != nil {
 		t.Fatalf("exact recording base was rejected: %v", err)
@@ -518,6 +567,14 @@ func TestRecordingCommitBaseSequenceAllowsSafeRebaseCandidate(t *testing.T) {
 	}
 	if err := validateOperationBaseSeq("track.setProperty", 13, 12); !errors.Is(err, ErrBaseSeqAhead) {
 		t.Fatalf("ordinary ahead base returned %v", err)
+	}
+}
+
+func TestLeaseFreeRecordingCommitCanRebaseOverConcurrentInsert(t *testing.T) {
+	store := &Store{}
+	if err := store.validateRecordingCommitRebaseTx(nil, uuid.New(),
+		"recording.commit", 10, 12, nil); err != nil {
+		t.Fatalf("lease-free new-clip commit rejected safe rebase: %v", err)
 	}
 }
 

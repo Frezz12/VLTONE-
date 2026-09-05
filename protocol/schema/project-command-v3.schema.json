@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vlt.studio/protocol/schema/project-command-v3.schema.json",
+  "title": "VLT Project Command v3",
+  "description": "Collaboration v3 command. It preserves v2 operations and adds path-free external plugin inserts and opaque state assets.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "opId", "transactionId", "baseServerSeq", "kind", "payload", "preconditions", "touchedFields"],
+  "properties": {
+    "schemaVersion": { "const": 3 },
+    "opId": { "$ref": "project-command-v2.schema.json#/$defs/id" },
+    "transactionId": { "$ref": "project-command-v2.schema.json#/$defs/optionalId" },
+    "baseServerSeq": { "type": "integer", "minimum": 0 },
+    "kind": { "$ref": "project-command-v2.schema.json#/$defs/kind" },
+    "payload": { "type": "object" },
+    "preconditions": {
+      "type": "array",
+      "items": { "$ref": "project-command-v2.schema.json#/$defs/precondition" },
+      "maxItems": 1024
+    },
+    "touchedFields": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 512 },
+      "minItems": 1,
+      "maxItems": 8192,
+      "uniqueItems": true
+    }
+  },
+  "allOf": [{ "$ref": "#/$defs/bodyShape" }],
+  "$defs": {
+    "externalPluginText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 400,
+      "pattern": "^[^/\\\\\\u0000-\\u001f]+$"
+    },
+    "externalSharedInsert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "bypassed", "format", "uid", "vendor", "pluginVersion", "stateSchemaVersion", "mix", "channelMode", "sidechainTrackId", "stateAsset", "rightStateAsset", "parameters", "rightParameters", "assetBindings"],
+      "properties": {
+        "id": { "$ref": "project-command-v2.schema.json#/$defs/id" },
+        "name": { "type": "string", "maxLength": 4096 },
+        "bypassed": { "type": "boolean" },
+        "format": { "enum": ["clap", "vst3", "au", "vst"] },
+        "uid": { "$ref": "#/$defs/externalPluginText" },
+        "vendor": { "allOf": [{ "$ref": "#/$defs/externalPluginText" }, { "maxLength": 200 }] },
+        "pluginVersion": { "allOf": [{ "$ref": "#/$defs/externalPluginText" }, { "maxLength": 200 }] },
+        "stateSchemaVersion": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "mix": { "type": "number", "minimum": 0, "maximum": 1 },
+        "channelMode": { "enum": ["auto", "mono", "stereo", "dual-mono"] },
+        "sidechainTrackId": { "$ref": "project-command-v2.schema.json#/$defs/optionalId" },
+        "stateAsset": { "$ref": "project-command-v2.schema.json#/$defs/optionalPluginStateAssetRef" },
+        "rightStateAsset": { "$ref": "project-command-v2.schema.json#/$defs/optionalPluginStateAssetRef" },
+        "parameters": { "type": "array", "maxItems": 16384, "items": { "$ref": "project-command-v2.schema.json#/$defs/insertParameter" } },
+        "rightParameters": { "type": "array", "maxItems": 16384, "items": { "$ref": "project-command-v2.schema.json#/$defs/insertParameter" } },
+        "assetBindings": { "type": "array", "maxItems": 1024, "items": { "$ref": "project-command-v2.schema.json#/$defs/pluginAssetBinding" } }
+      }
+    },
+    "sharedInsert": {
+      "oneOf": [
+        { "$ref": "project-command-v2.schema.json#/$defs/sharedInsert" },
+        { "$ref": "#/$defs/externalSharedInsert" }
+      ]
+    },
+    "pluginAddPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["location", "insert", "afterId"],
+      "properties": {
+        "location": { "$ref": "project-command-v2.schema.json#/$defs/pluginLocation" },
+        "insert": { "$ref": "#/$defs/sharedInsert" },
+        "afterId": { "$ref": "project-command-v2.schema.json#/$defs/optionalId" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } } } },
+          "then": { "properties": { "afterId": { "const": "" } } }
+        },
+        {
+          "if": { "properties": { "insert": { "properties": { "format": { "const": "internal" } } } } },
+          "then": {
+            "oneOf": [
+              { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } }, "insert": { "properties": { "uid": { "const": "daw.sampler" } } } } },
+              { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "insert": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity", "daw.graphit"] } } } } }
+            ]
+          }
+        }
+      ]
+    },
+    "pluginReplacePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["location", "insertId", "replacement"],
+      "properties": {
+        "location": { "$ref": "project-command-v2.schema.json#/$defs/pluginLocation" },
+        "insertId": { "$ref": "project-command-v2.schema.json#/$defs/id" },
+        "replacement": { "$ref": "#/$defs/sharedInsert" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "replacement": { "properties": { "format": { "const": "internal" } } } } },
+          "then": {
+            "oneOf": [
+              { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } }, "replacement": { "properties": { "uid": { "const": "daw.sampler" } } } } },
+              { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "replacement": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity", "daw.graphit"] } } } } }
+            ]
+          }
+        }
+      ]
+    },
+    "pluginStatePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["location", "insertId", "pluginVersion", "stateSchemaVersion", "stateAsset", "rightStateAsset", "parameters", "rightParameters", "assetBindings"],
+      "properties": {
+        "location": { "$ref": "project-command-v2.schema.json#/$defs/pluginLocation" },
+        "insertId": { "$ref": "project-command-v2.schema.json#/$defs/id" },
+        "pluginVersion": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "stateSchemaVersion": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "stateAsset": { "$ref": "project-command-v2.schema.json#/$defs/optionalPluginStateAssetRef" },
+        "rightStateAsset": { "$ref": "project-command-v2.schema.json#/$defs/optionalPluginStateAssetRef" },
+        "parameters": { "type": "array", "maxItems": 16384, "items": { "$ref": "project-command-v2.schema.json#/$defs/insertParameter" } },
+        "rightParameters": { "type": "array", "maxItems": 16384, "items": { "$ref": "project-command-v2.schema.json#/$defs/insertParameter" } },
+        "assetBindings": { "type": "array", "maxItems": 1024, "items": { "$ref": "project-command-v2.schema.json#/$defs/pluginAssetBinding" } }
+      }
+    },
+    "ordinaryBody": {
+      "allOf": [
+        { "$ref": "project-command-v2.schema.json#/$defs/nonBatchBody" },
+        { "not": { "properties": { "kind": { "enum": ["plugin.add", "plugin.replace", "plugin.setState"] } }, "required": ["kind"] } }
+      ]
+    },
+    "nonBatchBody": {
+      "oneOf": [
+        { "$ref": "#/$defs/ordinaryBody" },
+        { "properties": { "kind": { "const": "plugin.add" }, "payload": { "$ref": "#/$defs/pluginAddPayload" } }, "required": ["kind", "payload"] },
+        { "properties": { "kind": { "const": "plugin.replace" }, "payload": { "$ref": "#/$defs/pluginReplacePayload" } }, "required": ["kind", "payload"] },
+        { "properties": { "kind": { "const": "plugin.setState" }, "payload": { "$ref": "#/$defs/pluginStatePayload" } }, "required": ["kind", "payload"] }
+      ]
+    },
+    "batchItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "payload", "preconditions"],
+      "properties": {
+        "kind": { "$ref": "project-command-v2.schema.json#/$defs/kind" },
+        "payload": { "type": "object" },
+        "preconditions": { "type": "array", "items": { "$ref": "project-command-v2.schema.json#/$defs/precondition" }, "maxItems": 1024 }
+      },
+      "allOf": [{ "$ref": "#/$defs/nonBatchBody" }]
+    },
+    "batchPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commands"],
+      "properties": {
+        "commands": { "type": "array", "minItems": 1, "maxItems": 1024, "items": { "$ref": "#/$defs/batchItem" } }
+      }
+    },
+    "recordingCommitPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["leases", "commands"],
+      "properties": {
+        "leases": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": { "$ref": "project-command-v2.schema.json#/$defs/recordingLease" }
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": { "$ref": "project-command-v2.schema.json#/$defs/recordingCommitItem" }
+        }
+      }
+    },
+    "bodyShape": {
+      "oneOf": [
+        { "$ref": "#/$defs/nonBatchBody" },
+        { "properties": { "kind": { "const": "recording.commit" }, "payload": { "$ref": "#/$defs/recordingCommitPayload" } }, "required": ["kind", "payload"] },
+        { "properties": { "kind": { "const": "batch" }, "payload": { "$ref": "#/$defs/batchPayload" } }, "required": ["kind", "payload"] }
+      ]
+    }
+  }
+}

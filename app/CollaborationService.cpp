@@ -51,6 +51,21 @@ QString canonicalUuid(const QJsonValue& value) {
     return value.toString() == canonical ? canonical : QString();
 }
 
+bool validWelcomeWriteGate(int commandSchemaVersion, bool readOnly,
+                           const QString& reason,
+                           const QJsonValue& hashRound) {
+    if (readOnly) {
+        bool allowedReason = reason == QLatin1String("role_read_only");
+        if (commandSchemaVersion >= 3)
+            allowedReason = allowedReason ||
+                reason == QLatin1String("session_starting") ||
+                reason == QLatin1String("plugin_not_ready");
+        return allowedReason && hashRound.isNull();
+    }
+    return reason == QLatin1String("hash_consensus_required") &&
+           hashRound.isObject();
+}
+
 bool hasOnlySnapshotRequestKeys(const QJsonObject& payload) {
     static const QStringList keys{
         QStringLiteral("requestId"),
@@ -324,6 +339,26 @@ QString CollaborationService::accountUserId() const {
                        : id.toString(QUuid::WithoutBraces).toLower();
 }
 
+QString CollaborationService::protocolName() const {
+    return protocolNameForCommandSchema(m_commandSchemaVersion);
+}
+
+bool CollaborationService::setCommandSchemaVersion(int version) {
+    if (!daw::collab::supportedProjectCommandSchemaVersion(
+            std::uint32_t(version)))
+        return false;
+    if (version == m_commandSchemaVersion) return true;
+    m_commandSchemaVersion = version;
+    m_transportConnected = false;
+    m_sessionId.clear();
+    m_hashRoundId.clear();
+    m_hashRoundSessionId.clear();
+    emit commandSchemaVersionChanged(version);
+    emit roomIdentityChanged({}, {}, {});
+    if (m_shouldConnect && !m_projectId.isEmpty()) reconnectNow();
+    return true;
+}
+
 void CollaborationService::setProjectId(const QString& projectId,
                                         bool requestConnection) {
     const QUuid uuid(projectId);
@@ -471,7 +506,7 @@ void CollaborationService::trustedTransportConnected() {
         {QStringLiteral("appVersion"), QCoreApplication::applicationVersion()},
         {QStringLiteral("engineVersion"), QCoreApplication::applicationVersion()},
         {QStringLiteral("commandSchemaVersion"),
-         int(daw::collab::kProjectCommandSchemaVersion)},
+         m_commandSchemaVersion},
         {QStringLiteral("projectFormatVersion"),
          daw::collab::kSharedProjectFormatVersion},
         {QStringLiteral("afterServerSeq"),
@@ -660,6 +695,7 @@ bool CollaborationService::sendEnvelope(WireType type,
                                         bool ephemeral) {
     if (!m_transportConnected) return false;
     WireEnvelope envelope;
+    envelope.protocol = protocolName();
     envelope.type = type;
     envelope.messageId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     envelope.sentAtMs = nowMs();
@@ -833,6 +869,11 @@ bool CollaborationService::sendSnapshotHash() {
 }
 
 void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
+    if (envelope.protocol != protocolName()) {
+        emit protocolWarning(tr("Unexpected collaboration protocol version"));
+        trustedTransportUnavailable(tr("Incompatible collaboration server"));
+        return;
+    }
     if (envelope.type == WireType::Unknown) {
         emit protocolWarning(
             tr("Unsupported collaboration message: %1").arg(envelope.typeName));
@@ -888,12 +929,10 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
             .toString();
         const QJsonValue hashRound =
             envelope.payload.value(QStringLiteral("hashRound"));
-        if (writeBlockedReason.isEmpty() ||
-            (!readOnly &&
-             (writeBlockedReason != QLatin1String("hash_consensus_required") ||
-              !hashRound.isObject()))) {
+        if (!validWelcomeWriteGate(m_commandSchemaVersion, readOnly,
+                                   writeBlockedReason, hashRound)) {
             emit protocolWarning(
-                tr("Server omitted the collaboration v2 write gate"));
+                tr("Server omitted the collaboration write gate"));
             trustedResyncRequired(false, true,
                                   tr("Incompatible collaboration server"));
             return;
@@ -914,8 +953,13 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
         }
         m_resyncPending = false;
         if (readOnly) {
+            QString detail = tr("Session is read-only");
+            if (writeBlockedReason == QLatin1String("session_starting"))
+                detail = tr("Waiting for the host to start the session");
+            else if (writeBlockedReason == QLatin1String("plugin_not_ready"))
+                detail = tr("Plugin compatibility must be resolved");
             setState(CollaborationState::ReadOnly,
-                     tr("Session is read-only"));
+                     detail);
             return;
         }
         setState(CollaborationState::Joining,
@@ -977,6 +1021,43 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
             setState(CollaborationState::Joining,
                      tr("Verifying host handoff"));
         }
+        return;
+    }
+    if (envelope.type == WireType::SessionReadinessChanged) {
+        if (envelope.payload.size() != 4) return;
+        const QString participantId = canonicalUuid(
+            envelope.payload.value(QStringLiteral("participantId")));
+        const QString effectiveRole = envelope.payload
+            .value(QStringLiteral("effectiveRole")).toString();
+        const QString readinessStatus = envelope.payload
+            .value(QStringLiteral("readinessStatus")).toString();
+        const auto revision = exactSequence(
+            envelope.payload.value(QStringLiteral("readinessRevision")));
+        if (participantId.isEmpty() || !revision || *revision == 0 ||
+            (effectiveRole != QLatin1String("owner") &&
+             effectiveRole != QLatin1String("editor") &&
+             effectiveRole != QLatin1String("viewer")) ||
+            (readinessStatus != QLatin1String("ready") &&
+             readinessStatus != QLatin1String("blocked") &&
+             readinessStatus != QLatin1String("viewer"))) {
+            emit protocolWarning(tr("Invalid plugin readiness update"));
+            return;
+        }
+        emit participantReadinessChanged(
+            participantId, effectiveRole, readinessStatus, qint64(*revision));
+        return;
+    }
+    if (envelope.type == WireType::SessionActivated) {
+        if (envelope.payload.size() != 2) return;
+        const QString sessionId = canonicalUuid(
+            envelope.payload.value(QStringLiteral("sessionId")));
+        if (sessionId.isEmpty() || sessionId != m_sessionId ||
+            envelope.payload.value(QStringLiteral("status")).toString() !=
+                QLatin1String("active")) {
+            emit protocolWarning(tr("Invalid session activation update"));
+            return;
+        }
+        emit liveSessionActivated(sessionId);
         return;
     }
     if (envelope.type == WireType::SnapshotRequested) {
@@ -1128,6 +1209,24 @@ bool checkCollaborationPresenceSafetyForTest(QString* error) {
         if (error) *error = message;
         return false;
     };
+    if (!validWelcomeWriteGate(
+            2, false, QStringLiteral("hash_consensus_required"), QJsonObject{}) ||
+        !validWelcomeWriteGate(
+            2, true, QStringLiteral("role_read_only"), QJsonValue::Null) ||
+        validWelcomeWriteGate(
+            2, true, QStringLiteral("session_starting"), QJsonValue::Null) ||
+        !validWelcomeWriteGate(
+            3, true, QStringLiteral("session_starting"), QJsonValue::Null) ||
+        !validWelcomeWriteGate(
+            3, true, QStringLiteral("plugin_not_ready"), QJsonValue::Null) ||
+        validWelcomeWriteGate(
+            2, true, QStringLiteral("hash_consensus_required"), QJsonObject{}) ||
+        validWelcomeWriteGate(
+            3, true, QStringLiteral("unexpected"), QJsonValue::Null) ||
+        validWelcomeWriteGate(
+            3, false, QStringLiteral("hash_consensus_required"), QJsonValue::Null)) {
+        return fail(QStringLiteral("welcome write gate accepted an invalid pair"));
+    }
     PresencePacket coarse;
     coarse.policy = PresencePolicy::Exact; // Service must cap this surface.
     coarse.point.surface.kind = SurfaceKind::Browser;

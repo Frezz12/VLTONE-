@@ -30,6 +30,12 @@ const (
 // would permanently diverge replicas, so shape and reducer-level scalar
 // bounds are checked before sequence allocation.
 func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatch bool) error {
+	return validateCommandPayloadShapeForSchema(kind, payload, allowBatch,
+		CollaborationCommandSchemaVersion)
+}
+
+func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
+	allowBatch bool, schemaVersion int) error {
 	body, err := commandPayloadObject(payload)
 	if err != nil {
 		return err
@@ -363,11 +369,12 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 		if err != nil {
 			return err
 		}
-		insertID, uid, err := validateSharedInsert(body["insert"])
+		insertID, uid, format, err := validateSharedInsert(body["insert"], schemaVersion)
 		if err != nil {
 			return err
 		}
-		if (location.Chain == "instrument") != (uid == "daw.sampler") {
+		if format == "internal" &&
+			(location.Chain == "instrument") != (uid == "daw.sampler") {
 			return invalidf("command payload plugin kind is unsupported for its chain")
 		}
 		if err := optionalPayloadUUID(body, "afterId"); err != nil {
@@ -398,11 +405,13 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 		if err != nil {
 			return err
 		}
-		replacementID, uid, err := validateSharedInsert(body["replacement"])
+		replacementID, uid, format, err := validateSharedInsert(
+			body["replacement"], schemaVersion)
 		if err != nil || replacementID != insertID {
 			return invalidf("command payload replacement must preserve insertId")
 		}
-		if (location.Chain == "instrument") != (uid == "daw.sampler") {
+		if format == "internal" &&
+			(location.Chain == "instrument") != (uid == "daw.sampler") {
 			return invalidf("command payload plugin kind is unsupported for its chain")
 		}
 		return nil
@@ -435,7 +444,11 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 		if _, err := payloadString(body, "pluginVersion", 64, false); err != nil {
 			return err
 		}
-		if _, err := payloadInteger(body, "stateSchemaVersion", 1, math.MaxInt32); err != nil {
+		minimumStateSchema := int64(1)
+		if schemaVersion == CollaborationCommandSchemaV3 {
+			minimumStateSchema = 0
+		}
+		if _, err := payloadInteger(body, "stateSchemaVersion", minimumStateSchema, math.MaxInt32); err != nil {
 			return err
 		}
 		for _, name := range []string{"stateAsset", "rightStateAsset"} {
@@ -739,12 +752,12 @@ func validateCommandPayloadShape(kind string, payload json.RawMessage, allowBatc
 		if !allowBatch {
 			return invalidf("nested batch commands are unsupported")
 		}
-		return validateBatchPayload(body)
+		return validateBatchPayload(body, schemaVersion)
 	case "recording.commit":
 		if !allowBatch {
 			return invalidf("nested recording commits are unsupported")
 		}
-		return validateRecordingCommitPayload(body)
+		return validateRecordingCommitPayload(body, schemaVersion)
 	default:
 		return invalidf("operation kind is unsupported by command schema version 2")
 	}
@@ -1094,70 +1107,85 @@ func validatePluginPropertyValue(body map[string]json.RawMessage, property strin
 	}
 }
 
-func validateSharedInsert(raw json.RawMessage) (string, string, error) {
+func validateSharedInsert(raw json.RawMessage,
+	schemaVersion int) (string, string, string, error) {
 	body, err := commandPayloadObject(raw)
 	if err != nil {
-		return "", "", invalidf("command payload insert must be an object")
+		return "", "", "", invalidf("command payload insert must be an object")
 	}
 	required := []string{"id", "name", "bypassed", "format", "uid", "vendor", "pluginVersion", "stateSchemaVersion", "mix", "channelMode", "sidechainTrackId", "stateAsset", "rightStateAsset", "parameters", "rightParameters", "assetBindings"}
 	if err := exactPayloadKeys(body, required, nil); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	insertID, err := requiredPayloadUUID(body, "id")
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if _, err := payloadString(body, "name", 4096, true); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if _, err := payloadBool(body, "bypassed"); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	if format, err := payloadString(body, "format", 16, false); err != nil || format != "internal" {
-		return "", "", invalidf("command payload plugin format must be internal")
+	format, err := payloadString(body, "format", 16, false)
+	if err != nil || (format != "internal" &&
+		(schemaVersion != CollaborationCommandSchemaV3 || !validPluginFormat(format))) {
+		return "", "", "", invalidf("command payload plugin format is unsupported")
 	}
 	// Must stay in lockstep with supportedBuiltin() in ProjectReducer.cpp and
 	// the sharedInsert uid enum in protocol/schema/project-command-v2.schema.json.
 	// scripts/check-collaboration-contracts.mjs asserts all three agree.
-	uid, err := payloadEnum(body, "uid", "daw.sampler", "daw.equalizer", "daw.gravity", "daw.graphit")
-	if err != nil {
-		return "", "", err
+	uid, err := payloadString(body, "uid", 400, false)
+	if err != nil || !safePluginContractText(uid, 400) {
+		return "", "", "", invalidf("command payload plugin uid is invalid")
 	}
-	if _, err := payloadString(body, "vendor", 4096, true); err != nil {
-		return "", "", err
+	if format == "internal" && uid != "daw.sampler" && uid != "daw.equalizer" &&
+		uid != "daw.gravity" && uid != "daw.graphit" {
+		return "", "", "", invalidf("command payload built-in plugin uid is unsupported")
 	}
-	if _, err := payloadString(body, "pluginVersion", 64, false); err != nil {
-		return "", "", err
+	vendor, err := payloadString(body, "vendor", 4096, format == "internal")
+	if err != nil || (format != "internal" && !safePluginContractText(vendor, 200)) {
+		return "", "", "", invalidf("command payload plugin vendor is invalid")
 	}
-	if _, err := payloadInteger(body, "stateSchemaVersion", 1, math.MaxInt32); err != nil {
-		return "", "", err
+	maximumVersionLength := 64
+	minimumStateSchema := int64(1)
+	if schemaVersion == CollaborationCommandSchemaV3 {
+		maximumVersionLength = 200
+		minimumStateSchema = 0
+	}
+	version, err := payloadString(body, "pluginVersion", maximumVersionLength, false)
+	if err != nil || !safePluginContractText(version, maximumVersionLength) {
+		return "", "", "", invalidf("command payload plugin version is invalid")
+	}
+	if _, err := payloadInteger(body, "stateSchemaVersion", minimumStateSchema, math.MaxInt32); err != nil {
+		return "", "", "", err
 	}
 	if _, err := payloadNumber(body, "mix", 0, 1, false); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if _, err := payloadEnum(body, "channelMode", "auto", "mono", "stereo", "dual-mono"); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if err := optionalPayloadUUID(body, "sidechainTrackId"); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	for _, name := range []string{"stateAsset", "rightStateAsset"} {
 		if !rawJSONNull(body[name]) {
 			if _, err := validateAssetRef(body[name], "plugin-state"); err != nil {
-				return "", "", err
+				return "", "", "", err
 			}
 		}
 	}
 	if err := validatePluginParameters(body["parameters"], 4096); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if err := validatePluginParameters(body["rightParameters"], 4096); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if err := validatePluginBindings(body["assetBindings"], uid == "daw.sampler"); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return insertID, uid, nil
+	return insertID, uid, format, nil
 }
 
 func validatePluginParameters(raw json.RawMessage, maximumIDBytes int) error {
@@ -1508,27 +1536,35 @@ func validateCompSegmentPayload(raw json.RawMessage) error {
 	return nil
 }
 
-func validateBatchPayload(body map[string]json.RawMessage) error {
+func validateBatchPayload(body map[string]json.RawMessage,
+	schemaVersion int) error {
 	if err := exactPayloadKeys(body, []string{"commands"}, nil); err != nil {
 		return err
 	}
-	_, err := validateLockedCommandChildren(body["commands"], "batch")
+	_, err := validateLockedCommandChildren(body["commands"], "batch", schemaVersion)
 	return err
 }
 
-func validateRecordingCommitPayload(body map[string]json.RawMessage) error {
+func validateRecordingCommitPayload(body map[string]json.RawMessage,
+	schemaVersion int) error {
 	if err := exactPayloadKeys(body, []string{"leases", "commands"}, nil); err != nil {
 		return err
 	}
-	leaseReferences, err := recordingCommitLeaseReferencesFromRaw(body["leases"])
+	leaseReferences, err := recordingCommitLeaseReferencesFromRaw(body["leases"], schemaVersion)
 	if err != nil {
 		return err
 	}
-	commands, err := validateLockedCommandChildren(body["commands"], "recording commit")
+	commands, err := validateLockedCommandChildren(body["commands"],
+		"recording commit", schemaVersion)
 	if err != nil {
 		return err
 	}
 	commandTracks := make(map[uuid.UUID]struct{}, len(leaseReferences))
+	type clipTarget struct {
+		TrackID uuid.UUID
+		ClipID  uuid.UUID
+	}
+	newClips := make(map[clipTarget]struct{})
 	for _, child := range commands {
 		kind, _ := payloadString(child, "kind", 100, false)
 		if !recordingCommitChildKindAllowed(kind) {
@@ -1541,6 +1577,30 @@ func validateRecordingCommitPayload(body map[string]json.RawMessage) error {
 		if found {
 			commandTracks[trackID] = struct{}{}
 		}
+		if kind == "clip.add" {
+			clipID, found, err := commandTargetClipID(child["payload"])
+			if err != nil || !found {
+				return invalidf("recording commit clip.add target is invalid")
+			}
+			newClips[clipTarget{TrackID: trackID, ClipID: clipID}] = struct{}{}
+		}
+	}
+	if len(leaseReferences) == 0 {
+		for _, child := range commands {
+			kind, _ := payloadString(child, "kind", 100, false)
+			trackID, trackFound, err := commandTargetTrackID(kind, child["payload"])
+			if err != nil || !trackFound {
+				return invalidf("lease-free recording child target is invalid")
+			}
+			clipID, clipFound, err := commandTargetClipID(child["payload"])
+			if err != nil || !clipFound {
+				return invalidf("lease-free recording child clip target is invalid")
+			}
+			if _, exists := newClips[clipTarget{TrackID: trackID, ClipID: clipID}]; !exists {
+				return invalidf("lease-free recording commit may only mutate clips created in the same command")
+			}
+		}
+		return nil
 	}
 	if len(commandTracks) != len(leaseReferences) {
 		return invalidf("recording commit leases must exactly match command tracks")
@@ -1551,6 +1611,21 @@ func validateRecordingCommitPayload(body map[string]json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+func commandTargetClipID(payload json.RawMessage) (uuid.UUID, bool, error) {
+	body, err := commandPayloadObject(payload)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if _, exists := body["clipId"]; !exists {
+		return uuid.Nil, false, nil
+	}
+	value, err := requiredCanonicalPayloadUUID(body, "clipId")
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	return value, true, nil
 }
 
 func recordingCommitChildKindAllowed(kind string) bool {
@@ -1588,7 +1663,8 @@ func commandTargetTrackID(kind string, payload json.RawMessage) (uuid.UUID, bool
 	return uuid.Nil, false, nil
 }
 
-func validateLockedCommandChildren(raw json.RawMessage, label string) ([]map[string]json.RawMessage, error) {
+func validateLockedCommandChildren(raw json.RawMessage, label string,
+	schemaVersion int) ([]map[string]json.RawMessage, error) {
 	var commands []json.RawMessage
 	if err := json.Unmarshal(raw, &commands); err != nil || len(commands) == 0 || len(commands) > maxBatchCommands {
 		return nil, invalidf("%s must contain between 1 and %d commands", label, maxBatchCommands)
@@ -1606,7 +1682,8 @@ func validateLockedCommandChildren(raw json.RawMessage, label string) ([]map[str
 		if err != nil || kind == "batch" || kind == "recording.commit" {
 			return nil, invalidf("%s child %d kind is unsupported", label, index)
 		}
-		if err := validateCommandPayloadShape(kind, child["payload"], false); err != nil {
+		if err := validateCommandPayloadShapeForSchema(kind, child["payload"], false,
+			schemaVersion); err != nil {
 			return nil, invalidf("%s child %d: %v", label, index, err)
 		}
 		if err := validateRawPreconditions(child["preconditions"]); err != nil {
@@ -1617,18 +1694,26 @@ func validateLockedCommandChildren(raw json.RawMessage, label string) ([]map[str
 	return result, nil
 }
 
-func recordingCommitLeaseReferences(payload json.RawMessage) ([]recordingLeaseReference, error) {
+func recordingCommitLeaseReferences(payload json.RawMessage,
+	schemaVersion int) ([]recordingLeaseReference, error) {
 	body, err := commandPayloadObject(payload)
 	if err != nil {
 		return nil, err
 	}
-	return recordingCommitLeaseReferencesFromRaw(body["leases"])
+	return recordingCommitLeaseReferencesFromRaw(body["leases"], schemaVersion)
 }
 
-func recordingCommitLeaseReferencesFromRaw(raw json.RawMessage) ([]recordingLeaseReference, error) {
+func recordingCommitLeaseReferencesFromRaw(raw json.RawMessage,
+	schemaVersion int) ([]recordingLeaseReference, error) {
 	var values []json.RawMessage
-	if err := json.Unmarshal(raw, &values); err != nil || len(values) == 0 || len(values) > maxBatchCommands {
-		return nil, invalidf("recording commit must contain between 1 and %d leases", maxBatchCommands)
+	if err := json.Unmarshal(raw, &values); err != nil ||
+		(schemaVersion == CollaborationCommandSchemaVersion && len(values) == 0) ||
+		len(values) > maxBatchCommands {
+		minimum := 0
+		if schemaVersion == CollaborationCommandSchemaVersion {
+			minimum = 1
+		}
+		return nil, invalidf("recording commit must contain between %d and %d leases", minimum, maxBatchCommands)
 	}
 	result := make([]recordingLeaseReference, 0, len(values))
 	seenTracks := make(map[uuid.UUID]struct{}, len(values))

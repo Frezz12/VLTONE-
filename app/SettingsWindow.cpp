@@ -6,8 +6,10 @@
 #include "AudioSettingsPage.hpp"
 #include "ContextPanelPage.hpp"
 #include "LocalizationManager.hpp"
+#include "NotebookSettingsPage.hpp"
 #include "ShortcutManager.hpp"
 #include "Theme.hpp"
+#include "TimelineBackgroundPrefs.hpp"
 #include "UiConstants.hpp"
 #include "RecordingSettingsPage.hpp"
 #include "TransportSettingsPage.hpp"
@@ -17,8 +19,10 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -160,6 +164,10 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     connect(browserPage, &BrowserSettingsPage::changed, this,
             &SettingsWindow::browserSettingsChanged);
     addPage(browserPage, tr("Browser"));
+    auto* notebookPage = new NotebookSettingsPage(this);
+    connect(notebookPage, &NotebookSettingsPage::changed, this,
+            &SettingsWindow::notebookSettingsChanged);
+    addPage(notebookPage, tr("Notebook"));
     auto* aiPage = new AiSettingsPage(this);
     connect(aiPage, &AiSettingsPage::changed, this,
             &SettingsWindow::aiSettingsChanged);
@@ -510,6 +518,377 @@ QWidget* SettingsWindow::buildThemesTab() {
     refreshFontStatus();
 
     col->addWidget(m_themeList, 1);
+
+    auto* backgroundGroup = new QGroupBox(tr("Timeline Background"), page);
+    auto* backgroundColumn = new QVBoxLayout(backgroundGroup);
+    auto* backgroundHint = new QLabel(
+        tr("Choose a local photo, animated GIF or video for the arrangement "
+           "grid. The file stays on this computer and is not saved in the "
+           "project."),
+        backgroundGroup);
+    backgroundHint->setWordWrap(true);
+    backgroundColumn->addWidget(backgroundHint);
+
+    auto* enableTimelineBackground = new QCheckBox(
+        tr("Enable custom timeline background"), backgroundGroup);
+    enableTimelineBackground->setChecked(
+        ui::timelinebackgroundprefs::enabled());
+    enableTimelineBackground->setAccessibleName(
+        tr("Custom timeline background enabled"));
+    backgroundColumn->addWidget(enableTimelineBackground);
+
+    auto* backgroundForm = new QFormLayout;
+    backgroundForm->setSpacing(8);
+    auto* fileRow = new QWidget(backgroundGroup);
+    auto* fileLayout = new QHBoxLayout(fileRow);
+    fileLayout->setContentsMargins(0, 0, 0, 0);
+    fileLayout->setSpacing(6);
+    auto* backgroundPath = new QLineEdit(fileRow);
+    backgroundPath->setReadOnly(true);
+    backgroundPath->setPlaceholderText(tr("Theme colour only"));
+    backgroundPath->setAccessibleName(tr("Timeline background file"));
+    auto* chooseBackground = new QPushButton(tr("Choose…"), fileRow);
+    chooseBackground->setAccessibleName(tr("Choose timeline background"));
+    auto* clearBackground = new QPushButton(tr("Clear"), fileRow);
+    fileLayout->addWidget(backgroundPath, 1);
+    fileLayout->addWidget(chooseBackground);
+    fileLayout->addWidget(clearBackground);
+    backgroundForm->addRow(tr("Media"), fileRow);
+
+    auto* timelinePlacement = new QComboBox(backgroundGroup);
+    using BackgroundPlacement = ui::timelinebackgroundprefs::Placement;
+    timelinePlacement->addItem(tr("Fill frame (crop to fit)"),
+                               int(BackgroundPlacement::Fill));
+    timelinePlacement->addItem(tr("Stretch to frame"),
+                               int(BackgroundPlacement::Stretch));
+    timelinePlacement->addItem(tr("Tile at original size"),
+                               int(BackgroundPlacement::Tile));
+    timelinePlacement->addItem(tr("Original size, centred"),
+                               int(BackgroundPlacement::Center));
+    timelinePlacement->setCurrentIndex(std::max(
+        0, timelinePlacement->findData(
+               int(ui::timelinebackgroundprefs::placement()))));
+    timelinePlacement->setAccessibleName(
+        tr("Timeline background placement"));
+    timelinePlacement->setToolTip(
+        tr("Fill automatically adapts to every window and screen size."));
+    connect(timelinePlacement, &QComboBox::activated, this,
+            [this, timelinePlacement](int index) {
+                ui::timelinebackgroundprefs::setPlacement(
+                    BackgroundPlacement(
+                        timelinePlacement->itemData(index).toInt()));
+                emit themeBackgroundSettingsChanged();
+            });
+    backgroundForm->addRow(tr("Layout"), timelinePlacement);
+
+    const auto refreshBackgroundPath = [backgroundPath, clearBackground] {
+        const QString path = ui::timelinebackgroundprefs::path();
+        backgroundPath->setText(QDir::toNativeSeparators(path));
+        backgroundPath->setToolTip(path);
+        clearBackground->setEnabled(!path.isEmpty());
+    };
+    connect(chooseBackground, &QPushButton::clicked, this,
+            [this, refreshBackgroundPath] {
+                const QString selected = QFileDialog::getOpenFileName(
+                    this, tr("Choose a timeline background"),
+                    ui::timelinebackgroundprefs::path(),
+                    tr("Background media (*.png *.jpg *.jpeg *.webp *.bmp "
+                       "*.gif *.mp4 *.m4v *.webm *.ogv *.mov *.mkv *.avi);;Images "
+                       "(*.png *.jpg *.jpeg *.webp *.bmp *.gif);;Videos "
+                       "(*.mp4 *.m4v *.webm *.ogv *.mov *.mkv *.avi)"));
+                if (selected.isEmpty()) return;
+                if (!ui::timelinebackgroundprefs::setPath(selected)) {
+                    QMessageBox::warning(
+                        this, tr("Unsupported background"),
+                        tr("Choose a supported image, GIF or video file."));
+                    return;
+                }
+                refreshBackgroundPath();
+                emit themeBackgroundSettingsChanged();
+            });
+    connect(clearBackground, &QPushButton::clicked, this,
+            [this, refreshBackgroundPath] {
+                ui::timelinebackgroundprefs::clear();
+                refreshBackgroundPath();
+                emit themeBackgroundSettingsChanged();
+            });
+
+    const auto addPercentSlider =
+        [backgroundGroup, backgroundForm](const QString& label, int value,
+                                          const QString& accessibleName) {
+            auto* row = new QWidget(backgroundGroup);
+            auto* layout = new QHBoxLayout(row);
+            layout->setContentsMargins(0, 0, 0, 0);
+            layout->setSpacing(8);
+            auto* slider = new QSlider(Qt::Horizontal, row);
+            slider->setRange(0, 100);
+            slider->setValue(value);
+            slider->setAccessibleName(accessibleName);
+            auto* output = new QLabel(QStringLiteral("%1%").arg(value), row);
+            output->setMinimumWidth(40);
+            output->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            layout->addWidget(slider, 1);
+            layout->addWidget(output);
+            backgroundForm->addRow(label, row);
+            QObject::connect(slider, &QSlider::valueChanged, output,
+                             [output](int current) {
+                                 output->setText(
+                                     QStringLiteral("%1%").arg(current));
+                             });
+            return slider;
+        };
+    auto* visibility = addPercentSlider(
+        tr("Visibility"), ui::timelinebackgroundprefs::visibility(),
+        tr("Timeline background visibility"));
+    connect(visibility, &QSlider::valueChanged, this, [this](int value) {
+        ui::timelinebackgroundprefs::setVisibility(value);
+        emit themeBackgroundSettingsChanged();
+    });
+
+    auto* blurRow = new QWidget(backgroundGroup);
+    auto* blurLayout = new QHBoxLayout(blurRow);
+    blurLayout->setContentsMargins(0, 0, 0, 0);
+    blurLayout->setSpacing(8);
+    auto* blur = new QSlider(Qt::Horizontal, blurRow);
+    blur->setRange(0, 32);
+    blur->setValue(ui::timelinebackgroundprefs::blurRadius());
+    blur->setAccessibleName(tr("Timeline background blur"));
+    auto* blurValue = new QLabel(
+        tr("%1 px").arg(ui::timelinebackgroundprefs::blurRadius()), blurRow);
+    blurValue->setMinimumWidth(52);
+    blurValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    blurLayout->addWidget(blur, 1);
+    blurLayout->addWidget(blurValue);
+    backgroundForm->addRow(tr("Blur"), blurRow);
+    auto* blurDebounce = new QTimer(backgroundGroup);
+    blurDebounce->setSingleShot(true);
+    blurDebounce->setInterval(45);
+    connect(blur, &QSlider::valueChanged, this,
+            [blurValue, blurDebounce](int pixels) {
+                blurValue->setText(tr("%1 px").arg(pixels));
+                ui::timelinebackgroundprefs::setBlurRadius(pixels);
+                blurDebounce->start();
+            });
+    connect(blurDebounce, &QTimer::timeout, this,
+            &SettingsWindow::themeBackgroundSettingsChanged);
+
+    auto* animateBackground = new QCheckBox(
+        tr("Play GIF and video backgrounds"), backgroundGroup);
+    animateBackground->setChecked(
+        ui::timelinebackgroundprefs::animatedBackgroundsEnabled());
+    animateBackground->setToolTip(
+        tr("Reduce Motion freezes animated backgrounds on a still frame."));
+    connect(animateBackground, &QCheckBox::toggled, this, [this](bool enabled) {
+        ui::timelinebackgroundprefs::setAnimatedBackgroundsEnabled(enabled);
+        emit themeBackgroundSettingsChanged();
+    });
+    backgroundForm->addRow(QString(), animateBackground);
+    backgroundColumn->addLayout(backgroundForm);
+    col->addWidget(backgroundGroup);
+    refreshBackgroundPath();
+    const auto syncTimelineBackgroundEnabled =
+        [fileRow, timelinePlacement, visibility, blurRow,
+         animateBackground](bool enabled) {
+            fileRow->setEnabled(enabled);
+            timelinePlacement->setEnabled(enabled);
+            visibility->setEnabled(enabled);
+            blurRow->setEnabled(enabled);
+            animateBackground->setEnabled(enabled);
+        };
+    syncTimelineBackgroundEnabled(enableTimelineBackground->isChecked());
+    connect(enableTimelineBackground, &QCheckBox::toggled, this,
+            [this, syncTimelineBackgroundEnabled](bool enabled) {
+                ui::timelinebackgroundprefs::setEnabled(enabled);
+                syncTimelineBackgroundEnabled(enabled);
+                emit themeBackgroundSettingsChanged();
+            });
+
+    auto* headerBackgroundGroup =
+        new QGroupBox(tr("Header Background"), page);
+    auto* headerBackgroundColumn = new QVBoxLayout(headerBackgroundGroup);
+    auto* headerBackgroundHint = new QLabel(
+        tr("Add a local photo, animated GIF or video behind the top controls. "
+           "A low visibility keeps every control readable."),
+        headerBackgroundGroup);
+    headerBackgroundHint->setWordWrap(true);
+    headerBackgroundColumn->addWidget(headerBackgroundHint);
+
+    auto* enableHeaderBackground = new QCheckBox(
+        tr("Enable custom header background"), headerBackgroundGroup);
+    enableHeaderBackground->setChecked(ui::headerbackgroundprefs::enabled());
+    enableHeaderBackground->setAccessibleName(
+        tr("Custom header background enabled"));
+    headerBackgroundColumn->addWidget(enableHeaderBackground);
+
+    auto* headerBackgroundForm = new QFormLayout;
+    headerBackgroundForm->setSpacing(8);
+    auto* headerFileRow = new QWidget(headerBackgroundGroup);
+    auto* headerFileLayout = new QHBoxLayout(headerFileRow);
+    headerFileLayout->setContentsMargins(0, 0, 0, 0);
+    headerFileLayout->setSpacing(6);
+    auto* headerPath = new QLineEdit(headerFileRow);
+    headerPath->setReadOnly(true);
+    headerPath->setPlaceholderText(tr("Theme colour only"));
+    headerPath->setAccessibleName(tr("Header background file"));
+    auto* chooseHeaderBackground = new QPushButton(tr("Choose..."), headerFileRow);
+    chooseHeaderBackground->setAccessibleName(tr("Choose header background"));
+    auto* clearHeaderBackground = new QPushButton(tr("Clear"), headerFileRow);
+    headerFileLayout->addWidget(headerPath, 1);
+    headerFileLayout->addWidget(chooseHeaderBackground);
+    headerFileLayout->addWidget(clearHeaderBackground);
+    headerBackgroundForm->addRow(tr("Media"), headerFileRow);
+
+    const auto refreshHeaderBackgroundPath =
+        [headerPath, clearHeaderBackground] {
+            const QString path = ui::headerbackgroundprefs::path();
+            headerPath->setText(QDir::toNativeSeparators(path));
+            headerPath->setToolTip(path);
+            clearHeaderBackground->setEnabled(!path.isEmpty());
+        };
+    connect(chooseHeaderBackground, &QPushButton::clicked, this,
+            [this, refreshHeaderBackgroundPath] {
+                const QString selected = QFileDialog::getOpenFileName(
+                    this, tr("Choose a header background"),
+                    ui::headerbackgroundprefs::path(),
+                    tr("Background media (*.png *.jpg *.jpeg *.webp *.bmp "
+                       "*.gif *.mp4 *.m4v *.webm *.ogv *.mov *.mkv *.avi);;Images "
+                       "(*.png *.jpg *.jpeg *.webp *.bmp *.gif);;Videos "
+                       "(*.mp4 *.m4v *.webm *.ogv *.mov *.mkv *.avi)"));
+                if (selected.isEmpty()) return;
+                if (!ui::headerbackgroundprefs::setPath(selected)) {
+                    QMessageBox::warning(
+                        this, tr("Unsupported background"),
+                        tr("Choose a supported image, GIF or video file."));
+                    return;
+                }
+                refreshHeaderBackgroundPath();
+                emit themeBackgroundSettingsChanged();
+            });
+    connect(clearHeaderBackground, &QPushButton::clicked, this,
+            [this, refreshHeaderBackgroundPath] {
+                ui::headerbackgroundprefs::clear();
+                refreshHeaderBackgroundPath();
+                emit themeBackgroundSettingsChanged();
+            });
+
+    auto* headerPlacement = new QComboBox(headerBackgroundGroup);
+    headerPlacement->addItem(tr("Fill frame (crop to fit)"),
+                             int(BackgroundPlacement::Fill));
+    headerPlacement->addItem(tr("Stretch to frame"),
+                             int(BackgroundPlacement::Stretch));
+    headerPlacement->addItem(tr("Tile at original size"),
+                             int(BackgroundPlacement::Tile));
+    headerPlacement->addItem(tr("Original size, centred"),
+                             int(BackgroundPlacement::Center));
+    headerPlacement->setCurrentIndex(std::max(
+        0, headerPlacement->findData(
+               int(ui::headerbackgroundprefs::placement()))));
+    headerPlacement->setAccessibleName(tr("Header background placement"));
+    headerPlacement->setToolTip(
+        tr("Fill automatically adapts to every window and screen size."));
+    connect(headerPlacement, &QComboBox::activated, this,
+            [this, headerPlacement](int index) {
+                ui::headerbackgroundprefs::setPlacement(
+                    BackgroundPlacement(
+                        headerPlacement->itemData(index).toInt()));
+                emit themeBackgroundSettingsChanged();
+            });
+    headerBackgroundForm->addRow(tr("Layout"), headerPlacement);
+
+    const auto addHeaderPercentSlider =
+        [headerBackgroundGroup, headerBackgroundForm](
+            const QString& label, int value, const QString& accessibleName) {
+            auto* row = new QWidget(headerBackgroundGroup);
+            auto* layout = new QHBoxLayout(row);
+            layout->setContentsMargins(0, 0, 0, 0);
+            layout->setSpacing(8);
+            auto* slider = new QSlider(Qt::Horizontal, row);
+            slider->setRange(0, 100);
+            slider->setValue(value);
+            slider->setAccessibleName(accessibleName);
+            auto* output = new QLabel(QStringLiteral("%1%").arg(value), row);
+            output->setMinimumWidth(40);
+            output->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            layout->addWidget(slider, 1);
+            layout->addWidget(output);
+            headerBackgroundForm->addRow(label, row);
+            QObject::connect(slider, &QSlider::valueChanged, output,
+                             [output](int current) {
+                                 output->setText(
+                                     QStringLiteral("%1%").arg(current));
+                             });
+            return slider;
+        };
+    auto* headerVisibility = addHeaderPercentSlider(
+        tr("Visibility"), ui::headerbackgroundprefs::visibility(),
+        tr("Header background visibility"));
+    connect(headerVisibility, &QSlider::valueChanged, this,
+            [this](int value) {
+                ui::headerbackgroundprefs::setVisibility(value);
+                emit themeBackgroundSettingsChanged();
+            });
+
+    auto* headerBlurRow = new QWidget(headerBackgroundGroup);
+    auto* headerBlurLayout = new QHBoxLayout(headerBlurRow);
+    headerBlurLayout->setContentsMargins(0, 0, 0, 0);
+    headerBlurLayout->setSpacing(8);
+    auto* headerBlur = new QSlider(Qt::Horizontal, headerBlurRow);
+    headerBlur->setRange(0, 32);
+    headerBlur->setValue(ui::headerbackgroundprefs::blurRadius());
+    headerBlur->setAccessibleName(tr("Header background blur"));
+    auto* headerBlurValue = new QLabel(
+        tr("%1 px").arg(ui::headerbackgroundprefs::blurRadius()),
+        headerBlurRow);
+    headerBlurValue->setMinimumWidth(52);
+    headerBlurValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    headerBlurLayout->addWidget(headerBlur, 1);
+    headerBlurLayout->addWidget(headerBlurValue);
+    headerBackgroundForm->addRow(tr("Blur"), headerBlurRow);
+    auto* headerBlurDebounce = new QTimer(headerBackgroundGroup);
+    headerBlurDebounce->setSingleShot(true);
+    headerBlurDebounce->setInterval(45);
+    connect(headerBlur, &QSlider::valueChanged, this,
+            [headerBlurValue, headerBlurDebounce](int pixels) {
+                headerBlurValue->setText(tr("%1 px").arg(pixels));
+                ui::headerbackgroundprefs::setBlurRadius(pixels);
+                headerBlurDebounce->start();
+            });
+    connect(headerBlurDebounce, &QTimer::timeout, this,
+            &SettingsWindow::themeBackgroundSettingsChanged);
+
+    auto* animateHeaderBackground = new QCheckBox(
+        tr("Play GIF and video backgrounds"), headerBackgroundGroup);
+    animateHeaderBackground->setChecked(
+        ui::headerbackgroundprefs::animatedBackgroundsEnabled());
+    animateHeaderBackground->setToolTip(
+        tr("Reduce Motion freezes animated backgrounds on a still frame."));
+    connect(animateHeaderBackground, &QCheckBox::toggled, this,
+            [this](bool enabled) {
+                ui::headerbackgroundprefs::setAnimatedBackgroundsEnabled(
+                    enabled);
+                emit themeBackgroundSettingsChanged();
+            });
+    headerBackgroundForm->addRow(QString(), animateHeaderBackground);
+    headerBackgroundColumn->addLayout(headerBackgroundForm);
+    col->addWidget(headerBackgroundGroup);
+    refreshHeaderBackgroundPath();
+
+    const auto syncHeaderBackgroundEnabled =
+        [headerFileRow, headerPlacement, headerVisibility, headerBlurRow,
+         animateHeaderBackground](bool enabled) {
+            headerFileRow->setEnabled(enabled);
+            headerPlacement->setEnabled(enabled);
+            headerVisibility->setEnabled(enabled);
+            headerBlurRow->setEnabled(enabled);
+            animateHeaderBackground->setEnabled(enabled);
+        };
+    syncHeaderBackgroundEnabled(enableHeaderBackground->isChecked());
+    connect(enableHeaderBackground, &QCheckBox::toggled, this,
+            [this, syncHeaderBackgroundEnabled](bool enabled) {
+                ui::headerbackgroundprefs::setEnabled(enabled);
+                syncHeaderBackgroundEnabled(enabled);
+                emit themeBackgroundSettingsChanged();
+            });
 
     // The playhead. Thickness is a real preference rather than a default worth
     // defending: the same hairline that is right on a sparse arrangement is

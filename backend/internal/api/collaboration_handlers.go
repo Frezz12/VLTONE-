@@ -47,7 +47,11 @@ type createProjectInviteRequest struct {
 }
 
 type acceptProjectInviteRequest struct {
+	// Exactly one of these. Token is the long base64url invite kept for older
+	// desktop builds; Code is the short numeric one the UI now shows. Both
+	// arrive in the body and never in a query string.
 	Token string `json:"token"`
+	Code  string `json:"code"`
 }
 
 type appendProjectOperationRequest struct {
@@ -84,10 +88,19 @@ func (input sessionCompatibilityRequest) compatibility() collab.ClientCompatibil
 
 type startProjectSessionRequest struct {
 	sessionCompatibilityRequest
-	Mode string `json:"mode"`
+	Mode               string                       `json:"mode"`
+	PluginRequirements []collab.PluginRequirement   `json:"pluginRequirements"`
+	Readiness          collab.PluginReadinessReport `json:"readiness"`
+	// Optional. Empty leaves the room unprotected, which is the old behaviour.
+	// Body only, never a query parameter, and never logged.
+	Password string `json:"password"`
 }
 
-type joinProjectSessionRequest struct{ sessionCompatibilityRequest }
+type joinProjectSessionRequest struct {
+	sessionCompatibilityRequest
+	Password  string                       `json:"password"`
+	Readiness collab.PluginReadinessReport `json:"readiness"`
+}
 
 type handoffProjectHostRequest struct {
 	TargetMemberID uuid.UUID `json:"target_member_id"`
@@ -362,10 +375,43 @@ func (s *Server) acceptProjectInvite(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	project, err := s.Collab.AcceptInvite(r.Context(), input.Token, userFrom(r).ID)
-	if err != nil {
-		s.writeCollaborationError(w, r, err)
+	token := strings.TrimSpace(input.Token)
+	code := strings.TrimSpace(input.Code)
+	if (token == "") == (code == "") {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_failed",
+			"Provide either an invitation token or an invitation code.", nil)
 		return
+	}
+	// The address is only ever a rate-limiting key, so it is stored as a digest
+	// and the raw value never leaves this line.
+	actorIPHash := auth.HashToken(requestIP(r))
+	var project collab.ProjectView
+	var err error
+	if code != "" {
+		project, err = s.Collab.AcceptInviteByCode(r.Context(), code,
+			userFrom(r).ID, actorIPHash)
+		if err != nil {
+			// A code is guessable, so every failure has to look the same. The
+			// store distinguishes "no such code" from expired, revoked, spent
+			// and wrong-recipient; saying which would turn this endpoint into
+			// an oracle that confirms a guess without redeeming it. Rate-limit
+			// rejections stay distinct because they are advice, not a signal
+			// about any particular code.
+			if !errors.Is(err, collab.ErrTooManyAttempts) {
+				writeError(w, r, http.StatusNotFound, "invite_not_found",
+					"This invitation code is not valid.", nil)
+				return
+			}
+			s.writeCollaborationError(w, r, err)
+			return
+		}
+	} else {
+		project, err = s.Collab.AcceptInvite(r.Context(), token,
+			userFrom(r).ID, actorIPHash)
+		if err != nil {
+			s.writeCollaborationError(w, r, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, project)
 }
@@ -450,7 +496,18 @@ func (s *Server) activeProjectSession(w http.ResponseWriter, r *http.Request) {
 		s.writeCollaborationError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, state)
+	writeJSON(w, http.StatusOK, sessionStatePayload(state))
+}
+
+// sessionStatePayload adds the one derived fact a client needs about the
+// session secret. model.ProjectSession keeps the hash itself unexported from
+// JSON, so this is the only channel through which a password is ever mentioned.
+func sessionStatePayload(state collab.SessionState) map[string]any {
+	return map[string]any{
+		"session":          state.Session,
+		"members":          state.Members,
+		"passwordRequired": state.Session.PasswordRequired(),
+	}
 }
 
 func (s *Server) startProjectSession(w http.ResponseWriter, r *http.Request) {
@@ -465,15 +522,29 @@ func (s *Server) startProjectSession(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(input.Mode) == "" {
 		input.Mode = model.SessionModeIndependent
 	}
-	state, err := s.Collab.StartSessionCompatible(r.Context(), projectID,
-		userFrom(r).ID, deviceFrom(r).ID, collaborationActorSessionID(r),
-		input.Mode, input.compatibility())
+	secret := collab.SessionSecret{Password: input.Password}
+	// Drop the plaintext as soon as the store has it; the request struct
+	// outlives this call inside the decoder's buffers otherwise.
+	input.Password = ""
+	var state collab.SessionState
+	var err error
+	if input.CommandSchemaVersion == collab.CollaborationCommandSchemaV3 {
+		state, err = s.Collab.StartSessionV3Secured(r.Context(), projectID,
+			userFrom(r).ID, deviceFrom(r).ID, collaborationActorSessionID(r),
+			input.Mode, input.compatibility(), secret,
+			input.PluginRequirements, input.Readiness)
+	} else {
+		state, err = s.Collab.StartSessionSecured(r.Context(), projectID,
+			userFrom(r).ID, deviceFrom(r).ID, collaborationActorSessionID(r),
+			input.Mode, input.compatibility(), secret)
+	}
+	secret.Password = ""
 	if err != nil {
 		s.writeCollaborationError(w, r, err)
 		return
 	}
 	s.Hashes.ClearProject(projectID)
-	writeJSON(w, http.StatusCreated, state)
+	writeJSON(w, http.StatusCreated, sessionStatePayload(state))
 }
 
 func (s *Server) joinProjectSession(w http.ResponseWriter, r *http.Request) {
@@ -501,13 +572,25 @@ func (s *Server) sessionMemberAction(w http.ResponseWriter, r *http.Request, act
 		if !decodeSessionCompatibilityJSON(w, r, &input) {
 			return
 		}
-		state, err := s.Collab.JoinSessionCompatible(r.Context(), projectID,
-			sessionID, userID, deviceID, authSessionID, input.compatibility())
+		secret := collab.SessionSecret{Password: input.Password}
+		input.Password = ""
+		var state collab.SessionState
+		var err error
+		if input.CommandSchemaVersion == collab.CollaborationCommandSchemaV3 {
+			state, err = s.Collab.JoinSessionV3Secured(r.Context(), projectID,
+				sessionID, userID, deviceID, authSessionID,
+				input.compatibility(), secret, input.Readiness)
+		} else {
+			state, err = s.Collab.JoinSessionSecured(r.Context(), projectID,
+				sessionID, userID, deviceID, authSessionID,
+				input.compatibility(), secret)
+		}
+		secret.Password = ""
 		if err != nil {
 			s.writeCollaborationError(w, r, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, state)
+		writeJSON(w, http.StatusOK, sessionStatePayload(state))
 	case "leave":
 		state, err := s.Collab.LeaveSession(r.Context(), projectID, sessionID,
 			userID, deviceID, authSessionID)
@@ -515,7 +598,21 @@ func (s *Server) sessionMemberAction(w http.ResponseWriter, r *http.Request, act
 			s.writeCollaborationError(w, r, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, state)
+		if s.Rooms != nil {
+			s.Rooms.DisconnectProjectDevice(projectID, deviceID, collab.RoomClose{
+				Code: "member_left", Reason: "participant left the session",
+			})
+			hostPayload, _ := json.Marshal(map[string]any{
+				"hostParticipantId": state.Session.HostMemberID,
+				"reason":            "left",
+			})
+			s.Rooms.Publish(projectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelope("session.host_changed", hostPayload,
+				uuid.Nil, nil, 0)})
+		}
+		if round, roundErr := s.prepareHashRound(r.Context(), projectID, state); roundErr == nil {
+			s.publishHashRound(projectID, round)
+		}
+		writeJSON(w, http.StatusOK, sessionStatePayload(state))
 	case "heartbeat":
 		member, err := s.Collab.HeartbeatSession(r.Context(), projectID, sessionID,
 			userID, deviceID, authSessionID)
@@ -525,6 +622,74 @@ func (s *Server) sessionMemberAction(w http.ResponseWriter, r *http.Request, act
 		}
 		writeJSON(w, http.StatusOK, member)
 	}
+}
+
+func (s *Server) updateProjectSessionReadiness(w http.ResponseWriter,
+	r *http.Request) {
+	projectID, sessionID, ok := collaborationSessionIDs(w, r)
+	if !ok {
+		return
+	}
+	var report collab.PluginReadinessReport
+	if !decodeJSON(w, r, &report) {
+		return
+	}
+	state, err := s.Collab.UpdatePluginReadiness(r.Context(), projectID,
+		sessionID, userFrom(r).ID, deviceFrom(r).ID,
+		collaborationActorSessionID(r), report)
+	if err != nil {
+		s.writeCollaborationError(w, r, err)
+		return
+	}
+	if s.Rooms != nil {
+		for _, member := range state.Members {
+			if member.UserID == userFrom(r).ID && member.DeviceID == deviceFrom(r).ID {
+				payload, _ := json.Marshal(map[string]any{
+					"participantId":     member.ID,
+					"effectiveRole":     member.EffectiveRole,
+					"readinessStatus":   member.ReadinessStatus,
+					"readinessRevision": member.ReadinessRevision,
+				})
+				s.Rooms.Publish(projectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelopeFor(
+					collab.CollaborationProtocolV3, "session.readiness_changed",
+					payload, uuid.Nil, nil, 0)})
+				s.Rooms.DisconnectParticipant(member.ID, collab.RoomClose{
+					Code:   "readiness_changed",
+					Reason: "plugin readiness changed; reconnecting with the effective role",
+				})
+				break
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, sessionStatePayload(state))
+}
+
+func (s *Server) activateProjectSession(w http.ResponseWriter,
+	r *http.Request) {
+	projectID, sessionID, ok := collaborationSessionIDs(w, r)
+	if !ok {
+		return
+	}
+	state, err := s.Collab.ActivateSession(r.Context(), projectID, sessionID,
+		userFrom(r).ID, deviceFrom(r).ID, collaborationActorSessionID(r))
+	if err != nil {
+		s.writeCollaborationError(w, r, err)
+		return
+	}
+	if s.Rooms != nil {
+		payload, _ := json.Marshal(map[string]any{
+			"sessionId": sessionID, "status": model.ProjectSessionActive,
+		})
+		s.Rooms.Publish(projectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelopeFor(collab.CollaborationProtocolV3,
+			"session.activated", payload, uuid.Nil, nil, 0)})
+		for _, participantID := range s.Rooms.ConnectedParticipants(projectID) {
+			s.Rooms.DisconnectParticipant(participantID, collab.RoomClose{
+				Code:   "session_activated",
+				Reason: "collaboration lobby activated; reconnecting for write verification",
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, sessionStatePayload(state))
 }
 
 func (s *Server) handoffProjectSessionHost(w http.ResponseWriter, r *http.Request) {
@@ -582,11 +747,11 @@ func (s *Server) endProjectSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) acquireTrackLease(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudRecording(w, r) {
-		return
-	}
 	projectID, sessionID, ok := collaborationSessionIDs(w, r)
 	if !ok {
+		return
+	}
+	if !s.requireCloudRecording(w, r, projectID, sessionID) {
 		return
 	}
 	var input trackLeaseRequest
@@ -607,11 +772,11 @@ func (s *Server) acquireTrackLease(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renewTrackLease(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudRecording(w, r) {
-		return
-	}
 	projectID, sessionID, ok := collaborationSessionIDs(w, r)
 	if !ok {
+		return
+	}
+	if !s.requireCloudRecording(w, r, projectID, sessionID) {
 		return
 	}
 	leaseID, ok := parseUUIDParam(w, r, "leaseID")
@@ -636,11 +801,11 @@ func (s *Server) renewTrackLease(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) releaseTrackLease(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudRecording(w, r) {
-		return
-	}
 	projectID, sessionID, ok := collaborationSessionIDs(w, r)
 	if !ok {
+		return
+	}
+	if !s.requireCloudRecording(w, r, projectID, sessionID) {
 		return
 	}
 	leaseID, ok := parseUUIDParam(w, r, "leaseID")
@@ -655,12 +820,23 @@ func (s *Server) releaseTrackLease(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) requireCloudRecording(w http.ResponseWriter, r *http.Request) bool {
-	if cloudRecordingEnabledV1 {
-		return true
+func (s *Server) requireCloudRecording(w http.ResponseWriter, r *http.Request,
+	projectID, sessionID uuid.UUID) bool {
+	if s.Config.CollabRecordingEnabled {
+		state, err := s.Collab.GetActiveSession(r.Context(), projectID,
+			userFrom(r).ID)
+		if err != nil {
+			s.writeCollaborationError(w, r, err)
+			return false
+		}
+		if state.Session.ID == sessionID &&
+			state.Session.CommandSchemaVersion ==
+				collab.CollaborationCommandSchemaV3 {
+			return true
+		}
 	}
 	writeError(w, r, http.StatusConflict, "cloud_recording_disabled",
-		"Recording is not available in cloud projects.", nil)
+		"Recording requires an enabled collaboration v3 session.", nil)
 	return false
 }
 
@@ -733,6 +909,21 @@ func (s *Server) writeCollaborationError(w http.ResponseWriter, r *http.Request,
 	case errors.Is(err, collab.ErrCloudRecordingDisabled):
 		writeError(w, r, http.StatusConflict, "cloud_recording_disabled",
 			"Recording is not available in cloud projects.", nil)
+	case errors.Is(err, collab.ErrTooManyAttempts):
+		writeError(w, r, http.StatusTooManyRequests, "invite_attempts_exceeded",
+			"Too many invitation attempts. Wait a few minutes and try again.", nil)
+	case errors.Is(err, collab.ErrSessionPasswordRequired):
+		writeError(w, r, http.StatusForbidden, "session_password_required",
+			"This session is protected by a password.", nil)
+	case errors.Is(err, collab.ErrSessionPasswordInvalid):
+		writeError(w, r, http.StatusForbidden, "session_password_invalid",
+			"That session password is not correct.", nil)
+	case errors.Is(err, collab.ErrSessionStarting):
+		writeError(w, r, http.StatusConflict, "session_starting",
+			"The collaboration lobby has not been activated.", nil)
+	case errors.Is(err, collab.ErrPluginNotReady):
+		writeError(w, r, http.StatusConflict, "plugin_not_ready",
+			"Plugin compatibility must be resolved before editing.", nil)
 	case errors.Is(err, collab.ErrValidation):
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_failed", err.Error(), nil)
 	case errors.Is(err, collab.ErrVersionMismatch):

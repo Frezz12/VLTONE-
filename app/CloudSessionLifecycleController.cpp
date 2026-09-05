@@ -31,13 +31,19 @@ bool blocksCloudRequests(CollaborationState state) {
 } // namespace
 
 struct CloudSessionLifecycleController::Impl {
-    enum class Pending : quint8 { None, Start, End, Leave };
+    enum class Pending : quint8 { None, Start, Activate, End, Leave };
 
     struct Ports {
-        std::function<quint64(const QString&, CloudSessionMode)> start;
+        std::function<quint64(const QString&, CloudSessionMode,
+                              const QString& password,
+                              const std::vector<daw::collab::PluginRequirement>&,
+                              const daw::collab::PluginReadinessReport&)>
+            start;
         std::function<quint64(const QString&, const QString&)> end;
+        std::function<quint64(const QString&, const QString&)> activate;
         std::function<quint64(const QString&, const QString&)> leave;
         std::function<bool(quint64)> cancel;
+        std::function<bool(int)> selectProtocol;
         std::function<void()> reconnect;
         std::function<void()> disconnect;
         std::function<QString()> serviceProjectId;
@@ -82,6 +88,7 @@ struct CloudSessionLifecycleController::Impl {
     bool knownNoActiveSession = false;
     bool ending = false;
     bool left = false;
+    bool lobbyStarting = false;
     bool issuing = false;
     CloudRequestKind issuingKind = CloudRequestKind::GetProject;
     std::optional<DeferredFailure> deferredFailure;
@@ -141,6 +148,13 @@ struct CloudSessionLifecycleController::Impl {
         return !local.isEmpty() && local == hostParticipant();
     }
 
+    bool canActivate() const {
+        return pending == Pending::None && lobbyStarting && !ending && !left &&
+               !sessionId.isEmpty() && hasCurrentRoom() &&
+               (role == CloudProjectRole::Owner || localIsHost()) &&
+               bool(ports.activate);
+    }
+
     bool canEnd() const {
         return pending == Pending::None && !ending && !left &&
                hasCurrentRoom() &&
@@ -183,6 +197,10 @@ struct CloudSessionLifecycleController::Impl {
         }
         if (pending == Pending::Start) {
             setPhase(CloudSessionLifecyclePhase::Starting);
+            return;
+        }
+        if (pending == Pending::Activate) {
+            setPhase(CloudSessionLifecyclePhase::Activating);
             return;
         }
         if (pending == Pending::End || ending) {
@@ -240,6 +258,7 @@ struct CloudSessionLifecycleController::Impl {
         knownNoActiveSession = false;
         ending = false;
         left = false;
+        lobbyStarting = false;
         recomputePhase();
     }
 
@@ -284,6 +303,8 @@ struct CloudSessionLifecycleController::Impl {
                requestId == pendingRequestId &&
                ((expected == Pending::Start &&
                  kind == CloudRequestKind::StartSession) ||
+                (expected == Pending::Activate &&
+                 kind == CloudRequestKind::ActivateSession) ||
                 (expected == Pending::End &&
                  kind == CloudRequestKind::EndSession) ||
                 (expected == Pending::Leave &&
@@ -298,6 +319,7 @@ struct CloudSessionLifecycleController::Impl {
         sessionId.clear();
         ending = false;
         left = false;
+        lobbyStarting = false;
         recomputePhase();
         emit q->userNotice(notice, true);
     }
@@ -326,10 +348,52 @@ struct CloudSessionLifecycleController::Impl {
             knownNoActiveSession = false;
             ending = false;
             left = false;
+            lobbyStarting =
+                state.session.status == CloudSessionStatus::Starting;
+            if (ports.selectProtocol &&
+                !ports.selectProtocol(state.session.commandSchemaVersion)) {
+                invalidateResponse(q->tr(
+                    "The session uses an unsupported collaboration protocol."));
+                return;
+            }
             recomputePhase();
             if (ports.reconnect) ports.reconnect();
             recomputePhase();
             emit q->userNotice(q->tr("Session created. Connecting…"), false);
+            return;
+        }
+        if (kind == CloudRequestKind::ActivateSession &&
+            matches(requestId, kind, Pending::Activate)) {
+            if (state.session.projectId != projectId ||
+                canonicalUuid(state.session.id) != canonicalUuid(sessionId) ||
+                state.session.status != CloudSessionStatus::Active) {
+                invalidateResponse(q->tr(
+                    "The server returned an inconsistent activation response."));
+                return;
+            }
+            pendingRequestId = 0;
+            pending = Pending::None;
+            lobbyStarting = false;
+            if (ports.selectProtocol &&
+                !ports.selectProtocol(state.session.commandSchemaVersion)) {
+                invalidateResponse(q->tr(
+                    "The session uses an unsupported collaboration protocol."));
+                return;
+            }
+            if (ports.reconnect) ports.reconnect();
+            recomputePhase();
+            emit q->userNotice(q->tr("Session started."), false);
+            return;
+        }
+        if (kind == CloudRequestKind::GetActiveSession &&
+            state.session.projectId == projectId) {
+            sessionId = canonicalUuid(state.session.id);
+            lobbyStarting =
+                state.session.status == CloudSessionStatus::Starting;
+            if (ports.selectProtocol)
+                (void)ports.selectProtocol(state.session.commandSchemaVersion);
+            knownNoActiveSession = false;
+            recomputePhase();
             return;
         }
         if (kind == CloudRequestKind::LeaveSession &&
@@ -392,6 +456,11 @@ struct CloudSessionLifecycleController::Impl {
                 ? q->tr("This cloud project is archived or read-only. "
                         "Open an active project to start a session.")
                 : q->tr("Could not start the collaboration session.");
+        } else if (kind == CloudRequestKind::ActivateSession) {
+            expected = Pending::Activate;
+            notice = error.apiCode == QLatin1String("plugin_not_ready")
+                ? q->tr("Every participant must be ready or explicitly remain a viewer.")
+                : q->tr("Could not activate the collaboration session.");
         } else if (kind == CloudRequestKind::EndSession) {
             expected = Pending::End;
             notice = q->tr("Could not request the end of this session.");
@@ -515,12 +584,24 @@ CloudSessionLifecycleController::CloudSessionLifecycleController(
     const QPointer<CloudProjectClient> projectGuard(projects);
     const QPointer<CollaborationService> serviceGuard(service);
     m_impl->ports.start = [projectGuard](const QString& projectId,
-                                         CloudSessionMode mode) {
-        return projectGuard ? projectGuard->startSession(projectId, mode) : 0;
+                                         CloudSessionMode mode,
+                                         const QString& password,
+                                         const auto& requirements,
+                                         const auto& readiness) {
+        return projectGuard
+                   ? projectGuard->startSession(projectId, mode, password,
+                                                requirements, readiness)
+                   : 0;
     };
     m_impl->ports.end = [projectGuard](const QString& projectId,
                                        const QString& sessionId) {
         return projectGuard ? projectGuard->endSession(projectId, sessionId) : 0;
+    };
+    m_impl->ports.activate = [projectGuard](const QString& projectId,
+                                            const QString& sessionId) {
+        return projectGuard ? projectGuard->activateSession(projectId,
+                                                            sessionId)
+                            : 0;
     };
     m_impl->ports.leave = [projectGuard](const QString& projectId,
                                          const QString& sessionId) {
@@ -529,6 +610,9 @@ CloudSessionLifecycleController::CloudSessionLifecycleController(
     };
     m_impl->ports.cancel = [projectGuard](quint64 requestId) {
         return projectGuard && projectGuard->cancel(requestId);
+    };
+    m_impl->ports.selectProtocol = [serviceGuard](int version) {
+        return !serviceGuard || serviceGuard->setCommandSchemaVersion(version);
     };
     m_impl->ports.reconnect = [serviceGuard] {
         if (serviceGuard) serviceGuard->reconnectNow();
@@ -674,6 +758,10 @@ bool CloudSessionLifecycleController::canStartSession() const {
     return m_impl->canStart();
 }
 
+bool CloudSessionLifecycleController::canActivateSession() const {
+    return m_impl->canActivate();
+}
+
 bool CloudSessionLifecycleController::canEndSession() const {
     return m_impl->canEnd();
 }
@@ -682,12 +770,26 @@ bool CloudSessionLifecycleController::canLeaveSession() const {
     return m_impl->canLeave();
 }
 
-bool CloudSessionLifecycleController::startSession() {
+bool CloudSessionLifecycleController::startSession(
+    const QString& password,
+    const std::vector<daw::collab::PluginRequirement>& requirements,
+    const daw::collab::PluginReadinessReport& readiness) {
     if (!m_impl->canStart()) return false;
     m_impl->beginIssue(Impl::Pending::Start,
                        CloudRequestKind::StartSession);
     const quint64 requestId = m_impl->ports.start(
-        m_impl->projectId, CloudSessionMode::Independent);
+        m_impl->projectId, CloudSessionMode::Independent, password,
+        requirements, readiness);
+    m_impl->finishIssue(requestId);
+    return requestId != 0;
+}
+
+bool CloudSessionLifecycleController::activateSession() {
+    if (!m_impl->canActivate()) return false;
+    m_impl->beginIssue(Impl::Pending::Activate,
+                       CloudRequestKind::ActivateSession);
+    const quint64 requestId = m_impl->ports.activate(
+        m_impl->projectId, m_impl->sessionId);
     m_impl->finishIssue(requestId);
     return requestId != 0;
 }
@@ -752,7 +854,8 @@ bool checkCloudSessionLifecycleControllerForTest(QString* error) {
     CloudSessionMode requestedMode = CloudSessionMode::FollowHost;
 
     impl.ports.start = [&](const QString& requestedProject,
-                           CloudSessionMode mode) {
+                           CloudSessionMode mode, const QString&,
+                           const auto&, const auto&) {
         if (requestedProject == projectId) ++starts;
         requestedMode = mode;
         return ++nextRequest;
@@ -928,7 +1031,8 @@ bool checkCloudSessionLifecycleControllerForTest(QString* error) {
     impl.onSynchronized(projectId, 0, hash, CloudProjectRole::Owner,
                         CloudProjectStatus::Active);
     impl.onNoActiveSession(projectId);
-    impl.ports.start = [&](const QString&, CloudSessionMode) {
+    impl.ports.start = [&](const QString&, CloudSessionMode,
+                           const QString&, const auto&, const auto&) {
         const quint64 requestId = ++nextRequest;
         impl.onRequestFailed(requestId, CloudRequestKind::StartSession, {});
         return requestId;

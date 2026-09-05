@@ -1108,6 +1108,10 @@ Anything changed since — by the assistant or by you — is undone as well. One
         <source>Could not apply this configuration. The previous audio device is still active.</source>
         <translation>Не удалось применить эту конфигурацию. Предыдущее аудиоустройство по-прежнему активно.</translation>
     </message>
+    <message>
+        <source>Show audio CPU load in the bottom status bar</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>AutomationCurveView</name>
@@ -1443,6 +1447,151 @@ Anything changed since — by the assistant or by you — is undone as well. One
     </message>
 </context>
 <context>
+    <name>BounceInPlaceDialog</name>
+    <message>
+        <source>Bounce in Place</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Render range</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>End at selection</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Continue until silence</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Custom Start / End</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ending</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source> s</source>
+        <translation type="unfinished"> с</translation>
+    </message>
+    <message>
+        <source>Start</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>End</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Processing to print</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Clip FX</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Track FX</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Sends / Returns</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Summing Folders</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Master FX</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>After rendering</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Replace in place</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Create a new track</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Destination</source>
+        <translation type="unfinished">Назначение</translation>
+    </message>
+    <message>
+        <source>Bounce summary</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Bounce warning</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ready</source>
+        <translation type="unfinished">Готово</translation>
+    </message>
+    <message>
+        <source>Bounce status</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Bounce progress</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Bounce</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Will be printed: %1
+Will remain live: %2
+Will be skipped: %3</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>source only</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>none</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Warning: shared nonlinear effects are rendered with each source soloed; the sum of files can differ from the live mix.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>End must be later than Start.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rendering…</source>
+        <translation type="unfinished">Рендеринг…</translation>
+    </message>
+    <message>
+        <source>Rendering %1 of %2 seconds</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Cancelled — the project was not changed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Bounce failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Bounce complete</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>BrowserSettingsPage</name>
     <message>
         <source>FOLDERS</source>
@@ -1527,6 +1676,46 @@ Anything changed since — by the assistant or by you — is undone as well. One
     <message>
         <source>Home page</source>
         <translation>Главная страница</translation>
+    </message>
+    <message>
+        <source>No custom background</source>
+        <translation>Без своего фона</translation>
+    </message>
+    <message>
+        <source>Start page background file</source>
+        <translation>Файл фона стартовой страницы</translation>
+    </message>
+    <message>
+        <source>Choose…</source>
+        <translation>Выбрать…</translation>
+    </message>
+    <message>
+        <source>Choose start page background</source>
+        <translation>Выбрать фон стартовой страницы</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>Очистить</translation>
+    </message>
+    <message>
+        <source>Start background</source>
+        <translation>Фон стартовой страницы</translation>
+    </message>
+    <message>
+        <source>Choose a start page background</source>
+        <translation>Выбор фона стартовой страницы</translation>
+    </message>
+    <message>
+        <source>Background media (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.avif *.mp4 *.m4v *.webm *.ogv *.ogg *.mov);;Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.avif);;Videos (*.mp4 *.m4v *.webm *.ogv *.ogg *.mov)</source>
+        <translation>Фоновые медиа (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.avif *.mp4 *.m4v *.webm *.ogv *.ogg *.mov);;Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.avif);;Видео (*.mp4 *.m4v *.webm *.ogv *.ogg *.mov)</translation>
+    </message>
+    <message>
+        <source>Choose a supported image, GIF or video</source>
+        <translation>Выберите поддерживаемое изображение, GIF или видео</translation>
+    </message>
+    <message>
+        <source>Images, GIFs and videos stay on this computer. Animated backgrounds stop when reduced motion is enabled.</source>
+        <translation>Изображения, GIF и видео остаются на этом компьютере. При включённом уменьшении движения анимированный фон останавливается.</translation>
     </message>
     <message>
         <source>Show the bookmarks bar</source>
@@ -1946,6 +2135,149 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     </message>
 </context>
 <context>
+    <name>CloudProjectListState</name>
+    <message>
+        <source>Owner</source>
+        <translation>Владелец</translation>
+    </message>
+    <message>
+        <source>Editor</source>
+        <translation>Редактор</translation>
+    </message>
+    <message>
+        <source>Viewer</source>
+        <translation>Наблюдатель</translation>
+    </message>
+    <message>
+        <source>Uploading</source>
+        <translation>Выгрузка</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>Активен</translation>
+    </message>
+    <message>
+        <source>Read-only</source>
+        <translation>Только чтение</translation>
+    </message>
+    <message>
+        <source>Conflict</source>
+        <translation>Конфликт</translation>
+    </message>
+    <message>
+        <source>Archived</source>
+        <translation>В архиве</translation>
+    </message>
+    <message>
+        <source>Just now</source>
+        <translation>Только что</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n minute(s) ago</source>
+        <translation>
+            <numerusform>%n минуту назад</numerusform>
+            <numerusform>%n минуты назад</numerusform>
+            <numerusform>%n минут назад</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n hour(s) ago</source>
+        <translation>
+            <numerusform>%n час назад</numerusform>
+            <numerusform>%n часа назад</numerusform>
+            <numerusform>%n часов назад</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n day(s) ago</source>
+        <translation>
+            <numerusform>%n день назад</numerusform>
+            <numerusform>%n дня назад</numerusform>
+            <numerusform>%n дней назад</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Open now</source>
+        <translation>Открыт сейчас</translation>
+    </message>
+    <message>
+        <source>Loading…</source>
+        <translation>Загрузка…</translation>
+    </message>
+    <message>
+        <source>Cloud projects could not be loaded.</source>
+        <translation>Не удалось загрузить облачные проекты.</translation>
+    </message>
+    <message>
+        <source>The project could not be archived.</source>
+        <translation>Не удалось архивировать проект.</translation>
+    </message>
+    <message>
+        <source>Archiving…</source>
+        <translation>Архивирование…</translation>
+    </message>
+    <message>
+        <source>You have no cloud projects yet.</source>
+        <translation>У вас пока нет облачных проектов.</translation>
+    </message>
+    <message>
+        <source>Project archived.</source>
+        <translation>Проект отправлен в архив.</translation>
+    </message>
+    <message>
+        <source>The cloud request could not be completed.</source>
+        <translation>Не удалось выполнить облачный запрос.</translation>
+    </message>
+    <message>
+        <source>Cloud Projects</source>
+        <translation>Облачные проекты</translation>
+    </message>
+    <message>
+        <source>Cloud projects</source>
+        <translation>Облачные проекты</translation>
+    </message>
+    <message>
+        <source>Projects you have published or been invited to. Open one to work on it with other people.</source>
+        <translation>Проекты, которые вы опубликовали или в которые вас пригласили. Откройте любой, чтобы работать над ним вместе с другими.</translation>
+    </message>
+    <message>
+        <source>Open</source>
+        <translation>Открыть</translation>
+    </message>
+    <message>
+        <source>Publish…</source>
+        <translation>Опубликовать…</translation>
+    </message>
+    <message>
+        <source>Invite…</source>
+        <translation>Пригласить…</translation>
+    </message>
+    <message>
+        <source>Archive</source>
+        <translation>В архив</translation>
+    </message>
+    <message>
+        <source>Join by Code…</source>
+        <translation>Войти по коду…</translation>
+    </message>
+    <message>
+        <source>Refresh</source>
+        <translation>Обновить</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Закрыть</translation>
+    </message>
+    <message>
+        <source>Archive Cloud Project</source>
+        <translation>Архивирование облачного проекта</translation>
+    </message>
+    <message>
+        <source>Archive “%1”? Nobody will be able to open or join it afterwards.</source>
+        <translation>Отправить «%1» в архив? После этого его нельзя будет ни открыть, ни войти в него.</translation>
+    </message>
+</context>
+<context>
     <name>CollaborationCommandBridge</name>
     <message>
         <source>This cloud project is read-only until the live session is writable.</source>
@@ -1970,6 +2302,10 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message>
         <source>Cloud undo could not be submitted. The history entry was kept.</source>
         <translation>Не удалось отправить облачную отмену. Запись в истории сохранена.</translation>
+    </message>
+    <message>
+        <source>The prepared cloud edit no longer matches the writable session.</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -2607,8 +2943,8 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <translation>График амплитудно-частотной характеристики эквалайзера</translation>
     </message>
     <message>
-        <source>Double-click to add a band. Drag bands to change frequency and gain; use the mouse wheel for Q and Alt-drag for dynamic range.</source>
-        <translation>Двойной щелчок добавляет полосу. Перетаскивание меняет частоту и усиление; колесо мыши — Q, Alt+перетаскивание — динамический диапазон.</translation>
+        <source>Double-click to add a band. Below 20 Hz creates a Low Cut; above 20 kHz creates a High Cut. Drag bands to change frequency and gain; hold Shift for fine adjustment.</source>
+        <translation>Двойной щелчок добавляет полосу. Ниже 20 Гц создаётся срез НЧ, выше 20 кГц — срез ВЧ. Перетаскивание меняет частоту и усиление; удерживайте Shift для точной настройки.</translation>
     </message>
     <message>
         <source>Duplicate Band</source>
@@ -2702,10 +3038,6 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <translation>Параметры выбранной полосы</translation>
     </message>
     <message>
-        <source>No band selected</source>
-        <translation>Полоса не выбрана</translation>
-    </message>
-    <message>
         <source>Filter type</source>
         <translation>Тип фильтра</translation>
     </message>
@@ -2782,24 +3114,12 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <translation>Крутизна</translation>
     </message>
     <message>
-        <source>Placement</source>
-        <translation>Размещение</translation>
-    </message>
-    <message>
-        <source>Frequency</source>
-        <translation>Частота</translation>
-    </message>
-    <message>
         <source>Gain</source>
         <translation>Усиление</translation>
     </message>
     <message>
         <source>Q</source>
         <translation>Q</translation>
-    </message>
-    <message>
-        <source>Dynamics</source>
-        <translation>Динамика</translation>
     </message>
     <message>
         <source>Enable dynamics for selected band</source>
@@ -2838,10 +3158,6 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <translation>Авто</translation>
     </message>
     <message>
-        <source>External SC</source>
-        <translation>Внешний SC</translation>
-    </message>
-    <message>
         <source>Band detector</source>
         <translation>Детектор полосы</translation>
     </message>
@@ -2852,6 +3168,22 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message>
         <source>Automatic dynamics timing and threshold</source>
         <translation>Автоматические время и порог динамики</translation>
+    </message>
+    <message>
+        <source>Frequency (logarithmic). Hold Shift while dragging for fine adjustment.</source>
+        <translation>Частота (логарифмическая шкала). Удерживайте Shift при перетаскивании для точной настройки.</translation>
+    </message>
+    <message>
+        <source>Automatically controls timing and threshold. Moving Threshold turns Auto off.</source>
+        <translation>Автоматически управляет временем и порогом. Изменение порога отключает режим «Авто».</translation>
+    </message>
+    <message>
+        <source>Threshold is automatic. Drag to switch Auto off and set it manually.</source>
+        <translation>Порог настраивается автоматически. Перетащите ручку, чтобы отключить «Авто» и задать порог вручную.</translation>
+    </message>
+    <message>
+        <source>Manual dynamics threshold</source>
+        <translation>Ручная настройка порога динамики</translation>
     </message>
     <message>
         <source>Use external sidechain</source>
@@ -3000,6 +3332,30 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message>
         <source>SC missing</source>
         <translation>SC не подключён</translation>
+    </message>
+    <message>
+        <source>Band</source>
+        <translation>Полоса</translation>
+    </message>
+    <message>
+        <source>Freq</source>
+        <translation>Частота</translation>
+    </message>
+    <message>
+        <source>Channel</source>
+        <translation>Канал</translation>
+    </message>
+    <message>
+        <source>Dynamic</source>
+        <translation>Динамика</translation>
+    </message>
+    <message>
+        <source>Deselect band</source>
+        <translation>Снять выбор полосы</translation>
+    </message>
+    <message>
+        <source>Ext SC</source>
+        <translation>Внеш. SC</translation>
     </message>
 </context>
 <context>
@@ -3539,53 +3895,10 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     </message>
 </context>
 <context>
-    <name>GravityField</name>
-    <message>
-        <source>Gravity pitch and size field</source>
-        <translation>Поле высоты тона и размера Gravity</translation>
-    </message>
-    <message>
-        <source>Horizontal position controls pitch; vertical position controls size.</source>
-        <translation>Положение по горизонтали управляет высотой тона, по вертикали — размером.</translation>
-    </message>
-    <message>
-        <source>Drag to set Pitch and Size. Use arrow keys for precise changes.</source>
-        <translation>Перетаскивайте для изменения высоты тона и размера. Для точной настройки используйте клавиши со стрелками.</translation>
-    </message>
-    <message>
-        <source>Pitch %1 semitones, size %2 percent, linked attractors spread plus or minus %3 semitones.</source>
-        <translation>Высота тона: %1 полутонов, размер: %2%, разброс связанных аттракторов: ±%3 полутонов.</translation>
-    </message>
-    <message>
-        <source>Pitch %1 semitones and size %2 percent.</source>
-        <translation>Высота тона: %1 полутонов, размер: %2%.</translation>
-    </message>
-</context>
-<context>
     <name>GraphitPanel</name>
     <message>
         <source>Graphit saturation effect</source>
         <translation>Эффект насыщения Graphit</translation>
-    </message>
-    <message>
-        <source>Air — soft high-frequency polish</source>
-        <translation>Air — мягкий блеск высоких частот</translation>
-    </message>
-    <message>
-        <source>Body — warm low-mid weight</source>
-        <translation>Body — тёплая плотность нижней середины</translation>
-    </message>
-    <message>
-        <source>Punch — transient-focused impact</source>
-        <translation>Punch — акцент на транзиентах</translation>
-    </message>
-    <message>
-        <source>Crunch — firm midrange saturation</source>
-        <translation>Crunch — плотное насыщение середины</translation>
-    </message>
-    <message>
-        <source>Extreme — hard compression and clipping</source>
-        <translation>Extreme — жёсткая компрессия и клиппинг</translation>
     </message>
     <message>
         <source>Graphit mode %1: %2</source>
@@ -3618,10 +3931,6 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message>
         <source>AMOUNT  ·  %1</source>
         <translation>AMOUNT  ·  %1</translation>
-    </message>
-    <message>
-        <source>Current value %1; mode %2</source>
-        <translation>Текущее значение %1; режим %2</translation>
     </message>
     <message>
         <source>AMOUNT %1%</source>
@@ -3674,6 +3983,29 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message>
         <source>PRIORITY %1</source>
         <translation>ПРИОРИТЕТ %1</translation>
+    </message>
+</context>
+<context>
+    <name>GravityField</name>
+    <message>
+        <source>Gravity pitch and size field</source>
+        <translation>Поле высоты тона и размера Gravity</translation>
+    </message>
+    <message>
+        <source>Horizontal position controls pitch; vertical position controls size.</source>
+        <translation>Положение по горизонтали управляет высотой тона, по вертикали — размером.</translation>
+    </message>
+    <message>
+        <source>Drag to set Pitch and Size. Use arrow keys for precise changes.</source>
+        <translation>Перетаскивайте для изменения высоты тона и размера. Для точной настройки используйте клавиши со стрелками.</translation>
+    </message>
+    <message>
+        <source>Pitch %1 semitones, size %2 percent, linked attractors spread plus or minus %3 semitones.</source>
+        <translation>Высота тона: %1 полутонов, размер: %2%, разброс связанных аттракторов: ±%3 полутонов.</translation>
+    </message>
+    <message>
+        <source>Pitch %1 semitones and size %2 percent.</source>
+        <translation>Высота тона: %1 полутонов, размер: %2%.</translation>
     </message>
 </context>
 <context>
@@ -4326,6 +4658,189 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message>
         <source>Restore editor</source>
         <translation>Восстановить редактор</translation>
+    </message>
+</context>
+<context>
+    <name>JoinFlowState</name>
+    <message>
+        <source>Checking the code</source>
+        <translation>Проверка кода</translation>
+    </message>
+    <message>
+        <source>Opening the project</source>
+        <translation>Открытие проекта</translation>
+    </message>
+    <message>
+        <source>Checking compatibility</source>
+        <translation>Проверка совместимости</translation>
+    </message>
+    <message>
+        <source>Downloading the project</source>
+        <translation>Загрузка проекта</translation>
+    </message>
+    <message>
+        <source>Downloading audio</source>
+        <translation>Загрузка аудио</translation>
+    </message>
+    <message>
+        <source>Matching plugins</source>
+        <translation>Согласование плагинов</translation>
+    </message>
+    <message>
+        <source>Connecting</source>
+        <translation>Подключение</translation>
+    </message>
+    <message>
+        <source>The request could not be started.</source>
+        <translation>Не удалось начать запрос.</translation>
+    </message>
+    <message>
+        <source>Joining is unavailable right now.</source>
+        <translation>Вход в сессию сейчас недоступен.</translation>
+    </message>
+    <message>
+        <source>Use at least 6 characters, or leave the password empty.</source>
+        <translation>Используйте не менее 6 символов или оставьте пароль пустым.</translation>
+    </message>
+    <message>
+        <source>Joining the session…</source>
+        <translation>Вход в сессию…</translation>
+    </message>
+    <message>
+        <source>Enter the invitation code exactly as you received it.</source>
+        <translation>Введите код приглашения ровно так, как вы его получили.</translation>
+    </message>
+    <message>
+        <source>Checking the invitation code…</source>
+        <translation>Проверка кода приглашения…</translation>
+    </message>
+    <message>
+        <source>The invitation is not valid.</source>
+        <translation>Приглашение недействительно.</translation>
+    </message>
+    <message>
+        <source>Opening the project…</source>
+        <translation>Открытие проекта…</translation>
+    </message>
+    <message>
+        <source>This project has been archived.</source>
+        <translation>Этот проект в архиве.</translation>
+    </message>
+    <message>
+        <source>You can watch</source>
+        <translation>Вы можете смотреть</translation>
+    </message>
+    <message>
+        <source>You can edit</source>
+        <translation>Вы можете редактировать</translation>
+    </message>
+    <message>
+        <source>Downloading the project…</source>
+        <translation>Загрузка проекта…</translation>
+    </message>
+    <message>
+        <source>The project could not be opened.</source>
+        <translation>Не удалось открыть проект.</translation>
+    </message>
+    <message>
+        <source>Fetching</source>
+        <translation>Получение</translation>
+    </message>
+    <message>
+        <source>Snapshot</source>
+        <translation>Снимок</translation>
+    </message>
+    <message>
+        <source>Replaying edits</source>
+        <translation>Проигрывание правок</translation>
+    </message>
+    <message>
+        <source>The project could not be downloaded.</source>
+        <translation>Не удалось загрузить проект.</translation>
+    </message>
+    <message>
+        <source>Downloading audio…</source>
+        <translation>Загрузка аудио…</translation>
+    </message>
+    <message>
+        <source>%1 of %2 files</source>
+        <translation>%1 из %2 файлов</translation>
+    </message>
+    <message>
+        <source>Some files are still missing</source>
+        <translation>Часть файлов пока отсутствует</translation>
+    </message>
+    <message>
+        <source>You are in the session.</source>
+        <translation>Вы в сессии.</translation>
+    </message>
+    <message>
+        <source>That password is not correct.</source>
+        <translation>Пароль неверный.</translation>
+    </message>
+    <message>
+        <source>This session is protected. Enter its password.</source>
+        <translation>Сессия защищена паролем. Введите его.</translation>
+    </message>
+    <message>
+        <source>Could not join the session.</source>
+        <translation>Не удалось войти в сессию.</translation>
+    </message>
+    <message>
+        <source>Done</source>
+        <translation>Готово</translation>
+    </message>
+    <message>
+        <source>Join</source>
+        <translation>Войти</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Закрыть</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Join a Session</source>
+        <translation>Вход в сессию</translation>
+    </message>
+    <message>
+        <source>Join a session</source>
+        <translation>Вход в сессию</translation>
+    </message>
+    <message>
+        <source>1234 5678 9012</source>
+        <translation>1234 5678 9012</translation>
+    </message>
+    <message>
+        <source>Session password</source>
+        <translation>Пароль сессии</translation>
+    </message>
+    <message>
+        <source>The live session is no longer available.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Plugin compatibility cannot be checked.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ready</source>
+        <translation type="unfinished">Готово</translation>
+    </message>
+    <message>
+        <source>%1 unavailable; joining as viewer</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>This session uses an unsupported collaboration protocol.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Enter the invitation code you were given, or open the invitation link. The project, shared assets, and exact plugin versions are checked before editing is enabled.</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -5027,14 +5542,6 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <translation>Не удалось добавить дорожки шаблона</translation>
     </message>
     <message>
-        <source>Open VLT Project</source>
-        <translation>Открыть проект VLT</translation>
-    </message>
-    <message>
-        <source>VLT Project (*.vlt);;Project Template (*.vltt);;Legacy Project (project.json);;All Files (*)</source>
-        <translation>Проект VLT (*.vlt);;Шаблон проекта (*.vltt);;Проект (project.json);;Все файлы (*)</translation>
-    </message>
-    <message>
         <source>Open failed</source>
         <translation>Открытие не удалось</translation>
     </message>
@@ -5087,10 +5594,6 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <translation>Шаблон “%1” сохранен</translation>
     </message>
     <message>
-        <source>Save Project As</source>
-        <translation>Сохранить проект как</translation>
-    </message>
-    <message>
         <source>VLT Project (*.vlt)</source>
         <translation>Проект VLT (*.vlt)</translation>
     </message>
@@ -5109,18 +5612,6 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message>
         <source>%1 kHz   Buffer %2   %3 tracks   %4</source>
         <translation>%1 кГц   Буфер %2   %3 дорожки   %4</translation>
-    </message>
-    <message>
-        <source>DSP %1%   %2</source>
-        <translation>DSP %1%   %2</translation>
-    </message>
-    <message>
-        <source>Playing</source>
-        <translation>Воспроизведение</translation>
-    </message>
-    <message>
-        <source>Stopped</source>
-        <translation>Остановлено</translation>
     </message>
     <message>
         <source>Tracks added from “%1”: %2</source>
@@ -5539,10 +6030,6 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <translation>Запись отменена из-за потери резерва дорожки</translation>
     </message>
     <message>
-        <source>Cloud recording is disabled in this version. Make a local copy to record.</source>
-        <translation>Облачная запись отключена в этой версии. Для записи создайте локальную копию.</translation>
-    </message>
-    <message>
         <source>Save the finished recovery take with R or Stop before recording again</source>
         <translation>Перед новой записью сохраните завершённый дубль восстановления клавишей R или кнопкой «Стоп»</translation>
     </message>
@@ -5683,28 +6170,8 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <translation>Облачные проекты недоступны</translation>
     </message>
     <message>
-        <source>Cloud Projects</source>
-        <translation>Облачные проекты</translation>
-    </message>
-    <message>
         <source>Refresh</source>
         <translation>Обновить</translation>
-    </message>
-    <message>
-        <source>Accept Invitation…</source>
-        <translation>Принять приглашение…</translation>
-    </message>
-    <message>
-        <source>Archive</source>
-        <translation>Архивировать</translation>
-    </message>
-    <message>
-        <source>Open</source>
-        <translation>Открыть</translation>
-    </message>
-    <message>
-        <source>Loading…</source>
-        <translation>Загрузка…</translation>
     </message>
     <message>
         <source>Viewer</source>
@@ -5717,62 +6184,6 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message>
         <source>Editor</source>
         <translation>Редактор</translation>
-    </message>
-    <message>
-        <source>Active</source>
-        <translation>Активен</translation>
-    </message>
-    <message>
-        <source>Read-only</source>
-        <translation>Только чтение</translation>
-    </message>
-    <message>
-        <source>Conflict</source>
-        <translation>Конфликт</translation>
-    </message>
-    <message>
-        <source>Archived</source>
-        <translation>В архиве</translation>
-    </message>
-    <message>
-        <source>Uploading</source>
-        <translation>Загрузка</translation>
-    </message>
-    <message>
-        <source>%1  —  %2, %3</source>
-        <translation>%1  —  %2, %3</translation>
-    </message>
-    <message>
-        <source>No cloud projects</source>
-        <translation>Нет облачных проектов</translation>
-    </message>
-    <message>
-        <source>Accept Invitation</source>
-        <translation>Принять приглашение</translation>
-    </message>
-    <message>
-        <source>Invitation token:</source>
-        <translation>Токен приглашения:</translation>
-    </message>
-    <message>
-        <source>Open another project before archiving this one</source>
-        <translation>Перед архивацией откройте другой проект</translation>
-    </message>
-    <message>
-        <source>Archive Cloud Project</source>
-        <translation>Архивировать облачный проект</translation>
-    </message>
-    <message>
-        <source>Archive the selected cloud project?</source>
-        <translation>Архивировать выбранный облачный проект?</translation>
-    </message>
-    <message>
-        <source>Could not load cloud projects</source>
-        <translation>Не удалось загрузить облачные проекты</translation>
-    </message>
-    <message>
-        <source>Cloud Project Request Failed</source>
-        <translation>Ошибка запроса облачного проекта</translation>
     </message>
     <message>
         <source>The cloud request could not be completed.</source>
@@ -5953,10 +6364,6 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message>
         <source>Applying session settings…</source>
         <translation>Применение настроек сессии…</translation>
-    </message>
-    <message>
-        <source>Live session: %1 participant(s) online.</source>
-        <translation>Активная сессия: участников в сети — %1.</translation>
     </message>
     <message>
         <source>No live session is active. Project membership is still available below.</source>
@@ -6306,14 +6713,6 @@ The current project has not been changed.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Could not open the VLT project.
-
-%1
-
-Make sure the package still contains Project.vlt and its Content folder.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <source>The project was not saved.
 
 %1
@@ -6327,6 +6726,270 @@ Check free disk space, folder permissions, and missing referenced files, then tr
 %1
 
 Check free disk space and folder permissions, then try again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Start a session</source>
+        <translation>Начать сессию</translation>
+    </message>
+    <message>
+        <source>People you invite join with the invitation code. A password is optional and protects the room itself, so a code that leaks is still not enough to walk in.</source>
+        <translation>Приглашённые входят по коду. Пароль необязателен и защищает саму комнату: даже если код утечёт, войти по нему одному будет нельзя.</translation>
+    </message>
+    <message>
+        <source>Require a password to join</source>
+        <translation>Требовать пароль для входа</translation>
+    </message>
+    <message>
+        <source>At least 6 characters</source>
+        <translation>Не менее 6 символов</translation>
+    </message>
+    <message>
+        <source>Start session</source>
+        <translation>Начать сессию</translation>
+    </message>
+    <message>
+        <source>Use at least 6 characters.</source>
+        <translation>Используйте не менее 6 символов.</translation>
+    </message>
+    <message>
+        <source>Audio CPU load</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Bounce in Place…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ctrl+Alt+C</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Offline Render…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Audio and project status</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Audio processing CPU load</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Render and insert selected material</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Local-only in v1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Available for audio clips only</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Bounce in Place — Local-only in v1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Region: %1–%2 s across %3 track(s)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Loop: full audible mix, %1–%2 s</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Loop: %1 track(s), %2–%3 s</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 selected clip(s), %2–%3 s</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Select clips, a region, or enable Loop</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Bounce in Place complete</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Offline Render — Local-only in v1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Offline Render</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Offline Render accepts audio clips only. Use Bounce in Place for MIDI or Pattern clips first.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Select one or more audio clips</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Offline Render complete</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>CPU %1%</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Audio CPU load: %1 percent</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Join a Session…</source>
+        <translation>Войти в сессию…</translation>
+    </message>
+    <message>
+        <source>Enter an invitation code to join someone else&apos;s session</source>
+        <translation>Введите код приглашения, чтобы войти в чужую сессию</translation>
+    </message>
+    <message>
+        <source>Replace Project</source>
+        <translation>Заменить проект</translation>
+    </message>
+    <message>
+        <source>A project named “%1” already exists in this location. Replace it?</source>
+        <translation>Проект «%1» уже существует в этой папке. Заменить его?</translation>
+    </message>
+    <message>
+        <source>Could not open the VLT project.
+
+%1
+
+Make sure the package still contains a matching .vlt manifest and its Content folder.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Uploading recorded audio… %1/%2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Recorded audio is safely queued for upload</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Recorded audio remains queued for retry</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Uploading recorded audio…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Recorded audio is uploaded but its project edit must be retried</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Recording uploaded; waiting for server commit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Recording committed to the shared project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Cloud recording requires a collaboration v3 session</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Create Collaboration LobbyвЂ¦</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Start after every participant is ready or remains a viewer.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The collaboration lobby could not be started.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Resolve missing or mismatched plugins before hosting a session.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation type="unfinished">Плагины</translation>
+    </message>
+    <message>
+        <source>Session participants and plugin readiness</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rescan Plugins</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Check Again</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Open Plugin Manager</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Stay as Viewer</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Scans installed plugins in isolated helper processes.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Checks this computer against the session plugin manifest.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Keeps this participant read-only without blocking the lobby.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source> → Viewer</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Not joined</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ready</source>
+        <translation type="unfinished">Готово</translation>
+    </message>
+    <message>
+        <source>Needs attention</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Missing</source>
+        <translation type="unfinished">Отсутствует</translation>
+    </message>
+    <message>
+        <source>Version mismatch</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Probe failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Lobby: check plugin readiness, then the host can start the session.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Live session: %1 participant(s) joined.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Scanning plugins in isolated helper processes…</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -6446,6 +7109,480 @@ Check free disk space and folder permissions, then try again.</source>
     <message>
         <source>Delete</source>
         <translation>Удалить</translation>
+    </message>
+</context>
+<context>
+    <name>NotebookSettingsPage</name>
+    <message>
+        <source>APPEARANCE</source>
+        <translation>ВНЕШНИЙ ВИД</translation>
+    </message>
+    <message>
+        <source>Choose a local image, GIF or video for the notebook background. The file stays on this computer.</source>
+        <translation>Выберите локальное изображение, GIF или видео для фона блокнота. Файл останется на этом компьютере.</translation>
+    </message>
+    <message>
+        <source>No custom background</source>
+        <translation>Без своего фона</translation>
+    </message>
+    <message>
+        <source>Notebook background file</source>
+        <translation>Файл фона блокнота</translation>
+    </message>
+    <message>
+        <source>Choose…</source>
+        <translation>Выбрать…</translation>
+    </message>
+    <message>
+        <source>Choose notebook background</source>
+        <translation>Выбрать фон блокнота</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>Очистить</translation>
+    </message>
+    <message>
+        <source>Background</source>
+        <translation>Фон</translation>
+    </message>
+    <message>
+        <source>Choose a notebook background</source>
+        <translation>Выбрать фон блокнота</translation>
+    </message>
+    <message>
+        <source>Background media (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.avif *.mp4 *.m4v *.webm *.ogv *.ogg *.mov);;Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.avif);;Videos (*.mp4 *.m4v *.webm *.ogv *.ogg *.mov)</source>
+        <translation>Фоновые медиа (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.avif *.mp4 *.m4v *.webm *.ogv *.ogg *.mov);;Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.avif);;Видео (*.mp4 *.m4v *.webm *.ogv *.ogg *.mov)</translation>
+    </message>
+    <message>
+        <source>Choose a supported image, GIF or video</source>
+        <translation>Выберите поддерживаемое изображение, GIF или видео</translation>
+    </message>
+    <message>
+        <source>Background visibility</source>
+        <translation>Видимость фона</translation>
+    </message>
+    <message>
+        <source>Visibility</source>
+        <translation>Видимость</translation>
+    </message>
+    <message>
+        <source>Play animated GIF and video backgrounds</source>
+        <translation>Воспроизводить анимированные GIF- и видеофоны</translation>
+    </message>
+    <message>
+        <source>CUSTOM TEXT FONTS</source>
+        <translation>СВОИ ШРИФТЫ ДЛЯ ТЕКСТА</translation>
+    </message>
+    <message>
+        <source>Add local font files for text inside the notebook. Removing a font does not delete the original file.</source>
+        <translation>Добавьте локальные файлы шрифтов для текста в блокноте. Удаление шрифта из списка не удаляет исходный файл.</translation>
+    </message>
+    <message>
+        <source>Notebook custom fonts</source>
+        <translation>Свои шрифты блокнота</translation>
+    </message>
+    <message>
+        <source>Add Font…</source>
+        <translation>Добавить шрифт…</translation>
+    </message>
+    <message>
+        <source>Remove</source>
+        <translation>Удалить</translation>
+    </message>
+    <message>
+        <source>Add notebook fonts</source>
+        <translation>Добавить шрифты блокнота</translation>
+    </message>
+    <message>
+        <source>Font files (*.ttf *.otf *.ttc *.woff *.woff2)</source>
+        <translation>Файлы шрифтов (*.ttf *.otf *.ttc *.woff *.woff2)</translation>
+    </message>
+</context>
+<context>
+    <name>NotebookWindow</name>
+    <message>
+        <source>Notebook</source>
+        <translation>Блокнот</translation>
+    </message>
+    <message>
+        <source>Could not open notebook</source>
+        <translation>Не удалось открыть блокнот</translation>
+    </message>
+    <message>
+        <source>Notebook editor could not start</source>
+        <translation>Не удалось запустить редактор блокнота</translation>
+    </message>
+    <message>
+        <source>NOTEBOOK</source>
+        <translation>БЛОКНОТ</translation>
+    </message>
+    <message>
+        <source>Saved locally</source>
+        <translation>Сохранено локально</translation>
+    </message>
+    <message>
+        <source>Notebook save status</source>
+        <translation>Статус сохранения блокнота</translation>
+    </message>
+    <message>
+        <source>Pause animated background</source>
+        <translation>Приостановить анимацию фона</translation>
+    </message>
+    <message>
+        <source>Notebook settings</source>
+        <translation>Настройки блокнота</translation>
+    </message>
+    <message>
+        <source>Undo</source>
+        <translation>Отменить</translation>
+    </message>
+    <message>
+        <source>Redo</source>
+        <translation>Повторить</translation>
+    </message>
+    <message>
+        <source>Paragraph style</source>
+        <translation>Стиль абзаца</translation>
+    </message>
+    <message>
+        <source>Paragraph</source>
+        <translation>Абзац</translation>
+    </message>
+    <message>
+        <source>Heading 1</source>
+        <translation>Заголовок 1</translation>
+    </message>
+    <message>
+        <source>Heading 2</source>
+        <translation>Заголовок 2</translation>
+    </message>
+    <message>
+        <source>Quote</source>
+        <translation>Цитата</translation>
+    </message>
+    <message>
+        <source>Text font</source>
+        <translation>Шрифт текста</translation>
+    </message>
+    <message>
+        <source>Text size</source>
+        <translation>Размер текста</translation>
+    </message>
+    <message>
+        <source>Bold</source>
+        <translation>Полужирный</translation>
+    </message>
+    <message>
+        <source>Italic</source>
+        <translation>Курсив</translation>
+    </message>
+    <message>
+        <source>Underline</source>
+        <translation>Подчёркнутый</translation>
+    </message>
+    <message>
+        <source>Text color</source>
+        <translation>Цвет текста</translation>
+    </message>
+    <message>
+        <source>Highlight color</source>
+        <translation>Цвет выделения</translation>
+    </message>
+    <message>
+        <source>Bulleted list</source>
+        <translation>Маркированный список</translation>
+    </message>
+    <message>
+        <source>Numbered list</source>
+        <translation>Нумерованный список</translation>
+    </message>
+    <message>
+        <source>Insert image</source>
+        <translation>Вставить изображение</translation>
+    </message>
+    <message>
+        <source>Clear formatting</source>
+        <translation>Очистить форматирование</translation>
+    </message>
+    <message>
+        <source>Notebook editor</source>
+        <translation>Редактор блокнота</translation>
+    </message>
+    <message>
+        <source>Start writing…</source>
+        <translation>Начните писать…</translation>
+    </message>
+    <message>
+        <source>Pasted image</source>
+        <translation>Вставленное изображение</translation>
+    </message>
+    <message>
+        <source>Insert an image</source>
+        <translation>Вставить изображение</translation>
+    </message>
+    <message>
+        <source>Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.avif)</source>
+        <translation>Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.avif)</translation>
+    </message>
+    <message>
+        <source>This image could not be read</source>
+        <translation>Не удалось прочитать изображение</translation>
+    </message>
+    <message>
+        <source>The image could not be copied</source>
+        <translation>Не удалось скопировать изображение</translation>
+    </message>
+    <message>
+        <source>Saving…</source>
+        <translation>Сохранение…</translation>
+    </message>
+    <message>
+        <source>Could not save</source>
+        <translation>Не удалось сохранить</translation>
+    </message>
+    <message>
+        <source>Background could not be played</source>
+        <translation>Не удалось воспроизвести фон</translation>
+    </message>
+    <message>
+        <source>Play animated background</source>
+        <translation>Воспроизвести анимацию фона</translation>
+    </message>
+    <message>
+        <source>Edit timed text</source>
+        <translation>Редактировать синхронный текст</translation>
+    </message>
+    <message>
+        <source>Show timed text on the timeline</source>
+        <translation>Показывать синхронный текст на таймлайне</translation>
+    </message>
+    <message>
+        <source>TIMED TEXT</source>
+        <translation>СИНХРОННЫЙ ТЕКСТ</translation>
+    </message>
+    <message>
+        <source>Place the caret in a notebook line, then stamp it at the current playhead position. You can edit both time and text below.</source>
+        <translation>Поставьте курсор в строку блокнота и привяжите её к текущей позиции воспроизведения. Ниже можно изменить время и текст.</translation>
+    </message>
+    <message>
+        <source>Stamp selected line at playhead</source>
+        <translation>Привязать строку к позиции</translation>
+    </message>
+    <message>
+        <source>Stamp selected notebook line at playhead</source>
+        <translation>Привязать выбранную строку блокнота к позиции воспроизведения</translation>
+    </message>
+    <message>
+        <source>Add the selected notebook line at the current project time</source>
+        <translation>Добавить выбранную строку блокнота в текущее время проекта</translation>
+    </message>
+    <message>
+        <source>Time</source>
+        <translation>Время</translation>
+    </message>
+    <message>
+        <source>Text</source>
+        <translation>Текст</translation>
+    </message>
+    <message>
+        <source>Timed notebook lines</source>
+        <translation>Строки блокнота с таймингами</translation>
+    </message>
+    <message>
+        <source>Double-click a time or line to edit it</source>
+        <translation>Дважды щёлкните время или строку для редактирования</translation>
+    </message>
+    <message>
+        <source>Set to playhead</source>
+        <translation>Взять текущую позицию</translation>
+    </message>
+    <message>
+        <source>Set selected line time to playhead</source>
+        <translation>Привязать время выбранной строки к позиции воспроизведения</translation>
+    </message>
+    <message>
+        <source>Delete</source>
+        <translation>Удалить</translation>
+    </message>
+    <message>
+        <source>Delete selected timed line</source>
+        <translation>Удалить выбранную строку с таймингом</translation>
+    </message>
+    <message>
+        <source>Timeline font</source>
+        <translation>Шрифт на таймлайне</translation>
+    </message>
+    <message>
+        <source>Timed text font</source>
+        <translation>Шрифт синхронного текста</translation>
+    </message>
+    <message>
+        <source>The default uses the transport position display font</source>
+        <translation>По умолчанию используется шрифт индикатора позиции транспорта</translation>
+    </message>
+    <message>
+        <source>Timings are saved locally</source>
+        <translation>Тайминги сохранены локально</translation>
+    </message>
+    <message>
+        <source>Timed text save status</source>
+        <translation>Состояние сохранения синхронного текста</translation>
+    </message>
+    <message>
+        <source>Use seconds or the format mm:ss.mmm.</source>
+        <translation>Введите секунды или время в формате мм:сс.мс.</translation>
+    </message>
+    <message>
+        <source>Timed text cannot be empty.</source>
+        <translation>Строка синхронного текста не может быть пустой.</translation>
+    </message>
+    <message>
+        <source>Could not save timed text.</source>
+        <translation>Не удалось сохранить синхронный текст.</translation>
+    </message>
+    <message>
+        <source>Place the caret in a non-empty notebook line first.</source>
+        <translation>Сначала поставьте курсор в непустую строку блокнота.</translation>
+    </message>
+    <message>
+        <source>Transport display (default)</source>
+        <translation>Индикатор транспорта (по умолчанию)</translation>
+    </message>
+    <message>
+        <source>Close timed text editor</source>
+        <translation>Закрыть редактор синхронного текста</translation>
+    </message>
+    <message>
+        <source>Hide timed text from the timeline</source>
+        <translation>Скрыть синхронный текст с таймлайна</translation>
+    </message>
+</context>
+<context>
+    <name>OfflineRenderDialog</name>
+    <message>
+        <source>Offline Render</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The original clip audio is preserved. This chain is rendered into a managed cache; realtime Clip FX remain live.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Offline render warning</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Warning: selected clips have different offline chains. The primary clip&apos;s chain is shown; Render Offline will replace the chains on all selected clips.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Selected clips (%1)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Clips to process</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Audio clip</source>
+        <translation type="unfinished">Аудиоклип</translation>
+    </message>
+    <message>
+        <source>%1 — %2  (%3–%4 s)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Track: %1
+Clip: %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Offline processing inserts</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Chain preset</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Offline processing preset</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Load</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Save As…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Include Tail</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ready</source>
+        <translation type="unfinished">Готово</translation>
+    </message>
+    <message>
+        <source>Offline render status</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Offline render progress</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Render Offline</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Could not create the offline plugin rack</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>This plugin is not available.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Load preset</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Save offline chain</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Preset name</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Save preset</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Enter a valid preset name.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rendering…</source>
+        <translation type="unfinished">Рендеринг…</translation>
+    </message>
+    <message>
+        <source>Rendering %1 of %2 seconds</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Cancelled — the project was not changed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Offline render failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Offline render complete</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -8224,6 +9361,18 @@ This session also contains a finished cloud recording awaiting upload. Restore a
         <source>Send track</source>
         <translation>Send-дорожка</translation>
     </message>
+    <message>
+        <source>Waveform height: drag or use Up/Down; double-click or Home resets</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Waveform display height</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Waveform %1%</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>QuantizeDialog</name>
@@ -9006,6 +10155,197 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     </message>
 </context>
 <context>
+    <name>SessionActivity</name>
+    <message>
+        <source>Local project</source>
+        <translation>Локальный проект</translation>
+    </message>
+    <message>
+        <source>Collaboration unavailable</source>
+        <translation>Совместная работа недоступна</translation>
+    </message>
+    <message>
+        <source>Sign in</source>
+        <translation>Войдите</translation>
+    </message>
+    <message>
+        <source>No connection</source>
+        <translation>Нет соединения</translation>
+    </message>
+    <message>
+        <source>Uploading</source>
+        <translation>Выгрузка</translation>
+    </message>
+    <message>
+        <source>Connecting</source>
+        <translation>Подключение</translation>
+    </message>
+    <message>
+        <source>Joining</source>
+        <translation>Вход в сессию</translation>
+    </message>
+    <message>
+        <source>Synced</source>
+        <translation>Синхронизировано</translation>
+    </message>
+    <message>
+        <source>Reconnecting</source>
+        <translation>Переподключение</translation>
+    </message>
+    <message>
+        <source>Read-only</source>
+        <translation>Только чтение</translation>
+    </message>
+    <message>
+        <source>Conflict</source>
+        <translation>Конфликт</translation>
+    </message>
+    <message>
+        <source>Session error</source>
+        <translation>Ошибка сессии</translation>
+    </message>
+    <message>
+        <source>Session</source>
+        <translation>Сессия</translation>
+    </message>
+    <message>
+        <source>Fetching project</source>
+        <translation>Получение проекта</translation>
+    </message>
+    <message>
+        <source>Downloading snapshot</source>
+        <translation>Загрузка снимка</translation>
+    </message>
+    <message>
+        <source>Replaying edits</source>
+        <translation>Проигрывание правок</translation>
+    </message>
+    <message>
+        <source>Reconciling local edits</source>
+        <translation>Сверка локальных правок</translation>
+    </message>
+    <message>
+        <source>Checking session</source>
+        <translation>Проверка сессии</translation>
+    </message>
+    <message>
+        <source>Sync failed</source>
+        <translation>Синхронизация не удалась</translation>
+    </message>
+    <message>
+        <source>Checking project</source>
+        <translation>Проверка проекта</translation>
+    </message>
+    <message>
+        <source>Creating cloud project</source>
+        <translation>Создание облачного проекта</translation>
+    </message>
+    <message>
+        <source>Uploading audio</source>
+        <translation>Выгрузка аудио</translation>
+    </message>
+    <message>
+        <source>Preparing snapshot</source>
+        <translation>Подготовка снимка</translation>
+    </message>
+    <message>
+        <source>Uploading snapshot</source>
+        <translation>Выгрузка снимка</translation>
+    </message>
+    <message>
+        <source>Activating project</source>
+        <translation>Активация проекта</translation>
+    </message>
+    <message>
+        <source>%1 B</source>
+        <translation>%1 Б</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n person, you host</source>
+        <translation>
+            <numerusform>%n человек, вы ведущий</numerusform>
+            <numerusform>%n человека, вы ведущий</numerusform>
+            <numerusform>%n человек, вы ведущий</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n person</source>
+        <translation>
+            <numerusform>%n человек</numerusform>
+            <numerusform>%n человека</numerusform>
+            <numerusform>%n человек</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>%1 %2 of %3</source>
+        <translation>%1 %2 из %3</translation>
+    </message>
+    <message>
+        <source>Publishing</source>
+        <translation>Публикация</translation>
+    </message>
+    <message>
+        <source>Downloading %1 of %2 files</source>
+        <translation>Загрузка %1 из %2 файлов</translation>
+    </message>
+    <message>
+        <source>Uploading %1 of %2</source>
+        <translation>Выгрузка %1 из %2</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n edit queued</source>
+        <translation>
+            <numerusform>%n правка в очереди</numerusform>
+            <numerusform>%n правки в очереди</numerusform>
+            <numerusform>%n правок в очереди</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Verifying state</source>
+        <translation>Проверка состояния</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n warning</source>
+        <translation>
+            <numerusform>%n предупреждение</numerusform>
+            <numerusform>%n предупреждения</numerusform>
+            <numerusform>%n предупреждений</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Transferred %1 of %2</source>
+        <translation>Передано %1 из %2</translation>
+    </message>
+    <message>
+        <source>This session is read-only for you right now.</source>
+        <translation>Сейчас сессия доступна вам только для чтения.</translation>
+    </message>
+    <message>
+        <source>No one else here</source>
+        <translation>Больше никого нет</translation>
+    </message>
+    <message>
+        <source> — Host</source>
+        <translation> — ведущий</translation>
+    </message>
+    <message>
+        <source>Collaboration session status</source>
+        <translation>Состояние совместной сессии</translation>
+    </message>
+    <message>
+        <source>Session warnings</source>
+        <translation>Предупреждения сессии</translation>
+    </message>
+    <message>
+        <source>Join a session…</source>
+        <translation>Войти в сессию…</translation>
+    </message>
+    <message>
+        <source>Cloud projects…</source>
+        <translation>Облачные проекты…</translation>
+    </message>
+</context>
+<context>
     <name>SettingsWindow</name>
     <message>
         <source>Settings — %1</source>
@@ -9412,6 +10752,182 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
 
 Reassign it to &quot;%3&quot;?</source>
         <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Line thickness</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Playhead line thickness in pixels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 px</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Leave a glowing trail while it moves</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Playhead motion trail</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Notebook</source>
+        <translation>Блокнот</translation>
+    </message>
+    <message>
+        <source>Timeline Background</source>
+        <translation>Фон таймлайна</translation>
+    </message>
+    <message>
+        <source>Choose a local photo, animated GIF or video for the arrangement grid. The file stays on this computer and is not saved in the project.</source>
+        <translation>Выберите локальную фотографию, анимированный GIF или видео для фона сетки аранжировки. Файл останется на этом компьютере и не будет сохранён в проекте.</translation>
+    </message>
+    <message>
+        <source>Theme colour only</source>
+        <translation>Только цвет темы</translation>
+    </message>
+    <message>
+        <source>Timeline background file</source>
+        <translation>Файл фона таймлайна</translation>
+    </message>
+    <message>
+        <source>Choose…</source>
+        <translation>Выбрать…</translation>
+    </message>
+    <message>
+        <source>Choose timeline background</source>
+        <translation>Выбрать фон таймлайна</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>Очистить</translation>
+    </message>
+    <message>
+        <source>Media</source>
+        <translation>Медиа</translation>
+    </message>
+    <message>
+        <source>Choose a timeline background</source>
+        <translation>Выберите фон таймлайна</translation>
+    </message>
+    <message>
+        <source>Unsupported background</source>
+        <translation>Неподдерживаемый фон</translation>
+    </message>
+    <message>
+        <source>Choose a supported image, GIF or video file.</source>
+        <translation>Выберите поддерживаемое изображение, GIF или видео.</translation>
+    </message>
+    <message>
+        <source>Visibility</source>
+        <translation>Видимость</translation>
+    </message>
+    <message>
+        <source>Timeline background visibility</source>
+        <translation>Видимость фона таймлайна</translation>
+    </message>
+    <message>
+        <source>Timeline background blur</source>
+        <translation>Размытие фона таймлайна</translation>
+    </message>
+    <message>
+        <source>Blur</source>
+        <translation>Размытие</translation>
+    </message>
+    <message>
+        <source>Play GIF and video backgrounds</source>
+        <translation>Воспроизводить GIF и видео на фоне</translation>
+    </message>
+    <message>
+        <source>Reduce Motion freezes animated backgrounds on a still frame.</source>
+        <translation>Режим уменьшения движения останавливает анимированный фон на одном кадре.</translation>
+    </message>
+    <message>
+        <source>Background media (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.mp4 *.m4v *.webm *.ogv *.mov *.mkv *.avi);;Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif);;Videos (*.mp4 *.m4v *.webm *.ogv *.mov *.mkv *.avi)</source>
+        <translation>Фоновые медиа (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.mp4 *.m4v *.webm *.ogv *.mov *.mkv *.avi);;Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif);;Видео (*.mp4 *.m4v *.webm *.ogv *.mov *.mkv *.avi)</translation>
+    </message>
+    <message>
+        <source>Enable custom timeline background</source>
+        <translation>Включить пользовательский фон таймлайна</translation>
+    </message>
+    <message>
+        <source>Custom timeline background enabled</source>
+        <translation>Пользовательский фон таймлайна включён</translation>
+    </message>
+    <message>
+        <source>Fill frame (crop to fit)</source>
+        <translation>Заполнить область (с обрезкой)</translation>
+    </message>
+    <message>
+        <source>Stretch to frame</source>
+        <translation>Растянуть по области</translation>
+    </message>
+    <message>
+        <source>Tile at original size</source>
+        <translation>Повторять в исходном размере</translation>
+    </message>
+    <message>
+        <source>Original size, centred</source>
+        <translation>Исходный размер по центру</translation>
+    </message>
+    <message>
+        <source>Timeline background placement</source>
+        <translation>Размещение фона таймлайна</translation>
+    </message>
+    <message>
+        <source>Fill automatically adapts to every window and screen size.</source>
+        <translation>Заполнение автоматически подстраивается под размер окна и экрана.</translation>
+    </message>
+    <message>
+        <source>Layout</source>
+        <translation>Размещение</translation>
+    </message>
+    <message>
+        <source>Header Background</source>
+        <translation>Фон хедера</translation>
+    </message>
+    <message>
+        <source>Add a local photo, animated GIF or video behind the top controls. A low visibility keeps every control readable.</source>
+        <translation>Добавьте локальную фотографию, GIF-анимацию или видео за верхними элементами управления. Низкая видимость сохраняет читаемость элементов.</translation>
+    </message>
+    <message>
+        <source>Enable custom header background</source>
+        <translation>Включить пользовательский фон хедера</translation>
+    </message>
+    <message>
+        <source>Custom header background enabled</source>
+        <translation>Пользовательский фон хедера включён</translation>
+    </message>
+    <message>
+        <source>Header background file</source>
+        <translation>Файл фона хедера</translation>
+    </message>
+    <message>
+        <source>Choose header background</source>
+        <translation>Выбрать фон хедера</translation>
+    </message>
+    <message>
+        <source>Choose a header background</source>
+        <translation>Выбор фона хедера</translation>
+    </message>
+    <message>
+        <source>Header background placement</source>
+        <translation>Размещение фона хедера</translation>
+    </message>
+    <message>
+        <source>Header background visibility</source>
+        <translation>Видимость фона хедера</translation>
+    </message>
+    <message>
+        <source>Header background blur</source>
+        <translation>Размытие фона хедера</translation>
+    </message>
+    <message>
+        <source>Choose...</source>
+        <translation>Выбрать…</translation>
     </message>
 </context>
 <context>
@@ -9934,6 +11450,38 @@ Its %1 takes are removed from the project and the clip can no longer be expanded
 The files are rewritten on disk and the trimmed audio cannot be recovered.</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Bounce in Place…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ctrl+Alt+C</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Render and insert the selected material</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Local-only in v1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Offline Render…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Available for audio clips only</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Render the selected region</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Pending upload</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>ToolDialog</name>
@@ -10351,26 +11899,6 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <translation>Нарисовать</translation>
     </message>
     <message>
-        <source>CPU load</source>
-        <translation>Загрузка ЦП</translation>
-    </message>
-    <message>
-        <source>CPU load — %1%</source>
-        <translation>Загрузка ЦП — %1%</translation>
-    </message>
-    <message>
-        <source>Master output mute</source>
-        <translation>Отключение мастер-выхода</translation>
-    </message>
-    <message>
-        <source>Mute master output</source>
-        <translation>Отключить мастер-выход</translation>
-    </message>
-    <message>
-        <source>Restore master output</source>
-        <translation>Восстановить мастер-выход</translation>
-    </message>
-    <message>
         <source>Playhead musical position</source>
         <translation>Музыкальная позиция курсора</translation>
     </message>
@@ -10407,14 +11935,6 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <translation>Используйте числитель от 1 до 32 и знаменатель 1, 2, 4, 8, 16 или 32.</translation>
     </message>
     <message>
-        <source>Master output level</source>
-        <translation>Уровень мастер-выхода</translation>
-    </message>
-    <message>
-        <source>Read-only stereo output level. Use the speaker button to mute.</source>
-        <translation>Стереоуровень только для просмотра. Для отключения звука нажмите кнопку динамика.</translation>
-    </message>
-    <message>
         <source>Drag up or down to seek. Double-click to type a position.</source>
         <translation>Тяните вверх или вниз для перемотки. Двойной щелчок — ввод позиции.</translation>
     </message>
@@ -10425,10 +11945,6 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
     <message>
         <source>Drag to seek · Double-click to enter minutes.seconds.centiseconds</source>
         <translation>Тяните для перемотки · Двойной щелчок — ввод минуты.секунды.сотые</translation>
-    </message>
-    <message>
-        <source>Master output level — %1</source>
-        <translation>Уровень мастер-выхода — %1</translation>
     </message>
     <message>
         <source>Invalid playhead position</source>
@@ -10446,6 +11962,18 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <source>Typing keyboard — the computer keys play notes
 Z…M and Q…P, two octaves from C%1  ·  [ and ] shift the octave</source>
         <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Tempo, time signature, grid and time display</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Open the notebook</source>
+        <translation>Открыть блокнот</translation>
+    </message>
+    <message>
+        <source>Notebook</source>
+        <translation>Блокнот</translation>
     </message>
 </context>
 <context>
@@ -10988,6 +12516,30 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <translation>Закладки</translation>
     </message>
     <message>
+        <source>Ctrl+D to add</source>
+        <translation>Ctrl+D — добавить</translation>
+    </message>
+    <message>
+        <source>Search the web</source>
+        <translation>Поиск в интернете</translation>
+    </message>
+    <message>
+        <source>Find what you need without leaving your project.</source>
+        <translation>Найдите нужное, не покидая свой проект.</translation>
+    </message>
+    <message>
+        <source>Web search</source>
+        <translation>Поиск в интернете</translation>
+    </message>
+    <message>
+        <source>Search or enter a topic</source>
+        <translation>Введите поисковый запрос</translation>
+    </message>
+    <message>
+        <source>Search</source>
+        <translation>Найти</translation>
+    </message>
+    <message>
         <source>Open all bookmarks</source>
         <translation>Открыть все закладки</translation>
     </message>
@@ -11273,6 +12825,34 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <source>Could not revoke the invitation.</source>
         <translation>Не удалось отозвать приглашение.</translation>
     </message>
+    <message>
+        <source>Invitation code copied.</source>
+        <translation>Код приглашения скопирован.</translation>
+    </message>
+    <message>
+        <source>Invitation link copied.</source>
+        <translation>Ссылка приглашения скопирована.</translation>
+    </message>
+    <message>
+        <source>Invitation code</source>
+        <translation>Код приглашения</translation>
+    </message>
+    <message>
+        <source>Copy code</source>
+        <translation>Скопировать код</translation>
+    </message>
+    <message>
+        <source>Copy link</source>
+        <translation>Скопировать ссылку</translation>
+    </message>
+    <message>
+        <source>A link that opens this session in VLT Studio. The code travels in the link fragment, so it is never sent to a web server.</source>
+        <translation>Ссылка, открывающая эту сессию в VLT Studio. Код передаётся во фрагменте ссылки и потому никогда не уходит на веб-сервер.</translation>
+    </message>
+    <message>
+        <source>Show advanced token</source>
+        <translation>Показать служебный токен</translation>
+    </message>
 </context>
 <context>
     <name>collab::CloudSessionLifecycleController</name>
@@ -11327,6 +12907,26 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message>
         <source>Collaboration session ended.</source>
         <translation>Совместная сессия завершена.</translation>
+    </message>
+    <message>
+        <source>The session uses an unsupported collaboration protocol.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The server returned an inconsistent activation response.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Session started.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Every participant must be ready or explicitly remain a viewer.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Could not activate the collaboration session.</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -11416,10 +13016,6 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <translation>Некорректные начальные данные проекта</translation>
     </message>
     <message>
-        <source>Server omitted the collaboration v2 write gate</source>
-        <translation>Сервер не передал разрешение на запись Collaboration v2</translation>
-    </message>
-    <message>
         <source>Incompatible collaboration server</source>
         <translation>Несовместимый сервер совместной работы</translation>
     </message>
@@ -11467,6 +13063,30 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <source>Operation conflicted with the session</source>
         <translation>Операция конфликтует с состоянием сессии</translation>
     </message>
+    <message>
+        <source>Unexpected collaboration protocol version</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Server omitted the collaboration write gate</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Waiting for the host to start the session</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Plugin compatibility must be resolved</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Invalid plugin readiness update</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Invalid session activation update</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>collab::PresenceOverlay</name>
@@ -11481,137 +13101,6 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message>
         <source>%1 selected</source>
         <translation>Выбрано: %1</translation>
-    </message>
-</context>
-<context>
-    <name>collab::SessionStatusWidget</name>
-    <message>
-        <source>Collaboration session status</source>
-        <translation>Состояние совместной сессии</translation>
-    </message>
-    <message>
-        <source>Session participants</source>
-        <translation>Участники сессии</translation>
-    </message>
-    <message>
-        <source>Session: Local</source>
-        <translation>Сессия: локальная</translation>
-    </message>
-    <message>
-        <source>Session: Authorization needed</source>
-        <translation>Сессия: требуется авторизация</translation>
-    </message>
-    <message>
-        <source>Session: Sign in</source>
-        <translation>Сессия: войдите в аккаунт</translation>
-    </message>
-    <message>
-        <source>Session: No connection</source>
-        <translation>Сессия: нет соединения</translation>
-    </message>
-    <message>
-        <source>Session: Uploading</source>
-        <translation>Сессия: загрузка</translation>
-    </message>
-    <message>
-        <source>Session: Connecting</source>
-        <translation>Сессия: подключение</translation>
-    </message>
-    <message>
-        <source>Session: Joining</source>
-        <translation>Сессия: присоединение</translation>
-    </message>
-    <message>
-        <source>Session: Synced</source>
-        <translation>Сессия: синхронизирована</translation>
-    </message>
-    <message>
-        <source>Session: Reconnecting</source>
-        <translation>Сессия: переподключение</translation>
-    </message>
-    <message>
-        <source>Session: Read-only</source>
-        <translation>Сессия: только чтение</translation>
-    </message>
-    <message>
-        <source>Session: Conflict</source>
-        <translation>Сессия: конфликт</translation>
-    </message>
-    <message>
-        <source>Session: Error</source>
-        <translation>Сессия: ошибка</translation>
-    </message>
-    <message>
-        <source>People %1</source>
-        <translation>Участники: %1</translation>
-    </message>
-    <message>
-        <source>No active participants</source>
-        <translation>Нет активных участников</translation>
-    </message>
-    <message>
-        <source> — Host</source>
-        <translation> — ведущий</translation>
-    </message>
-    <message>
-        <source> (%1)</source>
-        <translation> (%1)</translation>
-    </message>
-    <message>
-        <source> — %1</source>
-        <translation> — %1</translation>
-    </message>
-    <message>
-        <source>Timeline</source>
-        <translation>Таймлайн</translation>
-    </message>
-    <message>
-        <source>Track list</source>
-        <translation>Список дорожек</translation>
-    </message>
-    <message>
-        <source>Transport</source>
-        <translation>Транспорт</translation>
-    </message>
-    <message>
-        <source>Mixer</source>
-        <translation>Микшер</translation>
-    </message>
-    <message>
-        <source>Piano roll</source>
-        <translation>Редактор нот</translation>
-    </message>
-    <message>
-        <source>Automation</source>
-        <translation>Автоматизация</translation>
-    </message>
-    <message>
-        <source>Sample editor</source>
-        <translation>Редактор сэмплов</translation>
-    </message>
-    <message>
-        <source>Built-in plugin</source>
-        <translation>Встроенный плагин</translation>
-    </message>
-    <message>
-        <source>File browser</source>
-        <translation>Файловый браузер</translation>
-    </message>
-    <message>
-        <source>Web browser</source>
-        <translation>Веб-браузер</translation>
-    </message>
-    <message>
-        <source>AI panel</source>
-        <translation>Панель ИИ</translation>
-    </message>
-    <message>
-        <source>Settings</source>
-        <translation>Настройки</translation>
-    </message>
-    <message>
-        <source>Workspace</source>
-        <translation>Рабочая область</translation>
     </message>
 </context>
 <context>
@@ -11785,8 +13274,8 @@ Double-click to rename</source>
         <translation>Перетащите горизонтально для регулировки; двойной щелчок для сброса.</translation>
     </message>
     <message>
-        <source>Drag vertically to adjust; double-click to reset.</source>
-        <translation>Перетащите вертикально для регулировки; двойной щелчок для сброса.</translation>
+        <source>Drag right or up to increase, left or down to decrease; double-click to reset.</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -11849,6 +13338,168 @@ Double-click to rename</source>
     <message>
         <source>Pan</source>
         <translation>Панорама</translation>
+    </message>
+</context>
+<context>
+    <name>ui::ProjectOpenDialog</name>
+    <message>
+        <source>Open Project</source>
+        <translation>Открыть проект</translation>
+    </message>
+    <message>
+        <source>Your projects</source>
+        <translation>Ваши проекты</translation>
+    </message>
+    <message>
+        <source>Recently opened and saved projects are kept here for quick access.</source>
+        <translation>Недавно открытые и сохранённые проекты доступны здесь для быстрого запуска.</translation>
+    </message>
+    <message>
+        <source>No recent projects yet. Open one from disk and it will appear here.</source>
+        <translation>Недавних проектов пока нет. Откройте проект с диска, и он появится здесь.</translation>
+    </message>
+    <message>
+        <source>Author not specified</source>
+        <translation>Автор не указан</translation>
+    </message>
+    <message>
+        <source>By %1</source>
+        <translation>Автор: %1</translation>
+    </message>
+    <message>
+        <source>Modified %1</source>
+        <translation>Изменён: %1</translation>
+    </message>
+    <message>
+        <source>Open</source>
+        <translation>Открыть</translation>
+    </message>
+    <message>
+        <source>Open project %1</source>
+        <translation>Открыть проект %1</translation>
+    </message>
+    <message>
+        <source>Browse on Disk…</source>
+        <translation>Найти на диске…</translation>
+    </message>
+    <message>
+        <source>Browse for another project</source>
+        <translation>Найти другой проект</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Open VLT Project</source>
+        <translation>Открыть проект VLT</translation>
+    </message>
+    <message>
+        <source>VLT Project (*.vlt);;Project Template (*.vltt);;Legacy Project (project.json);;All Files (*)</source>
+        <translation>Проект VLT (*.vlt);;Шаблон проекта (*.vltt);;Старый проект (project.json);;Все файлы (*)</translation>
+    </message>
+</context>
+<context>
+    <name>ui::ProjectSaveDialog</name>
+    <message>
+        <source>Enter a project name.</source>
+        <translation>Введите название проекта.</translation>
+    </message>
+    <message>
+        <source>The name cannot contain &lt; &gt; : &quot; / \ | ? * or end with a dot.</source>
+        <translation>Название не может содержать &lt; &gt; : &quot; / \ | ? * или заканчиваться точкой.</translation>
+    </message>
+    <message>
+        <source>Choose another project name.</source>
+        <translation>Выберите другое название проекта.</translation>
+    </message>
+    <message>
+        <source>Project cover</source>
+        <translation>Обложка проекта</translation>
+    </message>
+    <message>
+        <source>No project cover selected</source>
+        <translation>Обложка проекта не выбрана</translation>
+    </message>
+    <message>
+        <source>Save Project</source>
+        <translation>Сохранить проект</translation>
+    </message>
+    <message>
+        <source>Save your project</source>
+        <translation>Сохранение проекта</translation>
+    </message>
+    <message>
+        <source>Set the project details and choose where its portable VLT package will be saved.</source>
+        <translation>Укажите данные проекта и выберите папку для переносимого пакета VLT.</translation>
+    </message>
+    <message>
+        <source>Choose Image…</source>
+        <translation>Выбрать изображение…</translation>
+    </message>
+    <message>
+        <source>Choose project cover image</source>
+        <translation>Выбрать изображение обложки проекта</translation>
+    </message>
+    <message>
+        <source>Remove</source>
+        <translation>Удалить</translation>
+    </message>
+    <message>
+        <source>Remove project cover image</source>
+        <translation>Удалить обложку проекта</translation>
+    </message>
+    <message>
+        <source>Project name</source>
+        <translation>Название проекта</translation>
+    </message>
+    <message>
+        <source>Project author</source>
+        <translation>Автор проекта</translation>
+    </message>
+    <message>
+        <source>Save location</source>
+        <translation>Папка сохранения</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Обзор…</translation>
+    </message>
+    <message>
+        <source>Choose save location</source>
+        <translation>Выбрать папку сохранения</translation>
+    </message>
+    <message>
+        <source>Author</source>
+        <translation>Автор</translation>
+    </message>
+    <message>
+        <source>Save to</source>
+        <translation>Сохранить в</translation>
+    </message>
+    <message>
+        <source>Project package</source>
+        <translation>Пакет проекта</translation>
+    </message>
+    <message>
+        <source>Final project path</source>
+        <translation>Итоговый путь проекта</translation>
+    </message>
+    <message>
+        <source>Project name error</source>
+        <translation>Ошибка в названии проекта</translation>
+    </message>
+    <message>
+        <source>Choose Project Location</source>
+        <translation>Выбор папки проекта</translation>
+    </message>
+    <message>
+        <source>Choose Project Cover</source>
+        <translation>Выбор обложки проекта</translation>
+    </message>
+    <message>
+        <source>Images (*.png *.jpg *.jpeg *.webp *.bmp);;All Files (*)</source>
+        <translation>Изображения (*.png *.jpg *.jpeg *.webp *.bmp);;Все файлы (*)</translation>
     </message>
 </context>
 <context>

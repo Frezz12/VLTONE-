@@ -74,6 +74,9 @@ ajv.addFormat(
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
 );
 const validateCommand = ajv.compile(schema);
+const schemaV3Path = "protocol/schema/project-command-v3.schema.json";
+const schemaV3 = JSON.parse(read(schemaV3Path));
+const validateCommandV3 = ajv.compile(schemaV3);
 const validateFixture = (path) => {
   const value = JSON.parse(read(path));
   const commands = Array.isArray(value.commands) ? value.commands : [value];
@@ -102,6 +105,25 @@ mustReject(optionalSamplerSample, "optional Sampler sample binding");
 const externalSampler = structuredClone(focusedCommands[2]);
 externalSampler.payload.location.chain = "track";
 mustReject(externalSampler, "Sampler outside the instrument chain");
+const externalPlugin = structuredClone(
+  focusedCommands.find((command) => command.kind === "plugin.add"),
+);
+if (!externalPlugin) throw new Error("v2 golden fixture is missing plugin.add");
+externalPlugin.schemaVersion = 3;
+Object.assign(externalPlugin.payload.insert, {
+  name: "Exact External Effect",
+  format: "vst3",
+  uid: "com.example.exact-effect",
+  vendor: "Example Audio",
+  pluginVersion: "1.2.3",
+  stateSchemaVersion: 0,
+});
+if (!validateCommandV3(externalPlugin)) {
+  throw new Error(
+    `${schemaV3Path} rejected an exact path-free external plugin: ${ajv.errorsText(validateCommandV3.errors)}`,
+  );
+}
+mustReject(externalPlugin, "v3 external plugin in the immutable v2 schema");
 const schemaKinds = schema.$defs.kind.enum;
 const bodyKinds = schema.$defs.nonBatchBody.oneOf.map(
   (shape) => shape.properties.kind.const,
@@ -221,19 +243,19 @@ const payloadValidationPath = "backend/internal/collab/payload_validation.go";
 const payloadValidation = read(payloadValidationPath);
 assertSameKinds(
   schemaKinds,
-  goSwitchKinds(payloadValidation, "func validateCommandPayloadShape"),
+  goSwitchKinds(payloadValidation, "func validateCommandPayloadShapeForSchema"),
   `${payloadValidationPath} validateCommandPayloadShape`,
 );
 
-const goUidMatch = functionSource(payloadValidation, "func validateSharedInsert").match(
-  /payloadEnum\(body,\s*"uid",([^)]*)\)/,
+const goSharedInsert = functionSource(payloadValidation, "func validateSharedInsert");
+const goBuiltins = [...goSharedInsert.matchAll(/uid != "([^"]+)"/g)].map(
+  (match) => match[1],
 );
-if (!goUidMatch) {
+if (!goBuiltins.length)
   throw new Error(`${payloadValidationPath} is missing the shared-insert uid enum`);
-}
 assertSameKinds(
   builtinUidSchema,
-  [...goUidMatch[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]),
+  goBuiltins,
   `${payloadValidationPath} validateSharedInsert uid`,
 );
 
@@ -241,7 +263,7 @@ const metadataPath = "backend/internal/collab/command_validation.go";
 const metadata = read(metadataPath);
 assertSameKinds(
   schemaKinds,
-  goSwitchKinds(metadata, "func deriveCommandMetadata"),
+  goSwitchKinds(metadata, "func deriveCommandMetadataForSchema"),
   `${metadataPath} deriveCommandMetadata`,
 );
 
@@ -268,11 +290,16 @@ for (const expected of [
   "version: 1.0.0",
   "/v1/desktop/capabilities:",
   "operationId: listCloudProjectInvites",
-  "protocol: { const: vlt-collab-v2 }",
+  "protocol: { const: vlt-collab-v3 }",
+  "protocols:",
   "project_format: { const: 7 }",
-  "command_schema: { const: 2 }",
+  "command_schema: { const: 3 }",
+  "command_schemas:",
   "../../protocol/schema/project-command-v2.schema.json",
-  "recording: { const: false }",
+  "../../protocol/schema/project-command-v3.schema.json",
+  "operationId: updateCloudProjectSessionReadiness",
+  "operationId: activateCloudProjectSession",
+  "recording: { const: true }",
   "collaboration_not_enabled",
   "hash_consensus_required",
   "cloud_recording_disabled",
@@ -282,4 +309,21 @@ for (const expected of [
   requireText(openapi, expected, openapiPath);
 }
 
-console.log("Collaboration v2 public contracts are pinned.");
+const asyncapiV3Path = "docs/vlt-collab-v3.asyncapi.yaml";
+const asyncapiV3 = read(asyncapiV3Path);
+for (const expected of [
+  "id: urn:vltstudio:collaboration:v3",
+  "version: 3.0.0",
+  "Sec-WebSocket-Protocol: { const: vlt-collab-v3 }",
+  "commandSchemaVersion: { const: 3 }",
+  "projectFormatVersion: { const: 7 }",
+  "../protocol/schema/project-command-v3.schema.json",
+  "name: session.readiness_changed",
+  "name: session.activated",
+  "session_starting",
+  "plugin_not_ready",
+]) {
+  requireText(asyncapiV3, expected, asyncapiV3Path);
+}
+
+console.log("Collaboration v2 compatibility and v3 public contracts are pinned.");

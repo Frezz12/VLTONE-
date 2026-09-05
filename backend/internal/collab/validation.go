@@ -18,9 +18,12 @@ import (
 )
 
 const (
-	CollaborationProtocol             = "vlt-collab-v2"
+	CollaborationProtocolV2           = "vlt-collab-v2"
+	CollaborationProtocolV3           = "vlt-collab-v3"
+	CollaborationProtocol             = CollaborationProtocolV2
 	CollaborationProjectFormatVersion = 7
 	CollaborationCommandSchemaVersion = 2
+	CollaborationCommandSchemaV3      = 3
 	MaxOperationPayloadBytes          = 1 << 20
 	MaxOperationPreconditions         = 1024
 	MaxOperationTouchedFields         = 8192
@@ -53,7 +56,32 @@ var (
 	ErrInviteExpired          = errors.New("project invitation has expired")
 	ErrInviteUsed             = errors.New("project invitation is no longer available")
 	ErrCloudRecordingDisabled = errors.New("cloud recording is disabled")
+	// Redemption is rate limited per invite, per account and per client IP.
+	// Handlers map this to 429 and must not say which limit was reached.
+	ErrTooManyAttempts = errors.New("too many invitation attempts")
+	// The session carries a password and the joiner did not supply a valid one.
+	// Both are answered identically to the client so neither confirms the other.
+	ErrSessionPasswordRequired = errors.New("collaboration session requires a password")
+	ErrSessionPasswordInvalid  = errors.New("collaboration session password is invalid")
+	ErrSessionStarting         = errors.New("collaboration session has not been activated")
+	ErrPluginNotReady          = errors.New("plugin compatibility is not ready")
 )
+
+func SupportedCommandSchemaVersion(version int) bool {
+	return version == CollaborationCommandSchemaVersion ||
+		version == CollaborationCommandSchemaV3
+}
+
+func CollaborationProtocolForSchema(version int) (string, bool) {
+	switch version {
+	case CollaborationCommandSchemaVersion:
+		return CollaborationProtocolV2, true
+	case CollaborationCommandSchemaV3:
+		return CollaborationProtocolV3, true
+	default:
+		return "", false
+	}
+}
 
 type ValidationError struct{ Message string }
 
@@ -157,7 +185,7 @@ func normalizeOperation(input AppendOperationInput) (normalizedOperation, error)
 	if len(input.Kind) > 100 || !operationKindPattern.MatchString(input.Kind) {
 		return normalizedOperation{}, invalidf("operation kind must be batch or a dotted lower-camel identifier")
 	}
-	if input.SchemaVersion != CollaborationCommandSchemaVersion {
+	if !SupportedCommandSchemaVersion(input.SchemaVersion) {
 		return normalizedOperation{}, invalidf("command schema version is unsupported")
 	}
 	if input.BaseSeq < 0 {
@@ -180,15 +208,18 @@ func normalizeOperation(input AppendOperationInput) (normalizedOperation, error)
 	if err != nil {
 		return normalizedOperation{}, fmt.Errorf("canonicalize operation payload: %w", err)
 	}
-	expectedFields, nestedPreconditions, err := deriveCommandMetadata(input.Kind, canonicalPayload, true)
+	expectedFields, nestedPreconditions, err := deriveCommandMetadataForSchema(
+		input.Kind, canonicalPayload, true, input.SchemaVersion)
 	if err != nil {
 		return normalizedOperation{}, err
 	}
-	lifecycleSteps, err := deriveLifecycleSteps(input.Kind, canonicalPayload, true)
+	lifecycleSteps, err := deriveLifecycleStepsForSchema(input.Kind,
+		canonicalPayload, true, input.SchemaVersion)
 	if err != nil {
 		return normalizedOperation{}, err
 	}
-	leasePolicy, err := deriveCommandLeasePolicy(input.Kind, canonicalPayload, true)
+	leasePolicy, err := deriveCommandLeasePolicyForSchema(input.Kind,
+		canonicalPayload, true, input.SchemaVersion)
 	if err != nil {
 		return normalizedOperation{}, err
 	}

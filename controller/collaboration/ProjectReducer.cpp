@@ -21,7 +21,7 @@ ApplyResult reject(ApplyCode code, std::string message) {
 
 ProjectCommand inverseShell(const ProjectCommand& source, CommandBody body) {
     ProjectCommand inverse;
-    inverse.meta.schemaVersion = kProjectCommandSchemaVersion;
+    inverse.meta.schemaVersion = source.meta.schemaVersion;
     inverse.meta.projectId = source.meta.projectId;
     inverse.meta.transactionId = source.meta.operationId;
     inverse.body = std::move(body);
@@ -675,6 +675,13 @@ bool supportedBuiltin(const InsertModel& insert) {
             insert.uid == "daw.gravity" || insert.uid == "daw.graphit");
 }
 
+bool supportedExternal(const InsertModel& insert) {
+    return insert.format == PluginFormat::Clap ||
+           insert.format == PluginFormat::Vst3 ||
+           insert.format == PluginFormat::AudioUnit ||
+           insert.format == PluginFormat::Vst;
+}
+
 bool validParameters(const std::vector<InsertParameter>& parameters) {
     std::vector<std::string> ids;
     ids.reserve(parameters.size());
@@ -711,12 +718,18 @@ bool validBindings(const std::vector<PluginAssetBinding>& bindings,
     return true;
 }
 
-bool validSharedInsert(const InsertModel& insert) {
-    return supportedBuiltin(insert) && !insert.id.empty() &&
+bool validSharedInsert(const InsertModel& insert,
+                       std::uint32_t schemaVersion) {
+    const bool external = supportedExternal(insert);
+    const bool allowed = supportedBuiltin(insert) ||
+                         (schemaVersion >= kProjectCommandSchemaVersion &&
+                          external);
+    return allowed && !insert.id.empty() && !insert.uid.empty() &&
            insert.name.size() <= 4096 && insert.vendor.size() <= 4096 &&
            insert.path.empty() && insert.stateFile.empty() &&
            insert.rightStateFile.empty() && insert.pluginVersion.size() > 0 &&
-           insert.pluginVersion.size() <= 64 && insert.stateSchemaVersion > 0 &&
+           insert.pluginVersion.size() <= (external ? 200 : 64) &&
+           insert.stateSchemaVersion >= (external ? 0 : 1) &&
            std::isfinite(insert.mix) && insert.mix >= 0.0f &&
            insert.mix <= 1.0f && insert.windowX == 0 && insert.windowY == 0 &&
            insert.windowWidth == 0 && insert.windowHeight == 0 &&
@@ -2220,6 +2233,7 @@ ApplyResult applySetClipMusicalAnalysis(
 
 bool pluginKindMatchesLocation(const PluginLocation& location,
                                const InsertModel& insert) {
+    if (supportedExternal(insert)) return true;
     const bool instrument = insert.uid == "daw.sampler";
     return location.chain == PluginChain::Instrument ? instrument : !instrument;
 }
@@ -2232,7 +2246,7 @@ ApplyResult applyAddPlugin(SharedProjectDocument& state,
         return reject(ApplyCode::DeletedEntity,
                       "delete wins over plugin creation");
     }
-    if (!validSharedInsert(body.insert) ||
+    if (!validSharedInsert(body.insert, command.meta.schemaVersion) ||
         !pluginKindMatchesLocation(body.location, body.insert)) {
         return reject(ApplyCode::InvalidCommand,
                       "plugin must be a clean supported built-in for its chain");
@@ -2479,7 +2493,7 @@ ApplyResult applyReplacePlugin(SharedProjectDocument& state,
     if (!insert)
         return reject(ApplyCode::MissingEntity, "plugin does not exist");
     if (body.replacement.id != body.insertId ||
-        !validSharedInsert(body.replacement) ||
+        !validSharedInsert(body.replacement, command.meta.schemaVersion) ||
         !pluginKindMatchesLocation(body.location, body.replacement)) {
         return reject(ApplyCode::InvalidCommand,
                       "replacement must preserve a clean supported insert id");
@@ -2657,7 +2671,7 @@ ApplyResult applySetPluginState(SharedProjectDocument& state,
     candidate.parameters = body.parameters;
     candidate.rightParameters = body.rightParameters;
     candidate.assetBindings = body.assetBindings;
-    if (!validSharedInsert(candidate))
+    if (!validSharedInsert(candidate, command.meta.schemaVersion))
         return reject(ApplyCode::InvalidCommand,
                       "invalid built-in plugin state");
     const SetPluginState before = pluginStateOf(body.location, *insert);
@@ -4329,7 +4343,7 @@ ApplyResult applyBatch(SharedProjectDocument& state,
 ApplyResult applyImpl(SharedProjectDocument& state,
                       const ProjectCommand& command, bool allowBatch,
                       bool recordOperation) {
-    if (command.meta.schemaVersion != kProjectCommandSchemaVersion)
+    if (!supportedProjectCommandSchemaVersion(command.meta.schemaVersion))
         return reject(ApplyCode::Unsupported, "unsupported command schema version");
     if (command.meta.operationId.empty())
         return reject(ApplyCode::InvalidCommand, "operation id is required");

@@ -45,6 +45,7 @@ ShortcutManager::Metadata inferredMetadata(const QString& id,
     } else {
         metadata.risk = ShortcutManager::Risk::Reversible;
     }
+    metadata.remoteScope = ShortcutManager::remoteScopeForId(id);
     return metadata;
 }
 
@@ -203,6 +204,42 @@ ShortcutManager::ShortcutManager(QObject* parent) : QObject(parent) {
     if (qApp) qApp->installEventFilter(this);
 }
 
+ShortcutManager::RemoteScope ShortcutManager::remoteScopeForId(
+    const QString& id) {
+    const QString lower = id.toLower();
+    if (lower.startsWith(QStringLiteral("file.")) ||
+        lower.startsWith(QStringLiteral("app.")) ||
+        lower.startsWith(QStringLiteral("browser.")) ||
+        lower.startsWith(QStringLiteral("timeline.")) ||
+        lower == QLatin1String("track.findplugin") ||
+        lower == QLatin1String("view.togglebrowser") ||
+        lower == QLatin1String("view.toggleweb") ||
+        lower == QLatin1String("view.toggleai") ||
+        lower == QLatin1String("edit.copyclips") ||
+        lower == QLatin1String("edit.cutclips") ||
+        lower == QLatin1String("edit.pasteclips")) {
+        return RemoteScope::ForbiddenRemote;
+    }
+    if (lower.startsWith(QStringLiteral("transport.")) ||
+        lower.startsWith(QStringLiteral("tool.")) ||
+        lower.startsWith(QStringLiteral("edit.grid.")) ||
+        lower == QLatin1String("edit.snapon") ||
+        lower == QLatin1String("edit.snapoff")) {
+        return RemoteScope::LocalSession;
+    }
+    if (lower.startsWith(QStringLiteral("view.")) ||
+        lower.startsWith(QStringLiteral("editor.")) ||
+        lower == QLatin1String("track.automation") ||
+        lower == QLatin1String("edit.togglecomp")) {
+        return RemoteScope::PresenterView;
+    }
+    if (lower.startsWith(QStringLiteral("edit.")) ||
+        lower.startsWith(QStringLiteral("track."))) {
+        return RemoteScope::SharedDocument;
+    }
+    return RemoteScope::Unclassified;
+}
+
 void ShortcutManager::registerCommand(const QString& id, const QString& label,
                                       const QString& category,
                                       const QKeySequence& def, QAction* action) {
@@ -289,6 +326,45 @@ bool ShortcutManager::invoke(const QString& id) const {
         return false;
     }
     candidate->action->trigger();
+    return true;
+}
+
+bool ShortcutManager::invokeRemote(const QString& id,
+                                   bool presenterViewSubscribed) const {
+    const Command* candidate = find(id);
+    if (!candidate) return false;
+    const RemoteScope scope = candidate->metadata.remoteScope;
+    if (scope != RemoteScope::SharedDocument &&
+        !(scope == RemoteScope::PresenterView &&
+          presenterViewSubscribed)) {
+        return false;
+    }
+    return invoke(id);
+}
+
+bool ShortcutManager::checkRemoteMetadata(QString* error) const {
+    QSet<QString> ids;
+    for (const Command& candidate : m_commands) {
+        if (candidate.id.isEmpty() || ids.contains(candidate.id)) {
+            if (error) *error = QStringLiteral("duplicate or empty command id");
+            return false;
+        }
+        ids.insert(candidate.id);
+        if (candidate.metadata.remoteScope == RemoteScope::Unclassified) {
+            if (error)
+                *error = QStringLiteral("unclassified remote command: %1")
+                             .arg(candidate.id);
+            return false;
+        }
+        if ((candidate.metadata.remoteScope == RemoteScope::ForbiddenRemote ||
+             candidate.metadata.remoteScope == RemoteScope::LocalSession) &&
+            invokeRemote(candidate.id, true)) {
+            if (error)
+                *error = QStringLiteral("forbidden remote command invoked: %1")
+                             .arg(candidate.id);
+            return false;
+        }
+    }
     return true;
 }
 

@@ -70,18 +70,8 @@ void inspectInsert(const InsertModel& insert, const std::string& location,
     if (!insert.isLoaded())
         return;
 
-    if (insert.format != PluginFormat::Internal) {
-        report.blockers.push_back(PublishIssue{
-            PublishIssueKind::ThirdPartyPlugin,
-            location,
-            insert.id,
-            insert.uid,
-            insert.name,
-            "V1 cloud projects accept built-in plugins only; remove or bounce this slot",
-        });
-        return;
-    }
-    if (!isSupportedBuiltinV1(insert)) {
+    const bool internal = insert.format == PluginFormat::Internal;
+    if (internal && !isSupportedBuiltinV1(insert)) {
         report.blockers.push_back(PublishIssue{
             PublishIssueKind::UnknownInternalPlugin,
             location,
@@ -92,15 +82,30 @@ void inspectInsert(const InsertModel& insert, const std::string& location,
         });
         return;
     }
-    if (insert.pluginVersion.empty() || insert.pluginVersion.size() > 64 ||
-        insert.stateSchemaVersion <= 0) {
+    const bool supportedExternal = insert.format == PluginFormat::Clap ||
+        insert.format == PluginFormat::Vst3 ||
+        insert.format == PluginFormat::AudioUnit ||
+        insert.format == PluginFormat::Vst;
+    if (!internal && !supportedExternal) {
         report.blockers.push_back(PublishIssue{
-            PublishIssueKind::UnknownInternalPlugin,
+            PublishIssueKind::ThirdPartyPlugin, location, insert.id,
+            insert.uid, insert.name, "the plugin format is not shareable",
+        });
+        return;
+    }
+    if (insert.uid.empty() || (!internal && insert.vendor.empty()) ||
+        insert.pluginVersion.empty() || insert.pluginVersion.size() > 200 ||
+        insert.vendor.size() > 200 ||
+        (internal ? insert.stateSchemaVersion <= 0
+                  : insert.stateSchemaVersion < 0)) {
+        report.blockers.push_back(PublishIssue{
+            internal ? PublishIssueKind::UnknownInternalPlugin
+                     : PublishIssueKind::ThirdPartyPlugin,
             location,
             insert.id,
             insert.uid,
             insert.name,
-            "built-in plugin version and state schema are required for collaboration",
+            "exact plugin uid, vendor, version and state schema are required for collaboration",
         });
         return;
     }

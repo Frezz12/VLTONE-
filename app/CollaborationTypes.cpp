@@ -207,6 +207,10 @@ QString wireTypeName(WireType type) {
         case WireType::SessionHandoff: return enumName("session.handoff");
         case WireType::SessionHostChanged:
             return enumName("session.host_changed");
+        case WireType::SessionReadinessChanged:
+            return enumName("session.readiness_changed");
+        case WireType::SessionActivated:
+            return enumName("session.activated");
         case WireType::SessionEnding: return enumName("session.ending");
         case WireType::SnapshotRequested:
             return enumName("snapshot.requested");
@@ -490,7 +494,10 @@ QJsonObject wireEnvelopeToJson(const WireEnvelope& envelope) {
         ? envelope.typeName
         : wireTypeName(envelope.type);
     QJsonObject json{
-        {QStringLiteral("protocol"), QString::fromLatin1(kProtocolName)},
+        {QStringLiteral("protocol"),
+         isSupportedProtocolName(envelope.protocol)
+             ? envelope.protocol
+             : QString::fromLatin1(kProtocolName)},
         {QStringLiteral("type"), resolvedType},
         {QStringLiteral("messageId"), safeSemanticId(envelope.messageId)},
         {QStringLiteral("payload"), envelope.payload},
@@ -512,7 +519,7 @@ std::optional<WireEnvelope> wireEnvelopeFromJson(const QJsonObject& json,
                                                  QString* error) {
     WireEnvelope envelope;
     envelope.protocol = json.value(QStringLiteral("protocol")).toString();
-    if (envelope.protocol != QLatin1String(kProtocolName)) {
+    if (!isSupportedProtocolName(envelope.protocol)) {
         setError(error, QStringLiteral("unsupported collaboration protocol version"));
         return std::nullopt;
     }
@@ -543,6 +550,19 @@ std::optional<WireEnvelope> wireEnvelopeFromJson(const QJsonObject& json,
         integerValue(json.value(QStringLiteral("serverTimeMs")));
     envelope.payload = json.value(QStringLiteral("payload")).toObject();
     return envelope;
+}
+
+QString protocolNameForCommandSchema(int schemaVersion) {
+    if (schemaVersion == kProtocolVersionV2)
+        return QString::fromLatin1(kProtocolNameV2);
+    if (schemaVersion == kProtocolVersion)
+        return QString::fromLatin1(kProtocolName);
+    return {};
+}
+
+bool isSupportedProtocolName(const QString& protocol) {
+    return protocol == QLatin1String(kProtocolNameV2) ||
+           protocol == QLatin1String(kProtocolName);
 }
 
 bool checkCollaborationProtocolForTest(QString* error) {
@@ -600,6 +620,13 @@ bool checkCollaborationProtocolForTest(QString* error) {
     if (!wire || wire->type != WireType::PresenceCursor ||
         wire->protocol != QLatin1String(kProtocolName)) {
         setError(error, QStringLiteral("wire envelope did not round-trip"));
+        return false;
+    }
+    envelope.protocol = QString::fromLatin1(kProtocolNameV2);
+    const auto v2Wire =
+        wireEnvelopeFromJson(wireEnvelopeToJson(envelope), error);
+    if (!v2Wire || v2Wire->protocol != QLatin1String(kProtocolNameV2)) {
+        setError(error, QStringLiteral("v2 wire envelope did not round-trip"));
         return false;
     }
     return true;

@@ -11,7 +11,8 @@ endif()
 option(DAW_REQUIRE_EXACT_QT_VERSION
        "Reject Qt versions other than DAW_QT_VERSION" ${DAW_EXACT_QT_DEFAULT})
 set(DAW_QT_COMPONENTS
-    Widgets Network WebEngineWidgets SerialPort Svg LinguistTools)
+    Widgets Network Multimedia WebChannel WebEngineWidgets SerialPort Svg
+    LinguistTools)
 if(DAW_ENABLE_COLLABORATION)
     list(APPEND DAW_QT_COMPONENTS WebSockets)
 endif()
@@ -33,6 +34,11 @@ file(GLOB DAW_APP_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp")
 
 qt_add_executable(daw ${DAW_APP_SOURCES})
+if(MSVC)
+    # MainWindow hosts the feature-gated desktop composition root and its Qt
+    # metacode; the collaboration build can exceed COFF's default section cap.
+    target_compile_options(daw PRIVATE /bigobj)
+endif()
 
 file(GLOB DAW_TOOLBAR_ICONS CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/icons/*.svg")
@@ -82,7 +88,9 @@ endif()
 
 target_include_directories(daw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(daw PRIVATE daw_controller Qt6::Widgets Qt6::Network
-                                  Qt6::WebEngineWidgets Qt6::SerialPort Qt6::Svg
+                                  Qt6::Multimedia Qt6::WebChannel
+                                  Qt6::WebEngineWidgets
+                                  Qt6::SerialPort Qt6::Svg
                                   OpenSSL::Crypto RtMidi::rtmidi)
 if(DAW_BUILD_TESTS)
     add_test(NAME collaboration_client_selftest

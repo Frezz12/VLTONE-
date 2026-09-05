@@ -16,6 +16,7 @@ const collaborationHashTimeout = 15 * time.Second
 type openedHashRound struct {
 	view     collab.HashRoundView
 	expected []uuid.UUID
+	protocol string
 }
 
 func (s *Server) prepareHashRound(ctx context.Context, projectID uuid.UUID,
@@ -42,6 +43,14 @@ func (s *Server) prepareHashRound(ctx context.Context, projectID uuid.UUID,
 		view: s.Hashes.Begin(projectID, state.Session.ID, project.HeadSeq,
 			expected, collaborationHashTimeout),
 		expected: expected,
+		protocol: func() string {
+			protocol, ok := collab.CollaborationProtocolForSchema(
+				state.Session.CommandSchemaVersion)
+			if !ok {
+				return collab.CollaborationProtocolV2
+			}
+			return protocol
+		}(),
 	}, nil
 }
 
@@ -57,7 +66,7 @@ func (s *Server) publishHashRound(projectID uuid.UUID, round openedHashRound) {
 		"serverSeq":  round.view.ServerSeq,
 		"deadlineMs": round.view.Deadline.UnixMilli(),
 	})
-	message := collab.RoomMessage{Data: collaborationEnvelope(
+	message := collab.RoomMessage{Data: collaborationEnvelopeFor(round.protocol,
 		"hash.requested", payload, uuid.Nil, nil, 0)}
 	for _, participantID := range round.expected {
 		s.Rooms.DeliverParticipant(projectID, participantID, message)
@@ -125,7 +134,11 @@ func (s *Server) connectedEditorParticipants(ctx context.Context,
 	}
 	result := make([]uuid.UUID, 0, len(connected))
 	for _, member := range state.Members {
-		if connected[member.ID] && roles[member.UserID] != model.ProjectRoleViewer {
+		role := roles[member.UserID]
+		if state.Session.CommandSchemaVersion == collab.CollaborationCommandSchemaV3 {
+			role = member.EffectiveRole
+		}
+		if connected[member.ID] && role != model.ProjectRoleViewer {
 			result = append(result, member.ID)
 		}
 	}

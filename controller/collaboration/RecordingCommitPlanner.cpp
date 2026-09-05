@@ -327,6 +327,27 @@ ProjectCommand child(CommandBody body) {
 
 } // namespace
 
+std::optional<std::size_t> RecordingCommitPlanner::requiredCompSegmentCount(
+    const CloudRecordingCapture& capture) {
+    if (capture.semantics.mode != CloudRecordingMode::Layers ||
+        capture.passes.empty() ||
+        capture.passes.size() > kMaxRecordingCommitPassesPerCapture) {
+        return std::nullopt;
+    }
+    double runStart = std::numeric_limits<double>::max();
+    double runEnd = 0.0;
+    for (const CloudRecordingPass& pass : capture.passes) {
+        if (!boundedFinite(pass.startSeconds, 0.0, kMaximumTimeSeconds) ||
+            !boundedFinite(pass.endSeconds, pass.startSeconds,
+                           kMaximumTimeSeconds, true)) {
+            return std::nullopt;
+        }
+        runStart = std::min(runStart, pass.startSeconds);
+        runEnd = std::max(runEnd, pass.endSeconds);
+    }
+    return finalCompPieces(capture, runStart, runEnd).size();
+}
+
 RecordingCommitPreflightResult RecordingCommitPlanner::preflight(
     const SharedProjectDocument& snapshot,
     const CloudRecordingRecoveryRun& frozenRun,
@@ -354,7 +375,9 @@ RecordingCommitPreflightResult RecordingCommitPlanner::preflight(
             RecordingCommitPlanCode::SnapshotConflict,
             "recording operation is already materialized");
     }
-    if (input.leases.size() != frozenRun.captures.size()) {
+    const bool leaseFreeNewClips = input.leases.empty();
+    if (!leaseFreeNewClips &&
+        input.leases.size() != frozenRun.captures.size()) {
         return preflightFailure(RecordingCommitPlanCode::InvalidInput,
                                 "capture and lease counts do not match");
     }
@@ -414,26 +437,30 @@ RecordingCommitPreflightResult RecordingCommitPlanner::preflight(
     for (const CloudRecordingCapture& capture : frozenRun.captures) {
         if (!canonicalUuid(capture.captureId) ||
             !canonicalUuid(capture.trackId) ||
-            !canonicalUuid(capture.leaseId) ||
+            (leaseFreeNewClips ? !capture.leaseId.empty()
+                               : !canonicalUuid(capture.leaseId)) ||
             !canonicalUuid(capture.uploadId) ||
             !canonicalUuid(capture.assetId) ||
             !captureIds.insert(capture.captureId).second ||
             !trackIds.insert(capture.trackId).second ||
-            !frozenLeaseIds.insert(capture.leaseId).second ||
+            (!capture.leaseId.empty() &&
+             !frozenLeaseIds.insert(capture.leaseId).second) ||
             !uploadIds.insert(capture.uploadId).second ||
             !assetIds.insert(capture.assetId).second) {
             return preflightFailure(
                 RecordingCommitPlanCode::InvalidInput,
                 "frozen capture identities are invalid or duplicated");
         }
-        const auto suppliedLease = leaseByTrack.find(capture.trackId);
-        if (suppliedLease == leaseByTrack.end()) {
-            return preflightFailure(
-                RecordingCommitPlanCode::InvalidInput,
-                "caller lease is missing for a frozen capture");
+        if (!leaseFreeNewClips) {
+            const auto suppliedLease = leaseByTrack.find(capture.trackId);
+            if (suppliedLease == leaseByTrack.end()) {
+                return preflightFailure(
+                    RecordingCommitPlanCode::InvalidInput,
+                    "caller lease is missing for a frozen capture");
+            }
+            rebindsFrozenLease = rebindsFrozenLease ||
+                                 suppliedLease->second != capture.leaseId;
         }
-        rebindsFrozenLease = rebindsFrozenLease ||
-                             suppliedLease->second != capture.leaseId;
         captures.push_back(&capture);
     }
 
@@ -505,6 +532,12 @@ RecordingCommitPreflightResult RecordingCommitPlanner::preflight(
             return preflightFailure(
                 RecordingCommitPlanCode::SnapshotConflict,
                 "recording target is not a live audio track");
+        }
+
+        if (leaseFreeNewClips) {
+            // V3 allocates an independent clip/container. Overlap is ordinary
+            // arrangement layering, not an edit of existing take/comp state.
+            continue;
         }
 
         if (semantics.mode == CloudRecordingMode::Overwrite) {
@@ -629,8 +662,10 @@ RecordingCommitPlanResult RecordingCommitPlanner::plan(
         // The authority validates the leases present in the final command.
         // For a proven restart/rebind these are the freshly acquired current
         // lease ids, never the stale ids frozen with the original capture.
-        canonicalLeases.push_back(
-            {capture.trackId, currentLeaseByTrack.at(capture.trackId)});
+        if (!input.leases.empty()) {
+            canonicalLeases.push_back(
+                {capture.trackId, currentLeaseByTrack.at(capture.trackId)});
+        }
         const CloudRecordingSemantics& semantics = capture.semantics;
 
         const AssetRef& asset = captureInput.uploadedAsset;

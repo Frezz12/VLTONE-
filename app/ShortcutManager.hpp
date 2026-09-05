@@ -33,6 +33,16 @@ public:
         ExternalSideEffect,
     };
 
+    /// Collaboration boundary for semantic UI commands. Remote execution is
+    /// command-based: it never synthesizes a key, mouse event or QWidget click.
+    enum class RemoteScope {
+        Unclassified,
+        SharedDocument,
+        LocalSession,
+        PresenterView,
+        ForbiddenRemote,
+    };
+
     /// Assistant interaction modes in which a command may be offered. This is
     /// metadata only: the policy layer remains responsible for enforcing it.
     enum Mode {
@@ -48,6 +58,7 @@ public:
         QString helpId;
         Risk risk = Risk::Unknown;
         ModeMask modes = AllModes;
+        RemoteScope remoteScope = RemoteScope::Unclassified;
     };
 
     struct Command {
@@ -81,6 +92,15 @@ public:
     /// Trigger a semantic command only when it exists and its QAction is both
     /// enabled and visible. Returns whether it was triggered.
     bool invoke(const QString& id) const;
+    /// Invoke only an explicitly shareable semantic command. LocalSession and
+    /// ForbiddenRemote are always refused. PresenterView additionally requires
+    /// an active opt-in subscription from the receiving participant.
+    bool invokeRemote(const QString& id,
+                      bool presenterViewSubscribed = false) const;
+    /// Used by the UI self-test/release gate so a newly registered command
+    /// cannot silently cross the collaboration boundary.
+    bool checkRemoteMetadata(QString* error = nullptr) const;
+    static RemoteScope remoteScopeForId(const QString& id);
 
     /// Take a set of keys away from the actions, without changing what the
     /// commands are *bound* to.

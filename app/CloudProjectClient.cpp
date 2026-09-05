@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 namespace collab {
@@ -193,6 +194,138 @@ std::optional<CloudProjectRole> projectRole(const QString& value) {
     return std::nullopt;
 }
 
+QJsonObject pluginRequirementJson(
+    const daw::collab::PluginRequirement& requirement) {
+    return {
+        {QStringLiteral("format"),
+         QString::fromStdString(daw::toString(requirement.format))},
+        {QStringLiteral("nativeUid"),
+         QString::fromStdString(requirement.nativeUid)},
+        {QStringLiteral("vendor"), QString::fromStdString(requirement.vendor)},
+        {QStringLiteral("version"), QString::fromStdString(requirement.version)},
+        {QStringLiteral("stateSchemaVersion"), requirement.stateSchemaVersion},
+        {QStringLiteral("kind"),
+         requirement.instrument ? QStringLiteral("instrument")
+                                : QStringLiteral("effect")},
+        {QStringLiteral("channelMode"),
+         QString::fromStdString(daw::toString(requirement.channelMode))},
+    };
+}
+
+QJsonObject pluginReadinessJson(
+    const daw::collab::PluginReadinessResult& result) {
+    QJsonObject value{
+        {QStringLiteral("format"),
+         QString::fromStdString(daw::toString(result.requirement.format))},
+        {QStringLiteral("nativeUid"),
+         QString::fromStdString(result.requirement.nativeUid)},
+        {QStringLiteral("vendor"),
+         QString::fromStdString(result.requirement.vendor)},
+        {QStringLiteral("version"),
+         QString::fromStdString(result.requirement.version)},
+        {QStringLiteral("stateSchemaVersion"),
+         result.requirement.stateSchemaVersion},
+        {QStringLiteral("kind"),
+         result.requirement.instrument ? QStringLiteral("instrument")
+                                       : QStringLiteral("effect")},
+        {QStringLiteral("channelMode"),
+         QString::fromStdString(daw::toString(result.requirement.channelMode))},
+        {QStringLiteral("status"), QString::fromLatin1(
+             daw::collab::pluginReadinessStatusName(result.status))},
+    };
+    if (!result.buildHmac.empty())
+        value.insert(QStringLiteral("buildHmac"),
+                     QString::fromStdString(result.buildHmac));
+    return value;
+}
+
+QJsonObject pluginReadinessReportJson(
+    const daw::collab::PluginReadinessReport& report) {
+    QJsonArray plugins;
+    for (const auto& result : report.plugins)
+        plugins.push_back(pluginReadinessJson(result));
+    return {
+        {QStringLiteral("revision"), double(report.revision)},
+        {QStringLiteral("stayViewer"), report.stayViewer},
+        {QStringLiteral("plugins"), plugins},
+    };
+}
+
+std::optional<daw::collab::PluginRequirement> parsePluginRequirement(
+    const QJsonObject& object) {
+    if (!exactKeys(object,
+                   {"format", "nativeUid", "vendor", "version",
+                    "stateSchemaVersion", "kind", "channelMode"})) {
+        return std::nullopt;
+    }
+    const QString format = object.value(QStringLiteral("format")).toString();
+    const QString uid = object.value(QStringLiteral("nativeUid")).toString();
+    const QString vendor = object.value(QStringLiteral("vendor")).toString();
+    const QString version = object.value(QStringLiteral("version")).toString();
+    const QString kind = object.value(QStringLiteral("kind")).toString();
+    const QString mode = object.value(QStringLiteral("channelMode")).toString();
+    const auto stateSchema = boundedInteger(
+        object.value(QStringLiteral("stateSchemaVersion")), 0,
+        std::numeric_limits<int>::max());
+    const daw::PluginFormat parsedFormat =
+        daw::pluginFormatFromString(format.toStdString());
+    if (parsedFormat == daw::PluginFormat::None || uid.isEmpty() ||
+        uid.size() > 400 || vendor.isEmpty() || vendor.size() > 200 ||
+        version.isEmpty() || version.size() > 200 || !stateSchema ||
+        (kind != QLatin1String("instrument") && kind != QLatin1String("effect")) ||
+        (mode != QLatin1String("auto") && mode != QLatin1String("mono") &&
+         mode != QLatin1String("stereo") && mode != QLatin1String("dual-mono"))) {
+        return std::nullopt;
+    }
+    daw::collab::PluginRequirement result;
+    result.format = parsedFormat;
+    result.nativeUid = uid.toStdString();
+    result.vendor = vendor.toStdString();
+    result.version = version.toStdString();
+    result.stateSchemaVersion = *stateSchema;
+    result.instrument = kind == QLatin1String("instrument");
+    result.channelMode = daw::pluginChannelModeFromString(mode.toStdString());
+    return result;
+}
+
+std::optional<daw::collab::PluginReadinessResult> parsePluginReadiness(
+    const QJsonObject& object) {
+    if (!exactKeys(object,
+                   {"format", "nativeUid", "vendor", "version",
+                    "stateSchemaVersion", "kind", "channelMode", "status"},
+                   {"buildHmac"})) {
+        return std::nullopt;
+    }
+    QJsonObject requirementJson{
+        {QStringLiteral("format"), object.value(QStringLiteral("format"))},
+        {QStringLiteral("nativeUid"), object.value(QStringLiteral("nativeUid"))},
+        {QStringLiteral("vendor"), object.value(QStringLiteral("vendor"))},
+        {QStringLiteral("version"), object.value(QStringLiteral("version"))},
+        {QStringLiteral("stateSchemaVersion"),
+         object.value(QStringLiteral("stateSchemaVersion"))},
+        {QStringLiteral("kind"), object.value(QStringLiteral("kind"))},
+        {QStringLiteral("channelMode"), object.value(QStringLiteral("channelMode"))},
+    };
+    auto requirement = parsePluginRequirement(requirementJson);
+    const QString status = object.value(QStringLiteral("status")).toString();
+    if (!requirement) return std::nullopt;
+    daw::collab::PluginReadinessResult result;
+    result.requirement = std::move(*requirement);
+    if (status == QLatin1String("ready"))
+        result.status = daw::collab::PluginReadinessStatus::Ready;
+    else if (status == QLatin1String("missing"))
+        result.status = daw::collab::PluginReadinessStatus::Missing;
+    else if (status == QLatin1String("version_mismatch"))
+        result.status = daw::collab::PluginReadinessStatus::VersionMismatch;
+    else if (status == QLatin1String("probe_failed"))
+        result.status = daw::collab::PluginReadinessStatus::ProbeFailed;
+    else
+        return std::nullopt;
+    result.buildHmac = object.value(QStringLiteral("buildHmac"))
+                           .toString().toStdString();
+    return result;
+}
+
 std::optional<CloudMemberRole> memberRole(const QString& value) {
     if (value == QLatin1String("editor")) return CloudMemberRole::Editor;
     if (value == QLatin1String("viewer")) return CloudMemberRole::Viewer;
@@ -238,6 +371,31 @@ bool validApplicationVersion(const QString& value) {
         "(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"));
     return value.size() >= 5 && value.size() <= 64 &&
            semver.match(value).hasMatch();
+}
+
+/// Mirrors auth.ValidateSessionSecret on the server: six to 128 runes, or
+/// empty for an unprotected session. Refusing here keeps a doomed secret out of
+/// the request buffer entirely rather than round-tripping it to be rejected.
+bool validSessionPassword(const QString& value) {
+    if (value.isEmpty()) return true;
+    const qsizetype runes = value.size();
+    return runes >= 6 && runes <= 128 &&
+           !value.contains(QLatin1Char('\r')) &&
+           !value.contains(QLatin1Char('\n'));
+}
+
+/// Strips every separator, exactly as the server does, so a code pasted as
+/// "1234 5678 9012" or "1234-5678-9012" is accepted as typed.
+QString normalizedInviteCode(const QString& value) {
+    QString digits;
+    digits.reserve(value.size());
+    for (const QChar character : value) {
+        if (character.isDigit() && character.unicode() <= u'9' &&
+            character.unicode() >= u'0') {
+            digits.append(character);
+        }
+    }
+    return digits;
 }
 
 std::optional<CloudProject> parseProject(const QJsonObject& object,
@@ -629,7 +787,8 @@ std::optional<CloudLiveSession> parseLiveSession(const QJsonObject& object,
                    {"id", "project_id", "mode", "status", "version",
                     "created_at", "updated_at"},
                    {"created_by", "host_member_id", "started_at",
-                    "ended_at"})) {
+                    "ended_at", "command_schema_version",
+                    "plugin_requirements_revision", "plugin_requirements"})) {
         if (error) error->message = QStringLiteral("Invalid session shape");
         return std::nullopt;
     }
@@ -639,12 +798,24 @@ std::optional<CloudLiveSession> parseLiveSession(const QJsonObject& object,
         sessionStatus(object.value(QStringLiteral("status")).toString());
     const auto version =
         exactUnsigned(object.value(QStringLiteral("version")), true);
+    const QJsonValue commandSchemaValue =
+        object.value(QStringLiteral("command_schema_version"));
+    const QJsonValue requirementsRevisionValue =
+        object.value(QStringLiteral("plugin_requirements_revision"));
+    const auto commandSchema = commandSchemaValue.isUndefined()
+        ? std::optional<quint64>(2)
+        : exactUnsigned(commandSchemaValue, true);
+    const auto requirementsRevision = requirementsRevisionValue.isUndefined()
+        ? std::optional<quint64>(0)
+        : exactUnsigned(requirementsRevisionValue);
     if (!normalizedUuid(object.value(QStringLiteral("id")), &session.id) ||
         !normalizedUuid(object.value(QStringLiteral("project_id")),
                         &session.projectId) ||
         !optionalUuid(object, "created_by", &session.createdBy) ||
         !optionalUuid(object, "host_member_id", &session.hostMemberId) ||
-        !mode || !status || !version ||
+        !mode || !status || !version || !commandSchema ||
+        (*commandSchema != 2 && *commandSchema != 3) ||
+        !requirementsRevision ||
         !dateTimeValue(object.value(QStringLiteral("created_at")),
                        &session.createdAt) ||
         !optionalDateTime(object, "started_at", &session.startedAt) ||
@@ -657,6 +828,27 @@ std::optional<CloudLiveSession> parseLiveSession(const QJsonObject& object,
     session.mode = *mode;
     session.status = *status;
     session.version = *version;
+    session.commandSchemaVersion = int(*commandSchema);
+    session.pluginRequirementsRevision = qint64(*requirementsRevision);
+    const QJsonValue requirementsValue =
+        object.value(QStringLiteral("plugin_requirements"));
+    if (!requirementsValue.isUndefined()) {
+        if (!requirementsValue.isArray() ||
+            requirementsValue.toArray().size() > 512) {
+            if (error) error->message = QStringLiteral("Invalid plugin manifest");
+            return std::nullopt;
+        }
+        for (const QJsonValue& value : requirementsValue.toArray()) {
+            if (!value.isObject()) return std::nullopt;
+            auto requirement = parsePluginRequirement(value.toObject());
+            if (!requirement) {
+                if (error)
+                    error->message = QStringLiteral("Invalid plugin requirement");
+                return std::nullopt;
+            }
+            session.pluginRequirements.push_back(std::move(*requirement));
+        }
+    }
     return session;
 }
 
@@ -665,11 +857,25 @@ std::optional<CloudSessionMember> parseSessionMember(
     if (!exactKeys(object,
                    {"id", "session_id", "user_id", "device_id",
                     "joined_at", "last_seen_at"},
-                   {"desktop_session_id", "left_at"})) {
+                   {"desktop_session_id", "left_at", "effective_role",
+                    "readiness_status", "readiness_revision",
+                    "plugin_readiness"})) {
         if (error) error->message = QStringLiteral("Invalid session-member shape");
         return std::nullopt;
     }
     CloudSessionMember member;
+    const QJsonValue effectiveRoleValue =
+        object.value(QStringLiteral("effective_role"));
+    const QJsonValue readinessStatusValue =
+        object.value(QStringLiteral("readiness_status"));
+    const QJsonValue readinessRevisionValue =
+        object.value(QStringLiteral("readiness_revision"));
+    const auto effectiveRole = effectiveRoleValue.isUndefined()
+        ? std::optional<CloudProjectRole>(CloudProjectRole::Viewer)
+        : projectRole(effectiveRoleValue.toString());
+    const auto readinessRevision = readinessRevisionValue.isUndefined()
+        ? std::optional<quint64>(0)
+        : exactUnsigned(readinessRevisionValue);
     if (!normalizedUuid(object.value(QStringLiteral("id")), &member.id) ||
         !normalizedUuid(object.value(QStringLiteral("session_id")),
                         &member.sessionId) ||
@@ -677,6 +883,7 @@ std::optional<CloudSessionMember> parseSessionMember(
                         &member.userId) ||
         !normalizedUuid(object.value(QStringLiteral("device_id")),
                         &member.deviceId) ||
+        !effectiveRole || !readinessRevision ||
         !optionalUuid(object, "desktop_session_id",
                       &member.desktopSessionId) ||
         !dateTimeValue(object.value(QStringLiteral("joined_at")),
@@ -687,14 +894,44 @@ std::optional<CloudSessionMember> parseSessionMember(
         if (error) error->message = QStringLiteral("Invalid session-member fields");
         return std::nullopt;
     }
+    member.effectiveRole = *effectiveRole;
+    member.readinessRevision = qint64(*readinessRevision);
+    member.readinessStatus = readinessStatusValue.isUndefined()
+        ? QStringLiteral("ready")
+        : readinessStatusValue.toString();
+    if (member.readinessStatus != QLatin1String("ready") &&
+        member.readinessStatus != QLatin1String("blocked") &&
+        member.readinessStatus != QLatin1String("viewer")) {
+        if (error) error->message = QStringLiteral("Invalid readiness status");
+        return std::nullopt;
+    }
+    const QJsonValue readiness = object.value(QStringLiteral("plugin_readiness"));
+    if (!readiness.isUndefined()) {
+        if (!readiness.isArray() || readiness.toArray().size() > 512)
+            return std::nullopt;
+        for (const QJsonValue& value : readiness.toArray()) {
+            if (!value.isObject()) return std::nullopt;
+            auto parsed = parsePluginReadiness(value.toObject());
+            if (!parsed) return std::nullopt;
+            member.pluginReadiness.push_back(std::move(*parsed));
+        }
+    }
     return member;
 }
 
 std::optional<CloudSessionState> parseSessionState(const QJsonObject& object,
                                                    ParseFailure* error) {
-    if (!exactKeys(object, {"session", "members"}) ||
+    // passwordRequired is optional so a client stays compatible with a server
+    // that predates session passwords; absent simply means unprotected.
+    if (!exactKeys(object, {"session", "members"}, {"passwordRequired"}) ||
         !object.value(QStringLiteral("session")).isObject() ||
         !object.value(QStringLiteral("members")).isArray()) {
+        if (error) error->message = QStringLiteral("Invalid session-state shape");
+        return std::nullopt;
+    }
+    const QJsonValue passwordRequired =
+        object.value(QStringLiteral("passwordRequired"));
+    if (!passwordRequired.isUndefined() && !passwordRequired.isBool()) {
         if (error) error->message = QStringLiteral("Invalid session-state shape");
         return std::nullopt;
     }
@@ -708,6 +945,7 @@ std::optional<CloudSessionState> parseSessionState(const QJsonObject& object,
     }
     CloudSessionState state;
     state.session = std::move(*session);
+    state.session.passwordRequired = passwordRequired.toBool(false);
     QSet<QString> memberIds;
     state.members.reserve(values.size());
     for (const QJsonValue& value : values) {
@@ -1820,13 +2058,19 @@ quint64 CloudProjectClient::getActiveSession(const QString& projectId) {
 }
 
 quint64 CloudProjectClient::startSession(const QString& projectId,
-                                         CloudSessionMode mode) {
+                                         CloudSessionMode mode,
+                                         const QString& password,
+                                         const std::vector<daw::collab::PluginRequirement>& requirements,
+                                         const daw::collab::PluginReadinessReport& readiness) {
     const auto id = m_impl->uuidInput(projectId);
     const QString version = QCoreApplication::applicationVersion().trimmed();
     if (!id || !validApplicationVersion(version))
         return m_impl->invalid(CloudRequestKind::StartSession,
                                QStringLiteral("Invalid session compatibility"));
-    const QJsonObject body{
+    if (!validSessionPassword(password))
+        return m_impl->invalid(CloudRequestKind::StartSession,
+                               QStringLiteral("Invalid session password"));
+    QJsonObject body{
         {QStringLiteral("mode"), sessionModeName(mode)},
         {QStringLiteral("appVersion"), version},
         {QStringLiteral("engineVersion"), version},
@@ -1835,6 +2079,16 @@ quint64 CloudProjectClient::startSession(const QString& projectId,
         {QStringLiteral("projectFormatVersion"),
          daw::collab::kSharedProjectFormatVersion},
     };
+    if (daw::collab::kProjectCommandSchemaVersion >= 3) {
+        QJsonArray manifest;
+        for (const auto& requirement : requirements)
+            manifest.push_back(pluginRequirementJson(requirement));
+        body.insert(QStringLiteral("pluginRequirements"), manifest);
+        body.insert(QStringLiteral("readiness"),
+                    pluginReadinessReportJson(readiness));
+    }
+    if (!password.isEmpty())
+        body.insert(QStringLiteral("password"), password);
     return m_impl->requestSession(
         CloudRequestKind::StartSession, QByteArrayLiteral("POST"),
         QStringLiteral("desktop/projects/%1/sessions").arg(*id), &body, 201,
@@ -1842,24 +2096,68 @@ quint64 CloudProjectClient::startSession(const QString& projectId,
 }
 
 quint64 CloudProjectClient::joinSession(const QString& projectId,
-                                        const QString& sessionId) {
+                                        const QString& sessionId,
+                                        const QString& password,
+                                        const daw::collab::PluginReadinessReport& readiness,
+                                        int commandSchemaVersion) {
     const auto project = m_impl->uuidInput(projectId);
     const auto session = m_impl->uuidInput(sessionId);
     const QString version = QCoreApplication::applicationVersion().trimmed();
-    if (!project || !session || !validApplicationVersion(version))
+    if (!project || !session || !validApplicationVersion(version) ||
+        !daw::collab::supportedProjectCommandSchemaVersion(
+            std::uint32_t(commandSchemaVersion)))
         return m_impl->invalid(CloudRequestKind::JoinSession,
                                QStringLiteral("Invalid session compatibility"));
-    const QJsonObject body{
+    if (!validSessionPassword(password))
+        return m_impl->invalid(CloudRequestKind::JoinSession,
+                               QStringLiteral("Invalid session password"));
+    QJsonObject body{
         {QStringLiteral("appVersion"), version},
         {QStringLiteral("engineVersion"), version},
         {QStringLiteral("commandSchemaVersion"),
-         int(daw::collab::kProjectCommandSchemaVersion)},
+         commandSchemaVersion},
         {QStringLiteral("projectFormatVersion"),
          daw::collab::kSharedProjectFormatVersion},
     };
+    if (commandSchemaVersion >= 3)
+        body.insert(QStringLiteral("readiness"),
+                    pluginReadinessReportJson(readiness));
+    if (!password.isEmpty())
+        body.insert(QStringLiteral("password"), password);
     return m_impl->requestSession(
         CloudRequestKind::JoinSession, QByteArrayLiteral("POST"),
         QStringLiteral("desktop/projects/%1/sessions/%2/join")
+            .arg(*project, *session),
+        &body, 200, *project, *session);
+}
+
+quint64 CloudProjectClient::updateSessionReadiness(
+    const QString& projectId, const QString& sessionId,
+    const daw::collab::PluginReadinessReport& readiness) {
+    const auto project = m_impl->uuidInput(projectId);
+    const auto session = m_impl->uuidInput(sessionId);
+    if (!project || !session || readiness.revision <= 0)
+        return m_impl->invalid(CloudRequestKind::UpdateSessionReadiness,
+                               QStringLiteral("Invalid plugin readiness"));
+    QJsonObject body = pluginReadinessReportJson(readiness);
+    return m_impl->requestSession(
+        CloudRequestKind::UpdateSessionReadiness, QByteArrayLiteral("PUT"),
+        QStringLiteral("desktop/projects/%1/sessions/%2/readiness")
+            .arg(*project, *session),
+        &body, 200, *project, *session);
+}
+
+quint64 CloudProjectClient::activateSession(const QString& projectId,
+                                            const QString& sessionId) {
+    const auto project = m_impl->uuidInput(projectId);
+    const auto session = m_impl->uuidInput(sessionId);
+    if (!project || !session)
+        return m_impl->invalid(CloudRequestKind::ActivateSession,
+                               QStringLiteral("Invalid session id"));
+    QJsonObject body;
+    return m_impl->requestSession(
+        CloudRequestKind::ActivateSession, QByteArrayLiteral("POST"),
+        QStringLiteral("desktop/projects/%1/sessions/%2/activate")
             .arg(*project, *session),
         &body, 200, *project, *session);
 }
@@ -2236,7 +2534,9 @@ quint64 CloudProjectClient::createInvite(
             const auto object = m_impl->responseObject(
                 requestId, CloudRequestKind::CreateInvite, response);
             if (!object) return;
-            if (!exactKeys(*object, {"invite", "token"}) ||
+            // "code" is optional: a server without an invite-code pepper still
+            // mints the long token, and this build must keep working with one.
+            if (!exactKeys(*object, {"invite", "token"}, {"code"}) ||
                 !object->value(QStringLiteral("invite")).isObject()) {
                 m_impl->invalidResponse(
                     requestId, CloudRequestKind::CreateInvite,
@@ -2259,8 +2559,19 @@ quint64 CloudProjectClient::createInvite(
                                         CloudRequestKind::CreateInvite, parse);
                 return;
             }
+            QString code;
+            const QJsonValue codeValue = object->value(QStringLiteral("code"));
+            if (!codeValue.isUndefined() &&
+                (!boundedString(codeValue, 1, 32, &code) ||
+                 normalizedInviteCode(code) != code)) {
+                m_impl->invalidResponse(
+                    requestId, CloudRequestKind::CreateInvite,
+                    {CloudClientErrorCode::InvalidResponse,
+                     QStringLiteral("Invalid invitation response")});
+                return;
+            }
             emit inviteCreated(requestId,
-                               CreatedCloudProjectInvite{*invite, token});
+                               CreatedCloudProjectInvite{*invite, token, code});
         });
     return requestId;
 }
@@ -2287,6 +2598,39 @@ quint64 CloudProjectClient::acceptInvite(const QString& oneTimeToken) {
                                QStringLiteral("Invalid invitation token"));
     }
     const QJsonObject body{{QStringLiteral("token"), oneTimeToken}};
+    const quint64 requestId = m_impl->allocate();
+    m_impl->issue(
+        requestId, CloudRequestKind::AcceptInvite, QByteArrayLiteral("POST"),
+        QStringLiteral("desktop/project-invites/accept"), {},
+        QJsonDocument(body).toJson(QJsonDocument::Compact), {200},
+        kMaxRegularResponseBytes, true,
+        [this, requestId](const QByteArray& response) {
+            const auto object = m_impl->responseObject(
+                requestId, CloudRequestKind::AcceptInvite, response);
+            if (!object) return;
+            ParseFailure parse;
+            auto view = parseProjectView(*object, &parse);
+            if (!view) {
+                m_impl->invalidResponse(requestId,
+                                        CloudRequestKind::AcceptInvite, parse);
+                return;
+            }
+            emit inviteAccepted(requestId, *view);
+        });
+    return requestId;
+}
+
+quint64 CloudProjectClient::acceptInviteCode(const QString& numericCode) {
+    const QString code = normalizedInviteCode(numericCode);
+    // The width is not pinned here on purpose. The server owns the code length
+    // and may change it; a client that hard-coded twelve would start refusing
+    // valid codes before it was updated. Bound it loosely and let the server
+    // decide, which it does with a single opaque answer either way.
+    if (code.size() < 6 || code.size() > 32) {
+        return m_impl->invalid(CloudRequestKind::AcceptInvite,
+                               QStringLiteral("Invalid invitation code"));
+    }
+    const QJsonObject body{{QStringLiteral("code"), code}};
     const quint64 requestId = m_impl->allocate();
     m_impl->issue(
         requestId, CloudRequestKind::AcceptInvite, QByteArrayLiteral("POST"),
@@ -2730,7 +3074,7 @@ bool checkCloudProjectClientForTest(QString* error) {
     const QJsonDocument joinBody = QJsonDocument::fromJson(
         network.captured.back().body, &joinParseError);
     if (joinParseError.error != QJsonParseError::NoError ||
-        !joinBody.isObject() || joinBody.object().size() != 4 ||
+        !joinBody.isObject() || joinBody.object().size() != 5 ||
         joinBody.object().value(QStringLiteral("appVersion")).toString() !=
             QCoreApplication::applicationVersion() ||
         joinBody.object().value(QStringLiteral("engineVersion")).toString() !=
@@ -2740,7 +3084,8 @@ bool checkCloudProjectClientForTest(QString* error) {
                 .toInt() != int(daw::collab::kProjectCommandSchemaVersion) ||
         joinBody.object()
                 .value(QStringLiteral("projectFormatVersion"))
-                .toInt() != daw::collab::kSharedProjectFormatVersion) {
+                .toInt() != daw::collab::kSharedProjectFormatVersion ||
+        !joinBody.object().value(QStringLiteral("readiness")).isObject()) {
         return fail(QStringLiteral("join omitted compatibility metadata"));
     }
     if (!client.cancel(joinId) || failures != 1 ||
@@ -2748,6 +3093,25 @@ bool checkCloudProjectClientForTest(QString* error) {
         return fail(QStringLiteral("request cancellation did not complete"));
     }
     failures = 0;
+
+    network.scripts.push_back({200, {}, {}, {}, true});
+    const quint64 joinV2Id = client.joinSession(
+        projectId, sessionId, {}, {},
+        int(daw::collab::kProjectCommandSchemaVersionV2));
+    const QJsonDocument joinV2Body = QJsonDocument::fromJson(
+        network.captured.back().body, &joinParseError);
+    if (!joinV2Id || !joinV2Body.isObject() ||
+        joinV2Body.object().size() != 4 ||
+        joinV2Body.object().contains(QStringLiteral("readiness")) ||
+        joinV2Body.object()
+                .value(QStringLiteral("commandSchemaVersion"))
+                .toInt() != int(daw::collab::kProjectCommandSchemaVersionV2)) {
+        return fail(QStringLiteral("v2 join was rewritten as v3"));
+    }
+    if (!client.cancel(joinV2Id))
+        return fail(QStringLiteral("v2 join could not be cancelled"));
+    failures = 0;
+
 
     const QJsonObject firstPage = testBootstrapPage(
         projectId, 4, 2,
@@ -2780,7 +3144,7 @@ bool checkCloudProjectClientForTest(QString* error) {
         bootstrap.operations.size() != 2 ||
         bootstrap.operations[0].serverSequence != 3 ||
         bootstrap.operations[1].serverSequence != 4 ||
-        network.captured.size() != 4) {
+        network.captured.size() != 5) {
         return fail(QStringLiteral(
                         "canonical bootstrap pagination failed "
                         "(failures=%1, signals=%2, base=%3, head=%4, ops=%5, "
@@ -2794,15 +3158,15 @@ bool checkCloudProjectClientForTest(QString* error) {
                         .arg(int(lastError.code))
                         .arg(lastError.safeMessage));
     }
-    const QUrlQuery firstQuery(network.captured[2].request.url());
-    const QUrlQuery secondQuery(network.captured[3].request.url());
+    const QUrlQuery firstQuery(network.captured[3].request.url());
+    const QUrlQuery secondQuery(network.captured[4].request.url());
     if (firstQuery.queryItemValue(QStringLiteral("after_seq")) !=
             QLatin1String("0") ||
         secondQuery.queryItemValue(QStringLiteral("after_seq")) !=
             QLatin1String("3") ||
-        network.captured[2].request.url().toString().contains(
-            QString::fromUtf8(testToken)) ||
         network.captured[3].request.url().toString().contains(
+            QString::fromUtf8(testToken)) ||
+        network.captured[4].request.url().toString().contains(
             QString::fromUtf8(testToken))) {
         return fail(QStringLiteral("bootstrap pagination query was unsafe"));
     }
@@ -3215,6 +3579,105 @@ bool checkCloudProjectClientForTest(QString* error) {
         lastError.code != CloudClientErrorCode::RedirectRejected) {
         return fail(QStringLiteral("HTTP redirect was followed or accepted"));
     }
+    failures = 0;
+
+    // A session password and an invitation code are shared secrets. They may
+    // travel in the request body and nowhere else: a URL lands in proxy access
+    // logs, in Referer headers and in browser history, and neither secret has
+    // the entropy to survive that.
+    const QString roomPassword = QStringLiteral("jam night 7");
+    network.scripts.push_back({200, {}, {}, {}, true});
+    const quint64 securedJoinId =
+        client.joinSession(projectId, sessionId, roomPassword);
+    const FakeCloudNetwork::Captured securedJoin = network.captured.back();
+    const QJsonDocument securedJoinBody =
+        QJsonDocument::fromJson(securedJoin.body);
+    if (!securedJoinBody.isObject() ||
+        securedJoinBody.object().value(QStringLiteral("password")).toString() !=
+            roomPassword ||
+        securedJoin.request.url().toString().contains(roomPassword) ||
+        securedJoin.request.url().hasQuery() ||
+        !securedJoin.request.rawHeader("Cookie").isEmpty()) {
+        return fail(QStringLiteral("session password escaped the request body"));
+    }
+    if (!client.cancel(securedJoinId)) {
+        return fail(QStringLiteral("secured join could not be cancelled"));
+    }
+    failures = 0;
+
+    network.scripts.push_back({201, {}, {}, {}, true});
+    const quint64 securedStartId = client.startSession(
+        projectId, CloudSessionMode::Independent, roomPassword);
+    const FakeCloudNetwork::Captured securedStart = network.captured.back();
+    const QJsonDocument securedStartBody =
+        QJsonDocument::fromJson(securedStart.body);
+    if (!securedStartBody.isObject() ||
+        securedStartBody.object()
+                .value(QStringLiteral("password"))
+                .toString() != roomPassword ||
+        securedStart.request.url().toString().contains(roomPassword)) {
+        return fail(QStringLiteral("start password escaped the request body"));
+    }
+    if (!client.cancel(securedStartId)) {
+        return fail(QStringLiteral("secured start could not be cancelled"));
+    }
+    failures = 0;
+
+    // An unprotected session must not gain a password key at all, so a server
+    // that predates the field keeps seeing exactly the body it expects.
+    const int capturedBeforeOpen = int(network.captured.size());
+    network.scripts.push_back({201, {}, {}, {}, true});
+    const quint64 openStartId = client.startSession(projectId);
+    if (int(network.captured.size()) != capturedBeforeOpen + 1 ||
+        QJsonDocument::fromJson(network.captured.back().body)
+            .object()
+            .contains(QStringLiteral("password"))) {
+        return fail(QStringLiteral("an open session sent a password key"));
+    }
+    if (!client.cancel(openStartId)) {
+        return fail(QStringLiteral("open start could not be cancelled"));
+    }
+    failures = 0;
+
+    // A password the server would refuse never reaches the network.
+    const int capturedBeforeShort = int(network.captured.size());
+    client.startSession(projectId, CloudSessionMode::Independent,
+                        QStringLiteral("short"));
+    if (int(network.captured.size()) != capturedBeforeShort || failures != 1 ||
+        lastFailureKind != CloudRequestKind::StartSession) {
+        return fail(QStringLiteral("a too-short session password was sent"));
+    }
+    failures = 0;
+
+    // Invitation codes: separators are normalised away, the digits go in the
+    // body, and a malformed code is refused before any request is made.
+    network.scripts.push_back({200, {}, {}, {}, true});
+    const quint64 codeId =
+        client.acceptInviteCode(QStringLiteral("1234-5678 9012"));
+    const FakeCloudNetwork::Captured codeRequest = network.captured.back();
+    const QJsonDocument codeBody = QJsonDocument::fromJson(codeRequest.body);
+    if (!codeBody.isObject() ||
+        !exactKeys(codeBody.object(), {"code"}) ||
+        codeBody.object().value(QStringLiteral("code")).toString() !=
+            QStringLiteral("123456789012") ||
+        codeRequest.request.url().toString().contains(
+            QStringLiteral("123456789012")) ||
+        codeRequest.request.url().hasQuery()) {
+        return fail(QStringLiteral("invitation code escaped the request body"));
+    }
+    if (!client.cancel(codeId)) {
+        return fail(QStringLiteral("code redemption could not be cancelled"));
+    }
+    failures = 0;
+
+    const int capturedBeforeBadCode = int(network.captured.size());
+    client.acceptInviteCode(QStringLiteral("12a"));
+    if (int(network.captured.size()) != capturedBeforeBadCode ||
+        failures != 1 || lastFailureKind != CloudRequestKind::AcceptInvite) {
+        return fail(QStringLiteral("a malformed invitation code was sent"));
+    }
+    failures = 0;
+
     return true;
 }
 

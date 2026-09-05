@@ -27,7 +27,7 @@ type semanticVersion struct {
 // rejects an unparseable stored minimum instead of guessing an ordering.
 func ValidateClientCompatibility(project model.CloudProject,
 	client ClientCompatibility) error {
-	if client.CommandSchemaVersion != CollaborationCommandSchemaVersion ||
+	if !SupportedCommandSchemaVersion(client.CommandSchemaVersion) ||
 		client.ProjectFormatVersion != CollaborationProjectFormatVersion ||
 		client.ProjectFormatVersion != project.FormatVersion ||
 		client.EngineVersion == "" || client.EngineVersion != project.EngineVersion {

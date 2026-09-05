@@ -37,6 +37,7 @@ public:
         kRecordingTab,
         kContextPanelTab,
         kBrowserTab,
+        kNotebookTab,
         kAiTab,
         kAccountTab,
         kLanguageTab,
@@ -59,6 +60,8 @@ signals:
     void contextPanelSettingsChanged();
     /// The browser's folders, side or preview options changed.
     void browserSettingsChanged();
+    /// The notebook's background, motion or custom fonts changed.
+    void notebookSettingsChanged();
     /// The assistant's provider, key, model or step limit changed.
     void aiSettingsChanged();
     /// MainWindow owns the unsaved-project decision before credentials vanish.
@@ -69,6 +72,8 @@ signals:
     void cpuStatusBarVisibilityChanged(bool visible);
     /// How selected tracks are tinted changed on the Themes tab.
     void selectionTintChanged();
+    /// A local arrangement/header image, GIF, video or presentation changed.
+    void themeBackgroundSettingsChanged();
     void restartRequested();
 
 protected:

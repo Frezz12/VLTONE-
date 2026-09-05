@@ -18,8 +18,11 @@ Thumbs.db
 .pnpm-store/
 .postman/
 .sisyphus/
+.tmp/
 .zcode/
+.b.bat
 .codex-ssh-askpass.cmd
+.ut.bat
 
 # Secrets and local environment
 .env

@@ -99,6 +99,7 @@ CloudDocumentProjection projectForCloudSnapshotV1(const ProjectModel& source) {
     }
 
     ProjectModel& document = projection.document;
+    document.coverImagePath.clear();
     document.loopStartSeconds = 0.0;
     document.loopEndSeconds = 0.0;
     document.loopEnabled = false;
@@ -175,6 +176,10 @@ CloudDocumentProjection projectForCloudSnapshotV1(const ProjectModel& source) {
 
 bool containsLocalPathOrUiState(const ProjectModel& document,
                                 std::string* firstLocation) {
+    if (!document.coverImagePath.empty()) {
+        if (firstLocation) *firstLocation = "project/cover";
+        return true;
+    }
     if (document.loopEnabled || document.loopStartSeconds != 0.0 ||
         document.loopEndSeconds != 0.0) {
         if (firstLocation) *firstLocation = "project/transport";

@@ -49,6 +49,8 @@ func TestDesktopCollaborationRoutesMatch(t *testing.T) {
 		{http.MethodPost, project + "/sessions/" + id + "/join"},
 		{http.MethodPost, project + "/sessions/" + id + "/leave"},
 		{http.MethodPost, project + "/sessions/" + id + "/heartbeat"},
+		{http.MethodPut, project + "/sessions/" + id + "/readiness"},
+		{http.MethodPost, project + "/sessions/" + id + "/activate"},
 		{http.MethodPost, project + "/sessions/" + id + "/host"},
 		{http.MethodDelete, project + "/sessions/" + id},
 		{http.MethodPost, project + "/sessions/" + id + "/leases"},

@@ -4,10 +4,38 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 namespace daw::serialization {
 
 using json = nlohmann::json;
+
+json parametersToJson(const std::vector<InsertParameter>& values) {
+    json out = json::array();
+    for (const InsertParameter& value : values) {
+        if (!value.id.empty() && std::isfinite(value.value))
+            out.push_back(json{{"id", value.id}, {"value", value.value}});
+    }
+    return out;
+}
+
+std::vector<InsertParameter> parametersFromJson(const json& parent,
+                                                const char* key) {
+    std::vector<InsertParameter> out;
+    if (!parent.contains(key) || !parent.at(key).is_array()) return out;
+    for (const json& value : parent.at(key)) {
+        if (!value.is_object() || !value.contains("id") ||
+            !value.at("id").is_string() || !value.contains("value") ||
+            !value.at("value").is_number()) {
+            continue;
+        }
+        InsertParameter parameter{value.at("id").get<std::string>(),
+                                  value.at("value").get<double>()};
+        if (!parameter.id.empty() && std::isfinite(parameter.value))
+            out.push_back(std::move(parameter));
+    }
+    return out;
+}
 
 json insertToJson(const InsertModel& i) {
     json j{{"id", i.id}, {"name", i.name}, {"bypassed", i.bypassed}};
@@ -35,16 +63,11 @@ json insertToJson(const InsertModel& i) {
         j["rightStateAsset"] = assetRefToJson(i.rightStateAsset);
     if (!i.assetBindings.empty())
         j["assetBindings"] = pluginAssetBindingsToJson(i.assetBindings);
-    if (!i.parameters.empty()) {
-        json parameters = json::array();
-        for (const InsertParameter& p : i.parameters)
-            parameters.push_back(json{{"id", p.id}, {"value", p.value}});
+    if (json parameters = parametersToJson(i.parameters); !parameters.empty()) {
         j["parameters"] = std::move(parameters);
     }
-    if (!i.rightParameters.empty()) {
-        json parameters = json::array();
-        for (const InsertParameter& p : i.rightParameters)
-            parameters.push_back(json{{"id", p.id}, {"value", p.value}});
+    if (json parameters = parametersToJson(i.rightParameters);
+        !parameters.empty()) {
         j["rightParameters"] = std::move(parameters);
     }
     if (i.windowWidth > 0) {
@@ -82,22 +105,8 @@ InsertModel insertFromJson(const json& j) {
     if (j.contains("rightStateAsset"))
         i.rightStateAsset = assetRefFromJson(j.at("rightStateAsset"));
     i.assetBindings = pluginAssetBindingsFromJson(j, "assetBindings");
-    if (j.contains("parameters") && j.at("parameters").is_array()) {
-        for (const auto& jp : j.at("parameters")) {
-            InsertParameter p;
-            p.id = jp.value("id", "");
-            p.value = jp.value("value", 0.0);
-            if (!p.id.empty()) i.parameters.push_back(std::move(p));
-        }
-    }
-    if (j.contains("rightParameters") && j.at("rightParameters").is_array()) {
-        for (const auto& jp : j.at("rightParameters")) {
-            InsertParameter p;
-            p.id = jp.value("id", "");
-            p.value = jp.value("value", 0.0);
-            if (!p.id.empty()) i.rightParameters.push_back(std::move(p));
-        }
-    }
+    i.parameters = parametersFromJson(j, "parameters");
+    i.rightParameters = parametersFromJson(j, "rightParameters");
     if (j.contains("window") && j.at("window").is_object()) {
         const auto& w = j.at("window");
         i.windowX = w.value("x", 0);

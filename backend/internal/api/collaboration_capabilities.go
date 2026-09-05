@@ -64,7 +64,7 @@ func (s *Server) desktopCapabilities(w http.ResponseWriter, r *http.Request) {
 		"collaboration": map[string]any{
 			"enabled":         s.Config.CollaborationEnabled,
 			"entitled":        entitled,
-			"recording":       cloudRecordingEnabledV1,
+			"recording":       s.Config.CollabRecordingEnabled,
 			"maxParticipants": s.Config.CollabMaxParticipants,
 			"storage": map[string]any{
 				"maximumObjectBytes": s.Config.CollabMaximumObjectBytes,

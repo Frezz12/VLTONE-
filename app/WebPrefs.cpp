@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -50,6 +51,20 @@ QString normalizedWebUrl(const QString& value) {
                : QString();
 }
 
+bool supportedStartBackground(const QFileInfo& info) {
+    if (!info.isFile()) return false;
+    const QString suffix = info.suffix().toLower();
+    static const QStringList supported = {
+        QStringLiteral("png"),  QStringLiteral("jpg"),
+        QStringLiteral("jpeg"), QStringLiteral("webp"),
+        QStringLiteral("bmp"),  QStringLiteral("gif"),
+        QStringLiteral("avif"), QStringLiteral("mp4"),
+        QStringLiteral("m4v"),  QStringLiteral("webm"),
+        QStringLiteral("ogv"),  QStringLiteral("ogg"),
+        QStringLiteral("mov")};
+    return supported.contains(suffix);
+}
+
 } // namespace
 
 bool visible() { return QSettings().value(key("visible"), false).toBool(); }
@@ -81,6 +96,26 @@ void setHomeUrl(const QString& url) {
         value.isEmpty() || value == QLatin1String("about:blank")
             ? QLatin1String(kStartUrl)
             : value);
+}
+
+QString startPageBackgroundPath() {
+    const QFileInfo info(
+        QSettings().value(key("startPageBackground")).toString().trimmed());
+    return supportedStartBackground(info)
+               ? QDir::cleanPath(info.absoluteFilePath())
+               : QString();
+}
+
+bool setStartPageBackgroundPath(const QString& path) {
+    const QFileInfo info(path.trimmed());
+    if (!supportedStartBackground(info)) return false;
+    QSettings().setValue(key("startPageBackground"),
+                         QDir::cleanPath(info.absoluteFilePath()));
+    return true;
+}
+
+void clearStartPageBackground() {
+    QSettings().remove(key("startPageBackground"));
 }
 
 QString lastUrl() {

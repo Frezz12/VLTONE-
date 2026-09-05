@@ -6,6 +6,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDir>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -153,6 +154,61 @@ BrowserSettingsPage::BrowserSettingsPage(QWidget* parent) : QWidget(parent) {
         emit changed();
     });
     webForm->addRow(tr("Home page"), m_webHome);
+
+    auto* backgroundRow = new QWidget(this);
+    auto* backgroundLayout = new QHBoxLayout(backgroundRow);
+    backgroundLayout->setContentsMargins(0, 0, 0, 0);
+    backgroundLayout->setSpacing(6);
+    m_webBackground = new QLineEdit(backgroundRow);
+    m_webBackground->setReadOnly(true);
+    m_webBackground->setPlaceholderText(tr("No custom background"));
+    m_webBackground->setAccessibleName(tr("Start page background file"));
+    const QString backgroundPath = ui::webprefs::startPageBackgroundPath();
+    m_webBackground->setText(QDir::toNativeSeparators(backgroundPath));
+    m_webBackground->setToolTip(backgroundPath);
+    auto* chooseBackground = new QPushButton(tr("Choose…"), backgroundRow);
+    chooseBackground->setAccessibleName(tr("Choose start page background"));
+    m_clearWebBackground = new QPushButton(tr("Clear"), backgroundRow);
+    m_clearWebBackground->setEnabled(!backgroundPath.isEmpty());
+    backgroundLayout->addWidget(m_webBackground, 1);
+    backgroundLayout->addWidget(chooseBackground);
+    backgroundLayout->addWidget(m_clearWebBackground);
+    webForm->addRow(tr("Start background"), backgroundRow);
+
+    connect(chooseBackground, &QPushButton::clicked, this, [this] {
+        const QString current = ui::webprefs::startPageBackgroundPath();
+        const QString selected = QFileDialog::getOpenFileName(
+            this, tr("Choose a start page background"), current,
+            tr("Background media (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.avif "
+               "*.mp4 *.m4v *.webm *.ogv *.ogg *.mov);;Images (*.png *.jpg "
+               "*.jpeg *.webp *.bmp *.gif *.avif);;Videos (*.mp4 *.m4v *.webm "
+               "*.ogv *.ogg *.mov)"));
+        if (selected.isEmpty()) return;
+        if (!ui::webprefs::setStartPageBackgroundPath(selected)) {
+            m_webBackground->setToolTip(
+                tr("Choose a supported image, GIF or video"));
+            return;
+        }
+        const QString stored = ui::webprefs::startPageBackgroundPath();
+        m_webBackground->setText(QDir::toNativeSeparators(stored));
+        m_webBackground->setToolTip(stored);
+        m_clearWebBackground->setEnabled(true);
+        emit changed();
+    });
+    connect(m_clearWebBackground, &QPushButton::clicked, this, [this] {
+        ui::webprefs::clearStartPageBackground();
+        m_webBackground->clear();
+        m_webBackground->setToolTip(QString());
+        m_clearWebBackground->setEnabled(false);
+        emit changed();
+    });
+
+    auto* backgroundHint = new QLabel(
+        tr("Images, GIFs and videos stay on this computer. Animated backgrounds "
+           "stop when reduced motion is enabled."),
+        this);
+    backgroundHint->setWordWrap(true);
+    webForm->addRow(QString(), backgroundHint);
 
     m_webBookmarksBar =
         new QCheckBox(tr("Show the bookmarks bar"), this);

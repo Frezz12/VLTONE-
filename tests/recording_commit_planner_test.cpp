@@ -2,6 +2,8 @@
 #include "collaboration/ProjectReducer.hpp"
 #include "collaboration/RecordingCommitPlanner.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <cstdio>
 #include <string>
 #include <string_view>
@@ -170,6 +172,36 @@ int main() {
               serializeProjectCommand(*plannedAgain.command) == flatWire &&
               deserializeProjectCommand(flatWire, &wireError).has_value(),
           "planner is deterministic and emits round-trippable canonical wire");
+
+    Fixture leaseFree = flatFixture("lease-free-v3");
+    leaseFree.run.captures.front().leaseId.clear();
+    leaseFree.input.leases.clear();
+    ClipModel simultaneous;
+    simultaneous.id = id("planner-existing-clip", "lease-free-v3");
+    simultaneous.kind = ClipKind::Audio;
+    simultaneous.startSeconds = 4.0;
+    simultaneous.durationSeconds = 2.0;
+    leaseFree.snapshot.project.tracks.front().clips.push_back(simultaneous);
+    const RecordingCommitPlanResult leaseFreePlan =
+        RecordingCommitPlanner::plan(leaseFree.snapshot, leaseFree.run,
+                                     leaseFree.input);
+    const auto* leaseFreeCommit =
+        leaseFreePlan.command
+            ? std::get_if<RecordingCommit>(&leaseFreePlan.command->body)
+            : nullptr;
+    check(leaseFreePlan && leaseFreeCommit && leaseFreeCommit->leases.empty() &&
+              leaseFreeCommit->batch &&
+              leaseFreeCommit->batch->commands.size() == 2 &&
+              deserializeProjectCommand(
+                  serializeProjectCommand(*leaseFreePlan.command), &wireError)
+                  .has_value(),
+          "v3 overlapping new-clip recording plans without a track lease");
+    if (leaseFreePlan.command) {
+        auto v2Wire = projectCommandToJson(*leaseFreePlan.command);
+        v2Wire["schemaVersion"] = kProjectCommandSchemaVersionV2;
+        check(!projectCommandFromJson(v2Wire, &wireError).has_value(),
+              "v2 keeps the non-empty recording lease contract");
+    }
 
     SharedProjectDocument flatApplied = flat.snapshot;
     const ApplyResult flatResult =

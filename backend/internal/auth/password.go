@@ -37,15 +37,41 @@ func ValidatePassword(value string) error {
 	return nil
 }
 
+// ValidateSessionSecret is deliberately laxer than ValidatePassword. A session
+// password is a short-lived secret shared out loud between people who are about
+// to work together, protecting one ephemeral room rather than an account, and a
+// twelve character floor would just push everyone to reuse an account password.
+func ValidateSessionSecret(value string) error {
+	count := len([]rune(value))
+	if count < 6 || count > 128 {
+		return errors.New("session password must contain between 6 and 128 characters")
+	}
+	return nil
+}
+
 func HashPassword(password string) (string, error) {
 	if err := ValidatePassword(password); err != nil {
 		return "", err
 	}
+	return hashWithArgon(password)
+}
+
+// HashSessionSecret uses the same argon2id parameters as HashPassword; only the
+// length policy differs. VerifyPassword reads both, since it applies no policy
+// of its own and is already constant time.
+func HashSessionSecret(value string) (string, error) {
+	if err := ValidateSessionSecret(value); err != nil {
+		return "", err
+	}
+	return hashWithArgon(value)
+}
+
+func hashWithArgon(value string) (string, error) {
 	salt := make([]byte, argonSaltBytes)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	hash := argon2.IDKey([]byte(password), salt, argonIterations, argonMemory,
+	hash := argon2.IDKey([]byte(value), salt, argonIterations, argonMemory,
 		argonParallelism, argonKeyBytes)
 	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", argonMemory,
 		argonIterations, argonParallelism,

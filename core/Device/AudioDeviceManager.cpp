@@ -51,6 +51,19 @@ bool isAsioDevice(const PaDeviceInfo* di) {
     return api && api->type == paASIO;
 }
 
+PaTime suggestedLatency(const PaDeviceInfo* device, BufferSize bufferSize,
+                        SampleRate sampleRate, bool input) {
+    // PortAudio's ASIO backend uses suggestedLatency to choose the native
+    // ASIOCreateBuffers size. Leaving the device default here can make a 64
+    // frame request run the driver at 256/512 frames behind an adaptor.
+    if (isAsioDevice(device) && sampleRate > 0.0)
+        return static_cast<PaTime>(bufferSize) / sampleRate;
+    return device
+        ? (input ? device->defaultLowInputLatency
+                 : device->defaultLowOutputLatency)
+        : 0.0;
+}
+
 /// The buffer sizes worth offering when nobody has a better answer. Down to 8
 /// frames: whether a device will actually run there is the device's answer, and
 /// a refusal already puts the last working size back.
@@ -60,6 +73,31 @@ constexpr BufferSize kStandardBufferSizes[] = {8,   16,  32,   64,  128,
 /// Sample rates worth asking a device about.
 constexpr SampleRate kCandidateSampleRates[] = {44100.0,  48000.0,  88200.0,
                                                 96000.0,  176400.0, 192000.0};
+
+bool supportsBufferSize(PaDeviceIndex index, const PaDeviceInfo* device,
+                        BufferSize size) {
+#if DAW_HAVE_ASIO
+    if (isAsioDevice(device)) {
+        long smallest = 0, largest = 0, preferred = 0, granularity = 0;
+        if (PaAsio_GetAvailableBufferSizes(index, &smallest, &largest,
+                                           &preferred, &granularity) ==
+            paNoError) {
+            const long requested = static_cast<long>(size);
+            if (requested < smallest || requested > largest) return false;
+            if (granularity == -1)
+                return requested > 0 && (requested & (requested - 1)) == 0;
+            if (granularity > 0)
+                return (requested - smallest) % granularity == 0;
+            return requested == preferred;
+        }
+    }
+#else
+    (void)index;
+    (void)device;
+    (void)size;
+#endif
+    return true;
+}
 
 /// What buffer sizes this device will actually run at.
 ///
@@ -91,10 +129,23 @@ std::vector<BufferSize> availableBufferSizes(PaDeviceIndex index,
                     sizes.push_back(static_cast<BufferSize>(size));
                 }
             } else if (granularity > 0) {
-                for (long size = smallest; size <= largest && sizes.size() < 64;
-                     size += granularity) {
-                    sizes.push_back(static_cast<BufferSize>(size));
-                }
+                // A one-frame/one-word granularity can describe thousands of
+                // legal sizes. Offer the conventional useful values plus the
+                // driver's endpoints/preference instead of the first 64 tiny
+                // entries in that range.
+                const auto addIfLegal = [&](long size) {
+                    if (size >= smallest && size <= largest &&
+                        (size - smallest) % granularity == 0) {
+                        sizes.push_back(static_cast<BufferSize>(size));
+                    }
+                };
+                addIfLegal(smallest);
+                for (BufferSize size : kStandardBufferSizes)
+                    addIfLegal(static_cast<long>(size));
+                addIfLegal(preferred);
+                addIfLegal(largest);
+                std::sort(sizes.begin(), sizes.end());
+                sizes.erase(std::unique(sizes.begin(), sizes.end()), sizes.end());
             } else if (preferred > 0) {
                 // A driver that allows exactly one size.
                 sizes.push_back(static_cast<BufferSize>(preferred));
@@ -249,6 +300,10 @@ Result AudioDeviceManager::adoptConfiguration(
     const PaDeviceInfo* outDi = Pa_GetDeviceInfo(outputIndex);
     if (!outDi || outDi->maxOutputChannels <= 0)
         return Result::fail(EngineError::DeviceNotFound, "invalid output device");
+    if (!supportsBufferSize(outputIndex, outDi, config.bufferSize)) {
+        return Result::fail(EngineError::InvalidArgument,
+                            "buffer size is not supported by the ASIO driver");
+    }
 
     int inputIndex = -1;
     if (config.inputEnabled) {
@@ -383,11 +438,27 @@ Result AudioDeviceManager::applyConfiguration(
         if (restored) restored = openStream();
         if (restored && wasRunning) restored = start();
         if (!restored) {
+            AudioDeviceConfig fallback = previous;
+            fallback.outputDeviceUid.clear();
+            fallback.inputDeviceUid.clear();
+            fallback.inputEnabled = false;
+            fallback.inputChannelSelectors.clear();
+            fallback.outputChannelSelectors.clear();
+            auto recovered = adoptConfiguration(fallback);
+            if (recovered) recovered = openStream();
+            if (recovered && wasRunning) recovered = start();
+            if (recovered) {
+                return Result::fail(
+                    failure.error(), failure.message() +
+                        "; the previous device is unavailable, using the "
+                        "system default output");
+            }
             m_deviceState.store(AudioDeviceState::Failed);
             return Result::fail(
                 failure.error(), failure.message() +
-                    "; restoring the previous audio device also failed: " +
-                    restored.message());
+                    "; restoring the previous audio device failed: " +
+                    restored.message() + "; opening the system default also "
+                    "failed: " + recovered.message());
         }
         return failure;
     };
@@ -472,10 +543,19 @@ Result AudioDeviceManager::openStream() {
         m_sampleRate.store(rate);
     }
 
+    const BufferSize requestedBuffer = m_bufferSize.load();
+    outParams.suggestedLatency =
+        suggestedLatency(outDi, requestedBuffer, rate, /*input=*/false);
+    if (haveInput) {
+        const PaDeviceInfo* inDi = Pa_GetDeviceInfo(m_inputDeviceIndex);
+        inParams.suggestedLatency =
+            suggestedLatency(inDi, requestedBuffer, rate, /*input=*/true);
+    }
+
     PaStream* stream = nullptr;
     const PaError err = Pa_OpenStream(
         &stream, haveInput ? &inParams : nullptr, &outParams, rate,
-        m_bufferSize.load(), paNoFlag, &paTrampoline, this);
+        requestedBuffer, paNoFlag, &paTrampoline, this);
     if (err != paNoError) {
         m_diagLastStartResult.store(err);
         return Result::fail(EngineError::DeviceError,
@@ -498,7 +578,10 @@ void AudioDeviceManager::closeStream() {
     if (m_stream) {
         auto* stream = static_cast<PaStream*>(m_stream);
         if (Pa_IsStreamActive(stream) == 1) {
-            Pa_StopStream(stream);
+            // Reconfiguration is not a transport stop: discard the old
+            // driver's pending buffers immediately. A graceful Pa_StopStream
+            // can wait forever after a USB/ASIO device disappears.
+            Pa_AbortStream(stream);
         }
         Pa_CloseStream(stream);
         m_stream = nullptr;
@@ -650,26 +733,34 @@ Result AudioDeviceManager::showControlPanel(const std::string& uid,
     // ASIO panels often need exclusive access to the driver. Release our
     // stream, then restore it before returning so Hardware Setup never leaves
     // the application silent.
+    const AudioDeviceConfig previous = configuration();
     const bool hadStream = m_isInitialized.load();
     const bool wasRunning = m_isRunning.load();
-    const bool panelIsCurrent = index == m_outputDeviceIndex;
+    const bool panelIsCurrent = uid == previous.outputDeviceUid;
     if (hadStream) closeStream();
 
     const PaError err = PaAsio_ShowControlPanel(index, nativeWindow);
-    if (err == paNoError && panelIsCurrent) {
-        BufferSize preferred = 0;
-        (void)availableBufferSizes(index, Pa_GetDeviceInfo(index), &preferred);
-        if (preferred > 0) {
-            m_bufferSize.store(preferred);
-            m_diagRequestedBufferSize.store(preferred);
-        }
-    }
 
-    Result restored = Result::ok();
-    if (hadStream) {
-        restored = openStream();
-        if (restored && wasRunning) restored = start();
+    // PaAsio_GetAvailableBufferSizes reads PortAudio's enumeration cache.
+    // Rebuild that cache after the panel closes; otherwise a new Audient (and
+    // similar) driver buffer preference is invisible until the whole app is
+    // restarted, and reopening the stream can overwrite the user's choice.
+    Pa_Terminate();
+    m_paInitialized = false;
+    Result restored = ensurePortAudio();
+    AudioDeviceConfig restoreConfig = previous;
+    if (restored && hadStream && err == paNoError && panelIsCurrent) {
+        const int refreshedIndex = resolveDeviceIndex(
+            restoreConfig.outputDeviceUid, /*wantInput=*/false);
+        BufferSize preferred = 0;
+        (void)availableBufferSizes(refreshedIndex,
+                                   Pa_GetDeviceInfo(refreshedIndex),
+                                   &preferred);
+        if (preferred > 0) restoreConfig.bufferSize = preferred;
     }
+    if (restored && hadStream) restored = adoptConfiguration(restoreConfig);
+    if (restored && hadStream) restored = openStream();
+    if (restored && hadStream && wasRunning) restored = start();
     if (err != paNoError) {
         return Result::fail(EngineError::DeviceError,
                             std::string("PaAsio_ShowControlPanel: ") +

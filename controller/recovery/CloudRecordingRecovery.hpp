@@ -104,6 +104,8 @@ struct CloudRecordingSemantics {
 struct CloudRecordingCapture {
     std::string captureId;
     std::string trackId;
+    /// Empty for collaboration v3 recordings that allocate only new clip/take
+    /// identities. Older lease-bearing recovery rows remain readable.
     std::string leaseId;
     /// Client-generated idempotency identities for the future resumable asset
     /// workflow. They are not server upload-session credentials.

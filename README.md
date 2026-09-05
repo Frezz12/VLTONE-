@@ -24,7 +24,7 @@ See **[BUILD.md](BUILD.md)** for macOS and Windows instructions. Quick start on
 macOS:
 
 ```bash
-brew install cmake ninja qt qtwebengine qtserialport portaudio rtmidi libsndfile nlohmann-json
+brew install cmake ninja qt qtmultimedia qtwebengine qtserialport portaudio rtmidi libsndfile nlohmann-json
 cmake --preset macos
 cmake --build build
 ./build/bin/daw

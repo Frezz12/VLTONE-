@@ -8,6 +8,8 @@
 #include "KeyboardLayout.hpp"
 #include "SelectionModel.hpp"
 #include "Theme.hpp"
+#include "ThemeMediaBackground.hpp"
+#include "TimelineBackgroundPrefs.hpp"
 #include "UiConstants.hpp"
 
 #include "EngineController.hpp"
@@ -21,6 +23,7 @@
 #include <QDropEvent>
 #include <QEasingCurve>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QFontMetrics>
 #include <QIcon>
 #include <QHash>
@@ -41,8 +44,10 @@
 #include <QRegion>
 #include <QScrollBar>
 #include <QSignalBlocker>
+#include <QSettings>
+#include <QShowEvent>
+#include <QHideEvent>
 #include <QTimer>
-#include <QUrl>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -253,8 +258,26 @@ TimelineWidget::TimelineWidget(daw::EngineController* controller,
 
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             QOverload<>::of(&QWidget::update));
+    m_backgroundMedia = new ui::ThemeMediaBackground(this);
+    connect(m_backgroundMedia, &ui::ThemeMediaBackground::frameChanged, this,
+            [this](bool animatedFrame) {
+                const bool active = hasTimelineBackground();
+                const bool activeChanged = active != m_backgroundActive;
+                m_backgroundActive = active;
+                if (activeChanged) m_staticFrameValid = false;
+                if (animatedFrame && !activeChanged && m_staticFrameValid &&
+                    isVisible()) {
+                    m_backgroundFrameRepaint = true;
+                    repaint();
+                    m_backgroundFrameRepaint = false;
+                } else {
+                    update();
+                }
+            });
     layoutNavigationControls();
     syncNavigationControls();
+    reloadBackgroundSettings();
+    reloadTimedTextSettings();
 }
 
 TimelineWidget::~TimelineWidget() {
@@ -264,6 +287,50 @@ TimelineWidget::~TimelineWidget() {
     if (m_projectGestureActive || m_clipPositionEditOpen || m_clipTrimEditOpen)
         finishProjectGesture();
     finishStretchGesture();
+}
+
+bool TimelineWidget::hasTimelineBackground() const {
+    return m_backgroundEnabled && m_backgroundVisibility > 0 &&
+           m_backgroundMedia && m_backgroundMedia->hasFrame();
+}
+
+void TimelineWidget::reloadBackgroundSettings() {
+    using namespace ui::timelinebackgroundprefs;
+    const bool oldActive = hasTimelineBackground();
+    m_backgroundEnabled = enabled();
+    m_backgroundVisibility = visibility();
+    m_backgroundAnimationEnabled =
+        animatedBackgroundsEnabled() &&
+        !QSettings().value(QStringLiteral("ui/reduceMotion"), false).toBool();
+    m_backgroundMedia->setTargetSize(size(), devicePixelRatioF());
+    m_backgroundMedia->setPlacement(placement());
+    m_backgroundMedia->setBlurRadius(blurRadius());
+    m_backgroundMedia->setSource(path());
+    m_backgroundMedia->setPlaying(
+        m_backgroundEnabled && m_backgroundAnimationEnabled &&
+        m_backgroundVisibility > 0 && isVisible());
+    m_backgroundActive = hasTimelineBackground();
+    if (oldActive != m_backgroundActive) m_staticFrameValid = false;
+    update();
+}
+
+void TimelineWidget::reloadTimedTextSettings() {
+    const QRect oldRect = timedNotebookTextRect();
+    static QStringList attemptedFonts;
+    for (const QString& path : ui::notebookprefs::customFontFiles()) {
+        if (attemptedFonts.contains(path)) continue;
+        attemptedFonts.push_back(path);
+        QFontDatabase::addApplicationFont(path);
+    }
+    m_timedNotebookCues = ui::notebookprefs::timedCues();
+    m_timedNotebookTextEnabled = ui::notebookprefs::timedTextEnabled();
+    m_timedNotebookFontFamily =
+        ui::notebookprefs::timedTextFontFamily();
+    m_timedNotebookReduceMotion =
+        QSettings().value(QStringLiteral("ui/reduceMotion"), false).toBool();
+    const QRect dirty = oldRect.united(timedNotebookTextRect());
+    m_playbackOnlyDirty = {};
+    if (!dirty.isEmpty()) update(dirty.adjusted(-8, -8, 8, 8));
 }
 
 void TimelineWidget::beginProjectGesture(const QString& label,
@@ -1231,6 +1298,13 @@ void TimelineWidget::setSelectedTrack(const QString& id) {
     update();
 }
 
+void TimelineWidget::setPendingCloudRecordingSpans(
+    QVector<PendingCloudRecordingSpan> spans) {
+    m_pendingCloudRecordingSpans = std::move(spans);
+    m_staticFrameValid = false;
+    update();
+}
+
 void TimelineWidget::setGridBeats(double beats) {
     m_gridBeats = beats;
     update();
@@ -2171,6 +2245,8 @@ void TimelineWidget::refreshPlaybackFrame() {
     ensurePlayheadVisible();
     const int currentX =
         secondsToX(m_controller->presentationPositionSeconds());
+    const QRect timedTextDirty =
+        timedNotebookTextRect().adjusted(-8, -8, 8, 8).intersected(rect());
 
     if (m_scrollSeconds != scrollBefore) {
         // Auto-follow moved every item horizontally, so a dirty cursor strip is
@@ -2182,7 +2258,14 @@ void TimelineWidget::refreshPlaybackFrame() {
         return;
     }
 
-    if (m_lastPlayheadX && *m_lastPlayheadX == currentX) return;
+    if (m_lastPlayheadX && *m_lastPlayheadX == currentX) {
+        if (!timedTextDirty.isEmpty()) {
+            m_playbackOnlyDirty =
+                m_playbackOnlyDirty.united(timedTextDirty);
+            update(timedTextDirty);
+        }
+        return;
+    }
 
     // The trail is motion made visible, so it is measured from motion: the
     // distance covered since the last frame, smoothed so a single jittery tick
@@ -2202,6 +2285,7 @@ void TimelineWidget::refreshPlaybackFrame() {
     if (m_lastPlayheadX)
         dirty = dirty.united(playheadDirtyRect(*m_lastPlayheadX));
     dirty = dirty.united(playheadDirtyRect(currentX));
+    dirty = dirty.united(timedTextDirty);
     m_lastPlayheadX = currentX;
     if (!dirty.isEmpty()) {
         m_playbackOnlyDirty = m_playbackOnlyDirty.united(dirty);
@@ -2504,6 +2588,8 @@ void TimelineWidget::drawLanes(QPainter& p) {
                 const QColor wash =
                     ui::selectionWash(colorFromRgb(track.color));
                 lane = mixColors(lane, wash, t.dark ? 0.14 : 0.09);
+                if (hasTimelineBackground())
+                    lane.setAlpha(t.dark ? 154 : 190);
                 QColor selectedEdge =
                     mixColors(t.sectionDivider(), wash, 0.60);
                 selectedEdge.setAlpha(t.dark ? 150 : 125);
@@ -2511,6 +2597,13 @@ void TimelineWidget::drawLanes(QPainter& p) {
                 p.setPen(QPen(selectedEdge, 1));
                 p.drawLine(0, laneY, width(), laneY);
             } else {
+                if (hasTimelineBackground()) {
+                    const bool quietLane =
+                        track.kind == daw::TrackKind::Folder ||
+                        track.kind == daw::TrackKind::Pattern;
+                    lane.setAlpha(quietLane ? (t.dark ? 168 : 204)
+                                            : (t.dark ? 132 : 184));
+                }
                 p.fillRect(0, laneY, width(), laneH, lane);
             }
             p.setPen(QPen(mixColors(t.gridLineStrong, t.background, 0.18), 1));
@@ -2769,6 +2862,8 @@ void TimelineWidget::drawLanes(QPainter& p) {
             drawRecordingClip(p, track, laneY + kClipVerticalInset,
                               bodyH - 2 * kClipVerticalInset);
         }
+        drawPendingCloudRecordings(p, track, laneY + kClipVerticalInset,
+                                   bodyH - 2 * kClipVerticalInset);
 
         // The comp editors of any expanded clips, filling the extra lane height
         // they asked for. Drawn after the bodies so a row never lands under a
@@ -3852,6 +3947,49 @@ void TimelineWidget::drawRecordingClip(QPainter& p,
     }
 }
 
+void TimelineWidget::drawPendingCloudRecordings(
+    QPainter& p, const daw::TrackModel& track, int top, int height) {
+    if (height < 6 || m_pendingCloudRecordingSpans.isEmpty()) return;
+    const QString trackId = QString::fromStdString(track.id);
+    const QColor body = colorFromRgb(track.color);
+    const QColor pending = Theme::solo();
+
+    p.save();
+    for (const PendingCloudRecordingSpan& span :
+         m_pendingCloudRecordingSpans) {
+        if (span.trackId != trackId || span.endSeconds <= span.startSeconds)
+            continue;
+        const double left =
+            (span.startSeconds - m_scrollSeconds) * m_pixelsPerSecond;
+        const double right =
+            (span.endSeconds - m_scrollSeconds) * m_pixelsPerSecond;
+        const QRectF clip(left, top, std::max(2.0, right - left), height);
+        if (clip.right() < 0.0 || clip.left() > width()) continue;
+
+        p.setPen(QPen(QColor(pending.red(), pending.green(), pending.blue(),
+                            220),
+                      1.4, Qt::DashLine));
+        p.setBrush(QColor(body.red(), body.green(), body.blue(), 120));
+        p.drawRoundedRect(clip, 5.0, 5.0);
+
+        const QRectF caption(clip.left(), clip.top(), clip.width(),
+                             std::min(16.0, clip.height()));
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, 90));
+        p.drawRoundedRect(caption, 5.0, 5.0);
+        if (caption.width() > 64.0) {
+            QFont font = p.font();
+            font.setPixelSize(10);
+            p.setFont(font);
+            p.setPen(QColor(255, 255, 255, 225));
+            p.drawText(caption.adjusted(6.0, 0.0, -4.0, 0.0),
+                       Qt::AlignLeft | Qt::AlignVCenter,
+                       tr("Pending upload"));
+        }
+    }
+    p.restore();
+}
+
 void TimelineWidget::drawRecordingEnvelope(QPainter& p,
                                            const daw::RecordingPreview& preview,
                                            const daw::RecordingSpan& span,
@@ -4347,10 +4485,145 @@ void TimelineWidget::resizeEvent(QResizeEvent* ev) {
     QWidget::resizeEvent(ev);
     m_staticFrameValid = false;
     m_playbackOnlyDirty = {};
+    if (m_backgroundMedia)
+        m_backgroundMedia->setTargetSize(size(), devicePixelRatioF());
     // A taller arrangement can show more lanes, which may make the current
     // scroll position illegal.
     layoutNavigationControls();
     clampVerticalScroll();
+}
+
+void TimelineWidget::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    if (m_backgroundMedia)
+        m_backgroundMedia->setPlaying(
+            m_backgroundEnabled && m_backgroundAnimationEnabled &&
+            m_backgroundVisibility > 0);
+}
+
+void TimelineWidget::hideEvent(QHideEvent* event) {
+    if (m_backgroundMedia) m_backgroundMedia->setPlaying(false);
+    QWidget::hideEvent(event);
+}
+
+void TimelineWidget::drawTimelineBackground(QPainter& painter) {
+    painter.save();
+    if (m_rightRadius > 0) {
+        painter.setClipPath(
+            rightRoundedShape(QRectF(rect()),
+                              std::min<double>(m_rightRadius, height() / 2.0)),
+            Qt::IntersectClip);
+    }
+    painter.fillRect(rect(), th().background);
+    if (hasTimelineBackground()) {
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter.setOpacity(double(m_backgroundVisibility) / 100.0);
+        painter.drawPixmap(QPoint(0, 0), m_backgroundMedia->frame());
+    }
+    painter.restore();
+}
+
+QRect TimelineWidget::timedNotebookTextRect() const {
+    if (!m_timedNotebookTextEnabled || m_timedNotebookCues.isEmpty()) return {};
+    const int viewportBottom =
+        height() - m_bottomInset - kTimelineScrollExtent - 16;
+    if (viewportBottom - ui::kRulerHeight < 118 || width() < 260) return {};
+    const int panelWidth = std::min(760, width() - 40);
+    return QRect((width() - panelWidth) / 2, viewportBottom - 100,
+                 panelWidth, 100);
+}
+
+void TimelineWidget::drawTimedNotebookText(QPainter& painter) {
+    const bool running = m_controller->isPlaying() || m_controller->isRecording();
+    const QRect panel = timedNotebookTextRect();
+    if (!running || panel.isEmpty()) return;
+
+    const double position =
+        std::max(0.0, m_controller->presentationPositionSeconds());
+    const int active =
+        ui::notebookprefs::timedCueIndexAt(m_timedNotebookCues, position);
+    const int upcoming = active + 1;
+    if (active < 0 && upcoming >= m_timedNotebookCues.size()) return;
+
+    const Theme& theme = th();
+    painter.save();
+    painter.setClipRect(rect());
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    QColor shadow = theme.background;
+    shadow.setAlpha(105);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(shadow);
+    painter.drawRoundedRect(panel.adjusted(0, 4, 0, 4), 18, 18);
+
+    QColor top = theme.surfaceElevated;
+    QColor bottom = theme.toolbarBackground;
+    top.setAlpha(238);
+    bottom.setAlpha(224);
+    QLinearGradient glass(panel.topLeft(), panel.bottomLeft());
+    glass.setColorAt(0.0, top);
+    glass.setColorAt(1.0, bottom);
+    painter.setBrush(glass);
+    QColor edge = theme.accent;
+    edge.setAlpha(105);
+    painter.setPen(QPen(edge, 1));
+    painter.drawRoundedRect(panel.adjusted(0, 0, -1, -1), 18, 18);
+
+    QRectF currentArea = QRectF(panel).adjusted(24, 12, -24, -43);
+    QRectF nextArea = QRectF(panel).adjusted(32, 58, -32, -10);
+    QFont currentFont = m_timedNotebookFontFamily.isEmpty()
+                            ? ui::transportDisplayFont(27, QFont::Bold)
+                            : QFont(m_timedNotebookFontFamily);
+    currentFont.setPixelSize(27);
+    currentFont.setWeight(QFont::Bold);
+    QFont nextFont = currentFont;
+    nextFont.setPixelSize(17);
+    nextFont.setWeight(QFont::DemiBold);
+
+    double transition = 1.0;
+    if (active >= 0 && !m_timedNotebookReduceMotion) {
+        const double elapsed =
+            position - m_timedNotebookCues.at(active).seconds;
+        const double linear = std::clamp(elapsed / 0.28, 0.0, 1.0);
+        transition = 1.0 - std::pow(1.0 - linear, 3.0);
+    }
+
+    const auto drawLine = [&painter](const QString& text, const QRectF& area,
+                                     const QFont& font, QColor color,
+                                     double opacity, double yOffset) {
+        if (text.isEmpty() || opacity <= 0.001) return;
+        painter.save();
+        painter.setFont(font);
+        painter.setPen(color);
+        painter.setOpacity(std::clamp(opacity, 0.0, 1.0));
+        QRectF shifted = area.translated(0.0, yOffset);
+        const QString fitted = QFontMetrics(font).elidedText(
+            text, Qt::ElideRight, int(shifted.width()));
+        painter.drawText(shifted, Qt::AlignCenter, fitted);
+        painter.restore();
+    };
+
+    if (active >= 0) {
+        if (transition < 1.0 && active > 0) {
+            QColor outgoing = theme.textPrimary;
+            drawLine(m_timedNotebookCues.at(active - 1).text, currentArea,
+                     currentFont, outgoing, 1.0 - transition,
+                     -14.0 * transition);
+        }
+        QColor current = mixColors(theme.textSecondary, theme.textPrimary,
+                                   transition);
+        drawLine(m_timedNotebookCues.at(active).text, currentArea,
+                 currentFont, current, 0.78 + 0.22 * transition,
+                 30.0 * (1.0 - transition));
+    }
+
+    if (upcoming >= 0 && upcoming < m_timedNotebookCues.size()) {
+        QColor next = theme.textSecondary;
+        const double opacity = active < 0 ? 0.78 : 0.72 * transition;
+        drawLine(m_timedNotebookCues.at(upcoming).text, nextArea, nextFont,
+                 next, opacity, 5.0 * (1.0 - transition));
+    }
+    painter.restore();
 }
 
 void TimelineWidget::drawStaticFrame(QPainter& p,
@@ -4367,8 +4640,8 @@ void TimelineWidget::drawStaticFrame(QPainter& p,
             rightRoundedShape(QRectF(rect()), std::min<double>(
                                                   m_rightRadius, height() / 2.0));
         p.setClipPath(shape, Qt::IntersectClip);
-        p.fillPath(shape, th().background);
-    } else {
+        if (!hasTimelineBackground()) p.fillPath(shape, th().background);
+    } else if (!hasTimelineBackground()) {
         p.fillRect(rect(), th().background);
     }
 
@@ -4442,7 +4715,9 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
     const bool playbackOnly =
         m_staticFrameValid && !m_playbackOnlyDirty.isEmpty() &&
         paintRegion.subtracted(m_playbackOnlyDirty).isEmpty();
-    if (!playbackOnly) {
+    const bool backgroundOnly =
+        m_staticFrameValid && m_backgroundFrameRepaint;
+    if (!playbackOnly && !backgroundOnly) {
         const QRegion staticDirty =
             m_staticFrameValid ? paintRegion : QRegion(rect());
         QPainter cachePainter(&m_staticFrame);
@@ -4457,7 +4732,10 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setClipRegion(paintRegion, Qt::IntersectClip);
-    p.setCompositionMode(QPainter::CompositionMode_Source);
+    drawTimelineBackground(p);
+    p.setCompositionMode(hasTimelineBackground()
+                             ? QPainter::CompositionMode_SourceOver
+                             : QPainter::CompositionMode_Source);
     p.drawPixmap(QPoint(0, 0), m_staticFrame);
     p.setCompositionMode(QPainter::CompositionMode_SourceOver);
 
@@ -4472,6 +4750,7 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
 
     drawKnifeGuide(p);
     drawPlayhead(p);
+    drawTimedNotebookText(p);
     const int currentPlayheadX =
         secondsToX(m_controller->presentationPositionSeconds());
     if (paintRegion.intersects(playheadDirtyRect(currentPlayheadX)))
@@ -4592,22 +4871,15 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         return;
     const QPoint pos = ev->position().toPoint();
     if (ev->button() == Qt::RightButton) {
-        // As in the Piano Roll, the right button is a momentary eraser over
-        // editable content. A blank click only clears clip selection.
+        // Keep the existing blank-space deselection, but let clips use their
+        // normal context menu. The Piano Roll owns its separate right eraser.
         if (pos.y() < ui::kRulerHeight) return;
-        m_suppressContextMenu = true;
         ClipHit hit;
         if (!hitTestClip(pos, hit)) {
+            m_suppressContextMenu = true;
             clearClipSelection();
             ev->accept();
-            return;
         }
-        beginProjectGesture(tr("Erase Clips"));
-        m_erasing = true;
-        m_lastErasePoint = pos;
-        setCursor(arrangementToolCursor(icons::Glyph::Eraser));
-        eraseClipsAlong(pos, pos);
-        ev->accept();
         return;
     }
     // Read the modifier before anything decides what this click means: the
@@ -5323,9 +5595,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
         return;
     }
     const bool projectGestureButtonHeld =
-        m_erasing
-            ? bool(ev->buttons() & (Qt::LeftButton | Qt::RightButton))
-            : bool(ev->buttons() & Qt::LeftButton);
+        bool(ev->buttons() & Qt::LeftButton);
     if (m_projectGestureActive && !projectGestureButtonHeld) {
         cancelProjectGesture();
         updateCursor(ev->position().toPoint());
@@ -5997,6 +6267,8 @@ bool TimelineWidget::event(QEvent* e) {
     }
 
     const bool handled = QWidget::event(e);
+    if (e->type() == QEvent::DevicePixelRatioChange && m_backgroundMedia)
+        m_backgroundMedia->setTargetSize(size(), devicePixelRatioF());
     // One publish point per interaction, after the handler has settled, rather
     // than at every site that touches m_selection. The model ignores a push
     // that changes nothing, so the over-calling costs a short vector compare.

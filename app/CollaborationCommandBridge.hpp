@@ -99,6 +99,8 @@ public:
     daw::collab::SharedMutationResult submit(
         daw::collab::SharedMutationRequest request) override;
     qsizetype pendingOperationCount() const;
+    /// Emits pendingOperationCountChanged when the depth has actually moved.
+    void reportPendingDepth();
     QVector<daw::collab::ProjectCommand> journaledOperations(
         const QString& projectId) const;
     qsizetype journalEntryCount(const QString& projectId) const;
@@ -125,6 +127,11 @@ public:
         std::span<const std::string> mutedTrackIds) override;
 
     LocalOperationResult submitLocal(daw::collab::ProjectCommand command);
+    /// Submits a fully planned command whose durable operation/transaction ids
+    /// were reserved before an asynchronous asset upload. Unlike submit(),
+    /// this preserves those ids and still registers the command for typed undo.
+    daw::collab::SharedMutationResult submitPreparedCommand(
+        daw::collab::ProjectCommand command, std::string undoLabel);
     /// Replays a command recovered from the durable pending journal while
     /// normal edits remain blocked. The original opId is preserved.
     LocalOperationResult resubmitJournaled(
@@ -198,6 +205,10 @@ signals:
     void protocolWarning(const QString& safeMessage);
     void canUndoChanged(bool available);
     void canRedoChanged(bool available);
+    /// How many local edits are still waiting on the server, counting both the
+    /// optimistic queue and the durable journal. Emitted only when the value
+    /// changes, so a two hundred command batch does not emit two hundred times.
+    void pendingOperationCountChanged(qsizetype depth);
     void mutationBlocked(const QString& safeMessage);
 
 private:
@@ -256,6 +267,7 @@ private:
     std::unordered_map<std::string, PendingHistory> m_pendingHistory;
     bool m_lastCanUndo = false;
     bool m_lastCanRedo = false;
+    qsizetype m_lastPendingDepth = -1;
     bool m_resyncPending = false;
     QVector<collab::WireEnvelope> m_deferredCommitted;
     qsizetype m_deferredCommittedBytes = 0;

@@ -42,6 +42,7 @@ int main(int argc, char** argv) {
     const std::string track = controller.addTrack(daw::TrackKind::Audio, "Smoke");
     std::printf("nodes in the compiled graph: %zu\n",
                 controller.routingGraph() ? controller.routingGraph()->nodes.size() : 0);
+    controller.play();
 
     if (argc > 3) {
         auto alternate = config;
@@ -58,6 +59,10 @@ int main(int argc, char** argv) {
         std::printf("switched without restart: out=%s, %u frames\n",
                     controller.currentOutputDeviceUid().c_str(),
                     controller.bufferSizeFrames());
+        if (!controller.isPlaying()) {
+            std::printf("FAILED: playback stopped while switching device\n");
+            return 4;
+        }
         if (auto restored = controller.applyAudioConfiguration(config); !restored) {
             std::printf("FAILED to switch back: %s\n", restored.message().c_str());
             return 3;
@@ -65,9 +70,12 @@ int main(int argc, char** argv) {
         std::printf("restored without restart: out=%s, %u frames\n",
                     controller.currentOutputDeviceUid().c_str(),
                     controller.bufferSizeFrames());
+        if (!controller.isPlaying()) {
+            std::printf("FAILED: playback stopped while restoring device\n");
+            return 5;
+        }
     }
 
-    controller.play();
     std::this_thread::sleep_for(std::chrono::seconds(2));
     std::printf("position after 2 s: %.2f s, dsp load %.1f%%\n",
                 controller.positionSeconds(), controller.dspLoad() * 100.0);

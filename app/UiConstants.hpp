@@ -3,6 +3,7 @@
 #include "Theme.hpp"
 
 #include <QColor>
+#include <QFont>
 #include <QRectF>
 #include <QString>
 #include <QVector>
@@ -41,6 +42,12 @@ inline constexpr int kMinTrackHeaderWidth = 220;
 inline constexpr int kMinTimelineWidth = 180;
 inline constexpr int kTransportHeight = 80;
 inline constexpr int kBottomBarHeight = 28;
+
+/// The condensed, tabular face used by the transport's position/BPM display.
+/// Timed notebook text uses the same family by default so it feels like part
+/// of the instrument instead of a separate subtitle widget.
+QFont transportDisplayFont(int pixelSize,
+                           QFont::Weight weight = QFont::DemiBold);
 
 /// The on-screen lane height for a track, clamped to the resizable range. A
 /// zero/unset stored height falls back to the default. Both the timeline lanes

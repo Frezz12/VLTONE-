@@ -1,5 +1,6 @@
 #include "Icons.hpp"
 
+#include <QImage>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
@@ -1138,6 +1139,152 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         p.drawEllipse(QPointF(15.8, 12.2), 1.35, 1.35);
         break;
     }
+    case Glyph::Image: {
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(c, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawRoundedRect(QRectF(4.2, 5.0, 15.6, 14.0), 2.0, 2.0);
+        p.drawEllipse(QPointF(15.3, 9.0), 1.55, 1.55);
+        QPainterPath landscape;
+        landscape.moveTo(6.3, 16.8);
+        landscape.lineTo(10.3, 12.5);
+        landscape.lineTo(12.8, 14.8);
+        landscape.lineTo(15.0, 12.7);
+        landscape.lineTo(18.0, 16.8);
+        p.drawPath(landscape);
+        break;
+    }
+    case Glyph::Notebook: {
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(c, 1.55, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawRoundedRect(QRectF(6.0, 3.8, 13.5, 16.4), 2.1, 2.1);
+        p.drawLine(QPointF(9.1, 4.2), QPointF(9.1, 19.8));
+        p.drawLine(QPointF(11.7, 8.2), QPointF(16.8, 8.2));
+        p.drawLine(QPointF(11.7, 11.8), QPointF(16.8, 11.8));
+        p.drawLine(QPointF(11.7, 15.4), QPointF(15.1, 15.4));
+        p.drawLine(QPointF(4.2, 7.0), QPointF(7.2, 7.0));
+        p.drawLine(QPointF(4.2, 11.8), QPointF(7.2, 11.8));
+        p.drawLine(QPointF(4.2, 16.6), QPointF(7.2, 16.6));
+        break;
+    }
+    // ── Collaboration ──
+    case Glyph::Cloud:
+    case Glyph::CloudUpload:
+    case Glyph::CloudOff: {
+        // One silhouette for all three so the strip reads as a single family;
+        // the arrow and the slash are what distinguish the states, and both
+        // stay legible at 14px.
+        QPainterPath cloud;
+        cloud.moveTo(6.6, 17.4);
+        cloud.arcTo(QRectF(2.6, 10.0, 8.0, 8.0), 270.0, -160.0);
+        cloud.arcTo(QRectF(5.2, 5.6, 9.4, 9.4), 160.0, -150.0);
+        cloud.arcTo(QRectF(12.0, 9.2, 8.8, 8.8), 100.0, -170.0);
+        cloud.closeSubpath();
+        strokePath(p, cloud, c, 1.7);
+        if (g == Glyph::CloudUpload) {
+            QPainterPath arrow;
+            arrow.moveTo(12.0, 20.4);
+            arrow.lineTo(12.0, 13.6);
+            arrow.moveTo(9.4, 16.0);
+            arrow.lineTo(12.0, 13.4);
+            arrow.lineTo(14.6, 16.0);
+            strokePath(p, arrow, c, 1.7);
+        } else if (g == Glyph::CloudOff) {
+            p.setPen(QPen(c, 1.8, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(QPointF(4.6, 19.6), QPointF(19.4, 4.8));
+        }
+        break;
+    }
+    case Glyph::Users: {
+        // Two heads, the rear one clipped, so a participant count reads as
+        // people rather than as a generic contact card.
+        p.setPen(QPen(c, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(QPointF(9.4, 8.8), 3.3, 3.3);
+        QPainterPath body;
+        body.moveTo(3.6, 19.2);
+        body.arcTo(QRectF(3.6, 12.6, 11.6, 13.2), 180.0, -180.0);
+        strokePath(p, body, c, 1.7);
+        QPainterPath second;
+        second.moveTo(14.4, 6.2);
+        second.arcTo(QRectF(13.2, 5.5, 6.6, 6.6), 90.0, -180.0);
+        strokePath(p, second, c, 1.6);
+        QPainterPath secondBody;
+        secondBody.moveTo(16.4, 14.0);
+        secondBody.arcTo(QRectF(14.0, 13.4, 8.0, 11.0), 120.0, -120.0);
+        strokePath(p, secondBody, c, 1.6);
+        break;
+    }
+    case Glyph::Link: {
+        // Two interlocking capsules on the diagonal — a shareable link, not a
+        // chain of arbitrary length.
+        p.setPen(QPen(c, 1.75, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.save();
+        p.translate(12.0, 12.0);
+        p.rotate(-45.0);
+        p.drawRoundedRect(QRectF(-7.6, -3.1, 8.4, 6.2), 3.1, 3.1);
+        p.drawRoundedRect(QRectF(-0.8, -3.1, 8.4, 6.2), 3.1, 3.1);
+        p.drawLine(QPointF(-2.6, 0.0), QPointF(2.6, 0.0));
+        p.restore();
+        break;
+    }
+    case Glyph::Key: {
+        // A password on the session. The bit points down-right so it does not
+        // collide with the Gear glyph at small sizes.
+        p.setPen(QPen(c, 1.75, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(QPointF(8.6, 8.6), 4.0, 4.0);
+        QPainterPath bit;
+        bit.moveTo(11.5, 11.5);
+        bit.lineTo(19.4, 19.4);
+        bit.moveTo(17.6, 17.6);
+        bit.lineTo(15.6, 19.6);
+        bit.moveTo(15.0, 15.0);
+        bit.lineTo(13.0, 17.0);
+        strokePath(p, bit, c, 1.75);
+        break;
+    }
+    case Glyph::Check: {
+        QPainterPath tick;
+        tick.moveTo(5.2, 12.6);
+        tick.lineTo(10.0, 17.2);
+        tick.lineTo(18.9, 7.0);
+        strokePath(p, tick, c, 2.1);
+        break;
+    }
+    case Glyph::Warning: {
+        // A triangle rather than a circle: the strip already uses round marks
+        // for state, so shape alone separates "attention" from "status".
+        QPainterPath frame;
+        frame.moveTo(12.0, 3.9);
+        frame.lineTo(21.4, 20.1);
+        frame.lineTo(2.6, 20.1);
+        frame.closeSubpath();
+        QPen pen(c, 1.7);
+        pen.setJoinStyle(Qt::RoundJoin);
+        p.setPen(pen);
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(frame);
+        p.setPen(QPen(c, 1.8, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(12.0, 9.9), QPointF(12.0, 14.6));
+        p.setPen(Qt::NoPen);
+        p.setBrush(c);
+        p.drawEllipse(QPointF(12.0, 17.4), 1.05, 1.05);
+        break;
+    }
+    case Glyph::Spinner: {
+        // A three-quarter arc with a tapered tail. Callers rotate it; drawing
+        // an animation here would tie the glyph to a timer it does not own.
+        QPainterPath arc;
+        arc.arcMoveTo(QRectF(4.4, 4.4, 15.2, 15.2), 90.0);
+        arc.arcTo(QRectF(4.4, 4.4, 15.2, 15.2), 90.0, -270.0);
+        QPen pen(c, 2.0);
+        pen.setCapStyle(Qt::RoundCap);
+        p.setPen(pen);
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(arc);
+        break;
+    }
     }
 }
 
@@ -1152,6 +1299,33 @@ void paint(QPainter& p, Glyph glyph, const QRectF& rect, const QColor& color) {
     p.translate(-kUnit / 2.0, -kUnit / 2.0);
     drawGlyph(p, glyph, color);
     p.restore();
+}
+
+bool checkGlyphCoverageForTest(QString* error) {
+    for (int value = 0; value <= int(Glyph::Spinner); ++value) {
+        const auto glyph = static_cast<Glyph>(value);
+        QImage canvas(48, 48, QImage::Format_ARGB32_Premultiplied);
+        canvas.fill(Qt::transparent);
+        {
+            QPainter painter(&canvas);
+            paint(painter, glyph, QRectF(0, 0, 48, 48), QColor(0, 0, 0));
+        }
+        int inked = 0;
+        for (int y = 0; y < canvas.height() && inked < 8; ++y) {
+            const auto* row =
+                reinterpret_cast<const QRgb*>(canvas.constScanLine(y));
+            for (int x = 0; x < canvas.width(); ++x) {
+                if (qAlpha(row[x]) > 8) ++inked;
+            }
+        }
+        if (inked < 8) {
+            if (error) {
+                *error = QStringLiteral("glyph %1 draws nothing").arg(value);
+            }
+            return false;
+        }
+    }
+    return true;
 }
 
 QIcon icon(Glyph glyph, const QColor& color, int size) {

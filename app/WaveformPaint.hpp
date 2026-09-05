@@ -40,4 +40,7 @@ struct PeakPaint {
 void paintPeaks(QPainter& painter, const daw::WaveformPeaks* peaks,
                 const QRectF& area, const PeakPaint& how);
 
+/// Headless pixel check: an empty waveform still paints its zero axis.
+bool checkWaveformBaselineForTest();
+
 } // namespace ui

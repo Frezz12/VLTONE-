@@ -8,10 +8,12 @@
 namespace daw { class EngineController; }
 
 class QAction;
+class QHideEvent;
 class QLabel;
 class QLineEdit;
+class QShowEvent;
 class QToolButton;
-namespace ui { class IconButton; }
+namespace ui { class IconButton; class ThemeMediaBackground; }
 
 /// The top chrome: three compact control blocks centred as one cluster, with
 /// independent workspace docks pinned to the outer edges.
@@ -28,6 +30,8 @@ public:
     void refreshPosition();
     /// Re-read tempo after a project load / undo.
     void syncTempo();
+    /// Re-open the local header image/GIF/video selected in Themes settings.
+    void reloadBackgroundSettings();
 
     bool snapEnabled() const { return m_snapEnabled; }
     void setSnapEnabled(bool enabled);
@@ -76,6 +80,7 @@ public:
     void setInspectorVisible(bool visible);
     void setBrowserVisible(bool visible);
     void setWebVisible(bool visible);
+    void setNotebookVisible(bool visible);
     void setAiVisible(bool visible);
     void setMixerDetached(bool detached);
 
@@ -115,14 +120,18 @@ signals:
     void inspectorToggled(bool on);
     void browserToggled(bool on);
     void webToggled(bool on);
+    void notebookToggled(bool on);
     void aiToggled(bool on);
     void detachMixerRequested();
     void addTrackRequested();
     void settingsRequested();
 
 protected:
+    bool event(QEvent*) override;
     void paintEvent(QPaintEvent*) override;
     void resizeEvent(QResizeEvent*) override;
+    void showEvent(QShowEvent*) override;
+    void hideEvent(QHideEvent*) override;
 
 private:
     QWidget* buildRightGroup();
@@ -147,6 +156,11 @@ private:
     QString clockText() const;
 
     daw::EngineController* m_controller = nullptr;
+
+    ui::ThemeMediaBackground* m_backgroundMedia = nullptr;
+    int m_backgroundVisibility = 0;
+    bool m_backgroundEnabled = false;
+    bool m_backgroundAnimationEnabled = true;
 
     QWidget* m_pill = nullptr;
     QWidget* m_leftDock = nullptr;
@@ -177,6 +191,7 @@ private:
     ui::IconButton* m_browserPanelButton = nullptr;
     ui::IconButton* m_detachMixerButton = nullptr;
     ui::IconButton* m_webPanelButton = nullptr;
+    ui::IconButton* m_notebookPanelButton = nullptr;
     ui::IconButton* m_aiPanelButton = nullptr;
 
     QLineEdit* m_positionValue = nullptr;

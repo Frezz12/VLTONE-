@@ -3,10 +3,10 @@
 //
 // Audited BlockedV1 rows — these are deliberate, not gaps. Do not "unblock"
 // one without reading the reason:
-//   startRecording*/armCountIn*/tickCountIn — matches the server. Config sets
-//     cloudRecordingEnabledV1 = false, the ops endpoint rejects
-//     recording.commit, and the WS refuses recording leases. Unblocking the
-//     client alone just moves the failure later. Needs a server flip first.
+//   startRecording*/armCountIn*/tickCountIn — the raw controller mutations
+//     stay outside the shared-command sink. MainWindow's v3 workflow captures
+//     locally, durably uploads the closed WAV, then submits one typed
+//     recording.commit. V2 remains blocked server-side.
 //   ensureInsertSlots/ensureMasterInsertSlots — they append *unloaded* slot
 //     placeholders, which have no shared representation. No production caller
 //     exists; only tests reach them.
@@ -37,6 +37,7 @@ VLT_MUTATION(openProjectTemplate, BlockedV1)
 VLT_MUTATION(setPlaybackMode, LocalOnly)
 VLT_MUTATION(setTempo, SharedCommand)
 VLT_MUTATION(setProjectName, SharedCommand)
+VLT_MUTATION(setProjectMetadata, LocalOnly)
 VLT_MUTATION(setTimeSignature, SharedCommand)
 VLT_MUTATION(setProjectKey, SharedCommand)
 VLT_MUTATION(setAiInstructions, SharedCommand)
@@ -107,7 +108,7 @@ VLT_MUTATION(setChannelClipboard, LocalOnly)
 VLT_MUTATION(samplerInstance, LocalOnly)
 VLT_MUTATION(loadSamplerSampleSilently, LocalOnly)
 VLT_MUTATION(clearSamplerSampleSilently, LocalOnly)
-VLT_MUTATION(pumpPluginEvents, LocalOnly)
+VLT_MUTATION(pumpPluginEvents, SharedCommand)
 VLT_MUTATION(waveforms, LocalOnly)
 VLT_MUTATION(setTrackInstrumentPlugin, SharedCommand)
 VLT_MUTATION(setTrackInstrument, BlockedV1)
@@ -203,11 +204,11 @@ VLT_MUTATION(setRecordingPrefs, LocalOnly)
 VLT_MUTATION(setRecordMode, LocalOnly)
 VLT_MUTATION(setRecordModeInverted, LocalOnly)
 VLT_MUTATION(setTrackRecordMode, LocalOnly)
-VLT_MUTATION(startRecording, BlockedV1)
-VLT_MUTATION(startRecordingTracks, BlockedV1)
-VLT_MUTATION(startRecordingTracksExactly, BlockedV1)
-VLT_MUTATION(armCountIn, BlockedV1)
-VLT_MUTATION(armCountInExactly, BlockedV1)
+VLT_MUTATION(startRecording, LocalOnly)
+VLT_MUTATION(startRecordingTracks, LocalOnly)
+VLT_MUTATION(startRecordingTracksExactly, LocalOnly)
+VLT_MUTATION(armCountIn, LocalOnly)
+VLT_MUTATION(armCountInExactly, LocalOnly)
 VLT_MUTATION(tickCountIn, BlockedV1)
 VLT_MUTATION(finalizeRecordingCapture, LocalOnly)
 VLT_MUTATION(stopRecording, LocalOnly)

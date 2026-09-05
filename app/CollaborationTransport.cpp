@@ -23,7 +23,6 @@
 namespace collab {
 namespace {
 
-constexpr auto kSubprotocol = kProtocolName;
 constexpr qint64 kMaxMessageBytes = 1024 * 1024;
 constexpr qint64 kMaxQueuedBytes = 4 * 1024 * 1024;
 constexpr qsizetype kMaxQueuedMessages = 256;
@@ -166,6 +165,8 @@ CollaborationTransport::CollaborationTransport(account::Service* account,
             });
     connect(m_service, &CollaborationService::projectChanged, this,
             [this](const QString&) { stopTransport(true); });
+    connect(m_service, &CollaborationService::commandSchemaVersionChanged,
+            this, [this](int) { stopTransport(true); });
     connect(m_account, &account::Service::authenticatedChanged, this,
             [this](bool) { accountStateChanged(); });
     connect(m_account, &account::Service::snapshotChanged, this,
@@ -340,7 +341,7 @@ void CollaborationTransport::startConnection() {
             });
 
     QWebSocketHandshakeOptions options;
-    options.setSubprotocols({QString::fromLatin1(kSubprotocol)});
+    options.setSubprotocols({m_service->protocolName()});
     socket->open(handshakeRequest(m_endpoint, token), options);
     m_handshakeTimer.start(kHandshakeTimeoutMs);
 }
@@ -353,7 +354,7 @@ void CollaborationTransport::socketConnected(QWebSocket* socket,
         stopTransport(false);
         return;
     }
-    if (socket->subprotocol() != QLatin1String(kSubprotocol)) {
+    if (socket->subprotocol() != m_service->protocolName()) {
         permanentFailure(
             QStringLiteral("Collaboration protocol was not accepted"));
         return;
@@ -573,9 +574,11 @@ bool checkCollaborationTransportForTest(QString* error) {
         return fail(QStringLiteral("WebSocket authorization was not header-only"));
     }
     QWebSocketHandshakeOptions options;
-    options.setSubprotocols({QString::fromLatin1(kSubprotocol)});
+    options.setSubprotocols({QString::fromLatin1(kProtocolNameV2),
+                             QString::fromLatin1(kProtocolName)});
     if (options.subprotocols() !=
-        QStringList{QString::fromLatin1(kSubprotocol)}) {
+        QStringList{QString::fromLatin1(kProtocolNameV2),
+                    QString::fromLatin1(kProtocolName)}) {
         return fail(QStringLiteral("collaboration subprotocol was not requested"));
     }
     if (!isPermanentCloseCode(

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "collaboration/ProjectCommand.hpp"
+#include "collaboration/PluginCompatibility.hpp"
 
 #include <QByteArray>
 #include <QDateTime>
@@ -45,6 +46,8 @@ enum class CloudRequestKind : quint8 {
     AcquireRecordingLease,
     RenewRecordingLease,
     ReleaseRecordingLease,
+    UpdateSessionReadiness,
+    ActivateSession,
 };
 
 enum class CloudClientErrorCode : quint8 {
@@ -206,8 +209,12 @@ struct CreateCloudProjectInviteInput {
 
 struct CreatedCloudProjectInvite {
     CloudProjectInvite invite;
-    /// One-use secret returned only by create. Never log or persist it.
+    /// One-use secrets returned only by create. Never log or persist either.
+    /// The token is the long form kept for older builds; the code is the short
+    /// numeric one people actually type or paste from a link. Empty when the
+    /// server has no invite-code pepper configured.
     QString oneTimeToken;
+    QString oneTimeCode;
 };
 
 struct CloudOwnershipTransfer {
@@ -224,10 +231,16 @@ struct CloudLiveSession {
     CloudSessionMode mode = CloudSessionMode::Independent;
     CloudSessionStatus status = CloudSessionStatus::Starting;
     quint64 version = 0;
+    int commandSchemaVersion = 2;
+    qint64 pluginRequirementsRevision = 0;
+    std::vector<daw::collab::PluginRequirement> pluginRequirements;
     QDateTime createdAt;
     QDateTime startedAt;
     QDateTime updatedAt;
     QDateTime endedAt;
+    /// Whether a participant who is not already a member of this session has to
+    /// supply a password. The password itself is never sent to a client.
+    bool passwordRequired = false;
 };
 
 struct CloudSessionMember {
@@ -236,6 +249,10 @@ struct CloudSessionMember {
     QString userId;
     QString deviceId;
     QString desktopSessionId;
+    CloudProjectRole effectiveRole = CloudProjectRole::Viewer;
+    QString readinessStatus;
+    qint64 readinessRevision = 0;
+    QVector<daw::collab::PluginReadinessResult> pluginReadiness;
     QDateTime joinedAt;
     QDateTime lastSeenAt;
     QDateTime leftAt;
@@ -291,10 +308,27 @@ public:
                             const QString& operationId);
 
     quint64 getActiveSession(const QString& projectId);
+    /// An empty `password` starts an unprotected session. The secret travels in
+    /// the request body only — never a query string, never the WebSocket URL —
+    /// and is wiped from the outbound buffer once the request is queued.
     quint64 startSession(
         const QString& projectId,
-        CloudSessionMode mode = CloudSessionMode::Independent);
-    quint64 joinSession(const QString& projectId, const QString& sessionId);
+        CloudSessionMode mode = CloudSessionMode::Independent,
+        const QString& password = {},
+        const std::vector<daw::collab::PluginRequirement>& requirements = {},
+        const daw::collab::PluginReadinessReport& readiness = {});
+    /// `password` is required only when the session reports passwordRequired
+    /// and this device is not already a member of it.
+    quint64 joinSession(const QString& projectId, const QString& sessionId,
+                        const QString& password = {},
+                        const daw::collab::PluginReadinessReport& readiness = {},
+                        int commandSchemaVersion =
+                            daw::collab::kProjectCommandSchemaVersion);
+    quint64 updateSessionReadiness(
+        const QString& projectId, const QString& sessionId,
+        const daw::collab::PluginReadinessReport& readiness);
+    quint64 activateSession(const QString& projectId,
+                            const QString& sessionId);
     quint64 leaveSession(const QString& projectId, const QString& sessionId);
     quint64 endSession(const QString& projectId, const QString& sessionId);
     quint64 handoffSession(const QString& projectId,
@@ -328,6 +362,9 @@ public:
                          const CreateCloudProjectInviteInput& input);
     quint64 revokeInvite(const QString& projectId, const QString& inviteId);
     quint64 acceptInvite(const QString& oneTimeToken);
+    /// Redeems a short numeric invitation code. Separators are ignored, so a
+    /// value pasted as "1234 5678 9012" is accepted as typed.
+    quint64 acceptInviteCode(const QString& numericCode);
 
     bool cancel(quint64 requestId);
     void cancelAll();

@@ -13,9 +13,9 @@ namespace collab {
 
 /// Owner-facing creator for a single cloud-project invitation.
 ///
-/// The one-time token never leaves this dialog except through an explicit
-/// clipboard action by the user.  In particular, it is not exposed as a
-/// signal, persisted in settings, or included in diagnostic text.
+/// The one-time token and the short numeric code never leave this dialog except
+/// through an explicit clipboard action by the user.  In particular, neither is
+/// exposed as a signal, persisted in settings, or included in diagnostic text.
 class CloudProjectInviteDialog final : public QDialog {
     Q_OBJECT
 public:
@@ -35,6 +35,8 @@ protected:
     void closeEvent(QCloseEvent* event) override;
 
 private:
+    void applyTheme();
+
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };

@@ -23,6 +23,7 @@
 #include <initializer_list>
 #include <limits>
 #include <optional>
+#include <span>
 #include <unordered_set>
 #include <utility>
 
@@ -61,6 +62,19 @@ QString pendingJournalPath(const CollaborationService* service,
         operationUuid.toString(QUuid::WithoutBraces).toLower();
     return QDir(directory).filePath(normalizedOperation +
                                     QStringLiteral(".json"));
+}
+
+qsizetype uniquePendingOperationCount(
+    std::span<const ProjectCommand> optimistic,
+    const QStringList& journalFiles) {
+    std::unordered_set<std::string> operationIds;
+    operationIds.reserve(optimistic.size() + std::size_t(journalFiles.size()));
+    for (const ProjectCommand& command : optimistic)
+        operationIds.insert(command.meta.operationId);
+    for (const QString& file : journalFiles)
+        operationIds.insert(QFileInfo(file).completeBaseName().toLower().toStdString());
+    operationIds.erase(std::string{});
+    return qsizetype(operationIds.size());
 }
 
 bool persistPendingCommand(const CollaborationService* service,
@@ -467,11 +481,13 @@ daw::collab::SharedMutationResult CollaborationCommandBridge::submit(
 }
 
 qsizetype CollaborationCommandBridge::pendingOperationCount() const {
-    const qsizetype optimistic =
-        m_gateway ? qsizetype(m_gateway->pending().size()) : 0;
-    // Counting both is intentional: overlap is harmless for a non-zero gate,
-    // while a crash-recovered command exists only in the durable journal.
-    return optimistic + journalEntryCount(m_boundProjectId);
+    std::span<const ProjectCommand> optimistic;
+    if (m_gateway) optimistic = m_gateway->pending();
+    const QString directory = pendingJournalDirectory(m_service, m_boundProjectId);
+    const QStringList journalFiles = directory.isEmpty()
+        ? QStringList{}
+        : QDir(directory).entryList({QStringLiteral("*.json")}, QDir::Files);
+    return uniquePendingOperationCount(optimistic, journalFiles);
 }
 
 qsizetype CollaborationCommandBridge::journalEntryCount(
@@ -541,6 +557,13 @@ bool CollaborationCommandBridge::canRedo() {
            m_history.canRedo();
 }
 
+void CollaborationCommandBridge::reportPendingDepth() {
+    const qsizetype depth = pendingOperationCount();
+    if (depth == m_lastPendingDepth) return;
+    m_lastPendingDepth = depth;
+    emit pendingOperationCountChanged(depth);
+}
+
 void CollaborationCommandBridge::emitHistoryAvailability() {
     const bool settled = m_pendingHistory.empty();
     const bool nextUndo = !m_boundProjectId.isEmpty() && settled &&
@@ -555,6 +578,7 @@ void CollaborationCommandBridge::emitHistoryAvailability() {
         m_lastCanRedo = nextRedo;
         emit canRedoChanged(nextRedo);
     }
+    reportPendingDepth();
 }
 
 bool CollaborationCommandBridge::hasPendingHistoryTransition() const {
@@ -568,7 +592,9 @@ bool CollaborationCommandBridge::hasPendingHistoryTransition() const {
 daw::collab::CommandMeta CollaborationCommandBridge::freshMeta(
     bool transaction) const {
     daw::collab::CommandMeta meta;
-    meta.schemaVersion = daw::collab::kProjectCommandSchemaVersion;
+    meta.schemaVersion = m_service
+        ? std::uint32_t(m_service->commandSchemaVersion())
+        : daw::collab::kProjectCommandSchemaVersion;
     meta.projectId = m_boundProjectId.toStdString();
     meta.operationId = freshUuid();
     meta.baseServerSequence = confirmedServerSequence();
@@ -753,9 +779,50 @@ void CollaborationCommandBridge::clearPendingBookkeeping() {
     emitHistoryAvailability();
 }
 
+namespace {
+/// Emits the pending-operation depth when the enclosing scope ends, whatever
+/// path it leaves by.
+struct PendingDepthReporter {
+    CollaborationCommandBridge* bridge = nullptr;
+    ~PendingDepthReporter() {
+        if (bridge) bridge->reportPendingDepth();
+    }
+};
+} // namespace
+
 LocalOperationResult CollaborationCommandBridge::submitLocal(
     ProjectCommand command) {
     return submitLocalImpl(std::move(command), false);
+}
+
+daw::collab::SharedMutationResult
+CollaborationCommandBridge::submitPreparedCommand(
+    ProjectCommand command, std::string undoLabel) {
+    refreshProjectBinding();
+    if (m_boundProjectId.isEmpty() || !m_service || m_resyncPending || !m_available ||
+        !m_available() ||
+        command.meta.projectId != m_boundProjectId.toStdString() ||
+        command.meta.schemaVersion !=
+            std::uint32_t(m_service->commandSchemaVersion())) {
+        emit mutationBlocked(tr(
+            "The prepared cloud edit no longer matches the writable session."));
+        return daw::collab::SharedMutationResult::Blocked;
+    }
+    const std::string operationId = command.meta.operationId;
+    if (m_pendingHistory.contains(operationId)) {
+        return daw::collab::SharedMutationResult::Blocked;
+    }
+    m_pendingHistory.emplace(
+        operationId,
+        PendingHistory{PendingHistoryKind::Forward, command,
+                       std::move(undoLabel), 0});
+    const LocalOperationResult submitted = submitLocal(std::move(command));
+    if (!submitted.submitted()) {
+        forgetPending(operationId);
+        return daw::collab::SharedMutationResult::Blocked;
+    }
+    emitHistoryAvailability();
+    return daw::collab::SharedMutationResult::Submitted;
 }
 
 LocalOperationResult CollaborationCommandBridge::resubmitJournaled(
@@ -786,6 +853,10 @@ LocalOperationResult CollaborationCommandBridge::submitLocalImpl(
     }
 
     const std::string operationId = command.meta.operationId;
+    // Every exit below changes the queue depth, and there are six of them.
+    // Reporting on scope exit is what keeps a later added return from silently
+    // leaving the status strip showing a stale count.
+    const PendingDepthReporter depthReporter{this};
     if (!persistPendingCommand(m_service, command)) {
         result.code = LocalOperationCode::Rejected;
         result.message = QStringLiteral(
@@ -1268,6 +1339,21 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
             origins.push_back(origin);
         }
     } adapter;
+
+    ProjectCommand firstPending;
+    firstPending.meta.operationId =
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    ProjectCommand secondPending;
+    secondPending.meta.operationId =
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const std::array pendingDepthCommands{firstPending, secondPending};
+    if (uniquePendingOperationCount(
+            pendingDepthCommands,
+            {QStringLiteral("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.json"),
+             QStringLiteral("cccccccc-cccc-4ccc-8ccc-cccccccccccc.json")}) != 3) {
+        return fail(QStringLiteral(
+            "pending operation depth double-counted an optimistic journal entry"));
+    }
 
     CommandGateway gateway({}, &adapter);
     QVector<QJsonObject> sent;

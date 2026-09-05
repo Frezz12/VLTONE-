@@ -24,12 +24,22 @@
 #include "Host/PluginTypes.hpp"
 #include "MidiPreviewIndex.hpp"
 #include "CollaborationTypes.hpp"
+#include "NotebookPrefs.hpp"
 
 namespace daw { class EngineController; }
 namespace daw { struct WaveformPeaks; }
 namespace daw { struct RecordingSpan; struct RecordingPreview; }
-namespace ui { class SelectionModel; }
+namespace ui { class SelectionModel; class ThemeMediaBackground; }
 class QScrollBar;
+
+/// Local-only geometry for a closed cloud recording that is durable on this
+/// device but has not reached recording.commit yet. It is intentionally not a
+/// ClipModel: pending audio must never enter the shared document early.
+struct PendingCloudRecordingSpan {
+    QString trackId;
+    double startSeconds = 0.0;
+    double endSeconds = 0.0;
+};
 
 /// The arrangement timeline: a bar/beat ruler, one lane per track with its clips
 /// drawn as rounded rectangles, the grid at the division chosen in the transport
@@ -37,8 +47,7 @@ class QScrollBar;
 /// (snapping to the grid, Alt bypasses), trimmed by their edges and faded by
 /// their top corners; several clips can be marquee-selected and moved or cut
 /// together. Overlapping clips crossfade. Audio files can be dropped in from the
-/// file manager. The Knife tool splits clips; the Eraser tool or a held right
-/// mouse button deletes clips without changing the selected toolbar tool.
+/// file manager. The Knife tool splits clips and the Eraser tool deletes them.
 /// Empty space rubber-band-selects; dragging in the ruler scrubs. Wheel scrolls, Ctrl+wheel
 /// zooms, Shift+wheel moves through time, and dragging with the middle mouse
 /// button grabs the arrangement in both axes. Rendered with QPainter — the
@@ -50,8 +59,7 @@ public:
     ///   Select       — move clips, trim by their edges, fade by their top
     ///                  corners, adjust gain by the handle at the bottom.
     ///   Knife        — click a clip to split it (all selected clips, if several).
-    ///   Eraser       — click (or drag across) clips to delete them; right-drag
-    ///                  borrows this behavior from any active tool.
+    ///   Eraser       — click (or drag across) clips to delete them.
     ///   SelectRegion — drag a time region; delete or drag its contents.
     /// Appended, never inserted: the transport's chip menu addresses a tool by its
 /// index and stores that index, so renumbering one would silently change
@@ -97,6 +105,15 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
     /// Repaint only lanes whose in-flight recording preview changed. The
     /// independent playhead clock owns the cursor itself.
     void refreshRecordingFrame();
+    /// Re-open the local image/GIF/video selected on the Themes settings page.
+    /// Media is presentation-only and never enters the project document.
+    void reloadBackgroundSettings();
+    /// Re-read locally timed notebook lines and their presentation settings.
+    void reloadTimedTextSettings();
+    /// Replace the local recovery/outbox overlay. These spans are display-only
+    /// and cannot be selected or edited before their durable commit lands.
+    void setPendingCloudRecordingSpans(
+        QVector<PendingCloudRecordingSpan> spans);
 
     /// Grid division in beats (0 = off) and whether dragging snaps to it.
     void setGridBeats(double beats);
@@ -293,6 +310,8 @@ protected:
     bool event(QEvent*) override;   // trackpad pinch (native zoom gesture)
     void paintEvent(QPaintEvent*) override;
     void resizeEvent(class QResizeEvent*) override;
+    void showEvent(class QShowEvent*) override;
+    void hideEvent(class QHideEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
@@ -491,6 +510,10 @@ private:
     void drawRuler(class QPainter& p);
     void drawGrid(QPainter& p);
     void drawLanes(QPainter& p);
+    void drawTimelineBackground(QPainter& p);
+    void drawTimedNotebookText(QPainter& p);
+    QRect timedNotebookTextRect() const;
+    bool hasTimelineBackground() const;
     /// Everything except the moving playhead/count-in. Playback restores this
     /// cached layer under the old/new cursor strips instead of traversing the
     /// project at 60 Hz.
@@ -598,6 +621,9 @@ private:
     /// never mistaken for one. Loop recording draws one body per pass.
     void drawRecordingClip(QPainter& p, const daw::TrackModel& track,
                            int top, int height);
+    void drawPendingCloudRecordings(QPainter& p,
+                                    const daw::TrackModel& track,
+                                    int top, int height);
     /// The layer being recorded into an expanded clip, drawn as the row it is
     /// about to become at the bottom of that clip's take stack.
     void drawRecordingTakeRow(QPainter& p, const daw::TrackModel& track,
@@ -619,6 +645,7 @@ private:
     void drawPlayhead(QPainter& p);
 
     daw::EngineController* m_controller;
+    QVector<PendingCloudRecordingSpan> m_pendingCloudRecordingSpans;
     QString m_selectedTrackId;
     QStringList m_selectedTrackIds;
     /// The clip a plugin drag is hovering, so the drop feedback says which of
@@ -698,6 +725,18 @@ private:
     /// Any paint containing pixels outside this set is a real content repaint
     /// and refreshes the static cache for those pixels.
     QRegion m_playbackOnlyDirty;
+    /// Animated wallpaper invalidation is independent of the project cache:
+    /// a new video frame must not redraw every clip and waveform.
+    bool m_backgroundFrameRepaint = false;
+    ui::ThemeMediaBackground* m_backgroundMedia = nullptr;
+    int m_backgroundVisibility = 0;
+    bool m_backgroundEnabled = true;
+    bool m_backgroundActive = false;
+    bool m_backgroundAnimationEnabled = true;
+    QVector<ui::notebookprefs::TimedCue> m_timedNotebookCues;
+    QString m_timedNotebookFontFamily;
+    bool m_timedNotebookTextEnabled = false;
+    bool m_timedNotebookReduceMotion = false;
     double m_gridBeats = 0.25;      // 1/16 by default
     bool m_snapEnabled = true;
     bool m_showBars = true;
@@ -861,8 +900,7 @@ private:
     bool m_dropActive = false;
     int m_dropLane = -1;
 
-    // Eraser drag. Right-button strokes borrow it without changing the active
-    // toolbar tool, matching the Piano Roll note eraser.
+    // Eraser drag from the dedicated toolbar tool.
     bool m_erasing = false;
     QPoint m_lastErasePoint;
     bool m_suppressContextMenu = false;

@@ -12,8 +12,13 @@
 
 namespace collab {
 
-inline constexpr int kProtocolVersion = 2;
-inline constexpr auto kProtocolName = "vlt-collab-v2";
+inline constexpr int kProtocolVersionV2 = 2;
+inline constexpr int kProtocolVersion = 3;
+inline constexpr auto kProtocolNameV2 = "vlt-collab-v2";
+inline constexpr auto kProtocolName = "vlt-collab-v3";
+
+QString protocolNameForCommandSchema(int schemaVersion);
+bool isSupportedProtocolName(const QString& protocol);
 
 enum class CollaborationState {
     LocalOnly,
@@ -175,6 +180,8 @@ enum class WireType {
     LeaseRelease,
     SessionHandoff,
     SessionHostChanged,
+    SessionReadinessChanged,
+    SessionActivated,
     SessionEnding,
     SnapshotRequested,
     SessionEnded,

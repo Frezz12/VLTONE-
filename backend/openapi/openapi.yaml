@@ -364,7 +364,10 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "../../protocol/schema/project-command-v2.schema.json" }
+            schema:
+              oneOf:
+                - { $ref: "../../protocol/schema/project-command-v2.schema.json" }
+                - { $ref: "../../protocol/schema/project-command-v3.schema.json" }
       responses:
         "201": { description: New operation committed, content: { application/json: { schema: { $ref: "#/components/schemas/AppendOperationResult" } } } }
         "200": { description: Idempotent retry returned the original operation, content: { application/json: { schema: { $ref: "#/components/schemas/AppendOperationResult" } } } }
@@ -569,7 +572,7 @@ paths:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/CreateProjectInviteRequest" } } }
       responses:
-        "201": { description: One-use invitation; token is returned only here, content: { application/json: { schema: { $ref: "#/components/schemas/CreatedProjectInvite" } } } }
+        "201": { description: "One-use invitation. The token and the short code are returned only here; neither is stored in clear and neither is ever logged.", content: { application/json: { schema: { $ref: "#/components/schemas/CreatedProjectInvite" } } } }
         "403": { $ref: "#/components/responses/Error" }
   /v1/desktop/projects/{projectId}/invites/{inviteId}:
     parameters:
@@ -592,11 +595,18 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [token]
-              properties: { token: { type: string, minLength: 32, maxLength: 256, writeOnly: true } }
+              description: Supply exactly one of token or code.
+              minProperties: 1
+              maxProperties: 1
+              properties:
+                token: { type: string, minLength: 32, maxLength: 256, writeOnly: true }
+                code: { type: string, minLength: 12, maxLength: 32, writeOnly: true, description: Short numeric invitation code; separators are ignored }
       responses:
         "200": { description: Membership created, content: { application/json: { schema: { $ref: "#/components/schemas/CloudProjectView" } } } }
+        "404": { $ref: "#/components/responses/Error" }
         "410": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
   /v1/desktop/projects/{projectId}/sessions:
     parameters: [{ $ref: "#/components/parameters/ProjectId" }]
     post:
@@ -642,11 +652,38 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/SessionCompatibilityRequest" }
+            schema: { $ref: "#/components/schemas/JoinProjectSessionRequest" }
       responses:
         "200": { description: Device joined, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectSessionState" } } } }
+        "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/readiness:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
+    put:
+      operationId: updateCloudProjectSessionReadiness
+      summary: Re-run exact plugin compatibility and update the participant's effective role
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PluginReadinessReport" }
+      responses:
+        "200": { description: Readiness and effective role updated, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectSessionState" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/activate:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
+    post:
+      operationId: activateCloudProjectSession
+      summary: Activate a v3 lobby after every editor is ready or remains a viewer
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200": { description: Lobby activated, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectSessionState" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /v1/desktop/projects/{projectId}/sessions/{sessionId}/leave:
     parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
     post:
@@ -1133,7 +1170,7 @@ components:
           properties:
             enabled: { type: boolean }
             entitled: { type: boolean }
-            recording: { const: false }
+            recording: { const: true }
             maxParticipants: { type: integer, minimum: 1, maximum: 8 }
             storage:
               type: object
@@ -1218,6 +1255,7 @@ components:
         accepted_at: { type: [string, "null"], format: date-time }
         revoked_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
+        code_digits: { type: integer, minimum: 0, maximum: 32, description: Width of the short numeric code, or 0 when the invite has none. The code itself is never returned after creation. }
     CreatedProjectInvite:
       type: object
       additionalProperties: false
@@ -1225,6 +1263,7 @@ components:
       properties:
         invite: { $ref: "#/components/schemas/ProjectInvite" }
         token: { type: string, writeOnly: true }
+        code: { type: string, writeOnly: true, description: Short numeric invitation code, returned only here and never stored in clear }
     ProjectSnapshot:
       type: object
       additionalProperties: false
@@ -1461,7 +1500,7 @@ components:
     ProjectLiveSession:
       type: object
       additionalProperties: false
-      required: [id, project_id, mode, status, version, created_at, updated_at]
+      required: [id, project_id, mode, status, version, command_schema_version, plugin_requirements_revision, plugin_requirements, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         project_id: { type: string, format: uuid }
@@ -1470,6 +1509,9 @@ components:
         mode: { enum: [independent, follow_host, synchronized] }
         status: { enum: [starting, active, ending, ended] }
         version: { type: integer, format: int64, minimum: 1 }
+        command_schema_version: { enum: [2, 3] }
+        plugin_requirements_revision: { type: integer, format: int64, minimum: 0 }
+        plugin_requirements: { type: array, maxItems: 512, items: { $ref: "#/components/schemas/PluginRequirement" } }
         created_at: { type: string, format: date-time }
         started_at: { type: [string, "null"], format: date-time }
         updated_at: { type: string, format: date-time }
@@ -1481,8 +1523,19 @@ components:
       properties:
         appVersion: { type: string, minLength: 5, maxLength: 64, description: SemVer 2.0.0 application version }
         engineVersion: { type: string, minLength: 1, maxLength: 64 }
-        commandSchemaVersion: { const: 2 }
+        commandSchemaVersion: { enum: [2, 3] }
         projectFormatVersion: { const: 7 }
+    JoinProjectSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [appVersion, engineVersion, commandSchemaVersion, projectFormatVersion]
+      properties:
+        appVersion: { type: string, minLength: 5, maxLength: 64, description: SemVer 2.0.0 application version }
+        engineVersion: { type: string, minLength: 1, maxLength: 64 }
+        commandSchemaVersion: { enum: [2, 3] }
+        projectFormatVersion: { const: 7 }
+        password: { type: string, minLength: 6, maxLength: 128, writeOnly: true, description: Required when the session reports passwordRequired }
+        readiness: { $ref: "#/components/schemas/PluginReadinessReport" }
     StartProjectSessionRequest:
       type: object
       additionalProperties: false
@@ -1490,28 +1543,75 @@ components:
       properties:
         appVersion: { type: string, minLength: 5, maxLength: 64, description: SemVer 2.0.0 application version }
         engineVersion: { type: string, minLength: 1, maxLength: 64 }
-        commandSchemaVersion: { const: 2 }
+        commandSchemaVersion: { enum: [2, 3] }
         projectFormatVersion: { const: 7 }
         mode: { enum: [independent, follow_host, synchronized], default: independent }
+        password: { type: string, minLength: 6, maxLength: 128, writeOnly: true, description: Optional session password; omit for an unprotected session }
+        pluginRequirements: { type: array, maxItems: 512, items: { $ref: "#/components/schemas/PluginRequirement" } }
+        readiness: { $ref: "#/components/schemas/PluginReadinessReport" }
+      allOf:
+        - if: { properties: { commandSchemaVersion: { const: 3 } } }
+          then:
+            required: [mode, pluginRequirements, readiness]
+            properties: { mode: { const: independent } }
+    PluginRequirement:
+      type: object
+      additionalProperties: false
+      required: [format, nativeUid, vendor, version, stateSchemaVersion, kind, channelMode]
+      properties:
+        format: { enum: [internal, clap, vst3, au, vst] }
+        nativeUid: { type: string, minLength: 1, maxLength: 400, pattern: "^[^/\\\\]+$" }
+        vendor: { type: string, minLength: 1, maxLength: 200, pattern: "^[^/\\\\]+$" }
+        version: { type: string, minLength: 1, maxLength: 200, pattern: "^[^/\\\\]+$" }
+        stateSchemaVersion: { type: integer, minimum: 0, maximum: 2147483647 }
+        kind: { enum: [instrument, effect] }
+        channelMode: { enum: [auto, mono, stereo, dual-mono] }
+    PluginReadinessResult:
+      type: object
+      additionalProperties: false
+      required: [format, nativeUid, vendor, version, stateSchemaVersion, kind, channelMode, status]
+      properties:
+        format: { enum: [internal, clap, vst3, au, vst] }
+        nativeUid: { type: string, minLength: 1, maxLength: 400, pattern: "^[^/\\\\]+$" }
+        vendor: { type: string, minLength: 1, maxLength: 200, pattern: "^[^/\\\\]+$" }
+        version: { type: string, minLength: 1, maxLength: 200, pattern: "^[^/\\\\]+$" }
+        stateSchemaVersion: { type: integer, minimum: 0, maximum: 2147483647 }
+        kind: { enum: [instrument, effect] }
+        channelMode: { enum: [auto, mono, stereo, dual-mono] }
+        status: { enum: [ready, missing, version_mismatch, probe_failed] }
+        buildHmac: { type: string, pattern: "^[0-9a-f]{64}$" }
+    PluginReadinessReport:
+      type: object
+      additionalProperties: false
+      required: [revision, stayViewer, plugins]
+      properties:
+        revision: { type: integer, format: int64, minimum: 1 }
+        stayViewer: { type: boolean }
+        plugins: { type: array, maxItems: 512, items: { $ref: "#/components/schemas/PluginReadinessResult" } }
     ProjectSessionMember:
       type: object
       additionalProperties: false
-      required: [id, session_id, user_id, device_id, joined_at, last_seen_at]
+      required: [id, session_id, user_id, device_id, effective_role, readiness_status, readiness_revision, plugin_readiness, joined_at, last_seen_at]
       properties:
         id: { type: string, format: uuid }
         session_id: { type: string, format: uuid }
         user_id: { type: string, format: uuid }
         device_id: { type: string, format: uuid }
+        effective_role: { enum: [owner, editor, viewer] }
+        readiness_status: { enum: [ready, blocked, viewer] }
+        readiness_revision: { type: integer, format: int64, minimum: 0 }
+        plugin_readiness: { type: array, maxItems: 512, items: { $ref: "#/components/schemas/PluginReadinessResult" } }
         joined_at: { type: string, format: date-time }
         last_seen_at: { type: string, format: date-time }
         left_at: { type: [string, "null"], format: date-time }
     ProjectSessionState:
       type: object
       additionalProperties: false
-      required: [session, members]
+      required: [session, members, passwordRequired]
       properties:
         session: { $ref: "#/components/schemas/ProjectLiveSession" }
         members: { type: array, maxItems: 8, items: { $ref: "#/components/schemas/ProjectSessionMember" } }
+        passwordRequired: { type: boolean, description: Whether a new participant must supply a session password. The password itself is never returned. }
     TrackLeaseRequest:
       type: object
       additionalProperties: false
@@ -1680,13 +1780,15 @@ components:
         collaboration:
           type: object
           additionalProperties: false
-          required: [enabled, protocol, project_format, command_schema, recording, max_participants]
+          required: [enabled, protocol, protocols, project_format, command_schema, command_schemas, recording, max_participants]
           properties:
             enabled: { type: boolean }
-            protocol: { const: vlt-collab-v2 }
+            protocol: { const: vlt-collab-v3 }
+            protocols: { type: array, items: { enum: [vlt-collab-v2, vlt-collab-v3] }, minItems: 2, maxItems: 2 }
             project_format: { const: 7 }
-            command_schema: { const: 2 }
-            recording: { const: false }
+            command_schema: { const: 3 }
+            command_schemas: { type: array, items: { enum: [2, 3] }, minItems: 2, maxItems: 2 }
+            recording: { const: true }
             max_participants: { type: integer, minimum: 1, maximum: 8 }
     LoginRequest:
       type: object

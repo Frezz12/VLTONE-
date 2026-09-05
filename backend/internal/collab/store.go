@@ -22,6 +22,10 @@ type Store struct {
 	DB              *gorm.DB
 	Now             func() time.Time
 	MaxParticipants int
+	// Keys the HMAC behind short invite codes. Empty disables the code path
+	// entirely; the long token keeps working, so a misconfigured deployment
+	// degrades rather than handing out unprotected codes.
+	InviteCodePepper []byte
 }
 
 func NewStore(db *gorm.DB, maximumParticipants ...int) *Store {
@@ -681,6 +685,29 @@ func (s *Store) AppendOperation(ctx context.Context, input AppendOperationInput)
 		if err != nil {
 			return err
 		}
+		var liveSession model.ProjectSession
+		if err := tx.Select("command_schema_version", "plugin_requirements").First(&liveSession,
+			"id = ?", member.SessionID).Error; err != nil {
+			return err
+		}
+		if normalized.SchemaVersion != liveSession.CommandSchemaVersion {
+			return ErrVersionMismatch
+		}
+		if liveSession.CommandSchemaVersion == CollaborationCommandSchemaV3 &&
+			!RoleAllows(member.EffectiveRole, PermissionEdit) {
+			return ErrPluginNotReady
+		}
+		if liveSession.CommandSchemaVersion == CollaborationCommandSchemaV3 {
+			requirements, err := unmarshalPluginRequirements(
+				json.RawMessage(liveSession.PluginRequirements))
+			if err != nil {
+				return err
+			}
+			if err := requireExternalPluginCapabilities(normalized.Kind,
+				normalized.Payload, requirements); err != nil {
+				return err
+			}
+		}
 		if err := validateOperationBaseSeq(normalized.Kind, normalized.BaseSeq,
 			view.Project.HeadSeq); err != nil {
 			return err
@@ -773,8 +800,15 @@ func (s *Store) validateRecordingCommitRebaseTx(tx *gorm.DB, projectID uuid.UUID
 	if kind != "recording.commit" || baseSeq == headSeq {
 		return nil
 	}
-	if baseSeq > headSeq || len(leases) == 0 {
+	if baseSeq > headSeq {
 		return ErrBaseSeqMismatch
+	}
+	// A v3 lease-free recording has already been shape-checked to mutate only
+	// clip identities allocated inside the same atomic command. It can safely
+	// rebase over unrelated work and over another concurrently inserted clip,
+	// including a clip on the same track.
+	if len(leases) == 0 {
+		return nil
 	}
 
 	targetHeadKeys := recordingCommitTargetHeadKeys(leases)

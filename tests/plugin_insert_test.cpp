@@ -18,6 +18,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <utility>
 
 namespace fs = std::filesystem;
@@ -79,6 +80,39 @@ int main() {
 
     const fs::path dir = fs::temp_directory_path() / "daw_plugin_insert_test";
     std::error_code ec;
+    // Some VST3 plugins expose placeholder parameters whose current value is
+    // NaN. JSON spells that as null; it must not make the whole project
+    // impossible to reopen.
+    {
+        daw::ProjectModel project;
+        daw::TrackModel track;
+        track.id = "track";
+        daw::InsertModel insert;
+        insert.id = "slot";
+        insert.format = daw::PluginFormat::Vst3;
+        insert.uid = "dxsplit";
+        insert.parameters = {{"good", 0.25},
+                             {"bad", std::numeric_limits<double>::quiet_NaN()}};
+        track.inserts.push_back(std::move(insert));
+        project.tracks.push_back(std::move(track));
+
+        std::string encoded;
+        const bool saved =
+            daw::ProjectSerializer::serializeDocument(project, encoded).isOk();
+        daw::ProjectModel decoded;
+        const bool loaded = daw::ProjectSerializer::deserializeDocument(
+            decoded,
+            R"({"format":"vlt-project","tracks":[{"id":"track","inserts":[{"id":"slot","format":"vst3","uid":"dxsplit","parameters":[{"id":"bad","value":null},{"id":"good","value":0.25}]}]}]})")
+                                .isOk();
+        check(saved && encoded.find("\"id\":\"bad\"") == std::string::npos &&
+                  loaded && decoded.tracks.size() == 1 &&
+                  decoded.tracks.front().inserts.size() == 1 &&
+                  decoded.tracks.front().inserts.front().parameters.size() == 1 &&
+                  decoded.tracks.front().inserts.front().parameters.front().id ==
+                      "good",
+              "non-finite plugin parameters neither corrupt nor block a project");
+    }
+
     fs::remove_all(dir, ec);
     fs::create_directories(dir, ec);
 

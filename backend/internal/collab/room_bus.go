@@ -62,6 +62,7 @@ type RoomBus interface {
 	PublishFinal(projectID uuid.UUID, message RoomMessage, close RoomClose)
 	DisconnectParticipant(participantID uuid.UUID, close RoomClose)
 	DisconnectProjectUser(projectID, userID uuid.UUID, close RoomClose)
+	DisconnectProjectDevice(projectID, deviceID uuid.UUID, close RoomClose)
 	DisconnectDevice(deviceID uuid.UUID, close RoomClose)
 	DisconnectDesktopSession(desktopSessionID uuid.UUID, close RoomClose)
 	DisconnectUser(userID uuid.UUID, close RoomClose)
@@ -585,6 +586,13 @@ func (b *InProcessRoomBus) DisconnectProjectUser(projectID, userID uuid.UUID,
 	closeInfo RoomClose) {
 	b.disconnectMatching(func(subscription *RoomSubscription) bool {
 		return subscription.projectID == projectID && subscription.userID == userID
+	}, closeInfo)
+}
+
+func (b *InProcessRoomBus) DisconnectProjectDevice(projectID, deviceID uuid.UUID,
+	closeInfo RoomClose) {
+	b.disconnectMatching(func(subscription *RoomSubscription) bool {
+		return subscription.projectID == projectID && subscription.deviceID == deviceID
 	}, closeInfo)
 }
 

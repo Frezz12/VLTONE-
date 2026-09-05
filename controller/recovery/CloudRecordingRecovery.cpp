@@ -79,6 +79,10 @@ bool canonicalUuid(std::string_view value) {
     return nonzero;
 }
 
+bool optionalCanonicalUuid(std::string_view value) {
+    return value.empty() || canonicalUuid(value);
+}
+
 bool boundedFinite(double value, double minimum, double maximum,
                    bool minimumExclusive = false) {
     if (!std::isfinite(value) || value > maximum) return false;
@@ -936,11 +940,12 @@ CloudRecordingRecoveryResult validateCloudRecordingRecoveryManifest(
                 capture.status == CloudRecordingCaptureStatus::WriteFailed;
             if (!canonicalUuid(capture.captureId) ||
                 !canonicalUuid(capture.trackId) ||
-                !canonicalUuid(capture.leaseId) ||
+                !optionalCanonicalUuid(capture.leaseId) ||
                 !canonicalUuid(capture.uploadId) ||
                 !canonicalUuid(capture.assetId) ||
                 !captureIds.insert(capture.captureId).second ||
-                !leaseIds.insert(capture.leaseId).second ||
+                (!capture.leaseId.empty() &&
+                 !leaseIds.insert(capture.leaseId).second) ||
                 !uploadIds.insert(capture.uploadId).second ||
                 !assetIds.insert(capture.assetId).second ||
                 !localWavPaths.insert(capture.localWavPath).second ||

@@ -5,6 +5,7 @@
 #include "Theme.hpp"
 
 #include <QAction>
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QContextMenuEvent>
@@ -42,6 +43,14 @@ namespace eq = daw::plugins::equalizer;
 namespace {
 
 constexpr auto kUserPresetKey = "equalizer/userPresets.v1";
+constexpr double kLowCutCreationBoundaryHz = 20.0;
+constexpr double kHighCutCreationBoundaryHz = 20000.0;
+
+eq::FilterType filterTypeForNewBand(double frequency) {
+    if (frequency < kLowCutCreationBoundaryHz) return eq::FilterType::LowCut;
+    if (frequency > kHighCutCreationBoundaryHz) return eq::FilterType::HighCut;
+    return eq::FilterType::Bell;
+}
 
 QColor bandColor(int band, bool dark) {
     return EqualizerGraph::colorForBand(band, dark);
@@ -59,6 +68,11 @@ public:
 
     explicit OverlayPlate(QWidget* parent = nullptr) : QWidget(parent) {
         setAttribute(Qt::WA_StyledBackground, false);
+        // The plate is a child of the graph. An ignored event from a label or
+        // disabled dynamics control must stop here instead of reaching the
+        // graph and clearing the selected band underneath it.
+        setAttribute(Qt::WA_NoMousePropagation);
+        setAutoFillBackground(false);
         connect(&ThemeManager::instance(), &ThemeManager::changed, this,
                 QOverload<>::of(&QWidget::update));
     }
@@ -94,12 +108,24 @@ protected:
             p.fillPath(halo, QColor(0, 0, 0, alpha));
         }
 
+        // A restrained glass surface: enough of the live analyzer remains
+        // visible to preserve context, while the high opacity keeps labels and
+        // controls readable on a busy spectrum.
+        QColor glassTop = mixColors(t.surfaceElevated, t.background,
+                                    t.dark ? 0.36 : 0.08);
+        QColor glassBottom = mixColors(t.surface, t.background,
+                                       t.dark ? 0.58 : 0.20);
+        glassTop.setAlpha(t.dark ? 232 : 242);
+        glassBottom.setAlpha(t.dark ? 216 : 234);
         QLinearGradient body(plate.topLeft(), plate.bottomLeft());
-        body.setColorAt(0.0, mixColors(t.surfaceElevated, t.background,
-                                       t.dark ? 0.42 : 0.10));
-        body.setColorAt(1.0, mixColors(t.surface, t.background,
-                                       t.dark ? 0.66 : 0.26));
+        body.setColorAt(0.0, glassTop);
+        body.setColorAt(1.0, glassBottom);
         p.fillPath(shape, body);
+
+        QLinearGradient sheen(plate.topLeft(), plate.bottomLeft());
+        sheen.setColorAt(0.0, QColor(255, 255, 255, t.dark ? 22 : 64));
+        sheen.setColorAt(0.46, QColor(255, 255, 255, 0));
+        p.fillPath(shape, sheen);
 
         // A hairline of the band's own colour along the top edge: the plate
         // says which band it belongs to before you read a word on it.
@@ -195,8 +221,9 @@ EqualizerGraph::EqualizerGraph(QWidget* parent) : QWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setAccessibleName(tr("Equalizer frequency response graph"));
-    setToolTip(tr("Double-click to add a band. Drag bands to change frequency and gain; "
-                  "use the mouse wheel for Q and Alt-drag for dynamic range."));
+    setToolTip(tr("Double-click to add a band. Below 20 Hz creates a Low Cut; "
+                  "above 20 kHz creates a High Cut. Drag bands to change frequency "
+                  "and gain; hold Shift for fine adjustment."));
 }
 
 void EqualizerGraph::setData(
@@ -798,24 +825,34 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
         const QColor field = mixColors(t.surfaceElevated, t.background,
                                        t.dark ? 0.55 : 0.12);
         const QColor edge = mixColors(t.separator(), t.textPrimary, 0.10);
+        const auto rgba = [](const QColor& color, int alpha) {
+            return QStringLiteral("rgba(%1,%2,%3,%4)")
+                .arg(color.red()).arg(color.green()).arg(color.blue()).arg(alpha);
+        };
+        const QString glassField = rgba(field, t.dark ? 208 : 232);
+        const QString pressedField = rgba(
+            mixColors(field, t.accent, 0.20), t.dark ? 238 : 246);
         setStyleSheet(QString(R"(
 #EqualizerPanel QComboBox {
     background: %1; border: 1px solid %2; border-radius: 9px;
-    padding: 3px 10px; color: %3; min-height: 20px;
+    padding: 3px 10px; color: %3; min-height: 22px;
 }
 #EqualizerPanel QComboBox:hover { border-color: %4; background: %6; }
-#EqualizerPanel QComboBox:focus { border-color: %4; }
+#EqualizerPanel QComboBox:focus { border-color: %4; background: %8; }
 #EqualizerPanel QComboBox::drop-down { width: 16px; border: none; }
 #EqualizerPanel QComboBox QAbstractItemView {
-    background: %1; border: 1px solid %2; border-radius: 8px;
+    background: %9; border: 1px solid %2; border-radius: 8px;
     padding: 3px; selection-background-color: %4; color: %3;
 }
 #EqualizerPanel QPushButton {
     background: %1; border: 1px solid %2; border-radius: 9px;
-    padding: 3px 12px; color: %3; min-height: 20px;
+    padding: 3px 12px; color: %3; min-height: 22px;
 }
 #EqualizerPanel QPushButton:hover { background: %6; border-color: %4; }
+#EqualizerPanel QPushButton:focus { background: %8; border-color: %4; }
+#EqualizerPanel QPushButton:pressed { background: %8; border-color: %4; }
 #EqualizerPanel QPushButton:checked { background: %4; border-color: %4; color: %7; }
+#EqualizerPanel QPushButton:disabled { color: %5; background: %1; }
 #EqualizerPanel QCheckBox { color: %3; spacing: 6px; }
 #EqualizerPanel QCheckBox::indicator {
     width: 14px; height: 14px; border-radius: 5px;
@@ -825,8 +862,12 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
 #EqualizerPanel QCheckBox::indicator:checked {
     background: %4; border-color: %4;
 }
+#EqualizerPanel QCheckBox::indicator:focus { border-color: %4; }
 #EqualizerPanel QCheckBox::indicator:disabled { border-color: %2; background: %6; }
 #EqualizerBandLabel { color: %4; font-weight: 700; letter-spacing: 0.6px; }
+#EqualizerDynamicsPanel {
+    background: transparent; border-top: 1px solid %2;
+}
 #EqualizerPanel QPushButton#EqualizerBandClose {
     border: none; border-radius: 10px; background: transparent;
     color: %5; font-size: 15px; font-weight: 700;
@@ -835,11 +876,11 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
 #EqualizerPanel QPushButton#EqualizerBandClose:hover {
     background: %6; color: %3;
 }
-)").arg(field.name(), edge.name(), t.textPrimary.name(), t.accent.name(),
+)").arg(glassField, edge.name(), t.textPrimary.name(), t.accent.name(),
         t.textSecondary.name(),
-        mixColors(field, t.textPrimary, 0.10).name(),
+        rgba(mixColors(field, t.textPrimary, 0.10), t.dark ? 228 : 242),
         (t.accent.value() > 150 ? QColor(18, 20, 24) : QColor(245, 246, 248))
-            .name()));
+            .name(), pressedField, field.name()));
     };
     restyle();
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, restyle);
@@ -848,6 +889,7 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     // over the curve it edits and is only there while a band is selected.
     auto* plate = new OverlayPlate(m_graph);
     m_bandPanel = plate;
+    m_bandPanel->setObjectName(QStringLiteral("EqualizerBandPanel"));
     m_bandPanel->setAccessibleName(tr("Selected band controls"));
     m_bandPanel->hide();
     constexpr int kPlateEdge = OverlayPlate::kMargin;
@@ -927,8 +969,14 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     };
     // The three that matter, big and in the middle — this row is the reason the
     // plate exists.
-    makeBandKnob(QStringLiteral("$band.frequency"), eq::BandParam::Frequency,
-                 tr("Freq"), 46);
+    ui::Knob* frequencyKnob = makeBandKnob(
+        QStringLiteral("$band.frequency"), eq::BandParam::Frequency,
+        tr("Freq"), 46);
+    frequencyKnob->setLogarithmic(true);
+    const QString frequencyHelp =
+        tr("Frequency (logarithmic). Hold Shift while dragging for fine adjustment.");
+    frequencyKnob->setToolTip(frequencyHelp);
+    frequencyKnob->setAccessibleDescription(frequencyHelp);
     makeBandKnob(QStringLiteral("$band.gain"), eq::BandParam::Gain,
                  tr("Gain"), 56);
     makeBandKnob(QStringLiteral("$band.q"), eq::BandParam::Q, tr("Q"), 46);
@@ -951,6 +999,7 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     // Dynamics live on the same plate, one row down, so turning them on grows
     // the inspector instead of opening a second panel somewhere else.
     m_dynamicPanel = new QWidget(m_bandPanel);
+    m_dynamicPanel->setObjectName(QStringLiteral("EqualizerDynamicsPanel"));
     m_dynamicPanel->setAccessibleName(tr("Selected band dynamics"));
     m_dynamicPanel->hide();
     plateStack->addWidget(m_dynamicPanel);
@@ -972,15 +1021,29 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
                 return QString::fromStdString(eq::parameterText(index, value));
             });
             knob->setAccessibleName(caption);
+            knob->setToolTip(QString::fromStdString(info->name));
             knob->setAutomatable(info->isAutomatable);
         }
+        if (field == eq::BandParam::DetectorLow ||
+            field == eq::BandParam::DetectorHigh)
+            knob->setLogarithmic(true);
         knob->setVisualStyle(ui::Knob::VisualStyle::Graphite);
         knob->setBare(38);
         connect(knob, &ui::Knob::valueChanged, this, [this, field](double value) {
             if (m_refreshing || m_graph->selection().empty()) return;
             std::vector<QString> ids;
             for (int band : m_graph->selection()) ids.push_back(bandId(band, field));
-            beginGesture(ids);
+            std::vector<QString> autoIds;
+            if (field == eq::BandParam::DynamicThreshold) {
+                for (int band : m_graph->selection()) {
+                    const QString autoId = bandId(band, eq::BandParam::DynamicAuto);
+                    if (readParameter(autoId) >= 0.5) autoIds.push_back(autoId);
+                }
+            }
+            std::vector<QString> gestureIds = ids;
+            gestureIds.insert(gestureIds.end(), autoIds.begin(), autoIds.end());
+            beginGesture(gestureIds);
+            for (const QString& id : autoIds) writeParameter(id, 0.0);
             for (const QString& id : ids) writeParameter(id, value);
         });
         connect(knob, &ui::Knob::editFinished, this,
@@ -1010,6 +1073,10 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     m_detectorMode->addItems({tr("Band detector"), tr("Free detector")});
     m_detectorMode->setMinimumWidth(112);
     m_dynamicAuto->setAccessibleName(tr("Automatic dynamics timing and threshold"));
+    const QString autoHelp = tr(
+        "Automatically controls timing and threshold. Moving Threshold turns Auto off.");
+    m_dynamicAuto->setToolTip(autoHelp);
+    m_dynamicAuto->setAccessibleDescription(autoHelp);
     m_external->setAccessibleName(tr("Use external sidechain"));
     m_detectorMode->setAccessibleName(tr("Dynamics detector range mode"));
     dynamicsRow->addWidget(m_dynamicAuto);
@@ -1287,13 +1354,18 @@ void EqualizerPanel::createBand(double frequency, double gain) {
                                  tr("All 24 equalizer bands are already in use."));
         return;
     }
+    const eq::FilterType type = filterTypeForNewBand(frequency);
+    const bool isCut = type == eq::FilterType::LowCut ||
+                       type == eq::FilterType::HighCut;
     const std::vector<QString> ids{bandId(band, eq::BandParam::Enabled),
+                                   bandId(band, eq::BandParam::Type),
                                    bandId(band, eq::BandParam::Frequency),
                                    bandId(band, eq::BandParam::Gain)};
     beginGesture(ids);
     writeParameter(ids[0], 1.0);
-    writeParameter(ids[1], frequency);
-    writeParameter(ids[2], gain);
+    writeParameter(ids[1], double(type));
+    writeParameter(ids[2], frequency);
+    writeParameter(ids[3], isCut ? 0.0 : gain);
     finishGesture("Create Equalizer Band");
     m_graph->setSelection({band});
     selectBands({band});
@@ -1653,6 +1725,7 @@ void EqualizerPanel::refreshBandControls() {
     const bool selected = band >= 0;
     // Nothing selected means no inspector at all — an empty plate parked over
     // the curve is just something in the way.
+    const bool bandVisibilityChanged = m_bandPanel->isHidden() == selected;
     m_bandPanel->setVisible(selected);
     QLabel* label = m_bandPanel->findChild<QLabel*>(QStringLiteral("EqualizerBandLabel"));
     if (label) label->setText(selected ? tr("Band %1").arg(band + 1) : tr("Band"));
@@ -1710,13 +1783,24 @@ void EqualizerPanel::refreshBandControls() {
         state.type == eq::FilterType::LowShelf ||
         state.type == eq::FilterType::HighShelf || state.type == eq::FilterType::Tilt;
     m_dynamic->setEnabled(supportsDynamics);
-    m_dynamicPanel->setVisible(supportsDynamics && state.dynamicEnabled);
-    // The plate changes height when dynamics open or close, so it has to be
-    // re-placed against the plot's lower edge.
-    m_bandPanel->adjustSize();
-    m_graph->setOverlay(m_bandPanel);
-    if (ui::Knob* threshold = m_knobs.value(QStringLiteral("$band.dynamic.threshold")))
-        threshold->setEnabled(!state.dynamicAuto);
+    const bool showDynamics = supportsDynamics && state.dynamicEnabled;
+    const bool dynamicsVisibilityChanged = m_dynamicPanel->isHidden() == showDynamics;
+    m_dynamicPanel->setVisible(showDynamics);
+    // Resizing the overlay on every 33 ms analyzer refresh can move a control
+    // while it owns the mouse grab. Reflow only when disclosure actually
+    // changes, then anchor the new size to the graph once.
+    if (bandVisibilityChanged || dynamicsVisibilityChanged) {
+        m_bandPanel->adjustSize();
+        m_graph->setOverlay(m_bandPanel);
+    }
+    if (ui::Knob* threshold = m_knobs.value(QStringLiteral("$band.dynamic.threshold"))) {
+        threshold->setEnabled(true);
+        const QString help = state.dynamicAuto
+            ? tr("Threshold is automatic. Drag to switch Auto off and set it manually.")
+            : tr("Manual dynamics threshold");
+        threshold->setToolTip(help);
+        threshold->setAccessibleDescription(help);
+    }
     for (const QString& key : {QStringLiteral("$band.detector.low"),
                                QStringLiteral("$band.detector.high")})
         if (ui::Knob* knob = m_knobs.value(key))
@@ -1849,6 +1933,61 @@ bool EqualizerPanel::checkForTest() {
     }
     const bool moved = band >= 0 &&
         equalizerInstance()->bandState(band).frequency > 1500.0;
+
+    const auto dragKnobUp = [](ui::Knob* knob, int pixels) {
+        if (!knob) return;
+        const QPoint at(knob->width() / 2, knob->height() / 2);
+        const QPoint moved = at - QPoint(0, pixels);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(at),
+                          QPointF(knob->mapToGlobal(at)), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(knob, &press);
+        QMouseEvent move(QEvent::MouseMove, QPointF(moved),
+                         QPointF(knob->mapToGlobal(moved)), Qt::NoButton,
+                         Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(knob, &move);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(moved),
+                            QPointF(knob->mapToGlobal(moved)), Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(knob, &release);
+    };
+
+    ui::Knob* frequency = m_knobs.value(QStringLiteral("$band.frequency"));
+    if (band >= 0 && frequency) {
+        writeParameter(bandId(band, eq::BandParam::Frequency), 20.0);
+        frequency->setValue(20.0);
+        dragKnobUp(frequency, 1);
+    }
+    const bool preciseLowFrequency = frequency && frequency->value() > 20.0 &&
+                                     frequency->value() < 30.0;
+
+    if (band >= 0) {
+        writeParameter(bandId(band, eq::BandParam::DynamicEnabled), 1.0);
+        writeParameter(bandId(band, eq::BandParam::DynamicAuto), 1.0);
+        selectBands({band});
+        refresh();
+    }
+    ui::Knob* threshold = m_knobs.value(QStringLiteral("$band.dynamic.threshold"));
+    const double thresholdBefore = threshold ? threshold->value() : 0.0;
+    dragKnobUp(threshold, 2);
+    const bool dynamicsStayOpen = band >= 0 && threshold &&
+        !m_bandPanel->isHidden() && !m_dynamicPanel->isHidden() &&
+        selectedBand() == band && threshold->value() > thresholdBefore &&
+        !equalizerInstance()->bandState(std::uint32_t(band)).dynamicAuto;
+
+    createBand(10.0, -12.0);
+    const int lowCutBand = selectedBand();
+    const bool createsLowCut = lowCutBand >= 0 &&
+        equalizerInstance()->bandState(std::uint32_t(lowCutBand)).type ==
+            eq::FilterType::LowCut &&
+        equalizerInstance()->bandState(std::uint32_t(lowCutBand)).gainDb == 0.0;
+    createBand(30000.0, 12.0);
+    const int highCutBand = selectedBand();
+    const bool createsHighCut = highCutBand >= 0 &&
+        equalizerInstance()->bandState(std::uint32_t(highCutBand)).type ==
+            eq::FilterType::HighCut &&
+        equalizerInstance()->bandState(std::uint32_t(highCutBand)).gainDb == 0.0;
+
     const char beforeSlot = equalizerInstance()->activeComparison();
     switchComparison(beforeSlot == 'A' ? 'B' : 'A');
     const bool comparison = equalizerInstance()->activeComparison() != beforeSlot;
@@ -1861,7 +2000,8 @@ bool EqualizerPanel::checkForTest() {
                      !knob->accessibleName().isEmpty();
     equalizerInstance()->loadState(saved);
     refresh();
-    return created && moved && comparison && analyzer && accessible;
+    return created && moved && preciseLowFrequency && dynamicsStayOpen &&
+           createsLowCut && createsHighCut && comparison && analyzer && accessible;
 }
 
 void EqualizerPanel::showEvent(QShowEvent* event) {

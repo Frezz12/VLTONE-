@@ -122,7 +122,7 @@ function Resolve-QtRoot {
     if ($actualVersion -ne "6.8.3") {
         throw "Qt $actualVersion was found at '$QtRoot'; the release requires exactly Qt 6.8.3."
     }
-    foreach ($module in "Qt6WebEngineWidgets", "Qt6SerialPort", "Qt6WebSockets") {
+    foreach ($module in "Qt6Multimedia", "Qt6WebEngineWidgets", "Qt6SerialPort", "Qt6WebSockets") {
         $config = Join-Path $QtRoot "lib\cmake\$module\${module}Config.cmake"
         if (-not (Test-Path -LiteralPath $config -PathType Leaf)) {
             throw "Required Qt module '$module' is missing from '$QtRoot'."

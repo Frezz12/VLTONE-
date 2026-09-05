@@ -675,7 +675,11 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                        requireUuid(body.deleteOperationId,
                                    "deleteOperationId");
             } else if constexpr (std::is_same_v<T, RecordingCommit>) {
-                if (!body.batch || body.leases.empty() ||
+                const bool leaseFreeNewClips = body.leases.empty();
+                if (!body.batch ||
+                    (leaseFreeNewClips &&
+                     value.meta.schemaVersion ==
+                         kProjectCommandSchemaVersionV2) ||
                     body.leases.size() > kMaxProjectCommandBatchSize) {
                     return fail("recording lease count is out of bounds");
                 }
@@ -699,6 +703,7 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                         return fail("recording lease leaseId is duplicated");
                 }
                 std::set<std::string> commandTrackIds;
+                std::set<std::pair<std::string, std::string>> newClips;
                 for (const ProjectCommand& child : body.batch->commands) {
                     if (std::holds_alternative<RecordingCommit>(child.body) ||
                         std::holds_alternative<
@@ -717,6 +722,10 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                             "command kind is not allowed in recording.commit");
                     }
                     if (!self(self, child)) return false;
+                    if (const auto* added =
+                            std::get_if<AddClip>(&child.body)) {
+                        newClips.emplace(added->trackId, added->clipId);
+                    }
                     std::visit([&](const auto& childBody) {
                         if constexpr (requires { childBody.trackId; }) {
                             if (!childBody.trackId.empty())
@@ -730,6 +739,28 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                             }
                         }
                     }, child.body);
+                }
+                if (leaseFreeNewClips) {
+                    for (const ProjectCommand& child : body.batch->commands) {
+                        const bool targetsNewClip = std::visit(
+                            [&](const auto& childBody) {
+                                if constexpr (requires {
+                                                  childBody.trackId;
+                                                  childBody.clipId;
+                                              }) {
+                                    return newClips.contains(
+                                        {childBody.trackId,
+                                         childBody.clipId});
+                                }
+                                return false;
+                            },
+                            child.body);
+                        if (!targetsNewClip) {
+                            return fail(
+                                "lease-free recording commit may only mutate clips created in the same command");
+                        }
+                    }
+                    return true;
                 }
                 return commandTrackIds == leaseTrackIds ||
                        fail("recording command tracks do not match leases");

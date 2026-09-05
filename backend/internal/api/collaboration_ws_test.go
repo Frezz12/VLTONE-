@@ -61,6 +61,20 @@ func TestCollaborationJoinCloseReason(t *testing.T) {
 	}
 }
 
+func TestWelcomeParticipantsContainOnlyConnectedSockets(t *testing.T) {
+	connectedID := uuid.New()
+	offlineID := uuid.New()
+	participants := []collaborationParticipant{
+		{ParticipantID: offlineID.String(), Nickname: "Offline"},
+		{ParticipantID: connectedID.String(), Nickname: "Connected"},
+	}
+	filtered := connectedCollaborationParticipants(participants,
+		[]uuid.UUID{connectedID})
+	if len(filtered) != 1 || filtered[0].ParticipantID != connectedID.String() {
+		t.Fatalf("connected participants = %#v", filtered)
+	}
+}
+
 func TestCollaborationPresenceRejectsSensitiveDetailAndUnknownContent(t *testing.T) {
 	coarseWithCoordinates := json.RawMessage(`{
 		"surface":"settings","precision":"coarse","u":0.5,"v":0.5

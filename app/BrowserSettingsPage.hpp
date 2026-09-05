@@ -38,5 +38,7 @@ private:
     QSlider* m_gain = nullptr;
     QComboBox* m_midiTempo = nullptr;
     QLineEdit* m_webHome = nullptr;
+    QLineEdit* m_webBackground = nullptr;
+    QPushButton* m_clearWebBackground = nullptr;
     QCheckBox* m_webBookmarksBar = nullptr;
 };

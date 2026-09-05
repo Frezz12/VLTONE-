@@ -1,11 +1,22 @@
 #include "UiConstants.hpp"
 
 #include <QSettings>
+#include <QFontDatabase>
 
 #include <algorithm>
 
 namespace ui {
 namespace {
+
+QFont fixedUiFont(int pixelSize) {
+#ifdef Q_OS_MACOS
+    QFont font(QStringLiteral("Menlo"));
+#else
+    QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+#endif
+    font.setPixelSize(pixelSize);
+    return font;
+}
 
 SelectionTint readSelectionTint() {
     const int stored =
@@ -44,6 +55,18 @@ bool& cachedPlayheadTrail() {
 }
 
 } // namespace
+
+QFont transportDisplayFont(int pixelSize, QFont::Weight weight) {
+    QFont font;
+    font.setFamilies({QStringLiteral("Bahnschrift"),
+                      QStringLiteral("DIN Alternate"),
+                      QStringLiteral("Roboto Condensed"),
+                      fixedUiFont(pixelSize).family()});
+    font.setPixelSize(pixelSize);
+    font.setWeight(weight);
+    font.setFeature(QFont::Tag("tnum"), 1);
+    return font;
+}
 
 SelectionTint selectionTint() {
     return cachedSelectionTint();

@@ -2,13 +2,16 @@ package collab
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"vltstudio/backend/internal/auth"
 	"vltstudio/backend/internal/model"
 )
 
@@ -46,24 +49,55 @@ type LeaseHeldError struct {
 func (e *LeaseHeldError) Error() string { return ErrLeaseHeld.Error() }
 func (e *LeaseHeldError) Unwrap() error { return ErrLeaseHeld }
 
+// SessionSecret carries a session password between the handler and the store.
+// It is never logged, never serialised and never placed in a URL.
+type SessionSecret struct{ Password string }
+
 func (s *Store) StartSession(ctx context.Context, projectID, actorUserID,
 	actorDeviceID, actorSessionID uuid.UUID, mode string) (SessionState, error) {
 	return s.startSession(ctx, projectID, actorUserID, actorDeviceID,
-		actorSessionID, mode, nil)
+		actorSessionID, mode, nil, SessionSecret{}, nil, nil)
 }
 
 func (s *Store) StartSessionCompatible(ctx context.Context, projectID,
 	actorUserID, actorDeviceID, actorSessionID uuid.UUID, mode string,
 	compatibility ClientCompatibility) (SessionState, error) {
 	return s.startSession(ctx, projectID, actorUserID, actorDeviceID,
-		actorSessionID, mode, &compatibility)
+		actorSessionID, mode, &compatibility, SessionSecret{}, nil, nil)
+}
+
+// StartSessionSecured additionally protects the room with a password. An empty
+// password means an unprotected session, exactly as before.
+func (s *Store) StartSessionSecured(ctx context.Context, projectID,
+	actorUserID, actorDeviceID, actorSessionID uuid.UUID, mode string,
+	compatibility ClientCompatibility, secret SessionSecret) (SessionState, error) {
+	return s.startSession(ctx, projectID, actorUserID, actorDeviceID,
+		actorSessionID, mode, &compatibility, secret, nil, nil)
+}
+
+// StartSessionV3Secured creates a real lobby. The host must prove readiness for
+// the exact manifest before any participant can activate the room.
+func (s *Store) StartSessionV3Secured(ctx context.Context, projectID,
+	actorUserID, actorDeviceID, actorSessionID uuid.UUID, mode string,
+	compatibility ClientCompatibility, secret SessionSecret,
+	requirements []PluginRequirement,
+	readiness PluginReadinessReport) (SessionState, error) {
+	return s.startSession(ctx, projectID, actorUserID, actorDeviceID,
+		actorSessionID, mode, &compatibility, secret, requirements, &readiness)
 }
 
 func (s *Store) startSession(ctx context.Context, projectID, actorUserID,
 	actorDeviceID, actorSessionID uuid.UUID, mode string,
-	compatibility *ClientCompatibility) (SessionState, error) {
+	compatibility *ClientCompatibility, secret SessionSecret,
+	requirements []PluginRequirement,
+	readiness *PluginReadinessReport) (SessionState, error) {
 	if !ValidSessionMode(mode) || actorDeviceID == uuid.Nil {
 		return SessionState{}, invalidf("session mode or device is invalid")
+	}
+	if compatibility != nil &&
+		compatibility.CommandSchemaVersion == CollaborationCommandSchemaV3 &&
+		mode != model.SessionModeIndependent {
+		return SessionState{}, invalidf("v3 sessions require independent transport")
 	}
 	var state SessionState
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -96,33 +130,82 @@ func (s *Store) startSession(ctx context.Context, projectID, actorUserID,
 		if !errors.Is(lookup.Error, gorm.ErrRecordNotFound) {
 			return lookup.Error
 		}
+		commandSchemaVersion := CollaborationCommandSchemaVersion
+		if compatibility != nil {
+			commandSchemaVersion = compatibility.CommandSchemaVersion
+		}
+		manifestRevision := int64(0)
+		manifestJSON := json.RawMessage("[]")
+		readinessStatus, effectiveRole := model.SessionReadinessReady, view.Role
+		readinessRevision := int64(0)
+		readinessJSON := json.RawMessage("[]")
+		if commandSchemaVersion == CollaborationCommandSchemaV3 {
+			if readiness == nil {
+				return invalidf("v3 host plugin readiness is required")
+			}
+			manifestRevision = 1
+			var err error
+			manifestJSON, err = marshalPluginRequirements(requirements)
+			if err != nil {
+				return err
+			}
+			normalized, status, role, err := normalizePluginReadiness(
+				requirements, manifestRevision, *readiness, view.Role)
+			if err != nil {
+				return err
+			}
+			if status != model.SessionReadinessReady || role != model.ProjectRoleOwner {
+				return ErrPluginNotReady
+			}
+			readinessStatus, effectiveRole = status, role
+			readinessRevision = normalized.Revision
+			readinessJSON, _ = json.Marshal(normalized.Plugins)
+		}
 		now := s.now()
 		creator := actorUserID
 		session := model.ProjectSession{
 			ID: uuid.New(), ProjectID: projectID, CreatedBy: &creator, Mode: mode,
-			Status: model.ProjectSessionStarting, Version: 1, CreatedAt: now, UpdatedAt: now,
+			Status: model.ProjectSessionStarting, Version: 1,
+			CommandSchemaVersion:       commandSchemaVersion,
+			PluginRequirementsRevision: manifestRevision,
+			PluginRequirements:         datatypes.JSON(manifestJSON), CreatedAt: now, UpdatedAt: now,
+		}
+		if secret.Password != "" {
+			hash, hashErr := auth.HashSessionSecret(secret.Password)
+			if hashErr != nil {
+				return invalidf("%s", hashErr.Error())
+			}
+			setAt := now
+			session.PasswordHash = &hash
+			session.PasswordSetAt = &setAt
 		}
 		if err := tx.Create(&session).Error; err != nil {
 			return err
 		}
 		member := model.ProjectSessionMember{
 			ID: uuid.New(), SessionID: session.ID, UserID: actorUserID, DeviceID: actorDeviceID,
-			DesktopSessionID: &actorSessionID, JoinedAt: now, LastSeenAt: now,
+			DesktopSessionID: &actorSessionID, EffectiveRole: effectiveRole,
+			ReadinessStatus: readinessStatus, ReadinessRevision: readinessRevision,
+			PluginReadiness: datatypes.JSON(readinessJSON), JoinedAt: now, LastSeenAt: now,
 		}
 		if err := tx.Create(&member).Error; err != nil {
 			return err
 		}
-		startedAt := now
 		hostID := member.ID
-		if err := tx.Model(&model.ProjectSession{}).Where("id = ?", session.ID).Updates(map[string]any{
-			"host_member_id": hostID, "status": model.ProjectSessionActive,
-			"started_at": startedAt, "updated_at": now,
-		}).Error; err != nil {
+		updates := map[string]any{"host_member_id": hostID, "updated_at": now}
+		if commandSchemaVersion == CollaborationCommandSchemaVersion {
+			updates["status"] = model.ProjectSessionActive
+			updates["started_at"] = now
+		}
+		if err := tx.Model(&model.ProjectSession{}).Where("id = ?", session.ID).
+			Updates(updates).Error; err != nil {
 			return err
 		}
 		session.HostMemberID = &hostID
-		session.Status = model.ProjectSessionActive
-		session.StartedAt = &startedAt
+		if commandSchemaVersion == CollaborationCommandSchemaVersion {
+			session.Status = model.ProjectSessionActive
+			session.StartedAt = &now
+		}
 		state = SessionState{Session: session, Members: []model.ProjectSessionMember{member}}
 		return nil
 	})
@@ -139,7 +222,8 @@ func (s *Store) GetActiveSession(ctx context.Context, projectID, actorUserID uui
 	}
 	var session model.ProjectSession
 	if err := s.DB.WithContext(ctx).Where("project_id = ? AND status IN ?", projectID,
-		[]string{model.ProjectSessionActive, model.ProjectSessionEnding}).
+		[]string{model.ProjectSessionStarting, model.ProjectSessionActive,
+			model.ProjectSessionEnding}).
 		First(&session).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return SessionState{}, ErrNotFound
@@ -152,19 +236,39 @@ func (s *Store) GetActiveSession(ctx context.Context, projectID, actorUserID uui
 func (s *Store) JoinSession(ctx context.Context, projectID, sessionID,
 	actorUserID, actorDeviceID, actorSessionID uuid.UUID) (SessionState, error) {
 	return s.joinSession(ctx, projectID, sessionID, actorUserID, actorDeviceID,
-		actorSessionID, nil)
+		actorSessionID, nil, SessionSecret{}, nil)
 }
 
+// JoinSessionCompatible carries no secret. The WebSocket upgrade calls this,
+// and it must not be able to admit a new participant to a protected session —
+// see the gate in joinSession.
 func (s *Store) JoinSessionCompatible(ctx context.Context, projectID, sessionID,
 	actorUserID, actorDeviceID, actorSessionID uuid.UUID,
 	compatibility ClientCompatibility) (SessionState, error) {
 	return s.joinSession(ctx, projectID, sessionID, actorUserID, actorDeviceID,
-		actorSessionID, &compatibility)
+		actorSessionID, &compatibility, SessionSecret{}, nil)
+}
+
+// JoinSessionSecured is the REST path, which can carry a password.
+func (s *Store) JoinSessionSecured(ctx context.Context, projectID, sessionID,
+	actorUserID, actorDeviceID, actorSessionID uuid.UUID,
+	compatibility ClientCompatibility, secret SessionSecret) (SessionState, error) {
+	return s.joinSession(ctx, projectID, sessionID, actorUserID, actorDeviceID,
+		actorSessionID, &compatibility, secret, nil)
+}
+
+func (s *Store) JoinSessionV3Secured(ctx context.Context, projectID, sessionID,
+	actorUserID, actorDeviceID, actorSessionID uuid.UUID,
+	compatibility ClientCompatibility, secret SessionSecret,
+	readiness PluginReadinessReport) (SessionState, error) {
+	return s.joinSession(ctx, projectID, sessionID, actorUserID, actorDeviceID,
+		actorSessionID, &compatibility, secret, &readiness)
 }
 
 func (s *Store) joinSession(ctx context.Context, projectID, sessionID,
 	actorUserID, actorDeviceID, actorSessionID uuid.UUID,
-	compatibility *ClientCompatibility) (SessionState, error) {
+	compatibility *ClientCompatibility, secret SessionSecret,
+	readiness *PluginReadinessReport) (SessionState, error) {
 	if actorDeviceID == uuid.Nil {
 		return SessionState{}, invalidf("device is required")
 	}
@@ -189,6 +293,10 @@ func (s *Store) joinSession(ctx context.Context, projectID, sessionID,
 		session, err := s.openSessionTx(tx, projectID, sessionID, true)
 		if err != nil {
 			return err
+		}
+		if compatibility != nil &&
+			compatibility.CommandSchemaVersion != session.CommandSchemaVersion {
+			return ErrVersionMismatch
 		}
 		if session.Status == model.ProjectSessionEnding && !RoleAllows(view.Role, PermissionEdit) {
 			return ErrForbidden
@@ -216,6 +324,21 @@ func (s *Store) joinSession(ctx context.Context, projectID, sessionID,
 				member.DesktopSessionID = &actorSessionID
 				member.LastSeenAt = now
 			} else if errors.Is(err, ErrNotFound) {
+				// The password gate lives exactly here, on the branch that
+				// admits a genuinely new participant.
+				//
+				// Placing it earlier would re-prompt on every reconnect and on
+				// a re-login from the same installation, both of which reach
+				// this function through the two branches above. Placing it in
+				// the REST handler instead would leave a hole: the WebSocket
+				// upgrade calls JoinSessionCompatible with no request body, so
+				// a joiner could skip the handler entirely and be admitted by
+				// the socket. Down here the socket passes an empty secret,
+				// fails, and is forced back through REST — which is what the
+				// join dialog does anyway.
+				if err := checkSessionSecret(session, secret); err != nil {
+					return err
+				}
 				var activeMembers int64
 				if err := tx.Model(&model.ProjectSessionMember{}).
 					Where("session_id = ? AND left_at IS NULL", session.ID).
@@ -225,10 +348,35 @@ func (s *Store) joinSession(ctx context.Context, projectID, sessionID,
 				if activeMembers >= int64(s.MaxParticipants) {
 					return ErrSessionFull
 				}
+				readinessStatus, effectiveRole := model.SessionReadinessReady, view.Role
+				readinessRevision := int64(0)
+				readinessJSON := json.RawMessage("[]")
+				if session.CommandSchemaVersion == CollaborationCommandSchemaV3 {
+					if readiness == nil {
+						return invalidf("v3 plugin readiness is required")
+					}
+					requirements, err := unmarshalPluginRequirements(
+						json.RawMessage(session.PluginRequirements))
+					if err != nil {
+						return err
+					}
+					normalized, status, role, err := normalizePluginReadiness(
+						requirements, session.PluginRequirementsRevision,
+						*readiness, view.Role)
+					if err != nil {
+						return err
+					}
+					readinessStatus, effectiveRole = status, role
+					readinessRevision = normalized.Revision
+					readinessJSON, _ = json.Marshal(normalized.Plugins)
+				}
 				member = model.ProjectSessionMember{
 					ID: uuid.New(), SessionID: session.ID, UserID: actorUserID,
 					DeviceID: actorDeviceID, DesktopSessionID: &actorSessionID,
-					JoinedAt: now, LastSeenAt: now,
+					EffectiveRole: effectiveRole, ReadinessStatus: readinessStatus,
+					ReadinessRevision: readinessRevision,
+					PluginReadiness:   datatypes.JSON(readinessJSON),
+					JoinedAt:          now, LastSeenAt: now,
 				}
 				if err := tx.Create(&member).Error; err != nil {
 					return err
@@ -240,7 +388,7 @@ func (s *Store) joinSession(ctx context.Context, projectID, sessionID,
 			return err
 		}
 		if session.HostMemberID == nil {
-			candidate, found, err := s.hostCandidateTx(tx, view.Project, session.ID, uuid.Nil)
+			candidate, found, err := s.hostCandidateTx(tx, view.Project, session, uuid.Nil)
 			if err != nil {
 				return err
 			}
@@ -301,6 +449,136 @@ func (s *Store) HeartbeatSession(ctx context.Context, projectID, sessionID,
 		return nil
 	})
 	return member, err
+}
+
+// UpdatePluginReadiness re-evaluates the effective role against the current
+// manifest revision. A stale report never revives write access.
+func (s *Store) UpdatePluginReadiness(ctx context.Context, projectID, sessionID,
+	actorUserID, actorDeviceID, actorSessionID uuid.UUID,
+	report PluginReadinessReport) (SessionState, error) {
+	var state SessionState
+	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.requireActiveActorTx(tx, actorUserID, actorDeviceID,
+			actorSessionID); err != nil {
+			return err
+		}
+		view, err := s.projectAccess(tx, projectID, actorUserID, true)
+		if err != nil {
+			return err
+		}
+		session, err := s.openSessionTx(tx, projectID, sessionID, true)
+		if err != nil {
+			return err
+		}
+		if session.CommandSchemaVersion != CollaborationCommandSchemaV3 {
+			return ErrVersionMismatch
+		}
+		member, err := s.activeSessionMemberTx(tx, sessionID, actorUserID,
+			actorDeviceID, actorSessionID, true)
+		if err != nil {
+			return err
+		}
+		requirements, err := unmarshalPluginRequirements(
+			json.RawMessage(session.PluginRequirements))
+		if err != nil {
+			return err
+		}
+		normalized, status, role, err := normalizePluginReadiness(requirements,
+			session.PluginRequirementsRevision, report, view.Role)
+		if err != nil {
+			return err
+		}
+		readinessJSON, _ := json.Marshal(normalized.Plugins)
+		now := s.now()
+		if err := tx.Model(&model.ProjectSessionMember{}).Where("id = ?", member.ID).
+			Updates(map[string]any{
+				"effective_role": role, "readiness_status": status,
+				"readiness_revision": normalized.Revision,
+				"plugin_readiness":   readinessJSON, "last_seen_at": now,
+			}).Error; err != nil {
+			return err
+		}
+		member.EffectiveRole, member.ReadinessStatus = role, status
+		member.ReadinessRevision = normalized.Revision
+		member.PluginReadiness = datatypes.JSON(readinessJSON)
+		member.LastSeenAt = now
+		members, err := s.liveMembersTx(tx, session.ID)
+		if err != nil {
+			return err
+		}
+		state = SessionState{Session: session, Members: members}
+		return nil
+	})
+	return state, err
+}
+
+// ActivateSession is the v3 readiness barrier. Blocked editors must either
+// become ready or explicitly stay as viewers before the host can continue.
+func (s *Store) ActivateSession(ctx context.Context, projectID, sessionID,
+	actorUserID, actorDeviceID, actorSessionID uuid.UUID) (SessionState, error) {
+	var state SessionState
+	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.requireActiveActorTx(tx, actorUserID, actorDeviceID,
+			actorSessionID); err != nil {
+			return err
+		}
+		view, err := s.projectAccess(tx, projectID, actorUserID, true)
+		if err != nil {
+			return err
+		}
+		session, err := s.openSessionTx(tx, projectID, sessionID, true)
+		if err != nil {
+			return err
+		}
+		if session.CommandSchemaVersion != CollaborationCommandSchemaV3 {
+			return ErrVersionMismatch
+		}
+		member, err := s.activeSessionMemberTx(tx, sessionID, actorUserID,
+			actorDeviceID, actorSessionID, true)
+		if err != nil {
+			return err
+		}
+		if view.Role != model.ProjectRoleOwner &&
+			(session.HostMemberID == nil || *session.HostMemberID != member.ID) {
+			return ErrForbidden
+		}
+		if session.Status == model.ProjectSessionActive {
+			state, err = s.sessionStateTx(tx, session)
+			return err
+		}
+		if session.Status != model.ProjectSessionStarting {
+			return ErrSessionEnded
+		}
+		members, err := s.liveMembersTx(tx, session.ID)
+		if err != nil {
+			return err
+		}
+		for _, candidate := range members {
+			if candidate.ReadinessRevision != session.PluginRequirementsRevision ||
+				candidate.ReadinessStatus == model.SessionReadinessBlocked {
+				return ErrPluginNotReady
+			}
+			if session.HostMemberID != nil && candidate.ID == *session.HostMemberID &&
+				(candidate.ReadinessStatus != model.SessionReadinessReady ||
+					!RoleAllows(candidate.EffectiveRole, PermissionHostSession)) {
+				return ErrPluginNotReady
+			}
+		}
+		now := s.now()
+		if err := tx.Model(&model.ProjectSession{}).Where("id = ?", session.ID).
+			Updates(map[string]any{
+				"status": model.ProjectSessionActive, "started_at": now,
+				"updated_at": now, "version": gorm.Expr("version + 1"),
+			}).Error; err != nil {
+			return err
+		}
+		session.Status, session.StartedAt, session.UpdatedAt =
+			model.ProjectSessionActive, &now, now
+		session.Version++
+		state = SessionState{Session: session, Members: members}
+		return nil
+	})
+	return state, err
 }
 
 func (s *Store) LeaveSession(ctx context.Context, projectID, sessionID,
@@ -632,6 +910,15 @@ func (s *Store) sessionState(ctx context.Context, session model.ProjectSession) 
 	return SessionState{Session: session, Members: members}, nil
 }
 
+func (s *Store) sessionStateTx(tx *gorm.DB,
+	session model.ProjectSession) (SessionState, error) {
+	members, err := s.liveMembersTx(tx, session.ID)
+	if err != nil {
+		return SessionState{}, err
+	}
+	return SessionState{Session: session, Members: members}, nil
+}
+
 func (s *Store) liveSessionTx(tx *gorm.DB, projectID, sessionID uuid.UUID, lock bool) (model.ProjectSession, error) {
 	session, err := s.openSessionTx(tx, projectID, sessionID, lock)
 	if err != nil {
@@ -656,7 +943,9 @@ func (s *Store) openSessionTx(tx *gorm.DB, projectID, sessionID uuid.UUID,
 		}
 		return model.ProjectSession{}, err
 	}
-	if session.Status != model.ProjectSessionActive && session.Status != model.ProjectSessionEnding {
+	if session.Status != model.ProjectSessionStarting &&
+		session.Status != model.ProjectSessionActive &&
+		session.Status != model.ProjectSessionEnding {
 		return model.ProjectSession{}, ErrSessionEnded
 	}
 	return session, nil
@@ -772,7 +1061,7 @@ func (s *Store) leaveMemberTx(tx *gorm.DB, project model.CloudProject, session *
 		session.Version++
 		return nil
 	}
-	candidate, found, err := s.hostCandidateTx(tx, project, session.ID, member.ID)
+	candidate, found, err := s.hostCandidateTx(tx, project, *session, member.ID)
 	if err != nil {
 		return err
 	}
@@ -812,11 +1101,11 @@ func (s *Store) EndIdleSessions(ctx context.Context, reconnectGrace time.Duratio
 	var ended []EndedIdleSession
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var candidates []model.ProjectSession
-		if err := tx.Where(`status = ? AND updated_at <= ? AND NOT EXISTS (
+		if err := tx.Where(`status IN ? AND updated_at <= ? AND NOT EXISTS (
 				SELECT 1 FROM project_session_members AS members
 				WHERE members.session_id = project_live_sessions.id
 				AND members.left_at IS NULL
-			)`, model.ProjectSessionActive, cutoff).
+			)`, []string{model.ProjectSessionStarting, model.ProjectSessionActive}, cutoff).
 			Order("project_id, id").Find(&candidates).Error; err != nil {
 			return err
 		}
@@ -840,11 +1129,14 @@ func (s *Store) EndIdleSessions(ctx context.Context, reconnectGrace time.Duratio
 				Count(&liveMembers).Error; err != nil {
 				return err
 			}
-			if liveMembers != 0 || session.Status != model.ProjectSessionActive ||
+			if liveMembers != 0 ||
+				(session.Status != model.ProjectSessionStarting &&
+					session.Status != model.ProjectSessionActive) ||
 				session.UpdatedAt.After(cutoff) {
 				continue
 			}
-			finalized := project.SnapshotSeq == project.HeadSeq
+			finalized := session.Status == model.ProjectSessionStarting ||
+				project.SnapshotSeq == project.HeadSeq
 			if finalized {
 				if err := s.endSessionTx(tx, &session, s.now()); err != nil {
 					return err
@@ -904,7 +1196,8 @@ func (s *Store) ReapStaleSessionMembers(ctx context.Context,
 			Select("members.id, members.session_id, sessions.project_id").
 			Joins("JOIN project_live_sessions AS sessions ON sessions.id = members.session_id").
 			Where("members.left_at IS NULL AND members.last_seen_at <= ? AND sessions.status IN ?",
-				cutoff, []string{model.ProjectSessionActive, model.ProjectSessionEnding}).
+				cutoff, []string{model.ProjectSessionStarting,
+					model.ProjectSessionActive, model.ProjectSessionEnding}).
 			Order("sessions.project_id, members.session_id, members.last_seen_at, members.id").
 			Limit(limit).Scan(&candidates).Error; err != nil {
 			return err
@@ -932,7 +1225,8 @@ func (s *Store) ReapStaleSessionMembers(ctx context.Context,
 			var session model.ProjectSession
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 				Where("id = ? AND project_id = ? AND status IN ?", group.SessionID,
-					group.ProjectID, []string{model.ProjectSessionActive,
+					group.ProjectID, []string{model.ProjectSessionStarting,
+						model.ProjectSessionActive,
 						model.ProjectSessionEnding}).
 				First(&session).Error; err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -988,9 +1282,11 @@ func copyOptionalUUID(value *uuid.UUID) *uuid.UUID {
 	return &copy
 }
 
-func (s *Store) hostCandidateTx(tx *gorm.DB, project model.CloudProject, sessionID, excludedMemberID uuid.UUID) (model.ProjectSessionMember, bool, error) {
+func (s *Store) hostCandidateTx(tx *gorm.DB, project model.CloudProject,
+	session model.ProjectSession, excludedMemberID uuid.UUID) (
+	model.ProjectSessionMember, bool, error) {
 	var members []model.ProjectSessionMember
-	if err := tx.Where("session_id = ? AND left_at IS NULL AND id <> ?", sessionID, excludedMemberID).
+	if err := tx.Where("session_id = ? AND left_at IS NULL AND id <> ?", session.ID, excludedMemberID).
 		Order("joined_at, id").Find(&members).Error; err != nil {
 		return model.ProjectSessionMember{}, false, err
 	}
@@ -1001,6 +1297,13 @@ func (s *Store) hostCandidateTx(tx *gorm.DB, project model.CloudProject, session
 		}
 		if err != nil {
 			return model.ProjectSessionMember{}, false, err
+		}
+		if session.CommandSchemaVersion == CollaborationCommandSchemaV3 {
+			role = member.EffectiveRole
+			if member.ReadinessRevision != session.PluginRequirementsRevision ||
+				member.ReadinessStatus != model.SessionReadinessReady {
+				continue
+			}
 		}
 		if RoleAllows(role, PermissionHostSession) {
 			return member, true, nil
@@ -1034,7 +1337,9 @@ func (s *Store) endSessionTx(tx *gorm.DB, session *model.ProjectSession, now tim
 func (s *Store) removeUserFromLiveSessionsTx(tx *gorm.DB, project model.CloudProject, userID uuid.UUID, now time.Time) error {
 	var sessions []model.ProjectSession
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("project_id = ? AND status = ?", project.ID, model.ProjectSessionActive).Find(&sessions).Error; err != nil {
+		Where("project_id = ? AND status IN ?", project.ID,
+			[]string{model.ProjectSessionStarting, model.ProjectSessionActive}).
+		Find(&sessions).Error; err != nil {
 		return err
 	}
 	for index := range sessions {
@@ -1055,7 +1360,9 @@ func (s *Store) removeUserFromLiveSessionsTx(tx *gorm.DB, project model.CloudPro
 func (s *Store) reconcileProjectHostsTx(tx *gorm.DB, project model.CloudProject, userID uuid.UUID, now time.Time) error {
 	var sessions []model.ProjectSession
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("project_id = ? AND status = ?", project.ID, model.ProjectSessionActive).Find(&sessions).Error; err != nil {
+		Where("project_id = ? AND status IN ?", project.ID,
+			[]string{model.ProjectSessionStarting, model.ProjectSessionActive}).
+		Find(&sessions).Error; err != nil {
 		return err
 	}
 	for index := range sessions {
@@ -1066,7 +1373,7 @@ func (s *Store) reconcileProjectHostsTx(tx *gorm.DB, project model.CloudProject,
 		if err := tx.First(&host, "id = ?", *sessions[index].HostMemberID).Error; err != nil || host.UserID != userID {
 			continue
 		}
-		candidate, found, err := s.hostCandidateTx(tx, project, sessions[index].ID, host.ID)
+		candidate, found, err := s.hostCandidateTx(tx, project, sessions[index], host.ID)
 		if err != nil {
 			return err
 		}
@@ -1127,7 +1434,8 @@ func (s *Store) evictSessionMembersTx(tx *gorm.DB, userID, deviceID,
 		Select("DISTINCT sessions.project_id").
 		Joins("JOIN project_live_sessions AS sessions ON sessions.id = members.session_id").
 		Where("sessions.status IN ? AND members.left_at IS NULL",
-			[]string{model.ProjectSessionActive, model.ProjectSessionEnding})
+			[]string{model.ProjectSessionStarting, model.ProjectSessionActive,
+				model.ProjectSessionEnding})
 	if userID != uuid.Nil {
 		projects = projects.Where("members.user_id = ?", userID)
 	}
@@ -1151,7 +1459,8 @@ func (s *Store) evictSessionMembersTx(tx *gorm.DB, userID, deviceID,
 		var sessions []model.ProjectSession
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("project_id = ? AND status IN ?", projectID,
-				[]string{model.ProjectSessionActive, model.ProjectSessionEnding}).
+				[]string{model.ProjectSessionStarting,
+					model.ProjectSessionActive, model.ProjectSessionEnding}).
 			Order("id").Find(&sessions).Error; err != nil {
 			return err
 		}
@@ -1178,6 +1487,25 @@ func (s *Store) evictSessionMembersTx(tx *gorm.DB, userID, deviceID,
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// checkSessionSecret admits a joiner to a password-protected session.
+//
+// The two failure modes are deliberately distinct at this layer so the handler
+// can tell the client whether to show the password field at all, but they carry
+// no information about the password itself: VerifyPassword is constant time and
+// an unprotected session accepts any secret, including none.
+func checkSessionSecret(session model.ProjectSession, secret SessionSecret) error {
+	if session.PasswordHash == nil {
+		return nil
+	}
+	if secret.Password == "" {
+		return ErrSessionPasswordRequired
+	}
+	if !auth.VerifyPassword(*session.PasswordHash, secret.Password) {
+		return ErrSessionPasswordInvalid
 	}
 	return nil
 }

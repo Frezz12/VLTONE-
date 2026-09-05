@@ -118,8 +118,9 @@ QString payloadOf(const QMimeData* mime, const char* type) {
 class DragTitle : public QLabel {
 public:
     DragTitle(const QString& text, const char* mime, QString payload,
-              QWidget* parent)
-        : QLabel(text, parent), m_mime(mime), m_payload(std::move(payload)) {
+              std::function<void()> dragFinished, QWidget* parent)
+        : QLabel(text, parent), m_mime(mime), m_payload(std::move(payload)),
+          m_dragFinished(std::move(dragFinished)) {
         setCursor(Qt::OpenHandCursor);
     }
 
@@ -135,12 +136,18 @@ protected:
             return;
         auto* drag = new QDrag(this);
         drag->setMimeData(dragPayload(m_mime, m_payload));
-        drag->exec(Qt::MoveAction | Qt::CopyAction, Qt::MoveAction);
+        // A successful drop rebuilds the strip. Announce it only after exec()
+        // returns so the drag source cannot be deleted from its own event stack.
+        if (drag->exec(Qt::MoveAction | Qt::CopyAction, Qt::MoveAction) !=
+                Qt::IgnoreAction &&
+            m_dragFinished)
+            m_dragFinished();
     }
 
 private:
     const char* m_mime;
     QString m_payload;
+    std::function<void()> m_dragFinished;
     QPoint m_press;
 };
 
@@ -184,9 +191,11 @@ public:
     /// Make this row a drag source carrying `payload`, and — with `takes` set —
     /// a target for the same kind of drag. `onDrop` is given the payload and
     /// the modifiers held at the drop, so Alt can mean "copy".
-    void setDragPayload(const char* mime, QString payload) {
+    void setDragPayload(const char* mime, QString payload,
+                        std::function<void()> dragFinished) {
         m_dragMime = mime;
         m_dragPayload = std::move(payload);
+        m_dragFinished = std::move(dragFinished);
         m_slot->setCursor(Qt::OpenHandCursor);
     }
     void setDropTarget(const char* mime,
@@ -291,7 +300,12 @@ private:
         drag->setMimeData(dragPayload(m_dragMime, m_dragPayload));
         drag->setPixmap(grab());
         drag->setHotSpot(m_press);
-        drag->exec(Qt::MoveAction | Qt::CopyAction, Qt::MoveAction);
+        // The target mutates the model; the source safely requests the shared
+        // rebuild once Qt has finished dispatching the drag.
+        if (drag->exec(Qt::MoveAction | Qt::CopyAction, Qt::MoveAction) !=
+                Qt::IgnoreAction &&
+            m_dragFinished)
+            m_dragFinished();
     }
 
     void refreshHover() {
@@ -405,6 +419,7 @@ private:
     /// Drag source: what this row hands over when it is picked up.
     const char* m_dragMime = nullptr;
     QString m_dragPayload;
+    std::function<void()> m_dragFinished;
     QPoint m_press;
     /// Drop target: what it takes, and what to do with it.
     const char* m_dropMime = nullptr;
@@ -740,8 +755,10 @@ QWidget* ChannelStrip::buildSlotRow(QToolButton* slot, const QString& channel,
                         emit edited();
                         emit structureChanged();
                     });
-                menu->exec(swap->mapToGlobal(QPoint(0, swap->height())));
-                menu->deleteLater();
+                // A modal exec() would let the queued rebuild delete this
+                // button and menu while their mouse-release stack is suspended.
+                menu->setAttribute(Qt::WA_DeleteOnClose);
+                menu->popup(swap->mapToGlobal(QPoint(0, swap->height())));
             });
     row->addSlotAction(swap);
 
@@ -892,8 +909,9 @@ QWidget* ChannelStrip::buildSlotWell(const QString& title, QWidget* addButton,
         // the chain comes with you.
         // Same look as any other section title — it is one, it just happens to
         // be a handle as well.
-        auto* handle = new DragTitle(title.toUpper(), drag.dragMime,
-                                     drag.dragPayload, box);
+        auto* handle = new DragTitle(
+            title.toUpper(), drag.dragMime, drag.dragPayload,
+            [this] { emit structureChanged(); }, box);
         handle->setProperty("role", "section");
         QFont f = handle->font();
         f.setPixelSize(9);
@@ -1045,8 +1063,8 @@ QWidget* ChannelStrip::buildInserts() {
         connect(b, &QWidget::customContextMenuRequested, this,
                 [this, b, insertId, index](const QPoint& at) {
                     QMenu* menu = buildInsertMenu(b, insertId, index);
-                    menu->exec(b->mapToGlobal(at));
-                    menu->deleteLater();
+                    menu->setAttribute(Qt::WA_DeleteOnClose);
+                    menu->popup(b->mapToGlobal(at));
                 });
         // The hover actions are the shortcuts to the three things that menu
         // offers most often; the menu keeps the rest.
@@ -1058,7 +1076,8 @@ QWidget* ChannelStrip::buildInserts() {
         // buildSlotRow always makes a SlotRow; the header cannot name the type
         // because it lives in this file's anonymous namespace.
         auto* slotRow = static_cast<SlotRow*>(row);
-        slotRow->setDragPayload(kInsertMime, channel + "\t" + insertId);
+        slotRow->setDragPayload(kInsertMime, channel + "\t" + insertId,
+                                [this] { emit structureChanged(); });
         slotRow->setDropTarget(
             kInsertMime, [this, channel, index](const QString& payload,
                                                 Qt::KeyboardModifiers mods) {
@@ -1101,8 +1120,8 @@ QWidget* ChannelStrip::buildInserts() {
     more->setButtonSize(16, 14);
     connect(more, &QAbstractButton::clicked, this, [this, more] {
         QMenu* menu = buildChainMenu(more);
-        menu->exec(more->mapToGlobal(QPoint(0, more->height())));
-        menu->deleteLater();
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        menu->popup(more->mapToGlobal(QPoint(0, more->height())));
     });
     headRow->addWidget(more);
 
@@ -1138,7 +1157,6 @@ void ChannelStrip::dropInsertAt(const QString& channel, const QString& payload,
         return;
     }
     emit edited();
-    emit structureChanged();
 }
 
 QMenu* ChannelStrip::buildChainMenu(QWidget* parent) {
@@ -1425,8 +1443,8 @@ QWidget* ChannelStrip::buildInstrument() {
                                 emit edited();
                                 emit structureChanged();
                             });
-                    menu->exec(slot->mapToGlobal(at));
-                    menu->deleteLater();
+                    menu->setAttribute(Qt::WA_DeleteOnClose);
+                    menu->popup(slot->mapToGlobal(at));
                 });
         // Addressed by track id and instrument slot id — the same pair an
         // insert uses, so the hover actions are the ones the inserts have.
@@ -1616,9 +1634,10 @@ QWidget* ChannelStrip::buildSends() {
     auto* add = new ui::IconButton(icons::Glyph::Plus, tr("Add send"), this);
     add->setButtonSize(16, 14);
     connect(add, &QAbstractButton::clicked, this, [this, add] {
-        QMenu menu(this);
-        populateAddSendMenu(&menu);
-        menu.exec(add->mapToGlobal(QPoint(0, add->height())));
+        auto* menu = new QMenu(add);
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        populateAddSendMenu(menu);
+        menu->popup(add->mapToGlobal(QPoint(0, add->height())));
     });
     WellDrag drag;
     drag.dragMime = kSendsMime;
@@ -2445,7 +2464,6 @@ void ChannelStrip::acceptChainDrop(const QString& sourceChannel, bool copy) {
         m_controller->collapseUndo(mark, tr("Move Plugins").toStdString());
     }
     emit edited();
-    emit structureChanged();
 }
 
 void ChannelStrip::acceptSendsDrop(const QString& sourceTrackId, bool copy) {
@@ -2454,7 +2472,6 @@ void ChannelStrip::acceptSendsDrop(const QString& sourceTrackId, bool copy) {
                                    m_trackId.toStdString(), !copy))
         return;
     emit edited();
-    emit structureChanged();
 }
 
 void ChannelStrip::applyTheme() {

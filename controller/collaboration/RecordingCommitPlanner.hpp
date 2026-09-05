@@ -105,9 +105,17 @@ struct RecordingCommitPlanResult {
 /// network, upload or UUID work.
 class RecordingCommitPlanner {
 public:
+    /// Exact number of comp-segment identities required for a layered
+    /// capture. This lets the durable uploader reserve deterministic ids
+    /// without duplicating the planner's overlap algorithm.
+    static std::optional<std::size_t> requiredCompSegmentCount(
+        const recovery::CloudRecordingCapture& capture);
+
     /// Pure pre-upload gate shared by the final planner. It validates exact
-    /// snapshot head, frozen recovery safety, live lease bindings, bounded
-    /// pass/command cost and target-range conflicts.
+    /// snapshot head, frozen recovery safety, optional live lease bindings,
+    /// bounded pass/command cost and target-range conflicts. An empty lease
+    /// list is the v3 new-clip path; the final command validator guarantees
+    /// that it cannot target an existing clip/take container.
     static RecordingCommitPreflightResult preflight(
         const SharedProjectDocument& snapshot,
         const recovery::CloudRecordingRecoveryRun& frozenRun,

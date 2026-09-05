@@ -13,7 +13,7 @@ test("administrator signs in and sees operational totals", async ({ page }) => {
   await page.getByLabel("Пароль").fill("correct horse battery staple");
   await page.getByRole("button", { name: "Войти" }).click();
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByText("Оперативный обзор")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Оперативный обзор" })).toBeVisible();
   await expect(page.getByText("42", { exact: true })).toBeVisible();
   await expect(page.getByText("1 250 000", { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "График запусков и крашей за 24 часа" })).toBeVisible();

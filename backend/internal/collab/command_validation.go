@@ -61,7 +61,14 @@ const (
 )
 
 func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool) ([]string, []FieldPrecondition, error) {
-	if err := validateCommandPayloadShape(kind, payload, allowBatch); err != nil {
+	return deriveCommandMetadataForSchema(kind, payload, allowBatch,
+		CollaborationCommandSchemaVersion)
+}
+
+func deriveCommandMetadataForSchema(kind string, payload json.RawMessage,
+	allowBatch bool, schemaVersion int) ([]string, []FieldPrecondition, error) {
+	if err := validateCommandPayloadShapeForSchema(kind, payload, allowBatch,
+		schemaVersion); err != nil {
 		return nil, nil, err
 	}
 	fields := make(map[string]struct{})
@@ -600,7 +607,8 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 			return nil, nil, invalidf("aggregate command must contain between 1 and %d commands", maxBatchCommands)
 		}
 		for _, command := range body.Commands {
-			childFields, childPreconditions, err := deriveCommandMetadata(command.Kind, command.Payload, false)
+			childFields, childPreconditions, err := deriveCommandMetadataForSchema(
+				command.Kind, command.Payload, false, schemaVersion)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -609,7 +617,7 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 			nestedPreconditions = append(nestedPreconditions, childPreconditions...)
 		}
 		if kind == "recording.commit" {
-			leases, err := recordingCommitLeaseReferences(payload)
+			leases, err := recordingCommitLeaseReferences(payload, schemaVersion)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -633,7 +641,14 @@ func deriveCommandMetadata(kind string, payload json.RawMessage, allowBatch bool
 // must be coordinated with record leases. It walks batches recursively so a
 // client cannot bypass the policy by changing the command envelope shape.
 func deriveCommandLeasePolicy(kind string, payload json.RawMessage, allowBatch bool) (commandLeasePolicy, error) {
-	if err := validateCommandPayloadShape(kind, payload, allowBatch); err != nil {
+	return deriveCommandLeasePolicyForSchema(kind, payload, allowBatch,
+		CollaborationCommandSchemaVersion)
+}
+
+func deriveCommandLeasePolicyForSchema(kind string, payload json.RawMessage,
+	allowBatch bool, schemaVersion int) (commandLeasePolicy, error) {
+	if err := validateCommandPayloadShapeForSchema(kind, payload, allowBatch,
+		schemaVersion); err != nil {
 		return commandLeasePolicy{}, err
 	}
 	policy := commandLeasePolicy{}
@@ -693,14 +708,15 @@ func deriveCommandLeasePolicy(kind string, payload json.RawMessage, allowBatch b
 			return commandLeasePolicy{}, invalidf("aggregate command payload is invalid")
 		}
 		if kind == "recording.commit" {
-			leaseReferences, err := recordingCommitLeaseReferences(payload)
+			leaseReferences, err := recordingCommitLeaseReferences(payload, schemaVersion)
 			if err != nil {
 				return commandLeasePolicy{}, err
 			}
 			policy.RecordingLeases = leaseReferences
 		}
 		for _, command := range body.Commands {
-			child, err := deriveCommandLeasePolicy(command.Kind, command.Payload, false)
+			child, err := deriveCommandLeasePolicyForSchema(command.Kind,
+				command.Payload, false, schemaVersion)
 			if err != nil {
 				return commandLeasePolicy{}, err
 			}
@@ -729,7 +745,14 @@ func uniqueSortedUUIDs(values []uuid.UUID) []uuid.UUID {
 }
 
 func deriveLifecycleSteps(kind string, payload json.RawMessage, allowBatch bool) ([]lifecycleStep, error) {
-	if err := validateCommandPayloadShape(kind, payload, allowBatch); err != nil {
+	return deriveLifecycleStepsForSchema(kind, payload, allowBatch,
+		CollaborationCommandSchemaVersion)
+}
+
+func deriveLifecycleStepsForSchema(kind string, payload json.RawMessage,
+	allowBatch bool, schemaVersion int) ([]lifecycleStep, error) {
+	if err := validateCommandPayloadShapeForSchema(kind, payload, allowBatch,
+		schemaVersion); err != nil {
 		return nil, err
 	}
 	if kind == "batch" || kind == "recording.commit" {
@@ -741,7 +764,8 @@ func deriveLifecycleSteps(kind string, payload json.RawMessage, allowBatch bool)
 		}
 		var steps []lifecycleStep
 		for _, command := range body.Commands {
-			childSteps, err := deriveLifecycleSteps(command.Kind, command.Payload, false)
+			childSteps, err := deriveLifecycleStepsForSchema(command.Kind,
+				command.Payload, false, schemaVersion)
 			if err != nil {
 				return nil, err
 			}

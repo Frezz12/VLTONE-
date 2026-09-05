@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -83,6 +84,10 @@ func (s *Signer) Verify(token, scope string, now time.Time) (Claims, error) {
 	return claims, nil
 }
 
+// MinimumCodePepperBytes is the floor for the pepper behind HashLowEntropyCode.
+// The server refuses to start with less when collaboration is enabled.
+const MinimumCodePepperBytes = 32
+
 func RandomToken(bytes int) (string, error) {
 	buffer := make([]byte, bytes)
 	if _, err := rand.Read(buffer); err != nil {
@@ -94,4 +99,31 @@ func RandomToken(bytes int) (string, error) {
 func HashToken(token string) string {
 	digest := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(digest[:])
+}
+
+// HashLowEntropyCode keys a short shared secret with a server-held pepper.
+//
+// HashToken is a bare SHA-256, which is the right thing for a 32-byte token and
+// the wrong thing for a twelve digit invite code: that whole space is a 10^12
+// entry rainbow table anyone can precompute, so a database disclosure would
+// hand over every outstanding invite. Keying the digest with a pepper the
+// database does not contain removes that. It stays deterministic, so the result
+// can back a unique index and lookups are equality on the HMAC rather than any
+// comparison of the code itself.
+//
+// `domain` separates uses of the same pepper. Rotating the pepper invalidates
+// every outstanding code, which is why long tokens are kept alongside them.
+func HashLowEntropyCode(pepper []byte, domain, code string) (string, error) {
+	if len(pepper) < MinimumCodePepperBytes {
+		return "", fmt.Errorf("invite code pepper must be at least %d bytes",
+			MinimumCodePepperBytes)
+	}
+	if domain == "" || code == "" {
+		return "", errors.New("code domain and value are required")
+	}
+	mac := hmac.New(sha256.New, pepper)
+	mac.Write([]byte(domain))
+	mac.Write([]byte{0})
+	mac.Write([]byte(code))
+	return hex.EncodeToString(mac.Sum(nil)), nil
 }

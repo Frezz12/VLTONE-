@@ -10,6 +10,7 @@
 #include <fstream>
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <iomanip>
@@ -45,6 +46,14 @@ std::string ProjectSerializer::statePath(const std::string& packageDir) {
 }
 
 namespace {
+
+fs::path preferredManifestPath(const fs::path& package) {
+    std::string extension = package.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    return extension == ".vlt" ? package / package.filename()
+                               : package / ProjectSerializer::kProjectFile;
+}
 
 using serialization::insertFromJson;
 using serialization::insertToJson;
@@ -748,6 +757,9 @@ json documentToJson(const ProjectModel& project, MediaPaths media) {
     root["format"] = "vlt-project";
     root["version"] = ProjectSerializer::kFormatVersion;
     root["name"] = project.name;
+    if (!project.author.empty()) root["author"] = project.author;
+    if (!project.coverImagePath.empty())
+        root["cover"] = mediaReference(project.coverImagePath, media);
     root["tempo"] = project.tempo;
     root["timeSigNumerator"] = project.timeSigNumerator;
     root["timeSigDenominator"] = project.timeSigDenominator;
@@ -782,6 +794,12 @@ audio::Result documentFromJson(ProjectModel& out, const json& root,
     out = ProjectModel{};
     try {
         out.name = root.value("name", "Untitled");
+        out.author = root.value("author", std::string());
+        const std::string cover = root.value("cover", std::string());
+        if (!cover.empty()) {
+            out.coverImagePath = platform::pathToUtf8(
+                platform::pathFromUtf8(mediaDir) / platform::pathFromUtf8(cover));
+        }
         out.tempo = root.value("tempo", 120.0);
         out.timeSigNumerator = root.value("timeSigNumerator", 4);
         out.timeSigDenominator = root.value("timeSigDenominator", 4);
@@ -1091,31 +1109,56 @@ audio::Result ProjectSerializer::save(const ProjectModel& project,
             for (auto& take : c.takes) copyMedia(take.filePath);
         }
     }
+    copyMedia(persisted.coverImagePath);
     if (!copyFailure.empty()) {
         return audio::Result::fail(audio::EngineError::FileWriteError,
                                    std::move(copyFailure));
     }
 
-    return saveDocument(
-        persisted,
-        platform::pathToUtf8(platform::pathFromUtf8(packageDir) / kProjectFile),
-        MediaPaths::Basenames);
+    const fs::path manifest =
+        preferredManifestPath(platform::pathFromUtf8(packageDir));
+    const audio::Result saved = saveDocument(
+        persisted, platform::pathToUtf8(manifest), MediaPaths::Basenames);
+    if (saved && manifest.filename() != fs::path(kProjectFile)) {
+        ec.clear();
+        fs::remove(platform::pathFromUtf8(packageDir) / kProjectFile, ec);
+    }
+    return saved;
+}
+
+std::string ProjectSerializer::manifestPath(const std::string& packageDir) {
+    const fs::path package = platform::pathFromUtf8(packageDir);
+    const fs::path preferred = preferredManifestPath(package);
+    std::error_code ec;
+    if (fs::is_regular_file(preferred, ec))
+        return platform::pathToUtf8(preferred);
+
+    const fs::path legacy = package / kProjectFile;
+    ec.clear();
+    if (fs::is_regular_file(legacy, ec))
+        return platform::pathToUtf8(legacy);
+
+    const fs::path legacyJson = package / "project.json";
+    ec.clear();
+    if (fs::is_regular_file(legacyJson, ec))
+        return platform::pathToUtf8(legacyJson);
+
+    ec.clear();
+    for (fs::directory_iterator it(package, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        std::string extension = it->path().extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return char(std::tolower(c)); });
+        if (extension == ".vlt")
+            return platform::pathToUtf8(it->path());
+    }
+    return platform::pathToUtf8(preferred);
 }
 
 audio::Result ProjectSerializer::load(ProjectModel& out,
                                       const std::string& packageDir) {
-    const fs::path package = platform::pathFromUtf8(packageDir);
-    fs::path manifest = package / kProjectFile;
-    std::error_code ec;
-    // Migration is deliberately read-only: old packages open, while every new
-    // Save As is VLT. Saving an opened legacy package in place continues to use
-    // its existing media/state directories so no referenced content is lost.
-    if (!fs::is_regular_file(manifest, ec)) {
-        const fs::path legacy = package / "project.json";
-        ec.clear();
-        if (fs::is_regular_file(legacy, ec)) manifest = legacy;
-    }
-    return loadDocument(out, platform::pathToUtf8(manifest),
+    return loadDocument(out, manifestPath(packageDir),
                         mediaPath(packageDir));
 }
 

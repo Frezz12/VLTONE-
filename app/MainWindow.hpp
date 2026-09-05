@@ -47,6 +47,7 @@ class NoteContextPanel;
 class FileBrowserPanel;
 class AiChatPanel;
 class WebBrowserPanel;
+class NotebookWindow;
 class TypingKeyboard;
 class MidiInputManager;
 namespace collab {
@@ -62,7 +63,10 @@ class CloudSessionLifecycleController;
 class RecordingLeaseCoordinator;
 class PresenceInputRouter;
 class PresenceOverlay;
-class SessionStatusWidget;
+class SessionStatusStrip;
+class CloudAssetTransferManager;
+class CloudRecordingAssetCoordinator;
+struct CloudRecordingAssetResult;
 enum class SurfaceKind;
 struct TransportFrame;
 }
@@ -119,7 +123,9 @@ public:
         collab::CloudProjectClient* projectClient,
         collab::RecordingLeaseCoordinator* recordingLeases,
         collab::CloudProjectAssetHydrator* assetHydrator,
-        collab::AssetCache* assetCache);
+        collab::AssetCache* assetCache,
+        collab::CloudAssetTransferManager* assetTransfers = nullptr,
+        collab::CloudRecordingAssetCoordinator* recordingAssets = nullptr);
     void setCloudSharedAssetMutationBridge(
         collab::CloudSharedAssetMutationBridge* bridge);
 #endif
@@ -132,10 +138,11 @@ public:
     bool checkFreshProjectEmptyForTest() const {
         return m_controller.project().tracks.empty();
     }
+    bool checkRemoteCommandMetadataForTest(QString* error = nullptr) const;
 
     /// Open a VLT package selected by the File menu, passed on the command
     /// line, or delivered by the operating system after a double-click. Both
-    /// the outer `<name>.vlt` package and its inner `Project.vlt` manifest are
+    /// the outer `<name>.vlt` package and its inner same-named manifest are
     /// accepted so the same project is convenient on macOS, Windows and Linux.
     /// A `.vltt` package is routed to the new-project-from-template flow, so an
     /// operating-system double-click can never make Save overwrite a template.
@@ -224,6 +231,16 @@ public:
     bool openDemoSampler(const QString& samplePath = {});
 
     /// Headless/screenshot check for the built-in Graphit saturator editor.
+    /// Runs the join flow to completion and returns the project that was
+    /// joined, or empty when the user cancelled or it failed. `seedCode`
+    /// pre-fills the field from an invitation link and is never auto-submitted.
+    /// Public so the DAW_SHOT_JOIN screenshot hook can reach it, like the other
+    /// demo surfaces here.
+    QString openJoinSessionDialog(const QString& seedCode = {},
+                                  QWidget* parent = nullptr);
+    /// Public alongside the other demo surfaces so the DAW_SHOT_CLOUD
+    /// screenshot hook can open it.
+    void onOpenCloudProjects();
     bool openDemoGraphit();
     bool checkGraphitPanelForTest();
     void resizeGraphitForShot();
@@ -700,6 +717,8 @@ private:
     /// hidden so downloads are not cancelled.
     void ensureWebBrowser();
     void setWebVisible(bool visible, bool persist = true);
+    void ensureNotebook();
+    void setNotebookVisible(bool visible, bool persist = true);
     void applyRightPanelWidths();
     /// Apply the preferred track-header width against the live arrangement
     /// bounds, and keep the tool strip aligned with it.
@@ -736,7 +755,13 @@ private:
                                            const QString& ownerId,
                                            const QString& objectId);
     void onPublishCloudProject();
-    void onOpenCloudProjects();
+    /// Asks for an optional session password, then starts the session.
+    /// Shows one short, already-safe line to the user. Routed to the session
+    /// strip, which is always visible, rather than the CPU status bar, which
+    /// the user can switch off. `timeoutMs` of 0 leaves it until superseded.
+    void showTransientStatus(const QString& safeMessage, int timeoutMs = 5000,
+                             bool error = false);
+    void onStartCollaborationSession();
     void onInvitePeople();
     void onSessionSettings();
     bool openCloudProject(const QString& projectId,
@@ -757,6 +782,12 @@ private:
     bool prepareCloudRecordingForProjectTransition();
     bool cloudRecordingContextIsWritable(
         const std::vector<std::string>& targets) const;
+    void tryUploadPendingCloudRecording();
+    void refreshPendingCloudRecordingPreviews();
+    void handleCloudRecordingAssetsReady(
+        quint64 generation,
+        const QVector<collab::CloudRecordingAssetResult>& results);
+    void cleanupCommittedCloudRecording(const QString& operationId);
     bool ensureCloudRecordingRecoverySession();
     bool cloudRecordingRecoveryExists() const;
 #endif
@@ -784,7 +815,7 @@ private:
     collab::PresenceOverlay* m_trackListPresence = nullptr;
     collab::PresenceOverlay* m_mixerPresence = nullptr;
     collab::PresenceOverlay* m_pianoRollPresence = nullptr;
-    collab::SessionStatusWidget* m_sessionStatus = nullptr;
+    collab::SessionStatusStrip* m_sessionStrip = nullptr;
 #ifdef DAW_ENABLE_COLLABORATION
     struct PublicationUiState;
     std::unique_ptr<PublicationUiState> m_publicationUi;
@@ -798,9 +829,13 @@ private:
         m_cloudSharedAssetMutationBridge;
     QPointer<collab::AssetCache> m_collaborationAssetCache;
     QPointer<collab::RecordingLeaseCoordinator> m_recordingLeases;
+    QPointer<collab::CloudRecordingAssetCoordinator> m_cloudRecordingAssets;
     struct CloudRecordingRuntime;
     std::unique_ptr<CloudRecordingRuntime> m_cloudRecording;
     quint64 m_cloudRecordingGeneration = 0;
+    quint64 m_cloudRecordingAssetGeneration = 0;
+    QString m_cloudRecordingUploadRunId;
+    QString m_cloudRecordingUploadOperationId;
     bool m_preserveCloudRecoverySession = false;
     QAction* m_publishProjectAction = nullptr;
     QAction* m_cloudProjectsAction = nullptr;
@@ -837,6 +872,7 @@ private:
     QWidget* m_webContainer = nullptr;
     WebBrowserPanel* m_webPanel = nullptr;
     QWidget* m_webHandle = nullptr;
+    NotebookWindow* m_notebookWindow = nullptr;
     AiChatPanel* m_aiPanel = nullptr;
     QWidget* m_aiHandle = nullptr;
     /// The row holding browser | inspector | arrangement | assistant. Kept

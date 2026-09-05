@@ -954,6 +954,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** Re-run exact plugin compatibility and update the participant's effective role */
+        put: operations["updateCloudProjectSessionReadiness"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate a v3 lobby after every editor is ready or remains a viewer */
+        post: operations["activateCloudProjectSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/desktop/projects/{projectId}/sessions/{sessionId}/leave": {
         parameters: {
             query?: never;
@@ -1640,7 +1680,7 @@ export interface components {
                 enabled: boolean;
                 entitled: boolean;
                 /** @constant */
-                recording: false;
+                recording: true;
                 maxParticipants: number;
                 storage: {
                     /** Format: int64 */
@@ -1737,10 +1777,14 @@ export interface components {
             revoked_at?: string | null;
             /** Format: date-time */
             created_at: string;
+            /** @description Width of the short numeric code */
+            code_digits?: number;
         };
         CreatedProjectInvite: {
             invite: components["schemas"]["ProjectInvite"];
             token: string;
+            /** @description Short numeric invitation code */
+            code?: string;
         };
         ProjectSnapshot: {
             /** Format: uuid */
@@ -1982,6 +2026,11 @@ export interface components {
             status: "starting" | "active" | "ending" | "ended";
             /** Format: int64 */
             version: number;
+            /** @enum {unknown} */
+            command_schema_version: 2 | 3;
+            /** Format: int64 */
+            plugin_requirements_revision: number;
+            plugin_requirements: components["schemas"]["PluginRequirement"][];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -1995,17 +2044,29 @@ export interface components {
             /** @description SemVer 2.0.0 application version */
             appVersion: string;
             engineVersion: string;
-            /** @constant */
-            commandSchemaVersion: 2;
+            /** @enum {unknown} */
+            commandSchemaVersion: 2 | 3;
             /** @constant */
             projectFormatVersion: 7;
+        };
+        JoinProjectSessionRequest: {
+            /** @description SemVer 2.0.0 application version */
+            appVersion: string;
+            engineVersion: string;
+            /** @enum {unknown} */
+            commandSchemaVersion: 2 | 3;
+            /** @constant */
+            projectFormatVersion: 7;
+            /** @description Required when the session reports passwordRequired */
+            password?: string;
+            readiness?: components["schemas"]["PluginReadinessReport"];
         };
         StartProjectSessionRequest: {
             /** @description SemVer 2.0.0 application version */
             appVersion: string;
             engineVersion: string;
-            /** @constant */
-            commandSchemaVersion: 2;
+            /** @enum {unknown} */
+            commandSchemaVersion: 2 | 3;
             /** @constant */
             projectFormatVersion: 7;
             /**
@@ -2013,6 +2074,43 @@ export interface components {
              * @enum {unknown}
              */
             mode: "independent" | "follow_host" | "synchronized";
+            /** @description Optional session password; omit for an unprotected session */
+            password?: string;
+            pluginRequirements?: components["schemas"]["PluginRequirement"][];
+            readiness?: components["schemas"]["PluginReadinessReport"];
+        } & unknown;
+        PluginRequirement: {
+            /** @enum {unknown} */
+            format: "internal" | "clap" | "vst3" | "au" | "vst";
+            nativeUid: string;
+            vendor: string;
+            version: string;
+            stateSchemaVersion: number;
+            /** @enum {unknown} */
+            kind: "instrument" | "effect";
+            /** @enum {unknown} */
+            channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+        };
+        PluginReadinessResult: {
+            /** @enum {unknown} */
+            format: "internal" | "clap" | "vst3" | "au" | "vst";
+            nativeUid: string;
+            vendor: string;
+            version: string;
+            stateSchemaVersion: number;
+            /** @enum {unknown} */
+            kind: "instrument" | "effect";
+            /** @enum {unknown} */
+            channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+            /** @enum {unknown} */
+            status: "ready" | "missing" | "version_mismatch" | "probe_failed";
+            buildHmac?: string;
+        };
+        PluginReadinessReport: {
+            /** Format: int64 */
+            revision: number;
+            stayViewer: boolean;
+            plugins: components["schemas"]["PluginReadinessResult"][];
         };
         ProjectSessionMember: {
             /** Format: uuid */
@@ -2023,6 +2121,13 @@ export interface components {
             user_id: string;
             /** Format: uuid */
             device_id: string;
+            /** @enum {unknown} */
+            effective_role: "owner" | "editor" | "viewer";
+            /** @enum {unknown} */
+            readiness_status: "ready" | "blocked" | "viewer";
+            /** Format: int64 */
+            readiness_revision: number;
+            plugin_readiness: components["schemas"]["PluginReadinessResult"][];
             /** Format: date-time */
             joined_at: string;
             /** Format: date-time */
@@ -2033,6 +2138,8 @@ export interface components {
         ProjectSessionState: {
             session: components["schemas"]["ProjectLiveSession"];
             members: components["schemas"]["ProjectSessionMember"][];
+            /** @description Whether a new participant must supply a session password. The password itself is never returned. */
+            passwordRequired: boolean;
         };
         TrackLeaseRequest: {
             /** Format: uuid */
@@ -2202,13 +2309,15 @@ export interface components {
             collaboration: {
                 enabled: boolean;
                 /** @constant */
-                protocol: "vlt-collab-v2";
+                protocol: "vlt-collab-v3";
+                protocols: ("vlt-collab-v2" | "vlt-collab-v3")[];
                 /** @constant */
                 project_format: 7;
                 /** @constant */
-                command_schema: 2;
+                command_schema: 3;
+                command_schemas: (2 | 3)[];
                 /** @constant */
-                recording: false;
+                recording: true;
                 max_participants: number;
             };
         };
@@ -2520,7 +2629,7 @@ export interface components {
             /** @constant */
             format: "internal";
             /** @enum {unknown} */
-            uid: "daw.sampler" | "daw.equalizer" | "daw.gravity";
+            uid: "daw.sampler" | "daw.equalizer" | "daw.gravity" | "daw.graphit";
             vendor: string;
             pluginVersion: string;
             stateSchemaVersion: number;
@@ -2841,7 +2950,7 @@ export interface components {
             };
             insert?: {
                 /** @enum {unknown} */
-                uid?: "daw.equalizer" | "daw.gravity";
+                uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit";
             };
         });
         pluginRefPayload: {
@@ -2878,7 +2987,7 @@ export interface components {
             };
             replacement?: {
                 /** @enum {unknown} */
-                uid?: "daw.equalizer" | "daw.gravity";
+                uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit";
             };
         });
         pluginPropertyPayload: {
@@ -3781,7 +3890,7 @@ export interface components {
                     /** @constant */
                     format: "internal";
                     /** @enum {unknown} */
-                    uid: "daw.sampler" | "daw.equalizer" | "daw.gravity";
+                    uid: "daw.sampler" | "daw.equalizer" | "daw.gravity" | "daw.graphit";
                     vendor: string;
                     pluginVersion: string;
                     stateSchemaVersion: number;
@@ -3817,7 +3926,7 @@ export interface components {
                     };
                     insert?: {
                         /** @enum {unknown} */
-                        uid?: "daw.equalizer" | "daw.gravity";
+                        uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit";
                     };
                 });
                 pluginRefPayload: {
@@ -3854,7 +3963,7 @@ export interface components {
                     };
                     replacement?: {
                         /** @enum {unknown} */
-                        uid?: "daw.equalizer" | "daw.gravity";
+                        uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit";
                     };
                 });
                 pluginPropertyPayload: {
@@ -4440,6 +4549,179 @@ export interface components {
                 };
             };
         } & components["schemas"]["bodyShape"];
+        externalPluginText: string;
+        externalSharedInsert: {
+            id: components["schemas"]["id"];
+            name: string;
+            bypassed: boolean;
+            /** @enum {unknown} */
+            format: "clap" | "vst3" | "au" | "vst";
+            uid: components["schemas"]["externalPluginText"];
+            vendor: components["schemas"]["externalPluginText"] & unknown;
+            pluginVersion: components["schemas"]["externalPluginText"] & unknown;
+            stateSchemaVersion: number;
+            mix: number;
+            /** @enum {unknown} */
+            channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+            sidechainTrackId: components["schemas"]["optionalId"];
+            stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            parameters: components["schemas"]["insertParameter"][];
+            rightParameters: components["schemas"]["insertParameter"][];
+            assetBindings: components["schemas"]["pluginAssetBinding"][];
+        };
+        "$defs-sharedInsert": components["schemas"]["sharedInsert"] | components["schemas"]["externalSharedInsert"];
+        ordinaryBody: components["schemas"]["nonBatchBody"] & unknown;
+        "$defs-pluginAddPayload": {
+            location: components["schemas"]["pluginLocation"];
+            insert: components["schemas"]["$defs-sharedInsert"];
+            afterId: components["schemas"]["optionalId"];
+        } & (unknown & unknown);
+        "$defs-pluginReplacePayload": {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            replacement: components["schemas"]["$defs-sharedInsert"];
+        } & unknown;
+        "$defs-pluginStatePayload": {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            pluginVersion: string;
+            stateSchemaVersion: number;
+            stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            parameters: components["schemas"]["insertParameter"][];
+            rightParameters: components["schemas"]["insertParameter"][];
+            assetBindings: components["schemas"]["pluginAssetBinding"][];
+        };
+        "$defs-nonBatchBody": components["schemas"]["ordinaryBody"] | {
+            /** @constant */
+            kind: "plugin.add";
+            payload: components["schemas"]["$defs-pluginAddPayload"];
+        } | {
+            /** @constant */
+            kind: "plugin.replace";
+            payload: components["schemas"]["$defs-pluginReplacePayload"];
+        } | {
+            /** @constant */
+            kind: "plugin.setState";
+            payload: components["schemas"]["$defs-pluginStatePayload"];
+        };
+        "$defs-batchItem": {
+            kind: components["schemas"]["kind"];
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+        } & components["schemas"]["$defs-nonBatchBody"];
+        "$defs-recordingCommitPayload": {
+            leases: components["schemas"]["recordingLease"][];
+            commands: components["schemas"]["recordingCommitItem"][];
+        };
+        "$defs-batchPayload": {
+            commands: components["schemas"]["$defs-batchItem"][];
+        };
+        "$defs-bodyShape": components["schemas"]["$defs-nonBatchBody"] | {
+            /** @constant */
+            kind: "recording.commit";
+            payload: components["schemas"]["$defs-recordingCommitPayload"];
+        } | {
+            /** @constant */
+            kind: "batch";
+            payload: components["schemas"]["$defs-batchPayload"];
+        };
+        /**
+         * VLT Project Command v3
+         * @description Collaboration v3 command. It preserves v2 operations and adds path-free external plugin inserts and opaque state assets.
+         */
+        "project-command-v3.schema": {
+            /** @constant */
+            schemaVersion: 3;
+            opId: components["schemas"]["id"];
+            transactionId: components["schemas"]["optionalId"];
+            baseServerSeq: number;
+            kind: components["schemas"]["kind"];
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+            touchedFields: string[];
+            $defs: {
+                externalPluginText: string;
+                externalSharedInsert: {
+                    id: components["schemas"]["id"];
+                    name: string;
+                    bypassed: boolean;
+                    /** @enum {unknown} */
+                    format: "clap" | "vst3" | "au" | "vst";
+                    uid: components["schemas"]["externalPluginText"];
+                    vendor: components["schemas"]["externalPluginText"] & unknown;
+                    pluginVersion: components["schemas"]["externalPluginText"] & unknown;
+                    stateSchemaVersion: number;
+                    mix: number;
+                    /** @enum {unknown} */
+                    channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+                    sidechainTrackId: components["schemas"]["optionalId"];
+                    stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    parameters: components["schemas"]["insertParameter"][];
+                    rightParameters: components["schemas"]["insertParameter"][];
+                    assetBindings: components["schemas"]["pluginAssetBinding"][];
+                };
+                sharedInsert: components["schemas"]["sharedInsert"] | components["schemas"]["externalSharedInsert"];
+                pluginAddPayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insert: components["schemas"]["$defs-sharedInsert"];
+                    afterId: components["schemas"]["optionalId"];
+                } & (unknown & unknown);
+                pluginReplacePayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    replacement: components["schemas"]["$defs-sharedInsert"];
+                } & unknown;
+                pluginStatePayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    pluginVersion: string;
+                    stateSchemaVersion: number;
+                    stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    parameters: components["schemas"]["insertParameter"][];
+                    rightParameters: components["schemas"]["insertParameter"][];
+                    assetBindings: components["schemas"]["pluginAssetBinding"][];
+                };
+                ordinaryBody: components["schemas"]["nonBatchBody"] & unknown;
+                nonBatchBody: components["schemas"]["ordinaryBody"] | {
+                    /** @constant */
+                    kind: "plugin.add";
+                    payload: components["schemas"]["$defs-pluginAddPayload"];
+                } | {
+                    /** @constant */
+                    kind: "plugin.replace";
+                    payload: components["schemas"]["$defs-pluginReplacePayload"];
+                } | {
+                    /** @constant */
+                    kind: "plugin.setState";
+                    payload: components["schemas"]["$defs-pluginStatePayload"];
+                };
+                batchItem: {
+                    kind: components["schemas"]["kind"];
+                    payload: Record<string, never>;
+                    preconditions: components["schemas"]["precondition"][];
+                } & components["schemas"]["$defs-nonBatchBody"];
+                batchPayload: {
+                    commands: components["schemas"]["$defs-batchItem"][];
+                };
+                recordingCommitPayload: {
+                    leases: components["schemas"]["recordingLease"][];
+                    commands: components["schemas"]["recordingCommitItem"][];
+                };
+                bodyShape: components["schemas"]["$defs-nonBatchBody"] | {
+                    /** @constant */
+                    kind: "recording.commit";
+                    payload: components["schemas"]["$defs-recordingCommitPayload"];
+                } | {
+                    /** @constant */
+                    kind: "batch";
+                    payload: components["schemas"]["$defs-batchPayload"];
+                };
+            };
+        } & components["schemas"]["$defs-bodyShape"];
     };
     responses: {
         /** @description Structured API error */
@@ -5387,7 +5669,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["project-command-v2.schema"];
+                "application/json": components["schemas"]["project-command-v2.schema"] | components["schemas"]["project-command-v3.schema"];
             };
         };
         responses: {
@@ -5784,7 +6066,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description One-use invitation; token is returned only here */
+            /** @description One-use invitation. The token and the short code are returned only here; neither is stored in clear and neither is ever logged. */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -5828,7 +6110,9 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    token: string;
+                    token?: string;
+                    /** @description Short numeric invitation code; separators are ignored */
+                    code?: string;
                 };
             };
         };
@@ -5842,7 +6126,10 @@ export interface operations {
                     "application/json": components["schemas"]["CloudProjectView"];
                 };
             };
+            404: components["responses"]["Error"];
             410: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
         };
     };
     startCloudProjectSession: {
@@ -5931,7 +6218,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SessionCompatibilityRequest"];
+                "application/json": components["schemas"]["JoinProjectSessionRequest"];
             };
         };
         responses: {
@@ -5944,8 +6231,64 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectSessionState"];
                 };
             };
+            403: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+        };
+    };
+    updateCloudProjectSessionReadiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PluginReadinessReport"];
+            };
+        };
+        responses: {
+            /** @description Readiness and effective role updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSessionState"];
+                };
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    activateCloudProjectSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Lobby activated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSessionState"];
+                };
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     leaveCloudProjectSession: {

@@ -469,6 +469,10 @@ public:
     /// Draw the value arc from the middle of the ring rather than from its
     /// start — right for anything bipolar (pan, tension, an envelope amount).
     void setBipolar(bool bipolar);
+    /// Map the knob travel geometrically instead of linearly. This is intended
+    /// for positive, ratio-based parameters such as frequency: one pixel then
+    /// represents the same musical interval at 30 Hz and at 3 kHz.
+    void setLogarithmic(bool logarithmic);
     /// Snap to whole numbers, for a stepped parameter.
     void setStepped(bool stepped) { m_stepped = stepped; }
     void setFormatter(std::function<QString(double)> formatter);
@@ -537,6 +541,7 @@ protected:
 private:
     void commit(double value);
     double fraction() const;
+    double valueForFraction(double fraction) const;
     QString text() const;
 
     QString m_caption;
@@ -546,6 +551,7 @@ private:
     double m_default = 0.0;
     QColor m_arcColor;
     bool m_bipolar = false;
+    bool m_logarithmic = false;
     bool m_stepped = false;
     bool m_compact = false;
     std::function<double(double)> m_detent;
@@ -553,7 +559,7 @@ private:
     /// Non-zero once `setBare` has been called: the ring's exact diameter.
     int m_bare = 0;
     std::function<QString(double)> m_formatter;
-    double m_dragStartValue = 0.0;
+    double m_dragStartFraction = 0.0;
     int m_dragStartY = 0;
     bool m_dragging = false;
     bool m_automatable = false;

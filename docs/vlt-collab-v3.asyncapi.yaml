@@ -1,0 +1,322 @@
+asyncapi: 2.6.0
+id: urn:vltstudio:collaboration:v3
+info:
+  title: VLTONE Collaboration Protocol
+  version: 3.0.0
+  description: |
+    Collaboration v3 adds a real plugin-readiness lobby and exact external
+    plugin contracts. Project transport remains independent and local. Durable
+    state is recovered through REST bootstrap and project-command-v3; this
+    stream is never the sole copy of an operation.
+defaultContentType: application/json
+
+servers:
+  production:
+    url: api.vltstudio.example
+    protocol: wss
+    security: [{ desktopBearer: [] }]
+    description: Clients must negotiate the vlt-collab-v3 subprotocol.
+
+channels:
+  /v1/desktop/projects/{projectId}/live:
+    parameters:
+      projectId:
+        schema: { type: string, format: uuid }
+    bindings:
+      ws:
+        headers:
+          type: object
+          properties:
+            Sec-WebSocket-Protocol: { const: vlt-collab-v3 }
+          required: [Sec-WebSocket-Protocol]
+        bindingVersion: 0.1.0
+    publish:
+      operationId: receiveV3ClientMessage
+      message:
+        oneOf:
+          - $ref: '#/components/messages/Hello'
+          - $ref: '#/components/messages/OpSubmit'
+          - $ref: '#/components/messages/PresenceClick'
+          - $ref: '#/components/messages/SnapshotHash'
+    subscribe:
+      operationId: receiveV3ServerMessage
+      message:
+        oneOf:
+          - $ref: '#/components/messages/Welcome'
+          - $ref: '#/components/messages/OpCommitted'
+          - $ref: '#/components/messages/OpRejected'
+          - $ref: '#/components/messages/SessionReadinessChanged'
+          - $ref: '#/components/messages/SessionActivated'
+          - $ref: '#/components/messages/HashRequested'
+          - $ref: '#/components/messages/HashVerified'
+
+components:
+  securitySchemes:
+    desktopBearer:
+      type: httpApiKey
+      name: Authorization
+      in: header
+
+  messages:
+    Hello:
+      name: hello
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            properties:
+              type: { const: hello }
+              payload: { $ref: '#/components/schemas/HelloPayload' }
+            required: [type, payload]
+    Welcome:
+      name: welcome
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: welcome }
+              payload: { $ref: '#/components/schemas/WelcomePayload' }
+            required: [type, payload]
+    OpSubmit:
+      name: op.submit
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            properties:
+              type: { const: op.submit }
+              payload:
+                type: object
+                additionalProperties: false
+                required: [command]
+                properties:
+                  command: { $ref: '../protocol/schema/project-command-v3.schema.json' }
+            required: [type, payload]
+    OpCommitted:
+      name: op.committed
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: op.committed }
+              payload:
+                type: object
+                required: [projectId, serverSeq, actorUserId, actorDeviceId, committedAtMs, command]
+                properties:
+                  projectId: { type: string, format: uuid }
+                  serverSeq: { type: integer, minimum: 1 }
+                  actorUserId: { type: string, format: uuid }
+                  actorDeviceId: { type: string, format: uuid }
+                  committedAtMs: { type: integer, minimum: 0 }
+                  command: { $ref: '../protocol/schema/project-command-v3.schema.json' }
+            required: [type, payload]
+    OpRejected:
+      name: op.rejected
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: op.rejected }
+              payload:
+                type: object
+                additionalProperties: false
+                required: [requestMessageId, code, message, retryable]
+                properties:
+                  requestMessageId: { type: string, format: uuid }
+                  opId: { type: string, format: uuid }
+                  code:
+                    enum: [invalid_message, forbidden, read_only, session_inactive, session_starting, plugin_not_ready, version_mismatch, hash_consensus_required, stale_precondition, entity_deleted, asset_incomplete, lease_required, lease_conflict, sequence_gap, operation_id_reused, conflict, rate_limited]
+                  message: { type: string, maxLength: 240 }
+                  retryable: { type: boolean }
+                  headSeq: { type: integer, minimum: 0 }
+            required: [type, payload]
+    PresenceClick:
+      name: presence.click
+      description: Visual-only semantic pointer feedback; it never invokes QWidget, QAction, native input, or a remote command.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            properties:
+              type: { const: presence.click }
+              ephemeralSeq: { type: integer, minimum: 0 }
+              payload: { $ref: '#/components/schemas/SafeClick' }
+            required: [type, ephemeralSeq, payload]
+    SnapshotHash:
+      name: snapshot.hash
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            properties:
+              type: { const: snapshot.hash }
+              payload:
+                type: object
+                additionalProperties: false
+                required: [roundId, serverSeq, sha256]
+                properties:
+                  roundId: { type: string, format: uuid }
+                  serverSeq: { type: integer, minimum: 0 }
+                  sha256: { $ref: '#/components/schemas/Sha256' }
+            required: [type, payload]
+    SessionReadinessChanged:
+      name: session.readiness_changed
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: session.readiness_changed }
+              payload:
+                type: object
+                additionalProperties: false
+                required: [participantId, effectiveRole, readinessStatus, readinessRevision]
+                properties:
+                  participantId: { type: string, format: uuid }
+                  effectiveRole: { enum: [owner, editor, viewer] }
+                  readinessStatus: { enum: [ready, blocked, viewer] }
+                  readinessRevision: { type: integer, minimum: 1 }
+            required: [type, payload]
+    SessionActivated:
+      name: session.activated
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: session.activated }
+              payload:
+                type: object
+                additionalProperties: false
+                required: [sessionId, status]
+                properties:
+                  sessionId: { type: string, format: uuid }
+                  status: { const: active }
+            required: [type, payload]
+    HashRequested:
+      name: hash.requested
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: hash.requested }
+              payload: { $ref: '#/components/schemas/HashRound' }
+            required: [type, payload]
+    HashVerified:
+      name: hash.verified
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type: { const: hash.verified }
+              payload:
+                type: object
+                additionalProperties: false
+                required: [roundId, serverSeq, sha256]
+                properties:
+                  roundId: { type: string, format: uuid }
+                  serverSeq: { type: integer, minimum: 0 }
+                  sha256: { $ref: '#/components/schemas/Sha256' }
+            required: [type, payload]
+
+  schemas:
+    ClientEnvelope:
+      type: object
+      properties:
+        protocol: { const: vlt-collab-v3 }
+        type: { type: string, maxLength: 64 }
+        messageId: { type: string, format: uuid }
+        sentAtMs: { type: integer, minimum: 0 }
+      required: [protocol, type, messageId, sentAtMs]
+    ServerEnvelope:
+      type: object
+      properties:
+        protocol: { const: vlt-collab-v3 }
+        type: { type: string, maxLength: 64 }
+        messageId: { type: string, format: uuid }
+        serverTimeMs: { type: integer, minimum: 0 }
+      required: [protocol, type, messageId, serverTimeMs]
+    HelloPayload:
+      type: object
+      additionalProperties: false
+      required: [appVersion, engineVersion, commandSchemaVersion, projectFormatVersion, afterServerSeq]
+      properties:
+        appVersion: { type: string, maxLength: 64 }
+        engineVersion: { type: string, maxLength: 64 }
+        commandSchemaVersion: { const: 3 }
+        projectFormatVersion: { const: 7 }
+        afterServerSeq: { type: integer, minimum: 0 }
+        stateHash:
+          oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }]
+    WelcomePayload:
+      type: object
+      additionalProperties: false
+      required: [projectId, sessionId, participant, headSeq, readOnly, hashRound, writeBlockedReason, effectiveRole, pluginRequirementsRevision, participants, limits]
+      properties:
+        projectId: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        participant: { $ref: '#/components/schemas/Participant' }
+        hostParticipantId:
+          oneOf: [{ type: string, format: uuid }, { type: 'null' }]
+        headSeq: { type: integer, minimum: 0 }
+        readOnly: { type: boolean }
+        hashRound:
+          oneOf: [{ $ref: '#/components/schemas/HashRound' }, { type: 'null' }]
+        writeBlockedReason:
+          enum: [session_starting, plugin_not_ready, hash_consensus_required, role_read_only]
+        effectiveRole: { enum: [owner, editor, viewer] }
+        pluginRequirementsRevision: { type: integer, minimum: 1 }
+        participants: { type: array, maxItems: 8, items: { $ref: '#/components/schemas/Participant' } }
+        limits:
+          type: object
+          additionalProperties: false
+          required: [maxParticipants, cursorHz, transportHz, maxMessageBytes, roomQueueBytes]
+          properties:
+            maxParticipants: { type: integer, minimum: 1, maximum: 8 }
+            cursorHz: { type: integer, minimum: 1, maximum: 30 }
+            transportHz: { type: integer, minimum: 1, maximum: 15 }
+            maxMessageBytes: { type: integer, minimum: 1024 }
+            roomQueueBytes: { type: integer, minimum: 2097152, maximum: 67108864 }
+    Participant:
+      type: object
+      additionalProperties: false
+      required: [participantId, userId, nickname, role, color, host, joinedAtMs]
+      properties:
+        participantId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        nickname: { type: string, minLength: 1, maxLength: 80 }
+        role: { enum: [owner, editor, viewer] }
+        color: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
+        host: { type: boolean }
+        joinedAtMs: { type: integer, minimum: 0 }
+    HashRound:
+      type: object
+      additionalProperties: false
+      required: [roundId, sessionId, serverSeq, deadlineMs]
+      properties:
+        roundId: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        serverSeq: { type: integer, minimum: 0 }
+        deadlineMs: { type: integer, minimum: 0 }
+    SafeClick:
+      type: object
+      additionalProperties: false
+      required: [surface, phase, button]
+      properties:
+        surface: { enum: [shell, transport, timeline, track_list, mixer, piano_roll, automation_editor, sample_editor, builtin_plugin, generic_plugin, third_party_plugin] }
+        phase: { enum: [press, release] }
+        button: { enum: [primary, secondary, middle] }
+        target_id: { type: string, maxLength: 160 }
+        track_id: { type: string, maxLength: 160 }
+        clip_id: { type: string, maxLength: 160 }
+        parameter_id: { type: string, maxLength: 160 }
+        u: { type: number, minimum: 0, maximum: 1 }
+        v: { type: number, minimum: 0, maximum: 1 }
+    Sha256:
+      type: string
+      pattern: '^[0-9a-f]{64}$'

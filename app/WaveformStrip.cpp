@@ -76,12 +76,6 @@ void WaveformStrip::paintEvent(QPaintEvent* event) {
         return;
     }
 
-    // A centre line, so a quiet file still reads as audio rather than as an
-    // empty box.
-    p.setPen(QPen(mixColors(t.well(), t.textSecondary, 0.25), 1.0));
-    p.drawLine(QPointF(area.left(), area.center().y()),
-               QPointF(area.right(), area.center().y()));
-
     ui::PeakPaint how;
     how.sourceStartSeconds = 0.0;
     how.secondsPerPixel = m_peaks.durationSeconds / std::max(1.0, double(width()));

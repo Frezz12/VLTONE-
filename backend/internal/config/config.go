@@ -11,22 +11,27 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"vltstudio/backend/internal/auth"
 )
 
 type Config struct {
-	Environment                     string
-	HTTPAddr                        string
-	DatabaseURL                     string
-	PublicOrigin                    string
-	AdminOrigin                     string
-	DesktopAPIOrigin                string
-	StorageRoot                     string
-	SigningSeed                     []byte
-	AICredentialsKey                []byte
-	ConsentVersion                  string
-	AIEnabled                       bool
-	AIGlobalMonthlyLimit            int64
-	CollaborationEnabled            bool
+	Environment          string
+	HTTPAddr             string
+	DatabaseURL          string
+	PublicOrigin         string
+	AdminOrigin          string
+	DesktopAPIOrigin     string
+	StorageRoot          string
+	SigningSeed          []byte
+	AICredentialsKey     []byte
+	ConsentVersion       string
+	AIEnabled            bool
+	AIGlobalMonthlyLimit int64
+	CollaborationEnabled bool
+	// Keys the HMAC behind short numeric invite codes. Required whenever
+	// collaboration is enabled; rotating it invalidates outstanding codes.
+	InviteCodePepper                []byte
 	CollabRecordingEnabled          bool
 	CollabAllowedUserIDs            []uuid.UUID
 	CollabMaxParticipants           int
@@ -86,10 +91,9 @@ func Load() (Config, error) {
 		// limits in configuration also lets a single-instance dogfood deploy be
 		// tuned without changing the wire protocol.
 		CollaborationEnabled: boolEnv("COLLABORATION_ENABLED", false),
-		// Cloud recording is a deliberately unavailable V1 capability. Keep
-		// this value false even in non-production builds so an old client can
-		// never turn the backend recording path back on by configuration.
-		CollabRecordingEnabled:          false,
+		// Recording is a collaboration-v3 rollout capability. The API still
+		// rejects it for v2 sessions even when this flag is enabled.
+		CollabRecordingEnabled:          boolEnv("COLLAB_RECORDING_ENABLED", false),
 		CollabMaxParticipants:           int(boundedInt64Env("COLLAB_MAX_PARTICIPANTS", 8, 1, 8)),
 		CollabSnapshotOps:               boundedInt64Env("COLLAB_SNAPSHOT_OPS", 500, 1, 100000),
 		CollabSnapshotSeconds:           int(boundedInt64Env("COLLAB_SNAPSHOT_SECONDS", 300, 30, 86400)),
@@ -129,9 +133,6 @@ func Load() (Config, error) {
 		SMTPFrom:                        env("SMTP_FROM", "VLT Studio <no-reply@example.com>"),
 		TrustedProxyCIDRs:               csv(env("TRUSTED_PROXY_CIDRS", "")),
 	}
-	if boolEnv("COLLAB_RECORDING_ENABLED", false) {
-		return Config{}, errors.New("COLLAB_RECORDING_ENABLED must remain false for V1")
-	}
 	for _, raw := range csv(os.Getenv("COLLAB_ALLOWED_USER_IDS")) {
 		id, parseErr := uuid.Parse(raw)
 		if parseErr != nil || id == uuid.Nil {
@@ -151,6 +152,15 @@ func Load() (Config, error) {
 			return Config{}, errors.New("AUTH_SIGNING_SEED must be a base64-encoded 32-byte seed")
 		}
 	}
+	pepperText := strings.TrimSpace(os.Getenv("VLT_INVITE_CODE_PEPPER"))
+	if pepperText != "" {
+		c.InviteCodePepper, err = base64.StdEncoding.DecodeString(pepperText)
+		if err != nil || len(c.InviteCodePepper) < auth.MinimumCodePepperBytes {
+			return Config{}, fmt.Errorf(
+				"VLT_INVITE_CODE_PEPPER must be a base64-encoded key of at least %d bytes",
+				auth.MinimumCodePepperBytes)
+		}
+	}
 	credentialsKeyText := strings.TrimSpace(os.Getenv("AI_CREDENTIALS_KEY"))
 	if credentialsKeyText != "" {
 		c.AICredentialsKey, err = base64.StdEncoding.DecodeString(credentialsKeyText)
@@ -168,6 +178,13 @@ func Load() (Config, error) {
 		}
 	}
 	if c.CollaborationEnabled {
+		// Fail closed. Starting without the pepper would silently disable the
+		// only thing standing between a leaked database and every live invite.
+		if len(c.InviteCodePepper) < auth.MinimumCodePepperBytes {
+			return Config{}, fmt.Errorf(
+				"VLT_INVITE_CODE_PEPPER of at least %d bytes is required when collaboration is enabled",
+				auth.MinimumCodePepperBytes)
+		}
 		endpoint, parseErr := url.Parse(c.CollabObjectEndpoint)
 		if parseErr != nil || endpoint.Scheme == "" || endpoint.Host == "" || endpoint.User != nil ||
 			(endpoint.Scheme != "http" && endpoint.Scheme != "https") ||

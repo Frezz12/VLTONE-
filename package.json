@@ -16,6 +16,7 @@
     "check:release-security": "node scripts/check-next-security.mjs"
   },
   "devDependencies": {
+    "@typescript/lib-dom": "npm:@types/web@0.0.354",
     "openapi-typescript": "7.9.1",
     "typescript": "5.9.2"
   }

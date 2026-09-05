@@ -944,7 +944,7 @@ json bodyToJson(const ProjectCommand& command) {
 }
 
 bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
-               std::string& error) {
+               std::string& error, std::uint32_t schemaVersion) {
     if (!payload.is_object()) {
         error = "payload must be an object";
         return false;
@@ -1779,7 +1779,8 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
             error = "invalid recording commit payload shape";
             return false;
         }
-        if (payload.at("leases").empty() ||
+        if ((schemaVersion == kProjectCommandSchemaVersionV2 &&
+             payload.at("leases").empty()) ||
             payload.at("leases").size() > kMaxProjectCommandBatchSize) {
             error = "recording lease count is out of bounds";
             return false;
@@ -1824,7 +1825,7 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
                 return false;
             }
             ProjectCommand child;
-            child.meta.schemaVersion = kProjectCommandSchemaVersion;
+            child.meta.schemaVersion = schemaVersion;
             for (const json& item : childJson.at("preconditions")) {
                 CommandCondition condition;
                 if (!conditionFromJson(item, condition)) {
@@ -1836,7 +1837,7 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
             std::string childError;
             if (!parseBody(childKind,
                            childJson.value("payload", json::object()),
-                           child.body, childError)) {
+                           child.body, childError, schemaVersion)) {
                 error = "invalid recording child: " + childError;
                 return false;
             }
@@ -1871,7 +1872,7 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
                 return false;
             }
             ProjectCommand child;
-            child.meta.schemaVersion = kProjectCommandSchemaVersion;
+            child.meta.schemaVersion = schemaVersion;
             if (childJson.contains("preconditions")) {
                 if (!childJson.at("preconditions").is_array()) {
                     error = "batch child preconditions must be an array";
@@ -1889,7 +1890,7 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
             std::string childError;
             if (!parseBody(childKind,
                            childJson.value("payload", json::object()), child.body,
-                           childError)) {
+                           childError, schemaVersion)) {
                 error = "invalid batch child: " + childError;
                 return false;
             }
@@ -1946,7 +1947,7 @@ std::optional<ProjectCommand> projectCommandFromJson(const nlohmann::json& value
         }
         ProjectCommand command;
         command.meta = metaFromJson(value);
-        if (command.meta.schemaVersion != kProjectCommandSchemaVersion)
+        if (!supportedProjectCommandSchemaVersion(command.meta.schemaVersion))
             return fail("unsupported project command schema version");
         if (value.contains("preconditions")) {
             if (!value.at("preconditions").is_array())
@@ -1965,7 +1966,7 @@ std::optional<ProjectCommand> projectCommandFromJson(const nlohmann::json& value
         std::string bodyError;
         if (!parseBody(value.value("kind", std::string()),
                        value.value("payload", json::object()), command.body,
-                       bodyError)) {
+                       bodyError, command.meta.schemaVersion)) {
             return fail(std::move(bodyError));
         }
         if (!value.at("touchedFields").is_array())

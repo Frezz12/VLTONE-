@@ -19,6 +19,7 @@ enum class CloudSessionLifecyclePhase : quint8 {
     Ready,
     Starting,
     Connecting,
+    Activating,
     Active,
     Ending,
     Leaving,
@@ -49,11 +50,18 @@ public:
     CloudSessionLifecyclePhase phase() const noexcept;
 
     bool canStartSession() const;
+    bool canActivateSession() const;
     bool canEndSession() const;
     bool canLeaveSession() const;
 
 public slots:
-    bool startSession();
+    /// An empty password starts an unprotected session. The secret is
+    /// forwarded to the client and never retained here.
+    bool startSession(
+        const QString& password = {},
+        const std::vector<daw::collab::PluginRequirement>& requirements = {},
+        const daw::collab::PluginReadinessReport& readiness = {});
+    bool activateSession();
     bool endSession();
     bool leaveSession();
 

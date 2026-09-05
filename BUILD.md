@@ -54,7 +54,7 @@ no build at all; this path is only the floor under that.
 ## Account platform (local development)
 
 Pinned tools are Go **1.26.7**, PostgreSQL **18.6**, Node.js **24 LTS**, pnpm
-**11.3.0**, Next.js **16.2.11**, GORM **1.31.2** and Tailwind CSS **4.3.0**.
+**11.3.0**, Next.js **16.3.3**, GORM **1.31.2** and Tailwind CSS **4.3.0**.
 Docker is not used. Start a local PostgreSQL instance, create the role/database
 matching `backend/.env.example`, then run:
 
@@ -99,9 +99,9 @@ The Demo subscription is indefinite, enables all features and renews a
 startup requires an Ed25519 seed, HTTPS origins and a positive
 `AI_GLOBAL_MONTHLY_TOKEN_LIMIT`. Provider keys stay in the Go process.
 
-Next.js 16.2.11 is intentionally pinned for the initial internal build. A tag or
-`VLT_PUBLIC_RELEASE=1` runs `pnpm check:release-security` and is blocked until
-the security patch announced for 26 August 2026 is pinned and reviewed.
+Next.js 16.3.3 is pinned for the public build. A tag or
+`VLT_PUBLIC_RELEASE=1` runs `pnpm check:release-security` and blocks known
+vulnerable versions.
 
 ---
 
@@ -110,7 +110,7 @@ the security patch announced for 26 August 2026 is pinned and reviewed.
 Dependencies via Homebrew:
 
 ```bash
-brew install cmake ninja qt qtwebengine qtserialport portaudio rtmidi libsndfile nlohmann-json
+brew install cmake ninja qt qtmultimedia qtwebengine qtserialport portaudio rtmidi libsndfile nlohmann-json
 ```
 
 Configure, build, test:
@@ -179,8 +179,8 @@ The release toolchain is deliberately narrow and reproducible:
   (`v143`, compiler 19.44), selected with `-vcvars_ver=14.44`;
 - Windows SDK **10.0.26100.0**;
 - CMake ≥ 3.24 and Ninja;
-- Qt **6.8.3** `msvc2022_64`, with the mandatory **Qt WebEngine** and
-  **Qt SerialPort** modules;
+- Qt **6.8.3** `msvc2022_64`, with the mandatory **Qt Multimedia**,
+  **Qt WebEngine**, **Qt SerialPort** and **Qt WebSockets** modules;
 - Inno Setup **6.7.1** for the production installer;
 - Git (the build script checks out the pinned vcpkg revision itself).
 
@@ -295,8 +295,8 @@ repeatable checks in `build.ps1` and the `windows-2022` workflow:
 
 - [x] pinned vcpkg manifest resolves PortAudio/ASIO, libsndfile and
       nlohmann/json for `x64-windows`;
-- [x] Release x64 builds with MSVC and links Qt Widgets, WebEngine and
-      SerialPort;
+- [x] Release x64 builds with MSVC and links Qt Widgets, Multimedia,
+      WebEngine and SerialPort;
 - [x] all **21** Windows CTest tests pass;
 - [x] the offscreen application self-test passes, including deterministic Edit
       chord routing that does not depend on a real active/focused native window;

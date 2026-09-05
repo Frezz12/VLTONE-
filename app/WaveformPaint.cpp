@@ -1,5 +1,6 @@
 #include "WaveformPaint.hpp"
 
+#include <QImage>
 #include <QPainter>
 #include <QPainterPath>
 
@@ -12,15 +13,21 @@ namespace ui {
 void paintPeaks(QPainter& p, const daw::WaveformPeaks* peaks, const QRectF& area,
                 const PeakPaint& how) {
     if (area.height() < 6.0 || area.width() < 2.0) return;
-    if (!peaks || !peaks->isValid() || peaks->bucketCount() == 0) return;
-    if (!(how.secondsPerPixel > 0.0)) return;
-
-    const double mid = area.center().y();
-    const double halfHeight = area.height() / 2.0 - 1.0;
-
     const double left = std::max(area.left(), how.clipLeft);
     const double right = std::min(area.right(), how.clipRight);
     if (right <= left) return;
+
+    // The zero-amplitude axis is part of the waveform, not empty decoration.
+    // Draw it first so silent clips and gaps remain visible, while real signal
+    // grows seamlessly above and below the same one-pixel line.
+    const double mid = area.center().y();
+    p.setPen(QPen(how.color, 1.0));
+    p.drawLine(QPointF(left, mid), QPointF(right, mid));
+
+    if (!peaks || !peaks->isValid() || peaks->bucketCount() == 0) return;
+    if (!(how.secondsPerPixel > 0.0)) return;
+
+    const double halfHeight = area.height() / 2.0 - 1.0;
 
     const double secondsPerPixel = how.secondsPerPixel;
     const std::vector<float>* minima = &peaks->minima;
@@ -108,6 +115,21 @@ void paintPeaks(QPainter& p, const daw::WaveformPeaks* peaks, const QRectF& area
     p.setPen(Qt::NoPen);
     p.setBrush(how.color);
     p.drawPath(path);
+}
+
+bool checkWaveformBaselineForTest() {
+    QImage image(24, 12, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    PeakPaint how;
+    how.secondsPerPixel = 0.01;
+    how.clipLeft = 2.0;
+    how.clipRight = 22.0;
+    how.color = Qt::white;
+    paintPeaks(painter, nullptr, QRectF(0.0, 0.0, 24.0, 12.0), how);
+    painter.end();
+    return qAlpha(image.pixel(12, 6)) > 0 &&
+           qAlpha(image.pixel(12, 2)) == 0;
 }
 
 } // namespace ui

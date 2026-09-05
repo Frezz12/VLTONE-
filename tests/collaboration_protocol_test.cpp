@@ -49,6 +49,10 @@ std::string clipId(std::string_view label) {
 
 CommandMeta meta(std::string label, std::uint64_t clientSequence = 1) {
     CommandMeta value;
+    // This suite is the immutable v2 regression corpus. Individual v3 cases
+    // opt in explicitly so raising the application's preferred schema cannot
+    // silently rewrite the historical wire fixtures.
+    value.schemaVersion = kProjectCommandSchemaVersionV2;
     value.projectId = testUuid("collaboration-test", "project");
     value.operationId = label.empty() ? std::string() : operationId(label);
     value.actorId = testUuid("collaboration-test", "actor");
@@ -2456,7 +2460,13 @@ void routingPluginAssetReducerAndWire() {
               state, command("plugin-external",
                              AddPluginInsert{trackChain, external, gravity.id}))
                   .code == ApplyCode::InvalidCommand,
-          "v1 reducer rejects third-party plugin insertion");
+          "v2 reducer rejects third-party plugin insertion");
+    ProjectCommand externalV3 =
+        command("plugin-external-v3",
+                AddPluginInsert{trackChain, external, gravity.id});
+    externalV3.meta.schemaVersion = kProjectCommandSchemaVersion;
+    check(ProjectReducer::apply(state, externalV3).changed(),
+          "v3 reducer accepts an exact path-free third-party plugin insertion");
 
     ApplyResult deleteSend =
         apply("send-delete", DeleteSend{sourceId, sendId}, 21);

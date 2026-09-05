@@ -288,29 +288,37 @@ void SamplerInstance::bakeWorkerLoop() {
             m_pendingBake.reset();
         }
 
-        auto data = std::make_shared<SampleData>();
-        data->path = request.path;
-        data->name = request.name;
+        std::shared_ptr<SampleData> data;
+        bool bakeFailed = false;
+        try {
+            data = std::make_shared<SampleData>();
+            data->path = request.path;
+            data->name = request.name;
 
-        if (!request.raw) {
-            data.reset();
-        } else if (request.keepOnDisk || request.settings.isNeutral()) {
-            data->audio = request.raw;
-            data->baseFrames = request.raw->frames();
-        } else {
-            engine::FrameCount baseFrames = request.raw->frames();
-            std::shared_ptr<const engine::SampleBuffer> baked = precompute(
-                *request.raw, request.settings, baseFrames,
-                PrecomputeCancellation{&m_precomputeGeneration,
-                                       request.generation});
-            if (baked) {
-                data->audio = std::move(baked);
-                data->baseFrames = baseFrames;
-            } else if (m_precomputeGeneration.load(std::memory_order_acquire) ==
-                       request.generation) {
+            if (!request.raw) {
+                data.reset();
+            } else if (request.keepOnDisk || request.settings.isNeutral()) {
                 data->audio = request.raw;
                 data->baseFrames = request.raw->frames();
+            } else {
+                engine::FrameCount baseFrames = request.raw->frames();
+                std::shared_ptr<const engine::SampleBuffer> baked = precompute(
+                    *request.raw, request.settings, baseFrames,
+                    PrecomputeCancellation{&m_precomputeGeneration,
+                                           request.generation});
+                if (baked) {
+                    data->audio = std::move(baked);
+                    data->baseFrames = baseFrames;
+                } else if (m_precomputeGeneration.load(std::memory_order_acquire) ==
+                           request.generation) {
+                    data->audio = request.raw;
+                    data->baseFrames = request.raw->frames();
+                }
             }
+        } catch (...) {
+            // Exceptions escaping std::thread call std::terminate. Keep the
+            // already-published raw/previous sample and complete this request.
+            bakeFailed = true;
         }
 
         {
@@ -318,8 +326,10 @@ void SamplerInstance::bakeWorkerLoop() {
             if (m_stopBakeWorker) return;
             if (m_precomputeGeneration.load(std::memory_order_acquire) ==
                 request.generation) {
-                m_sample.publish(
-                    std::shared_ptr<const SampleData>(std::move(data)));
+                if (!bakeFailed) {
+                    m_sample.publish(
+                        std::shared_ptr<const SampleData>(std::move(data)));
+                }
                 m_completedPrecomputeGeneration.store(
                     request.generation, std::memory_order_release);
             }

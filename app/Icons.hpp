@@ -44,10 +44,25 @@ enum class Glyph {
     Volume, Pan, FadeIn, FadeOut,
     // Plugin quick-adder: the glass search that grows out of the "+ Add Plugin"
     // button on a selected track.
-    Search, Star, Close, Mic, Eq, Synth, Plugin,
+    Search, Star, Close, Mic, Eq, Synth, Plugin, Image,
+    /// A bound writing page used by the standalone rich-text notebook.
+    Notebook,
     /// A compact assistant/chat mark used by the global AI panel toggle.
-    Assistant
+    Assistant,
+    // Collaboration surfaces: the session status strip, the join checklist and
+    // the cloud project browser.
+    Cloud, CloudUpload, CloudOff, Users, Link, Key, Check, Warning,
+    /// An open arc, meant to be rotated by the caller to indicate work in
+    /// flight. It carries no animation of its own.
+    Spinner
 };
+
+/// Rasterise every glyph and report the first that draws nothing. The switch in
+/// paint() has no default, so a value added to the enum but not to the switch
+/// renders as empty space rather than failing to build — as does a case whose
+/// path is malformed. `Spinner` is assumed last; anything appended after it is
+/// covered automatically.
+bool checkGlyphCoverageForTest(QString* error = nullptr);
 
 /// Draw `glyph` centred in `rect`, tinted `color`.
 void paint(QPainter& painter, Glyph glyph, const QRectF& rect,

@@ -105,6 +105,7 @@ private:
     void showStartPage();
     void showLoadError(const QUrl& failedUrl);
     QString startPageHtml() const;
+    QUrl startPageBaseUrl() const;
     QString errorPageHtml(const QUrl& failedUrl) const;
     void updateNavigationState();
     void updateAddress();

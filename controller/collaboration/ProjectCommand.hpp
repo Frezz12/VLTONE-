@@ -12,7 +12,14 @@
 
 namespace daw::collab {
 
-inline constexpr std::uint32_t kProjectCommandSchemaVersion = 2;
+inline constexpr std::uint32_t kProjectCommandSchemaVersionV2 = 2;
+inline constexpr std::uint32_t kProjectCommandSchemaVersion = 3;
+
+inline constexpr bool supportedProjectCommandSchemaVersion(
+    std::uint32_t version) noexcept {
+    return version == kProjectCommandSchemaVersionV2 ||
+           version == kProjectCommandSchemaVersion;
+}
 inline constexpr std::size_t kMaxProjectCommandPreconditions = 1024;
 inline constexpr std::size_t kMaxProjectCommandTouchedFields = 8192;
 inline constexpr std::size_t kMaxProjectCommandBatchSize = 1024;

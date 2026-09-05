@@ -31,6 +31,13 @@ inline constexpr int kMaxWidth = 960;
 QString homeUrl();
 void setHomeUrl(const QString& url);
 
+/// Optional local media behind the built-in start page. The file is referenced
+/// in place (never copied or uploaded) and is limited to formats Chromium can
+/// render as an image, animated image or muted background video.
+QString startPageBackgroundPath();
+bool setStartPageBackgroundPath(const QString& path);
+void clearStartPageBackground();
+
 /// The last ordinary page visited. Data/blob URLs are session details and are
 /// not restored across launches.
 QString lastUrl();

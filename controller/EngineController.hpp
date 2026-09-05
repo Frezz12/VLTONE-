@@ -243,6 +243,7 @@ public:
     const ProjectModel& project() const { return m_project; }
     const std::string& projectName() const { return m_project.name; }
     void setProjectName(std::string name);
+    void setProjectMetadata(std::string author, std::string coverImagePath);
 
     audio::Result saveProject(const std::string& packageDir);
     audio::Result openProject(const std::string& packageDir);

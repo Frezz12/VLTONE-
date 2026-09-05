@@ -50,7 +50,9 @@ func (sequencer *operationSequencer) lock(projectID uuid.UUID) func() {
 // for both REST and WebSocket callers.
 func (s *Server) appendCollaborationOperation(ctx context.Context,
 	input collab.AppendOperationInput) (model.ProjectOperation, bool, error) {
-	if !cloudRecordingEnabledV1 && input.Kind == "recording.commit" {
+	if input.Kind == "recording.commit" &&
+		(!s.Config.CollabRecordingEnabled ||
+			input.SchemaVersion != collab.CollaborationCommandSchemaV3) {
 		if s.metrics != nil {
 			s.metrics.rejections.Add(1)
 		}

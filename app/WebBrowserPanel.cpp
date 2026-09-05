@@ -2,6 +2,7 @@
 
 #include "Controls.hpp"
 #include "FileTypes.hpp"
+#include "GlassPanel.hpp"
 #include "Icons.hpp"
 #include "Theme.hpp"
 #include "WebPrefs.hpp"
@@ -28,6 +29,7 @@
 #include <QIcon>
 #include <QInputDialog>
 #include <QShortcut>
+#include <QSettings>
 #include <QStackedWidget>
 #include <QStringListModel>
 #include <QTabBar>
@@ -152,6 +154,30 @@ QUrl ordinaryUrlFromInput(QString input) {
 QString bookmarkLabel(const ui::webprefs::Bookmark& bookmark) {
     const QString title = bookmark.title.trimmed();
     return title.isEmpty() ? QUrl(bookmark.url).host() : title;
+}
+
+bool isVideoBackground(const QString& path) {
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    static const QStringList videoSuffixes = {
+        QStringLiteral("mp4"), QStringLiteral("m4v"),
+        QStringLiteral("webm"), QStringLiteral("ogv"),
+        QStringLiteral("ogg"), QStringLiteral("mov")};
+    return videoSuffixes.contains(suffix);
+}
+
+QString cssRgba(QColor color) {
+    return QStringLiteral("rgba(%1,%2,%3,%4)")
+        .arg(color.red())
+        .arg(color.green())
+        .arg(color.blue())
+        .arg(QString::number(color.alphaF(), 'f', 3));
+}
+
+bool sameLocalPath(const QUrl& a, const QUrl& b) {
+    if (!a.isLocalFile() || !b.isLocalFile()) return false;
+    const QString left = QFileInfo(a.toLocalFile()).canonicalFilePath();
+    const QString right = QFileInfo(b.toLocalFile()).canonicalFilePath();
+    return !left.isEmpty() && left == right;
 }
 
 class RestrictedWebPage final : public QWebEnginePage {
@@ -316,7 +342,7 @@ WebBrowserPanel::WebBrowserPanel(QWidget* parent) : QWidget(parent) {
         for (Tab* tab : std::as_const(m_tabs)) {
             if (tab->showingStartPage) {
                 tab->view->setHtml(startPageHtml(),
-                                   QUrl(QStringLiteral("about:blank")));
+                                   startPageBaseUrl());
             } else if (tab->showingErrorPage && !tab->failedUrl.isEmpty()) {
                 tab->view->setHtml(errorPageHtml(QUrl(tab->failedUrl)),
                                    QUrl(QStringLiteral("about:blank")));
@@ -394,12 +420,13 @@ QWidget* WebBrowserPanel::buildTabStrip() {
     m_tabBar->setElideMode(Qt::ElideRight);
     m_tabBar->setUsesScrollButtons(true);
     m_tabBar->setFocusPolicy(Qt::NoFocus);
+    m_tabBar->setIconSize(QSize(14, 14));
     m_tabBar->setContextMenuPolicy(Qt::CustomContextMenu);
     m_tabBar->setAccessibleName(tr("Browser tabs"));
 
     m_newTab = new ui::IconButton(icons::Glyph::Plus, tr("New tab (Ctrl+T)"),
                                   m_tabStrip);
-    m_newTab->setButtonSize(24, 24);
+    m_newTab->setButtonSize(27, 27);
     m_newTab->setFocusPolicy(Qt::StrongFocus);
 
     connect(m_newTab, &QAbstractButton::clicked, this,
@@ -441,13 +468,20 @@ int WebBrowserPanel::openTab(const QString& url, bool activate) {
             tr("Blocked unsupported web address: %1").arg(rejected.toDisplayString()));
     };
     page->internalNavigationAllowed = [this, tab](const QUrl& candidate) {
-        return candidate.scheme() == QLatin1String("data") &&
-               (tab->showingStartPage || tab->showingErrorPage ||
-                !m_testDownloadPath.isEmpty());
+        const bool internalData =
+            candidate.scheme() == QLatin1String("data") &&
+            (tab->showingStartPage || tab->showingErrorPage ||
+             !m_testDownloadPath.isEmpty());
+        const QUrl startBase = startPageBaseUrl();
+        return internalData ||
+               (tab->showingStartPage && startBase.isLocalFile() &&
+                sameLocalPath(candidate, startBase));
     };
     tab->view->setPage(page);
     tab->view->settings()->setAttribute(
         QWebEngineSettings::JavascriptCanOpenWindows, true);
+    tab->view->settings()->setAttribute(
+        QWebEngineSettings::LocalContentCanAccessFileUrls, true);
     tab->view->settings()->setAttribute(
         QWebEngineSettings::FullScreenSupportEnabled, false);
     page->setBackgroundColor(th().background);
@@ -482,7 +516,7 @@ int WebBrowserPanel::openTab(const QString& url, bool activate) {
     const QString destination = url.trimmed();
     if (isStartDestination(destination)) {
         tab->showingStartPage = true;
-        tab->view->setHtml(startPageHtml(), QUrl(QStringLiteral("about:blank")));
+        tab->view->setHtml(startPageHtml(), startPageBaseUrl());
         if (activate) {
             updateAddress();
             updateBookmarkState();
@@ -492,7 +526,7 @@ int WebBrowserPanel::openTab(const QString& url, bool activate) {
         tab->view->setUrl(target);
     } else {
         tab->showingStartPage = true;
-        tab->view->setHtml(startPageHtml(), QUrl(QStringLiteral("about:blank")));
+        tab->view->setHtml(startPageHtml(), startPageBaseUrl());
     }
     updateTabLabel(tab);
     scheduleSessionSave();
@@ -614,7 +648,10 @@ void WebBrowserPanel::wireTab(Tab* tab) {
             url.scheme() == QLatin1String("data") &&
             (tab->showingStartPage || tab->showingErrorPage ||
              !m_testDownloadPath.isEmpty());
-        if (!internalData && url != QUrl(QStringLiteral("about:blank"))) {
+        const bool internalStartBase =
+            tab->showingStartPage && sameLocalPath(url, startPageBaseUrl());
+        if (!internalData && !internalStartBase &&
+            url != QUrl(QStringLiteral("about:blank"))) {
             tab->showingStartPage = false;
             tab->showingErrorPage = false;
             tab->failedUrl.clear();
@@ -1012,56 +1049,106 @@ QString WebBrowserPanel::startPageHtml() const {
                           initial, bookmarkLabel(bookmark).toHtmlEscaped(),
                           url.host().toHtmlEscaped());
     }
-    if (saved.isEmpty()) {
-        saved = QStringLiteral(
-            "<div class='empty'><b>No bookmarks yet</b><span>Open a page and "
-            "press Ctrl+D to keep it here.</span></div>");
+    QString bookmarksSection;
+    if (!saved.isEmpty()) {
+        bookmarksSection =
+            QStringLiteral(
+                "<section class='section' aria-labelledby='saved-title'>"
+                "<div class='section-head'><h2 id='saved-title'>%1</h2>"
+                "<small>%2</small></div><div class='saved-grid'>%3</div>"
+                "</section>")
+                .arg(tr("Bookmarks").toHtmlEscaped(),
+                     tr("Ctrl+D to add").toHtmlEscaped(), saved);
     }
+
+    const QString backgroundPath = ui::webprefs::startPageBackgroundPath();
+    const QFileInfo background(backgroundPath);
+    const bool video = isVideoBackground(backgroundPath);
+    const bool animated = video || background.suffix().compare(
+                                      QStringLiteral("gif"), Qt::CaseInsensitive) == 0;
+    QString media;
+    const bool reduceMotion =
+        QSettings().value(QStringLiteral("ui/reduceMotion"), false).toBool();
+    if (!backgroundPath.isEmpty() && !(animated && reduceMotion)) {
+        const QString source =
+            QUrl::fromLocalFile(backgroundPath)
+                .toString(QUrl::FullyEncoded)
+                .toHtmlEscaped();
+        media = video
+                    ? QStringLiteral(
+                          "<video class='backdrop-media motion' aria-hidden='true' "
+                          "autoplay muted loop playsinline preload='metadata' "
+                          "src='%1'></video>")
+                          .arg(source)
+                    : QStringLiteral(
+                          "<img class='backdrop-media%1' aria-hidden='true' "
+                          "alt='' draggable='false' src='%2'>")
+                          .arg(animated ? QStringLiteral(" motion") : QString(),
+                               source);
+        media += QStringLiteral(
+            "<div class='backdrop-scrim' aria-hidden='true'></div>");
+    }
+
+    QColor glass = t.surface;
+    glass.setAlphaF(ui::GlassPanel::reduceTransparency()
+                        ? 1.0
+                        : (t.dark ? 0.82 : 0.88));
+    QColor field = t.surfaceElevated;
+    field.setAlphaF(ui::GlassPanel::reduceTransparency()
+                        ? 1.0
+                        : (t.dark ? 0.78 : 0.86));
+    const QColor accentInk = t.accentHighlight.lightnessF() > 0.58
+                                 ? QColor(18, 20, 24)
+                                 : QColor(Qt::white);
 
     QString html = QStringLiteral(R"HTML(
 <!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file: data:; media-src file:; style-src 'unsafe-inline'; form-action https://duckduckgo.com; base-uri 'none'">
 <title>VLT Start</title><style>
 :root{color-scheme:%MODE%;--bg:%BG%;--surface:%SURFACE%;--raised:%RAISED%;
---text:%TEXT%;--muted:%MUTED%;--accent:%ACCENT%;--line:%LINE%;}
+--text:%TEXT%;--muted:%MUTED%;--accent:%ACCENT%;--accent-ink:%ACCENT_INK%;
+--line:%LINE%;--glass:%GLASS%;--field:%FIELD%;--blur:%BLUR%;}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);
 color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-body{display:flex;justify-content:center}.page{width:min(720px,100%);padding:48px 34px 42px}
-.eyebrow{color:var(--accent);font-size:11px;font-weight:750;letter-spacing:.18em}
-h1{margin:9px 0 8px;font-size:clamp(30px,6vw,54px);line-height:.98;letter-spacing:-.045em}
-.lead{margin:0 0 25px;color:var(--muted);font-size:13px;line-height:1.55}
-form{display:flex;align-items:center;height:46px;padding:0 7px 0 15px;background:var(--surface);
-border:1px solid var(--line);border-radius:13px}input{min-width:0;flex:1;border:0;outline:0;
-background:transparent;color:var(--text);font-size:14px}button{height:32px;padding:0 15px;
-border:0;border-radius:9px;background:var(--accent);color:#fff;font-weight:700;cursor:pointer}
-button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+body{min-height:100vh;display:grid;place-items:center;overflow-x:hidden}
+.backdrop-media,.backdrop-scrim{position:fixed;inset:0;width:100%;height:100%}
+.backdrop-media{object-fit:cover;z-index:0}.backdrop-scrim{z-index:1;background:rgba(0,0,0,.42);background:
+linear-gradient(150deg,rgba(0,0,0,.20),rgba(0,0,0,.46)),radial-gradient(circle at 20% 8%,color-mix(in srgb,var(--accent) 24%,transparent),transparent 48%)}
+.page{position:relative;z-index:2;width:min(680px,100%);padding:32px}
+.home{padding:28px;background:var(--glass);border:1px solid var(--line);border-color:color-mix(in srgb,var(--line) 72%,var(--accent) 28%);
+border-radius:20px;box-shadow:0 18px 60px rgba(0,0,0,.22);backdrop-filter:var(--blur);
+-webkit-backdrop-filter:var(--blur)}
+h1{margin:0 0 6px;font-size:clamp(22px,4vw,31px);line-height:1.12;letter-spacing:-.025em}
+.lead{margin:0 0 20px;color:var(--muted);font-size:13px;line-height:1.55}
+form{display:flex;align-items:center;min-height:48px;padding:5px 6px 5px 16px;background:var(--field);
+border:1px solid var(--line);border-radius:14px;transition:border-color .16s ease,background .16s ease}
+form:focus-within{border-color:var(--accent);background:var(--surface)}input{min-width:0;flex:1;border:0;outline:0;
+background:transparent;color:var(--text);font-size:15px}button{min-height:36px;padding:0 16px;
+border:1px solid var(--accent);border-color:color-mix(in srgb,var(--accent) 70%,var(--text) 30%);border-radius:10px;
+background:var(--accent);color:var(--accent-ink);font-weight:750;cursor:pointer}
+button:hover{filter:brightness(1.08)}button:active{filter:brightness(.92)}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 .section{margin-top:27px}.section-head{display:flex;justify-content:space-between;align-items:center;
 margin-bottom:10px}.section h2{margin:0;font-size:11px;letter-spacing:.12em;text-transform:uppercase}
-.section small{color:var(--muted)}.quick,.saved-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
-a{color:inherit;text-decoration:none}.quick a,.saved{min-width:0;display:flex;align-items:center;gap:10px;
-padding:11px 12px;background:var(--surface);border:1px solid var(--line);border-radius:11px;
-transition:background .16s ease,border-color .16s ease}.quick a:hover,.saved:hover{background:var(--raised);border-color:var(--accent)}
-.quick b,.mark{display:grid;place-items:center;width:25px;height:25px;flex:0 0 25px;border-radius:7px;
+.section small{color:var(--muted)}.saved-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+a{color:inherit;text-decoration:none}.saved{min-width:0;min-height:48px;display:flex;align-items:center;gap:10px;
+padding:10px 12px;background:var(--field);border:1px solid var(--line);border-radius:12px;
+transition:background .16s ease,border-color .16s ease}.saved:hover{background:var(--raised);border-color:var(--accent)}
+.mark{display:grid;place-items:center;width:27px;height:27px;flex:0 0 27px;border-radius:8px;
 background:var(--raised);color:var(--accent);font-size:11px}.saved span:last-child{min-width:0;display:flex;flex-direction:column}
 .saved strong,.saved small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.saved strong{font-size:12px}
-.saved small{margin-top:2px;font-size:10px;color:var(--muted)}.empty{grid-column:1/-1;padding:17px;
-border:1px dashed var(--line);border-radius:11px;color:var(--muted);display:flex;flex-direction:column;gap:4px;font-size:12px}
-.empty b{color:var(--text)}.privacy{margin-top:24px;color:var(--muted);font-size:10px;text-align:center}
-@media(max-width:430px){.page{padding:34px 18px}.quick,.saved-grid{grid-template-columns:1fr}h1{font-size:34px}}
-@media(prefers-reduced-motion:reduce){*{transition:none!important}}
-</style></head><body><main class="page"><div class="eyebrow">VLT WEB</div>
-<h1>Your sound starts here.</h1><p class="lead">Browse, download audio and bring it into the project without leaving the DAW.</p>
-<form action="https://duckduckgo.com/" method="get"><input name="q" autofocus autocomplete="off"
-placeholder="Search the web"><button type="submit">Search</button></form>
-<section class="section"><div class="section-head"><h2>Quick access</h2><small>Single-tab workspace</small></div>
-<div class="quick"><a href="https://www.google.com"><b>G</b>Google</a>
-<a href="https://www.youtube.com"><b>YT</b>YouTube</a>
-<a href="https://soundcloud.com"><b>SC</b>SoundCloud</a>
-<a href="https://bandcamp.com"><b>BC</b>Bandcamp</a></div></section>
-<section class="section"><div class="section-head"><h2>Bookmarks</h2><small>Ctrl+D on any page</small></div>
-<div class="saved-grid">%BOOKMARKS%</div></section>
-<div class="privacy">Cookies and site data stay in a separate VLT browser profile.</div>
-</main></body></html>)HTML");
+.saved small{margin-top:2px;font-size:10px;color:var(--muted)}.sr-only{position:absolute;width:1px;height:1px;
+padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:520px){.page{padding:16px}.home{padding:22px 18px}.saved-grid{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}.backdrop-media.motion{display:none}}
+</style></head><body>%MEDIA%<main class="page"><div class="home">
+<h1>%TITLE%</h1><p class="lead">%LEAD%</p>
+<form role="search" action="https://duckduckgo.com/" method="get">
+<label class="sr-only" for="web-query">%SEARCH_LABEL%</label>
+<input id="web-query" name="q" autofocus autocomplete="off" placeholder="%SEARCH_PLACEHOLDER%">
+<button type="submit">%SEARCH_BUTTON%</button></form>%BOOKMARK_SECTION%
+</div></main></body></html>)HTML");
     html.replace(QStringLiteral("%MODE%"),
                  t.dark ? QStringLiteral("dark") : QStringLiteral("light"));
     html.replace(QStringLiteral("%BG%"), t.background.name());
@@ -1070,9 +1157,33 @@ placeholder="Search the web"><button type="submit">Search</button></form>
     html.replace(QStringLiteral("%TEXT%"), t.textPrimary.name());
     html.replace(QStringLiteral("%MUTED%"), t.textSecondary.name());
     html.replace(QStringLiteral("%ACCENT%"), t.accentHighlight.name());
+    html.replace(QStringLiteral("%ACCENT_INK%"), accentInk.name());
     html.replace(QStringLiteral("%LINE%"), t.separator().name());
-    html.replace(QStringLiteral("%BOOKMARKS%"), saved);
+    html.replace(QStringLiteral("%GLASS%"), cssRgba(glass));
+    html.replace(QStringLiteral("%FIELD%"), cssRgba(field));
+    html.replace(QStringLiteral("%BLUR%"),
+                 ui::GlassPanel::reduceTransparency()
+                     ? QStringLiteral("none")
+                     : QStringLiteral("blur(24px) saturate(135%)"));
+    html.replace(QStringLiteral("%MEDIA%"), media);
+    html.replace(QStringLiteral("%TITLE%"), tr("Search the web").toHtmlEscaped());
+    html.replace(QStringLiteral("%LEAD%"),
+                 tr("Find what you need without leaving your project.")
+                     .toHtmlEscaped());
+    html.replace(QStringLiteral("%SEARCH_LABEL%"),
+                 tr("Web search").toHtmlEscaped());
+    html.replace(QStringLiteral("%SEARCH_PLACEHOLDER%"),
+                 tr("Search or enter a topic").toHtmlEscaped());
+    html.replace(QStringLiteral("%SEARCH_BUTTON%"),
+                 tr("Search").toHtmlEscaped());
+    html.replace(QStringLiteral("%BOOKMARK_SECTION%"), bookmarksSection);
     return html;
+}
+
+QUrl WebBrowserPanel::startPageBaseUrl() const {
+    const QString path = ui::webprefs::startPageBackgroundPath();
+    if (path.isEmpty()) return QUrl(QStringLiteral("about:blank"));
+    return QUrl::fromLocalFile(path);
 }
 
 QString WebBrowserPanel::errorPageHtml(const QUrl& failedUrl) const {
@@ -1112,7 +1223,7 @@ void WebBrowserPanel::showStartPage() {
     updateAddress();
     updateBookmarkState();
     updateTabLabel(tab);
-    tab->view->setHtml(startPageHtml(), QUrl(QStringLiteral("about:blank")));
+    tab->view->setHtml(startPageHtml(), startPageBaseUrl());
 }
 
 void WebBrowserPanel::showLoadError(const QUrl& failedUrl) {
@@ -1250,7 +1361,7 @@ void WebBrowserPanel::rebuildBookmarksBar(bool refreshStartPage) {
         for (Tab* tab : std::as_const(m_tabs)) {
             if (tab->showingStartPage) {
                 tab->view->setHtml(startPageHtml(),
-                                   QUrl(QStringLiteral("about:blank")));
+                                   startPageBaseUrl());
             }
         }
     }
@@ -1777,6 +1888,36 @@ void WebBrowserPanel::resizeEvent(QResizeEvent* event) {
 
 void WebBrowserPanel::applyTheme() {
     const Theme& t = th();
+    const bool flat = ui::GlassPanel::reduceTransparency();
+    QColor chromeTop = mixColors(t.toolbarBackground, t.accent,
+                                 t.dark ? 0.15 : 0.09);
+    QColor chromeBottom =
+        mixColors(t.surface, t.accent, t.dark ? 0.08 : 0.05);
+    QColor tabTop = mixColors(t.surfaceElevated, t.textPrimary,
+                              t.dark ? 0.06 : 0.02);
+    QColor tabBottom = mixColors(t.surface, t.background,
+                                 t.dark ? 0.22 : 0.08);
+    QColor selectedTop = mixColors(t.surfaceElevated, t.accent,
+                                   t.dark ? 0.20 : 0.12);
+    QColor selectedBottom = mixColors(t.surface, t.accent,
+                                      t.dark ? 0.10 : 0.07);
+    QColor tabRim = mixColors(t.separator(), t.accent, 0.24);
+    QColor selectedRim = mixColors(t.separator(), t.accentHighlight, 0.66);
+    QColor addressFill = mixColors(t.surfaceElevated, t.background,
+                                   t.dark ? 0.20 : 0.06);
+    QColor addressRim = mixColors(t.separator(), t.accent, 0.26);
+    if (!flat) {
+        chromeTop.setAlphaF(t.dark ? 0.88 : 0.92);
+        chromeBottom.setAlphaF(t.dark ? 0.84 : 0.90);
+        tabTop.setAlphaF(t.dark ? 0.58 : 0.66);
+        tabBottom.setAlphaF(t.dark ? 0.48 : 0.60);
+        selectedTop.setAlphaF(t.dark ? 0.92 : 0.94);
+        selectedBottom.setAlphaF(t.dark ? 0.82 : 0.90);
+        tabRim.setAlphaF(0.72);
+        selectedRim.setAlphaF(0.92);
+        addressFill.setAlphaF(t.dark ? 0.74 : 0.82);
+        addressRim.setAlphaF(0.84);
+    }
     if (m_address) {
         if (QAction* mark = m_address->actions().isEmpty()
                                 ? nullptr
@@ -1800,52 +1941,52 @@ void WebBrowserPanel::applyTheme() {
     background: %SURFACE%; border: none; border-radius: 0;
 }
 #WebTabStrip {
-    background: transparent; border: none;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+        stop:0 %CHROME_TOP%, stop:1 %CHROME_BOTTOM%);
+    border: none;
 }
-/* The strip is chrome, not a document widget: no frame, no base line, and the
-   selected tab is lifted onto the toolbar's own surface so the two read as one
-   piece rather than as a tab bar sitting on a panel. */
 QTabBar#WebTabBar { background: transparent; qproperty-drawBase: 0; }
-/* The tab a page is on is marked the way a selected track is marked
-   everywhere else in the program: an accent edge along the top, and the
-   panel's own surface underneath so the tab and the toolbar read as one
-   continuous piece of chrome. */
 QTabBar#WebTabBar::tab {
-    color: %MUTED%; background: transparent;
-    border: none; border-top: 2px solid transparent;
-    border-top-left-radius: 8px; border-top-right-radius: 8px;
-    padding: 2px 3px 3px 7px; margin-right: 1px; margin-top: 1px;
-    min-width: 46px; max-width: 156px; height: 21px; font-size: 11px;
+    color: %MUTED%;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+        stop:0 %TAB_TOP%, stop:1 %TAB_BOTTOM%);
+    border: 1px solid %TAB_RIM%; border-radius: 9px;
+    padding: 2px 4px 2px 8px; margin: 4px 2px 3px 0;
+    min-width: 52px; max-width: 164px; height: 22px; font-size: 11px;
 }
-QTabBar#WebTabBar::tab:!selected { margin-top: 3px; }
 QTabBar#WebTabBar::tab:!selected:hover {
-    color: %TEXT%; background: %RAISED%;
+    color: %TEXT%; border-color: %ACCENT_SOFT%;
 }
 QTabBar#WebTabBar::tab:selected {
-    color: %TEXT%; background: %SURFACE%;
-    border-top-color: %ACCENT_HI%; font-weight: 600;
+    color: %TEXT%;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+        stop:0 %SELECTED_TOP%, stop:1 %SELECTED_BOTTOM%);
+    border-color: %SELECTED_RIM%; border-bottom: 2px solid %ACCENT_HI%;
+    padding-bottom: 1px; font-weight: 650;
 }
 QTabBar#WebTabBar::scroller { width: 22px; }
 QTabBar#WebTabBar QToolButton {
-    background: %SURFACE%; border: 1px solid %SEP%; border-radius: 5px;
+    background: %ADDRESS_FILL%; border: 1px solid %ADDRESS_RIM%; border-radius: 7px;
     margin: 3px 0; color: %TEXT%;
 }
-/* One seam under the whole chrome block, not one under each row. */
 #WebToolbar {
-    background: %SURFACE%; border: none;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+        stop:0 %CHROME_TOP%, stop:1 %CHROME_BOTTOM%);
+    border: none; border-bottom: 1px solid %ACCENT_SOFT%;
 }
 #WebBookmarksBar, #WebFindBar {
-    background: %SURFACE%; border: none; border-top: 1px solid %SEP%;
+    background: %CHROME_BOTTOM%; border: none; border-top: 1px solid %TAB_RIM%;
 }
 #WebDownloadBar {
     background: %SURFACE%; border: none; border-top: 1px solid %SEP%;
 }
 #WebAddress, #WebFindText {
-    color: %TEXT%; background: %SURFACE%; border: 1px solid %SEP%;
-    border-radius: 8px; padding: 4px 7px; selection-background-color: %ACCENT%;
+    color: %TEXT%; background: %ADDRESS_FILL%; border: 1px solid %ADDRESS_RIM%;
+    border-radius: 11px; padding: 4px 8px; min-height: 22px;
+    selection-background-color: %ACCENT%;
 }
 #WebAddress:focus, #WebFindText:focus {
-    border: 2px solid %ACCENT_HI%; padding: 3px 6px;
+    background: %SELECTED_BOTTOM%; border: 2px solid %ACCENT_HI%; padding: 3px 7px;
 }
 #WebViewFrame { background: %BG%; border: none; border-top: 1px solid %SEP%; }
 #WebViewStack { background: %BG%; }
@@ -1874,6 +2015,18 @@ QPushButton#WebBookmarksMore:focus { border-color: %ACCENT_HI%; }
         .replace("%BG%", t.background.name())
         .replace("%SURFACE%", t.surface.name())
         .replace("%RAISED%", t.surfaceElevated.name())
+        .replace("%CHROME_TOP%", cssRgba(chromeTop))
+        .replace("%CHROME_BOTTOM%", cssRgba(chromeBottom))
+        .replace("%TAB_TOP%", cssRgba(tabTop))
+        .replace("%TAB_BOTTOM%", cssRgba(tabBottom))
+        .replace("%SELECTED_TOP%", cssRgba(selectedTop))
+        .replace("%SELECTED_BOTTOM%", cssRgba(selectedBottom))
+        .replace("%TAB_RIM%", cssRgba(tabRim))
+        .replace("%SELECTED_RIM%", cssRgba(selectedRim))
+        .replace("%ADDRESS_FILL%", cssRgba(addressFill))
+        .replace("%ADDRESS_RIM%", cssRgba(addressRim))
+        .replace("%ACCENT_SOFT%",
+                 mixColors(t.separator(), t.accent, 0.44).name())
         .replace("%SEP%", t.separator().name())
         .replace("%DIVIDER%", t.sectionDivider().name())
         .replace("%ACCENT_HI%", t.accentHighlight.name())

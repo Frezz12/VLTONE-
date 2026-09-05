@@ -457,19 +457,14 @@ void PluginManager::scanWorker(bool rescanAll) {
             !entry.plugins.empty()) {
             entry.ok = true;
 
-            // VST3 metadata inspection does not run component/controller
-            // initialize or activation. Validate each advertised class in a
-            // disposable process so a broken instrument cannot take down the
-            // main DAW when selected.
-            if (candidate.format == Format::Vst3 ||
-                candidate.format == Format::Vst) {
+            // Metadata inspection is not a compatibility proof. Validate every
+            // external format in a disposable process so CLAP/AU failures are
+            // contained just like VST/VST3 failures and cached readiness means
+            // the class has instantiated, activated and processed one block.
+            if (candidate.format != Format::Internal &&
+                candidate.format != Format::Unknown) {
                 std::vector<PluginDescriptor> validated;
                 for (const PluginDescriptor& descriptor : entry.plugins) {
-                    if (candidate.format == Format::Vst3 &&
-                        !descriptor.isInstrument && !descriptor.wantsMidi) {
-                        validated.push_back(descriptor);
-                        continue;
-                    }
                     const std::vector<std::string> validateArguments = {
                         "--validate",
                         "--format=" + std::string(plugins::toString(candidate.format)),

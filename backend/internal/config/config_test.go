@@ -90,6 +90,7 @@ func TestCollaborationDefaultsToDisabledAndBoundsLimits(t *testing.T) {
 	}
 
 	t.Setenv("COLLABORATION_ENABLED", "true")
+	t.Setenv("VLT_INVITE_CODE_PEPPER", testInviteCodePepper)
 	t.Setenv("COLLAB_MAX_PARTICIPANTS", "4")
 	t.Setenv("COLLAB_SNAPSHOT_OPS", "250")
 	t.Setenv("COLLAB_MEMBER_STALE_SECONDS", "90")
@@ -122,9 +123,58 @@ func TestCollaborationDefaultsToDisabledAndBoundsLimits(t *testing.T) {
 	}
 }
 
+// 32 bytes of base64, matching auth.MinimumCodePepperBytes.
+const testInviteCodePepper = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+// A missing or short pepper must stop the server rather than quietly falling
+// back to an unkeyed digest: a twelve digit code space is precomputable, so an
+// unpeppered database disclosure would reveal every outstanding invite.
+func TestInviteCodePepperIsRequiredWhenCollaborationIsEnabled(t *testing.T) {
+	setValidCollaborationStorage(t)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("COLLABORATION_ENABLED", "true")
+
+	t.Setenv("VLT_INVITE_CODE_PEPPER", "")
+	if _, err := Load(); err == nil ||
+		!strings.Contains(err.Error(), "VLT_INVITE_CODE_PEPPER") {
+		t.Fatalf("collaboration without an invite pepper was accepted: %v", err)
+	}
+
+	t.Setenv("VLT_INVITE_CODE_PEPPER", "c2hvcnQ=") // five bytes
+	if _, err := Load(); err == nil ||
+		!strings.Contains(err.Error(), "VLT_INVITE_CODE_PEPPER") {
+		t.Fatalf("a short invite pepper was accepted: %v", err)
+	}
+
+	t.Setenv("VLT_INVITE_CODE_PEPPER", "not-base64-$$$")
+	if _, err := Load(); err == nil ||
+		!strings.Contains(err.Error(), "VLT_INVITE_CODE_PEPPER") {
+		t.Fatalf("a malformed invite pepper was accepted: %v", err)
+	}
+
+	t.Setenv("VLT_INVITE_CODE_PEPPER", testInviteCodePepper)
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("a valid invite pepper was rejected: %v", err)
+	}
+	if len(loaded.InviteCodePepper) != 32 {
+		t.Fatalf("invite pepper was not decoded: %d bytes",
+			len(loaded.InviteCodePepper))
+	}
+}
+
+func setValidCollaborationStorage(t *testing.T) {
+	t.Helper()
+	t.Setenv("COLLAB_OBJECT_ENDPOINT", "http://127.0.0.1:9000")
+	t.Setenv("COLLAB_OBJECT_BUCKET", "vlt-collaboration")
+	t.Setenv("COLLAB_OBJECT_ACCESS_KEY_ID", "access")
+	t.Setenv("COLLAB_OBJECT_SECRET_ACCESS_KEY", "secret")
+}
+
 func TestCollaborationStorageConfigurationIsFailClosed(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("COLLABORATION_ENABLED", "true")
+	t.Setenv("VLT_INVITE_CODE_PEPPER", testInviteCodePepper)
 	t.Setenv("COLLAB_OBJECT_ENDPOINT", "")
 	t.Setenv("COLLAB_OBJECT_BUCKET", "")
 	t.Setenv("COLLAB_OBJECT_ACCESS_KEY_ID", "")
@@ -180,10 +230,18 @@ func TestCollaborationAllowlistIsDefaultDenyAndValidatesUUIDs(t *testing.T) {
 	}
 }
 
-func TestCloudRecordingCannotBeEnabledInV1(t *testing.T) {
+func TestCloudRecordingFeatureFlag(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
+	t.Setenv("COLLAB_RECORDING_ENABLED", "false")
+	loaded, err := Load()
+	if err != nil || loaded.CollabRecordingEnabled {
+		t.Fatalf("cloud recording default-off flag = %v, %v",
+			loaded.CollabRecordingEnabled, err)
+	}
 	t.Setenv("COLLAB_RECORDING_ENABLED", "true")
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "must remain false") {
-		t.Fatalf("cloud recording was enabled in V1: %v", err)
+	loaded, err = Load()
+	if err != nil || !loaded.CollabRecordingEnabled {
+		t.Fatalf("cloud recording flag was not enabled: %v, %v",
+			loaded.CollabRecordingEnabled, err)
 	}
 }

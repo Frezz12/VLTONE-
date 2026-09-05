@@ -18,6 +18,11 @@
 #include "CloudProjectSyncCoordinator.hpp"
 #include "CloudSessionLifecycleController.hpp"
 #include "EngineProjectProjectionAdapter.hpp"
+#include "Icons.hpp"
+#include "CloudProjectsDialog.hpp"
+#include "JoinSessionDialog.hpp"
+#include "SessionStatusStrip.hpp"
+#include "UiConstants.hpp"
 #include "PresenceInputRouter.hpp"
 #include "PresenceStore.hpp"
 #include "MixerWidget.hpp"
@@ -27,6 +32,10 @@
 #include "AutomationEditorWindow.hpp"
 #include "AudioPreferences.hpp"
 #include "LocalizationManager.hpp"
+#include "NotebookPrefs.hpp"
+#include "TimelineBackgroundPrefs.hpp"
+#include "ThemeMediaBackground.hpp"
+#include "WaveformPaint.hpp"
 #include "PromptService.hpp"
 #include "StartupWindow.hpp"
 #include "UpdateChecker.hpp"
@@ -35,6 +44,7 @@
 #include "GlassPanel.hpp"
 #include "Controls.hpp"
 #include "PluginQuickAdder.hpp"
+#include "ProjectDialogs.hpp"
 #include "Theme.hpp"
 
 #include <QApplication>
@@ -423,6 +433,54 @@ int main(int argc, char** argv) {
                          fontError.toUtf8().constData());
             return 35;
         }
+        QString notebookError;
+        if (!ui::notebookprefs::checkPreferencesForTest(&notebookError)) {
+            std::fprintf(stderr, "notebook preferences check failed: %s\n",
+                         notebookError.toUtf8().constData());
+            return 61;
+        }
+        QString timelineBackgroundError;
+        if (!ui::timelinebackgroundprefs::checkPreferencesForTest(
+                &timelineBackgroundError)) {
+            std::fprintf(stderr,
+                         "timeline background preferences check failed: %s\n",
+                         timelineBackgroundError.toUtf8().constData());
+            return 62;
+        }
+        QString mediaBackgroundError;
+        if (!ui::checkThemeMediaBackgroundForTest(&mediaBackgroundError)) {
+            std::fprintf(stderr, "theme media background check failed: %s\n",
+                         mediaBackgroundError.toUtf8().constData());
+            return 64;
+        }
+        if (!ui::checkWaveformBaselineForTest()) {
+            std::fprintf(stderr, "waveform baseline pixel check failed\n");
+            return 63;
+        }
+        QString browserError;
+        if (!collab::checkCloudProjectsDialogForTest(&browserError)) {
+            std::fprintf(stderr, "cloud projects dialog check failed: %s\n",
+                         browserError.toUtf8().constData());
+            return 60;
+        }
+        QString joinError;
+        if (!collab::checkJoinSessionDialogForTest(&joinError)) {
+            std::fprintf(stderr, "join session dialog check failed: %s\n",
+                         joinError.toUtf8().constData());
+            return 59;
+        }
+        QString stripError;
+        if (!collab::checkSessionStatusStripForTest(&stripError)) {
+            std::fprintf(stderr, "session status strip check failed: %s\n",
+                         stripError.toUtf8().constData());
+            return 58;
+        }
+        QString glyphError;
+        if (!icons::checkGlyphCoverageForTest(&glyphError)) {
+            std::fprintf(stderr, "icon glyph coverage failed: %s\n",
+                         glyphError.toUtf8().constData());
+            return 57;
+        }
         if (!ui::PanKnob::checkInteractionForTest()) {
             std::fprintf(stderr, "pan control interaction failed\n");
             return 39;
@@ -668,6 +726,8 @@ int main(int argc, char** argv) {
         &accountService, &collaborationAssetCache);
     collab::CloudSharedAssetMutationCoordinator cloudSharedAssetMutations(
         &cloudAssetTransfers, &collaborationAssetCache);
+    collab::CloudRecordingAssetCoordinator cloudRecordingAssets(
+        &cloudAssetTransfers, &collaborationAssetCache);
     collab::CloudProjectAssetHydrator cloudAssetHydrator(
         &cloudAssetTransfers, &collaborationAssetCache);
     collab::CloudProjectPublisher cloudProjectPublisher(
@@ -705,7 +765,9 @@ int main(int argc, char** argv) {
                                        &cloudProjectClient,
                                        &recordingLeases,
                                        &cloudAssetHydrator,
-                                       &collaborationAssetCache);
+                                       &collaborationAssetCache,
+                                       &cloudAssetTransfers,
+                                       &cloudRecordingAssets);
     collab::EngineProjectProjectionAdapter collaborationProjection(
         window.collaborationEngineController(), &collaborationAssetCache);
     QObject::connect(
@@ -790,7 +852,12 @@ int main(int argc, char** argv) {
     // DAW_SHOT_SIZE=WxH grabs at a chosen window size: most layout bugs only
     // show up on a laptop screen, where the arrangement is short.
     int shotWidth = 1440;
-    int shotHeight = screenshotPath ? 1200 : 900;
+    // The workspace now carries the always-present session strip under the
+    // arrangement. The interaction self-tests drive the timeline by pixel
+    // coordinates, so give the window back the height that chrome takes,
+    // rather than leaving the lanes they reach for one row off-screen.
+    int shotHeight =
+        (screenshotPath ? 1200 : 900) + ui::kBottomBarHeight;
     if (const char* size = std::getenv("DAW_SHOT_SIZE")) {
         int w = 0, h = 0;
         if (std::sscanf(size, "%dx%d", &w, &h) == 2 && w > 400 && h > 300) {
@@ -968,6 +1035,20 @@ int main(int argc, char** argv) {
         const char* shotSampler = std::getenv("DAW_SHOT_SAMPLER");
         const bool shootSampler = shotSampler != nullptr;
         if (shootSampler) window.openDemoSampler(QString::fromUtf8(shotSampler));
+        // DAW_SHOT_CLOUD opens the cloud project browser.
+        const bool shotCloud = std::getenv("DAW_SHOT_CLOUD") != nullptr;
+        if (shotCloud) {
+            QTimer::singleShot(0, &window,
+                               [&window] { window.onOpenCloudProjects(); });
+        }
+        // DAW_SHOT_JOIN opens the session join checklist. Its value seeds the
+        // code field, so a shot can show the flow with a code already entered.
+        const char* shotJoin = std::getenv("DAW_SHOT_JOIN");
+        if (shotJoin) {
+            QTimer::singleShot(0, &window, [&window, shotJoin] {
+                window.openJoinSessionDialog(QString::fromUtf8(shotJoin));
+            });
+        }
         // DAW_SHOT_GRAPHIT opens the compact built-in one-knob saturator.
         const bool shootGraphit = std::getenv("DAW_SHOT_GRAPHIT") != nullptr;
         if (shootGraphit) window.openDemoGraphit();
@@ -1170,6 +1251,24 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+            // The join dialog is narrower than the 600 px floor above, so it
+            // gets its own pass like the recovery message box does.
+            if (shotJoin) {
+                for (QWidget* w : QApplication::topLevelWidgets()) {
+                    if (w != &window && w->isVisible() &&
+                        qobject_cast<collab::JoinSessionDialog*>(w)) {
+                        target = w;
+                    }
+                }
+            }
+            if (shotCloud) {
+                for (QWidget* w : QApplication::topLevelWidgets()) {
+                    if (w != &window && w->isVisible() &&
+                        qobject_cast<collab::CloudProjectsDialog*>(w)) {
+                        target = w;
+                    }
+                }
+            }
             // A message box is far narrower than the 600 px the windows above
             // are found by, so it gets its own pass with no width floor.
             if (shootRecovery) {
@@ -1214,6 +1313,16 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                          "a fresh project unexpectedly contains tracks\n");
             return 38;
+        }
+        QString remoteCommandError;
+        if (!window.checkRemoteCommandMetadataForTest(&remoteCommandError)) {
+            std::fprintf(stderr, "remote command registry is incomplete: %s\n",
+                         remoteCommandError.toUtf8().constData());
+            return 41;
+        }
+        if (!ui::checkProjectDialogsForTest(&window)) {
+            std::fprintf(stderr, "the project save/open dialogs are incomplete\n");
+            return 40;
         }
         // Keep each built-in editor's widget and undo invariants independently runnable:
         // the full UI selftest also exercises platform codecs, file watching

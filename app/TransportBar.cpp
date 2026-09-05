@@ -3,6 +3,8 @@
 #include "GlassPanel.hpp"
 #include "Icons.hpp"
 #include "Theme.hpp"
+#include "ThemeMediaBackground.hpp"
+#include "TimelineBackgroundPrefs.hpp"
 #include "UiConstants.hpp"
 
 #include <QSettings>
@@ -16,9 +18,10 @@
 #include <QButtonGroup>
 #include <QCoreApplication>
 #include <QEasingCurve>
-#include <QFontDatabase>
+#include <QEvent>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
@@ -33,6 +36,7 @@
 #include <QRadialGradient>
 #include <QResizeEvent>
 #include <QSignalBlocker>
+#include <QShowEvent>
 #include <QStyle>
 #include <QToolButton>
 #include <QVariantAnimation>
@@ -42,20 +46,6 @@
 #include <functional>
 
 namespace {
-
-QFont monoFont(int pixelSize, bool bold = false) {
-#ifdef Q_OS_MACOS
-    // Qt 6 reports its macOS FixedFont family as the generic "Monospace" and
-    // spends ~65 ms populating aliases before discovering it is not a real
-    // installed family. Menlo is the platform fixed UI font.
-    QFont f(QStringLiteral("Menlo"));
-#else
-    QFont f = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-#endif
-    f.setPixelSize(pixelSize);
-    f.setBold(bold);
-    return f;
-}
 
 // The compact console leaves enough room around its glass plate for a soft
 // shadow, while its two wells remain large enough to read at a glance.
@@ -80,28 +70,6 @@ constexpr int kBlockRadius = 11;
 constexpr int kPositionFontPx = 25;
 constexpr int kStatsFontPx = 16;
 constexpr int kChipFontPx = 15;
-
-/// The face the readouts are set in. Bahnschrift is Windows' cut of DIN 1451,
-/// the signage type hardware transports have used for decades: narrow enough
-/// to let the bar counter be genuinely large in a short well, and technical
-/// enough that the console reads as an instrument rather than a form. The
-/// fallbacks pick the nearest thing each platform ships before dropping back
-/// to the fixed UI font.
-///
-/// Tabular figures are requested explicitly. A rolling counter whose digits
-/// change width shifts under the eye, which is exactly what a position readout
-/// must never do.
-QFont displayFont(int pixelSize, QFont::Weight weight = QFont::DemiBold) {
-    QFont f;
-    f.setFamilies({QStringLiteral("Bahnschrift"),
-                   QStringLiteral("DIN Alternate"),
-                   QStringLiteral("Roboto Condensed"),
-                   monoFont(pixelSize).family()});
-    f.setPixelSize(pixelSize);
-    f.setWeight(weight);
-    f.setFeature(QFont::Tag("tnum"), 1);
-    return f;
-}
 
 QString gridDivisionName(const ui::GridDivision& division) {
     if (division.beats < 0.0)
@@ -806,6 +774,9 @@ TransportBar::TransportBar(daw::EngineController* controller, QWidget* parent)
                    0, kToolCount - 1);
     setFixedHeight(ui::kTransportHeight);
     setAttribute(Qt::WA_StyledBackground, false);
+    m_backgroundMedia = new ui::ThemeMediaBackground(this);
+    connect(m_backgroundMedia, &ui::ThemeMediaBackground::frameChanged, this,
+            [this](bool) { update(); });
 
     // Build the trailing controls first, then restore the original three-part
     // composition: transport, glass LCD, and editing tools. Their shared
@@ -827,6 +798,7 @@ TransportBar::TransportBar(daw::EngineController* controller, QWidget* parent)
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             &TransportBar::applyTheme);
     applyTheme();
+    reloadBackgroundSettings();
     syncTempo();
     syncTimeSignature();
     updateResponsiveLayout();
@@ -919,6 +891,17 @@ QWidget* TransportBar::buildRightDock() {
     connect(m_webPanelButton, &QAbstractButton::toggled, this,
             &TransportBar::webToggled);
     panel->addAction(m_webPanelButton);
+
+    m_notebookPanelButton = new ui::IconButton(
+        icons::Glyph::Notebook, tr("Open the notebook"), panel);
+    m_notebookPanelButton->setObjectName(QStringLiteral("HeaderNotebookButton"));
+    m_notebookPanelButton->setAccessibleName(tr("Notebook"));
+    m_notebookPanelButton->setFocusPolicy(Qt::StrongFocus);
+    m_notebookPanelButton->setCheckable(true);
+    m_notebookPanelButton->setButtonSize(28, 28);
+    connect(m_notebookPanelButton, &QAbstractButton::toggled, this,
+            &TransportBar::notebookToggled);
+    panel->addAction(m_notebookPanelButton);
 
     m_aiPanelButton = new ui::IconButton(
         icons::Glyph::Assistant, tr("Open the AI assistant"), panel);
@@ -1166,7 +1149,7 @@ QWidget* TransportBar::buildPill() {
     auto* tempoEdit = new TempoScrubEdit(QStringLiteral("120"), statsSection);
     m_tempoEdit = tempoEdit;
     m_tempoEdit->setObjectName(QStringLiteral("TempoField"));
-    m_tempoEdit->setFont(displayFont(kStatsFontPx));
+    m_tempoEdit->setFont(ui::transportDisplayFont(kStatsFontPx));
     m_tempoEdit->setFixedSize(66, 19);
     m_tempoEdit->setFrame(false);
     m_tempoEdit->setAlignment(Qt::AlignCenter);
@@ -1196,7 +1179,7 @@ QWidget* TransportBar::buildPill() {
     m_timeSignatureButton->setCursor(Qt::PointingHandCursor);
     m_timeSignatureButton->setFocusPolicy(Qt::StrongFocus);
     m_timeSignatureButton->setFixedSize(66, 19);
-    m_timeSignatureButton->setFont(displayFont(kStatsFontPx));
+    m_timeSignatureButton->setFont(ui::transportDisplayFont(kStatsFontPx));
     m_timeSignatureButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     m_timeSignatureButton->setAccessibleName(tr("Project time signature"));
     auto* signatureMenu = new QMenu(m_timeSignatureButton);
@@ -1230,7 +1213,7 @@ QWidget* TransportBar::buildPill() {
     m_gridButton->setCursor(Qt::PointingHandCursor);
     m_gridButton->setFocusPolicy(Qt::StrongFocus);
     m_gridButton->setFixedSize(66, 19);
-    m_gridButton->setFont(displayFont(kChipFontPx));
+    m_gridButton->setFont(ui::transportDisplayFont(kChipFontPx));
     m_gridButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     auto* gridMenu = new QMenu(m_gridButton);
     auto* gridGroup = new QActionGroup(gridMenu);
@@ -1259,7 +1242,7 @@ QWidget* TransportBar::buildPill() {
     m_timeFormatButton->setCursor(Qt::PointingHandCursor);
     m_timeFormatButton->setFocusPolicy(Qt::StrongFocus);
     m_timeFormatButton->setFixedSize(66, 19);
-    m_timeFormatButton->setFont(displayFont(kChipFontPx));
+    m_timeFormatButton->setFont(ui::transportDisplayFont(kChipFontPx));
     m_timeFormatButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     auto* timeMenu = new QMenu(m_timeFormatButton);
     auto* timeGroup = new QActionGroup(timeMenu);
@@ -1316,7 +1299,8 @@ QWidget* TransportBar::buildPositionGroup() {
     auto* scrub = new PositionScrubEdit(QStringLiteral("1.1.000"), group);
     m_positionValue = scrub;
     m_positionValue->setObjectName(QStringLiteral("BarsPosition"));
-    m_positionValue->setFont(displayFont(kPositionFontPx, QFont::Bold));
+    m_positionValue->setFont(
+        ui::transportDisplayFont(kPositionFontPx, QFont::Bold));
     m_positionValue->setFixedSize(136, 32);
     m_positionValue->setFrame(false);
     m_positionValue->setAlignment(Qt::AlignCenter);
@@ -1656,6 +1640,13 @@ void TransportBar::paintEvent(QPaintEvent*) {
     // The header has its own colour (per-theme `headerBackground`); compact
     // glass modules float above it without changing the workspace geometry.
     p.fillRect(rect(), t.headerBackground);
+    if (m_backgroundEnabled && m_backgroundVisibility > 0 &&
+        m_backgroundMedia && m_backgroundMedia->hasFrame()) {
+        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        p.setOpacity(double(m_backgroundVisibility) / 100.0);
+        p.drawPixmap(QPoint(0, 0), m_backgroundMedia->frame());
+        p.setOpacity(1.0);
+    }
 
     p.setPen(QPen(t.sectionDivider(), 1));
     p.drawLine(0, height() - 1, width(), height() - 1);
@@ -1663,7 +1654,46 @@ void TransportBar::paintEvent(QPaintEvent*) {
 
 void TransportBar::resizeEvent(QResizeEvent* ev) {
     QWidget::resizeEvent(ev);
+    if (m_backgroundMedia)
+        m_backgroundMedia->setTargetSize(size(), devicePixelRatioF());
     updateResponsiveLayout();
+}
+
+bool TransportBar::event(QEvent* event) {
+    const bool handled = QWidget::event(event);
+    if (event->type() == QEvent::DevicePixelRatioChange && m_backgroundMedia)
+        m_backgroundMedia->setTargetSize(size(), devicePixelRatioF());
+    return handled;
+}
+
+void TransportBar::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    if (m_backgroundMedia)
+        m_backgroundMedia->setPlaying(
+            m_backgroundEnabled && m_backgroundAnimationEnabled &&
+            m_backgroundVisibility > 0);
+}
+
+void TransportBar::hideEvent(QHideEvent* event) {
+    if (m_backgroundMedia) m_backgroundMedia->setPlaying(false);
+    QWidget::hideEvent(event);
+}
+
+void TransportBar::reloadBackgroundSettings() {
+    using namespace ui::headerbackgroundprefs;
+    m_backgroundEnabled = enabled();
+    m_backgroundVisibility = visibility();
+    m_backgroundAnimationEnabled =
+        animatedBackgroundsEnabled() &&
+        !QSettings().value(QStringLiteral("ui/reduceMotion"), false).toBool();
+    m_backgroundMedia->setTargetSize(size(), devicePixelRatioF());
+    m_backgroundMedia->setPlacement(placement());
+    m_backgroundMedia->setBlurRadius(blurRadius());
+    m_backgroundMedia->setSource(path());
+    m_backgroundMedia->setPlaying(
+        m_backgroundEnabled && m_backgroundAnimationEnabled &&
+        m_backgroundVisibility > 0 && isVisible());
+    update();
 }
 
 int TransportBar::minimumResponsiveWidth() const {
@@ -2040,6 +2070,10 @@ void TransportBar::setBrowserVisible(bool visible) {
 
 void TransportBar::setWebVisible(bool visible) {
     reflectToggle(m_webPanelButton, visible);
+}
+
+void TransportBar::setNotebookVisible(bool visible) {
+    reflectToggle(m_notebookPanelButton, visible);
 }
 
 void TransportBar::setAiVisible(bool visible) {

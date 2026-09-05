@@ -97,6 +97,8 @@ int main() {
     fs::create_directories(sourceDir);
     const std::string tonePath = (sourceDir / "tone.wav").string();
     writeTone(tonePath, 48000, 24000);
+    const std::string coverPath = (sourceDir / "cover.png").string();
+    { std::ofstream(coverPath, std::ios::binary) << "test cover"; }
 
     // ── A project with something of every kind in it ──
     daw::EngineController ctrl;
@@ -122,6 +124,7 @@ int main() {
     ctrl.setTempo(132.0);
     ctrl.setProjectKey(9, "minor");
     ctrl.setAiInstructions("keep the low end tight");
+    ctrl.setProjectMetadata("Test Author", coverPath);
     ctrl.setTrackVolume(midiTrack, 0.6f);
     ctrl.setTrackPan(midiTrack, -0.4f);
 
@@ -141,7 +144,7 @@ int main() {
           "journal creates no media directory");
     check(countFiles(journal.parent_path()) == 1,
           "journal is exactly one file — nothing was copied");
-    check(countFiles(sourceDir) == 1, "the source library is left untouched");
+    check(countFiles(sourceDir) == 2, "the source library is left untouched");
 
     const std::string journalText = readFile(journal);
     std::string serializedTonePath = tonePath;
@@ -164,6 +167,9 @@ int main() {
     check(restored.keyRoot == 9 && restored.scale == "minor", "key survives");
     check(restored.aiInstructions == "keep the low end tight",
           "AI instructions survive");
+    check(restored.author == "Test Author" &&
+              restored.coverImagePath == coverPath,
+          "project author and cover survive the journal");
     if (restored.tracks.size() == 2) {
         const auto& guitar = restored.tracks[0];
         const auto& piano = restored.tracks[1];
@@ -202,6 +208,8 @@ int main() {
     check(ctrl.saveProject(pkg.string()).isOk(), "saves a real package");
     check(fs::exists(pkg / "Content" / "tone.wav"),
           "package still copies media, as it always did");
+    check(fs::exists(pkg / "Content" / "cover.png"),
+          "package owns its project cover");
 
     const fs::path basenameDoc = dir / "basenames.json";
     // saveProject rewrote nothing in the live model, so serializing it with
@@ -212,8 +220,25 @@ int main() {
     // basenames yields the same names the package holds.
     daw::ProjectSerializer::saveDocument(packaged, basenameDoc.string(),
                                          daw::MediaPaths::Basenames);
-    check(readFile(basenameDoc) == readFile(pkg / "Project.vlt"),
-          "Basenames output is byte-identical to the package's Project.vlt");
+    check(readFile(basenameDoc) == readFile(pkg / "song.vlt"),
+          "Basenames output is byte-identical to the package manifest");
+    check(packaged.author == "Test Author" &&
+              packaged.coverImagePath ==
+                  (pkg / "Content" / "cover.png").string(),
+          "packaged metadata resolves its portable cover");
+
+    const fs::path legacyPackage = dir / "legacy.vlt";
+    fs::copy(pkg, legacyPackage, fs::copy_options::recursive);
+    fs::rename(legacyPackage / "song.vlt", legacyPackage / "Project.vlt");
+    daw::ProjectModel legacyProject;
+    check(daw::ProjectSerializer::load(legacyProject, legacyPackage.string())
+              .isOk() && legacyProject.tracks.size() == 2,
+          "legacy Project.vlt manifests still open");
+    check(daw::ProjectSerializer::save(legacyProject, legacyPackage.string())
+              .isOk() &&
+              fs::is_regular_file(legacyPackage / "legacy.vlt") &&
+              !fs::exists(legacyPackage / "Project.vlt"),
+          "saving migrates a legacy manifest to the project name");
 
     // The application contract is UTF-8 std::string at its public boundary and
     // native filesystem paths underneath. Exercise both directions here: the
@@ -249,7 +274,8 @@ int main() {
                   unicodeReloaded.tracks.size() == 1 &&
                   unicodeReloaded.tracks.front().clips.size() == 1,
               "reloads a project through a Unicode path");
-        check(fs::is_regular_file(unicodePackage / "Project.vlt") &&
+        check(fs::is_regular_file(unicodePackage /
+                                  unicodePackage.filename()) &&
                   fs::is_regular_file(unicodePackage / "Content" /
                                       unicodeTone.filename()),
               "Unicode package contains its manifest and media");

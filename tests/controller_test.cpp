@@ -117,6 +117,19 @@ int main() {
     daw::EngineController ctrl;
     check(ctrl.initialize(48000, 512, /*openDevice=*/false).isOk(),
           "controller initialises offline");
+    ctrl.play();
+    auto audioConfig = ctrl.audioConfiguration();
+    audioConfig.bufferSize = 256;
+    const auto rebuildsBeforeBufferChange = ctrl.graphRebuildCountForTest();
+    check(ctrl.applyAudioConfiguration(audioConfig).isOk(),
+          "audio configuration changes while playing");
+    check(ctrl.isPlaying(), "audio configuration preserves playback");
+    check(ctrl.graphRebuildCountForTest() == rebuildsBeforeBufferChange,
+          "buffer change does not rebuild the audio graph");
+    audioConfig.bufferSize = 512;
+    check(ctrl.applyAudioConfiguration(audioConfig).isOk(),
+          "audio buffer restores after playback-preservation check");
+    ctrl.stop();
 
     {
         daw::EngineController themed;
@@ -233,7 +246,8 @@ int main() {
     // ── Save + reload ──
     const std::string pkg = (dir / "song.vlt").string();
     check(ctrl.saveProject(pkg).isOk(), "saves the project package");
-    check(fs::exists(fs::path(pkg) / "Project.vlt"), "Project.vlt written");
+    check(fs::exists(fs::path(pkg) / "song.vlt"),
+          "same-named project manifest written");
     check(fs::exists(fs::path(pkg) / "Content" / "tone.wav"),
           "referenced audio copied into Content/");
     check(fs::is_directory(fs::path(pkg) / "State"),

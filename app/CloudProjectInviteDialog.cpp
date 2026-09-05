@@ -1,5 +1,9 @@
 #include "CloudProjectInviteDialog.hpp"
 
+#include "CollaborationDialogStyle.hpp"
+#include "LocalizationManager.hpp"
+#include "Theme.hpp"
+
 #include <QApplication>
 #include <QClipboard>
 #include <QCloseEvent>
@@ -22,24 +26,19 @@
 
 namespace collab {
 namespace {
+// The dialog family's shared vocabulary; see CollaborationDialogStyle.hpp.
+using collab::dialog::boundedSafeMessage;
+using collab::dialog::canonicalUuid;
+using collab::dialog::kMaximumSafeMessageCharacters;
+using collab::dialog::wipe;
+
 
 constexpr qint64 kMinimumExpirySeconds = 3'600;
 constexpr qint64 kMaximumExpirySeconds = 2'592'000;
 constexpr qint64 kDefaultExpirySeconds = 604'800;
 constexpr int kMaximumEmailCharacters = 320;
-constexpr int kMaximumSafeMessageCharacters = 240;
 constexpr int kMinimumTokenCharacters = 32;
 constexpr int kMaximumTokenCharacters = 256;
-
-QString canonicalUuid(const QString& value) {
-    static const QRegularExpression pattern(QStringLiteral(
-        "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
-        "[0-9a-f]{4}-[0-9a-f]{12}$"));
-    const QString text = value.trimmed();
-    const QUuid uuid(text);
-    if (!pattern.match(text).hasMatch() || uuid.isNull()) return {};
-    return uuid.toString(QUuid::WithoutBraces).toLower();
-}
 
 QString normalizedEmail(const QString& value) {
     return value.trimmed();
@@ -53,23 +52,39 @@ bool validEmail(const QString& value) {
            (email.isEmpty() || pattern.match(email).hasMatch());
 }
 
+/// Groups a code for reading: 1234 5678 9012. Presentation only — every stored
+/// and transmitted form is bare digits.
+QString groupedInviteCode(const QString& code) {
+    QString grouped;
+    grouped.reserve(code.size() + code.size() / 4);
+    for (qsizetype index = 0; index < code.size(); ++index) {
+        if (index > 0 && index % 4 == 0) grouped.append(QLatin1Char(' '));
+        grouped.append(code.at(index));
+    }
+    return grouped;
+}
+
+/// Builds the shareable link.
+///
+/// The code goes in the URL *fragment*, never the path. A fragment is never
+/// sent to any server: it stays out of web-server and CDN access logs, out of
+/// the Referer header of every outbound click on that page, and out of browser
+/// history sync. For a twelve digit secret that difference is the whole game.
+QString inviteLink(const QString& code) {
+    if (code.isEmpty()) return {};
+    QString origin = qEnvironmentVariable(
+        "VLT_PUBLIC_ORIGIN", QStringLiteral("https://vltstudio.ru"));
+    while (origin.endsWith(QLatin1Char('/'))) origin.chop(1);
+    return origin + QLatin1Char('/') +
+           ui::LocalizationManager::instance().websiteLocale() +
+           QStringLiteral("/join#") + code;
+}
+
 bool validToken(const QString& token) {
     return token.size() >= kMinimumTokenCharacters &&
            token.size() <= kMaximumTokenCharacters &&
            !token.contains(QLatin1Char('\r')) &&
            !token.contains(QLatin1Char('\n'));
-}
-
-void wipe(QString& value) {
-    if (!value.isEmpty()) value.fill(QChar(0));
-    value.clear();
-    value.squeeze();
-}
-
-QString boundedSafeMessage(const QString& value,
-                           const QString& fallback) {
-    const QString bounded = value.trimmed().left(kMaximumSafeMessageCharacters);
-    return bounded.isEmpty() ? fallback : bounded;
 }
 
 class InviteRequestState final {
@@ -99,6 +114,12 @@ public:
         return m_phase == Phase::Ready && !m_token.isEmpty();
     }
     const QString& token() const noexcept { return m_token; }
+    /// The short numeric code, when the server minted one. Handled exactly like
+    /// the token: shown once, never persisted, wiped on shutdown.
+    bool hasCode() const noexcept {
+        return m_phase == Phase::Ready && !m_code.isEmpty();
+    }
+    const QString& code() const noexcept { return m_code; }
     const QString& safeMessage() const noexcept { return m_safeMessage; }
     bool messageIsError() const noexcept { return m_messageIsError; }
 
@@ -158,7 +179,10 @@ public:
         // Deferred signals may belong to another request sharing this client.
         // Drop their copies too; in particular, do not retain a crossed token
         // until the next request or dialog shutdown.
-        if (created) wipe(created->result.oneTimeToken);
+        if (created) {
+            wipe(created->result.oneTimeToken);
+            wipe(created->result.oneTimeCode);
+        }
         if (failed) wipe(failed->safeMessage);
         return m_phase != Phase::Idle || issued != 0;
     }
@@ -189,9 +213,15 @@ public:
         m_requestId = 0;
         m_phase = Phase::Ready;
         wipe(m_token);
+        wipe(m_code);
         m_token = result.oneTimeToken;
-        setInfo(QStringLiteral(
-            "Invitation created. Copy the one-time token before closing."));
+        m_code = result.oneTimeCode;
+        setInfo(m_code.isEmpty()
+                    ? QStringLiteral("Invitation created. Copy the one-time "
+                                     "token before closing.")
+                    : QStringLiteral("Invitation created. Copy the code or the "
+                                     "link before closing — neither is shown "
+                                     "again."));
         return true;
     }
 
@@ -221,6 +251,7 @@ public:
         m_phase = Phase::Idle;
         clearDeferred();
         wipe(m_token);
+        wipe(m_code);
         m_ports = {};
         setError(QStringLiteral("Cloud invitations are unavailable right now."));
     }
@@ -232,6 +263,7 @@ public:
         m_phase = Phase::Idle;
         clearDeferred();
         wipe(m_token);
+        wipe(m_code);
         wipe(m_safeMessage);
         if (request != 0 && m_ports.cancel) m_ports.cancel(request);
     }
@@ -259,6 +291,7 @@ private:
     void clearDeferredCreated() {
         if (!m_deferredCreated) return;
         wipe(m_deferredCreated->result.oneTimeToken);
+        wipe(m_deferredCreated->result.oneTimeCode);
         m_deferredCreated.reset();
     }
 
@@ -277,6 +310,7 @@ private:
     CloudMemberRole m_requestedRole = CloudMemberRole::Viewer;
     bool m_issuing = false;
     QString m_token;
+    QString m_code;
     QString m_safeMessage;
     bool m_messageIsError = false;
     std::optional<DeferredCreated> m_deferredCreated;
@@ -293,6 +327,11 @@ struct CloudProjectInviteDialog::Impl {
     QLineEdit* email = nullptr;
     QSpinBox* expiryHours = nullptr;
     QLabel* status = nullptr;
+    QLabel* codeLabel = nullptr;
+    QLabel* code = nullptr;
+    QPushButton* copyCode = nullptr;
+    QPushButton* copyLink = nullptr;
+    QPushButton* revealToken = nullptr;
     QLabel* tokenLabel = nullptr;
     QLineEdit* token = nullptr;
     QPushButton* copy = nullptr;
@@ -304,6 +343,7 @@ struct CloudProjectInviteDialog::Impl {
     QPushButton* revokeInvitation = nullptr;
     quint64 listRequestId = 0;
     quint64 revokeRequestId = 0;
+    bool tokenRevealed = false;
 
     Impl(CloudProjectInviteDialog* owner, const QString& projectId,
          InviteRequestState::Ports ports)
@@ -340,15 +380,32 @@ struct CloudProjectInviteDialog::Impl {
                 : QStringLiteral("QLabel { color: #8ed7e8; }"));
             status->setVisible(!request.safeMessage().isEmpty());
         }
-        if (tokenLabel) tokenLabel->setVisible(ready);
-        if (token) {
-            if (ready && token->text() != request.token())
-                token->setText(request.token());
-            else if (!ready && !token->text().isEmpty())
-                token->clear();
-            token->setVisible(ready);
+        // The short code is the artifact people actually use, so it is the
+        // one shown by default; the long token stays reachable for a server
+        // that mints no codes and for support, but it is not the headline.
+        const bool hasCode = ready && request.hasCode();
+        if (codeLabel) codeLabel->setVisible(hasCode);
+        if (code) {
+            code->setText(hasCode ? groupedInviteCode(request.code())
+                                  : QString());
+            code->setVisible(hasCode);
         }
-        if (copy) copy->setVisible(ready);
+        if (copyCode) copyCode->setVisible(hasCode);
+        if (copyLink) copyLink->setVisible(hasCode);
+        if (revealToken) {
+            revealToken->setVisible(ready && hasCode);
+            revealToken->setChecked(revealToken->isChecked() && ready);
+        }
+        const bool showToken = ready && (!hasCode || tokenRevealed);
+        if (tokenLabel) tokenLabel->setVisible(showToken);
+        if (token) {
+            if (showToken && token->text() != request.token())
+                token->setText(request.token());
+            else if (!showToken && !token->text().isEmpty())
+                token->clear();
+            token->setVisible(showToken);
+        }
+        if (copy) copy->setVisible(showToken);
     }
 
     void submit() {
@@ -362,6 +419,28 @@ struct CloudProjectInviteDialog::Impl {
             clipboard->setText(request.token(), QClipboard::Clipboard);
         status->setTextFormat(Qt::PlainText);
         status->setText(q->tr("One-time invitation token copied."));
+        status->setStyleSheet(QStringLiteral("QLabel { color: #8ed7e8; }"));
+        status->show();
+    }
+
+    void copyCodeToClipboard() {
+        if (!request.hasCode()) return;
+        if (QClipboard* clipboard = QApplication::clipboard())
+            clipboard->setText(request.code(), QClipboard::Clipboard);
+        showNotice(q->tr("Invitation code copied."));
+    }
+
+    void copyLinkToClipboard() {
+        if (!request.hasCode()) return;
+        if (QClipboard* clipboard = QApplication::clipboard())
+            clipboard->setText(inviteLink(request.code()), QClipboard::Clipboard);
+        showNotice(q->tr("Invitation link copied."));
+    }
+
+    void showNotice(const QString& text) {
+        if (!status) return;
+        status->setTextFormat(Qt::PlainText);
+        status->setText(text);
         status->setStyleSheet(QStringLiteral("QLabel { color: #8ed7e8; }"));
         status->show();
     }
@@ -415,7 +494,9 @@ struct CloudProjectInviteDialog::Impl {
         listRequestId = 0;
         revokeRequestId = 0;
         request.shutdown();
+        tokenRevealed = false;
         if (token) token->clear();
+        if (code) code->clear();
         if (email) email->clear();
     }
 };
@@ -439,13 +520,10 @@ CloudProjectInviteDialog::CloudProjectInviteDialog(
     setWindowTitle(tr("Invite People"));
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
     setModal(true);
-    setMinimumWidth(460);
+    setMinimumWidth(collab::dialog::kMinimumWidth);
 
-    auto* title = new QLabel(tr("Invite someone to this project"), this);
-    QFont titleFont = title->font();
-    titleFont.setBold(true);
-    titleFont.setPointSize(titleFont.pointSize() + 3);
-    title->setFont(titleFont);
+    QLabel* title =
+        collab::dialog::titleLabel(tr("Invite someone to this project"), this);
 
     m_impl->description = new QLabel(
         tr("Choose what the invited person can do. The token is shown only "
@@ -481,6 +559,28 @@ CloudProjectInviteDialog::CloudProjectInviteDialog(
     m_impl->status->setTextFormat(Qt::PlainText);
     m_impl->status->setWordWrap(true);
 
+    m_impl->codeLabel = new QLabel(tr("Invitation code"), this);
+    m_impl->code = new QLabel(this);
+    m_impl->code->setObjectName(QStringLiteral("CollabCode"));
+    m_impl->code->setTextFormat(Qt::PlainText);
+    m_impl->code->setAlignment(Qt::AlignCenter);
+    // Selectable so it can be read out or copied by hand, but never editable
+    // and never pre-filled with anything but this one code.
+    m_impl->code->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_impl->copyCode = new QPushButton(tr("Copy code"), this);
+    m_impl->copyLink = new QPushButton(tr("Copy link"), this);
+    m_impl->copyLink->setToolTip(
+        tr("A link that opens this session in VLT Studio. The code travels in "
+           "the link fragment, so it is never sent to a web server."));
+    auto* codeRow = new QHBoxLayout;
+    codeRow->addWidget(m_impl->copyCode);
+    codeRow->addWidget(m_impl->copyLink);
+    codeRow->addStretch(1);
+
+    m_impl->revealToken = new QPushButton(tr("Show advanced token"), this);
+    m_impl->revealToken->setCheckable(true);
+    m_impl->revealToken->setFlat(true);
+
     m_impl->tokenLabel = new QLabel(tr("One-time invitation token"), this);
     m_impl->token = new QLineEdit(this);
     m_impl->token->setReadOnly(true);
@@ -513,12 +613,16 @@ CloudProjectInviteDialog::CloudProjectInviteDialog(
     buttons->addWidget(m_impl->create);
 
     auto* column = new QVBoxLayout(this);
-    column->setContentsMargins(24, 22, 24, 22);
-    column->setSpacing(14);
+    column->setContentsMargins(collab::dialog::kMargins);
+    column->setSpacing(collab::dialog::kSpacing);
     column->addWidget(title);
     column->addWidget(m_impl->description);
     column->addLayout(form);
     column->addWidget(m_impl->status);
+    column->addWidget(m_impl->codeLabel);
+    column->addWidget(m_impl->code);
+    column->addLayout(codeRow);
+    column->addWidget(m_impl->revealToken);
     column->addWidget(m_impl->tokenLabel);
     column->addLayout(tokenRow);
     column->addWidget(invitationsTitle);
@@ -526,12 +630,25 @@ CloudProjectInviteDialog::CloudProjectInviteDialog(
     column->addLayout(invitationButtons);
     column->addLayout(buttons);
 
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+            &CloudProjectInviteDialog::applyTheme);
+    applyTheme();
+
     connect(m_impl->create, &QPushButton::clicked, this,
             [this] { m_impl->submit(); });
     connect(m_impl->cancel, &QPushButton::clicked, this,
             &CloudProjectInviteDialog::reject);
     connect(m_impl->copy, &QPushButton::clicked, this,
             [this] { m_impl->copyToken(); });
+    connect(m_impl->copyCode, &QPushButton::clicked, this,
+            [this] { m_impl->copyCodeToClipboard(); });
+    connect(m_impl->copyLink, &QPushButton::clicked, this,
+            [this] { m_impl->copyLinkToClipboard(); });
+    connect(m_impl->revealToken, &QPushButton::toggled, this,
+            [this](bool revealed) {
+                m_impl->tokenRevealed = revealed;
+                m_impl->refresh();
+            });
     connect(m_impl->refreshInvitations, &QPushButton::clicked, this,
             [this] { m_impl->reloadInvitations(); });
     connect(m_impl->revokeInvitation, &QPushButton::clicked, this,
@@ -822,6 +939,13 @@ bool checkCloudProjectInviteDialogForTest(QString* error) {
     }
     if (error) error->clear();
     return true;
+}
+
+void CloudProjectInviteDialog::applyTheme() {
+    // The invitation list, the code plate and the reveal button are not covered
+    // by the global stylesheet, so without this the dialog falls back to raw
+    // Fusion and reads as a different application.
+    setStyleSheet(collab::dialog::styleSheet());
 }
 
 } // namespace collab

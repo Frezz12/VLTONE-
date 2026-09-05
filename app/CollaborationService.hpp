@@ -42,6 +42,12 @@ public:
     PresenceStore* presenceStore() { return &m_presenceStore; }
     LocalSessionState* localSessionState() { return &m_localSessionState; }
 
+    int commandSchemaVersion() const noexcept { return m_commandSchemaVersion; }
+    QString protocolName() const;
+    /// Selects the immutable protocol of the REST-discovered live session.
+    /// Existing v2 rooms remain joinable; newly created rooms use v3.
+    bool setCommandSchemaVersion(int version);
+
     /// Opening a local project never uploads it or connects. A cloud flow must
     /// explicitly supply the server project id.
     void setProjectId(const QString& projectId, bool requestConnection = true);
@@ -110,6 +116,7 @@ signals:
     void stateChanged(collab::CollaborationState state,
                       const QString& detail);
     void projectChanged(const QString& projectId);
+    void commandSchemaVersionChanged(int version);
     void roomAuthorizationRequired(const QString& projectId,
                                    const QUrl& endpoint);
     void outboundTextMessage(const QString& message);
@@ -135,6 +142,11 @@ signals:
     /// final snapshot; teardown occurs only at `liveSessionEnded`.
     void liveSessionEnding(const QString& sessionId);
     void liveSessionEnded(const QString& sessionId);
+    void liveSessionActivated(const QString& sessionId);
+    void participantReadinessChanged(const QString& participantId,
+                                     const QString& effectiveRole,
+                                     const QString& readinessStatus,
+                                     qint64 readinessRevision);
 
 private:
     void refreshAccountState();
@@ -162,6 +174,7 @@ private:
     qint64 m_hashRoundDeadlineMs = 0;
     QHash<int, quint64> m_ephemeralSequences;
     int m_maxMessageBytes = 1024 * 1024;
+    int m_commandSchemaVersion = kProtocolVersion;
     bool m_shouldConnect = false;
     bool m_transportConnected = false;
     bool m_sessionReadOnly = false;

@@ -73,6 +73,21 @@ type collaborationParticipant struct {
 	JoinedAtMS    int64  `json:"joinedAtMs"`
 }
 
+func connectedCollaborationParticipants(all []collaborationParticipant,
+	connected []uuid.UUID) []collaborationParticipant {
+	ids := make(map[string]bool, len(connected))
+	for _, participantID := range connected {
+		ids[participantID.String()] = true
+	}
+	result := make([]collaborationParticipant, 0, len(connected))
+	for _, participant := range all {
+		if ids[participant.ParticipantID] {
+			result = append(result, participant)
+		}
+	}
+	return result
+}
+
 type collaborationWirePrecondition struct {
 	Kind        string `json:"kind"`
 	FieldKey    string `json:"fieldKey"`
@@ -151,6 +166,7 @@ type collaborationRoomConnection struct {
 	userID        uuid.UUID
 	deviceID      uuid.UUID
 	authSessionID uuid.UUID
+	protocol      string
 
 	rateMu        sync.Mutex
 	lastEphemeral map[string]time.Time
@@ -286,16 +302,22 @@ func (s *Server) collaborationLiveActorState(ctx context.Context, projectID,
 		return state, nil
 	}
 
-	var participant struct{ ID uuid.UUID }
+	var participant struct {
+		ID                   uuid.UUID
+		EffectiveRole        string
+		CommandSchemaVersion int
+	}
 	err = s.DB.WithContext(ctx).Table("project_session_members AS members").
-		Select("members.id").
+		Select("members.id", "members.effective_role",
+			"sessions.command_schema_version").
 		Joins("JOIN project_live_sessions AS sessions ON sessions.id = members.session_id").
 		Where(`members.id = ? AND members.session_id = ? AND members.user_id = ?
 			AND members.device_id = ? AND members.desktop_session_id = ?
 			AND members.left_at IS NULL AND sessions.project_id = ?
 			AND sessions.status IN ?`, participantID, sessionID, userID, deviceID,
 			desktopSessionID, projectID,
-			[]string{model.ProjectSessionActive, model.ProjectSessionEnding}).
+			[]string{model.ProjectSessionStarting, model.ProjectSessionActive,
+				model.ProjectSessionEnding}).
 		Take(&participant).Error
 	if recordNotFound(err) {
 		return state, nil
@@ -304,6 +326,10 @@ func (s *Server) collaborationLiveActorState(ctx context.Context, projectID,
 		return state, err
 	}
 	state.participantActive = true
+	if participant.CommandSchemaVersion == collab.CollaborationCommandSchemaV3 &&
+		participant.EffectiveRole != "" {
+		state.projectRole = participant.EffectiveRole
+	}
 	return state, nil
 }
 
@@ -325,17 +351,24 @@ func (s *Server) collaborationLive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	requiredProtocol, ok := collab.CollaborationProtocolForSchema(
+		active.Session.CommandSchemaVersion)
+	if !ok {
+		writeError(w, r, http.StatusConflict, "version_mismatch",
+			"This session requires a newer application version.", nil)
+		return
+	}
 	connection, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		Subprotocols:    []string{collab.CollaborationProtocol},
+		Subprotocols:    []string{requiredProtocol},
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
 		return
 	}
 	connection.SetReadLimit(collaborationMaximumMessageBytes)
-	if connection.Subprotocol() != collab.CollaborationProtocol {
+	if connection.Subprotocol() != requiredProtocol {
 		_ = connection.Close(websocket.StatusProtocolError,
-			"vlt-collab-v2 subprotocol required")
+			"session collaboration subprotocol required")
 		return
 	}
 
@@ -349,7 +382,8 @@ func (s *Server) collaborationLive(w http.ResponseWriter, r *http.Request) {
 	}
 	var helloEnvelope collaborationClientEnvelope
 	if err := decodeCollaborationJSON(rawHello, &helloEnvelope); err != nil ||
-		validateCollaborationEnvelope(helloEnvelope, "hello", false) != nil {
+		validateCollaborationEnvelopeFor(helloEnvelope, requiredProtocol,
+			"hello", false) != nil {
 		_ = connection.Close(websocket.StatusProtocolError, "invalid hello")
 		return
 	}
@@ -376,17 +410,6 @@ func (s *Server) collaborationLive(w http.ResponseWriter, r *http.Request) {
 			collaborationJoinCloseReason(err))
 		return
 	}
-	joinedTransportOwned := false
-	defer func() {
-		if joinedTransportOwned {
-			return
-		}
-		cleanupContext, cancelCleanup := context.WithTimeout(context.Background(),
-			collaborationWriteTimeout)
-		_, _ = s.Collab.LeaveSession(cleanupContext, projectID, joined.Session.ID,
-			user.ID, device.ID, claims.SessionID)
-		cancelCleanup()
-	}()
 	stateContext, cancelState := context.WithTimeout(context.Background(),
 		collaborationWSDBTimeout(s.Config.CollabWSDBTimeoutSeconds))
 	participants, participant, role, err := s.collaborationParticipantViews(
@@ -434,21 +457,36 @@ func (s *Server) collaborationLive(w http.ResponseWriter, r *http.Request) {
 		_ = connection.Close(status, safeWebSocketReason(closeInfo.Reason))
 		return
 	}
-	roundContext, cancelRound := context.WithTimeout(context.Background(),
-		collaborationWriteTimeout)
-	hashRound, err := s.prepareHashRound(roundContext, projectID, joined)
-	cancelRound()
-	if err != nil {
-		subscription.Close(collab.RoomClose{Code: "hash_unavailable",
-			Reason: "state hash round unavailable"})
-		_ = connection.Close(websocket.StatusInternalError,
-			"state hash round unavailable")
-		return
-	}
-	readOnly := !collab.RoleAllows(role, collab.PermissionEdit)
+	participants = connectedCollaborationParticipants(
+		participants, s.Rooms.ConnectedParticipants(projectID))
+	hashRound := openedHashRound{}
+	readOnly := joined.Session.Status == model.ProjectSessionStarting ||
+		!collab.RoleAllows(role, collab.PermissionEdit)
 	blockedReason := "hash_consensus_required"
-	if readOnly {
+	if joined.Session.Status == model.ProjectSessionStarting {
+		blockedReason = "session_starting"
+	} else if readOnly {
 		blockedReason = "role_read_only"
+		for _, member := range joined.Members {
+			if member.ID == participantID &&
+				member.ReadinessStatus == model.SessionReadinessBlocked {
+				blockedReason = "plugin_not_ready"
+				break
+			}
+		}
+	} else {
+		roundContext, cancelRound := context.WithTimeout(context.Background(),
+			collaborationWriteTimeout)
+		var roundErr error
+		hashRound, roundErr = s.prepareHashRound(roundContext, projectID, joined)
+		cancelRound()
+		if roundErr != nil {
+			subscription.Close(collab.RoomClose{Code: "hash_unavailable",
+				Reason: "state hash round unavailable"})
+			_ = connection.Close(websocket.StatusInternalError,
+				"state hash round unavailable")
+			return
+		}
 	}
 	var hashRoundPayload any
 	if hashRound.view.RoundID != uuid.Nil {
@@ -458,7 +496,7 @@ func (s *Server) collaborationLive(w http.ResponseWriter, r *http.Request) {
 			"deadlineMs": hashRound.view.Deadline.UnixMilli(),
 		}
 	}
-	welcomePayload, _ := json.Marshal(map[string]any{
+	welcome := map[string]any{
 		"projectId": projectID, "sessionId": joined.Session.ID,
 		"participant": participant, "hostParticipantId": joined.Session.HostMemberID,
 		"headSeq": project.Project.HeadSeq, "readOnly": readOnly,
@@ -470,26 +508,34 @@ func (s *Server) collaborationLive(w http.ResponseWriter, r *http.Request) {
 			"maxMessageBytes": collaborationMaximumMessageBytes,
 			"roomQueueBytes":  normalizedRoomQueueBytes(s.Config.CollabRoomQueueBytes),
 		},
-	})
-	if err := writeCollaborationSocket(connection, collaborationEnvelope(
-		"welcome", welcomePayload, uuid.Nil, nil, 0)); err != nil {
+	}
+	if requiredProtocol == collab.CollaborationProtocolV3 {
+		welcome["effectiveRole"] = role
+		welcome["pluginRequirementsRevision"] = joined.Session.PluginRequirementsRevision
+	}
+	welcomePayload, _ := json.Marshal(welcome)
+	if err := writeCollaborationSocket(connection, collaborationEnvelopeFor(
+		requiredProtocol, "welcome", welcomePayload, uuid.Nil, nil, 0)); err != nil {
 		subscription.Close(collab.RoomClose{Code: "disconnected",
 			Reason: "welcome delivery failed"})
 		return
 	}
-	s.publishHashRound(projectID, hashRound)
+	if !readOnly {
+		s.publishHashRound(projectID, hashRound)
+	}
 	roomConnection := &collaborationRoomConnection{
 		server: s, connection: connection, subscription: subscription,
 		projectID: projectID, sessionID: joined.Session.ID,
 		participantID: participantID, userID: user.ID, deviceID: device.ID,
 		authSessionID: claims.SessionID, lastEphemeral: make(map[string]time.Time),
+		protocol: requiredProtocol,
 	}
 	joinedPayload, _ := json.Marshal(participant)
 	s.Rooms.Publish(projectID, participantID, collab.RoomMessage{
-		Data: collaborationEnvelope("presence.join", joinedPayload, uuid.Nil, nil, 0),
+		Data: collaborationEnvelopeFor(requiredProtocol, "presence.join",
+			joinedPayload, uuid.Nil, nil, 0),
 	})
-	joinedTransportOwned = true
-	roomConnection.run(joined.Session.HostMemberID)
+	roomConnection.run()
 }
 
 func collaborationJoinCloseReason(err error) string {
@@ -499,7 +545,7 @@ func collaborationJoinCloseReason(err error) string {
 	return "session membership unavailable"
 }
 
-func (connection *collaborationRoomConnection) run(initialHost *uuid.UUID) {
+func (connection *collaborationRoomConnection) run() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	errorsChannel := make(chan error, 3)
@@ -527,58 +573,27 @@ func (connection *collaborationRoomConnection) run(initialHost *uuid.UUID) {
 		// emit duplicate presence and host events.
 		return
 	}
-
-	leaveContext, cancelLeave := context.WithTimeout(context.Background(),
-		collaborationWriteTimeout)
-	state, leaveErr := connection.server.Collab.LeaveSession(leaveContext,
-		connection.projectID, connection.sessionID, connection.userID,
-		connection.deviceID, connection.authSessionID)
-	cancelLeave()
+	// A transport is not a membership. Ordinary network loss keeps the durable
+	// member alive for the maintenance reaper's reconnect grace; explicit REST
+	// leave and revocation paths own membership changes.
 	leftPayload, _ := json.Marshal(map[string]any{
 		"participantId": connection.participantID, "reason": closeInfo.Code,
 	})
 	connection.server.Rooms.Publish(connection.projectID,
 		connection.participantID, collab.RoomMessage{
-			Data: collaborationEnvelope("presence.leave", leftPayload,
+			Data: collaborationEnvelopeFor(connection.protocol, "presence.leave", leftPayload,
 				uuid.Nil, nil, 0),
 		})
-	currentHost := state.Session.HostMemberID
-	hostKnown := leaveErr == nil
-	if !hostKnown {
-		// Forced eviction commits before RoomBus disconnect and makes the revoked
-		// credential unable to call LeaveSession. Read only the exact room row so
-		// remaining participants still learn the host elected by Evict*Tx.
-		hostContext, cancelHost := context.WithTimeout(context.Background(),
-			collaborationWriteTimeout)
-		var current model.ProjectSession
-		hostErr := connection.server.DB.WithContext(hostContext).
-			Select("id", "host_member_id").
-			Where("id = ? AND project_id = ? AND status = ?", connection.sessionID,
-				connection.projectID, model.ProjectSessionActive).First(&current).Error
-		cancelHost()
-		if hostErr == nil {
-			currentHost = current.HostMemberID
-			hostKnown = true
-		}
+	if closeInfo.Code == "member_left" {
+		return
 	}
-	if hostKnown && !sameOptionalUUID(initialHost, currentHost) {
-		hostPayload, _ := json.Marshal(map[string]any{
-			"hostParticipantId": currentHost,
-			"reason":            "disconnected",
-		})
-		connection.server.Rooms.Publish(connection.projectID, uuid.Nil,
-			collab.RoomMessage{Data: collaborationEnvelope("session.host_changed",
-				hostPayload, uuid.Nil, nil, 0)})
+	hashContext, cancelHash := context.WithTimeout(context.Background(),
+		collaborationWriteTimeout)
+	if round, hashErr := connection.server.prepareCurrentHashRound(
+		hashContext, connection.projectID); hashErr == nil {
+		connection.server.publishHashRound(connection.projectID, round)
 	}
-	if leaveErr == nil {
-		hashContext, cancelHash := context.WithTimeout(context.Background(),
-			collaborationWriteTimeout)
-		if round, hashErr := connection.server.prepareHashRound(hashContext,
-			connection.projectID, state); hashErr == nil {
-			connection.server.publishHashRound(connection.projectID, round)
-		}
-		cancelHash()
-	}
+	cancelHash()
 }
 
 func collaborationWebSocketCloseStatus(closeInfo collab.RoomClose,
@@ -708,7 +723,8 @@ func (connection *collaborationRoomConnection) readLoop(ctx context.Context) err
 func (connection *collaborationRoomConnection) handleEnvelope(ctx context.Context,
 	envelope collaborationClientEnvelope) error {
 	ephemeral := isCollaborationEphemeral(envelope.Type)
-	if err := validateCollaborationEnvelope(envelope, "", ephemeral); err != nil {
+	if err := validateCollaborationEnvelopeFor(envelope, connection.protocol,
+		"", ephemeral); err != nil {
 		return err
 	}
 	switch envelope.Type {
@@ -818,7 +834,7 @@ func (connection *collaborationRoomConnection) handleSnapshotHash(ctx context.Co
 			"reason": "sequence_gap", "snapshotSeq": project.Project.SnapshotSeq,
 			"headSeq": project.Project.HeadSeq, "readOnly": false,
 		})
-		connection.subscription.Deliver(collab.RoomMessage{Data: collaborationEnvelope("resync.required", payload, uuid.Nil, nil, 0)})
+		connection.subscription.Deliver(collab.RoomMessage{Data: collaborationEnvelopeFor(connection.protocol, "resync.required", payload, uuid.Nil, nil, 0)})
 		if connection.server.metrics != nil {
 			connection.server.metrics.resyncs.Add(1)
 		}
@@ -833,7 +849,7 @@ func (connection *collaborationRoomConnection) handleSnapshotHash(ctx context.Co
 			"roundId": result.Round.RoundID, "serverSeq": result.Round.ServerSeq,
 		})
 		connection.server.Rooms.Publish(connection.projectID, uuid.Nil,
-			collab.RoomMessage{Data: collaborationEnvelope("hash.verified", payload,
+			collab.RoomMessage{Data: collaborationEnvelopeFor(connection.protocol, "hash.verified", payload,
 				uuid.Nil, nil, 0)})
 		return nil
 	}
@@ -860,7 +876,7 @@ func (connection *collaborationRoomConnection) handleSnapshotHash(ctx context.Co
 		"headSeq": project.Project.HeadSeq, "readOnly": readOnly,
 	})
 	connection.server.Rooms.Publish(connection.projectID, uuid.Nil,
-		collab.RoomMessage{Data: collaborationEnvelope("resync.required", payload,
+		collab.RoomMessage{Data: collaborationEnvelopeFor(connection.protocol, "resync.required", payload,
 			uuid.Nil, nil, 0)})
 	if connection.server.metrics != nil {
 		connection.server.metrics.resyncs.Add(1)
@@ -880,7 +896,8 @@ func (connection *collaborationRoomConnection) handleSnapshotHash(ctx context.Co
 
 func (connection *collaborationRoomConnection) handleLease(ctx context.Context,
 	envelope collaborationClientEnvelope) error {
-	if !cloudRecordingEnabledV1 {
+	if !connection.server.Config.CollabRecordingEnabled ||
+		connection.protocol != collab.CollaborationProtocolV3 {
 		connection.reject(ctx, envelope.MessageID, "cloud_recording_disabled",
 			"Recording is not available in cloud projects.", false)
 		return nil
@@ -934,7 +951,7 @@ func (connection *collaborationRoomConnection) handleLease(ctx context.Context,
 			"requestMessageId": envelope.MessageID, "code": code,
 			"message": message, "retryable": retryable,
 		})
-		connection.subscription.Deliver(collab.RoomMessage{Data: collaborationEnvelope("lease.denied", payload, uuid.Nil, nil, 0)})
+		connection.subscription.Deliver(collab.RoomMessage{Data: collaborationEnvelopeFor(connection.protocol, "lease.denied", payload, uuid.Nil, nil, 0)})
 		return nil
 	}
 	payload, _ := json.Marshal(map[string]any{
@@ -943,7 +960,7 @@ func (connection *collaborationRoomConnection) handleLease(ctx context.Context,
 		"expiresAtMs":         lease.ExpiresAt.UnixMilli(),
 	})
 	connection.server.Rooms.Publish(connection.projectID, uuid.Nil,
-		collab.RoomMessage{Data: collaborationEnvelope("lease.granted", payload,
+		collab.RoomMessage{Data: collaborationEnvelopeFor(connection.protocol, "lease.granted", payload,
 			uuid.Nil, nil, 0)})
 	return nil
 }
@@ -973,7 +990,7 @@ func (connection *collaborationRoomConnection) handleHandoff(ctx context.Context
 		"hostParticipantId": *state.Session.HostMemberID, "reason": "manual",
 	})
 	connection.server.Rooms.Publish(connection.projectID, uuid.Nil,
-		collab.RoomMessage{Data: collaborationEnvelope("session.host_changed",
+		collab.RoomMessage{Data: collaborationEnvelopeFor(connection.protocol, "session.host_changed",
 			payload, uuid.Nil, nil, 0)})
 	if round, roundErr := connection.server.prepareHashRound(ctx,
 		connection.projectID, state); roundErr == nil {
@@ -993,7 +1010,7 @@ func (connection *collaborationRoomConnection) relayEphemeral(
 	}
 	connection.lastEphemeral[envelope.Type] = now
 	connection.rateMu.Unlock()
-	data := collaborationEnvelope(envelope.Type, envelope.Payload,
+	data := collaborationEnvelopeFor(connection.protocol, envelope.Type, envelope.Payload,
 		connection.participantID, envelope.EphemeralSeq, envelope.SentAtMS)
 	connection.server.Rooms.Publish(connection.projectID,
 		connection.participantID, collab.RoomMessage{
@@ -1005,7 +1022,7 @@ func (connection *collaborationRoomConnection) relayEphemeral(
 
 func (connection *collaborationRoomConnection) relayDurable(
 	envelope collaborationClientEnvelope) error {
-	data := collaborationEnvelope(envelope.Type, envelope.Payload,
+	data := collaborationEnvelopeFor(connection.protocol, envelope.Type, envelope.Payload,
 		connection.participantID, nil, envelope.SentAtMS)
 	connection.server.Rooms.Publish(connection.projectID,
 		connection.participantID, collab.RoomMessage{Data: data})
@@ -1032,7 +1049,7 @@ func (connection *collaborationRoomConnection) rejectWithOperation(
 		payload["headSeq"] = project.Project.HeadSeq
 	}
 	body, _ := json.Marshal(payload)
-	connection.subscription.Deliver(collab.RoomMessage{Data: collaborationEnvelope("op.rejected", body, uuid.Nil, nil, 0)})
+	connection.subscription.Deliver(collab.RoomMessage{Data: collaborationEnvelopeFor(connection.protocol, "op.rejected", body, uuid.Nil, nil, 0)})
 }
 
 func (s *Server) collaborationParticipantViews(ctx context.Context,
@@ -1073,9 +1090,13 @@ func (s *Server) collaborationParticipantViews(ctx context.Context,
 	var current collaborationParticipant
 	currentRole := ""
 	for _, member := range state.Members {
+		role := roles[member.UserID]
+		if state.Session.CommandSchemaVersion == collab.CollaborationCommandSchemaV3 {
+			role = member.EffectiveRole
+		}
 		participant := collaborationParticipant{
 			ParticipantID: member.ID.String(), UserID: member.UserID.String(),
-			Nickname: nicknames[member.UserID], Role: roles[member.UserID],
+			Nickname: nicknames[member.UserID], Role: role,
 			Color: collaborationColor(colors[member.UserID]),
 			Host: state.Session.HostMemberID != nil &&
 				*state.Session.HostMemberID == member.ID,
@@ -1140,7 +1161,13 @@ func parseCollaborationWireCommand(raw json.RawMessage) (
 
 func validateCollaborationEnvelope(envelope collaborationClientEnvelope,
 	expectedType string, ephemeral bool) error {
-	if envelope.Protocol != collab.CollaborationProtocol ||
+	return validateCollaborationEnvelopeFor(envelope,
+		collab.CollaborationProtocolV2, expectedType, ephemeral)
+}
+
+func validateCollaborationEnvelopeFor(envelope collaborationClientEnvelope,
+	protocol, expectedType string, ephemeral bool) error {
+	if envelope.Protocol != protocol ||
 		(expectedType != "" && envelope.Type != expectedType) ||
 		envelope.Type == "" || len(envelope.Type) > 64 ||
 		uuid.Validate(envelope.MessageID) != nil || envelope.SentAtMS < 0 ||
@@ -1159,7 +1186,7 @@ func validateCollaborationEnvelope(envelope collaborationClientEnvelope,
 func validateCollaborationHello(hello collaborationHello) error {
 	if hello.AppVersion == "" || len(hello.AppVersion) > 64 ||
 		hello.EngineVersion == "" || len(hello.EngineVersion) > 64 ||
-		hello.CommandSchemaVersion != collab.CollaborationCommandSchemaVersion ||
+		!collab.SupportedCommandSchemaVersion(hello.CommandSchemaVersion) ||
 		hello.ProjectFormatVersion != collab.CollaborationProjectFormatVersion ||
 		hello.AfterServerSeq < 0 {
 		return errors.New("unsupported collaboration client")
@@ -1275,8 +1302,14 @@ func decodeCollaborationJSON(data []byte, target any) error {
 
 func collaborationEnvelope(kind string, payload json.RawMessage,
 	participantID uuid.UUID, ephemeralSequence *uint64, sentAtMS int64) []byte {
+	return collaborationEnvelopeFor(collab.CollaborationProtocolV2, kind,
+		payload, participantID, ephemeralSequence, sentAtMS)
+}
+
+func collaborationEnvelopeFor(protocol, kind string, payload json.RawMessage,
+	participantID uuid.UUID, ephemeralSequence *uint64, sentAtMS int64) []byte {
 	envelope := collaborationServerEnvelope{
-		Protocol: collab.CollaborationProtocol, Type: kind,
+		Protocol: protocol, Type: kind,
 		MessageID: uuid.NewString(), EphemeralSeq: ephemeralSequence,
 		SentAtMS: sentAtMS, ServerTimeMS: time.Now().UnixMilli(), Payload: payload,
 	}
@@ -1315,7 +1348,12 @@ func collaborationCommittedEnvelope(operation model.ProjectOperation) []byte {
 		"actorDeviceId": operation.ActorDeviceID,
 		"committedAtMs": operation.CreatedAt.UnixMilli(), "command": command,
 	})
-	return collaborationEnvelope("op.committed", payload, uuid.Nil, nil, 0)
+	protocol, ok := collab.CollaborationProtocolForSchema(operation.SchemaVersion)
+	if !ok {
+		protocol = collab.CollaborationProtocolV2
+	}
+	return collaborationEnvelopeFor(protocol, "op.committed", payload,
+		uuid.Nil, nil, 0)
 }
 
 func collaborationRejection(err error) (string, string, bool) {
@@ -1330,6 +1368,10 @@ func collaborationRejection(err error) (string, string, bool) {
 		return "operation_id_reused", "Operation identifier was reused with different content.", false
 	case errors.Is(err, collab.ErrForbidden):
 		return "forbidden", "This role cannot perform the operation.", false
+	case errors.Is(err, collab.ErrPluginNotReady):
+		return "plugin_not_ready", "Plugin compatibility must be resolved before editing.", true
+	case errors.Is(err, collab.ErrSessionStarting):
+		return "session_starting", "The collaboration lobby has not been activated.", true
 	case errors.Is(err, collab.ErrProjectInactive),
 		errors.Is(err, collab.ErrLiveSessionRequired),
 		errors.Is(err, collab.ErrSessionEnded):

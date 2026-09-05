@@ -1880,6 +1880,11 @@ void Knob::setBipolar(bool bipolar) {
     update();
 }
 
+void Knob::setLogarithmic(bool logarithmic) {
+    m_logarithmic = logarithmic;
+    update();
+}
+
 void Knob::setFormatter(std::function<QString(double)> formatter) {
     m_formatter = std::move(formatter);
     update();
@@ -1941,8 +1946,21 @@ void Knob::setValue(double value) {
 }
 
 double Knob::fraction() const {
+    if (m_logarithmic && m_min > 0.0 && m_max > m_min) {
+        const double value = std::clamp(m_value, m_min, m_max);
+        return std::clamp(std::log(value / m_min) /
+                              std::log(m_max / m_min),
+                          0.0, 1.0);
+    }
     const double span = m_max - m_min;
     return span > 0.0 ? std::clamp((m_value - m_min) / span, 0.0, 1.0) : 0.0;
+}
+
+double Knob::valueForFraction(double valueFraction) const {
+    const double f = std::clamp(valueFraction, 0.0, 1.0);
+    if (m_logarithmic && m_min > 0.0 && m_max > m_min)
+        return m_min * std::pow(m_max / m_min, f);
+    return m_min + (m_max - m_min) * f;
 }
 
 QString Knob::text() const {
@@ -2342,7 +2360,7 @@ void Knob::paintEvent(QPaintEvent*) {
 void Knob::mousePressEvent(QMouseEvent* ev) {
     if (ev->button() != Qt::LeftButton) return;
     m_dragging = true;
-    m_dragStartValue = m_value;
+    m_dragStartFraction = fraction();
     m_dragStartY = int(ev->position().y());
     ValueBubble::showFor(this, QPoint(width() / 2, 0), text());
     update();
@@ -2353,7 +2371,7 @@ void Knob::mouseMoveEvent(QMouseEvent* ev) {
     const double travel = (ev->modifiers() & Qt::ShiftModifier) ? kKnobTravel * 4.0
                                                                 : kKnobTravel;
     const double moved = double(m_dragStartY) - ev->position().y();
-    commit(m_dragStartValue + (moved / travel) * (m_max - m_min));
+    commit(valueForFraction(m_dragStartFraction + moved / travel));
     ValueBubble::showFor(this, QPoint(width() / 2, 0), text());
 }
 
@@ -2385,12 +2403,38 @@ void Knob::contextMenuEvent(QContextMenuEvent* event) {
 
 void Knob::wheelEvent(QWheelEvent* ev) {
     const double fine = (ev->modifiers() & Qt::ShiftModifier) ? 0.25 : 1.0;
-    const double step = m_stepped ? 1.0 : (m_max - m_min) * 0.02;
-    commit(m_value + (ev->angleDelta().y() > 0 ? 1 : -1) * step * fine);
+    const double direction = ev->angleDelta().y() > 0 ? 1.0 : -1.0;
+    if (m_logarithmic && m_min > 0.0 && m_max > m_min && !m_stepped)
+        commit(valueForFraction(fraction() + direction * 0.02 * fine));
+    else {
+        const double step = m_stepped ? 1.0 : (m_max - m_min) * 0.02;
+        commit(m_value + direction * step * fine);
+    }
     emit editFinished();
 }
 
 void Knob::keyPressEvent(QKeyEvent* event) {
+    if (m_logarithmic && m_min > 0.0 && m_max > m_min && !m_stepped) {
+        const double fine = (event->modifiers() & Qt::ShiftModifier) ? 0.25 : 1.0;
+        double next = fraction();
+        switch (event->key()) {
+            case Qt::Key_Left:
+            case Qt::Key_Down: next -= 0.01 * fine; break;
+            case Qt::Key_Right:
+            case Qt::Key_Up: next += 0.01 * fine; break;
+            case Qt::Key_PageDown: next -= 0.10 * fine; break;
+            case Qt::Key_PageUp: next += 0.10 * fine; break;
+            case Qt::Key_Home: next = 0.0; break;
+            case Qt::Key_End: next = 1.0; break;
+            default:
+                QWidget::keyPressEvent(event);
+                return;
+        }
+        commit(valueForFraction(next));
+        emit editFinished();
+        event->accept();
+        return;
+    }
     const double base = m_stepped ? 1.0 : (m_max - m_min) * 0.01;
     const double fine = (event->modifiers() & Qt::ShiftModifier) ? 0.25 : 1.0;
     double next = m_value;

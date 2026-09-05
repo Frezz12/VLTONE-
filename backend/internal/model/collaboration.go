@@ -23,6 +23,10 @@ const (
 	ProjectSessionEnding   = "ending"
 	ProjectSessionEnded    = "ended"
 
+	SessionReadinessReady   = "ready"
+	SessionReadinessBlocked = "blocked"
+	SessionReadinessViewer  = "viewer"
+
 	SnapshotReasonAutosave    = "autosave"
 	SnapshotReasonSessionEnd  = "session_end"
 	SnapshotRequestPending    = "pending"
@@ -73,7 +77,29 @@ type ProjectInvite struct {
 	AcceptedAt     *time.Time `json:"accepted_at,omitempty"`
 	RevokedAt      *time.Time `json:"revoked_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
+	// Peppered HMAC of the short numeric code, never the code itself. The
+	// `json:"-"` on this and the two counters below is load-bearing: this
+	// struct is serialised straight to the client by ListInvites, and a
+	// disclosed lookup value would let anyone confirm a guess offline.
+	CodeLookup   *string    `gorm:"uniqueIndex" json:"-"`
+	CodeDigits   int16      `gorm:"not null;default:0" json:"code_digits"`
+	AttemptCount int        `gorm:"not null;default:0" json:"-"`
+	LockedUntil  *time.Time `json:"-"`
 }
+
+// InviteAttempt records one redemption attempt, successful or not, so the
+// per-account and per-IP windows can be enforced. The client IP is stored only
+// as a digest.
+type InviteAttempt struct {
+	ID          uuid.UUID  `gorm:"type:uuid;primaryKey" json:"-"`
+	ActorUserID uuid.UUID  `gorm:"type:uuid;index;not null" json:"-"`
+	ActorIPHash string     `gorm:"index;not null" json:"-"`
+	InviteID    *uuid.UUID `gorm:"type:uuid" json:"-"`
+	Succeeded   bool       `gorm:"not null;default:false" json:"-"`
+	AttemptedAt time.Time  `gorm:"index;not null" json:"-"`
+}
+
+func (InviteAttempt) TableName() string { return "project_invite_attempts" }
 
 type ProjectOperation struct {
 	ProjectID     uuid.UUID      `gorm:"type:uuid;primaryKey" json:"project_id"`
@@ -220,30 +246,43 @@ type ProjectSnapshotRequest struct {
 func (ProjectSnapshotRequest) TableName() string { return "project_snapshot_requests" }
 
 type ProjectSession struct {
-	ID           uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
-	ProjectID    uuid.UUID  `gorm:"type:uuid;index;not null" json:"project_id"`
-	CreatedBy    *uuid.UUID `gorm:"type:uuid" json:"created_by,omitempty"`
-	HostMemberID *uuid.UUID `gorm:"type:uuid" json:"host_member_id,omitempty"`
-	Mode         string     `gorm:"not null;default:independent" json:"mode"`
-	Status       string     `gorm:"not null;default:starting" json:"status"`
-	Version      int64      `gorm:"not null;default:1" json:"version"`
-	CreatedAt    time.Time  `json:"created_at"`
-	StartedAt    *time.Time `json:"started_at,omitempty"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	EndedAt      *time.Time `json:"ended_at,omitempty"`
+	ID                         uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
+	ProjectID                  uuid.UUID      `gorm:"type:uuid;index;not null" json:"project_id"`
+	CreatedBy                  *uuid.UUID     `gorm:"type:uuid" json:"created_by,omitempty"`
+	HostMemberID               *uuid.UUID     `gorm:"type:uuid" json:"host_member_id,omitempty"`
+	Mode                       string         `gorm:"not null;default:independent" json:"mode"`
+	Status                     string         `gorm:"not null;default:starting" json:"status"`
+	Version                    int64          `gorm:"not null;default:1" json:"version"`
+	CommandSchemaVersion       int            `gorm:"not null;default:2" json:"command_schema_version"`
+	PluginRequirementsRevision int64          `gorm:"not null;default:0" json:"plugin_requirements_revision"`
+	PluginRequirements         datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"plugin_requirements"`
+	CreatedAt                  time.Time      `json:"created_at"`
+	StartedAt                  *time.Time     `json:"started_at,omitempty"`
+	UpdatedAt                  time.Time      `json:"updated_at"`
+	EndedAt                    *time.Time     `json:"ended_at,omitempty"`
+	// Argon2id, and never serialised. Clients learn only PasswordRequired().
+	PasswordHash  *string    `json:"-"`
+	PasswordSetAt *time.Time `json:"-"`
 }
 
 func (ProjectSession) TableName() string { return "project_live_sessions" }
 
+// PasswordRequired is the only thing about the session secret a client is told.
+func (s ProjectSession) PasswordRequired() bool { return s.PasswordHash != nil }
+
 type ProjectSessionMember struct {
-	ID               uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
-	SessionID        uuid.UUID  `gorm:"type:uuid;index;not null" json:"session_id"`
-	UserID           uuid.UUID  `gorm:"type:uuid;not null" json:"user_id"`
-	DeviceID         uuid.UUID  `gorm:"type:uuid;not null" json:"device_id"`
-	DesktopSessionID *uuid.UUID `gorm:"type:uuid" json:"-"`
-	JoinedAt         time.Time  `json:"joined_at"`
-	LastSeenAt       time.Time  `json:"last_seen_at"`
-	LeftAt           *time.Time `json:"left_at,omitempty"`
+	ID                uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
+	SessionID         uuid.UUID      `gorm:"type:uuid;index;not null" json:"session_id"`
+	UserID            uuid.UUID      `gorm:"type:uuid;not null" json:"user_id"`
+	DeviceID          uuid.UUID      `gorm:"type:uuid;not null" json:"device_id"`
+	DesktopSessionID  *uuid.UUID     `gorm:"type:uuid" json:"-"`
+	EffectiveRole     string         `gorm:"not null;default:viewer" json:"effective_role"`
+	ReadinessStatus   string         `gorm:"not null;default:ready" json:"readiness_status"`
+	ReadinessRevision int64          `gorm:"not null;default:0" json:"readiness_revision"`
+	PluginReadiness   datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"plugin_readiness"`
+	JoinedAt          time.Time      `json:"joined_at"`
+	LastSeenAt        time.Time      `json:"last_seen_at"`
+	LeftAt            *time.Time     `json:"left_at,omitempty"`
 }
 
 type ProjectTrackLease struct {

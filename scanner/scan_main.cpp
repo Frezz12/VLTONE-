@@ -221,6 +221,8 @@ int scannerMain(const std::vector<std::string>& arguments) {
         // inspect-time default (`false`).
         PluginDescriptor validated = *found;
         validated.hasEditor = instance->hasEditor();
+        validated.mainInputChannels = inputChannels;
+        validated.mainOutputChannels = outputChannels;
         writeResult(scan::encodeResult({validated}));
         return 0;
     }

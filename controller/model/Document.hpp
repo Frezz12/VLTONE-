@@ -703,6 +703,10 @@ struct TrackRow {
 
 struct ProjectModel {
     std::string name = "Untitled";
+    std::string author;
+    /// Project artwork. A saved package owns its copy in Content/; an unsaved
+    /// project may still point at the image the user selected.
+    std::string coverImagePath;
     double tempo = 120.0;
     int timeSigNumerator = 4;
     int timeSigDenominator = 4;
