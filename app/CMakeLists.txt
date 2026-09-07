@@ -92,9 +92,9 @@ if(DAW_BUILD_TESTS)
         ../tests/render_ui_test.cpp
         PreviewLoader.cpp PreviewLoader.hpp
         ExportDialog.cpp ExportDialog.hpp ExportPrefs.cpp
-        SelectionModel.cpp SelectionModel.hpp Theme.cpp GlassPanel.cpp GlassPanel.hpp)
+        SelectionModel.cpp SelectionModel.hpp Theme.cpp Typography.cpp GlassPanel.cpp GlassPanel.hpp)
     target_include_directories(render_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(render_ui_test PRIVATE daw_controller Qt6::Widgets)
+    target_link_libraries(render_ui_test PRIVATE daw_controller Qt6::Widgets Qt6::WebEngineCore)
     add_test(NAME render_ui_test COMMAND render_ui_test)
     set_tests_properties(render_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)

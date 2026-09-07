@@ -165,7 +165,9 @@ void run(QApplication& app, const QString& root) {
     blobSource.mediaUrl = "blob:http://127.0.0.1/temporary";
     const auto serialized = blobSource.toJson();
     require(serialized.value("mediaUrl").toString().isEmpty() && !serialized.contains("token"), "persistence excludes transient media and document tokens");
-    require(ui::WebVideoSource::fromJson(serialized).valid(), "source descriptor round trips");
+    const auto restored = ui::WebVideoSource::fromJson(serialized);
+    require(restored.valid() && !restored.frame, "source descriptor round trips without a live frame");
+    ui::pauseWebVideo(restored);
     auto invalid = source;
     invalid.pageUrl = QUrl("file:///etc/passwd");
     require(!invalid.valid(), "non-web background navigation is rejected");

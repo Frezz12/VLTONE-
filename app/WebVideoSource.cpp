@@ -143,8 +143,8 @@ QString webVideoLookupScript(const WebVideoSource& source) {
 }
 
 void pauseWebVideo(const WebVideoSource& source) {
-    if (!source.frame.isValid() || source.token.isEmpty()) return;
-    auto frame = source.frame;
+    if (!source.frame || !source.frame->isValid() || source.token.isEmpty()) return;
+    auto frame = *source.frame;
     frame.runJavaScript(QStringLiteral("(()=>{const v=%1;if(v)v.pause();})()")
         .arg(webVideoLookupScript(source)), QWebEngineScript::ApplicationWorld);
 }

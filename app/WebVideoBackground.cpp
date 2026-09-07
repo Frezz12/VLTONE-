@@ -238,6 +238,7 @@ void WebVideoBackground::inspect(Session* session) {
 }
 
 void WebVideoBackground::prepare(Session* session, const WebVideoSource& candidate) {
+    if (!candidate.frame || !candidate.frame->isValid()) return;
     session->selected = candidate;
     session->installed = true;
     session->ready = false;
@@ -265,12 +266,12 @@ void WebVideoBackground::prepare(Session* session, const WebVideoSource& candida
         parent.runJavaScript(isolateScript(element), QWebEngineScript::ApplicationWorld, isolated);
         parent = child;
     }
-    session->selected.frame.runJavaScript(isolateScript(webVideoLookupScript(candidate)), QWebEngineScript::ApplicationWorld, isolated);
+    session->selected.frame->runJavaScript(isolateScript(webVideoLookupScript(candidate)), QWebEngineScript::ApplicationWorld, isolated);
     poll(session);
 }
 
 void WebVideoBackground::poll(Session* session) {
-    if (session->polling || !session->selected.frame.isValid()) return;
+    if (session->polling || !session->selected.frame || !session->selected.frame->isValid()) return;
     session->polling = true;
     session->pollAge.restart();
     const bool playing = session == m_pending || m_playing;
@@ -297,7 +298,7 @@ void WebVideoBackground::poll(Session* session) {
         .arg(session->requested.position, 0, 'g', 16)
         .arg(muted ? "true" : "false").arg(playing ? "true" : "false");
     const QPointer<Session> guard(session);
-    session->selected.frame.runJavaScript(script, QWebEngineScript::ApplicationWorld,
+    session->selected.frame->runJavaScript(script, QWebEngineScript::ApplicationWorld,
         [this, guard, playing](const QVariant& result) {
             if (!guard || !owns(guard)) return;
             guard->polling = false;
@@ -338,7 +339,7 @@ void WebVideoBackground::tick() {
         if (session == m_active && session->age.elapsed() - session->lastReadyAt > 30000) {
             fail(session, tr("The background video player stopped. Open the page and try again.")); continue;
         }
-        if (!session->installed || !session->selected.frame.isValid()) {
+        if (!session->installed || !session->selected.frame || !session->selected.frame->isValid()) {
             session->installed = false;
             session->ready = false;
             if (!session->pollAge.isValid() || session->pollAge.elapsed() > 400) {
