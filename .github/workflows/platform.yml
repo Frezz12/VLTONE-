@@ -62,6 +62,9 @@ jobs:
       - name: Start isolated MinIO and verify lifecycle
         shell: bash
         run: |
+          export AWS_ACCESS_KEY_ID="$COLLAB_OBJECT_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$COLLAB_OBJECT_SECRET_ACCESS_KEY"
+          export AWS_DEFAULT_REGION="$COLLAB_OBJECT_REGION"
           docker run --detach --rm --name vlt-minio \
             --publish 127.0.0.1:9000:9000 \
             --env MINIO_ROOT_USER="$COLLAB_OBJECT_ACCESS_KEY_ID" \
