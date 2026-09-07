@@ -18,6 +18,9 @@ jobs:
   desktop:
     runs-on: macos-15
     timeout-minutes: 90
+    env:
+      # Xcode 16's libc++ does not provide std::jthread/stop_token.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - name: Check out sources
         uses: actions/checkout@v4
