@@ -1251,6 +1251,38 @@ void verifySharedChannelBatchMutators(
     std::filesystem::remove(presetPath, ignored);
 }
 
+void verifyFreezeAndDiagnosticsStayLocal() {
+    daw::EngineController controller;
+    if (!check(bool(controller.initialize(48000, 256, false)),
+               "freeze boundary controller initializes")) return;
+    const auto track = controller.addTrack(daw::TrackKind::Midi, "Freeze boundary");
+    controller.addMidiClip(track, 0.0, 1.0);
+    check(controller.freezeUnavailableReason(track).empty(),
+          "local MIDI source is eligible for freeze");
+    FakeSharedMutationSink sink;
+    controller.attachSharedMutationSink(sink);
+    const auto revision = controller.projectRevision();
+    const auto undoDepth = controller.undoDepth();
+    daw::rendering::Report report;
+    check(!controller.freezeTrack(track, {}, report) &&
+              controller.freezeUnavailableReason(track) ==
+                  "Freeze is available in local projects" &&
+              !controller.isTrackFrozen(track) && report.files.empty(),
+          "cloud binding still rejects freeze without publishing audio");
+    check(!controller.unfreezeTrack(track),
+          "thawing an unfrozen cloud source leaves it unchanged");
+    (void)controller.callbackMetrics();
+    (void)controller.graphMetrics();
+    controller.setAudioProfiling(true);
+    daw::rt::ProfileEvent event;
+    (void)controller.popAudioProfile(0, event);
+    controller.setAudioProfiling(false);
+    check(sink.genericCalls == 0 && controller.projectRevision() == revision &&
+              controller.undoDepth() == undoDepth,
+          "freeze and local diagnostic access submit no shared changes or undo");
+    controller.detachSharedMutationSink(sink);
+}
+
 void verifyCapabilityLedger() {
     using daw::collab::MutationCapability;
     std::unordered_set<std::string_view> names;
@@ -1754,6 +1786,7 @@ void verifyLocalFallback() {
 
 int main() {
     verifyCapabilityLedger();
+    verifyFreezeAndDiagnosticsStayLocal();
     verifySharedAssetMutationGate();
     verifyVerifiedAssetActions();
     check(daw::collab::marksLocalFileDirty(

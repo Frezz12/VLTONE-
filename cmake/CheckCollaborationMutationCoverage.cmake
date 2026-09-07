@@ -1,3 +1,8 @@
+cmake_minimum_required(VERSION 3.24)
+if(CMAKE_SCRIPT_MODE_FILE)
+    get_filename_component(CMAKE_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+endif()
+
 # Production collaboration keeps an explicit classification for every public
 # EngineController operation that can mutate state.  Const methods are proven
 # read-only by their declarations; the short allowlist below covers legacy
@@ -108,6 +113,7 @@ set(VLT_PROVEN_NONCONST_GETTERS
     currentOutputDeviceUid
     currentInputDeviceUid
     recordingPreview
+    freezeUnavailableReason
     clipSampleData
     clipSampleParameter)
 

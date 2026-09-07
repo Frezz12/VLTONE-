@@ -209,6 +209,8 @@ if (-not (Test-Path -LiteralPath $dumpbinPath -PathType Leaf)) {
     throw "dumpbin.exe was not found in the activated MSVC toolset."
 }
 Resolve-QtRoot
+# Validate controller coverage before spending time on native dependencies.
+Invoke-Checked cmake -P (Join-Path $repository "cmake\CheckCollaborationMutationCoverage.cmake")
 New-Item -ItemType Directory -Force -Path $BuildDirectory | Out-Null
 Resolve-VcpkgRoot
 

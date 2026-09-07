@@ -36,6 +36,7 @@ jobs:
           }
 
       - name: Restore vcpkg binary cache
+        id: vcpkg-cache
         uses: actions/cache@v4
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
@@ -106,6 +107,13 @@ jobs:
             build-windows/Testing/Temporary/**
             build-windows/CMakeFiles/CMakeConfigureLog.yaml
           if-no-files-found: ignore
+
+      - name: Preserve dependency cache after a build failure
+        if: failure() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-${{ runner.os }}-x64-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
 
       - name: Upload private build-ID symbols
         if: always()
