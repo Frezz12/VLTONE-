@@ -69,6 +69,7 @@ private:
     void applyTheme();
     void pickColor();
     void loadProperties();
+    void finishClipEdits();
     QWidget* buildClipSection();
     QDoubleSpinBox* addClipSpin(QFormLayout* form, const QString& label,
                                const QString& parameterId, double minimum,
@@ -77,6 +78,7 @@ private:
     void applyClipParameter(const QString& parameterId, double value);
     void commitClipParameter(const QString& parameterId, double before);
 
+    bool m_rackRefreshPending = false;
     daw::EngineController* m_controller = nullptr;
     QString m_trackId;
     QString m_clipId;

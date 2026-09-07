@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Common/Types.hpp"
+#include "Job/BackgroundExecutor.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -23,10 +24,11 @@ public:
         return m_sampleRate.load(std::memory_order_relaxed);
     }
 
-    void play() noexcept { m_state.store(TransportState::Playing, std::memory_order_release); }
-    void pause() noexcept { m_state.store(TransportState::Paused, std::memory_order_release); }
-    void stop() noexcept { m_state.store(TransportState::Stopped, std::memory_order_release); }
+    void play() noexcept { m_backgroundLease.setPlaying(true); m_state.store(TransportState::Playing, std::memory_order_release); }
+    void pause() noexcept { m_backgroundLease.setPlaying(false); m_state.store(TransportState::Paused, std::memory_order_release); }
+    void stop() noexcept { m_backgroundLease.setPlaying(false); m_state.store(TransportState::Stopped, std::memory_order_release); }
     void startRecording() noexcept {
+        m_backgroundLease.setPlaying(true);
         m_state.store(TransportState::Recording, std::memory_order_release);
     }
 
@@ -220,6 +222,7 @@ public:
     }
 
 private:
+    BackgroundPlaybackLease m_backgroundLease;
     std::atomic<TransportState> m_state{TransportState::Stopped};
     std::atomic<SamplePos> m_position{0};
     std::atomic<SamplePos> m_duration{0};

@@ -11,7 +11,7 @@ function(daw_add_windows_metadata target original_filename internal_name descrip
     set(DAW_RC_MANIFEST
         "${CMAKE_CURRENT_BINARY_DIR}/${target}.exe.manifest")
     configure_file(
-        "${CMAKE_SOURCE_DIR}/packaging/windows/VLTStudioPro.manifest.in"
+        "${CMAKE_SOURCE_DIR}/packaging/windows/VLTONE.manifest.in"
         "${DAW_RC_MANIFEST}"
         @ONLY)
 

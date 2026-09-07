@@ -5,7 +5,7 @@
 # then it is worse than none. See guard_main.cpp for what it can and cannot do.
 add_executable(daw_guard guard_main.cpp)
 daw_add_windows_metadata(daw_guard "daw_guard.exe" "daw_guard"
-                         "VLT Studio Pro recovery watchdog")
+                         "VLTONE recovery watchdog")
 
 target_link_libraries(daw_guard PRIVATE daw_json)
 # Only for recovery/SessionFile.hpp, which is header-only precisely so this

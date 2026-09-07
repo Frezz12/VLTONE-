@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 #include <QWidget>
 
 #include "CollaborationTypes.hpp"
@@ -13,6 +14,7 @@ class QHBoxLayout;
 class QLabel;
 class QScrollArea;
 class ChannelStrip;
+namespace ui { class FrameTimer; }
 
 /// The mixer console: a scrolling row of channel strips with the master strip
 /// pinned to the right, under a square, edge-to-edge command bar. It lives in
@@ -28,7 +30,7 @@ public:
     void refreshAutomationValues();
     /// Re-read every strip's values from the document — the cheap counterpart
     /// to `rebuild`, for when a level or a flag was changed somewhere else.
-    void syncFromModel();
+    void syncFromModel(const QStringList& trackIds = {});
     /// The gain a strip is showing, or −1 when there is no such strip.
     double faderGainForTest(const QString& trackId) const;
     void setSelectedTrack(const QString& trackId);
@@ -51,6 +53,7 @@ public:
 signals:
     void trackSelected(const QString& trackId);
     void edited(bool localFileDirty = true);
+    void channelEdited(const QString& trackId, bool localFileDirty);
     /// An insert, instrument or routing slot changed. Ordinary value edits do
     /// not emit this, so the shell can keep its existing strip widgets alive.
     void structureChanged();
@@ -63,6 +66,15 @@ signals:
     void settingsRequested();
 
 private:
+    bool eventFilter(QObject* object, QEvent* event) override;
+    void syncVisibleStrips();
+    void wireStrip(ChannelStrip* strip);
+    QStringList m_channels;
+    std::vector<ChannelStrip*> m_slots;
+    bool m_syncingStrips = false;
+    bool m_deferredRackChange = false;
+    ui::FrameTimer* m_materializeTimer = nullptr;
+    ui::FrameTimer* m_meterTimer = nullptr;
     void applyTheme();
     bool stripIsVisible(const ChannelStrip* strip) const;
     /// The strip under a point in this widget's coordinates, and where a given

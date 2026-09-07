@@ -232,8 +232,7 @@ void PluginEditorWindow::buildWrapper() {
     m_dockToggle->setFixedSize(27, 27);
     m_dockToggle->setIcon(icons::icon(icons::Glyph::Automation, th().textPrimary));
     m_dockToggle->setToolTip(
-        tr("Show this plugin's parameters — Alt/Option-double-click or "
-           "right-click a knob to automate it"));
+        tr("Show this plugin's parameters — right-click a knob to create automation"));
     m_dockToggle->setAccessibleName(tr("Show parameter panel"));
     m_dockToggle->setVisible(false);
     connect(m_dockToggle, &QToolButton::toggled, this,
@@ -470,7 +469,7 @@ void PluginEditorWindow::rebuildEditorContent() {
         m_contentRow->insertWidget(0, m_generic, 1);
         emit builtInPanelReady(samplerPanel, QStringLiteral("sampler"));
         setMinimumSize(860, 558);
-        m_fallbackContentSize = QSize(1080, 688);
+        m_fallbackContentSize = QSize(960, 600);
         resize(m_fallbackContentSize);
     } else {
         buildGenericEditor();
@@ -914,7 +913,7 @@ QWidget* PluginEditorWindow::buildParameterDock() {
     outer->addWidget(ui::sectionLabel(tr("PARAMETERS"), dock));
 
     auto* hint = new QLabel(
-        tr("Alt/Option-double-click or right-click a knob to automate it"), dock);
+        tr("Right-click a knob to create automation, or enable automation creation in the toolbar and double-click"), dock);
     hint->setObjectName(QStringLiteral("PluginHint"));
     hint->setWordWrap(true);
     outer->addWidget(hint);

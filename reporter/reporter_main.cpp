@@ -357,7 +357,7 @@ private:
             {QStringLiteral("health_samples"), parsedHealthSamples(health)},
             {QStringLiteral("modules"), parsedModules(marker)},
         };
-        QByteArray artifact("VLT Studio Pro crash diagnostics\nformat=vlt-crash-log-1\n\n");
+        QByteArray artifact("VLTONE crash diagnostics\nformat=vlt-crash-log-1\n\n");
         const auto appendSection = [&artifact](const char* name, const QByteArray& body) {
             artifact += '['; artifact += name; artifact += "]\n"; artifact += body;
             if (!artifact.endsWith('\n')) artifact += '\n';

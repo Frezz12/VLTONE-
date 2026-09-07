@@ -36,7 +36,7 @@ SampleEditorWindow::SampleEditorWindow(daw::EngineController* controller,
     layout->addWidget(panel);
 
     setMinimumSize(860, 520);
-    resize(1080, 650);
+    resize(960, 562);
 }
 
 void SampleEditorWindow::setSnapProvider(std::function<double()> provider) {

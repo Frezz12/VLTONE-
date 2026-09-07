@@ -38,7 +38,7 @@ void explainCloudRecordingPreserved(QWidget* parent) {
     QMessageBox::information(
         parent, QObject::tr("Cloud Recording Preserved"),
         QObject::tr(
-            "A finished cloud recording in this recovery session is still awaiting upload. VLT kept its audio and recovery metadata; project Restore or Discard does not remove it."));
+            "A finished cloud recording in this recovery session is still awaiting upload. VLTONE kept its audio and recovery metadata; project Restore or Discard does not remove it."));
 }
 
 } // namespace
@@ -89,7 +89,7 @@ QMessageBox* buildRecoveryPrompt(QWidget* parent,
     box->setIcon(QMessageBox::Warning);
     box->setWindowTitle(QObject::tr("Recover unsaved work"));
     box->setText(
-        QObject::tr("VLT Studio Pro closed unexpectedly while you were working on %1.")
+        QObject::tr("VLTONE closed unexpectedly while you were working on %1.")
             .arg(name));
     // Every limit stated up front. Recovery that quietly restores less than the
     // user assumes is worse than recovery that says what it has.
@@ -103,7 +103,7 @@ QMessageBox* buildRecoveryPrompt(QWidget* parent,
             .arg(describeSession(session));
     if (hasCloudRecordingSidecar(session)) {
         information += QObject::tr(
-            "\n\nThis session also contains a finished cloud recording awaiting upload. Restore and Discard affect only the project recovery; VLT will preserve that recording.");
+            "\n\nThis session also contains a finished cloud recording awaiting upload. Restore and Discard affect only the project recovery; VLTONE will preserve that recording.");
     }
     box->setInformativeText(information);
 

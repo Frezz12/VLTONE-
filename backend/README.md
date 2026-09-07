@@ -1,4 +1,4 @@
-# VLT Studio backend
+# VLTONE backend
 
 The Go service is the only business backend for the public site, admin site and
 desktop DAW. It expects a local PostgreSQL 18 instance; Docker is deliberately

@@ -1,6 +1,8 @@
 #include "BrowserSettingsPage.hpp"
 
 #include "BrowserPrefs.hpp"
+#include "BrowserBackgroundDialog.hpp"
+#include "AccountService.hpp"
 #include "Controls.hpp"
 #include "WebPrefs.hpp"
 
@@ -112,7 +114,7 @@ BrowserSettingsPage::BrowserSettingsPage(QWidget* parent) : QWidget(parent) {
     column->addWidget(ui::sectionLabel(tr("WEB BROWSER"), this));
     auto* webHint = new QLabel(
         tr("The integrated browser keeps its own cookies and opens this page "
-           "when Home is pressed. Leave it blank for the built-in VLT start "
+           "when Home is pressed. Leave it blank for the built-in VLTONE start "
            "page."),
         this);
     webHint->setWordWrap(true);
@@ -125,7 +127,7 @@ BrowserSettingsPage::BrowserSettingsPage(QWidget* parent) : QWidget(parent) {
     const QString storedHome = ui::webprefs::homeUrl();
     if (storedHome != QLatin1String(ui::webprefs::kStartUrl))
         m_webHome->setText(storedHome);
-    m_webHome->setPlaceholderText(tr("VLT start page"));
+    m_webHome->setPlaceholderText(tr("VLTONE start page"));
     m_webHome->setAccessibleName(tr("Web browser home page"));
     connect(m_webHome, &QLineEdit::editingFinished, this, [this] {
         const QString typed = m_webHome->text().trimmed();
@@ -209,6 +211,23 @@ BrowserSettingsPage::BrowserSettingsPage(QWidget* parent) : QWidget(parent) {
         this);
     backgroundHint->setWordWrap(true);
     webForm->addRow(QString(), backgroundHint);
+
+    auto* collection = new QPushButton(tr("Browse background collection…"), this);
+    collection->setAccessibleName(tr("Choose a background from the collection"));
+    connect(collection, &QPushButton::clicked, this, [this] {
+        auto* service = account::Service::instance();
+        if (!service) return;
+        BrowserBackgroundDialog dialog(QUrl(service->apiOrigin()), this);
+        if (dialog.exec() != QDialog::Accepted || !ui::webprefs::setStartPageBackgroundPath(dialog.selectedPath())) return;
+        m_webBackground->setText(QDir::toNativeSeparators(dialog.selectedPath()));
+        m_webBackground->setToolTip(dialog.selectedPath());
+        m_clearWebBackground->setEnabled(true);
+        emit changed();
+    });
+    webForm->addRow(tr("Background collection"), collection);
+    auto* networkHint = new QLabel(tr("The web browser uses the system proxy and VPN connection. If your VPN offers a local proxy, enable its System proxy mode. After changing the connection, reload the tab."), this);
+    networkHint->setWordWrap(true);
+    webForm->addRow(tr("Connection"), networkHint);
 
     m_webBookmarksBar =
         new QCheckBox(tr("Show the bookmarks bar"), this);

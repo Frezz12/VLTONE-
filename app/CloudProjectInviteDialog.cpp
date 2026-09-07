@@ -570,7 +570,7 @@ CloudProjectInviteDialog::CloudProjectInviteDialog(
     m_impl->copyCode = new QPushButton(tr("Copy code"), this);
     m_impl->copyLink = new QPushButton(tr("Copy link"), this);
     m_impl->copyLink->setToolTip(
-        tr("A link that opens this session in VLT Studio. The code travels in "
+        tr("A link that opens this session in VLTONE. The code travels in "
            "the link fragment, so it is never sent to a web server."));
     auto* codeRow = new QHBoxLayout;
     codeRow->addWidget(m_impl->copyCode);

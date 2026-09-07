@@ -1,21 +1,24 @@
 #pragma once
+#include <bit>
 
 #include "Common/Types.hpp"
+#include "DSP/SimdDispatch.hpp"
 
 #include <cstring>
 
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
     #include <arm_neon.h>
     #define DAW_SIMD_NEON 1
-#elif defined(__AVX__) || defined(__SSE4_1__) || defined(_M_X64)
+#elif defined(__AVX__) || defined(__SSE2__) || defined(_M_X64)
     #include <immintrin.h>
     #define DAW_SIMD_X86 1
 #endif
 
 /// Vectorised kernels for the handful of operations that dominate a mix:
 /// clear, copy, gain, and accumulate-with-gain. Each has a scalar reference
-/// implementation and a SIMD path chosen at compile time (NEON on Apple
-/// Silicon/ARM, AVX/SSE on x86). The loops are written so the compiler can also
+/// implementation and a baseline SIMD path (NEON on Apple
+/// Silicon/ARM, SSE2 on x86), with separately compiled AVX2 mix kernels selected
+/// by runtime CPU/OS detection. The loops are written so the compiler can also
 /// auto-vectorise the tail.
 namespace daw::engine::dsp {
 
@@ -32,6 +35,9 @@ inline void copy(std::span<float> destination,
 /// destination *= gain
 inline void applyGain(std::span<float> destination, float gain) noexcept {
     const std::size_t n = destination.size();
+    if (kAvx2Kernels && n >= 32) {
+        kAvx2Kernels->applyGain(destination.data(), n, gain); return;
+    }
     float* d = destination.data();
     std::size_t i = 0;
 
@@ -58,6 +64,9 @@ inline void applyGain(std::span<float> destination, float gain) noexcept {
 inline void addScaled(std::span<float> destination,
                       std::span<const float> source, float gain) noexcept {
     const std::size_t n = std::min(destination.size(), source.size());
+    if (kAvx2Kernels && n >= 32) {
+        kAvx2Kernels->addScaled(destination.data(), source.data(), n, gain); return;
+    }
     float* d = destination.data();
     const float* s = source.data();
     std::size_t i = 0;
@@ -119,6 +128,9 @@ inline void add(std::span<float> destination,
 inline void copyScaled(std::span<float> destination,
                        std::span<const float> source, float gain) noexcept {
     const std::size_t n = std::min(destination.size(), source.size());
+    if (kAvx2Kernels && n >= 32) {
+        kAvx2Kernels->copyScaled(destination.data(), source.data(), n, gain); return;
+    }
     float* d = destination.data();
     const float* s = source.data();
     std::size_t i = 0;
@@ -140,6 +152,57 @@ inline void copyScaled(std::span<float> destination,
     }
 #endif
     for (; i < n; ++i) d[i] = s[i] * gain;
+}
+
+/// Exact silence, including signed zero. NaN and every nonzero bit-pattern
+/// representing a float remain audible input for plugin wake-up contracts.
+inline bool isSilent(std::span<const float> source) noexcept {
+    std::size_t i = 0;
+#if DAW_SIMD_NEON
+    for (; i + 4 <= source.size(); i += 4)
+        if (vmaxvq_u32(vandq_u32(vreinterpretq_u32_f32(vld1q_f32(source.data() + i)),
+                                vdupq_n_u32(0x7fffffffu))) != 0) return false;
+#elif DAW_SIMD_X86
+    for (; i + 4 <= source.size(); i += 4)
+        if (_mm_movemask_epi8(_mm_cmpeq_epi32(
+                _mm_and_si128(_mm_castps_si128(_mm_loadu_ps(source.data() + i)),
+                              _mm_set1_epi32(0x7fffffff)), _mm_setzero_si128())) != 65535) return false;
+#endif
+    for (; i < source.size(); ++i)
+        if ((std::bit_cast<std::uint32_t>(source[i]) & 0x7fffffffu) != 0) return false;
+    return true;
+}
+
+/// Inclusive wet/dry endpoints. Unlike copyScaledRamp, one frame uses the
+/// target and the final frame of a longer block reaches it exactly.
+inline void wetDryRamp(std::span<float> wet, std::span<const float> dry,
+                       float start, float target) noexcept {
+    const auto n = std::min(wet.size(), dry.size());
+    if (!n) return;
+    const float inverse = n > 1 ? 1.0f / float(n - 1) : 0.0f;
+    const float delta = target - start;
+    std::size_t i = 0;
+#if DAW_SIMD_NEON
+    const float lanes[] = {0, 1, 2, 3};
+    for (; i + 4 < n; i += 4) {
+        const auto t = vmulq_n_f32(vaddq_f32(vdupq_n_f32(float(i)), vld1q_f32(lanes)), inverse);
+        const auto mix = vaddq_f32(vdupq_n_f32(start), vmulq_n_f32(t, delta));
+        vst1q_f32(wet.data() + i, vaddq_f32(vmulq_f32(vld1q_f32(wet.data() + i), mix),
+            vmulq_f32(vld1q_f32(dry.data() + i), vsubq_f32(vdupq_n_f32(1), mix))));
+    }
+#elif DAW_SIMD_X86
+    for (; i + 4 < n; i += 4) {
+        const auto t = _mm_mul_ps(_mm_add_ps(_mm_set1_ps(float(i)), _mm_setr_ps(0, 1, 2, 3)), _mm_set1_ps(inverse));
+        const auto mix = _mm_add_ps(_mm_set1_ps(start), _mm_mul_ps(t, _mm_set1_ps(delta)));
+        _mm_storeu_ps(wet.data() + i, _mm_add_ps(_mm_mul_ps(_mm_loadu_ps(wet.data() + i), mix),
+            _mm_mul_ps(_mm_loadu_ps(dry.data() + i), _mm_sub_ps(_mm_set1_ps(1), mix))));
+    }
+#endif
+    for (; i + 1 < n; ++i) {
+        const float mix = start + delta * (float(i) * inverse);
+        wet[i] = wet[i] * mix + dry[i] * (1.0f - mix);
+    }
+    wet[n - 1] = wet[n - 1] * target + dry[n - 1] * (1.0f - target);
 }
 
 /// Peak magnitude of a buffer, used by meters. Every metered channel runs this

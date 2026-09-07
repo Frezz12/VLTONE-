@@ -17,6 +17,8 @@
 #include <QSizePolicy>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QUuid>
+#include <cstdio>
 
 #include <algorithm>
 #include <utility>
@@ -131,11 +133,17 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
 InternalEditorFrame::~InternalEditorFrame() {
     cancelPendingInteractiveResize();
     uninstallApplicationEventFilter();
+    // QWidget deletes its children after our QPointer members have already
+    // been destroyed. The content's destroyed callback below must not write
+    // into those members during that base-class teardown.
+    if (m_content) disconnect(m_content, nullptr, this, nullptr);
 }
 
 void InternalEditorFrame::setContent(QWidget* content) {
     if (!content || content == m_content) return;
     if (m_content) {
+        disconnect(m_content, nullptr, this, nullptr);
+        disconnect(m_content, nullptr, m_title, nullptr);
         m_column->removeWidget(m_content);
         m_content->setParent(nullptr);
     }
@@ -158,6 +166,11 @@ void InternalEditorFrame::setContent(QWidget* content) {
 
 void InternalEditorFrame::setAccessoryWidget(QWidget* accessory) {
     m_accessory = accessory;
+}
+
+void InternalEditorFrame::setWorkspaceArea(QWidget* area) {
+    m_workspaceArea = area;
+    if (m_placementRestored) constrainToParent();
 }
 
 void InternalEditorFrame::present() {
@@ -184,7 +197,10 @@ void InternalEditorFrame::setMaximized(bool maximized) {
     m_resizeEdges = NoEdge;
     if (maximized) m_restoreGeometry = geometry();
     m_maximized = maximized;
-    setGeometry(maximized ? availableRect()
+    const QRect limits = m_maximized ? workspaceRect() : availableRect();
+    setMinimumSize(std::min(kMinimumWidth, limits.width()),
+                   std::min(kMinimumHeight, limits.height()));
+    setGeometry(maximized ? workspaceRect()
                           : constrainedGeometry(m_restoreGeometry));
     updateMaximizeButton();
     updateResizeHandles();
@@ -200,7 +216,13 @@ void InternalEditorFrame::resizeForContent(const QSize& contentSize) {
 
     const QSize chrome(2, kTitleHeight + 2);
     QRect wanted(geometry().topLeft(), contentSize + chrome);
-    const QRect constrained = constrainedGeometry(wanted);
+    QRect constrained = constrainedGeometry(wanted);
+    // A plugin opening its parameter dock should stay fully visible if it was
+    // fully visible before. An intentionally parked editor keeps its title in
+    // place when the plugin requests another content size.
+    const QRect bounds = availableRect();
+    if (bounds.contains(geometry()) && constrained.bottom() > bounds.bottom())
+        constrained.moveBottom(bounds.bottom());
     setGeometry(constrained);
     m_restoreGeometry = constrained;
     updateResizeHandles();
@@ -215,7 +237,9 @@ QSize InternalEditorFrame::maximumContentSize() const {
 }
 
 bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == parentWidget() && event->type() == QEvent::Resize) {
+    if ((watched == parentWidget() && event->type() == QEvent::Resize) ||
+        (watched == m_workspaceArea &&
+         (event->type() == QEvent::Resize || event->type() == QEvent::Move))) {
         constrainToParent();
     }
 
@@ -407,13 +431,20 @@ void InternalEditorFrame::restorePlacement() {
     m_placementRestored = true;
 
     QSettings settings;
-    const QRect saved = settings.value(m_settingsKey + "/geometry").toRect();
+    QRect saved = settings.value(m_settingsKey + "/geometry").toRect();
+    // Older releases stored coordinates in the body below the header. Keep
+    // those windows at the same visual location when adopting the larger host.
+    if (saved.isValid() && settings.value(m_settingsKey + "/placementVersion", 1).toInt() < 2)
+        saved.translate(workspaceRect().topLeft());
     m_maximized = settings.value(m_settingsKey + "/maximized", false).toBool();
+    const QRect movementBounds = m_maximized ? workspaceRect() : availableRect();
+    setMinimumSize(std::min(kMinimumWidth, movementBounds.width()),
+                   std::min(kMinimumHeight, movementBounds.height()));
 
     if (saved.isValid()) {
         m_restoreGeometry = constrainedGeometry(saved);
     } else {
-        const QRect bounds = availableRect();
+        const QRect bounds = workspaceRect();
         const QSize chrome(2, kTitleHeight + 2);
         QSize wanted = m_preferredContentSize + chrome;
         wanted.setWidth(std::clamp(wanted.width(),
@@ -428,7 +459,7 @@ void InternalEditorFrame::restorePlacement() {
             wanted.width(), wanted.height());
     }
 
-    setGeometry(m_maximized ? availableRect() : m_restoreGeometry);
+    setGeometry(m_maximized ? workspaceRect() : m_restoreGeometry);
     updateMaximizeButton();
     updateResizeHandles();
 }
@@ -438,12 +469,16 @@ void InternalEditorFrame::savePlacement() {
     QSettings settings;
     settings.setValue(m_settingsKey + "/geometry", m_restoreGeometry);
     settings.setValue(m_settingsKey + "/maximized", m_maximized);
+    settings.setValue(m_settingsKey + "/placementVersion", 2);
 }
 
 void InternalEditorFrame::constrainToParent() {
     if (!m_placementRestored) return;
+    const QRect bounds = m_maximized ? workspaceRect() : availableRect();
+    setMinimumSize(std::min(kMinimumWidth, bounds.width()),
+                   std::min(kMinimumHeight, bounds.height()));
     if (m_maximized) {
-        setGeometry(availableRect());
+        setGeometry(workspaceRect());
     } else {
         const QRect constrained = constrainedGeometry(geometry());
         setGeometry(constrained);
@@ -458,12 +493,20 @@ void InternalEditorFrame::constrainToParent() {
 QRect InternalEditorFrame::availableRect() const {
     QWidget* host = parentWidget();
     if (!host) return QRect(0, 0, std::max(1, width()), std::max(1, height()));
-    // The host is already the body below the transport and tool strip. Filling
-    // it exactly keeps that header visible while removing the decorative moat
-    // that used to remain around a maximized internal editor.
+    // Floating editors share the transport's parent, so Qt neither clips their
+    // title bars at the old body boundary nor puts the header above them.
     const QRect bounds = host->rect();
     if (bounds.width() < 1 || bounds.height() < 1) return QRect(0, 0, 1, 1);
     return bounds;
+}
+
+QRect InternalEditorFrame::workspaceRect() const {
+    const QRect bounds = availableRect();
+    if (!m_workspaceArea || !parentWidget()) return bounds;
+    const QRect body(m_workspaceArea->mapTo(parentWidget(), QPoint()),
+                     m_workspaceArea->size());
+    const QRect visible = bounds.intersected(body);
+    return visible.isEmpty() ? bounds : visible;
 }
 
 QRect InternalEditorFrame::constrainedGeometry(const QRect& wanted) const {
@@ -473,7 +516,10 @@ QRect InternalEditorFrame::constrainedGeometry(const QRect& wanted) const {
     const int width = std::clamp(wanted.width(), minW, bounds.width());
     const int height = std::clamp(wanted.height(), minH, bounds.height());
     const int maxX = bounds.x() + bounds.width() - width;
-    const int maxY = bounds.y() + bounds.height() - height;
+    // The entire title bar (including its buttons) remains recoverable. Only
+    // the body may disappear below the application viewport.
+    const int visibleTitleHeight = std::min(kTitleHeight + 2, bounds.height());
+    const int maxY = bounds.y() + bounds.height() - visibleTitleHeight;
     const int x = std::clamp(wanted.x(), bounds.x(), maxX);
     const int y = std::clamp(wanted.y(), bounds.y(), maxY);
     return QRect(x, y, width, height);
@@ -578,13 +624,16 @@ QRect InternalEditorFrame::interactiveResizeGeometry(
                            left + minW, bounds.x() + bounds.width());
     }
     if (m_resizeEdges & TopEdge) {
+        const int latestTitleTop = bounds.y() + bounds.height() -
+                                   std::min(kTitleHeight + 2, bounds.height());
         top = std::clamp(m_pressGeometry.top() + delta.y(),
-                         bounds.top(), bottom - minH);
+                         std::max(bounds.top(), bottom - bounds.height()),
+                         std::min(bottom - minH, latestTitleTop));
     }
     if (m_resizeEdges & BottomEdge) {
         bottom = std::clamp(m_pressGeometry.y() +
                                 m_pressGeometry.height() + delta.y(),
-                            top + minH, bounds.y() + bounds.height());
+                            top + minH, top + bounds.height());
     }
     return QRect(left, top, right - left, bottom - top);
 }
@@ -605,4 +654,109 @@ void InternalEditorFrame::applyPendingInteractiveResize() {
 void InternalEditorFrame::cancelPendingInteractiveResize() {
     m_resizeApplyTimer.stop();
     m_pendingResizeGeometry = QRect();
+}
+
+bool InternalEditorFrame::checkPlacementForTest() {
+    const QString key = QStringLiteral("tests/editorPlacement/") +
+                        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QSettings settings;
+    const QRect legacy(70, 80, 620, 380);
+    settings.setValue(key + "/geometry", legacy);
+    bool ok = true;
+    const auto check = [&ok](bool condition, const char* message) {
+        if (!condition) std::fprintf(stderr, "editor placement: %s\n", message);
+        ok &= condition;
+    };
+    QWidget host;
+    host.resize(1000, 700);
+    QWidget body(&host);
+    body.setGeometry(0, 120, 1000, 580);
+    host.show();
+    InternalEditorFrame frame(key, &host);
+    frame.setWorkspaceArea(&body);
+    auto* content = new QWidget;
+    if (QGuiApplication::platformName() != QLatin1String("offscreen") &&
+        QGuiApplication::platformName() != QLatin1String("minimal"))
+        content->setAttribute(Qt::WA_NativeWindow);
+    frame.setContent(content);
+    frame.present();
+    QApplication::processEvents();
+    check(frame.geometry() == legacy.translated(body.pos()), "legacy body coordinates migrate without a visual jump");
+    const auto drag = [](InternalEditorFrame& window, QPoint delta) {
+        QWidget* title = window.m_titleBar;
+        const QPoint grab(80, kTitleHeight / 2);
+        const QPoint origin = title->mapToGlobal(grab);
+        QMouseEvent press(QEvent::MouseButtonPress, grab, origin,
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(title, &press);
+        QMouseEvent move(QEvent::MouseMove, grab + delta, origin + delta,
+                         Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(title, &move);
+        QMouseEvent release(QEvent::MouseButtonRelease,
+                            title->mapFromGlobal(origin + delta), origin + delta,
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(title, &release);
+    };
+    const auto titleVisible = [&host](const InternalEditorFrame& window) {
+        return host.rect().contains(QRect(window.m_titleBar->mapTo(&host, QPoint()),
+                                           window.m_titleBar->size()));
+    };
+    const QSize originalSize = frame.size();
+    drag(frame, QPoint(0, -10000));
+    const QPoint hit = frame.m_titleBar->mapTo(&host, QPoint(80, 18));
+    QWidget* hitWidget = host.childAt(hit);
+    check(frame.y() == 0 && frame.size() == originalSize && titleVisible(frame) &&
+          hitWidget && frame.isAncestorOf(hitWidget), "title can cover and receive input above the workspace header");
+    drag(frame, QPoint(0, 10000));
+    check(frame.geometry().bottom() > host.height() && titleVisible(frame) &&
+          frame.size() == originalSize && frame.y() == host.height() - kTitleHeight - 2,
+          "body can disappear below the viewport while the full title stays visible");
+    const QRect parked = frame.geometry();
+    frame.setMaximized(true);
+    check(frame.geometry() == body.geometry(), "maximize still fits the editing body");
+    frame.setMaximized(false);
+    check(frame.geometry() == parked, "unmaximize restores the parked position");
+    // Resizing a parked editor must never feed inverted limits to std::clamp.
+    frame.m_pressGeometry = parked;
+    frame.m_pressGlobal = QPoint();
+    frame.m_resizeEdges = BottomEdge;
+    const QRect taller = frame.interactiveResizeGeometry(QPoint(0, 10000));
+    check(taller.top() == parked.top() && taller.height() <= host.height() &&
+          taller.height() >= kMinimumHeight, "bottom resize remains valid below the viewport");
+    frame.m_resizeEdges = TopEdge;
+    const QRect top = frame.interactiveResizeGeometry(QPoint(0, 10000));
+    check(top.top() <= host.height() - kTitleHeight - 2 && top.height() >= kMinimumHeight,
+          "top resize never loses the title");
+    frame.m_resizeEdges = NoEdge;
+    drag(frame, QPoint(0, 250 - frame.y()));
+    check(frame.y() == 250, "parked windows can be brought back with their title");
+    frame.hide();
+    {
+        InternalEditorFrame reopened(key, &host);
+        reopened.setWorkspaceArea(&body);
+        reopened.setContent(new QWidget);
+        reopened.present();
+        QApplication::processEvents();
+        check(reopened.y() == 250 && settings.value(key + "/placementVersion").toInt() == 2,
+              "saved full-workspace coordinates are not migrated twice");
+        drag(reopened, QPoint(0, 10000));
+        host.resize(350, 260);
+        body.setGeometry(0, 80, 350, 180);
+        QApplication::processEvents();
+        check(titleVisible(reopened) && reopened.width() <= host.width(),
+              "shrinking the host keeps the title accessible below the old minimum size");
+        reopened.setMaximized(true);
+        check(reopened.geometry() == body.geometry(), "maximize fits a short workspace");
+        reopened.setMaximized(false);
+        reopened.hide();
+        host.resize(280, 200);
+        body.setGeometry(0, 80, 280, 120);
+        QApplication::processEvents();
+        reopened.present();
+        QApplication::processEvents();
+        check(titleVisible(reopened) && reopened.width() <= host.width(),
+              "a hidden window is recovered when reopened in a smaller host");
+    }
+    settings.remove(key);
+    return ok;
 }

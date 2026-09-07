@@ -2,7 +2,7 @@
   "Home": {
     "kicker": "DEMO • EARLY ACCESS",
     "title": "Music under complete control.",
-    "copy": "VLT Studio Pro brings recording, arranging, plugins, and an AI assistant into one fast workspace. Create an account and join the Demo.",
+    "copy": "VLTONE brings recording, arranging, plugins, and an AI assistant into one fast workspace. Create an account and join the Demo.",
     "create": "Create account",
     "login": "Sign in",
     "factTokens": "AI tokens every month",
@@ -64,10 +64,10 @@
     "invalidAttachment": "Only JPEG, PNG, and WebP images up to 10 MB each are allowed."
   },
   "Manual": {
-    "metaTitle": "Manual — VLT Studio Pro",
-    "metaDescription": "Complete guide to recording, arranging, MIDI, plugins, automation, AI, and export in VLT Studio Pro.",
+    "metaTitle": "Manual — VLTONE",
+    "metaDescription": "Complete guide to recording, arranging, MIDI, plugins, automation, AI, and export in VLTONE.",
     "eyebrow": "Documentation / Demo",
-    "title": "VLT Studio Pro Manual",
+    "title": "VLTONE Manual",
     "intro": "From first launch to a finished master: every workspace, real production workflows, and fixes for common problems in one guide.",
     "searchLabel": "Search the manual",
     "searchPlaceholder": "Try recording, piano roll, plugins…",
@@ -95,33 +95,117 @@
           {
             "id": "first-launch",
             "title": "First launch",
-            "intro": "VLT Studio Pro verifies your account, audio system, and available plugins before opening the main workspace.",
+            "intro": "VLTONE verifies your account, audio system, and available plugins before opening the main workspace.",
             "preparation": "Connect your audio interface before launch and make sure the internet is available for Demo entitlement verification.",
-            "steps": ["Sign in to your VLT account if the saved session cannot be restored.", "Wait for safe plugin scanning; the current file and total progress appear in the startup window.", "Open an empty project or a previously saved session.", "Open Settings → Audio and verify the device, sample rate, and buffer size."],
+            "steps": [
+              "Sign in to your VLTONE account if the saved session cannot be restored.",
+              "Wait for safe plugin scanning; the current file and total progress appear in the startup window.",
+              "Open an empty project or a previously saved session.",
+              "Open Settings → Audio and verify the device, sample rate, and buffer size."
+            ],
             "result": "The main workspace is open and the audio engine is ready for playback and recording.",
-            "notes": ["Scanning runs out of process, so a faulty plugin should not close the application."],
-            "problems": [{"problem": "A plugin scans for too long or is blacklisted.", "fix": "Open Plugin Manager, inspect Blacklist, update the plugin, and scan it again."}],
-            "figures": [{"slug": "startup", "alt": "VLT Studio Pro startup window scanning plugins", "caption": "The startup window reports the current loading stage and plugin scan progress.", "ratio": "4 / 3"}]
+            "notes": [
+              "Scanning runs out of process, so a faulty plugin should not close the application."
+            ],
+            "problems": [
+              {
+                "problem": "A plugin scans for too long or is blacklisted.",
+                "fix": "Open Plugin Manager, inspect Blacklist, update the plugin, and scan it again."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "startup",
+                "alt": "VLTONE startup window scanning plugins",
+                "caption": "The startup window reports the current loading stage and plugin scan progress.",
+                "ratio": "4 / 3"
+              }
+            ]
           },
           {
             "id": "workspace",
             "title": "Workspace",
             "intro": "The arrangement is central, tracks and Browser sit to the left, Mixer opens below, Web and AI can open on the right, and the context panel follows selection.",
-            "steps": ["Use track headers for selection, mute, solo, volume, pan, and record state.", "Drag clips along the timeline; the vertical playhead shows playback position.", "Toggle Mixer, Inspector, Context Panel, Browser, Web, and AI from View.", "Double-click a clip to open its matching audio, piano-roll, or pattern editor."],
+            "steps": [
+              "Use track headers for selection, mute, solo, volume, pan, and record state.",
+              "Drag clips along the timeline; the vertical playhead shows playback position.",
+              "Toggle Mixer, Inspector, Context Panel, Browser, Web, and AI from View.",
+              "Double-click a clip to open its matching audio, piano-roll, or pattern editor."
+            ],
             "result": "You know where to edit project structure, track sound, and the contents of a selected clip.",
-            "shortcuts": [{"keys": "X", "label": "Show or hide Mixer"}, {"keys": "I", "label": "Show or hide Inspector"}, {"keys": "B", "label": "Show or hide Browser"}],
-            "notes": ["Internal editors use the same project and the same undo history."],
-            "figures": [{"slug": "arrangement", "alt": "Main workspace with tracks, clips, and Mixer", "caption": "The main window combines transport, track headers, arrangement, context panel, and Mixer."}]
+            "shortcuts": [
+              {
+                "keys": "X",
+                "label": "Show or hide Mixer"
+              },
+              {
+                "keys": "I",
+                "label": "Show or hide Inspector"
+              },
+              {
+                "keys": "B",
+                "label": "Show or hide Browser"
+              }
+            ],
+            "notes": [
+              "Internal editors use the same project and the same undo history.",
+              "The context panel adapts to available width. If a secondary button is hidden, widen the window or narrow the browser."
+            ],
+            "figures": [
+              {
+                "slug": "arrangement",
+                "alt": "Main workspace with tracks, clips, and Mixer",
+                "caption": "The main window combines transport, track headers, arrangement, context panel, and Mixer."
+              }
+            ]
           },
           {
             "id": "transport",
             "title": "Transport, tempo, and cycle",
             "intro": "Transport controls project position, playback, recording, metronome, tempo, and the cycle range.",
-            "steps": ["Click the ruler to move the playhead, or press Return to go to the start.", "Start playback with Play or Space.", "Enter BPM; arrangement and MIDI grids update immediately.", "Drag a ruler range and enable Cycle to repeat it.", "Enable Metronome before recording when you need a count reference."],
+            "steps": [
+              "Click the ruler to move the playhead, or press Return to go to the start.",
+              "Start playback with Play or Space.",
+              "Enter BPM; arrangement and MIDI grids update immediately.",
+              "Drag a ruler range and enable Cycle to repeat it.",
+              "Enable Metronome before recording when you need a count reference."
+            ],
             "result": "The project plays from the right position, at the right tempo, and repeats a cycle when needed.",
-            "shortcuts": [{"keys": "Space", "label": "Play / Pause"}, {"keys": "Return", "label": "Return to start"}, {"keys": "C", "label": "Cycle"}, {"keys": "K", "label": "Metronome"}, {"keys": "R", "label": "Record"}],
-            "problems": [{"problem": "Space types a character instead of starting playback.", "fix": "Finish editing the text field; transport keys are deliberately left alone while typing."}],
-            "figures": [{"slug": "cycle", "alt": "Arrangement with an active cycle range", "caption": "The cycle range is marked on the ruler; Cycle enables it without moving its boundaries."}]
+            "shortcuts": [
+              {
+                "keys": "Space",
+                "label": "Play / Pause"
+              },
+              {
+                "keys": "Return",
+                "label": "Return to start"
+              },
+              {
+                "keys": "C",
+                "label": "Cycle"
+              },
+              {
+                "keys": "K",
+                "label": "Metronome"
+              },
+              {
+                "keys": "R",
+                "label": "Record"
+              }
+            ],
+            "problems": [
+              {
+                "problem": "Space types a character instead of starting playback.",
+                "fix": "Finish editing the text field; transport keys are deliberately left alone while typing."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "cycle",
+                "alt": "Arrangement with an active cycle range",
+                "caption": "The cycle range is marked on the ruler; Cycle enables it without moving its boundaries."
+              }
+            ]
           }
         ]
       },
@@ -134,31 +218,149 @@
             "id": "projects",
             "title": "Create and save projects",
             "intro": "A project stores tracks, clips, MIDI, automation, routing, and plugin state. Every structural edit participates in undo.",
-            "steps": ["Choose File → New Project or New Project from Template.", "Use Save As immediately and choose a permanent location.", "Use Save as you work; save reusable layouts as a Template.", "Open an existing session with File → Open Project or by handing its file to the app."],
+            "steps": [
+              "Choose File → New Project or New Project from Template.",
+              "Use Save As immediately and choose a permanent location.",
+              "Use Save as you work; save reusable layouts as a Template.",
+              "Open an existing session with File → Open Project or by handing its file to the app."
+            ],
             "result": "The session has a permanent path and can be safely recovered and reopened.",
-            "shortcuts": [{"keys": "Ctrl/Cmd+N", "label": "New project"}, {"keys": "Ctrl/Cmd+O", "label": "Open"}, {"keys": "Ctrl/Cmd+S", "label": "Save"}],
-            "notes": ["Closing a changed session offers Save, Cancel, or an explicit discard."],
-            "problems": [{"problem": "The project reports a missing audio file.", "fix": "Locate the source in its new position; do not move project media by hand while the session is open."}]
+            "shortcuts": [
+              {
+                "keys": "Ctrl/Cmd+N",
+                "label": "New project"
+              },
+              {
+                "keys": "Ctrl/Cmd+O",
+                "label": "Open"
+              },
+              {
+                "keys": "Ctrl/Cmd+S",
+                "label": "Save"
+              }
+            ],
+            "notes": [
+              "Closing a changed session offers Save, Cancel, or an explicit discard."
+            ],
+            "problems": [
+              {
+                "problem": "The project reports a missing audio file.",
+                "fix": "Locate the source in its new position; do not move project media by hand while the session is open."
+              }
+            ]
           },
           {
             "id": "tracks-folders",
             "title": "Tracks and folders",
             "intro": "Audio, MIDI, Pattern, Bus, and Send tracks are available. Bus channels receive main outputs; Send channels receive parallel sends. Plain folders organise; summing folders also mix their children.",
-            "steps": ["Use Add Track or choose a type from Track.", "Rename and colour the track.", "Select multiple tracks with Shift or Ctrl/Cmd and move them into a new folder.", "Use Folder for organisation or Summing Folder for shared level and processing.", "Collapse folders when their children are not needed on screen."],
+            "steps": [
+              "Use Add Track or choose a type from Track.",
+              "Rename and colour the track.",
+              "Select multiple tracks with Shift or Ctrl/Cmd and move them into a new folder.",
+              "Use Folder for organisation or Summing Folder for shared level and processing.",
+              "Collapse folders when their children are not needed on screen."
+            ],
             "result": "Tracks are organised by purpose, and summing is used only where it is needed.",
-            "shortcuts": [{"keys": "Ctrl/Cmd+Alt+A", "label": "Audio track"}, {"keys": "Ctrl/Cmd+Alt+M", "label": "MIDI track"}, {"keys": "Ctrl/Cmd+Shift+D", "label": "New folder"}],
-            "problems": [{"problem": "Controls disappear on a deeply nested track.", "fix": "Widen the track header area or reduce nesting; the most important controls remain when space is tight."}],
-            "figures": [{"slug": "track-folders", "alt": "Nested folders and selected tracks", "caption": "Folders show hierarchy, while multi-selection packs tracks with one command."}]
+            "shortcuts": [
+              {
+                "keys": "Ctrl/Cmd+Alt+A",
+                "label": "Audio track"
+              },
+              {
+                "keys": "Ctrl/Cmd+Alt+M",
+                "label": "MIDI track"
+              },
+              {
+                "keys": "Ctrl/Cmd+Shift+D",
+                "label": "New folder"
+              }
+            ],
+            "problems": [
+              {
+                "problem": "Controls disappear on a deeply nested track.",
+                "fix": "Widen the track header area or reduce nesting; the most important controls remain when space is tight."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "track-folders",
+                "alt": "Nested folders and selected tracks",
+                "caption": "Folders show hierarchy, while multi-selection packs tracks with one command."
+              }
+            ]
           },
           {
             "id": "timeline-editing",
             "title": "Edit clips",
             "intro": "Pointer, Knife, Eraser, Region, Mute, and Draw cover core arrangement edits; the context panel exposes exact values.",
-            "steps": ["Use Pointer to move, resize, and select.", "Knife splits, Eraser removes, and Mute temporarily disables a clip.", "Region selects a time span for deletion or repeat.", "Copy, paste, repeat, and duplicate with Edit commands.", "Adjust gain, fade, pitch, colour, and other available values in the context panel."],
+            "steps": [
+              "Use Pointer to move, resize, and select.",
+              "Knife splits, Eraser removes, and Mute temporarily disables a clip.",
+              "Region selects a time span for deletion or repeat.",
+              "Copy, paste, repeat, and duplicate with Edit commands.",
+              "Adjust gain, fade, pitch, colour, and other available values in the context panel."
+            ],
             "result": "The arrangement changes non-destructively and every operation can be undone or redone.",
-            "shortcuts": [{"keys": "1–6", "label": "Arrangement tools"}, {"keys": "Ctrl/Cmd+B", "label": "Repeat clips or region"}, {"keys": "Ctrl/Cmd+M", "label": "Toggle clip mute"}, {"keys": "Delete", "label": "Delete selection"}],
-            "notes": ["Shift extends a range; Ctrl/Cmd toggles individual items."],
-            "figures": [{"slug": "context-panel", "alt": "Context panel over selected clips", "caption": "The context panel exposes only the controls relevant to the selected object type."}]
+            "shortcuts": [
+              {
+                "keys": "1–6",
+                "label": "Arrangement tools"
+              },
+              {
+                "keys": "Ctrl/Cmd+B",
+                "label": "Repeat clips or region"
+              },
+              {
+                "keys": "Ctrl/Cmd+M",
+                "label": "Toggle clip mute"
+              },
+              {
+                "keys": "Delete",
+                "label": "Delete selection"
+              }
+            ],
+            "notes": [
+              "Shift extends a range; Ctrl/Cmd toggles individual items."
+            ],
+            "figures": [
+              {
+                "slug": "context-panel",
+                "alt": "Context panel over selected clips",
+                "caption": "The context panel exposes only the controls relevant to the selected object type."
+              }
+            ]
+          },
+          {
+            "id": "adaptive-grid",
+            "title": "Adaptive grid and context panel",
+            "intro": "Zoom determines grid detail, while the selection determines the available tools.",
+            "steps": [
+              "Select Adaptive for the grid and zoom out to see larger arrangement sections.",
+              "At overview scales the grid groups whole bars: 2, 4, 8 and onward. Snapping follows visible lines; zooming in restores smaller divisions.",
+              "Choose a fixed division for a constant step, or Off to disable snapping.",
+              "Select a clip for clip tools or a track for channel settings. Widen the window or narrow the browser to reveal additional controls."
+            ],
+            "result": "Arrangement structure remains readable and snapping matches the chosen scale.",
+            "notes": [
+              "When space is limited, the context panel hides secondary controls while retaining primary actions and values. Controls return when space becomes available.",
+              "The panel follows selected clips; track, note and recording contexts return it to the middle of the available area."
+            ]
+          },
+          {
+            "id": "notebook",
+            "title": "Notebook and timed text",
+            "intro": "Notebook keeps notes and lets you attach text lines to playback positions.",
+            "steps": [
+              "Open Notebook and select Notes for text, headings, lists and images.",
+              "Use the formatting toolbar; additional actions are in the extra tools menu.",
+              "Switch to Text by time, enter a line and capture it at the current playhead position.",
+              "Edit text or timing in the table and enable text display during playback.",
+              "Open the notebook in a separate window if needed. Check the save indicator before closing."
+            ],
+            "result": "Notes and timed lines remain available while working on the composition.",
+            "notes": [
+              "Use the dedicated button to pause an animated notebook background. The gear button opens notebook settings."
+            ]
           }
         ]
       },
@@ -172,40 +374,157 @@
             "title": "Import and browse files",
             "intro": "Import audio through File, drop it onto the arrangement, or find it in Browser and preview it first.",
             "preparation": "Use a supported audio format and make sure the file is locally accessible.",
-            "steps": ["Open Browser and add your samples folder.", "Select a file to see its waveform and preview it.", "Drag it onto an Audio track or empty space to make a new one.", "Use File → Import Audio for a standard file dialog.", "Stop preview before comparing with the project if the signals overlap."],
+            "steps": [
+              "Open Browser and add your samples folder.",
+              "Select a file to see its waveform and preview it.",
+              "Drag it onto an Audio track or empty space to make a new one.",
+              "Use File → Import Audio for a standard file dialog.",
+              "Stop preview before comparing with the project if the signals overlap."
+            ],
             "result": "The file is an audio clip ready for movement, trimming, and processing.",
-            "problems": [{"problem": "The file does not appear in Browser.", "fix": "Check the extension filter and folder permissions, then refresh it."}],
-            "figures": [{"slug": "browser-samples", "alt": "Sample Browser with a selected audio file and waveform", "caption": "The preview strip lets you audition material before adding it."}, {"slug": "browser-plugins", "alt": "Plugin category in the built-in Browser", "caption": "Plugins have their own category and can be inserted without browsing file paths."}]
+            "problems": [
+              {
+                "problem": "The file does not appear in Browser.",
+                "fix": "Check the extension filter and folder permissions, then refresh it."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "browser-samples",
+                "alt": "Sample Browser with a selected audio file and waveform",
+                "caption": "The preview strip lets you audition material before adding it."
+              },
+              {
+                "slug": "browser-plugins",
+                "alt": "Plugin category in the built-in Browser",
+                "caption": "Plugins have their own category and can be inserted without browsing file paths."
+              }
+            ],
+            "notes": [
+              "MP3 uses the import decoder library; M4A/MP4A and MP4 audio use the native macOS or Windows decoder. Actual support depends on the file codec."
+            ]
           },
           {
             "id": "audio-editor",
             "title": "Audio clip editor",
             "intro": "Double-click a regular audio clip to open a larger waveform editor for precise work on its contents and boundaries.",
-            "steps": ["Double-click an audio clip without take layers.", "Zoom and navigate to find the attack or ending.", "Adjust available boundaries, fades, and playback properties.", "Close the editor; changes already belong to the main project and undo history."],
+            "steps": [
+              "Double-click an audio clip without take layers.",
+              "Zoom and navigate to find the attack or ending.",
+              "Adjust available boundaries, fades, and playback properties.",
+              "Close the editor; changes already belong to the main project and undo history."
+            ],
             "result": "The clip is prepared for arrangement without changing the source file on disk.",
-            "notes": ["Sampler looks similar, but edits an instrument rather than one audio clip instance."],
-            "figures": [{"slug": "audio-editor", "alt": "Audio clip editor with a waveform", "caption": "The clip editor offers a large waveform and precise controls.", "ratio": "4 / 3"}]
+            "notes": [
+              "Sampler looks similar, but edits an instrument rather than one audio clip instance."
+            ],
+            "figures": [
+              {
+                "slug": "audio-editor",
+                "alt": "Audio clip editor with a waveform",
+                "caption": "The clip editor offers a large waveform and precise controls.",
+                "ratio": "4 / 3"
+              }
+            ]
           },
           {
             "id": "recording",
             "title": "Record audio",
             "intro": "Record Enable prepares the track and take options; Record starts capture from the current playhead position.",
             "preparation": "Choose an input in Settings → Audio, arm the Audio track, and enable monitoring when needed.",
-            "steps": ["Select the destination track and arm it.", "Press Record Enable to expose mode, count-in, and monitoring.", "Choose Layer to keep takes or Overwrite to replace material.", "Position the playhead, enable Metronome, and press R.", "Press Stop; the completed WAV appears on the track."],
+            "steps": [
+              "Select the destination track and arm it.",
+              "Press Record Enable to expose mode, count-in, and monitoring.",
+              "Choose Layer to keep takes or Overwrite to replace material.",
+              "Position the playhead, enable Metronome, and press R.",
+              "Press Stop; the completed WAV appears on the track."
+            ],
             "result": "Recorded material is stored in the project and added to the selected track.",
-            "shortcuts": [{"keys": "R", "label": "Start or stop recording"}, {"keys": "Shift+L", "label": "Layer recording"}, {"keys": "K", "label": "Metronome"}],
-            "problems": [{"problem": "Transport moves but no input is recorded.", "fix": "Check input channels, track arm, OS microphone permission, and the selected audio device."}],
-            "figures": [{"slug": "recording", "alt": "Record-enabled project with take options", "caption": "Record Enable exposes take mode, count-in, and monitoring."}]
+            "shortcuts": [
+              {
+                "keys": "R",
+                "label": "Start or stop recording"
+              },
+              {
+                "keys": "Shift+L",
+                "label": "Layer recording"
+              },
+              {
+                "keys": "K",
+                "label": "Metronome"
+              }
+            ],
+            "problems": [
+              {
+                "problem": "Transport moves but no input is recorded.",
+                "fix": "Check input channels, track arm, OS microphone permission, and the selected audio device."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "recording",
+                "alt": "Record-enabled project with take options",
+                "caption": "Record Enable exposes take mode, count-in, and monitoring."
+              }
+            ]
           },
           {
             "id": "take-layers",
             "title": "Takes and take layers",
             "intro": "Layer Recording keeps repeated passes inside one layered clip without destroying earlier performances.",
-            "steps": ["Enable Layer Recording and define a cycle around the part.", "Record several passes; each completed pass becomes a layer.", "Select the layered clip and press E.", "Choose the active take, duplicate it when needed, and collapse the layers."],
+            "steps": [
+              "Enable Layer Recording and define a cycle around the part.",
+              "Record several passes; each completed pass becomes a layer.",
+              "Select the layered clip and press E.",
+              "Choose the active take, duplicate it when needed, and collapse the layers."
+            ],
             "result": "Multiple performances remain in one clip while the chosen active layer plays.",
-            "shortcuts": [{"keys": "E", "label": "Expand or collapse take layers"}],
-            "notes": ["Take layers belong to one clip; duplicating a track makes an independent copy of the entire track."],
-            "figures": [{"slug": "takes", "alt": "Expanded take layers while recording", "caption": "Each pass remains a separate layer while the parent clip stays a single object."}]
+            "shortcuts": [
+              {
+                "keys": "E",
+                "label": "Expand or collapse take layers"
+              }
+            ],
+            "notes": [
+              "Take layers belong to one clip; duplicating a track makes an independent copy of the entire track."
+            ],
+            "figures": [
+              {
+                "slug": "takes",
+                "alt": "Expanded take layers while recording",
+                "caption": "Each pass remains a separate layer while the parent clip stays a single object."
+              }
+            ]
+          },
+          {
+            "id": "time-stretch",
+            "title": "Time stretching and tempo following",
+            "intro": "The processing mode controls how a clip changes duration and pitch during editing and tempo changes.",
+            "steps": [
+              "Select an audio clip and open its parameters or editor.",
+              "Choose Stretch for general and rhythmic material, Loop for repeating phrases, Vocal for voice, or Complex for polyphonic recordings.",
+              "Adjust Time and Pitch and listen at the working tempo.",
+              "Change the project BPM: modes other than Resample preserve clip start and length in beats while recalculating duration in seconds.",
+              "Check transitions, fades and take boundaries; use Undo to return to the previous state."
+            ],
+            "result": "The audio clip follows the project musical timeline with the selected processing profile.",
+            "notes": [
+              "Vocal compensates formants during pitch shifts. Extreme stretching and large pitch shifts require listening checks with your recording.",
+              "Resample follows a different speed-change model; automatic beat-position preservation applies to the other modes."
+            ]
+          },
+          {
+            "id": "clip-inspector",
+            "title": "Precise clip parameter entry",
+            "intro": "The inspector supports both parameter dragging and explicit numeric entry.",
+            "steps": [
+              "Select an audio clip and find the numeric field in its inspector.",
+              "Drag the number upward to increase it or downward to decrease it; hold Shift for finer adjustment.",
+              "Double-click to type a value. With the keyboard, focus the field using Tab and press Enter or F2.",
+              "Press Enter to apply or Escape to cancel unfinished entry.",
+              "Scroll the inspector with the wheel or trackpad; scrolling over fields does not change the sound."
+            ],
+            "result": "The parameter is set precisely; one completed drag or entry is one Undo step."
           }
         ]
       },
@@ -218,46 +537,145 @@
             "id": "piano-roll",
             "title": "Piano roll",
             "intro": "Piano roll edits MIDI notes, velocity, pan, and controller lanes with the project grid, zoom, and cycle.",
-            "steps": ["Double-click a MIDI clip.", "Use Draw for notes, Pointer for position and length, and Eraser or Knife for removal and slicing.", "Set grid, snap, swing, and optionally Snap to Scale.", "Select notes with a box, Shift range, or Ctrl/Cmd toggle.", "Edit velocity or a controller lane in the lower area."],
+            "steps": [
+              "Double-click a MIDI clip.",
+              "Use Draw for notes, Pointer for position and length, and Eraser or Knife for removal and slicing.",
+              "Set grid, snap, swing, and optionally Snap to Scale.",
+              "Select notes with a box, Shift range, or Ctrl/Cmd toggle.",
+              "Edit velocity or a controller lane in the lower area."
+            ],
             "result": "The MIDI clip contains rhythmically and tonally prepared notes and controller data.",
-            "shortcuts": [{"keys": "Ctrl/Cmd+A", "label": "Select all notes"}, {"keys": "Ctrl/Cmd+D", "label": "Duplicate selection"}, {"keys": "Delete", "label": "Delete notes"}],
-            "problems": [{"problem": "A note jumps to an unexpected pitch.", "fix": "Check Snap to Scale and the selected root and scale."}],
-            "figures": [{"slug": "piano-roll", "alt": "Piano roll with selected MIDI notes and a lower lane", "caption": "Selected notes share one context panel and can be edited as a group.", "ratio": "4 / 3"}]
+            "shortcuts": [
+              {
+                "keys": "Ctrl/Cmd+A",
+                "label": "Select all notes"
+              },
+              {
+                "keys": "Ctrl/Cmd+D",
+                "label": "Duplicate selection"
+              },
+              {
+                "keys": "Delete",
+                "label": "Delete notes"
+              }
+            ],
+            "problems": [
+              {
+                "problem": "A note jumps to an unexpected pitch.",
+                "fix": "Check Snap to Scale and the selected root and scale."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "piano-roll",
+                "alt": "Piano roll with selected MIDI notes and a lower lane",
+                "caption": "Selected notes share one context panel and can be edited as a group.",
+                "ratio": "4 / 3"
+              }
+            ]
           },
           {
             "id": "midi-tools",
             "title": "Musical MIDI tools",
             "intro": "Tools apply quantise, humanise, legato, arpeggiate, chord, and other transforms with live preview.",
-            "steps": ["Select notes; without selection, a tool may use the entire clip.", "Open Tools and choose a transform.", "Adjust values and audition the preview.", "Confirm the result or cancel the panel.", "Use Undo if an already committed transform does not fit."],
+            "steps": [
+              "Select notes; without selection, a tool may use the entire clip.",
+              "Open Tools and choose a transform.",
+              "Adjust values and audition the preview.",
+              "Confirm the result or cancel the panel.",
+              "Use Undo if an already committed transform does not fit."
+            ],
             "result": "Notes are transformed in one undoable operation instead of being edited individually.",
-            "notes": ["Preview does not create another clip; confirmation records the final state in project history."],
-            "problems": [{"problem": "A tool appears to do nothing.", "fix": "Check selection and values; some transforms are invisible on one short note."}]
+            "notes": [
+              "Preview does not create another clip; confirmation records the final state in project history."
+            ],
+            "problems": [
+              {
+                "problem": "A tool appears to do nothing.",
+                "fix": "Check selection and values; some transforms are invisible on one short note."
+              }
+            ]
           },
           {
             "id": "patterns",
             "title": "Pattern tracks",
             "intro": "A Pattern combines several child instrument sources into one editable musical block.",
-            "steps": ["Create a Pattern Track and double-click it.", "Add instrument sources or samples.", "Rename, colour, reorder, and set level and pan.", "Open a source piano roll to edit its notes.", "Transpose or duplicate selected sources to make a variation."],
+            "steps": [
+              "Create a Pattern Track and double-click it.",
+              "Add instrument sources or samples.",
+              "Rename, colour, reorder, and set level and pan.",
+              "Open a source piano roll to edit its notes.",
+              "Transpose or duplicate selected sources to make a variation."
+            ],
             "result": "A layered rhythmic or instrumental pattern is controlled as one group.",
-            "figures": [{"slug": "pattern", "alt": "Pattern editor with several instrument sources", "caption": "Pattern editor combines sources, miniature sequences, and core controls.", "ratio": "4 / 3"}]
+            "figures": [
+              {
+                "slug": "pattern",
+                "alt": "Pattern editor with several instrument sources",
+                "caption": "Pattern editor combines sources, miniature sequences, and core controls.",
+                "ratio": "4 / 3"
+              }
+            ],
+            "notes": [
+              "Every source has Fill rhythm: once per bar or every 1/2, 1/4, 1/8, 1/16 or 1/32 of a bar. Fill replaces source notes; the project meter defines bar length.",
+              "Drop one .mid/.midi file onto a source row to replace notes without replacing its instrument. MIDI file tracks merge into that source and project tempo is preserved. This import does not carry CC, pitch bend or aftertouch.",
+              "A longer MIDI phrase extends the clip and Pattern to whole bars. Undo restores notes and boundaries. Dropping audio onto a row replaces its sample; dropping between rows adds a source.",
+              "Other sources in the same Pattern automatically appear as ghost notes in Piano Roll. The Ghost Notes menu can hide individual sources or all of them.",
+              "Right-click the sound plate for the instrument, Piano Roll, Fill rhythm, sample replacement and other actions. Built-in Samplers also expose Cut Itself.",
+              "The editor represents a Pattern track: MIDI operations target the source’s first MIDI clip. If there is none, one is created at the first Pattern instance."
+            ]
           },
           {
             "id": "sampler",
             "title": "Built-in Sampler",
             "intro": "Sampler loads a local audio file and turns it into an instrument for MIDI clips or the computer keyboard.",
-            "steps": ["Add a MIDI Track and choose Sampler.", "Open its editor and load an audio file.", "Set start/end, root note, envelope, and gain.", "Create a MIDI clip and add notes.", "Save the project; Sampler parameters are stored with the track."],
+            "steps": [
+              "Add a MIDI Track and choose Sampler.",
+              "Open its editor and load an audio file.",
+              "Set start/end, root note, envelope, and gain.",
+              "Create a MIDI clip and add notes.",
+              "Save the project; Sampler parameters are stored with the track."
+            ],
             "result": "The sample plays as an instrument and follows project MIDI notes.",
-            "problems": [{"problem": "The sample plays at the wrong pitch.", "fix": "Set the correct root note and check transposition."}],
-            "figures": [{"slug": "sampler", "alt": "Built-in Sampler editor with a waveform", "caption": "Sampler shows the waveform and its instrumental playback controls.", "ratio": "4 / 3"}]
+            "problems": [
+              {
+                "problem": "The sample plays at the wrong pitch.",
+                "fix": "Set the correct root note and check transposition."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "sampler",
+                "alt": "Built-in Sampler editor with a waveform",
+                "caption": "Sampler shows the waveform and its instrumental playback controls.",
+                "ratio": "4 / 3"
+              }
+            ],
+            "notes": [
+              "The waveform and file actions sit above the Playback, Envelope and Processing tabs. Instrument controls are grouped by purpose.",
+              "Drag controls to adjust parameters; wheel events over knobs and mode selectors do not change their values. The audio-clip editor shows only applicable controls."
+            ]
           },
           {
             "id": "typing-keyboard",
             "title": "Computer keyboard as MIDI",
             "intro": "Typing Keyboard maps physical keys to musical notes for testing an instrument without a MIDI controller.",
-            "steps": ["Select a MIDI track with a loaded instrument.", "Enable Tools → Typing Keyboard.", "Play the mapped keys and change octave or velocity.", "Disable the mode before using normal one-key commands."],
+            "steps": [
+              "Select a MIDI track with a loaded instrument.",
+              "Enable Tools → Typing Keyboard.",
+              "Play the mapped keys and change octave or velocity.",
+              "Disable the mode before using normal one-key commands."
+            ],
             "result": "You can audition and record the instrument without an external MIDI keyboard.",
-            "shortcuts": [{"keys": "Ctrl/Cmd+T", "label": "Toggle Typing Keyboard"}],
-            "notes": ["Conflicting single-key commands are temporarily released and restored when the mode is disabled."]
+            "shortcuts": [
+              {
+                "keys": "Ctrl/Cmd+T",
+                "label": "Toggle Typing Keyboard"
+              }
+            ],
+            "notes": [
+              "Conflicting single-key commands are temporarily released and restored when the mode is disabled."
+            ]
           }
         ]
       },
@@ -270,59 +688,241 @@
             "id": "mixer",
             "title": "Mixer and channel strip",
             "intro": "Mixer represents tracks as strips with inserts, sends, pan, fader, meters, mute, solo, record, and monitoring.",
-            "steps": ["Open Mixer with X.", "Set input gain and order inserts from top to bottom.", "Use pan and fader for placement and level.", "Watch the meter so peaks do not continually reach the top.", "Detach Mixer from View when a separate window is useful."],
+            "steps": [
+              "Open Mixer with X.",
+              "Set input gain and order inserts from top to bottom.",
+              "Use pan and fader for placement and level.",
+              "Watch the meter so peaks do not continually reach the top.",
+              "Detach Mixer from View when a separate window is useful."
+            ],
             "result": "Track balance is set, overloads are visible, and processing follows a clear order.",
-            "shortcuts": [{"keys": "X", "label": "Show or hide Mixer"}],
-            "notes": ["The context control and mixer fader edit one value and stay synchronised."],
-            "figures": [{"slug": "mixer", "alt": "VLT Studio Pro Mixer with plugins and level meters", "caption": "Each strip combines plugins, sends, pan, fader, and track states."}]
+            "shortcuts": [
+              {
+                "keys": "X",
+                "label": "Show or hide Mixer"
+              }
+            ],
+            "notes": [
+              "The context control and mixer fader edit one value and stay synchronised."
+            ],
+            "figures": [
+              {
+                "slug": "mixer",
+                "alt": "VLTONE Mixer with plugins and level meters",
+                "caption": "Each strip combines plugins, sends, pan, fader, and track states."
+              }
+            ]
           },
           {
             "id": "routing",
             "title": "Buses, sends, and summing",
             "intro": "Bus tracks receive main outputs for subgroup processing; Send tracks receive parallel sends, and a summing folder combines its children.",
-            "steps": ["Create a Send Track for shared reverb or delay.", "Add a send from the source track and set its level.", "Put the effect on the Send track and use a fully wet signal.", "Use a Bus Track or Summing Folder for permanent subgroup processing.", "Recheck solo and mute after changing routing."],
+            "steps": [
+              "Create a Send Track for shared reverb or delay.",
+              "Add a send from the source track and set its level.",
+              "Put the effect on the Send track and use a fully wet signal.",
+              "Use a Bus Track or Summing Folder for permanent subgroup processing.",
+              "Recheck solo and mute after changing routing."
+            ],
             "result": "Shared processing is reused and group level is controlled without duplicate plugins.",
-            "problems": [{"problem": "The effect is doubled or too loud.", "fix": "Check direct output, send level, and dry/wet on the Send track."}]
+            "problems": [
+              {
+                "problem": "The effect is doubled or too loud.",
+                "fix": "Check direct output, send level, and dry/wet on the Send track."
+              }
+            ]
           },
           {
             "id": "adding-plugins",
             "title": "Add and replace plugins",
             "intro": "Find plugins from a channel strip, context panel, or search menu. Formats are grouped and the search field keeps keyboard focus.",
-            "steps": ["Choose a track and an empty insert or instrument slot.", "Type part of the name or vendor.", "Put instruments in the instrument slot and processors in inserts.", "Open the plugin editor for native parameters.", "Use Replace or Remove; both changes participate in undo."],
+            "steps": [
+              "Choose a track and an empty insert or instrument slot.",
+              "Type part of the name or vendor.",
+              "Put instruments in the instrument slot and processors in inserts.",
+              "Open the plugin editor for native parameters.",
+              "Use Replace or Remove; both changes participate in undo."
+            ],
             "result": "The plugin is loaded in the correct slot and processes the live track signal.",
-            "shortcuts": [{"keys": "Ctrl/Cmd+F", "label": "Find a plugin for the track"}],
-            "problems": [{"problem": "A plugin cannot be inserted as an instrument.", "fix": "Check its type: an audio effect cannot be used as a MIDI track instrument."}],
-            "figures": [{"slug": "plugin-picker", "alt": "Plugin picker with its search field", "caption": "Search filters the list while retaining keyboard focus.", "ratio": "4 / 3"}, {"slug": "plugin-search", "alt": "Inline plugin search in the context panel", "caption": "Inline search expands directly over the selected track."}]
+            "shortcuts": [
+              {
+                "keys": "Ctrl/Cmd+F",
+                "label": "Find a plugin for the track"
+              }
+            ],
+            "problems": [
+              {
+                "problem": "A plugin cannot be inserted as an instrument.",
+                "fix": "Check its type: an audio effect cannot be used as a MIDI track instrument."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "plugin-picker",
+                "alt": "Plugin picker with its search field",
+                "caption": "Search filters the list while retaining keyboard focus.",
+                "ratio": "4 / 3"
+              },
+              {
+                "slug": "plugin-search",
+                "alt": "Inline plugin search in the context panel",
+                "caption": "Inline search expands directly over the selected track."
+              }
+            ]
           },
           {
             "id": "vlt-equalizer",
-            "title": "VLT Equalizer",
-            "intro": "VLT Equalizer is the built-in 24-band parametric and dynamic EQ for corrective, creative, and mastering work, with Zero Latency, Analog Phase, and Linear Phase processing.",
-            "steps": ["Add VLT Equalizer to an audio insert and open its editor.", "Double-click the logarithmic graph to create a band. Drag to change frequency and gain, use the mouse wheel for Q, or enter values in the selected-band controls.", "Choose the filter type, slope, and Stereo, Left, Right, Mid, or Side placement. Ctrl/Cmd-click selects several bands for grouped movement.", "For Bell, Shelf, or Tilt, enable Dynamics and set range, threshold, attack, release, and the internal or external detector range.", "Choose a phase mode. Linear Phase adds reported PDC latency; its Low, Medium, and High resolutions trade latency and CPU for frequency resolution.", "Use A/B and Copy A/B to compare states, then save a user preset or choose one of the factory presets. Analyzer checkboxes show Pre, Post, and sidechain traces; Freeze holds the current frame."],
+            "title": "VLTONE Equalizer",
+            "intro": "VLTONE Equalizer is the built-in 24-band parametric and dynamic EQ for corrective, creative, and mastering work, with Zero Latency, Analog Phase, and Linear Phase processing.",
+            "steps": [
+              "Add VLTONE Equalizer to an audio insert and open its editor.",
+              "Double-click the logarithmic graph to create a band. Drag to change frequency and gain, use the mouse wheel for Q, or enter values in the selected-band controls.",
+              "Choose the filter type, slope, and Stereo, Left, Right, Mid, or Side placement. Ctrl/Cmd-click selects several bands for grouped movement.",
+              "For Bell, Shelf, or Tilt, enable Dynamics and set range, threshold, attack, release, and the internal or external detector range.",
+              "Choose a phase mode. Linear Phase adds reported PDC latency; its Low, Medium, and High resolutions trade latency and CPU for frequency resolution.",
+              "Use A/B and Copy A/B to compare states, then save a user preset or choose one of the factory presets. Analyzer checkboxes show Pre, Post, and sidechain traces; Freeze holds the current frame."
+            ],
             "result": "The track is frequency-balanced with the required phase behaviour, channel placement, and optional level-dependent correction.",
-            "shortcuts": [{"keys": "Double-click", "label": "Create a band"}, {"keys": "Mouse wheel", "label": "Change Q"}, {"keys": "Alt+drag", "label": "Change dynamic range"}, {"keys": "Delete", "label": "Delete selected bands"}],
-            "notes": ["If an external detector is selected without a connected sidechain, dynamics stays inactive and the editor shows SC missing.", "All Pass bands remain saved but are temporarily inactive in Linear Phase mode.", "Processing mode and Linear Phase resolution are intentionally not automatable because they change plugin latency."],
-            "problems": [{"problem": "A dynamic band does not react.", "fix": "Check that Dynamics is enabled, the range is non-zero, the detector crosses its threshold, and an external sidechain is connected when selected."}, {"problem": "Playback shifts after changing phase mode.", "fix": "Let the host rebuild plugin delay compensation; mode changes update the reported latency."}],
-            "figures": [{"slug": "equalizer", "alt": "VLT Equalizer editor with a vocal cleanup curve", "caption": "The resizable editor combines the response graph, direct band controls, phase mode, presets, A/B, and analyzer options."}]
+            "shortcuts": [
+              {
+                "keys": "Double-click",
+                "label": "Create a band"
+              },
+              {
+                "keys": "Mouse wheel",
+                "label": "Change Q"
+              },
+              {
+                "keys": "Alt+drag",
+                "label": "Change dynamic range"
+              },
+              {
+                "keys": "Delete",
+                "label": "Delete selected bands"
+              }
+            ],
+            "notes": [
+              "If an external detector is selected without a connected sidechain, dynamics stays inactive and the editor shows SC missing.",
+              "All Pass bands remain saved but are temporarily inactive in Linear Phase mode.",
+              "Processing mode and Linear Phase resolution are intentionally not automatable because they change plugin latency."
+            ],
+            "problems": [
+              {
+                "problem": "A dynamic band does not react.",
+                "fix": "Check that Dynamics is enabled, the range is non-zero, the detector crosses its threshold, and an external sidechain is connected when selected."
+              },
+              {
+                "problem": "Playback shifts after changing phase mode.",
+                "fix": "Let the host rebuild plugin delay compensation; mode changes update the reported latency."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "equalizer",
+                "alt": "VLTONE Equalizer editor with a vocal cleanup curve",
+                "caption": "The resizable editor combines the response graph, direct band controls, phase mode, presets, A/B, and analyzer options."
+              }
+            ]
           },
           {
             "id": "plugin-manager",
             "title": "Plugin Manager",
             "intro": "Plugin Manager lists CLAP, VST, VST3, and Audio Unit, and controls scan paths, rescanning, and Blacklist.",
-            "steps": ["Open Settings → Plugin Manager.", "On Plugins, verify format, vendor, and status.", "Add only real plugin folders on Search Paths.", "Run Scan; use Rescan All after major updates.", "Remove a Blacklist entry only after fixing the plugin."],
+            "steps": [
+              "Open Settings → Plugin Manager.",
+              "On Plugins, verify format, vendor, and status.",
+              "Add only real plugin folders on Search Paths.",
+              "Run Scan; use Rescan All after major updates.",
+              "Remove a Blacklist entry only after fixing the plugin."
+            ],
             "result": "Available plugins are scanned and faulty ones remain isolated from startup.",
-            "notes": ["Do not add a disk root; it makes scanning much slower."],
-            "figures": [{"slug": "plugin-manager", "alt": "Plugins tab in Plugin Manager", "caption": "The main list shows recognised plugins and formats.", "ratio": "4 / 3"}, {"slug": "plugin-paths", "alt": "Plugin Manager search paths", "caption": "Search Paths limit the folders inspected by the scanner.", "ratio": "4 / 3"}, {"slug": "plugin-blacklist", "alt": "Plugin Manager Blacklist", "caption": "Faulty plugins stay isolated until an intentional rescan.", "ratio": "4 / 3"}]
+            "notes": [
+              "Do not add a disk root; it makes scanning much slower."
+            ],
+            "figures": [
+              {
+                "slug": "plugin-manager",
+                "alt": "Plugins tab in Plugin Manager",
+                "caption": "The main list shows recognised plugins and formats.",
+                "ratio": "4 / 3"
+              },
+              {
+                "slug": "plugin-paths",
+                "alt": "Plugin Manager search paths",
+                "caption": "Search Paths limit the folders inspected by the scanner.",
+                "ratio": "4 / 3"
+              },
+              {
+                "slug": "plugin-blacklist",
+                "alt": "Plugin Manager Blacklist",
+                "caption": "Faulty plugins stay isolated until an intentional rescan.",
+                "ratio": "4 / 3"
+              }
+            ]
           },
           {
             "id": "automation",
             "title": "Automation",
             "intro": "Automation lanes move volume, pan, and plugin parameters over time; the curve editor supports precise point editing.",
-            "steps": ["Select a track and press A.", "Choose volume, pan, or an available plugin target.", "Add and drag points, then choose a segment shape.", "Open the separate editor for larger scale and multi-selection.", "Play the project and confirm that the control follows the curve."],
+            "steps": [
+              "Right-click a parameter and select Create Automation Clip. This works independently of the top toolbar mode.",
+              "To create clips by double-clicking, enable the automation button above the tracks or press Cmd+Shift+U on macOS / Ctrl+Shift+U on Windows.",
+              "Open the created clip, add points and choose segment shapes in the curve editor.",
+              "For an existing track, press A to show its automation lane and check the target: volume, pan or a plugin parameter.",
+              "Start playback and confirm that the parameter follows the curve."
+            ],
             "result": "The parameter changes reproducibly over time and is saved with the project.",
-            "shortcuts": [{"keys": "A", "label": "Show automation lane"}],
-            "problems": [{"problem": "The curve is visible but the parameter does not move.", "fix": "Check target, automation clip enable state, and the required live plugin instance."}],
-            "figures": [{"slug": "automation-lane", "alt": "Automation lane below an audio track", "caption": "The lane shows a curve on the shared project timeline."}, {"slug": "automation-editor", "alt": "Separate automation curve editor", "caption": "Curve editor supports precise selection and point movement.", "ratio": "4 / 3"}]
+            "shortcuts": [
+              {
+                "keys": "A",
+                "label": "Show automation lane"
+              },
+              {
+                "keys": "Ctrl/Cmd+Shift+U",
+                "label": "Toggle double-click automation creation"
+              }
+            ],
+            "problems": [
+              {
+                "problem": "The curve is visible but the parameter does not move.",
+                "fix": "Check target, automation clip enable state, and the required live plugin instance."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "automation-lane",
+                "alt": "Automation lane below an audio track",
+                "caption": "The lane shows a curve on the shared project timeline."
+              },
+              {
+                "slug": "automation-editor",
+                "alt": "Separate automation curve editor",
+                "caption": "Curve editor supports precise selection and point movement.",
+                "ratio": "4 / 3"
+              }
+            ],
+            "notes": [
+              "With creation mode off, double-clicking resets ordinary knobs. Alt/Option no longer enables automation creation; inspector numeric fields instead open explicit entry.",
+              "Cmd/Ctrl+Shift+A still deselects in Piano Roll. The automation mode shortcut can be reassigned in Keyboard Shortcuts."
+            ]
+          },
+          {
+            "id": "freeze-track",
+            "title": "Freeze and unfreeze tracks",
+            "intro": "Freeze Track temporarily replaces source, instrument and insert processing with prepared audio.",
+            "steps": [
+              "Right-click an independent audio, MIDI or instrument track and choose Freeze Track… .",
+              "Wait for preparation to complete; use Cancel if needed.",
+              "Continue adjusting the fader, pan, mono and outgoing sends, which remain live.",
+              "Choose Unfreeze Track to restore the original chain. Freeze and unfreeze support Undo.",
+              "Keep the project media together: the prepared WAV is needed to reopen the frozen track."
+            ],
+            "result": "Audio processing load is reduced while original materials and plugins are retained.",
+            "notes": [
+              "If the action is unavailable, check its menu explanation. Armed/monitored tracks, incoming routing, external sidechains, linked Pattern clips and external plugin-parameter automation can prevent freezing.",
+              "Editing source material or processing invalidates the frozen result. Missing frozen media falls back to the original chain.",
+              "Freeze saves DSP work; plugin instances remain in memory. Cloud publication uses original editable sources."
+            ]
           }
         ]
       },
@@ -334,38 +934,120 @@
           {
             "id": "ai-setup",
             "title": "Set up AI",
-            "intro": "AI uses models supplied by your VLT account or a custom OpenAI-compatible connection from Settings → AI.",
-            "steps": ["Open Settings → AI and refresh models.", "Choose a managed model or add endpoint, model id, and key.", "Add assistant instructions when needed.", "Open AI and verify the selected model in its header."],
+            "intro": "AI uses models supplied by your VLTONE account or a custom OpenAI-compatible connection from Settings → AI.",
+            "steps": [
+              "Open Settings → AI and refresh models.",
+              "Choose a managed model or add endpoint, model id, and key.",
+              "Add assistant instructions when needed.",
+              "Open AI and verify the selected model in its header."
+            ],
             "result": "The AI panel is ready to answer and execute available project commands.",
-            "notes": ["When AI quota is exhausted, editing, recording, plugins, and export remain available."],
-            "problems": [{"problem": "The model does not appear.", "fix": "Check endpoint, model id, key, and server availability, then refresh the panel."}]
+            "notes": [
+              "When AI quota is exhausted, editing, recording, plugins, and export remain available."
+            ],
+            "problems": [
+              {
+                "problem": "The model does not appear.",
+                "fix": "Check endpoint, model id, key, and server availability, then refresh the panel."
+              }
+            ]
           },
           {
             "id": "ai-assistant",
             "title": "Project AI assistant",
             "intro": "The assistant sees permitted session context and calls the same undoable commands exposed by the interface.",
-            "steps": ["Open AI and select Chat.", "Describe the goal and optionally select a track or clip.", "Drop a local attachment when the request needs it.", "Review the reply and actions in the transcript.", "Use Undo or revert to an earlier message when the result does not fit."],
+            "steps": [
+              "Open AI and select Chat.",
+              "Describe the goal and optionally select a track or clip.",
+              "Drop a local attachment when the request needs it.",
+              "Review the reply and actions in the transcript.",
+              "Use Undo or revert to an earlier message when the result does not fit."
+            ],
             "result": "The assistant explains a task or changes the project through controlled command history.",
-            "notes": ["Stop a long request with Stop; completed operations remain visible and undoable."],
-            "figures": [{"slug": "ai-chat", "alt": "AI Chat panel with a completed request and actions", "caption": "Transcript separates answers, actions, errors, and run state."}]
+            "notes": [
+              "Stop a long request with Stop; completed operations remain visible and undoable."
+            ],
+            "figures": [
+              {
+                "slug": "ai-chat",
+                "alt": "AI Chat panel with a completed request and actions",
+                "caption": "Transcript separates answers, actions, errors, and run state."
+              }
+            ]
           },
           {
             "id": "ai-music",
             "title": "Generate music",
             "intro": "Music mode creates an audio file from a description and adds it to a new Audio track.",
-            "steps": ["Switch AI to Music.", "Describe genre, tempo, instruments, mood, and structure.", "Start generation and wait for the result card.", "Audition the clip; Insert Again adds another copy.", "Rename and process the track like ordinary audio."],
+            "steps": [
+              "Switch AI to Music.",
+              "Describe genre, tempo, instruments, mood, and structure.",
+              "Start generation and wait for the result card.",
+              "Audition the clip; Insert Again adds another copy.",
+              "Rename and process the track like ordinary audio."
+            ],
             "result": "The generated WAV is saved and inserted as a normal undoable import.",
-            "problems": [{"problem": "The clip was not inserted.", "fix": "Check the Generated folder and free space; the result card can insert it again."}],
-            "figures": [{"slug": "ai-music", "alt": "AI Music mode with a completed generation", "caption": "A finished result receives a card and appears on an Audio track."}]
+            "problems": [
+              {
+                "problem": "The clip was not inserted.",
+                "fix": "Check the Generated folder and free space; the result card can insert it again."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "ai-music",
+                "alt": "AI Music mode with a completed generation",
+                "caption": "A finished result receives a card and appears on an Audio track."
+              }
+            ]
           },
           {
             "id": "web-browser",
             "title": "Integrated Web",
             "intro": "The Web panel opens sites beside the arrangement and can pass supported local audio files into the project.",
-            "steps": ["Open Web from View or the bottom button.", "Navigate to an address or use page controls.", "Drag a supported local audio file onto the project.", "Undo the import when it is not useful.", "Hide Web to return space to the arrangement."],
+            "steps": [
+              "Open Web from View or the bottom button.",
+              "Navigate to an address or use page controls.",
+              "Drag a supported local audio file onto the project.",
+              "Undo the import when it is not useful.",
+              "Hide Web to return space to the arrangement."
+            ],
             "result": "A web source and the project are available in one workspace.",
-            "problems": [{"problem": "A page or video does not load.", "fix": "Check connectivity and site restrictions; protected streams do not always expose a local file."}],
-            "figures": [{"slug": "web", "alt": "Integrated Web panel beside the arrangement", "caption": "Web and AI are independent side workspaces."}]
+            "problems": [
+              {
+                "problem": "A page or video does not load.",
+                "fix": "Check connectivity and site restrictions; protected streams do not always expose a local file."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "web",
+                "alt": "Integrated Web panel beside the arrangement",
+                "caption": "Web and AI are independent side workspaces."
+              }
+            ],
+            "notes": [
+              "The browser uses system proxy settings and VPN routes. If a VPN exposes only a local proxy, enable its System proxy mode. Reload the tab after changing connectivity, or restart VLTONE if needed.",
+              "After a network error, Reload retries the original address. Include the URL and error code when reporting a problem."
+            ]
+          },
+          {
+            "id": "browser-backgrounds",
+            "title": "Browser backgrounds and timeline video",
+            "intro": "The browser start page and the timeline background have separate controls.",
+            "steps": [
+              "Open Settings → Browser → Background collection → Browse background collection… and select a published image.",
+              "For your own start-page background, choose a local image, GIF or video in browser settings.",
+              "To use timeline video, open a page containing video in Web and click Use video as timeline background when it becomes available.",
+              "Choose a source if several videos are found. Use the speaker button for sound and Remove video background to clear it.",
+              "If a video is unavailable, open its source page and check that it plays in the browser."
+            ],
+            "result": "The start page uses your chosen background and available web video can appear behind the timeline.",
+            "notes": [
+              "The selected start-page background and cached catalog work offline. Removing an image from the server collection does not erase a previously selected local copy.",
+              "Start-page backgrounds do not restyle external websites. Video availability depends on the page, format and source restrictions.",
+              "Start-page background animation stops when reduced motion is enabled."
+            ]
           }
         ]
       },
@@ -379,52 +1061,201 @@
             "title": "Render and export",
             "intro": "Render / Export creates a final mix or separate stems with the selected format, sample rate, depth, and channels.",
             "preparation": "Listen through the project and check solo/mute, master peaks, and range boundaries.",
-            "steps": ["Open File → Render / Export.", "Choose Mix or Stems.", "Set folder, name, format, sample rate, bit depth, and channels.", "Review stem sources and start render.", "Open the result and check start, ending, and level."],
+            "steps": [
+              "Open File → Render / Export.",
+              "Choose Mix or Stems.",
+              "Set folder, name, format, sample rate, bit depth, and channels.",
+              "Review stem sources and start render.",
+              "Open the result and check start, ending, and level."
+            ],
             "result": "A finished audio file or a set of synchronised stems is available.",
-            "shortcuts": [{"keys": "Ctrl/Cmd+E", "label": "Open Render / Export"}],
-            "problems": [{"problem": "Export differs from playback.", "fix": "Check master processing, channels, mute/solo, and external monitor gain."}],
-            "figures": [{"slug": "export-mix", "alt": "Full-mix export dialog", "caption": "Mix creates one file from the master output.", "ratio": "4 / 3"}, {"slug": "export-stems", "alt": "Stem export dialog", "caption": "Stems save selected tracks as separate synchronised files.", "ratio": "4 / 3"}]
+            "shortcuts": [
+              {
+                "keys": "Ctrl/Cmd+E",
+                "label": "Open Render / Export"
+              }
+            ],
+            "problems": [
+              {
+                "problem": "Export differs from playback.",
+                "fix": "Check master processing, channels, mute/solo, and external monitor gain."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "export-mix",
+                "alt": "Full-mix export dialog",
+                "caption": "Mix creates one file from the master output.",
+                "ratio": "4 / 3"
+              },
+              {
+                "slug": "export-stems",
+                "alt": "Stem export dialog",
+                "caption": "Stems save selected tracks as separate synchronised files.",
+                "ratio": "4 / 3"
+              }
+            ]
           },
           {
             "id": "recovery",
             "title": "Autosave and recovery",
             "intro": "A background journal records edits. After an unexpected exit, the app offers to restore a discovered session.",
-            "steps": ["Configure recovery in Settings → Recovery.", "Launch the app after a failure.", "Review the time and version of the discovered session.", "Restore it and save immediately to a permanent location.", "Decline only when the data is definitely no longer needed."],
+            "steps": [
+              "Configure recovery in Settings → Recovery.",
+              "Launch the app after a failure.",
+              "Review the time and version of the discovered session.",
+              "Restore it and save immediately to a permanent location.",
+              "Decline only when the data is definitely no longer needed."
+            ],
             "result": "The last consistent project state is restored and can be saved normally.",
-            "notes": ["Recovery complements Save but does not replace backups."],
-            "figures": [{"slug": "recovery", "alt": "Project recovery dialog after a failure", "caption": "The app presents a discovered session before opening the main workspace.", "ratio": "4 / 3"}]
+            "notes": [
+              "Recovery complements Save but does not replace backups."
+            ],
+            "figures": [
+              {
+                "slug": "recovery",
+                "alt": "Project recovery dialog after a failure",
+                "caption": "The app presents a discovered session before opening the main workspace.",
+                "ratio": "4 / 3"
+              }
+            ]
           },
           {
             "id": "settings",
             "title": "All application settings",
             "intro": "Settings contains Audio, Transport, Recording, Context Panel, Browser, AI, Account, Language, Recovery, Themes, Theme Editor, and Keyboard Shortcuts.",
-            "steps": ["Audio: device, I/O, sample rate, and buffer.", "Transport and Recording: metronome, count-in, takes, and monitoring.", "Context Panel and Browser: tools, position, preview, and MIDI tempo policy.", "AI and Account: models, custom endpoint, quota, and session.", "Language, Recovery, Themes, and Theme Editor: locale, safety, and appearance.", "Keyboard Shortcuts: find a command, assign a key, and resolve conflicts."],
+            "steps": [
+              "Audio: device, I/O, sample rate, and buffer.",
+              "Transport and Recording: metronome, count-in, takes, and monitoring.",
+              "Context Panel and Browser: tools, position, preview, and MIDI tempo policy.",
+              "AI and Account: models, custom endpoint, quota, and session.",
+              "Language, Recovery, Themes, and Theme Editor: locale, safety, and appearance.",
+              "Keyboard Shortcuts: find a command, assign a key, and resolve conflicts."
+            ],
             "result": "The application is configured for your hardware, language, and workflow.",
-            "shortcuts": [{"keys": "Ctrl/Cmd+,", "label": "Open Settings"}],
-            "notes": ["Some language and font changes require a restart; the page tells you when."],
+            "shortcuts": [
+              {
+                "keys": "Ctrl/Cmd+,",
+                "label": "Open Settings"
+              }
+            ],
+            "notes": [
+              "Some language and font changes require a restart; the page tells you when."
+            ],
             "figures": [
-              {"slug": "settings-audio", "alt": "Audio settings", "caption": "Audio: device, sample rate, buffer, and channels.", "ratio": "8 / 7"},
-              {"slug": "settings-transport", "alt": "Transport settings", "caption": "Transport: playback, metronome, and time behaviour.", "ratio": "8 / 7"},
-              {"slug": "settings-recording", "alt": "Recording settings", "caption": "Recording: take mode, monitoring, and capture options.", "ratio": "8 / 7"},
-              {"slug": "settings-context", "alt": "Context Panel settings", "caption": "Context Panel: tool visibility and behaviour.", "ratio": "8 / 7"},
-              {"slug": "settings-browser", "alt": "Browser settings", "caption": "Browser: preview, position, and import behaviour.", "ratio": "8 / 7"},
-              {"slug": "settings-ai", "alt": "AI settings", "caption": "AI: managed models and custom connections.", "ratio": "8 / 7"},
-              {"slug": "settings-account", "alt": "Account settings", "caption": "Account: Demo entitlement, AI quota, and sign-out.", "ratio": "8 / 7"},
-              {"slug": "settings-language", "alt": "Language settings", "caption": "Language: built-in and imported locales.", "ratio": "8 / 7"},
-              {"slug": "settings-recovery", "alt": "Recovery settings", "caption": "Recovery: journal frequency and retention.", "ratio": "8 / 7"},
-              {"slug": "settings-themes", "alt": "Themes settings", "caption": "Themes: ready-made light and dark palettes.", "ratio": "8 / 7"},
-              {"slug": "settings-theme-editor", "alt": "Theme Editor", "caption": "Theme Editor: individual colours and custom font.", "ratio": "8 / 7"},
-              {"slug": "settings-shortcuts", "alt": "Keyboard shortcut editor", "caption": "Keyboard Shortcuts: search, rebind, and reset.", "ratio": "8 / 7"}
+              {
+                "slug": "settings-audio",
+                "alt": "Audio settings",
+                "caption": "Audio: device, sample rate, buffer, and channels.",
+                "ratio": "8 / 7"
+              },
+              {
+                "slug": "settings-transport",
+                "alt": "Transport settings",
+                "caption": "Transport: playback, metronome, and time behaviour.",
+                "ratio": "8 / 7"
+              },
+              {
+                "slug": "settings-recording",
+                "alt": "Recording settings",
+                "caption": "Recording: take mode, monitoring, and capture options.",
+                "ratio": "8 / 7"
+              },
+              {
+                "slug": "settings-context",
+                "alt": "Context Panel settings",
+                "caption": "Context Panel: tool visibility and behaviour.",
+                "ratio": "8 / 7"
+              },
+              {
+                "slug": "settings-browser",
+                "alt": "Browser settings",
+                "caption": "Browser: preview, position, and import behaviour.",
+                "ratio": "8 / 7"
+              },
+              {
+                "slug": "settings-ai",
+                "alt": "AI settings",
+                "caption": "AI: managed models and custom connections.",
+                "ratio": "8 / 7"
+              },
+              {
+                "slug": "settings-account",
+                "alt": "Account settings",
+                "caption": "Account: Demo entitlement, AI quota, and sign-out.",
+                "ratio": "8 / 7"
+              },
+              {
+                "slug": "settings-language",
+                "alt": "Language settings",
+                "caption": "Language: built-in and imported locales.",
+                "ratio": "8 / 7"
+              },
+              {
+                "slug": "settings-recovery",
+                "alt": "Recovery settings",
+                "caption": "Recovery: journal frequency and retention.",
+                "ratio": "8 / 7"
+              },
+              {
+                "slug": "settings-themes",
+                "alt": "Themes settings",
+                "caption": "Themes: ready-made light and dark palettes.",
+                "ratio": "8 / 7"
+              },
+              {
+                "slug": "settings-theme-editor",
+                "alt": "Theme Editor",
+                "caption": "Theme Editor: individual colours and custom font.",
+                "ratio": "8 / 7"
+              },
+              {
+                "slug": "settings-shortcuts",
+                "alt": "Keyboard shortcut editor",
+                "caption": "Keyboard Shortcuts: search, rebind, and reset.",
+                "ratio": "8 / 7"
+              }
             ]
           },
           {
             "id": "troubleshooting",
             "title": "Quick diagnostics",
             "intro": "Start with the narrowest subsystem: device, track, route, plugin, or file.",
-            "steps": ["No sound: check Audio device, master output, meters, mute/solo, and routing.", "Clicks: raise buffer, stop background work, and verify sample rate.", "Plugin fails: inspect format, path, and Blacklist.", "Input does not record: check OS permission, input, arm, and monitoring.", "Missing file: find the source before saving over the only project copy.", "Still blocked: save under a new name and send a bug report with exact steps."],
+            "steps": [
+              "No sound: check Audio device, master output, meters, mute/solo, and routing.",
+              "Clicks: raise buffer, stop background work, and verify sample rate.",
+              "Plugin fails: inspect format, path, and Blacklist.",
+              "Input does not record: check OS permission, input, arm, and monitoring.",
+              "Missing file: find the source before saving over the only project copy.",
+              "Still blocked: save under a new name and send a bug report with exact steps."
+            ],
             "result": "The issue is isolated while the project and source data remain safe.",
-            "notes": ["Do not delete recovery, Blacklist, or the project folder before making a copy."],
-            "problems": [{"problem": "A window opened outside the screen.", "fix": "Restart with the primary display connected; internal windows are clamped to the available screen."}]
+            "notes": [
+              "Do not delete recovery, Blacklist, or the project folder before making a copy."
+            ],
+            "problems": [
+              {
+                "problem": "A window opened outside the screen.",
+                "fix": "Restart with the primary display connected; internal windows are clamped to the available screen."
+              }
+            ]
+          },
+          {
+            "id": "saved-sign-in",
+            "title": "Saved sign-in and offline access",
+            "intro": "Ordinary application restarts restore the saved session without asking for your account password again.",
+            "steps": [
+              "Sign in with an internet connection and allow the system credential vault to save the session.",
+              "On the next launch, wait for automatic session restoration.",
+              "If the vault is locked or macOS requires permission after replacing a build, click Restore saved sign-in and approve the system prompt.",
+              "After a temporary network failure, reconnect and retry the check; signing out is not required.",
+              "When the offline allowance expires, reconnect for an online access check."
+            ],
+            "result": "The saved session is restored if it remains valid on the server.",
+            "notes": [
+              "The 72-hour offline allowance is not a password expiration. An online check is required after it ends.",
+              "Explicit sign-out, session revocation or account suspension can require a new sign-in. Do not remove the saved session merely because of a temporary network failure."
+            ]
           }
         ]
       }

@@ -1,6 +1,9 @@
 #pragma once
 
 #include "Common/Types.hpp"
+#include "RealtimeMetrics.hpp"
+#include "AudioWorkerConfig.hpp"
+#include <mutex>
 
 #include <atomic>
 #include <cstdint>
@@ -109,6 +112,24 @@ public:
     JobSystem& operator=(const JobSystem&) = delete;
 
     unsigned workerCount() const noexcept { return m_workerCount; }
+    // Control thread with rendering stopped. Waits for helpers to re-register
+    // on their own threads before the audio device is allowed to start.
+    void configureAudioWorkers(const rt::AudioWorkerConfig& config);
+    unsigned realtimeWorkerCount() const noexcept { return m_realtimeWorkers.load(); }
+    unsigned workgroupWorkerCount() const noexcept { return m_workgroupWorkers.load(); }
+    void setProfiling(bool enabled) noexcept { m_profiling.store(enabled, std::memory_order_relaxed); }
+    bool profiling() const noexcept { return m_profiling.load(std::memory_order_relaxed); }
+    void recordProfile(unsigned worker, const rt::ProfileEvent& event) noexcept {
+        m_profiles[worker].push(event);
+    }
+    bool popProfile(unsigned worker, rt::ProfileEvent& event) noexcept {
+        return worker < m_workerCount && m_profiles[worker].pop(event);
+    }
+    std::uint64_t droppedProfileEvents() const noexcept {
+        std::uint64_t dropped = 0;
+        for (unsigned i = 0; i < m_workerCount; ++i) dropped += m_profiles[i].dropped();
+        return dropped;
+    }
 
     /// Size the per-worker deques. Control thread only, and **only while no
     /// pass can be running** — growing reallocates the slot array the workers
@@ -184,6 +205,12 @@ private:
     std::size_t m_itemCapacity = 0;
     std::vector<Worker> m_workers;
     std::vector<std::thread> m_threads;
+    std::unique_ptr<rt::DiagnosticRing<rt::ProfileEvent, 1024>[]> m_profiles;
+    std::atomic<bool> m_profiling{false};
+    std::mutex m_configurationMutex;
+    rt::AudioWorkerConfig m_configuration;
+    std::atomic<std::uint64_t> m_configurationEpoch{0};
+    std::atomic<unsigned> m_configurationApplied{0}, m_realtimeWorkers{0}, m_workgroupWorkers{0};
 
     JobSink m_sink;
     // Both counters are monotonic across passes. Resetting them per block used

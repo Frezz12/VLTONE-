@@ -343,7 +343,7 @@
         "loopStart": { "type": "number", "minimum": 0, "maximum": 1 },
         "loopEnd": { "type": "number", "minimum": 0, "maximum": 1 },
         "stretchMode": { "type": "integer", "minimum": 0, "maximum": 4 },
-        "stretchTime": { "type": "number", "minimum": 0.01, "maximum": 100 },
+        "stretchTime": { "type": "number", "minimum": 0.001, "maximum": 1000 },
         "stretchPitch": { "type": "number", "minimum": -96, "maximum": 96 },
         "formant": { "type": "number", "minimum": -96, "maximum": 96 },
         "rootNote": { "type": "integer", "minimum": 0, "maximum": 127 },

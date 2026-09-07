@@ -49,21 +49,22 @@ type telemetryPlugin struct {
 }
 
 type telemetrySamplePayload struct {
-	ProcessCPU    float64           `json:"process_cpu"`
-	SystemCPU     float64           `json:"system_cpu"`
-	DSPLoad       float64           `json:"dsp_load"`
-	DSPPeak       float64           `json:"dsp_peak"`
-	Xruns         int64             `json:"xruns"`
-	ResidentBytes int64             `json:"resident_bytes"`
-	SampleRate    float64           `json:"sample_rate"`
-	BufferFrames  int               `json:"buffer_frames"`
-	TrackCount    int               `json:"track_count"`
-	ClipCount     int               `json:"clip_count"`
-	PluginCount   int               `json:"plugin_count"`
-	PlaybackState string            `json:"playback_state"`
-	Recording     bool              `json:"recording"`
-	Foreground    bool              `json:"foreground"`
-	Plugins       []telemetryPlugin `json:"plugins"`
+	Snapshot      *telemetrySnapshot `json:"snapshot,omitempty"`
+	ProcessCPU    float64            `json:"process_cpu"`
+	SystemCPU     float64            `json:"system_cpu"`
+	DSPLoad       float64            `json:"dsp_load"`
+	DSPPeak       float64            `json:"dsp_peak"`
+	Xruns         int64              `json:"xruns"`
+	ResidentBytes int64              `json:"resident_bytes"`
+	SampleRate    float64            `json:"sample_rate"`
+	BufferFrames  int                `json:"buffer_frames"`
+	TrackCount    int                `json:"track_count"`
+	ClipCount     int                `json:"clip_count"`
+	PluginCount   int                `json:"plugin_count"`
+	PlaybackState string             `json:"playback_state"`
+	Recording     bool               `json:"recording"`
+	Foreground    bool               `json:"foreground"`
+	Plugins       []telemetryPlugin  `json:"plugins"`
 }
 
 type sessionEndedPayload struct {
@@ -80,8 +81,22 @@ func (s *Server) telemetryBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, device := userFrom(r), deviceFrom(r)
+	now := time.Now().UTC()
+	for _, event := range input.Events {
+		if event.EventID == uuid.Nil || event.SessionID == uuid.Nil || event.OccurredAt.IsZero() ||
+			event.OccurredAt.Before(now.AddDate(-1, 0, 0)) || event.OccurredAt.After(now.Add(10*time.Minute)) {
+			writeError(w, r, http.StatusUnprocessableEntity, "telemetry_batch_invalid", "Event identifiers or time are invalid.", nil)
+			return
+		}
+		if event.Kind == "sample" {
+			if err := s.prepareTelemetryPartition(event.OccurredAt); err != nil {
+				writeError(w, r, http.StatusInternalServerError, "telemetry_storage_unavailable", "Telemetry storage is unavailable.", nil)
+				return
+			}
+		}
+	}
 	accepted := 0
-	err := s.DB.Transaction(func(tx *gorm.DB) error {
+	err := s.DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
 		for _, event := range input.Events {
 			if event.EventID == uuid.Nil || event.SessionID == uuid.Nil || event.OccurredAt.IsZero() {
 				return errors.New("event identifiers and time are required")
@@ -89,23 +104,25 @@ func (s *Server) telemetryBatch(w http.ResponseWriter, r *http.Request) {
 			if event.OccurredAt.Before(time.Now().UTC().AddDate(-1, 0, 0)) || event.OccurredAt.After(time.Now().UTC().Add(10*time.Minute)) {
 				return errors.New("event time is outside accepted range")
 			}
-			var exists int64
-			if err := tx.Model(&model.TelemetryEvent{}).Where("event_id = ?", event.EventID).Count(&exists).Error; err != nil {
-				return err
+			// Claim the globally unique event before any session/sample writes.
+			// A concurrent duplicate blocks here and then observes zero rows.
+			stored := model.TelemetryEvent{
+				ID: uuid.New(), EventID: event.EventID, SessionID: event.SessionID,
+				UserID: user.ID, DeviceID: device.ID, Kind: event.Kind,
+				OccurredAt: event.OccurredAt.UTC(), Payload: datatypes.JSON([]byte(`{}`)),
 			}
-			if exists != 0 {
+			claim := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "event_id"}}, DoNothing: true}).Create(&stored)
+			if claim.Error != nil {
+				return claim.Error
+			}
+			if claim.RowsAffected == 0 {
 				continue
 			}
 			payload, err := s.applyTelemetryEvent(tx, user, device, event)
 			if err != nil {
 				return err
 			}
-			stored := model.TelemetryEvent{
-				ID: uuid.New(), EventID: event.EventID, SessionID: event.SessionID,
-				UserID: user.ID, DeviceID: device.ID, Kind: event.Kind,
-				OccurredAt: event.OccurredAt.UTC(), Payload: payload,
-			}
-			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&stored).Error; err != nil {
+			if err := tx.Model(&stored).Update("payload", payload).Error; err != nil {
 				return err
 			}
 			accepted++
@@ -147,9 +164,6 @@ func (s *Server) applyTelemetryEvent(tx *gorm.DB, user model.User, device model.
 			return nil, err
 		}
 		plugins := datatypes.JSON(jsonBytes(value.Plugins))
-		if err := ensureTelemetryPartition(tx, event.OccurredAt); err != nil {
-			return nil, err
-		}
 		sample := model.TelemetrySample{
 			ID: uuid.New(), EventID: event.EventID, SessionID: event.SessionID,
 			UserID: user.ID, DeviceID: device.ID, RecordedAt: event.OccurredAt.UTC(),
@@ -186,6 +200,23 @@ func (s *Server) applyTelemetryEvent(tx *gorm.DB, user model.User, device model.
 	}
 }
 
+func (s *Server) prepareTelemetryPartition(recordedAt time.Time) error {
+	month := recordedAt.UTC().Format("2006-01")
+	s.telemetryPartitionMu.Lock()
+	defer s.telemetryPartitionMu.Unlock()
+	if s.telemetryPartitions[month] {
+		return nil
+	}
+	if err := s.DB.Transaction(func(tx *gorm.DB) error { return ensureTelemetryPartition(tx, recordedAt) }); err != nil {
+		return err
+	}
+	if s.telemetryPartitions == nil {
+		s.telemetryPartitions = make(map[string]bool)
+	}
+	s.telemetryPartitions[month] = true
+	return nil
+}
+
 func ensureTelemetryPartition(tx *gorm.DB, recordedAt time.Time) error {
 	start := time.Date(recordedAt.UTC().Year(), recordedAt.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
@@ -211,7 +242,7 @@ func validateSample(value *telemetrySamplePayload) error {
 	if value.ProcessCPU < 0 || value.ProcessCPU > 10000 || value.SystemCPU < 0 || value.SystemCPU > 100 ||
 		value.DSPLoad < 0 || value.DSPLoad > 10000 || value.DSPPeak < 0 || value.DSPPeak > 10000 ||
 		value.Xruns < 0 || value.ResidentBytes < 0 || value.TrackCount < 0 || value.ClipCount < 0 ||
-		value.PluginCount < 0 || len(value.Plugins) > 500 {
+		value.PluginCount < 0 || value.SampleRate < 0 || value.SampleRate > 768000 || value.BufferFrames < 0 || value.BufferFrames > 1048576 || len(value.Plugins) > 500 {
 		return errors.New("telemetry values are outside accepted ranges")
 	}
 	if value.PlaybackState != "stopped" && value.PlaybackState != "playing" && value.PlaybackState != "paused" {
@@ -229,7 +260,7 @@ func validateSample(value *telemetrySamplePayload) error {
 			return errors.New("plugin count is invalid")
 		}
 	}
-	return nil
+	return validateSnapshot(value.Snapshot)
 }
 
 type crashMetadataInput struct {
@@ -250,10 +281,11 @@ type crashMetadataInput struct {
 func (s *Server) createCrashReport(w http.ResponseWriter, r *http.Request) {
 	const maxUpload = int64(50 << 20)
 	r.Body = http.MaxBytesReader(w, r.Body, maxUpload+(2<<20))
-	if err := r.ParseMultipartForm(maxUpload + (2 << 20)); err != nil {
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
 		writeError(w, r, http.StatusBadRequest, "crash_bundle_invalid", "Crash bundle is too large or invalid.", nil)
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	var input crashMetadataInput
 	if err := strictUnmarshal([]byte(r.FormValue("metadata")), &input); err != nil || input.ReportID == uuid.Nil || input.OccurredAt.IsZero() {
 		writeError(w, r, http.StatusUnprocessableEntity, "crash_metadata_invalid", "Crash metadata is invalid.", nil)
@@ -303,24 +335,27 @@ func (s *Server) createCrashReport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer file.Close()
-		body, err := io.ReadAll(io.LimitReader(file, maxUpload+1))
-		if err != nil || int64(len(body)) > maxUpload {
-			writeError(w, r, http.StatusUnprocessableEntity, "crash_bundle_too_large", "Crash artifact must be no larger than 50 MB.", nil)
-			return
-		}
-		directory := filepath.Join(s.Config.StorageRoot, "crashes", report.ID.String())
+		directory := filepath.Join(s.Config.StorageRoot, "crashes")
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			writeError(w, r, http.StatusInternalServerError, "storage_unavailable", "Crash storage is unavailable.", nil)
 			return
 		}
-		report.ArtifactPath = filepath.Join(directory, "bundle"+crashArtifactSuffix(files[0].Filename, body))
-		if err := os.WriteFile(report.ArtifactPath, body, 0o600); err != nil {
-			writeError(w, r, http.StatusInternalServerError, "storage_unavailable", "Crash artifact could not be stored.", nil)
+		// Each upload owns its directory, including concurrent retries of one ID.
+		directory, err = os.MkdirTemp(directory, report.ID.String()+"-")
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "storage_unavailable", "Crash storage is unavailable.", nil)
 			return
 		}
-		digest := sha256.Sum256(body)
-		report.SHA256 = hex.EncodeToString(digest[:])
-		report.ArtifactBytes = int64(len(body))
+		report.ArtifactPath, report.SHA256, report.ArtifactBytes, err = storeCrashArtifact(file, files[0].Filename, directory, maxUpload)
+		if err != nil {
+			os.RemoveAll(directory)
+			if errors.Is(err, errCrashArtifactTooLarge) {
+				writeError(w, r, http.StatusUnprocessableEntity, "crash_bundle_too_large", "Crash artifact must be no larger than 50 MB.", nil)
+			} else {
+				writeError(w, r, http.StatusInternalServerError, "storage_unavailable", "Crash artifact could not be stored.", nil)
+			}
+			return
+		}
 	}
 	if err := s.DB.Create(&report).Error; err != nil {
 		if report.ArtifactPath != "" {
@@ -331,6 +366,89 @@ func (s *Server) createCrashReport(w http.ResponseWriter, r *http.Request) {
 	}
 	go s.sendCrashNotification(report)
 	writeJSON(w, http.StatusCreated, map[string]any{"id": report.ID, "created_at": report.CreatedAt})
+}
+
+var errCrashArtifactTooLarge = errors.New("crash artifact too large")
+
+// Inspection is bounded independently of the upload size. Large JSON files
+// retain their exact bytes and use the conservative binary download suffix.
+// UTF-8 logs can be classified incrementally even across copy-buffer boundaries.
+type artifactInspection struct {
+	prefix    []byte
+	tail      []byte
+	validUTF8 bool
+}
+
+func (p *artifactInspection) Write(data []byte) (int, error) {
+	n := len(data)
+	if remaining := (1 << 20) - len(p.prefix); remaining > 0 {
+		p.prefix = append(p.prefix, data[:min(remaining, len(data))]...)
+	}
+	if p.validUTF8 {
+		if len(p.tail) > 0 {
+			data = append(p.tail, data...)
+			p.tail = nil
+		}
+		end := len(data)
+		// At most one incomplete UTF-8 rune can straddle the chunk boundary.
+		for end > 0 && len(data)-end < utf8.UTFMax && !utf8.RuneStart(data[end-1]) {
+			end--
+		}
+		if end > 0 {
+			end--
+		}
+		if !utf8.Valid(data[:end]) {
+			p.validUTF8 = false
+		}
+		rest := data[end:]
+		for len(rest) > 0 && utf8.FullRune(rest) {
+			r, size := utf8.DecodeRune(rest)
+			if r == utf8.RuneError && size == 1 {
+				p.validUTF8 = false
+				break
+			}
+			rest = rest[size:]
+		}
+		p.tail = append([]byte(nil), rest...)
+	}
+	return n, nil
+}
+func storeCrashArtifact(source io.Reader, filename, directory string, limit int64) (path, digest string, size int64, err error) {
+	destination, err := os.CreateTemp(directory, "bundle-*.part")
+	if err != nil {
+		return "", "", 0, err
+	}
+	temporary := destination.Name()
+	defer func() {
+		destination.Close()
+		if err != nil {
+			os.Remove(temporary)
+		}
+	}()
+	hasher := sha256.New()
+	inspection := artifactInspection{validUTF8: true}
+	size, err = io.Copy(io.MultiWriter(destination, hasher, &inspection), io.LimitReader(source, limit+1))
+	if err != nil {
+		return "", "", size, err
+	}
+	if size > limit {
+		return "", "", size, errCrashArtifactTooLarge
+	}
+	if err = destination.Close(); err != nil {
+		return "", "", size, err
+	}
+	suffix := ".bin"
+	if strings.EqualFold(filepath.Ext(filename), ".log") && inspection.validUTF8 && len(inspection.tail) == 0 {
+		suffix = ".log"
+	}
+	if size == int64(len(inspection.prefix)) {
+		suffix = crashArtifactSuffix(filename, inspection.prefix)
+	}
+	path = filepath.Join(directory, "bundle"+suffix)
+	if err = os.Rename(temporary, path); err != nil {
+		return "", "", size, err
+	}
+	return path, hex.EncodeToString(hasher.Sum(nil)), size, nil
 }
 
 func crashArtifactSuffix(filename string, body []byte) string {

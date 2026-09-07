@@ -597,7 +597,7 @@ QWidget* AiChatPanel::buildEmptyState() {
     column->addWidget(headline);
 
     auto* blurb = new QLabel(
-        tr("Use a model provided with VLT Studio, or add your own compatible "
+        tr("Use a model provided with VLTONE, or add your own compatible "
            "endpoint in AI Settings."),
         page);
     blurb->setObjectName("AiHint");
@@ -1390,16 +1390,16 @@ void AiChatPanel::step() {
     m_streaming.clear();
     m_client->setPartialSink([this](const QString& text) {
         m_streaming += text;
-        if (m_streamingLabel) {
-            m_streamingLabel->setText(m_streaming);
-            QTimer::singleShot(0, m_transcript, [this] {
-                if (m_transcript)
-                    m_transcript->verticalScrollBar()->setValue(
-                        m_transcript->verticalScrollBar()->maximum());
-            });
-        } else {
-            renderTranscript();
-        }
+        if (m_streamFlushPending) return;
+        m_streamFlushPending = true;
+        QTimer::singleShot(16, this, [this] {
+            m_streamFlushPending = false;
+            if (m_streamingLabel) {
+                m_streamingLabel->setText(m_streaming);
+                if (m_transcript) m_transcript->verticalScrollBar()->setValue(
+                    m_transcript->verticalScrollBar()->maximum());
+            } else if (!m_streaming.isEmpty()) renderTranscript();
+        });
     });
     // `wireMessages`, not `messages`: the transcript keeps the whole
     // conversation, the request carries only the recent turns.
@@ -1748,10 +1748,6 @@ void AiChatPanel::renderTranscript() {
     if (!m_transcript || !m_transcriptLayout) return;
 
     m_streamingLabel = nullptr;
-    while (QLayoutItem* item = m_transcriptLayout->takeAt(0)) {
-        delete item->widget();
-        delete item;
-    }
 
     // Which user turns can still be taken back, so the link is only offered
     // where it would actually work.
@@ -1760,7 +1756,42 @@ void AiChatPanel::renderTranscript() {
         revertable.insert(qulonglong(point.messageIndex));
 
     const std::vector<ai::Message>& messages = m_session->messages();
-    for (std::size_t at = 0; at < messages.size(); ++at) {
+    std::vector<std::size_t> hashes;
+    hashes.reserve(messages.size());
+    for (size_t i = 0; i < messages.size(); ++i) {
+        const auto& message = messages[i];
+        size_t hash = std::hash<std::string>{}(message.text);
+        const auto mix = [&](size_t value) { hash ^= value + size_t(0x9e3779b9) + (hash << 6) + (hash >> 2); };
+        mix(size_t(message.role)); mix(revertable.contains(qulonglong(i)));
+        for (const auto& outcome : message.outcomes) {
+            mix(std::hash<std::string>{}(outcome.callId));
+            mix(std::hash<std::string>{}(outcome.name)); mix(outcome.ok);
+            mix(std::hash<std::string>{}(outcome.result.dump()));
+        }
+        hashes.push_back(hash);
+    }
+    size_t prefix = 0;
+    while (prefix < hashes.size() && prefix < m_transcriptHashes.size() &&
+           hashes[prefix] == m_transcriptHashes[prefix]) ++prefix;
+    // The final tool capsule may absorb newly appended tool messages. Keep
+    // complete earlier cards, rebuild only that tail and transient live/error UI.
+    size_t start = 0;
+    int keep = 0;
+    while (keep < m_transcriptLayout->count()) {
+        auto* widget = m_transcriptLayout->itemAt(keep)->widget();
+        if (!widget || !widget->property("aiMessageEnd").isValid()) break;
+        const auto end = widget->property("aiMessageEnd").toULongLong();
+        if (end > prefix || end >= m_transcriptHashes.size()) break;
+        start = size_t(end); ++keep;
+        for (auto* button : widget->findChildren<QPushButton*>())
+            button->setEnabled(!m_session->running());
+    }
+    while (auto* item = m_transcriptLayout->takeAt(keep)) {
+        delete item->widget(); delete item;
+    }
+    m_transcriptHashes = std::move(hashes);
+    for (std::size_t at = start; at < messages.size(); ++at) {
+        const int beforeItems = m_transcriptLayout->count();
         const ai::Message& message = messages[at];
         switch (message.role) {
             case ai::Role::User: {
@@ -1772,9 +1803,10 @@ void AiChatPanel::renderTranscript() {
                     tr("YOU / %1").arg(mode), "AiUserRole");
                 card.second->addWidget(cardText(m_transcriptBody, 
                     QString::fromStdString(message.text), "AiMessageText"));
-                if (revertable.contains(qulonglong(at)) && !m_session->running()) {
+                if (revertable.contains(qulonglong(at))) {
                     auto* revert = new QPushButton(tr("REVERT REQUEST"), card.first);
                     revert->setObjectName("AiRevertButton");
+                    revert->setEnabled(!m_session->running());
                     revert->setCursor(Qt::PointingHandCursor);
                     revert->setToolTip(tr("Restore the project to before this request"));
                     connect(revert, &QAbstractButton::clicked, this,
@@ -1941,6 +1973,9 @@ void AiChatPanel::renderTranscript() {
                 break;
             }
         }
+        for (int item = beforeItems; item < m_transcriptLayout->count(); ++item)
+            if (auto* row = m_transcriptLayout->itemAt(item)->widget())
+                row->setProperty("aiMessageEnd", qulonglong(at + 1));
     }
 
     if (!m_session->lastError().empty()) {

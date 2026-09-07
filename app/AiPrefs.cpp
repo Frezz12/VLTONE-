@@ -1,4 +1,5 @@
 #include "AiPrefs.hpp"
+#include <QDir>
 #include "SecureStorage.hpp"
 
 #include <QJsonArray>
@@ -146,7 +147,8 @@ bool saveCustomModel(ModelConnection model, const QString& apiKey,
     const QString trimmedKey = apiKey.trimmed();
     if (!trimmedKey.isEmpty()) {
         if (!account::securestorage::writeNamed(secretSlot(model.id),
-                                                trimmedKey.toUtf8()))
+                                                trimmedKey.toUtf8(),
+                                                account::securestorage::Interaction::Allow))
             return false;
         model.hasApiKey = true;
     }
@@ -167,7 +169,8 @@ bool removeCustomModel(const QString& id) {
         removed = true;
     }
     if (!removed) return false;
-    if (!account::securestorage::clearNamed(secretSlot(id))) return false;
+    if (!account::securestorage::clearNamed(secretSlot(id),
+                                           account::securestorage::Interaction::Allow)) return false;
     writeModels("customModels", stored);
     if (activeModelId() == id) {
         const QList<ModelConnection> available = availableModels();
@@ -276,7 +279,10 @@ QString musicFolder() {
                              ? QStandardPaths::writableLocation(
                                    QStandardPaths::AppLocalDataLocation)
                              : music;
-    return base + QStringLiteral("/VLT Studio Pro Generated");
+    // Existing generated audio remains discoverable after the product rename.
+    const QString legacy = base + QStringLiteral("/VLT Studio Pro Generated");
+    if (QDir(legacy).exists()) return legacy;
+    return base + QStringLiteral("/VLTONE Generated");
 }
 
 void setMusicFolder(const QString& folder) {

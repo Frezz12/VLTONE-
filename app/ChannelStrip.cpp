@@ -1,4 +1,6 @@
 #include "ChannelStrip.hpp"
+#include "AudioImportPreparation.hpp"
+#include <QPointer>
 #include "ChannelStripPresets.hpp"
 #include "PluginPickerMenu.hpp"
 #include "Controls.hpp"
@@ -956,6 +958,8 @@ QWidget* ChannelStrip::buildSlotWell(const QString& title, QWidget* addButton,
 
 void ChannelStrip::dropSampleOnInstrument(const QString& trackId,
                                           const QString& path) {
+    const QPointer<ChannelStrip> guard(this);
+    if (!ui::prepareAudioImport(this, *m_controller, path) || !guard) return;
     if (!m_controller->loadInstrumentSampler(trackId.toStdString(),
                                              path.toStdString())) {
         return;
@@ -1577,6 +1581,7 @@ QWidget* ChannelStrip::buildSends() {
             // the row, so a column of sends reads down as "this much, to
             // there" rather than the other way round.
             auto* level = new ui::Knob({}, row);
+            m_sendKnobs.insert(sendId, level);
             level->setBare(kSendKnobSide);
             // Up to +6 dB, like a fader: unity is not enough to drive a quiet
             // source into a reverb without turning the bus up under everything
@@ -1607,6 +1612,7 @@ QWidget* ChannelStrip::buildSends() {
                 }
                 m_controller->setSendLevel(m_trackId.toStdString(),
                                            sendId.toStdString(), float(v));
+                emit edited(false);
             });
             connect(level, &ui::Knob::editFinished, this,
                     [this, sendId, levelStart] {
@@ -1948,6 +1954,17 @@ void ChannelStrip::setSelected(bool selected) {
     update();
 }
 
+bool ChannelStrip::hasActiveGesture() const {
+    const auto owns = [this](const QWidget* widget) {
+        return widget && (widget == this || isAncestorOf(widget));
+    };
+    if ((m_fader && m_fader->isEditing()) || (m_pan && m_pan->isEditing()) ||
+        m_insertBypassPaintPending || m_insertBypassPainting || m_browserDropActive ||
+        owns(QWidget::mouseGrabber()) || owns(QApplication::activePopupWidget())) return true;
+    for (const auto* knob : findChildren<ui::Knob*>()) if (knob->isEditing()) return true;
+    return false;
+}
+
 void ChannelStrip::syncFromModel() {
     // These controls report user edits through their value signals. A value
     // arriving from another view must not echo back into the controller (and
@@ -1964,14 +1981,14 @@ void ChannelStrip::syncFromModel() {
             ? std::optional<QSignalBlocker>{std::in_place, m_monoButton}
             : std::nullopt;
     if (m_master) {
-        m_fader->setGain(m_controller->masterVolume());
-        m_pan->setPan(m_controller->project().masterPan);
+        if (!m_fader->isEditing()) m_fader->setGain(m_controller->masterVolume());
+        if (!m_pan->isEditing()) m_pan->setPan(m_controller->project().masterPan);
         updateNamePlate(tr("MASTER"), 0x888888);
     } else if (const auto* t =
                    m_controller->project().findTrack(m_trackId.toStdString())) {
         updateNamePlate(QString::fromStdString(t->name).toUpper(), t->color);
-        m_fader->setGain(t->volume);
-        m_pan->setPan(t->pan);
+        if (!m_fader->isEditing()) m_fader->setGain(t->volume);
+        if (!m_pan->isEditing()) m_pan->setPan(t->pan);
         m_mute->setChecked(t->muted);
         m_solo->setChecked(t->soloed);
         if (m_monitor) m_monitor->setChecked(t->monitor);
@@ -1980,6 +1997,13 @@ void ChannelStrip::syncFromModel() {
             m_monoButton->setGlyph(t->mono ? icons::Glyph::MonoRing
                                            : icons::Glyph::StereoRings);
             m_monoButton->setToolTip(t->mono ? tr("Mono") : tr("Stereo"));
+        }
+        for (const auto& send : t->sends) {
+            if (auto* knob = m_sendKnobs.value(QString::fromStdString(send.id))) {
+                if (knob->isEditing()) continue;
+                const QSignalBlocker blockSend(knob);
+                knob->setValue(send.level);
+            }
         }
         if (m_inputButton) {
             m_inputButton->setFieldText(
@@ -2034,10 +2058,16 @@ void ChannelStrip::refreshAutomationValues() {
 }
 
 void ChannelStrip::updateReadouts() {
-    const QString gain = ui::formatGainDb(m_fader->gain());
-    const QString pan = panText(m_pan->pan());
-    if (m_gainLabel->text() != gain) m_gainLabel->setText(gain);
-    if (m_panLabel->text() != pan) m_panLabel->setText(pan);
+    if (m_displayedGain != m_fader->gain()) {
+        m_displayedGain = m_fader->gain();
+        const auto text = ui::formatGainDb(m_displayedGain);
+        if (m_gainLabel->text() != text) m_gainLabel->setText(text);
+    }
+    if (m_displayedPan != m_pan->pan()) {
+        m_displayedPan = m_pan->pan();
+        const auto text = panText(m_displayedPan);
+        if (m_panLabel->text() != text) m_panLabel->setText(text);
+    }
 }
 
 double ChannelStrip::faderGainForTest() const {

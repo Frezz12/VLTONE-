@@ -1,4 +1,5 @@
 #pragma once
+#include "UiFrameClock.hpp"
 
 #include "MidiPreviewIndex.hpp"
 #include "MidiTools.hpp"
@@ -63,7 +64,7 @@ class ToolDialog;
 /// every `ClipModel*`/`NoteModel*` would dangle. `clip()` re-resolves on each
 /// use and returns null once the clip is gone, which the paint and input paths
 /// all check.
-class PianoRollView : public QWidget {
+class PianoRollView : public ui::FrameWidget {
     Q_OBJECT
 public:
     /// What the left mouse button does on the grid.
@@ -501,7 +502,7 @@ private:
     QColor m_gridColor;              // invalid = follow the theme
     QSet<QString> m_ghostTracks;
     bool m_followPlayback = true;
-    int m_lastPlayheadPixel = -1;
+    double m_lastPlayheadX = -1.0;
     PitchMask m_lastSoundingPitches;
     PitchMask m_livePitches;
     mutable SoundingPitchIndex m_soundingPitchIndex;
@@ -777,6 +778,7 @@ private:
     void updateActionState();
     /// Rebuild the ghost-note list from the project's other MIDI tracks.
     void refreshGhostMenu();
+    void refreshPatternGhosts();
     /// Keep the tool palette and the Tools menu showing the same choice.
     void syncToolActions();
     /// Rebuild the bottom lane's picker from the clip's controller curves.
@@ -821,6 +823,11 @@ private:
     QMenu* m_toolsMenu = nullptr;
     QMenu* m_snapMenu = nullptr;
     QMenu* m_ghostMenu = nullptr;
+    QString m_ghostPatternId;
+    QSet<QString> m_patternGhostTracks;
+    QSet<QString> m_hiddenPatternGhosts;
+    QSet<QString> m_manualGhostTracks;
+    bool m_autoPatternGhosts = true;
     QMenu* m_noteStyleMenu = nullptr;
     QButtonGroup* m_toolButtons = nullptr;
     QComboBox* m_laneSelector = nullptr;

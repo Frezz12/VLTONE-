@@ -1,4 +1,5 @@
 #include "NoteContextPanel.hpp"
+#include "AdaptiveContextRow.hpp"
 
 #include "Controls.hpp"
 #include "Icons.hpp"
@@ -37,6 +38,8 @@ ui::IconButton* islandButton(icons::Glyph glyph, const QString& tip,
                              QWidget* parent) {
     auto* button = new ui::IconButton(glyph, tip, parent);
     button->setButtonSize(kButton, kButton);
+    ui::contextPriority(button, glyph == icons::Glyph::Power ? 100 :
+                               glyph == icons::Glyph::Plus || glyph == icons::Glyph::Trash ? 80 : 60);
     return button;
 }
 
@@ -45,6 +48,7 @@ QPushButton* islandSwatch(const QString& tip, QWidget* parent) {
     swatch->setFixedSize(18, kRowHeight);
     swatch->setCursor(Qt::PointingHandCursor);
     swatch->setToolTip(tip);
+    ui::contextPriority(swatch, 10);
     return swatch;
 }
 
@@ -211,6 +215,7 @@ QWidget* NoteContextPanel::buildNotes(bool multiple) {
     if (toolEnabled("note.level")) {
         auto* velocity = new ui::MiniSlider(icons::Glyph::Volume, tr("Velocity"),
                                             host);
+        ui::contextPriority(velocity, 110);
         velocity->setRange(1.0, 127.0);
         velocity->setStep(1.0);
         velocity->setDefaultValue(100.0);
@@ -238,6 +243,7 @@ QWidget* NoteContextPanel::buildNotes(bool multiple) {
         });
 
         auto* pan = new ui::MiniSlider(icons::Glyph::Pan, tr("Note pan"), host);
+        ui::contextPriority(pan, 90);
         pan->setRange(-1.0, 1.0);
         pan->setStep(0.01);
         pan->setDefaultValue(0.0);
@@ -262,6 +268,7 @@ QWidget* NoteContextPanel::buildNotes(bool multiple) {
     if (toolEnabled("note.timing")) {
         auto* length = new ui::MiniSlider(icons::Glyph::Clock, tr("Note length"),
                                           host);
+        ui::contextPriority(length, 90);
         length->setRange(1.0 / 32.0, 8.0);
         length->setStep(1.0 / 64.0);
         length->setDefaultValue(1.0);
@@ -327,6 +334,7 @@ QWidget* NoteContextPanel::buildNotes(bool multiple) {
         };
         for (const auto& [glyph, tool, tip] : tools) {
             auto* button = islandButton(glyph, tip, host);
+            ui::contextPriority(button, 30);
             connect(button, &QAbstractButton::clicked, this,
                     [this, tool] { emit toolRequested(tool); });
             row->addWidget(button);
@@ -434,8 +442,15 @@ void NoteContextPanel::setPanelEnabled(bool enabled) {
 
 void NoteContextPanel::relayout() {
     if (!m_content || !isVisible()) return;
+    if (m_transition) m_transition->stop();
+    if (m_outgoing) {
+        m_outgoing->deleteLater();
+        m_outgoing = nullptr;
+    }
+    setBackdropFrozen(false);
     setGeometry(targetGeometry());
     setCornerRadius(plateRect().height() / 2);
+    layoutSelf();
 }
 
 void NoteContextPanel::setAnchorProvider(std::function<bool(int&)> provider) {
@@ -474,27 +489,27 @@ QRect NoteContextPanel::targetGeometry() const {
         const QRect current = geometry();
         return QRect(current.center().x(), top, 1, current.height());
     }
-    const int width = std::min(m_content->sizeHint().width() +
-                                   2 * (kShadow + kEndPadding),
-                               host->width() - 24);
     const int height = kRowHeight + 2 * kPadding + kShadow;
 
     int limitLeft = 12;
     int limitRight = std::max(12, host->width() - 12);
     int boundsLeft = 0;
     int boundsRight = 0;
-    if (m_boundsProvider && m_boundsProvider(boundsLeft, boundsRight) &&
-        boundsRight - boundsLeft > 40) {
-        limitLeft = boundsLeft;
-        limitRight = boundsRight;
+    if (m_boundsProvider && m_boundsProvider(boundsLeft, boundsRight)) {
+        limitLeft = std::clamp(boundsLeft, 0, host->width());
+        limitRight = std::clamp(boundsRight, limitLeft, host->width());
     }
+    const int available = std::max(0, limitRight - limitLeft);
+    const int contentWidth = ui::fitContextRow(
+        m_content, std::max(0, available - 2 * (kShadow + kEndPadding)));
+    const int width = std::min(available, contentWidth + 2 * (kShadow + kEndPadding));
     const int rightmost = std::max(limitLeft, limitRight - width);
-    int left = std::clamp((host->width() - width) / 2, limitLeft, rightmost);
+    int left = limitLeft + (available - width) / 2;
     int anchorCentreX = 0;
     if (m_follow && m_anchorProvider && m_anchorProvider(anchorCentreX)) {
         left = std::clamp(anchorCentreX - width / 2, limitLeft, rightmost);
     }
-    return QRect(left, top, std::max(1, width), height);
+    return QRect(left, top, width, height);
 }
 
 void NoteContextPanel::layoutSelf() {

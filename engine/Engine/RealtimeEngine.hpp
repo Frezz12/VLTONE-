@@ -4,6 +4,7 @@
 #include "Graph/GraphProcessor.hpp"
 #include "Nodes/PlaybackNodes.hpp"
 #include "Transport/Transport.hpp"
+#include "RealtimeMetrics.hpp"
 
 #include <array>
 #include <atomic>
@@ -82,6 +83,13 @@ public:
     /// Compile and publish. The audio thread picks the new graph up on its next
     /// block; the old one stays alive until that block is finished.
     Status commitGraph(bool reconfigureNodes = false);
+    void preparePlayback(SamplePos position) {
+        // Invalidate queued look-ahead before warming the new position. Ready
+        // immutable pages remain reusable, including on a backward loop jump.
+        if (auto* cache = PcmReadCache::existing()) cache->invalidateRequests();
+        const auto snapshot = m_processor.graph();
+        if (snapshot) for (const auto& entry : snapshot->nodes) entry.node->preparePlayback(position);
+    }
 
     /// The graph currently driving audio — for diagnostics and tests.
     std::shared_ptr<const CompiledGraph> compiledGraph() const {
@@ -124,10 +132,23 @@ public:
 
     /// Fraction of the block budget the last render consumed (0…1+).
     float dspLoad() const noexcept { return m_dspLoad.load(std::memory_order_relaxed); }
+    rt::BlockMetrics& graphMetrics() noexcept { return m_graphMetrics; }
+    std::uint64_t gatedBlocks() const noexcept { return m_gatedBlocks.load(std::memory_order_relaxed); }
+    void setProfiling(bool enabled) noexcept { m_processor.setProfiling(enabled); }
+    bool popProfile(unsigned worker, rt::ProfileEvent& event) noexcept {
+        return m_processor.popProfile(worker, event);
+    }
+    std::uint64_t droppedProfileEvents() const noexcept { return m_processor.droppedProfileEvents(); }
 
     /// Compensation latency the published graph introduces.
     FrameCount latencySamples() const { return m_processor.latencySamples(); }
     unsigned workerCount() const noexcept { return m_processor.workerCount(); }
+    void configureAudioWorkers(const rt::AudioWorkerConfig& config) {
+        const RenderGate gate(*this);
+        m_processor.configureAudioWorkers(config);
+    }
+    unsigned realtimeWorkerCount() const noexcept { return m_processor.realtimeWorkerCount(); }
+    unsigned workgroupWorkerCount() const noexcept { return m_processor.workgroupWorkerCount(); }
 
     /// Called on the audio thread after every block; used for recording taps.
     void setBlockObserver(std::function<void(const AudioBlock&, FrameCount)> observer) {
@@ -172,6 +193,8 @@ private:
     /// for filter/value reset once, rather than on every subsequent block.
     bool m_masterSpectrumActive = false;
     std::atomic<float> m_dspLoad{0.0f};
+    rt::BlockMetrics m_graphMetrics;
+    std::atomic<std::uint64_t> m_gatedBlocks{0};
 
     // RenderGate handshake. Both sides are seq_cst on purpose: the control
     // thread stores `gateRequested` then loads `rendering`, the audio thread

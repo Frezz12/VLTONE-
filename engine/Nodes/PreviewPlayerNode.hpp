@@ -46,6 +46,7 @@ public:
     /// still be reading the old buffer, and the shared_ptr keeps it alive until
     /// it is not.
     void start(std::shared_ptr<const SampleBuffer> audio) {
+        if (audio) audio->prepareRead();
         m_audio.publish(std::move(audio));
         m_command.store(int(Command::Play), std::memory_order_release);
     }
@@ -74,7 +75,9 @@ public:
 
     /// Jump to a source frame. −1 means "nothing posted", which is why the
     /// queue slot is signed.
-    void seekFrames(std::int64_t frame) noexcept {
+    void seekFrames(std::int64_t frame) {
+        const auto audio = m_audio.controlCopy();
+        if (audio) audio->prepareRead(FrameCount(std::clamp<std::int64_t>(frame, 0, audio->frames())));
         m_seek.store(std::max<std::int64_t>(0, frame), std::memory_order_release);
     }
 
@@ -141,6 +144,7 @@ public:
             m_playing.store(false, std::memory_order_relaxed);
             return;
         }
+        if (!context.offline && loop()) audio->hintRead();
         m_sourceRate.store(audio->sampleRate(), std::memory_order_relaxed);
         m_sourceFrames.store(audio->frames(), std::memory_order_relaxed);
 
@@ -186,12 +190,16 @@ public:
             }
 
             for (ChannelCount ch = 0; ch < channels; ++ch) {
-                const float* source = audio->channel(ch);
+
                 float* destination = context.output.data(ch) + written;
                 if (step == 1.0) {
                     const auto base = std::int64_t(m_readPosition);
-                    dsp::addScaled({destination, count},
-                                   {source + base, count}, gain);
+                    for (FrameCount done = 0; done < count;) {
+                        const auto part = audio->readSpan(ch, FrameCount(base + done), count - done);
+                        if (part.empty()) break;
+                        dsp::addScaled({destination + done, part.size()}, part, gain);
+                        done += FrameCount(part.size());
+                    }
                     continue;
                 }
                 double position = m_readPosition;
@@ -199,8 +207,8 @@ public:
                     const auto index = std::int64_t(position);
                     if (index + 1 >= sourceFrames) break;
                     const float fraction = float(position - double(index));
-                    const float a = source[index];
-                    const float b = source[index + 1];
+                    const float a = audio->readSample(ch, FrameCount(index));
+                    const float b = audio->readSample(ch, FrameCount(index + 1));
                     destination[i] += (a + (b - a) * fraction) * gain;
                 }
             }

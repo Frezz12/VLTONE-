@@ -4,10 +4,12 @@
 #include <QObject>
 #include <QDateTime>
 #include <QString>
+#include <memory>
 
 class QNetworkAccessManager;
 class QNetworkReply;
 class QTimer;
+class QLockFile;
 
 namespace account {
 
@@ -29,6 +31,7 @@ class Service final : public QObject {
     Q_OBJECT
 public:
     explicit Service(QObject* parent = nullptr);
+    ~Service() override;
 
     static Service* instance();
     const Snapshot& snapshot() const { return m_snapshot; }
@@ -39,6 +42,8 @@ public:
     QString installationId() const;
 
     void beginRestore();
+    /// User-triggered recovery may ask the OS to unlock the existing vault.
+    void restoreSavedSession();
     void login(const QString& email, const QString& password);
     void logout();
     void installHeadlessTestSession();
@@ -59,29 +64,34 @@ signals:
     void logoutFinished();
 
 private:
+    bool lockCredentials(bool retry);
     void handleSessionReply(QNetworkReply* reply, bool refresh);
-    void acceptSession(const QJsonObject& response);
+    void acceptSession(const QJsonObject& response, bool explicitSignIn);
     bool acceptOffline(const QJsonObject& credentials, QString* reason);
-    void persistCredentials(const QJsonObject& response);
+    bool persistCredentials(const QJsonObject& response, bool explicitSignIn);
     void applyQuota(const QJsonObject& quota);
     void finishLogout();
     void setBusy(bool busy);
     QNetworkReply* postJson(const QString& path, const QJsonObject& body,
-                            const QString& bearer = {});
+                            const QString& bearer = {}, const QString& requestID = {});
 
     static Service* s_instance;
     QNetworkAccessManager* m_network = nullptr;
     QTimer* m_refreshTimer = nullptr;
+    QTimer* m_restoreRetryTimer = nullptr;
     QString m_apiOrigin;
     QString m_accessToken;
     QString m_refreshToken;
     QString m_reporterToken;
     QString m_offlineEntitlement;
     QString m_publicKey;
+    QJsonObject m_pendingSession;
+    std::unique_ptr<QLockFile> m_credentialLock;
     qint64 m_lastServerTime = 0;
     Snapshot m_snapshot;
     bool m_authenticated = false;
     bool m_busy = false;
+    bool m_allowVaultAccess = false;
 };
 
 } // namespace account

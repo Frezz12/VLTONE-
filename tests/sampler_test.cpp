@@ -364,6 +364,32 @@ int main() {
               "zero tension is a straight line");
     }
 
+    {
+        sampler::Envelope envelope;
+        sampler::EnvSettings settings;
+        settings.attack = 2.0;
+        envelope.noteOn();
+        constexpr double dt = 1.0 / 48000.0;
+        double elapsed = 0.0, error = 0.0;
+        for (int i = 0; i < 48000; ++i) {
+            settings.attackTension = i < 16000 ? .8 : i < 32000 ? -.5 : 0.0;
+            elapsed += dt;
+            error = std::max(error, std::abs(envelope.advance(dt, settings) -
+                sampler::applyTension(elapsed / settings.attack, settings.attackTension)));
+        }
+        check(error < 1e-12, "cached envelope tension follows live segment parameter changes");
+        const double releaseFrom = envelope.value();
+        envelope.noteOff(); settings.release = .5; settings.releaseTension = -.7;
+        elapsed = 0.0; error = 0.0;
+        for (int i = 0; i < 23999; ++i) {
+            elapsed += dt;
+            const double expected = releaseFrom * (1.0 - sampler::applyTension(
+                elapsed / settings.release, settings.releaseTension));
+            error = std::max(error, std::abs(envelope.advance(dt, settings) - expected));
+        }
+        check(error < 1e-12, "cached release segment preserves the reference curve");
+    }
+
     // ── Pan, and the pan modulation target ──
     {
         auto instance = makeSampler();
@@ -583,6 +609,28 @@ int main() {
         const Output up = render(*shifted, kSampleFrames * 2, {noteOn(60, 1.0)});
         check(soundingFrames(up.left) > kSampleFrames - 200,
               "and a pitch shift in that mode does not shorten it");
+    }
+
+    // Mode automation must select the same prepared DSP in live playback and
+    // offline export, without waiting for a UI pump between audio blocks.
+    {
+        auto automated = makeSampler();
+        automated->prepareStretchModeAutomation();
+        set(*automated, Param::StretchTime, 1.5);
+        for (int mode = 1; mode <= 4; ++mode) {
+            automated->reset();
+            PluginEvent change;
+            change.kind = PluginEvent::Kind::ParamValue;
+            change.paramIndex = std::uint32_t(Param::StretchMode);
+            change.value = mode;
+            const auto actual = render(*automated, 7200, {change, noteOn(60, 1.0)});
+            auto reference = makeSampler();
+            set(*reference, Param::StretchMode, mode);
+            set(*reference, Param::StretchTime, 1.5);
+            const auto expected = render(*reference, 7200, {noteOn(60, 1.0)});
+            check(actual.left == expected.left && actual.right == expected.right,
+                  "automated stretch mode matches the control-selected mode without a main-thread pump");
+        }
     }
 
     // The formant control tilts the spectral envelope in the two modes that

@@ -11,6 +11,7 @@
 #include "Nodes/MetronomeNode.hpp"
 #include "Nodes/PlaybackNodes.hpp"
 #include "Nodes/PreviewPlayerNode.hpp"
+#include "DSP/Window.hpp"
 #include "Transport/Transport.hpp"
 
 #include <algorithm>
@@ -19,6 +20,8 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <limits>
+#include <numbers>
 #include <thread>
 #include <vector>
 
@@ -204,6 +207,43 @@ struct OutputBuffer {
 } // namespace
 
 int main() {
+    {
+        bool rampMatches = true;
+        for (std::size_t count : {0, 1, 2, 3, 4, 5, 17, 255}) {
+            std::vector<float> wet(count, .7f), dry(count, -.3f);
+            dsp::wetDryRamp(wet, dry, .83f, .17f);
+            for (std::size_t i = 0; i < count; ++i) {
+                const float t = count > 1 ? float(i) / float(count - 1) : 1.0f;
+                const float mix = .83f + (.17f - .83f) * t;
+                rampMatches &= std::abs(wet[i] - (.7f * mix - .3f * (1.0f - mix))) < 1e-6f;
+            }
+        }
+        check(rampMatches, "wet/dry kernel preserves inclusive endpoints and short blocks");
+        std::array<float, 17> input{};
+        input[2] = -0.0f;
+        check(dsp::isSilent(input), "exact silence accepts both signs of zero");
+        bool detectsInput = true;
+        for (float value : {std::numeric_limits<float>::denorm_min(),
+                            std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::infinity(), -1.0f}) {
+            for (std::size_t i = 0; i < input.size(); ++i) {
+                input.fill(0.0f); input[i] = value;
+                detectsInput &= !dsp::isSilent(input);
+            }
+        }
+        check(detectsInput, "exact silence wakes on denormals, NaN and SIMD tail input");
+        double error = 0.0, complementError = 0.0;
+        for (int i = 0; i <= 100000; ++i) {
+            const double phase = double(i) / 100000.0;
+            error = std::max(error, std::abs(dsp::hannWindow(phase) -
+                (0.5 - 0.5 * std::cos(2.0 * std::numbers::pi * phase))));
+            if (phase < .5) complementError = std::max(complementError,
+                std::abs(dsp::hannWindow(phase) + dsp::hannWindow(phase + .5) - 1.0));
+        }
+        check(error < 1.5e-7 && complementError < 1e-12,
+              "Hann table preserves window shape and unity overlap");
+    }
+
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // unbuffered: a hang still shows progress
     constexpr FrameCount kBlock = 256;
     PrepareInfo info;

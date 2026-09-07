@@ -193,8 +193,67 @@ func (s *Server) adminUserTelemetry(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, "telemetry_unavailable", "Telemetry is unavailable.", nil)
 		return
 	}
-	s.DB.Where("user_id = ?", id).Order("recorded_at DESC").Limit(pageLimit(r) * 5).Find(&samples)
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions, "samples": samples})
+	query := s.DB.WithContext(r.Context()).Omit("plugins").Where("user_id = ?", id)
+	if cursor := r.URL.Query().Get("before"); cursor != "" {
+		parts := strings.Split(cursor, "|")
+		if len(parts) != 2 {
+			writeError(w, r, 400, "invalid_cursor", "Invalid telemetry cursor.", nil)
+			return
+		}
+		at, timeErr := time.Parse(time.RFC3339Nano, parts[0])
+		sampleID, idErr := uuid.Parse(parts[1])
+		if timeErr != nil || idErr != nil {
+			writeError(w, r, 400, "invalid_cursor", "Invalid telemetry cursor.", nil)
+			return
+		}
+		query = query.Where("(recorded_at, id) < (?, ?)", at, sampleID)
+	}
+	limit := pageLimit(r)
+	if err := query.Order("recorded_at DESC, id DESC").Limit(limit + 1).Find(&samples).Error; err != nil {
+		writeError(w, r, 500, "telemetry_unavailable", "Telemetry is unavailable.", nil)
+		return
+	}
+	var next string
+	if len(samples) > limit {
+		samples = samples[:limit]
+		last := samples[len(samples)-1]
+		next = last.RecordedAt.UTC().Format(time.RFC3339Nano) + "|" + last.ID.String()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions, "samples": samples, "next_cursor": next})
+}
+
+// The event already stores the sanitized full payload. Fetch it only on demand,
+// rather than duplicating it into samples or sending entire projects on polling.
+func (s *Server) adminUserTelemetryDetail(w http.ResponseWriter, r *http.Request) {
+	userID, ok := parseUUIDParam(w, r, "userID")
+	if !ok {
+		return
+	}
+	eventID, ok := parseUUIDParam(w, r, "eventID")
+	if !ok {
+		return
+	}
+	var event model.TelemetryEvent
+	if err := s.DB.WithContext(r.Context()).Where("event_id = ? AND user_id = ? AND kind = ?", eventID, userID, "sample").First(&event).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeError(w, r, 404, "sample_not_found", "Telemetry sample not found.", nil)
+		} else {
+			writeError(w, r, 500, "telemetry_unavailable", "Telemetry is unavailable.", nil)
+		}
+		return
+	}
+	var payload telemetrySamplePayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		writeError(w, r, 500, "telemetry_unavailable", "Telemetry is unavailable.", nil)
+		return
+	}
+	var session model.TelemetrySession
+	err := s.DB.WithContext(r.Context()).Where("id = ? AND user_id = ? AND device_id = ?", event.SessionID, userID, event.DeviceID).First(&session).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		writeError(w, r, 500, "telemetry_unavailable", "Telemetry is unavailable.", nil)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"payload": payload, "session": session, "recorded_at": event.OccurredAt, "event_id": event.EventID, "device_id": event.DeviceID})
 }
 
 func (s *Server) adminUserLedger(w http.ResponseWriter, r *http.Request) {

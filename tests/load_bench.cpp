@@ -2,16 +2,15 @@
 // a session the size of a real one.
 //
 //   load_bench [--tracks N] [--plugins M] [--seconds S] [--blocks 32,64,128,…]
-//              [--name <substring>]
+//              [--name <substring>] [--rate 48000] [--profile events.csv]
 //
 // Not a ctest target: it needs the plugins that exist on the machine it runs
 // on, and a pass/fail threshold for "fast enough" would be a threshold for
 // *this* laptop. It prints the numbers and leaves the judgement to the reader.
 //
 // It opens the real audio device and plays, so what it measures is the live
-// path — the same callback, the same graph, the same DSP meter the transport
-// bar shows — rather than an offline render that is allowed to take as long as
-// it likes.
+// path. It drains individual callback/graph timing events on this control
+// thread; quantiles never come from the smoothed transport meter.
 #include "EngineController.hpp"
 #include "Core/AudioBuffer.hpp"
 #include "Recording/RecordingEngine.hpp"
@@ -22,6 +21,8 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include "Memory/PcmReadCache.hpp"
 #include <string>
 #include <thread>
 #include <vector>
@@ -47,9 +48,11 @@ void writeTone(const std::string& path, double rate, std::uint32_t frames) {
 
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
-    int trackCount = 16;
+    int trackCount = 64;
     int pluginsPerTrack = 2;
     double seconds = 4.0;
+    double rate = 48000.0;
+    std::string profilePath;
     std::string wanted;
     std::vector<std::uint32_t> blockSizes = {32, 64, 128, 256, 512};
     for (int i = 1; i < argc; ++i) {
@@ -59,6 +62,10 @@ int main(int argc, char** argv) {
             pluginsPerTrack = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--seconds") && i + 1 < argc)
             seconds = std::atof(argv[++i]);
+        else if (!std::strcmp(argv[i], "--rate") && i + 1 < argc)
+            rate = std::atof(argv[++i]);
+        else if (!std::strcmp(argv[i], "--profile") && i + 1 < argc)
+            profilePath = argv[++i];
         else if (!std::strcmp(argv[i], "--name") && i + 1 < argc)
             wanted = argv[++i];
         else if (!std::strcmp(argv[i], "--blocks") && i + 1 < argc) {
@@ -70,7 +77,19 @@ int main(int argc, char** argv) {
         }
     }
 
-    const double rate = 48000.0;
+    if (trackCount < 1 || trackCount > 10000 || pluginsPerTrack < 0 || pluginsPerTrack > 1000 || seconds <= 0 || seconds > 86400 || !std::isfinite(seconds) ||
+        !std::isfinite(rate) || rate < 8000 || rate > 384000 || (seconds + 2.0) * rate > double(UINT32_MAX) || blockSizes.empty() ||
+        std::any_of(blockSizes.begin(), blockSizes.end(), [](auto n) { return n == 0 || n > 8192; })) {
+        std::fprintf(stderr, "invalid load profile\n"); return 2;
+    }
+    std::ofstream profile, nodeMap;
+    if (!profilePath.empty()) {
+        profile.open(profilePath);
+        nodeMap.open(profilePath + ".nodes.csv");
+        if (!profile || !nodeMap) { std::fprintf(stderr, "cannot write profile\n"); return 2; }
+        profile << "block,generation,position,worker,kind,node,nanoseconds\n";
+        nodeMap << "generation,node,name\n";
+    }
     daw::EngineController controller;
     if (auto result = controller.initialize(rate, 512, /*openDevice=*/true); !result) {
         std::fprintf(stderr, "initialize failed: %s\n", result.message().c_str());
@@ -95,7 +114,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const fs::path tone = fs::temp_directory_path() / "daw-load-bench-tone.wav";
+    const fs::path tone = fs::temp_directory_path() / ("daw-load-bench-" + daw::newUuid() + ".wav");
     writeTone(tone.string(), rate, std::uint32_t(rate * (seconds + 2.0)));
 
     std::printf("── building a session: %d tracks × %d plugins ──\n", trackCount,
@@ -124,44 +143,102 @@ int main(int argc, char** argv) {
         std::printf("%s\n", effects.size() > 4 ? ", …" : "");
     }
 
-    std::printf("\n%-8s %9s %9s %9s %9s\n", "block", "period", "mean", "peak", "verdict");
+    // Exercise the real device without summing a thousand test tones into the speakers.
+    controller.setMasterVolume(0.0f);
+    std::printf("rate=%.0f tracks=%d plugins=%d duration=%.1fs workers=%u\n", rate, trackCount, loaded, seconds, controller.audioWorkerCount());
+    std::printf("block,path,blocks,mean_ms,p95_ms,p99_ms,p99_9_ms,max_ms,over_budget\n");
+    bool failed = false;
     for (std::uint32_t block : blockSizes) {
         if (auto r = controller.setBufferSizeFrames(block); !r) {
             std::printf("%-8u  refused by the device: %s\n", block, r.message().c_str());
+            failed = true;
             continue;
         }
         const std::uint32_t actual = controller.bufferSizeFrames();
         controller.seekSeconds(0.0);
+        auto drainDiscard = [](daw::rt::BlockMetrics& metrics) {
+            daw::rt::BlockTiming event;
+            while (metrics.pop(event)) {}
+        };
+        drainDiscard(controller.callbackMetrics()); drainDiscard(controller.graphMetrics());
+        const auto callbackBefore = controller.callbackMetrics().counters();
+        const auto graphBefore = controller.graphMetrics().counters();
+        const auto xrunsBefore = controller.audioXruns();
+        const auto gatesBefore = controller.gatedAudioBlocks();
+        auto* cache = daw::engine::PcmReadCache::existing();
+        const auto cacheBefore = cache ? cache->counters() : daw::engine::PcmReadCache::Counters{};
+        const auto profileBefore = controller.droppedAudioProfileEvents();
+        controller.setAudioProfiling(profile.is_open());
         controller.play();
-
-        // The meter is an exponential average, so it needs a moment to catch
-        // up before the first reading means anything.
-        std::this_thread::sleep_for(std::chrono::milliseconds(400));
-        double sum = 0.0, peak = 0.0;
-        int samples = 0;
-        const auto until = std::chrono::steady_clock::now() +
-                           std::chrono::milliseconds(int(seconds * 1000));
+        daw::rt::TimingAccumulator callback, graph;
+        std::uint64_t mappedGeneration = 0;
+        auto drain = [&] {
+            if (profile.is_open()) {
+                const auto compiled = controller.routingGraph();
+                if (compiled && compiled->generation != mappedGeneration) {
+                    mappedGeneration = compiled->generation;
+                    for (const auto& node : compiled->nodes) {
+                        nodeMap << mappedGeneration << ',' << node.id << ",\"";
+                        for (char c : node.node->name()) {
+                            if (c == '\"') nodeMap << '\"';
+                            nodeMap << c;
+                        }
+                        nodeMap << "\"\n";
+                    }
+                }
+            }
+            callback.drain(controller.callbackMetrics()); graph.drain(controller.graphMetrics());
+            if (profile.is_open()) for (unsigned worker = 0; worker < controller.audioWorkerCount(); ++worker) {
+                daw::rt::ProfileEvent event;
+                for (unsigned n = 0; n < 8192 && controller.popAudioProfile(worker, event); ++n)
+                    profile << actual << ',' << event.generation << ',' << event.position << ','
+                        << event.worker << ',' << (event.kind == daw::rt::ProfileEvent::Kind::Node ? "node" : "wait")
+                        << ',' << event.node << ',' << event.elapsedNs << '\n';
+            }
+        };
+        const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
         while (std::chrono::steady_clock::now() < until) {
-            const double load = controller.dspLoad();
-            sum += load;
-            peak = std::max(peak, load);
-            ++samples;
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            drain();
+            controller.pumpPluginEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
+        drain();
+        const auto callbackAfter = controller.callbackMetrics().counters();
+        const auto graphAfter = controller.graphMetrics().counters();
+        const auto xrunsAfter = controller.audioXruns();
+        const auto gated = controller.gatedAudioBlocks() - gatesBefore;
+        const auto cacheAfter = cache ? cache->counters() : daw::engine::PcmReadCache::Counters{};
+        controller.setAudioProfiling(false);
         controller.stop();
-
-        const double mean = samples ? sum / samples : 0.0;
-        const double periodMs = 1000.0 * double(actual) / rate;
-        std::printf("%-8u %8.2fms %8.0f%% %8.0f%%   %s\n", actual, periodMs,
-                    mean * 100.0, peak * 100.0,
-                    peak < 0.7 ? "ok" : peak < 1.0 ? "TIGHT" : "OVERRUN");
+        const auto print = [&](const char* path, const daw::rt::TimingSummary& stats, std::uint64_t overruns) {
+            std::printf("%u,%s,%zu,%.4f,%.4f,%.4f,%.4f,%.4f,%llu\n", actual, path,
+                stats.count, stats.meanMs, stats.p95Ms, stats.p99Ms, stats.p999Ms, stats.maximumMs,
+                (unsigned long long)overruns);
+        };
+        const auto stats = callback.summary();
+        print("callback", stats, callbackAfter.overruns - callbackBefore.overruns);
+        print("graph", graph.summary(), graphAfter.overruns - graphBefore.overruns);
+        std::uint64_t xruns = 0;
+        for (std::size_t i = 0; i < 4; ++i) xruns += xrunsAfter[i] - xrunsBefore[i];
+        const auto dropped = callbackAfter.dropped - callbackBefore.dropped + graphAfter.dropped - graphBefore.dropped;
+        const auto misses = cacheAfter.misses - cacheBefore.misses;
+        const bool valid = !dropped && stats.count > 0 && loaded == trackCount * pluginsPerTrack;
+        const bool stable = valid && !xruns && !gated && !misses &&
+            callbackAfter.overruns == callbackBefore.overruns && stats.p999Load < .8;
+        failed |= !stable;
+        std::printf("diagnostics block=%u xruns_in_under=%llu in_over=%llu out_under=%llu out_over=%llu gates=%llu pcm_misses=%llu pcm_dropped=%llu pcm_locked_bytes=%zu telemetry_dropped=%llu profile_dropped=%llu rt_workers=%u workgroup_workers=%u verdict=%s\n",
+            actual, (unsigned long long)(xrunsAfter[0]-xrunsBefore[0]), (unsigned long long)(xrunsAfter[1]-xrunsBefore[1]),
+            (unsigned long long)(xrunsAfter[2]-xrunsBefore[2]), (unsigned long long)(xrunsAfter[3]-xrunsBefore[3]),
+            (unsigned long long)gated, (unsigned long long)misses,
+            (unsigned long long)(cacheAfter.droppedRequests-cacheBefore.droppedRequests), cacheAfter.lockedBytes, (unsigned long long)dropped,
+            (unsigned long long)(controller.droppedAudioProfileEvents()-profileBefore),
+            controller.realtimeAudioWorkerCount(), controller.workgroupAudioWorkerCount(),
+            !valid ? "INCOMPLETE" : stable ? (seconds >= 600 ? "PASS_10MIN" : "SHORT_PASS") : "UNSTABLE");
     }
-    std::printf("\n\"period\" is how long one block lasts in real time, and the two\n"
-                "percentages are how much of it the graph used. Past 100%% the device\n"
-                "callback misses its deadline, which is a click.\n");
+    std::printf("Acceptance: >=600 seconds, zero device xruns/gated blocks/PCM misses, callback p99.9 <80%% of its own block budget. Missing telemetry invalidates the result. Profiling adds overhead.\n");
 
     controller.shutdown();
     std::error_code ec;
     fs::remove(tone, ec);
-    return 0;
+    return failed ? 1 : 0;
 }

@@ -48,7 +48,7 @@ public:
     /// Re-read level, pan and the flags of every row from the document, without
     /// rebuilding a single widget. What a change made somewhere else — the
     /// mixer, the context panel — travels back through.
-    void syncTrackValues();
+    void syncTrackValues(const QStringList& trackIds = {});
     /// Mirror track volume/pan automation at the playhead without echoing the
     /// displayed values back into the document.
     void refreshAutomationValues();
@@ -116,6 +116,7 @@ signals:
     /// Something about the tracks changed (name, flags, order, folders) — the
     /// rest of the UI needs to re-read the document.
     void tracksChanged(bool localFileDirty = true);
+    void trackValuesChanged(const QStringList& ids, bool localFileDirty, bool appearance);
     /// Order/parenting changed; views that cache lane order must rebuild.
     void orderChanged();
     /// A plugin dropped onto a row loaded successfully and wants its editor.
@@ -182,9 +183,16 @@ private:
         ui::MsrButton* record = nullptr;
         ui::MsrButton* pattern = nullptr;
         QWidget* nameEdit = nullptr;
+        int kind = -1;
+        int top = 0;
+        int height = 0;
+        std::string displayedName;
+        double displayedGain = -1.0;
+        double displayedPan = -2.0;
     };
 
     QWidget* buildRow(const daw::TrackModel& track, int number, int depth);
+    void syncVisibleRows();
     void applyHighlight();
     void applyTheme();
     void showTrackContextMenu(const QString& id, const QPoint& globalPos);
@@ -285,6 +293,7 @@ private:
     QWidget* m_viewport = nullptr;    // clips the rows; fixed height
     QWidget* m_rowsHost = nullptr;    // holds every row; moved to scroll
     int m_scrollY = 0;
+    double m_wheelScrollRemainder = 0.0;
     QVBoxLayout* m_rowsLayout = nullptr;
     /// Over the column, where the "TRACKS" caption used to be: clear-all-mutes
     /// and clear-all-solos, lit while there is anything to clear.

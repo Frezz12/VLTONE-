@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS token_reservations_unsettled_created_at_idx;
+DROP INDEX IF EXISTS token_ledgers_kind_created_at_idx;

@@ -1,4 +1,5 @@
 #pragma once
+#include "UiFrameClock.hpp"
 
 #include <QHash>
 #include <QString>
@@ -39,7 +40,7 @@ class SamplerKeyboard;
 /// It reads the *processed* sample — the one the precomputed effects were baked
 /// into — because that is what plays, and a reverse or a reverb that the
 /// display did not follow would make the markers point at the wrong place.
-class SamplerWaveform : public QWidget {
+class SamplerWaveform : public ui::FrameWidget {
     Q_OBJECT
 public:
     explicit SamplerWaveform(QWidget* parent = nullptr);
@@ -74,6 +75,7 @@ private:
     double fractionForX(int x) const;
 
     std::shared_ptr<const daw::plugins::sampler::SampleData> m_sample;
+    quint64 m_peakGeneration = 0;
     const void* m_peaksFor = nullptr;   ///< the buffer the peaks were built from
     /// The envelope at a fixed resolution rather than one entry per pixel.
     /// Scanning the whole sample is O(its length), and tying that to the
@@ -114,6 +116,7 @@ public:
     SamplerPanel(daw::EngineController* controller, Context context,
                  QString ownerId, QString objectId, QWidget* parent = nullptr);
     ~SamplerPanel() override;
+    static bool checkLayoutForTest();
 
     /// How wide the arrangement's grid is, in seconds, or 0 when snapping is
     /// off. Asked every time it is needed rather than stored, so changing the snap

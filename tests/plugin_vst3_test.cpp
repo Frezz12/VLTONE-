@@ -9,6 +9,8 @@
 // reports 64 samples of latency, deliberately the same arithmetic as the CLAP
 // fixture so both formats can be held to identical numbers.
 #include "Host/PluginNode.hpp"
+#include "EngineController.hpp"
+#include "ProjectSerializer.hpp"
 #include "Graph/AudioGraph.hpp"
 #include "Nodes/BasicNodes.hpp"
 #include "Graph/GraphProcessor.hpp"
@@ -63,6 +65,7 @@ int main() {
 
     Vst3Factory factory;
     PluginDescriptor descriptor;
+    std::vector<std::uint8_t> tunedState;
 
     // ── The class id round-trips ──
     //
@@ -332,6 +335,7 @@ int main() {
         std::vector<std::uint8_t> saved;
         check(instance->saveState(saved) && !saved.empty(),
               "the plugin saves its state");
+        tunedState = saved;
 
         auto fresh = factory.create(descriptor);
         check(fresh != nullptr, "a second instance is created");
@@ -349,6 +353,70 @@ int main() {
 
         instance->stopProcessing();
         instance->deactivate();
+    }
+
+    // A preset may update opaque state without individual editor callbacks.
+    // The document still has its old fallback values in that case. Loading
+    // the chunk must survive the first real graph block, not just look correct
+    // in the controller before queued startup events reach the processor.
+    {
+        const auto directory = std::filesystem::temp_directory_path() /
+                               "daw_vst3_project_state_test";
+        std::error_code error;
+        std::filesystem::remove_all(directory, error);
+        const auto package = (directory / "Preset.vlt").string();
+        EngineController source;
+        check(source.initialize(48000, kBlock, false).isOk(),
+              "the preset project initializes without an audio device");
+        const auto track = source.addTrack(TrackKind::Audio, "Preset");
+        const auto slot = source.addInsert(track, descriptor);
+        check(source.saveProject(package).isOk(),
+              "the initial save records the default parameter fallback");
+        auto* instance = source.insertInstance(track, slot);
+        check(instance && instance->loadState(tunedState),
+              "a preset changes plugin state without per-parameter notifications");
+        check(source.saveProject(package).isOk(), "the tuned preset project saves");
+        ProjectModel savedDocument;
+        check(ProjectSerializer::load(savedDocument, package).isOk() &&
+                  savedDocument.tracks.front().inserts.front().parameters.front().value == 1.0,
+              "the regression project contains a stale default beside its tuned chunk");
+
+        const auto processAndReadGain = [&](EngineController& controller) {
+            engine::GraphProcessor processor(2);
+            processor.setGraph(controller.routingGraph());
+            OutputBuffer output(2, kBlock);
+            processor.process(output.block(), kBlock, 0, true);
+            processor.process(output.block(), kBlock, kBlock, true);
+            auto* live = controller.insertInstance(track, slot);
+            std::vector<std::uint8_t> state;
+            auto verifier = factory.create(descriptor);
+            if (!live || !live->saveState(state) || !verifier ||
+                !verifier->loadState(state)) return -1.0;
+            return verifier->parameterValue(0);
+        };
+        for (int pass = 0; pass < 2; ++pass) {
+            EngineController reopened;
+            reopened.initialize(48000, kBlock, false);
+            check(reopened.openProject(package).isOk(), "the preset project reopens");
+            check(std::fabs(processAndReadGain(reopened) - 0.5) < 1e-9,
+                  "the tuned processor state survives queued startup events and processing");
+            check(std::fabs(reopened.project().tracks.front().inserts.front()
+                                .parameters.front().value - 0.5) < 1e-9,
+                  "the document fallback matches the loaded preset for later saves and renders");
+            check(reopened.saveProject(package).isOk(), "the restored preset saves again");
+        }
+
+        // If no chunk is available, the inline fallback must still reach DSP.
+        savedDocument.tracks.front().inserts.front().stateFile = "missing.bin";
+        savedDocument.tracks.front().inserts.front().parameters.front().value = 0.75;
+        check(ProjectSerializer::save(savedDocument, package).isOk(),
+              "a project with a missing plugin state file is prepared");
+        EngineController fallback;
+        fallback.initialize(48000, kBlock, false);
+        check(fallback.openProject(package).isOk() &&
+                  std::fabs(processAndReadGain(fallback) - 0.75) < 1e-9,
+              "a missing chunk still restores the inline parameter fallback");
+        std::filesystem::remove_all(directory, error);
     }
 
     // ── Preset-wide controller changes ──

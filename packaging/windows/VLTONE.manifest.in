@@ -2,10 +2,10 @@
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <assemblyIdentity
       type="win32"
-      name="VLTStudio.VLTStudioPro"
+      name="VLTONE.VLTONE"
       version="@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@.@PROJECT_VERSION_PATCH@.0"
       processorArchitecture="amd64" />
-  <description>VLT Studio Pro digital audio workstation</description>
+  <description>VLTONE digital audio workstation</description>
 
   <dependency>
     <dependentAssembly>

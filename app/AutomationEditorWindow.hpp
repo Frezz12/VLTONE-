@@ -1,14 +1,17 @@
 #pragma once
+#include "UiFrameClock.hpp"
 
 #include "AutomationTools.hpp"
 #include "CollaborationTypes.hpp"
 #include "model/Document.hpp"
 
 #include <QString>
+#include <QPixmap>
 #include <QWidget>
 
 #include <vector>
 
+class QPainter;
 class QComboBox;
 class QLabel;
 class QToolButton;
@@ -28,9 +31,11 @@ namespace daw { class EngineController; }
 /// It owns no data. Every edit goes to `EngineController::setAutomationPoints`
 /// while the gesture runs and to `commitAutomationEdit` when it is let go, so
 /// the whole drag is one undo entry and the engine hears it live.
-class AutomationCurveView : public QWidget {
+class AutomationCurveView : public ui::FrameWidget {
     Q_OBJECT
 public:
+    using ui::FrameWidget::update;
+    void update() { m_staticValid = false; ui::FrameWidget::update(); }
     enum class Tool { Select, Draw };
 
     explicit AutomationCurveView(daw::EngineController* controller,
@@ -93,6 +98,12 @@ protected:
     void contextMenuEvent(QContextMenuEvent*) override;
 
 private:
+    void paintStatic(QPainter& painter);
+    QRegion overlayRegion() const;
+    QFont m_staticFont;
+    QPixmap m_staticFrame;
+    bool m_staticValid = false;
+    std::uint64_t m_staticRevision = 0;
     const daw::ClipModel* clip() const;
     /// The clip's curve — the preview while one is running.
     const daw::autotools::Points& curve() const;

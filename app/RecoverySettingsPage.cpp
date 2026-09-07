@@ -32,7 +32,7 @@ RecoverySettingsPage::RecoverySettingsPage(QWidget* parent) : QWidget(parent) {
 
     auto* what = new QLabel(
         tr("Every couple of seconds the project is written to a separate "
-           "recovery file. If VLT Studio Pro closes unexpectedly, the next launch offers "
+           "recovery file. If VLTONE closes unexpectedly, the next launch offers "
            "that work back."),
         this);
     what->setWordWrap(true);
@@ -63,7 +63,7 @@ RecoverySettingsPage::RecoverySettingsPage(QWidget* parent) : QWidget(parent) {
     column->addWidget(ui::sectionLabel(tr("WATCHDOG"), this));
 
     m_watchdog = new QCheckBox(
-        tr("Run a watchdog process alongside VLT Studio Pro"), this);
+        tr("Run a watchdog process alongside VLTONE"), this);
     m_watchdog->setChecked(ui::recoveryprefs::watchdog());
     m_watchdog->setEnabled(ui::recoveryprefs::enabled());
     connect(m_watchdog, &QCheckBox::toggled, this, [this](bool on) {
@@ -74,8 +74,8 @@ RecoverySettingsPage::RecoverySettingsPage(QWidget* parent) : QWidget(parent) {
     column->addWidget(m_watchdog);
 
     auto* watchdogNote = new QLabel(
-        tr("A small separate program that notices if VLT Studio Pro freezes — "
-           "something VLT Studio Pro itself cannot detect — and keeps a log of "
+        tr("A small separate program that notices if VLTONE freezes — "
+           "something VLTONE itself cannot detect — and keeps a log of "
            "how it was running. "
            "It cannot save anything on its own; that is what the copy above "
            "is for. Turning it off loses only the log and freeze detection."),
@@ -105,16 +105,16 @@ RecoverySettingsPage::RecoverySettingsPage(QWidget* parent) : QWidget(parent) {
 void RecoverySettingsPage::refreshStatus() {
     if (!ui::recoveryprefs::enabled()) {
         m_status->setText(
-            tr("Recovery is off. Unsaved work will be lost if VLT Studio Pro closes "
+            tr("Recovery is off. Unsaved work will be lost if VLTONE closes "
                "unexpectedly. Takes effect on the next launch."));
         return;
     }
     if (ui::recoveryprefs::watchdog() && ui::recovery::guardPath().isEmpty()) {
         m_status->setText(
-            tr("The watchdog program was not found next to VLT Studio Pro, so freezes "
+            tr("The watchdog program was not found next to VLTONE, so freezes "
                "will go unnoticed. Your work is still being copied."));
         return;
     }
     m_status->setText(
-        tr("Changes take effect the next time VLT Studio Pro starts."));
+        tr("Changes take effect the next time VLTONE starts."));
 }

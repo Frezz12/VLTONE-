@@ -219,7 +219,7 @@ LocalizationManager::ParsedPack LocalizationManager::parsePack(
     const QJsonObject root = document.object();
     if (root.value(QStringLiteral("format")).toString() !=
         QLatin1String(kPackFormat)) {
-        parsed.result.error = tr("This is not a VLT Studio Pro language pack.");
+        parsed.result.error = tr("This is not a VLTONE language pack.");
         return parsed;
     }
     if (root.value(QStringLiteral("schemaVersion")).toInt(-1) != kSchemaVersion) {

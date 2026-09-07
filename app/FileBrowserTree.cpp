@@ -5,10 +5,15 @@
 #include "ProjectTemplates.hpp"
 
 #include <algorithm>
+#include <utility>
 #include "Icons.hpp"
 #include "Theme.hpp"
 
 #include <QApplication>
+#include <QPersistentModelIndex>
+#include <QPointer>
+#include <QThreadPool>
+#include <QTimer>
 #include <QDir>
 #include <QDrag>
 #include <QFileIconProvider>
@@ -95,13 +100,17 @@ FileBrowserTree::FileBrowserTree(QWidget* parent) : QTreeWidget(parent) {
     m_watcher = new QFileSystemWatcher(this);
     connect(m_watcher, &QFileSystemWatcher::directoryChanged, this,
             [this](const QString& path) {
-                // Find the open node for that folder and re-read just it.
-                QTreeWidgetItemIterator it(this);
-                for (; *it; ++it) {
-                    if ((*it)->data(0, kPathRole).toString() != path) continue;
-                    if ((*it)->isExpanded()) reloadNode(*it);
-                    return;
-                }
+                m_changedDirectories.insert(path);
+                if (m_watchRefreshPending) return;
+                m_watchRefreshPending = true;
+                QTimer::singleShot(80, this, [this] {
+                    m_watchRefreshPending = false;
+                    const auto paths = std::exchange(m_changedDirectories, {});
+                    QTreeWidgetItemIterator it(this);
+                    for (; *it; ++it)
+                        if ((*it)->isExpanded() && paths.contains((*it)->data(0, kPathRole).toString()))
+                            reloadNode(*it);
+                });
             });
 
     connect(this, &QTreeWidget::itemExpanded, this, &FileBrowserTree::expandNode);
@@ -222,6 +231,8 @@ void FileBrowserTree::rebuildRoots() {
     const QStringList open = m_showingResults ? m_parkedExpanded : expandedPaths();
     const QString selected = selectedPath();
 
+    m_restoreExpanded = QSet<QString>(open.begin(), open.end());
+    m_restoreSelected = selected;
     m_showingResults = false;
     for (const QString& path : m_watched) m_watcher->removePath(path);
     m_watched.clear();
@@ -267,13 +278,13 @@ void FileBrowserTree::rebuildRoots() {
     }
 }
 
-QTreeWidgetItem* FileBrowserTree::makeItem(const QString& path, bool isDirectory) {
+QTreeWidgetItem* FileBrowserTree::makeItem(const QString& path, bool isDirectory, int cachedKind) {
     const QFileInfo info(path);
     auto* item = new QTreeWidgetItem;
     item->setText(0, info.fileName());
     item->setData(0, kPathRole, info.absoluteFilePath());
 
-    const Kind kind = kindOf(info);
+    const Kind kind = cachedKind >= 0 ? Kind(cachedKind) : kindOf(info);
     item->setData(0, kKindRole, int(kind));
     item->setIcon(0, icons::icon(glyphFor(kind),
                                  draggable(kind) || kind == Kind::Folder
@@ -348,19 +359,71 @@ void FileBrowserTree::contextMenuEvent(QContextMenuEvent* event) {
     else if (chosen == create) emit projectTemplateActivated(path);
 }
 
+struct FileBrowserTree::DirectoryResult {
+    QPersistentModelIndex parent;
+    quint64 serial = 0;
+    QVector<QPair<QString, int>> entries;
+    int offset = 0;
+    QSet<QString> expanded;
+    QString selected;
+    bool readable = true;
+};
+
 void FileBrowserTree::populate(QTreeWidgetItem* parent, const QString& path) {
-    QDir dir(path);
-    const QFileInfoList entries =
-        dir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot,
-                          QDir::DirsFirst | QDir::Name | QDir::IgnoreCase);
-    if (entries.isEmpty() && !dir.isReadable()) {
-        emit statusMessage(tr("Cannot read %1").arg(path));
-        return;
+    constexpr int generationRole = Qt::UserRole + 8;
+    auto result = std::make_shared<DirectoryResult>();
+    result->parent = indexFromItem(parent);
+    result->serial = ++m_loadSerial;
+    result->expanded = m_restoreExpanded;
+    result->selected = selectedPath();
+    parent->setData(0, generationRole, result->serial);
+    const QPointer<FileBrowserTree> guard(this);
+    QThreadPool::globalInstance()->start([guard, result, path] {
+        QDir dir(path);
+        const auto entries = dir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot,
+                                               QDir::DirsFirst | QDir::Name | QDir::IgnoreCase);
+        result->readable = dir.isReadable();
+        result->entries.reserve(entries.size());
+        for (const auto& entry : entries) {
+            if (entry.isSymLink() && !entry.exists()) continue;
+            result->entries.push_back({entry.absoluteFilePath(), int(kindOf(entry))});
+        }
+        QMetaObject::invokeMethod(qApp, [guard, result] {
+            if (guard) guard->applyDirectoryChunk(result);
+        }, Qt::QueuedConnection);
+    });
+}
+
+void FileBrowserTree::applyDirectoryChunk(const std::shared_ptr<DirectoryResult>& result) {
+    constexpr int generationRole = Qt::UserRole + 8;
+    if (m_showingResults || !result->parent.isValid()) return;
+    auto* parent = itemFromIndex(result->parent);
+    if (!parent || parent->data(0, generationRole).toULongLong() != result->serial) return;
+    if (result->offset == 0) {
+        // Remove stale children in bounded turns too. Keep the parent stable so
+        // all outstanding persistent indexes invalidate safely when discarded.
+        int removed = 0;
+        while (parent->childCount() && removed++ < 128) delete parent->takeChild(0);
+        if (parent->childCount()) {
+            QTimer::singleShot(1, this, [this, result] { applyDirectoryChunk(result); });
+            return;
+        }
+        if (!result->readable) emit statusMessage(tr("Cannot read %1").arg(parent->data(0, kPathRole).toString()));
     }
-    for (const QFileInfo& entry : entries) {
-        if (entry.isSymLink() && !entry.exists()) continue;   // a broken alias
-        parent->addChild(makeItem(entry.absoluteFilePath(), entry.isDir()));
+    const int end = std::min(result->offset + 128, int(result->entries.size()));
+    for (; result->offset < end; ++result->offset) {
+        const auto& [path, kind] = result->entries[result->offset];
+        auto* child = makeItem(path, Kind(kind) == Kind::Folder, kind);
+        parent->addChild(child);
+        if (result->expanded.contains(path) || m_restoreExpanded.contains(path))
+            child->setExpanded(true);
+        if (path == result->selected || path == m_restoreSelected) {
+            setCurrentItem(child);
+            m_restoreSelected.clear();
+        }
     }
+    if (result->offset < result->entries.size())
+        QTimer::singleShot(1, this, [this, result] { applyDirectoryChunk(result); });
 }
 
 void FileBrowserTree::expandNode(QTreeWidgetItem* item) {
@@ -369,6 +432,7 @@ void FileBrowserTree::expandNode(QTreeWidgetItem* item) {
     // The plugin folders are built whole and are not on disk: nothing to read,
     // and nothing a file-system watcher could usefully watch.
     if (path.startsWith(QLatin1String("daw://"))) return;
+    m_restoreExpanded.insert(path);
     if (item->data(0, kUnreadRole).toBool()) {
         // Drop the placeholder and read the folder for real.
         while (item->childCount() > 0) delete item->takeChild(0);
@@ -382,28 +446,15 @@ void FileBrowserTree::collapseNode(QTreeWidgetItem* item) {
     if (!item) return;
     const QString path = item->data(0, kPathRole).toString();
     if (path.startsWith(QLatin1String("daw://"))) return;
+    // A user collapse while enumeration is pending wins over restored state.
+    m_restoreExpanded.remove(path);
     unwatch(path);
 }
 
 void FileBrowserTree::reloadNode(QTreeWidgetItem* item) {
     if (!item) return;
-    const QString path = item->data(0, kPathRole).toString();
-    const QStringList open = expandedPaths();
-    const QString selected = selectedPath();
-
-    while (item->childCount() > 0) delete item->takeChild(0);
-    populate(item, path);
+    populate(item, item->data(0, kPathRole).toString());
     item->setData(0, kUnreadRole, false);
-    restoreExpanded(open);
-
-    if (selected.isEmpty()) return;
-    QTreeWidgetItemIterator it(this);
-    for (; *it; ++it) {
-        if ((*it)->data(0, kPathRole).toString() == selected) {
-            setCurrentItem(*it);
-            return;
-        }
-    }
 }
 
 void FileBrowserTree::refresh() {
@@ -498,16 +549,14 @@ QString FileBrowserTree::selectedPath() const {
 }
 
 QStringList FileBrowserTree::expandedPaths() const {
-    QStringList open;
-    QTreeWidgetItemIterator it(const_cast<FileBrowserTree*>(this));
-    for (; *it; ++it) {
-        if ((*it)->isExpanded()) open << (*it)->data(0, kPathRole).toString();
-    }
-    return open;
+    // Expansion events maintain this set. Walking every loaded file on each
+    // folder open or watcher notification makes large libraries quadratic.
+    return m_restoreExpanded.values();
 }
 
 void FileBrowserTree::restoreExpanded(const QStringList& paths) {
     if (paths.isEmpty()) return;
+    for (const auto& path : paths) m_restoreExpanded.insert(path);
     // Expanding fills a node, which can reveal more of the remembered set, so
     // this walks until nothing new opens rather than once over the tree.
     bool opened = true;

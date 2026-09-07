@@ -196,7 +196,7 @@ class HostApplication final
           U::Directly<Vst::IHostApplication, Vst::IPlugInterfaceSupport>> {
 public:
     tresult PLUGIN_API getName(Vst::String128 name) override {
-        static const char16_t kName[] = u"VLT Studio Pro";
+        static const char16_t kName[] = u"VLTONE";
         std::memcpy(name, kName, sizeof(kName));
         return kResultOk;
     }

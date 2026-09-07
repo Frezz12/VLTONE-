@@ -223,7 +223,7 @@ QString modeDescription(int mode) {
 
 GraphitPanel::GraphitPanel(daw::EngineController* controller, QString channelId,
                            QString insertId, QWidget* parent)
-    : QWidget(parent),
+    : ui::FrameWidget(parent),
       m_controller(controller),
       m_channelId(std::move(channelId)),
       m_insertId(std::move(insertId)),
@@ -369,6 +369,8 @@ GraphitPanel::GraphitPanel(daw::EngineController* controller, QString channelId,
     for (std::size_t index = 1; index < m_modeButtons.size(); ++index)
         QWidget::setTabOrder(m_modeButtons[index - 1], m_modeButtons[index]);
 
+    m_visualTimer = new ui::FrameTimer(this);
+    connect(m_visualTimer, &ui::FrameTimer::timeout, this, &GraphitPanel::refreshTelemetry);
     m_timer = new QTimer(this);
     m_timer->setInterval(33);
     connect(m_timer, &QTimer::timeout, this, &GraphitPanel::refresh);
@@ -387,6 +389,7 @@ double GraphitPanel::readParameter(const char* parameterId) const {
 }
 
 void GraphitPanel::writeParameter(const char* parameterId, double value) {
+    m_controlsValid = false;
     if (m_controller)
         m_controller->setInsertParameter(m_channelKey, m_insertKey,
                                          parameterId, value);
@@ -448,6 +451,15 @@ void GraphitPanel::showModeAutomationMenu(QPushButton* button,
 }
 
 bool GraphitPanel::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::ShortcutOverride) {
+        const auto* key = static_cast<QKeyEvent*>(event);
+        if (!(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) &&
+            (key->key() == Qt::Key_Left || key->key() == Qt::Key_Right ||
+             key->key() == Qt::Key_Up || key->key() == Qt::Key_Down)) {
+            event->accept();
+            return true;
+        }
+    }
     if (watched == m_priority) {
         if (event->type() == QEvent::KeyPress) {
             beginPriorityGesture();
@@ -482,6 +494,15 @@ bool GraphitPanel::eventFilter(QObject* watched, QEvent* event) {
 
 void GraphitPanel::refresh() {
     if (!m_controller) return;
+    const double amount = readParameter("amount");
+    const double priority = std::clamp(readParameter("priority"), -1.0, 1.0);
+    const int mode = std::clamp(int(std::lround(readParameter("mode"))), 0, 4);
+    const auto* model = m_controller->insertModel(m_channelKey, m_insertKey);
+    const bool bypassed = model ? model->bypassed : m_bypassed;
+    m_reducedMotion = QSettings().value(QStringLiteral("ui/reduceMotion"), false).toBool();
+    if (m_controlsValid && amount == m_amountValue && priority == m_priorityValue &&
+        mode == m_mode && bypassed == m_bypassed) return;
+    m_controlsValid = true;
     m_refreshing = true;
     m_amountValue = readParameter("amount");
     m_priorityValue = std::clamp(readParameter("priority"), -1.0, 1.0);
@@ -510,25 +531,6 @@ void GraphitPanel::refresh() {
             m_bypassed ? tr("Graphit is bypassed") : tr("Graphit is active"));
     }
 
-    graphit::Telemetry telemetry;
-    if (graphit::GraphitInstance* instance = graphitInstance())
-        telemetry = instance->consumeTelemetry();
-    const float peak = std::max(telemetry.outputLeft, telemetry.outputRight);
-    const float level = peak > 1.0e-6f
-        ? std::clamp((20.0f * std::log10(peak) + 54.0f) / 54.0f, 0.0f, 1.0f)
-        : 0.0f;
-    m_meterLevel = std::max(level, m_meterLevel * 0.92f);
-    m_gainReduction = std::max(telemetry.gainReductionDb,
-                               m_gainReduction * 0.90f);
-    const bool reducedMotion = QSettings().value(
-        QStringLiteral("ui/reduceMotion"), false).toBool();
-    if (reducedMotion) {
-        m_history.fill(m_meterLevel);
-    } else {
-        std::move(m_history.begin() + 1, m_history.end(), m_history.begin());
-        m_history.back() = m_meterLevel;
-    }
-
     m_amountReadout->setText(
         tr("AMOUNT  ·  %1").arg(QString::fromStdString(graphit::parameterText(
             std::uint32_t(graphit::Param::Amount), m_amountValue))));
@@ -545,6 +547,38 @@ void GraphitPanel::refresh() {
             std::uint32_t(graphit::Param::Priority), m_priorityValue)));
     m_refreshing = false;
     update();
+}
+
+void GraphitPanel::refreshTelemetry() {
+    graphit::Telemetry telemetry;
+    if (graphit::GraphitInstance* instance = graphitInstance())
+        telemetry = instance->consumeTelemetry();
+    const float peak = std::max(telemetry.outputLeft, telemetry.outputRight);
+    const float level = peak > 1.0e-6f
+        ? std::clamp((20.0f * std::log10(peak) + 54.0f) / 54.0f, 0.0f, 1.0f)
+        : 0.0f;
+    const double dt = std::clamp(m_visualTimer->deltaSeconds(), 0.0, 0.25);
+    const float previousLevel = m_meterLevel, previousReduction = m_gainReduction;
+    const bool hadHistory = std::any_of(m_history.begin(), m_history.end(),
+                                       [](float level) { return level > 0.0f; });
+    m_meterLevel = std::max(level, m_meterLevel * float(std::pow(0.92, dt / 0.033)));
+    m_gainReduction = std::max(telemetry.gainReductionDb,
+                               m_gainReduction * float(std::pow(0.90, dt / 0.033)));
+    if (m_meterLevel < 1e-5f) m_meterLevel = 0.0f;
+    if (m_gainReduction < 1e-5f) m_gainReduction = 0.0f;
+    if (m_reducedMotion) m_history.fill(m_meterLevel);
+    else {
+        m_historyTime += dt;
+        const auto steps = std::min<std::size_t>(m_history.size(), std::size_t(m_historyTime / 0.033));
+        if (steps) {
+            std::move(m_history.begin() + steps, m_history.end(), m_history.begin());
+            std::fill(m_history.end() - steps, m_history.end(), m_meterLevel);
+            m_historyTime -= double(steps) * 0.033;
+        }
+    }
+    if (hadHistory || previousLevel != m_meterLevel || previousReduction != m_gainReduction ||
+        std::any_of(m_history.begin(), m_history.end(), [](float level) { return level > 0.0f; }))
+        update(QRect(20, 35, width() - 40, 68));
 }
 
 void GraphitPanel::paintEvent(QPaintEvent*) {
@@ -599,7 +633,7 @@ void GraphitPanel::paintEvent(QPaintEvent*) {
     painter.setFont(header);
     painter.setPen(kMuted);
     painter.drawText(QRectF(width() - 100.0, 15.0, 72.0, 20.0),
-                     Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("VLT"));
+                     Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("VLTONE"));
 
     QFont small = painter.font();
     small.setPixelSize(8);
@@ -647,11 +681,13 @@ void GraphitPanel::resizeEvent(QResizeEvent* event) {
 void GraphitPanel::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
     if (m_timer) m_timer->start();
+    if (m_visualTimer) m_visualTimer->start();
     refresh();
 }
 
 void GraphitPanel::hideEvent(QHideEvent* event) {
     if (m_timer) m_timer->stop();
+    if (m_visualTimer) m_visualTimer->stop();
     QWidget::hideEvent(event);
 }
 

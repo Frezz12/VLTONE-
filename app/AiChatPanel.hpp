@@ -222,6 +222,8 @@ private:
     QTimer* m_contentIndexTicker = nullptr;
     /// Prose streamed in but not yet part of the transcript.
     QString m_streaming;
+    bool m_streamFlushPending = false;
+    std::vector<std::size_t> m_transcriptHashes;
     QLabel* m_streamingLabel = nullptr;
     QLabel* m_attachHint = nullptr;
     ui::IconButton* m_promptsButton = nullptr;

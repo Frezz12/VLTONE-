@@ -1,4 +1,5 @@
 #pragma once
+#include "UiFrameClock.hpp"
 
 #include "Internal/GravityInstance.hpp"
 
@@ -28,7 +29,7 @@ class Knob;
 namespace daw { class EngineController; }
 
 /// The functional particle field and Pitch/Size XY attractor.
-class GravityField final : public QWidget {
+class GravityField final : public ui::FrameWidget {
 public:
     explicit GravityField(QWidget* parent = nullptr);
 
@@ -64,6 +65,8 @@ private:
     QPointF attractorPoint() const;
     void moveAttractor(const QPointF& point);
     void addParticles(std::uint64_t count);
+    void advanceParticles(double dt);
+    ui::FrameTimer* m_visualTimer = nullptr;
     float randomUnit();
 
     std::vector<Particle> m_particles;

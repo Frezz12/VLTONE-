@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QSet>
+#include <QHash>
 #include <QWidget>
 
 #include <functional>
@@ -23,7 +24,7 @@ class RoutingField;
 class QToolButton;
 class QVBoxLayout;
 namespace ui { class FaderWidget; class PanKnob; class LevelMeter; class MsrButton;
-               class IconButton; }
+               class IconButton; class Knob; }
 
 /// A full console channel strip: colour header, I/O routing, insert (Audio FX)
 /// slots, aux sends, pan, fader + stereo meter, mute/solo/record and a name
@@ -58,6 +59,7 @@ public:
     double faderGainForTest() const;
     /// Re-read volume/pan/flags from the document (after undo, load, …).
     void syncFromModel();
+    bool hasActiveGesture() const;
     /// While the transport runs, mirror volume/pan automation at the playhead;
     /// while stopped, return to the stored static values.
     void refreshAutomationValues();
@@ -90,6 +92,8 @@ protected:
     void contextMenuEvent(QContextMenuEvent*) override;
 
 private:
+    double m_displayedGain = -1.0;
+    double m_displayedPan = -2.0;
     std::optional<daw::plugins::PluginDescriptor> pluginFromMime(
         const class QMimeData*) const;
     QString presetFromMime(const class QMimeData*) const;
@@ -186,6 +190,7 @@ private:
     bool m_insertsOnly = false;
     bool m_selected = false;
 
+    QHash<QString, ui::Knob*> m_sendKnobs;
     ui::FaderWidget* m_fader = nullptr;
     ui::PanKnob* m_pan = nullptr;
     ui::LevelMeter* m_meter = nullptr;

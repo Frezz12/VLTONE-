@@ -436,7 +436,7 @@ bool validSampleEdit(const ClipSampleEditModel& value) {
            finiteRange(value.loopEnd, 0.0, 1.0) &&
            value.loopStart <= value.loopEnd && stretchMode >= 0 &&
            stretchMode <= static_cast<int>(ClipStretchMode::Complex) &&
-           finiteRange(value.stretchTime, 0.01, 100.0) &&
+           finiteRange(value.stretchTime, 0.001, 1000.0) &&
            finiteRange(value.stretchPitch, -96.0, 96.0) &&
            finiteRange(value.formant, -96.0, 96.0) && value.rootNote >= 0 &&
            value.rootNote <= 127 && finiteRange(value.boost, -4.0, 4.0) &&
@@ -904,22 +904,10 @@ ApplyResult applyScalar(SharedProjectDocument& state,
             same = state.project.tempo == value;
             state.project.tempo = value;
             if (!same) {
-                // Project clip positions are stored in seconds but authored in
-                // bars. Mirror EngineController::retimeToTempo exactly for the
-                // shared document: every clip retains its start beat; MIDI
-                // duration/fades are musical, while audio duration/fades stay
-                // tied to the recorded material's clock.
                 const double ratio = previousTempo / value;
-                for (TrackModel& track : state.project.tracks) {
-                    for (ClipModel& clip : track.clips) {
-                        clip.startSeconds *= ratio;
-                        if (clip.kind == ClipKind::Midi) {
-                            clip.durationSeconds *= ratio;
-                            clip.fadeInSeconds *= ratio;
-                            clip.fadeOutSeconds *= ratio;
-                        }
-                    }
-                }
+                for (TrackModel& track : state.project.tracks)
+                    for (ClipModel& clip : track.clips)
+                        retimeClipToTempo(clip, ratio);
             }
             break;
         }
@@ -1998,6 +1986,11 @@ ApplyResult applySetClipSampleEdit(SharedProjectDocument& state,
         return reject(ApplyCode::InvalidCommand, "invalid clip sample edit");
     const ClipSampleEditModel before = location.clip->sampleEdit;
     const bool same = sampleEditEqual(before, body.sampleEdit);
+    const double ratio = body.sampleEdit.stretchTime / std::max(before.stretchTime, 0.001);
+    location.clip->durationSeconds *= ratio;
+    retimeClipComp(*location.clip, ratio);
+    location.clip->fadeInSeconds = std::min(location.clip->fadeInSeconds, location.clip->durationSeconds);
+    location.clip->fadeOutSeconds = std::min(location.clip->fadeOutSeconds, location.clip->durationSeconds);
     location.clip->sampleEdit = body.sampleEdit;
     const std::string key = "clip:" + body.clipId + ":sampleEdit";
     ApplyResult result;
@@ -2007,11 +2000,12 @@ ApplyResult applySetClipSampleEdit(SharedProjectDocument& state,
     result.impact.timelineChanged = !same;
     result.impact.trackIds.insert(body.trackId);
     result.impact.clipIds.insert(body.clipId);
-    markWriter(state, key, command.meta.operationId, result.impact);
+    markCommandWriters(state, command, result.impact);
     if (!same) {
         ProjectCommand inverse = inverseShell(
             command, SetClipSampleEdit{body.trackId, body.clipId, before});
         inverse.conditions.push_back(FieldWriterIs{key, command.meta.operationId});
+        inverse.conditions.push_back(FieldWriterIs{"project:tempoCascade", command.meta.operationId});
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;

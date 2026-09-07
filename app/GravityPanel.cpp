@@ -118,7 +118,7 @@ double clampedPresetValue(const daw::plugins::ParameterInfo& info,
 
 // ── GravityField ──
 
-GravityField::GravityField(QWidget* parent) : QWidget(parent) {
+GravityField::GravityField(QWidget* parent) : ui::FrameWidget(parent) {
     setMinimumSize(510, 260);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setFocusPolicy(Qt::StrongFocus);
@@ -128,6 +128,11 @@ GravityField::GravityField(QWidget* parent) : QWidget(parent) {
         tr("Horizontal position controls pitch; vertical position controls size."));
     setToolTip(tr("Drag to set Pitch and Size. Use arrow keys for precise changes."));
     m_particles.reserve(1200);
+    m_visualTimer = new ui::FrameTimer(this);
+    connect(m_visualTimer, &ui::FrameTimer::timeout, this, [this] {
+        advanceParticles(std::clamp(m_visualTimer->deltaSeconds(), 0.0, 0.1));
+    });
+    m_visualTimer->start();
 }
 
 QRectF GravityField::cloudRect() const {
@@ -207,24 +212,29 @@ void GravityField::setState(double gravityValue, double pitchValue,
     addParticles(telemetry.grainSerial - m_lastGrainSerial);
     m_lastGrainSerial = telemetry.grainSerial;
 
+    update();
+}
+
+void GravityField::advanceParticles(double dt) {
     // Motion is entirely visual. Reduced motion keeps the cloud and meters
     // live while removing orbit/drift and particle churn.
-    if (!m_reducedMotion) {
-        const float energy = std::clamp(telemetry.fieldEnergy, 0.0f, 1.0f);
+    if (!m_reducedMotion && !m_particles.empty()) {
+        const float timeScale = float(dt / 0.033);
+        const float energy = std::clamp(m_telemetry.fieldEnergy, 0.0f, 1.0f);
         const float pull = float(0.0007 + m_gravity * 0.0012);
         for (Particle& particle : m_particles) {
             particle.angle += particle.speed *
                               float(0.55 + m_gravity * 1.7 + energy * 0.8) *
-                              float(1.0 + m_motion);
-            particle.radius -= pull * float(0.35 + m_feedback * 0.65);
-            particle.life -= float(0.00045 + (1.0 - m_feedback) * 0.0010);
+                              float(1.0 + m_motion) * timeScale;
+            particle.radius -= pull * float(0.35 + m_feedback * 0.65) * timeScale;
+            particle.life -= float(0.00045 + (1.0 - m_feedback) * 0.0010) * timeScale;
             if (particle.radius < 0.035f) particle.radius = 1.0f;
         }
         std::erase_if(m_particles, [](const Particle& particle) {
             return particle.life <= 0.0f;
         });
+        update();
     }
-    update();
 }
 
 void GravityField::clearParticles() {

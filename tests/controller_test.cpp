@@ -1,3 +1,4 @@
+#include <thread>
 // Phase-2 verification: the headless controller round-trip — build a project,
 // import a clip, export a mixdown, save, and reload — with NO audio device
 // (initialize(openDevice=false)), so it runs anywhere.
@@ -108,6 +109,40 @@ engineNotesFor(const daw::EngineController& controller,
 }
 
 int main() {
+    {
+        daw::ProjectModel model;
+        daw::TrackModel a, b;
+        a.id = "index-a"; b.id = "index-b";
+        model.tracks = {a, b};
+        check(!model.findTrack(""), "empty routing ID is master, not a track");
+        check(model.indexOf(a.id) == 0 && !model.findTrack("missing"), "track index handles known and missing IDs");
+        for (int i = 0; i < 1000; ++i) (void)model.findTrack("missing");
+        std::swap(model.tracks[0], model.tracks[1]);
+        check(model.indexOf(a.id) == 1, "track index detects indexed reorder");
+        model.tracks[0].id = "missing";
+        model.invalidateTrackIndex();
+        check(model.indexOf("missing") == 0, "batch ID replacement invalidates the track lookup index");
+        model.tracks.erase(model.tracks.begin());
+        check(!model.findTrack("missing") && model.indexOf(a.id) == 0, "track deletion invalidates index size");
+    }
+
+    {
+        daw::ProjectModel model;
+        daw::TrackModel folder, leaf;
+        folder.id = "folder"; folder.kind = daw::TrackKind::Folder;
+        leaf.id = "leaf"; leaf.parentId = folder.id;
+        model.tracks = {folder, leaf}; model.useExplicitStructureCache();
+        check(daw::visibleTracks(model).size() == 2, "managed structure cache exposes expanded child");
+        model.tracks[0].expanded = false; model.invalidateStructure();
+        check(daw::visibleTracks(model).size() == 1, "structure revision invalidates folded rows");
+        daw::ProjectModel copy = model;
+        copy.tracks[0].expanded = true;
+        check(daw::visibleTracks(copy).size() == 2 && daw::visibleTracks(model).size() == 1,
+              "editable document copies do not inherit a managed cache contract");
+        check(copy.headerCopy().tracks.empty() && copy.headerCopy().tempo == copy.tempo,
+              "metadata snapshots do not copy tracks");
+    }
+
     const auto dir = fs::temp_directory_path() / "daw-controller-test";
     fs::remove_all(dir);
     fs::create_directories(dir);
@@ -255,7 +290,15 @@ int main() {
 
     daw::EngineController ctrl2;
     ctrl2.initialize(48000, 512, false);
-    check(ctrl2.openProject(pkg).isOk(), "reopens the saved project");
+    daw::EngineController::PreparedProject prepared;
+    audio::Result preparedResult = audio::Result::ok();
+    std::thread preparation([&] { preparedResult = daw::EngineController::prepareProjectOpen(pkg, 48000, prepared); });
+    preparation.join();
+    check(preparedResult.isOk() && !prepared.audio.empty(), "worker prepares document, samples and waveform peaks");
+    check(ctrl2.openPreparedProject(std::move(prepared)).isOk(), "reopens the prepared project");
+    daw::EngineController::PreparedProject cancelled;
+    check(!daw::EngineController::prepareProjectOpen(pkg, 48000, cancelled, [] { return false; }) && cancelled.document.tracks.empty(),
+          "cancelled project preparation publishes no partial document");
     check(ctrl2.project().tracks.size() == 1, "track survives the round-trip");
     check(ctrl2.project().tracks.size() == 1 &&
               ctrl2.project().tracks[0].clips.size() == 1,
@@ -3464,6 +3507,42 @@ int main() {
               "redoing a CC-lane removal publishes no plugin automation");
     }
 
+    // Audio drag publication has its own control cadence and flushes the
+    // exact endpoint, including a round trip that produces no undo entry.
+    {
+        daw::EngineController p;
+        p.initialize(48000, 512, false);
+        const auto track = p.addTrack(daw::TrackKind::Audio, "Audio gesture");
+        const auto clip = p.importAudio(tonePath, track, 0.0);
+        const auto placements = [&]() -> std::shared_ptr<const daw::engine::ClipPlayerNode::ClipList> {
+            const auto* ids = p.trackNodes(track);
+            const auto graph = p.routingGraph();
+            if (ids && graph) for (const auto& node : graph->nodes)
+                if (node.id == ids->clips)
+                    if (const auto* player = dynamic_cast<const daw::engine::ClipPlayerNode*>(node.node))
+                        return player->clips();
+            return {};
+        };
+        p.beginClipPositionEdit();
+        p.setClipStartSeconds(track, clip, 1.0);
+        check(placements() && placements()->front().startSample == 48000,
+              "audio gesture publishes its first position live");
+        for (int i = 2; i < 100; ++i) p.setClipStartSeconds(track, clip, i / 10.0);
+        p.endClipPositionEdit("Audio position");
+        check(placements() && placements()->front().startSample == 475200,
+              "audio gesture release publishes the exact final position");
+        p.undo();
+        check(placements() && placements()->front().startSample == 0,
+              "audio position undo republishes the previous endpoint");
+        const auto depth = p.undoDepth();
+        p.beginClipPositionEdit();
+        p.setClipStartSeconds(track, clip, 5.0);
+        p.setClipStartSeconds(track, clip, 0.0);
+        p.endClipPositionEdit("Round trip");
+        check(placements() && placements()->front().startSample == 0 && p.undoDepth() == depth,
+              "cancelled audio displacement flushes without an undo delta");
+    }
+
     // ── Arrangement position gestures coalesce realtime MIDI publication ──
     {
         daw::EngineController p;
@@ -5126,6 +5205,73 @@ int main() {
             check(n && std::fabs(n->durationSeconds - 2.0) < 1e-9,
                   "and the MIDI clip back to the length it was");
         }
+    }
+
+    // Stretched audio retains musical geometry and the exact source region.
+    for (int mode = 1; mode <= 4; ++mode) {
+        daw::EngineController c;
+        c.initialize(48000, 512, false);
+        c.setTempo(120);
+        const auto track = c.addTrack(daw::TrackKind::Audio, "Tempo follow");
+        const auto id = c.importAudio(tonePath, track, 2.0);
+        c.setClipSampleParameter(track, id, "stretch.mode", mode);
+        c.setClipSampleParameter(track, id, "stretch.time", 1.5);
+        c.setClipFade(track, id, .03, .04);
+        const auto before = *findClip(c, track, id);
+        c.setTempo(75);
+        const auto after = *findClip(c, track, id);
+        check(std::abs(after.startSeconds * 75 - before.startSeconds * 120) < 1e-8 &&
+              std::abs(after.durationSeconds * 75 - before.durationSeconds * 120) < 1e-8,
+              "every stretch mode keeps its start beat and musical length across BPM changes");
+        check(std::abs(after.durationSeconds / after.sampleEdit.stretchTime -
+                       before.durationSeconds / before.sampleEdit.stretchTime) < 1e-9 &&
+              after.offsetSeconds == before.offsetSeconds &&
+              std::abs(after.fadeInSeconds - before.fadeInSeconds * 1.6) < 1e-9,
+              "tempo-follow keeps the same trimmed source and moves fades with the audio");
+        c.undo();
+        check(std::abs(findClip(c, track, id)->sampleEdit.stretchTime - 1.5) < 1e-9 &&
+              std::abs(findClip(c, track, id)->durationSeconds - before.durationSeconds) < 1e-9,
+              "undo restores audio duration and stretch ratio together");
+        c.redo();
+        check(std::abs(findClip(c, track, id)->sampleEdit.stretchTime - 2.4) < 1e-9,
+              "redo reapplies tempo following exactly once");
+        c.setTempo(24); // 7.5x exceeds the manual Time knob's 4x limit.
+        const auto package = (dir / ("tempo-stretch-" + std::to_string(mode) + ".vlt")).string();
+        check(c.saveProject(package).isOk(), "save a tempo-following clip");
+        daw::EngineController reopened;
+        reopened.initialize(48000, 512, false);
+        check(reopened.openProject(package).isOk() &&
+              std::abs(findClip(reopened, track, id)->sampleEdit.stretchTime - 7.5) < 1e-9 &&
+              std::abs(findClip(reopened, track, id)->durationSeconds - before.durationSeconds * 5) < 1e-9,
+              "save/reopen preserves automatic ratios beyond the manual knob range");
+    }
+
+    {
+        daw::EngineController c;
+        c.initialize(48000, 512, false);
+        c.setTempo(120);
+        const auto track = c.addTrack(daw::TrackKind::Audio, "Stretch comp");
+        const auto id = c.importAudio(tonePath, track, 0);
+        check(!c.addTakeFromFile(track, id, tonePath).empty(), "create a layered stretch clip");
+        c.setClipSampleParameter(track, id, "stretch.mode", 4);
+        const auto before = *findClip(c, track, id);
+        c.setTempo(60);
+        const auto after = *findClip(c, track, id);
+        check(after.comp.back().endSeconds == before.comp.back().endSeconds * 2 &&
+              after.takes.back().lengthSeconds == before.takes.back().lengthSeconds,
+              "tempo-follow retimes the comp map and preserves the take's source length");
+        const auto output = (dir / "stretched-comp.wav").string();
+        audio::platform::DecodedAudio decoded;
+        check(c.exportMixdown(output, false).isOk() &&
+              audio::platform::decodeAudioFile(output, decoded).isOk(),
+              "a stretched comp renders through the real graph");
+        double lateEnergy = 0;
+        const auto first = std::size_t(before.durationSeconds * decoded.sampleRate * decoded.channels * 1.2);
+        const auto last = std::min(decoded.interleaved.size(),
+            std::size_t(after.durationSeconds * decoded.sampleRate * decoded.channels * .9));
+        for (auto i = first; i < last; ++i) lateEnergy += decoded.interleaved[i] * decoded.interleaved[i];
+        check(last > first && std::sqrt(lateEnergy / (last - first)) > .1,
+              "the second half of a stretched comp remains audible");
     }
 
     // ── The take in flight is the take that lands ──

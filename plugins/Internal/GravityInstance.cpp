@@ -309,7 +309,7 @@ const PluginDescriptor& GravityInstance::staticDescriptor() noexcept {
         d.uid = std::string(kUid);
         d.path = std::string(kUid);
         d.name = "Gravity";
-        d.vendor = "VLT Studio Pro";
+        d.vendor = "VLTONE";
         d.version = "2.0";
         d.stateSchemaVersion = kStateVersion;
         d.category = "Effect";

@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const allowed = /^v1\/admin\/releases\/[0-9a-f-]+\/(artifacts\/[a-z-]+|screenshots)$/;
+const allowed = /^v1\/admin\/(releases\/[0-9a-f-]+\/(artifacts\/[a-z-]+|screenshots)|browser-backgrounds)$/;
 
 async function forward(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
   const path = (await context.params).path.join("/");

@@ -19,6 +19,7 @@ class QLineEdit;
 class QComboBox;
 class QLabel;
 class QShowEvent;
+class QCheckBox;
 
 /// The unified, non-modal settings window: one place for Audio, Themes and
 /// Keyboard Shortcuts, titled with the application name. Replaces the standalone
@@ -28,6 +29,7 @@ class SettingsWindow : public QDialog {
 public:
     SettingsWindow(daw::EngineController* controller, ShortcutManager* shortcuts,
                    QWidget* parent = nullptr);
+    void refreshTimelineBackgroundSource();
 
     /// The tabs, by name. They used to be addressed by bare number, and the
     /// comment saying which was which had already gone stale twice.
@@ -45,6 +47,7 @@ public:
         kThemesTab,
         kThemeEditorTab,
         kShortcutsTab,
+        kInterfaceTab,
     };
 
     /// Bring a specific tab to the front.
@@ -56,6 +59,7 @@ public:
     bool checkAudioPageForTest() const;
 
 signals:
+    void transportPanelStyleChanged();
     /// A context-panel profile or its transparency setting changed.
     void contextPanelSettingsChanged();
     /// The browser's folders, side or preview options changed.
@@ -80,10 +84,14 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
+    QLineEdit* m_timelineBackgroundPath = nullptr;
+    QPushButton* m_clearTimelineBackground = nullptr;
+    QCheckBox* m_enableTimelineBackground = nullptr;
     /// Keep the dialog inside the current monitor's usable area. Every tab is
     /// scrollable, so shrinking the shell never hides a setting.
     void constrainToScreen();
     QWidget* buildThemesTab();
+    QWidget* buildInterfaceTab();
     QWidget* buildThemeEditorTab();
     QWidget* buildShortcutsTab();
     QWidget* buildLanguageTab();

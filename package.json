@@ -1,5 +1,5 @@
 {
-  "name": "vlt-studio-platform",
+  "name": "vltone-platform",
   "private": true,
   "packageManager": "pnpm@11.3.0",
   "engines": {

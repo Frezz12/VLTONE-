@@ -95,7 +95,7 @@ void UpdateChecker::start(QWidget* owner) {
         QMessageBox prompt(safeOwner);
         prompt.setIcon(QMessageBox::Information);
         prompt.setWindowTitle(UpdateChecker::tr("Update available"));
-        prompt.setText(UpdateChecker::tr("VLT Studio Pro %1 is available.").arg(available));
+        prompt.setText(UpdateChecker::tr("VLTONE %1 is available.").arg(available));
         prompt.setInformativeText(
             UpdateChecker::tr("You are using %1. The download button opens the release page in your browser.").arg(current));
         QPushButton* download = prompt.addButton(UpdateChecker::tr("Download"), QMessageBox::AcceptRole);

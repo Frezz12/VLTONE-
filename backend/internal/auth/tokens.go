@@ -101,6 +101,22 @@ func HashToken(token string) string {
 	return hex.EncodeToString(digest[:])
 }
 
+// RefreshTokenPair reproduces a committed rotation after a lost HTTP response.
+// Only hashes are stored in PostgreSQL. Domain separation keeps these tokens
+// independent of signatures and of each other; the signing secret never leaves
+// the server. The caller must verify the receipt and active successor session.
+func (s *Signer) RefreshTokenPair(previous, requestID string) (string, string) {
+	derive := func(kind string) string {
+		mac := hmac.New(sha256.New, s.private.Seed())
+		mac.Write([]byte("VLTONE/desktop-refresh/v1/" + kind + "\x00"))
+		mac.Write([]byte(previous))
+		mac.Write([]byte{0})
+		mac.Write([]byte(requestID))
+		return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	}
+	return derive("refresh"), derive("reporter")
+}
+
 // HashLowEntropyCode keys a short shared secret with a server-held pepper.
 //
 // HashToken is a bare SHA-256, which is the right thing for a 32-byte token and

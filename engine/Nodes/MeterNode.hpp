@@ -16,6 +16,7 @@ public:
     explicit MeterNode(std::string name = "Meter") : m_name(std::move(name)) {}
     std::string_view name() const noexcept override { return m_name; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
+    bool canFuseTask() const noexcept override { return true; }
 
     float peakLeft() const noexcept { return m_peakL.load(std::memory_order_relaxed); }
     float peakRight() const noexcept { return m_peakR.load(std::memory_order_relaxed); }

@@ -232,8 +232,22 @@ void PluginQuickAdder::setAccentColor(const QColor& color) {
 
 QSize PluginQuickAdder::sizeHint() const {
     const double eased = m_expandProgress;
-    return QSize(int(std::lerp(double(kCollapsedWidth), double(kExpandedWidth), eased)),
+    return QSize(std::min(m_availableWidth,
+                         int(std::lerp(double(kCollapsedWidth), double(kExpandedWidth), eased))),
                  kToolbarHeight);
+}
+
+void PluginQuickAdder::setAvailableWidth(int width) {
+    const int next = std::max(kCollapsedWidth, width);
+    if (m_availableWidth == next) return;
+    m_availableWidth = next;
+    // The caller is already laying out the strip; do not recursively emit
+    // sizeChanged while it is resolving that same width budget.
+    const QSize wanted = sizeHint();
+    setMinimumSize(wanted);
+    setMaximumSize(wanted);
+    resize(wanted);
+    updateGeometry();
 }
 
 QSize PluginQuickAdder::minimumSizeHint() const { return sizeHint(); }

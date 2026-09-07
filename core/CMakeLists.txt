@@ -26,6 +26,7 @@ if(WIN32)
 endif()
 
 target_include_directories(daw_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(daw_core PUBLIC ${CMAKE_SOURCE_DIR}/shared)
 target_compile_features(daw_core PUBLIC cxx_std_23)
 
 # ── libsndfile ──
@@ -54,6 +55,13 @@ target_link_libraries(daw_core PUBLIC
     daw_platform_paths
     ${DAW_SNDFILE_TARGET}
     ${DAW_PORTAUDIO_TARGET})
+
+# Native AAC/MP4 audio codecs; no external converter executable is required.
+if(APPLE)
+    target_link_libraries(daw_core PUBLIC "-framework AudioToolbox" "-framework CoreFoundation" "-framework CoreAudio")
+elseif(WIN32)
+    target_link_libraries(daw_core PUBLIC mfplat mfreadwrite mfuuid ole32 propsys)
+endif()
 
 if(MSVC)
     target_compile_options(daw_core PRIVATE /W3)

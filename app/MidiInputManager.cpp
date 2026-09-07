@@ -155,7 +155,7 @@ bool MidiInputManager::coreMidiReady() {
     std::thread([probe = m_coreMidiProbe] {
         MIDIClientRef client = 0;
         const OSStatus status = MIDIClientCreate(
-            CFSTR("VLT Studio Pro MIDI readiness check"), nullptr, nullptr,
+            CFSTR("VLTONE MIDI readiness check"), nullptr, nullptr,
             &client);
         if (status == noErr && client != 0) {
             MIDIClientDispose(client);
@@ -186,7 +186,7 @@ void MidiInputManager::refreshPorts() {
 
     QStringList names;
     try {
-        RtMidiIn probe(RtMidi::UNSPECIFIED, "VLT Studio Pro MIDI probe");
+        RtMidiIn probe(RtMidi::UNSPECIFIED, "VLTONE MIDI probe");
         const unsigned count = probe.getPortCount();
         names.reserve(int(count));
         for (unsigned i = 0; i < count; ++i)
@@ -214,9 +214,9 @@ void MidiInputManager::refreshPorts() {
             port->generation = m_generation;
             port->source = (m_generation << 32) | quint64(index + 1);
             port->input = std::make_unique<RtMidiIn>(
-                RtMidi::UNSPECIFIED, "VLT Studio Pro");
+                RtMidi::UNSPECIFIED, "VLTONE");
             port->input->ignoreTypes(true, true, true);
-            port->input->openPort(unsigned(index), "VLT Studio Pro input");
+            port->input->openPort(unsigned(index), "VLTONE input");
             port->input->setCallback(&Port::callback, port.get());
             m_ports[std::size_t(index)] = std::move(port);
         } catch (const RtMidiError& error) {

@@ -13,7 +13,7 @@ export function Header({ locale }: { locale: string }) {
   const localeHref = parts.join("/") || `/${other}`;
   return (
     <header className="vlt-topbar">
-      <Link className="vlt-brand" href={`/${locale}`}><Image className="vlt-brand-logo" src="/logo.png" width={40} height={40} alt="VLT" priority /><span>Studio Pro</span></Link>
+      <Link className="vlt-brand" href={`/${locale}`}><Image className="vlt-brand-logo" src="/logo.png" width={40} height={40} alt="VLTONE" priority /><span>VLTONE</span></Link>
       <nav className="vlt-nav" aria-label={locale === "ru" ? "Навигация сайта" : "Site navigation"}>
         <Link href={`/${locale}/releases`}><PackageOpen size={16} aria-hidden /> {locale === "ru" ? "Обновления" : "Releases"}</Link>
         <Link href={`/${locale}/manual`}><BookOpenText size={16} aria-hidden /> {locale === "ru" ? "Инструкция" : "Manual"}</Link>

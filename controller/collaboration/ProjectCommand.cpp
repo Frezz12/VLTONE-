@@ -934,6 +934,7 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
                 addTrackClipLandingHead(body.trackId);
             } else if constexpr (std::is_same_v<T, SetClipSampleEdit>) {
                 fields.insert("clip:" + body.clipId + ":sampleEdit");
+                fields.insert("project:tempoCascade");
                 addTrackClipLandingHead(body.trackId);
             } else if constexpr (std::is_same_v<T, SetClipFade>) {
                 fields.insert("clip:" + body.clipId + ":fadeInSeconds");

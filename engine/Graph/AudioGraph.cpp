@@ -253,7 +253,8 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
     compiled->channels = info.channels;
     compiled->maxBlockSize = info.maxBlockSize;
     compiled->sampleRate = info.sampleRate;
-    compiled->generation = ++m_generation;
+    static std::atomic<std::uint64_t> publicationGeneration{0};
+    compiled->generation = publicationGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
 
     // Dense index per live node, so the realtime path walks contiguous arrays
     // instead of chasing sparse ids.
@@ -424,6 +425,23 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
     }
 
     compiled->order.reserve(order.size());
+    compiled->taskCount = std::uint32_t(compiled->nodes.size());
+    for (std::uint32_t i = 0; i < compiled->nodes.size(); ++i) {
+        auto& entry = compiled->nodes[i];
+        if (entry.id == m_sink || entry.successorCount != 1 || entry.inputCount > 1 ||
+            !entry.node->canFuseTask() || entry.node->midiRole() != MidiNodeRole::None ||
+            entry.node->latencySamples() != 0) continue;
+        const auto next = compiled->successors[entry.firstSuccessor];
+        auto& successor = compiled->nodes[next];
+        if (successor.dependencies != 1 || successor.inputCount != 1 ||
+            !successor.node->canFuseTask() || successor.node->midiRole() != MidiNodeRole::None ||
+            successor.node->latencySamples() != 0) continue;
+        const auto& edge = compiled->inputEdges[successor.firstInput];
+        if (edge.role != InputRole::Main || edge.delayIndex != kInvalidNode) continue;
+        entry.inlineSuccessor = next;
+        successor.inlineTask = true;
+        --compiled->taskCount;
+    }
     compiled->pendingTemplate.reserve(order.size());
     // Nodes with the same dependency level never depend on one another, so a
     // level's size is a safe lower bound on exploitable parallelism. Compute it

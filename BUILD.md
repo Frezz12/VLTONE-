@@ -1,7 +1,9 @@
-# Building VLT Studio Pro
+# Building VLTONE
 
-VLT Studio Pro cross-platform digital audio workstation. C++23 graph audio engine + Qt 6
-Widgets front-end, audio I/O via PortAudio, file decode via libsndfile, JSON via
+VLTONE cross-platform digital audio workstation. C++23 graph audio engine + Qt 6
+Widgets front-end, audio I/O via PortAudio, file decode via libsndfile (plus
+AudioToolbox on macOS / Media Foundation on Windows for M4A, MP4A, MP4 audio
+and AAC), JSON via
 nlohmann/json. Build system: CMake (≥ 3.24) + Ninja.
 
 ```
@@ -124,7 +126,7 @@ ctest --test-dir build --output-on-failure
 Run:
 
 ```bash
-./build/bin/daw
+./build/bin/VLTONE
 ```
 
 Package a self-contained `.app`, Installer package and drag-install DMG:
@@ -134,14 +136,14 @@ packaging/macos/build-pkg.sh
 ```
 
 That configures a Release build with `-DDAW_PACKAGE=ON`, stages
-`build-pkg/stage-vlt/VLT Studio Pro.app` (macdeployqt copies Qt, Qt WebEngine's
+`build-pkg/stage-vlt/VLTONE.app` (macdeployqt copies Qt, Qt WebEngine's
 Chromium helper/resources, PortAudio and libsndfile into the bundle and rewrites
 their load commands) and wraps it in
-`build-pkg/VLT-Studio-Pro-<version>.pkg`, which installs to `/Applications`,
-plus `build-pkg/VLT-Studio-Pro-<version>.dmg` with an Applications shortcut.
+`build-pkg/VLTONE-<version>.pkg`, which installs to `/Applications`,
+plus `build-pkg/VLTONE-<version>.dmg` with an Applications shortcut.
 
 What `DAW_PACKAGE=ON` changes: the target becomes a real `.app` named
-**VLT Studio Pro**
+**VLTONE**
 with `app/resources/daw.icns` as its icon and `app/resources/Info.plist.in` as
 its identity — including `NSMicrophoneUsageDescription`, without which macOS
 gives a non-sandboxed app no input and recording captures silence. The three
@@ -173,6 +175,39 @@ with `iconutil -c icns` over an iconset built from it.
 
 ## Windows
 
+### Build the Windows installer from a Mac with GitHub Actions
+
+No local Windows installation is needed. The workflow in
+`.github/workflows/windows.yml` builds Release x64 on GitHub's `windows-2022`
+runner and packages the application with Inno Setup.
+
+1. Commit and push the source changes you want to build. Actions uses the
+   selected remote branch, not uncommitted files on your Mac.
+2. Open [Windows Release Build](https://github.com/Frezz12/VLTONE-/actions/workflows/windows.yml).
+3. Click **Run workflow**, select the branch and start the build.
+4. After it succeeds, use **Download the Windows build** in the run summary
+   (or the `VLTONE-<commit>-windows-x64` entry under **Artifacts**).
+5. Extract the downloaded archive. It contains
+   `VLTONE-<version>-x64-Setup.exe` and the portable application ZIP.
+
+The artifacts are retained for 30 days. A GitHub account with repository
+access is needed to download them. Ordinary branch builds work without signing
+secrets; `v*` release tags require `WINDOWS_SIGN_CERT_BASE64` and
+`WINDOWS_SIGN_CERT_PASSWORD`. Artifacts are not automatically published to
+GitHub Releases. Pushes and pull requests also trigger the workflow.
+
+You can also launch it from the Mac terminal with an authenticated GitHub CLI:
+
+```sh
+gh workflow run windows.yml --repo Frezz12/VLTONE- --ref main
+gh run list --repo Frezz12/VLTONE- --workflow windows.yml --event workflow_dispatch --limit 5
+# Use the run ID returned by the list command:
+gh run watch RUN_ID --repo Frezz12/VLTONE- --exit-status
+gh run download RUN_ID --repo Frezz12/VLTONE- --pattern '*-windows-x64' --dir dist/windows
+```
+
+### Build directly on Windows
+
 The release toolchain is deliberately narrow and reproducible:
 
 - Visual Studio 2022 Build Tools 17.14 toolset: **MSVC 14.44.35211**
@@ -180,7 +215,8 @@ The release toolchain is deliberately narrow and reproducible:
 - Windows SDK **10.0.26100.0**;
 - CMake ≥ 3.24 and Ninja;
 - Qt **6.8.3** `msvc2022_64`, with the mandatory **Qt Multimedia**,
-  **Qt WebEngine**, **Qt SerialPort** and **Qt WebSockets** modules;
+  **Qt WebEngine**, **Qt WebChannel**, **Qt Positioning**, **Qt SerialPort**
+  and **Qt WebSockets** modules, plus Qt SVG and Linguist tools;
 - Inno Setup **6.7.1** for the production installer;
 - Git (the build script checks out the pinned vcpkg revision itself).
 
@@ -200,20 +236,21 @@ From an ordinary PowerShell prompt, the complete build is one command:
 ```
 
 The script locates Visual Studio, activates the pinned compiler/SDK, validates
-Qt and its two additional modules, bootstraps the pinned vcpkg checkout,
-configures and builds Release x64, runs the **21 Windows CTest tests**, deploys
+Qt and its required modules, bootstraps the pinned vcpkg checkout,
+configures and builds Release x64, runs all registered Windows CTest tests
+(an empty test suite is an error), deploys
 Qt, checks PE imports, and runs `--selftest` with the offscreen backend from:
 
 ```text
-build-windows\Тест сборки\VLT Studio Pro\
+build-windows\Тест сборки\VLTONE\
 ```
 
 That last run covers Unicode, spaces and quoting in the deployed executable,
 Qt WebEngine helper and scanner paths. Artifacts are written to
 `build-windows\artifacts`:
 
-- `VLT-Studio-Pro-0.1.7-windows-x64.zip` — CI/developer artifact;
-- `VLT-Studio-Pro-0.1.7-x64-Setup.exe` — production installer.
+- `VLTONE-0.1.9-windows-x64.zip` — CI/developer artifact;
+- `VLTONE-0.1.9-x64-Setup.exe` — production installer.
 
 The computed install prefix is always the absolute
 `<repository>\build-windows\stage`; no machine-specific path is stored in the

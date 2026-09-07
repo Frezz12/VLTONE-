@@ -232,10 +232,10 @@ ClapInstance::~ClapInstance() {
 void ClapInstance::fillHost(clap_host_t& host, void* hostData) noexcept {
     host.clap_version = CLAP_VERSION;
     host.host_data = hostData;
-    host.name = VLT_STUDIO_PRO_NAME;
-    host.vendor = "VLT Studio";
+    host.name = VLTONE_NAME;
+    host.vendor = "VLTONE";
     host.url = "";
-    host.version = VLT_STUDIO_PRO_VERSION;
+    host.version = VLTONE_VERSION;
     host.get_extension = &ClapInstance::hostGetExtension;
     host.request_restart = &ClapInstance::hostRequestRestart;
     host.request_process = &ClapInstance::hostRequestProcess;

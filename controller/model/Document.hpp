@@ -5,7 +5,9 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
+#include <utility>
 
 // The document model — the UI-facing project data, independent of the engine.
 // It carries no engine handles at all: the controller compiles this model into
@@ -318,12 +320,11 @@ struct CompSegment {
     std::string id;
 };
 
-/// Time-stretch priority for one audio clip. These are strategies, not UI
-/// presets: the realtime player selects different grain/time-domain geometry
-/// for transient, looping, monophonic and dense material.
+/// Phase-coherent stretch profiles. Every non-Resample profile follows project
+/// tempo and preserves the clip length in beats. Numeric IDs stay compatible.
 enum class ClipStretchMode : uint8_t {
     Resample = 0,
-    Drums = 1,
+    Drums = 1, // displayed as Stretch; short analysis for rhythmic material
     Loop = 2,
     Vocal = 3,
     Complex = 4,
@@ -512,6 +513,11 @@ struct ClipModel {
     AssetRef asset;               // v6 cloud identity; filePath is legacy/cache
 };
 
+/// Shared by local tempo edits and the collaboration reducer. Source offsets
+/// remain source time; musical clip lengths and fades follow the tempo.
+void retimeClipToTempo(ClipModel& clip, double ratio);
+void retimeClipComp(ClipModel& clip, double ratio);
+
 /// An aux send from a track to a bus/aux track. Rendered by the engine as a
 /// SendNode tapped before or after the fader.
 struct SendModel {
@@ -638,6 +644,15 @@ struct SamplerFxModel {
     }
 };
 
+struct TrackFreezeState {
+    std::string filePath;
+    double durationSeconds = 0.0;
+    double sampleRate = 0.0;
+    // Runtime validation, rebuilt after resolving portable media on load.
+    std::string sourceFingerprint;
+    bool active() const { return !filePath.empty(); }
+};
+
 struct TrackModel {
     std::string id;
     TrackKind kind = TrackKind::Audio;
@@ -693,6 +708,7 @@ struct TrackModel {
     std::vector<SendModel> sends;
     std::vector<InsertModel> inserts;
     std::vector<ClipModel> clips;
+    TrackFreezeState freeze;
 };
 
 /// A track together with how deep it sits in the folder hierarchy.
@@ -701,7 +717,7 @@ struct TrackRow {
     int depth = 0;        // 0 = root
 };
 
-struct ProjectModel {
+struct ProjectMetadata {
     std::string name = "Untitled";
     std::string author;
     /// Project artwork. A saved package owns its copy in Content/; an unsaved
@@ -731,6 +747,25 @@ struct ProjectModel {
     float masterVolume = 1.0f;
     float masterPan = 0.0f;
     std::vector<InsertModel> masterInserts;
+};
+
+struct ProjectModel : ProjectMetadata {
+    ProjectModel() = default;
+    // Copies become ordinary editable documents, never inheriting a controller's
+    // explicit cache contract or its derived lookup/row allocations.
+    ProjectModel(const ProjectModel& other) : ProjectMetadata(other), tracks(other.tracks) {}
+    ProjectModel(ProjectModel&&) = default;
+    ProjectModel& operator=(ProjectModel&&) = default;
+    ProjectModel& operator=(const ProjectModel& other) {
+        if (this != &other) { ProjectModel copy(other); *this = std::move(copy); }
+        return *this;
+    }
+    /// Cheap metadata copy for an immutable snapshot assembled from track parts.
+    ProjectModel headerCopy() const {
+        ProjectModel copy;
+        static_cast<ProjectMetadata&>(copy) = *this;
+        return copy;
+    }
     std::vector<TrackModel> tracks;
 
     TrackModel* findTrack(const std::string& id);
@@ -738,10 +773,22 @@ struct ProjectModel {
 
     /// Index of a track in `tracks`, or npos.
     size_t indexOf(const std::string& id) const;
+    /// Required after a batch changes IDs without changing vector size.
+    /// Ordinary insertion/removal and indexed reorders are detected on lookup.
+    void invalidateTrackIndex() const { m_trackIndex.clear(); invalidateStructure(); }
+    void invalidateStructure() const { ++m_structureRevision; m_visibleRowsValid = false; }
+    void useExplicitStructureCache() { m_explicitStructureCache = true; invalidateStructure(); }
+    std::uint64_t structureRevision() const { return m_structureRevision; }
+
 
 private:
     void rebuildTrackIndex() const;
     mutable std::unordered_map<std::string, size_t> m_trackIndex;
+    bool m_explicitStructureCache = false;
+    mutable std::uint64_t m_structureRevision = 1;
+    mutable bool m_visibleRowsValid = false;
+    mutable const TrackModel* m_visibleTracksData = nullptr;
+    mutable std::size_t m_visibleTracksSize = 0;
     mutable std::vector<TrackRow> m_visibleRows;
     mutable std::uint64_t m_visibleRowsSignature = 0;
     friend const std::vector<TrackRow>& visibleTracks(const ProjectModel& project);

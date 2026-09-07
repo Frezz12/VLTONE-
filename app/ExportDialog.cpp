@@ -131,7 +131,7 @@ ExportDialog::ExportDialog(daw::EngineController& controller,
                            const ui::SelectionModel* selection, QWidget* parent,
                            const QString& projectPath)
     : QDialog(parent), m_controller(controller), m_selection(selection) {
-    setWindowTitle(tr("Render — %1").arg(QApplication::applicationName()));
+    setWindowTitle(tr("Render — %1").arg(QApplication::applicationDisplayName()));
     setModal(true);
     setSizeGripEnabled(true);
     setObjectName(QStringLiteral("ExportDialog"));

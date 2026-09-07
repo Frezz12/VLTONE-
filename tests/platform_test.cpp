@@ -117,7 +117,12 @@ int main() {
     check(audio::platform::isDecodableExtension("wav"), "accepts .wav");
     check(audio::platform::isDecodableExtension("flac"), "accepts .flac");
     check(audio::platform::isDecodableExtension("aiff"), "accepts .aiff");
-    check(!audio::platform::isDecodableExtension("m4a"), "rejects .m4a (no AAC)");
+#if defined(__APPLE__) || defined(_WIN32)
+    check(audio::platform::isDecodableExtension("m4a"), "accepts .m4a through native codecs");
+    check(audio::platform::isDecodableExtension("mp4a"), "accepts .mp4a alias");
+#else
+    check(!audio::platform::isDecodableExtension("m4a"), "does not offer unavailable native codecs");
+#endif
     check(!audio::platform::isDecodableExtension("txt"), "rejects .txt");
 
     // ── The extension list every dialog, drop target and the browser share ──

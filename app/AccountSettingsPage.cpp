@@ -12,11 +12,11 @@
 
 AccountSettingsPage::AccountSettingsPage(QWidget* parent) : QWidget(parent) {
     auto* column = new QVBoxLayout(this);
-    auto* title = new QLabel(tr("VLT Studio account"), this);
+    auto* title = new QLabel(tr("VLTONE account"), this);
     QFont font = title->font(); font.setBold(true); font.setPointSize(font.pointSize() + 2);
     title->setFont(font);
     column->addWidget(title);
-    auto* copy = new QLabel(tr("Your Demo entitlement and AI allowance are verified by the VLT account service."), this);
+    auto* copy = new QLabel(tr("Your Demo entitlement and AI allowance are verified by the VLTONE account service."), this);
     copy->setWordWrap(true);
     column->addWidget(copy);
     auto* form = new QFormLayout;

@@ -990,7 +990,7 @@ func validateClipSampleEdit(raw json.RawMessage) error {
 		return invalidf("command payload sample loop is inverted")
 	}
 	numeric := map[string][2]float64{
-		"stretchTime": {0.01, 100}, "stretchPitch": {-96, 96},
+		"stretchTime": {0.001, 1000}, "stretchPitch": {-96, 96},
 		"formant": {-96, 96}, "boost": {-4, 4}, "eqLow": {-4, 4},
 		"eqMid": {-4, 4}, "eqHigh": {-4, 4}, "ringMix": {0, 1},
 		"ringFreq": {0, 1}, "cut": {0, 1}, "res": {0, 1},

@@ -175,6 +175,11 @@ void TelemetryClient::sample() {
 
 void TelemetryClient::flushSample() {
     if (!m_sampleCount) return;
+    m_latest = m_window->telemetrySnapshot(true);
+    auto snapshot = m_latest.value(QStringLiteral("snapshot")).toObject();
+    snapshot.insert(QStringLiteral("window_ms"), double(m_sampleWindow.elapsed()));
+    snapshot.insert(QStringLiteral("measurement_count"), m_sampleCount);
+    m_latest.insert(QStringLiteral("snapshot"), snapshot);
     m_latest.insert(QStringLiteral("process_cpu"), m_processSum / m_sampleCount);
     m_latest.insert(QStringLiteral("system_cpu"), m_systemSum / m_sampleCount);
     m_latest.insert(QStringLiteral("dsp_load"), m_dspSum / m_sampleCount);

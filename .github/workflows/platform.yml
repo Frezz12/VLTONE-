@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      build_server_bundle:
+        description: Build the deployable API, website and admin bundle
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -137,14 +142,20 @@ jobs:
           pnpm --filter @vlt/admin test
 
       - name: Build immutable server bundle
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: bash packaging/server/build-bundle.sh "${GITHUB_REF_NAME#v}"
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_server_bundle)
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(python3 -c 'import json; print(json.load(open("vcpkg.json"))["version"])')-${GITHUB_SHA:0:7}"
+          fi
+          bash packaging/server/build-bundle.sh "$version"
 
       - name: Publish immutable server bundle
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_server_bundle)
         uses: actions/upload-artifact@v4
         with:
-          name: vlt-account-platform-${{ github.ref_name }}
+          name: vlt-account-platform-${{ github.sha }}
           path: |
             dist/server/*.tar.gz
             dist/server/*.sha256
@@ -172,7 +183,7 @@ jobs:
       - name: Download immutable server bundle
         uses: actions/download-artifact@v4
         with:
-          name: vlt-account-platform-${{ github.ref_name }}
+          name: vlt-account-platform-${{ github.sha }}
           path: dist/server
 
       - name: Sign server bundle provenance

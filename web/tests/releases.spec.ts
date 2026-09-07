@@ -25,7 +25,7 @@ test("release history exposes only available files and warns before DMG", async 
   await expect(dialog.getByText(/sudo xattr -rd/)).toBeVisible();
   await dialog.getByRole("button", { name: "Копировать" }).click();
   await expect(dialog.getByRole("button", { name: "Скопировано" })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('sudo xattr -rd com.apple.quarantine "/Applications/VLT Studio Pro.app"');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('sudo xattr -rd com.apple.quarantine "/Applications/VLTONE.app"');
   await page.keyboard.press("Escape");
   await expect(dialog).not.toBeVisible();
   await expect(macDownload).toBeFocused();

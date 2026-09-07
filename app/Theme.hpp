@@ -101,7 +101,7 @@ public:
     bool hasCustomFont() const { return m_fontId >= 0; }
     QString customFontFamily() const { return m_fontFamily; }
     QString customFontFileName() const { return m_fontFileName; }
-    QString systemFontFamily() const { return m_systemFont.family(); }
+    QString defaultFontFamily() const { return m_defaultFont.family(); }
 
     /// Filesystem-isolated import/reset check used by --selftest.
     bool checkFontForTest(QString* error = nullptr);
@@ -119,7 +119,7 @@ private:
 
     QVector<Theme> m_presets;
     Theme m_theme;
-    QFont m_systemFont;
+    QFont m_defaultFont;
     int m_fontId = -1;
     QString m_fontFamily;
     QString m_fontFileName;

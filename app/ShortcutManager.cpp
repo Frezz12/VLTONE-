@@ -146,6 +146,12 @@ int latinKeyForCharacter(QChar character) {
 }
 
 int physicalUsKeyImpl(const QKeyEvent* event) {
+    // A synthetic event has no native payload. On macOS virtual key zero is
+    // also the physical A key; treating every synthetic arrow as A dispatches
+    // an unrelated global command before the focused control receives it.
+    const bool hasNativeCode = event->spontaneous() || event->nativeVirtualKey() != 0 ||
+                              event->nativeScanCode() != 0 || event->nativeModifiers() != 0;
+    if (hasNativeCode) {
 #if defined(Q_OS_MACOS)
     if (const int key = fromTable(event->nativeVirtualKey(), kMacKeys)) return key;
 #elif defined(Q_OS_WIN)
@@ -156,6 +162,7 @@ int physicalUsKeyImpl(const QKeyEvent* event) {
         scan -= 8;
     if (const int key = fromTable(scan, kPcKeys)) return key;
 #endif
+    }
     // Remote desktops and synthetic events do not always carry native codes.
     // The Cyrillic fallback still covers the common layout explicitly.
     if (!event->text().isEmpty())

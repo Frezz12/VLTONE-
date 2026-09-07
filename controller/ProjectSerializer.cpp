@@ -330,7 +330,7 @@ ClipSampleEditModel clipSampleEditFromJson(const json& j) {
     s.loopStart = std::clamp(j.value("loopStart", 0.0), 0.0, 1.0);
     s.loopEnd = std::clamp(j.value("loopEnd", 1.0), 0.0, 1.0);
     s.stretchMode = ClipStretchMode(std::clamp(j.value("stretchMode", 0), 0, 4));
-    s.stretchTime = std::clamp(j.value("stretchTime", 1.0), 0.25, 4.0);
+    s.stretchTime = std::clamp(j.value("stretchTime", 1.0), 0.001, 1000.0);
     s.stretchPitch = std::clamp(j.value("stretchPitch", 0.0), -24.0, 24.0);
     s.formant = std::clamp(j.value("formant", 0.0), -12.0, 12.0);
     s.rootNote = std::clamp(j.value("rootNote", 60), 0, 127);
@@ -686,6 +686,11 @@ json trackToJson(const TrackModel& t, MediaPaths media) {
             {"inserts", insertsToJson(t.samplerFx.inserts)},
         };
     }
+    if (t.freeze.active()) {
+        track["freeze"] = json{{"file", mediaReference(t.freeze.filePath, media)},
+            {"durationSeconds", t.freeze.durationSeconds},
+            {"sampleRate", t.freeze.sampleRate}};
+    }
     return track;
 }
 
@@ -748,6 +753,14 @@ TrackModel trackFromJson(const json& j, const std::string& mediaDir) {
         for (const auto& jc : clips) {
             t.clips.push_back(clipFromJson(jc, mediaDir));
         }
+    }
+    if (j.contains("freeze") && j.at("freeze").is_object()) {
+        const auto& frozen = j.at("freeze");
+        const std::string file = frozen.value("file", "");
+        if (!file.empty()) t.freeze.filePath = platform::pathToUtf8(
+            platform::pathFromUtf8(mediaDir) / platform::pathFromUtf8(file));
+        t.freeze.durationSeconds = frozen.value("durationSeconds", 0.0);
+        t.freeze.sampleRate = frozen.value("sampleRate", 0.0);
     }
     return t;
 }
@@ -1114,6 +1127,7 @@ audio::Result ProjectSerializer::save(const ProjectModel& project,
             for (auto& take : c.takes) copyMedia(take.filePath);
         }
     }
+    for (auto& track : persisted.tracks) copyMedia(track.freeze.filePath);
     copyMedia(persisted.coverImagePath);
     if (!copyFailure.empty()) {
         return audio::Result::fail(audio::EngineError::FileWriteError,

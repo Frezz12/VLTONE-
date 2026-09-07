@@ -4,6 +4,7 @@
 #include "Core/Result.hpp"
 #include "Core/AudioBuffer.hpp"
 #include "Core/IAudioCallback.hpp"
+#include "RealtimeMetrics.hpp"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -141,7 +142,13 @@ public:
     // Invoked from the PortAudio C callback trampoline (see the .cpp). Public
     // only so that trampoline can reach it; not part of the intended API.
     int processStream(const void* input, void* output,
-                      unsigned long frameCount);
+                      unsigned long frameCount, unsigned long statusFlags = 0);
+
+    daw::rt::BlockMetrics& callbackMetrics() noexcept { return m_callbackMetrics; }
+    struct Xruns { std::uint64_t inputUnderflow, inputOverflow, outputUnderflow, outputOverflow; };
+    Xruns xruns() const noexcept {
+        return {m_xruns[0].load(), m_xruns[1].load(), m_xruns[2].load(), m_xruns[3].load()};
+    }
 
 private:
     Result ensurePortAudio();
@@ -150,6 +157,7 @@ private:
     Result adoptConfiguration(const AudioDeviceConfig& config);
     int resolveDeviceIndex(const std::string& uid, bool wantInput) const;
     void captureCurrentDeviceInfo();
+    daw::rt::AudioWorkerConfig workerConfiguration() const;
 
     // PortAudio handles kept opaque so <portaudio.h> stays out of this header.
     void* m_stream = nullptr;          // PaStream*
@@ -183,6 +191,8 @@ private:
     AudioBuffer m_inputWrapper;
 
     // Diagnostics — portable types (no OSStatus / UInt32).
+    daw::rt::BlockMetrics m_callbackMetrics;
+    std::atomic<std::uint64_t> m_xruns[4]{};
     std::atomic<float> m_diagInputRMS[2] = {0.0f, 0.0f};
     std::atomic<float> m_diagInputPeak[2] = {0.0f, 0.0f};
     std::atomic<int> m_diagLastRenderStatus{-1};

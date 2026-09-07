@@ -30,6 +30,7 @@ type desktopLoginRequest struct {
 type desktopRefreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
 	AppVersion   string `json:"app_version"`
+	RequestID    string `json:"request_id"`
 }
 
 // The desktop may legitimately run offline for up to 72 hours. The reporter
@@ -198,23 +199,33 @@ func (s *Server) desktopRefresh(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	if header := r.Header.Get("Idempotency-Key"); header != "" {
+		if input.RequestID != "" && input.RequestID != header {
+			writeError(w, r, 422, "refresh_request_invalid", "Refresh request IDs do not match.", nil)
+			return
+		}
+		input.RequestID = header
+	}
+	if input.RequestID != "" {
+		id, err := uuid.Parse(input.RequestID)
+		if err != nil || id == uuid.Nil {
+			writeError(w, r, 422, "refresh_request_invalid", "Refresh request ID must be a UUID.", nil)
+			return
+		}
+		input.RequestID = id.String()
+	}
 	now := time.Now().UTC()
 	var old model.DesktopSession
 	err := s.DB.Where("refresh_token_hash = ?", auth.HashToken(input.RefreshToken)).First(&old).Error
 	if err != nil {
-		writeError(w, r, http.StatusUnauthorized, "refresh_token_invalid", "Desktop session could not be refreshed.", nil)
-		return
-	}
-	if old.RotatedAt != nil {
-		if err := s.revokeDesktopSessionsAfterRefreshReuse(old.UserID, now); err != nil {
-			writeError(w, r, http.StatusInternalServerError, "session_revoke_failed",
-				"Compromised desktop sessions could not be closed.", nil)
-			return
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeError(w, r, http.StatusUnauthorized, "refresh_token_invalid", "Desktop session could not be refreshed.", nil)
+		} else {
+			writeError(w, r, 503, "refresh_unavailable", "Desktop session service is unavailable.", nil)
 		}
-		writeError(w, r, http.StatusUnauthorized, "refresh_token_reused", "Refresh token reuse was detected. Sign in again.", nil)
 		return
 	}
-	if old.RevokedAt != nil || !old.ExpiresAt.After(now) {
+	if old.RotatedAt == nil && (old.RevokedAt != nil || !old.ExpiresAt.After(now)) {
 		writeError(w, r, http.StatusUnauthorized, "refresh_token_invalid", "Desktop session could not be refreshed.", nil)
 		return
 	}
@@ -229,6 +240,9 @@ func (s *Server) desktopRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, "session_failed",
 			"Desktop session could not be created.", nil)
 		return
+	}
+	if input.RequestID != "" {
+		refresh, reporter = s.Signer.RefreshTokenPair(input.RefreshToken, input.RequestID)
 	}
 	next := model.DesktopSession{
 		ID: uuid.New(), UserID: old.UserID, DeviceID: old.DeviceID,
@@ -247,12 +261,18 @@ func (s *Server) desktopRefresh(w http.ResponseWriter, r *http.Request) {
 		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).
 			Where("id = ? AND status = ?", old.UserID, model.UserActive).
 			First(&user).Error; err != nil {
-			return errDesktopAccountUnavailable
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errDesktopAccountUnavailable
+			}
+			return err
 		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id = ? AND user_id = ? AND revoked_at IS NULL", old.DeviceID,
 				old.UserID).First(&device).Error; err != nil {
-			return errDesktopAccountUnavailable
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errDesktopAccountUnavailable
+			}
+			return err
 		}
 		var current model.DesktopSession
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -261,15 +281,43 @@ func (s *Server) desktopRefresh(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if current.RotatedAt != nil {
-			return errRefreshReuse
+			if input.RequestID == "" || current.RefreshRequestHash != auth.HashToken(input.RequestID) || current.RotatedToID == nil {
+				return errRefreshReuse
+			}
+			// Retry the exact durable request, never rotate twice. A successor
+			// that has since been revoked, expired or rotated cannot be revived.
+			var successor model.DesktopSession
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+				"id = ? AND user_id = ? AND device_id = ? AND revoked_at IS NULL AND rotated_at IS NULL AND expires_at > ?",
+				*current.RotatedToID, old.UserID, old.DeviceID, now).First(&successor).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return errRefreshInvalid
+				}
+				return err
+			}
+			if successor.RefreshTokenHash != auth.HashToken(refresh) || successor.ReporterTokenHash != auth.HashToken(reporter) {
+				return errRefreshInvalid
+			}
+			successor.ReporterExpiresAt = now.Add(reporterTokenLifetime)
+			if err := tx.Model(&successor).Updates(map[string]any{"last_seen_at": now, "reporter_expires_at": successor.ReporterExpiresAt}).Error; err != nil {
+				return err
+			}
+			material.User, material.Device, material.Session = user, device, successor
+			material.Signed, err = s.signDesktopSessionTokens(user, device, successor, now)
+			return err
 		}
 		if current.RevokedAt != nil || !current.ExpiresAt.After(now) {
 			return errRefreshInvalid
 		}
 		old = current
-		if err := tx.Model(&current).Updates(map[string]any{
+		updates := map[string]any{
 			"rotated_at": now, "revoked_at": now,
-		}).Error; err != nil {
+		}
+		if input.RequestID != "" {
+			updates["refresh_request_hash"] = auth.HashToken(input.RequestID)
+			updates["rotated_to_id"] = next.ID
+		}
+		if err := tx.Model(&current).Updates(updates).Error; err != nil {
 			return err
 		}
 		if err := tx.Create(&next).Error; err != nil {
@@ -305,7 +353,11 @@ func (s *Server) desktopRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, r, http.StatusUnauthorized, "refresh_token_invalid", "Desktop session could not be refreshed.", nil)
+		if errors.Is(err, errRefreshInvalid) {
+			writeError(w, r, http.StatusUnauthorized, "refresh_token_invalid", "Desktop session could not be refreshed.", nil)
+		} else {
+			writeError(w, r, 503, "refresh_unavailable", "Desktop session service is unavailable.", nil)
+		}
 		return
 	}
 	s.disconnectCollaborationDesktopSession(old.ID, "session_rotated")

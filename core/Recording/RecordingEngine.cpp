@@ -206,7 +206,7 @@ std::string AudioRecorder::makeRecordingPath(TrackID trackID,
     namespace fs = std::filesystem;
 
     fs::path directory = m_recordPath.empty()
-        ? fs::temp_directory_path() / "VLT Studio Pro Recordings"
+        ? fs::temp_directory_path() / "VLTONE Recordings"
         : daw::platform::pathFromUtf8(m_recordPath);
 
     std::error_code ec;

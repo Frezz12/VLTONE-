@@ -28,14 +28,14 @@ namespace {
 
 constexpr int kStartupWidth = 460;
 constexpr int kCompactHeight = 380;
-constexpr int kLoginHeight = 500;
+constexpr int kLoginHeight = 550;
 
 } // namespace
 
 StartupWindow::StartupWindow(account::Service* service, QWidget* parent)
     : QDialog(parent), m_service(service) {
     setObjectName(QStringLiteral("StartupWindow"));
-    setWindowTitle(QStringLiteral("VLT Studio Pro"));
+    setWindowTitle(QStringLiteral("VLTONE"));
     setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
                    Qt::WindowCloseButtonHint);
     setModal(true);
@@ -77,14 +77,14 @@ StartupWindow::StartupWindow(account::Service* service, QWidget* parent)
     m_logo->setObjectName(QStringLiteral("StartupLogo"));
     m_logo->setFixedSize(76, 76);
     m_logo->setAlignment(Qt::AlignCenter);
-    m_logo->setAccessibleName(tr("VLT Studio Pro logo"));
+    m_logo->setAccessibleName(tr("VLTONE logo"));
     const QPixmap logo(QStringLiteral(":/vlt/icon-1024.png"));
     if (!logo.isNull()) {
         m_logo->setPixmap(logo.scaled(QSize(60, 60), Qt::KeepAspectRatio,
                                       Qt::SmoothTransformation));
     }
 
-    auto* title = new QLabel(QStringLiteral("VLT STUDIO PRO"), this);
+    auto* title = new QLabel(QStringLiteral("VLTONE"), this);
     title->setObjectName(QStringLiteral("StartupTitle"));
     title->setAlignment(Qt::AlignCenter);
     QFont titleFont = title->font();
@@ -102,7 +102,7 @@ StartupWindow::StartupWindow(account::Service* service, QWidget* parent)
     m_status->setAlignment(Qt::AlignCenter);
     QFont statusFont = m_status->font();
     statusFont.setPixelSize(14);
-    statusFont.setBold(true);
+    statusFont.setWeight(QFont::DemiBold);
     m_status->setFont(statusFont);
 
     m_detail = new QLabel(this);
@@ -149,6 +149,10 @@ StartupWindow::StartupWindow(account::Service* service, QWidget* parent)
     m_login->setDefault(true);
     connect(m_login, &QPushButton::clicked, this, &StartupWindow::submit);
     loginColumn->addWidget(m_login);
+    m_restore = new QPushButton(m_loginPanel);
+    m_restore->setObjectName(QStringLiteral("StartupRestoreButton"));
+    connect(m_restore, &QPushButton::clicked, service, &account::Service::restoreSavedSession);
+    loginColumn->addWidget(m_restore);
 
     auto* links = new QHBoxLayout;
     links->setContentsMargins(0, 0, 0, 0);
@@ -184,6 +188,7 @@ StartupWindow::StartupWindow(account::Service* service, QWidget* parent)
 
     connect(service, &account::Service::busyChanged, this, [this](bool busy) {
         m_login->setDisabled(busy);
+        m_restore->setDisabled(busy);
         m_email->setDisabled(busy);
         m_password->setDisabled(busy);
         if (busy) {
@@ -331,7 +336,7 @@ void StartupWindow::changeEvent(QEvent* event) {
 
 void StartupWindow::retranslateUi() {
     m_language->setAccessibleName(tr("Application language"));
-    m_logo->setAccessibleName(tr("VLT Studio Pro logo"));
+    m_logo->setAccessibleName(tr("VLTONE logo"));
     m_product->setText(tr("Digital audio workstation"));
     m_progress->setAccessibleName(tr("Application startup progress"));
     m_email->setAccessibleName(tr("Email"));
@@ -339,6 +344,7 @@ void StartupWindow::retranslateUi() {
     m_emailLabel->setText(tr("Email"));
     m_passwordLabel->setText(tr("Password"));
     m_login->setText(tr("Sign in"));
+    m_restore->setText(tr("Restore saved sign-in"));
     m_register->setText(tr("Create account"));
     m_reset->setText(tr("Forgot password?"));
 

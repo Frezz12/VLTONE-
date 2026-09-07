@@ -4,7 +4,7 @@
 # process that is allowed to die. See scan_main.cpp for the reasoning.
 add_executable(daw_scan scan_main.cpp)
 daw_add_windows_metadata(daw_scan "daw_scan.exe" "daw_scan"
-                         "VLT Studio Pro plugin scanner")
+                         "VLTONE plugin scanner")
 
 target_link_libraries(daw_scan PRIVATE daw_pluginhost daw_json)
 

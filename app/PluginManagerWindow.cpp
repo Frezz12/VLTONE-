@@ -68,7 +68,7 @@ QTableWidgetItem* readOnlyItem(const QString& text) {
 PluginManagerWindow::PluginManagerWindow(daw::EngineController* controller,
                                          QWidget* parent)
     : QDialog(parent, Qt::Widget), m_controller(controller) {
-    setWindowTitle(tr("Plugin Manager — %1").arg(QApplication::applicationName()));
+    setWindowTitle(tr("Plugin Manager — %1").arg(QApplication::applicationDisplayName()));
     resize(880, 580);
 
     auto* root = new QVBoxLayout(this);
@@ -383,7 +383,7 @@ QWidget* PluginManagerWindow::buildBlacklistTab() {
     auto* hint = new QLabel(
         tr("A plugin that crashed, hung or produced nothing usable during the scan. "
            "It is skipped by later scans, because a plugin that crashes the scanner "
-           "would crash VLT Studio Pro."),
+           "would crash VLTONE."),
         page);
     hint->setObjectName(QStringLiteral("PluginHint"));
     hint->setWordWrap(true);

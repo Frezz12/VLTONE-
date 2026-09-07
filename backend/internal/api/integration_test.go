@@ -10,7 +10,9 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -239,9 +241,28 @@ func TestPostgresAccountFlow(t *testing.T) {
 		"event_id": uuid.New(), "session_id": sessionID, "kind": "sample", "occurred_at": time.Now().UTC(),
 		"payload": map[string]any{"process_cpu": 12.5, "system_cpu": 30.0, "dsp_load": 18.0, "dsp_peak": 22.0, "xruns": 0, "resident_bytes": 256_000_000, "sample_rate": 48_000, "buffer_frames": 256, "track_count": 8, "clip_count": 14, "plugin_count": 1, "playback_state": "playing", "recording": false, "foreground": true, "plugins": []any{map[string]any{"name": "Synth", "vendor": "Vendor", "version": "1.0", "format": "VST3", "count": 1}}},
 	}}}
+	samplePayload := validSample["events"].([]any)[0].(map[string]any)["payload"].(map[string]any)
+	samplePayload["snapshot"] = map[string]any{"schema_version": 1, "tempo": 120, "tracks": []any{map[string]any{"id": "bass", "name": "Бас", "inserts": []any{map[string]any{"name": "Compressor", "mix": 1, "bypassed": true}}}}, "audio": map[string]any{"output": map[string]any{"name": "USB Interface", "host_api": "Core Audio"}}}
 	storedSample := performJSON(router, http.MethodPost, "/v1/desktop/telemetry/batch", validSample, "203.0.113.23:1234", nil, telemetryHeaders)
 	if storedSample.Status != http.StatusAccepted {
 		t.Fatalf("valid telemetry sample was rejected: %d %v", storedSample.Status, storedSample.Body)
+	}
+	// Retried and concurrent sample batches must not repeat side effects.
+	var retries sync.WaitGroup
+	responses := make(chan testResponse, 8)
+	for i := 0; i < 8; i++ {
+		retries.Add(1)
+		go func() {
+			defer retries.Done()
+			responses <- performJSON(router, http.MethodPost, "/v1/desktop/telemetry/batch", validSample, "203.0.113.23:1234", nil, telemetryHeaders)
+		}()
+	}
+	retries.Wait()
+	close(responses)
+	for response := range responses {
+		if response.Status != http.StatusAccepted || response.Body["duplicates"] != float64(1) {
+			t.Fatalf("concurrent sample retry: %v", response)
+		}
 	}
 	var sampleCount int64
 	if err := db.Model(&model.TelemetrySample{}).Where("user_id = ?", user.ID).Count(&sampleCount).Error; err != nil || sampleCount != 1 {
@@ -356,8 +377,61 @@ func TestPostgresAccountFlow(t *testing.T) {
 	if adminLogin.Status != http.StatusOK || len(adminLogin.Cookies) == 0 {
 		t.Fatalf("admin login failed: %d %v", adminLogin.Status, adminLogin.Body)
 	}
+	telemetryURL := "/v1/admin/users/" + user.ID.String() + "/telemetry"
+	history := performJSON(router, http.MethodGet, telemetryURL+"?limit=1", nil, "203.0.113.40:1234", adminLogin.Cookies, nil)
+	if history.Status != 200 {
+		t.Fatalf("history failed: %v", history)
+	}
+	rows, ok := history.Body["samples"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("history rows: %v", history.Body)
+	}
+	row := rows[0].(map[string]any)
+	sampleEventID := row["event_id"].(string)
+	report := performJSON(router, http.MethodGet, telemetryURL+"/"+sampleEventID, nil, "203.0.113.40:1234", adminLogin.Cookies, nil)
+	if report.Status != 200 {
+		t.Fatalf("detail failed: %v", report)
+	}
+	reportPayload := report.Body["payload"].(map[string]any)
+	reportSnapshot := reportPayload["snapshot"].(map[string]any)
+	if reportSnapshot["tracks"].([]any)[0].(map[string]any)["name"] != "Бас" {
+		t.Fatalf("track metadata lost: %v", reportSnapshot)
+	}
+	hidden := performJSON(router, http.MethodGet, "/v1/admin/users/"+uuid.NewString()+"/telemetry/"+sampleEventID, nil, "203.0.113.40:1234", adminLogin.Cookies, nil)
+	if hidden.Status != 404 {
+		t.Fatalf("cross-user telemetry exposed: %v", hidden)
+	}
+	unauthenticated := performJSON(router, http.MethodGet, telemetryURL+"/"+sampleEventID, nil, "203.0.113.41:1234", nil, nil)
+	if unauthenticated.Status != 401 {
+		t.Fatalf("anonymous telemetry exposed: %v", unauthenticated)
+	}
+	invalidCursor := performJSON(router, http.MethodGet, telemetryURL+"?before=invalid", nil, "203.0.113.40:1234", adminLogin.Cookies, nil)
+	if invalidCursor.Status != 400 {
+		t.Fatal("invalid cursor accepted")
+	}
+	// Two samples at the exact same timestamp must remain individually pageable.
+	var firstSample model.TelemetrySample
+	if err := db.First(&firstSample, "event_id = ?", sampleEventID).Error; err != nil {
+		t.Fatal(err)
+	}
+	secondSample := firstSample
+	secondSample.ID = uuid.New()
+	secondSample.EventID = uuid.New()
+	if err := db.Create(&secondSample).Error; err != nil {
+		t.Fatal(err)
+	}
+	pageOne := performJSON(router, http.MethodGet, telemetryURL+"?limit=1", nil, "203.0.113.40:1234", adminLogin.Cookies, nil)
+	nextCursor := pageOne.Body["next_cursor"].(string)
+	pageTwo := performJSON(router, http.MethodGet, telemetryURL+"?limit=1&before="+url.QueryEscape(nextCursor), nil, "203.0.113.40:1234", adminLogin.Cookies, nil)
+	if pageTwo.Status != 200 || len(pageTwo.Body["samples"].([]any)) != 1 || pageOne.Body["samples"].([]any)[0].(map[string]any)["id"] == pageTwo.Body["samples"].([]any)[0].(map[string]any)["id"] {
+		t.Fatalf("cursor skipped/repeated tied sample: %v", pageTwo)
+	}
+	if err := db.Delete(&secondSample).Error; err != nil {
+		t.Fatal(err)
+	}
 	adminCSRF, _ := adminLogin.Body["csrf_token"].(string)
 	adminHeaders := map[string]string{"Origin": cfg.AdminOrigin, "X-CSRF-Token": adminCSRF}
+	t.Run("browser backgrounds", func(t *testing.T) { checkBrowserBackgrounds(t, server, router, adminLogin.Cookies, adminHeaders) })
 	emptyRelease := map[string]any{
 		"version": "", "summary_ru": "", "summary_en": "", "features_ru": []string{}, "features_en": []string{},
 		"changes_ru": []string{}, "changes_en": []string{}, "fixes_ru": []string{}, "fixes_en": []string{},
@@ -427,4 +501,12 @@ func TestPostgresAccountFlow(t *testing.T) {
 	if dashboard.Status != http.StatusOK || dashboard.Body["activity"] == nil || dashboard.Body["ai_daily"] == nil {
 		t.Fatalf("admin dashboard aggregates failed: %d %v", dashboard.Status, dashboard.Body)
 	}
+	t.Run("refresh retry after restart", func(t *testing.T) {
+		login := deviceLogin(secondID, "203.0.113.65:1234")
+		if login.Status != 200 {
+			t.Fatalf("refresh fixture login: %d", login.Status)
+		}
+		checkDesktopRefreshRetry(t, server, router, login.Body["refresh_token"].(string))
+	})
+
 }

@@ -2,7 +2,7 @@
 
 #include "Internal/GraphitInstance.hpp"
 
-#include <QWidget>
+#include "UiFrameClock.hpp"
 
 #include <array>
 #include <optional>
@@ -21,7 +21,7 @@ namespace ui { class Knob; }
 namespace daw { class EngineController; }
 
 /// Compact host-drawn editor for the built-in Graphit effect.
-class GraphitPanel final : public QWidget {
+class GraphitPanel final : public ui::FrameWidget {
     Q_OBJECT
 public:
     GraphitPanel(daw::EngineController* controller, QString channelId,
@@ -52,6 +52,7 @@ private:
     void selectMode(int mode);
     void showModeAutomationMenu(QPushButton* button, const QPoint& position);
     void refresh();
+    void refreshTelemetry();
 
     daw::EngineController* m_controller = nullptr;
     QString m_channelId;
@@ -64,6 +65,10 @@ private:
     QLabel* m_amountReadout = nullptr;
     std::array<QPushButton*, 5> m_modeButtons{};
     QTimer* m_timer = nullptr;
+    ui::FrameTimer* m_visualTimer = nullptr;
+    bool m_reducedMotion = false;
+    bool m_controlsValid = false;
+    double m_historyTime = 0.0;
     std::optional<double> m_amountGestureStart;
     std::optional<double> m_priorityGestureStart;
     std::array<float, daw::plugins::graphit::kHistorySize> m_history{};

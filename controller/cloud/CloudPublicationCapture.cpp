@@ -29,6 +29,8 @@ std::string audioMimeType(const fs::path& path) {
     if (extension == ".flac") return "audio/flac";
     if (extension == ".aif" || extension == ".aiff") return "audio/aiff";
     if (extension == ".mp3") return "audio/mpeg";
+    if (extension == ".m4a" || extension == ".mp4a" || extension == ".mp4") return "audio/mp4";
+    if (extension == ".aac") return "audio/aac";
     if (extension == ".ogg" || extension == ".oga") return "audio/ogg";
     if (extension == ".m4a" || extension == ".aac") return "audio/mp4";
     return "application/octet-stream";
@@ -101,7 +103,10 @@ struct CloudPublicationCapture::Impl {
 };
 
 CloudPublicationCapture::CloudPublicationCapture(ProjectModel source)
-    : document(std::move(source)), m_impl(std::make_unique<Impl>()) {}
+    : document(std::move(source)), m_impl(std::make_unique<Impl>()) {
+    // Freeze is a disposable local cache; publish the original editable source.
+    for (auto& track : document.tracks) track.freeze = {};
+}
 
 CloudPublicationCapture::CloudPublicationCapture(
     CloudPublicationCapture&&) noexcept = default;

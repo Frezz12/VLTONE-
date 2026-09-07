@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QHBoxLayout>
+#include <QPointer>
+#include <QVector>
 #include <QWidget>
 
 namespace icons { enum class Glyph; }
@@ -42,10 +44,14 @@ public:
     /// Mirror whether any automation lanes are currently expanded. Signal
     /// blocking keeps document refreshes from turning into user commands.
     void setAutomationVisible(bool visible);
-    /// Mirror the effective creation gesture: latched toolbar mode or a held
-    /// Alt/Option key. Signal blocking keeps a physical modifier from changing
-    /// the latched choice.
+    /// Mirror the explicit mode choice without emitting another toggle.
     void setAutomationCreationActive(bool active);
+    void setAutomationCreationShortcut(const QString& shortcut);
+    /// Keep a permanent boundary before the waveform control, even while it
+    /// is hidden. Its slot must not move when a context panel approaches it.
+    int contextRightEdge() const;
+    int contextLeftEdge() const;
+    void watchContextPanel(QWidget* panel);
 
 signals:
     void resized();
@@ -57,8 +63,7 @@ signals:
     /// Global reveal/collapse for automation lanes. Checked is the active
     /// state, so pressing the button a second time hides them again.
     void automationVisibilityToggled(bool visible);
-    /// The user clicked the creation-mode button. Alt/Option is momentary and
-    /// updates the same button visually without emitting this signal.
+    /// The user clicked the creation-mode button.
     void automationCreationModeToggled(bool enabled);
     void addTrackRequested();
     /// Right-click on the "+": the full list of track kinds, folders included.
@@ -67,10 +72,14 @@ signals:
     void addTrackMenuRequested(const QPoint& globalPos);
 
 protected:
+    bool event(QEvent*) override;
+    bool eventFilter(QObject*, QEvent*) override;
     void resizeEvent(QResizeEvent*) override;
     void paintEvent(QPaintEvent*) override;
 
 private:
+    void updateWaveformVisibility(QWidget* changingPanel = nullptr, bool showing = false);
+    QVector<QPointer<QWidget>> m_contextPanels;
     void applyTheme();
     /// Push the assistant's zone back to the end of the row. The zones are
     /// positional, and moving the browser to the right edge would otherwise

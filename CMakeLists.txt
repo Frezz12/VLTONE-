@@ -1,12 +1,12 @@
-# VLT Studio Pro — cross-platform (Windows + macOS) build.
+# VLTONE — cross-platform (Windows + macOS) build.
 # Replaces the macOS-only Xcode/xcodegen project. The old Swift/ObjC++ app
 # under DAW/ is not part of this build; it remains as a frozen reference until
 # the Qt app reaches parity.
 cmake_minimum_required(VERSION 3.24)
 
-project(VLTStudioPro
-    VERSION 0.1.7
-    DESCRIPTION "VLT Studio Pro digital audio workstation"
+project(VLTONE
+    VERSION 0.1.9
+    DESCRIPTION "VLTONE digital audio workstation"
     LANGUAGES CXX)
 
 include(cmake/WindowsResources.cmake)
@@ -22,8 +22,8 @@ if(NOT DAW_VCPKG_VERSION STREQUAL PROJECT_VERSION)
 endif()
 
 add_compile_definitions(
-    VLT_STUDIO_PRO_NAME="VLT Studio Pro"
-    VLT_STUDIO_PRO_VERSION="${PROJECT_VERSION}")
+    VLTONE_NAME="VLTONE"
+    VLTONE_VERSION="${PROJECT_VERSION}")
 
 # ── Global C++ settings ──
 set(CMAKE_CXX_STANDARD 23)
@@ -94,6 +94,17 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     if(DAW_HOST_MACOS_MAJOR)
         set(CMAKE_OSX_DEPLOYMENT_TARGET "${DAW_HOST_MACOS_MAJOR}.0" CACHE STRING "" FORCE)
         message(STATUS "macOS deployment target: ${CMAKE_OSX_DEPLOYMENT_TARGET} (host)")
+    endif()
+endif()
+
+option(DAW_RELEASE_IPO "Enable supported link-time optimization in Release builds" ON)
+if(DAW_RELEASE_IPO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT DAW_IPO_SUPPORTED OUTPUT DAW_IPO_ERROR LANGUAGES CXX)
+    if(DAW_IPO_SUPPORTED)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+    else()
+        message(STATUS "Release IPO unavailable: ${DAW_IPO_ERROR}")
     endif()
 endif()
 

@@ -29,7 +29,7 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
       </div>
       <figure className="hero-product">
         <Image src={`/manual/${locale}/arrangement.png`} width={1440} height={1200} priority alt={t("featureDawTitle")} />
-        <figcaption>VLT Studio Pro · {locale === "ru" ? "Рабочая область" : "Desktop workspace"}</figcaption>
+        <figcaption>VLTONE · {locale === "ru" ? "Рабочая область" : "Desktop workspace"}</figcaption>
       </figure>
     </section>
 
@@ -40,7 +40,7 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
       </article>)}</div>
     </section>
 
-    <section className="home-cta"><span>VLT Studio Pro</span><h2>{t("ctaTitle")}</h2><Link className="vlt-button" href={`/${locale}/register`}>{t("create")}<ArrowRight size={16} aria-hidden /></Link></section>
-    <footer className="home-footer"><span>VLT Studio Pro © 2026</span><span>{t("footer")}</span></footer>
+    <section className="home-cta"><span>VLTONE</span><h2>{t("ctaTitle")}</h2><Link className="vlt-button" href={`/${locale}/register`}>{t("create")}<ArrowRight size={16} aria-hidden /></Link></section>
+    <footer className="home-footer"><span>VLTONE © 2026</span><span>{t("footer")}</span></footer>
   </main>;
 }

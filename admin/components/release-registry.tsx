@@ -1,5 +1,6 @@
 "use client";
 
+import releaseTemplate from "../release-template.json";
 import type { APIError } from "@vlt/api-client";
 import { api } from "@vlt/api-client";
 import { FileArchive, ImagePlus, PackageOpen, Plus, Rocket, Save, Trash2, Upload } from "lucide-react";
@@ -33,57 +34,9 @@ const emptyRelease = (): Release => ({
   artifacts: [], screenshots: [], created_at: "", updated_at: "",
 });
 
-const release016Template = (): Release => ({
+const currentReleaseTemplate = (): Release => ({
   ...emptyRelease(),
-  version: "0.1.6",
-  summary_ru: "Улучшенный Bounce in Place и Offline Render, новые сценарии редактирования и более удобная работа с плагинами.",
-  summary_en: "Improved Bounce in Place and Offline Render, new editing workflows, and a more convenient plug-in experience.",
-  features_ru: [
-    "Offline Render показывает выбранные клипы и применяемые insert-эффекты.",
-    "В Piano Roll Shift-перетаскивание копирует одну ноту или всю выбранную группу.",
-    "Добавлена опциональная нижняя панель с текущей загрузкой аудиопроцессора.",
-    "Новый проект открывается с выбранной аудиодорожкой и открытым микшером.",
-    "Встроенные эффекты Equalizer, Gravity и Graphit доступны в insert-цепочке.",
-  ],
-  features_en: [
-    "Offline Render now lists the selected clips and insert effects being applied.",
-    "Shift-drag in Piano Roll duplicates a single note or the entire selected group.",
-    "Added an optional bottom status bar with live audio CPU usage.",
-    "New projects open with one selected audio track and the mixer visible.",
-    "Built-in Equalizer, Gravity, and Graphit effects are available in the insert chain.",
-  ],
-  changes_ru: [
-    "Выделение рамкой на таймлайне снова работает обычным перетаскиванием, а второй инструмент назначен на Ctrl.",
-    "Плейхед перемещается только с линейки и привязывается к сетке; то же поведение добавлено в Piano Roll.",
-    "Follow Playhead перенесён в левую панель, а на его прежнем месте добавлен визуальный масштаб волны клипа.",
-    "Громкость и панорама в контекстной панели поддерживают вертикальное и горизонтальное перетаскивание.",
-    "Новые дорожки получают акцентный цвет текущей темы.",
-    "Меню плагинов стало компактным, многоуровневым и прокручиваемым; быстрый поиск поддерживает Enter.",
-  ],
-  changes_en: [
-    "Timeline marquee selection works with a plain drag again, while the secondary tool is assigned to Ctrl.",
-    "The playhead moves only from the ruler and snaps to the grid; Piano Roll now follows the same behavior.",
-    "Follow Playhead moved to the left toolbar, and its former slot now controls visual clip waveform scale.",
-    "Volume and pan controls in the context panel support both vertical and horizontal dragging.",
-    "New tracks inherit the current theme accent color.",
-    "The plug-in menu is now compact, hierarchical, and scrollable; quick search supports Enter.",
-  ],
-  fixes_ru: [
-    "Исправлена маршрутизация Bounce in Place: новый клип звучит через новую дорожку, а не через исходную.",
-    "Исправлен выбор плагина мышью в быстром поиске.",
-    "Правый клик на таймлайне корректно включает ластик, удаляет клипы и снимает выделение в пустой области.",
-    "Mute, Solo и bypass insert-эффектов можно менять проводкой по нескольким элементам.",
-    "Убраны лишние пунктирные обводки у слайдеров.",
-    "Исправлено открытие страницы версии и загрузка файлов при API-адресе с суффиксом /v1.",
-  ],
-  fixes_en: [
-    "Fixed Bounce in Place routing so the new clip plays through its new track instead of the source track.",
-    "Fixed mouse selection in the quick plug-in search.",
-    "Right-click on the timeline now activates the eraser, deletes clips, and clears selection on empty space.",
-    "Mute, Solo, and insert bypass can be painted across multiple controls with one drag.",
-    "Removed unwanted dotted focus outlines around sliders.",
-    "Fixed release page loading and file uploads when the API URL includes the /v1 suffix.",
-  ],
+  ...releaseTemplate,
 });
 
 function lines(value: string) { return value.split("\n").map((item) => item.trim()).filter(Boolean); }
@@ -139,7 +92,7 @@ export function ReleaseRegistry() {
 
   function choose(item: Release) { setDraft(item); setStatus(""); setFieldErrors({}); }
   function startNew() { setDraft(emptyRelease()); setStatus(""); setFieldErrors({}); }
-  function useRelease016Template() { setDraft(release016Template()); setStatus("Шаблон 0.1.6 заполнен. Проверьте текст и сохраните черновик."); setFieldErrors({}); }
+  function useCurrentReleaseTemplate() { setDraft(currentReleaseTemplate()); setStatus("Шаблон релиза заполнен. Проверьте текст и сохраните черновик."); setFieldErrors({}); }
   function setList(field: ListField, value: string) { setDraft({ ...draft, [field]: lines(value) }); }
   function fail(reason: unknown) {
     const failure = reason as APIError;
@@ -256,7 +209,7 @@ export function ReleaseRegistry() {
   const fieldError = (name: string) => fieldErrors[name] ? <span className="release-field-error" role="alert">{fieldErrors[name]}</span> : null;
 
   return <AdminShell>
-    <div className="admin-page-head"><div><h1 className="vlt-title">Релизы</h1><p className="vlt-subtitle">Черновики, установщики и публичная история обновлений VLT Studio Pro.</p></div><button className="vlt-button" onClick={startNew} disabled={busy}><Plus size={16} aria-hidden />Новый релиз</button></div>
+    <div className="admin-page-head"><div><h1 className="vlt-title">Релизы</h1><p className="vlt-subtitle">Черновики, установщики и публичная история обновлений VLTONE.</p></div><button className="vlt-button" onClick={startNew} disabled={busy}><Plus size={16} aria-hidden />Новый релиз</button></div>
     {error && <div className="vlt-error">{error}</div>}
     {Object.keys(fieldErrors).length > 0 && <div className="vlt-error release-error-summary" ref={errorSummary} tabIndex={-1} role="alert"><strong>Исправьте поля перед продолжением:</strong><ul>{Object.entries(fieldErrors).map(([name, message]) => <li key={name}><a href={`#release-${name}`}>{message}</a></li>)}</ul></div>}
     <div className="release-registry-grid">
@@ -267,7 +220,7 @@ export function ReleaseRegistry() {
       </div></section>
 
       <div className="release-editor">
-        <section className="vlt-card vlt-card-pad"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">{draft.id ? `Версия ${draft.version || "без номера"}` : "Новый черновик"}</h2>{draft.status === "published" ? <span className="vlt-badge vlt-badge-accent">Опубликован</span> : !draft.id && <button className="vlt-button vlt-button-secondary" type="button" onClick={useRelease016Template} disabled={busy}><PackageOpen size={16} aria-hidden />Заполнить 0.1.6</button>}</div>
+        <section className="vlt-card vlt-card-pad"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">{draft.id ? `Версия ${draft.version || "без номера"}` : "Новый черновик"}</h2>{draft.status === "published" ? <span className="vlt-badge vlt-badge-accent">Опубликован</span> : !draft.id && <button className="vlt-button vlt-button-secondary" type="button" onClick={useCurrentReleaseTemplate} disabled={busy}><PackageOpen size={16} aria-hidden />Заполнить шаблон</button>}</div>
           <div className="release-form">
             <label className="vlt-label" htmlFor="release-version">Версия X.Y.Z<input id="release-version" className="vlt-input vlt-code" value={draft.version} disabled={draft.status === "published"} placeholder="0.1.2" onChange={(event) => setDraft({ ...draft, version: event.target.value })} />{fieldError("version")}</label>
             <label className="vlt-label" htmlFor="release-summary_ru">Кратко — русский<textarea id="release-summary_ru" className="vlt-input" value={draft.summary_ru} onChange={(event) => setDraft({ ...draft, summary_ru: event.target.value })} />{fieldError("summary_ru")}</label>

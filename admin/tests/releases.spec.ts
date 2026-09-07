@@ -1,3 +1,4 @@
+import releaseTemplate from "../release-template.json";
 import { expect, test } from "@playwright/test";
 
 test("admin saves a draft, uploads an installer, and publishes it", async ({ page }) => {
@@ -41,9 +42,9 @@ test("admin saves a draft, uploads an installer, and publishes it", async ({ pag
   await expect(errorSummary).toBeVisible();
   await expect(errorSummary).toBeFocused();
   await page.getByRole("button", { name: "Новый релиз" }).click();
-  await page.getByRole("button", { name: "Заполнить 0.1.6" }).click();
-  await expect(page.getByLabel("Версия X.Y.Z")).toHaveValue("0.1.6");
-  await expect(page.getByLabel("Кратко — русский")).toHaveValue(/Bounce in Place/);
+  await page.getByRole("button", { name: "Заполнить шаблон" }).click();
+  await expect(page.getByLabel("Версия X.Y.Z")).toHaveValue(releaseTemplate.version);
+  await expect(page.getByLabel("Кратко — русский")).toHaveValue(releaseTemplate.summary_ru);
 
   // Choosing a file on a new release must create its draft automatically.
   await page.getByLabel("Загрузить").first().setInputFiles({ name: "VLT-Setup.exe", mimeType: "application/octet-stream", buffer: Buffer.from("installer") });
@@ -54,7 +55,7 @@ test("admin saves a draft, uploads an installer, and publishes it", async ({ pag
   await page.getByRole("button", { name: "Добавить" }).click();
   await expect(page.getByText("Скриншот добавлен.")).toBeVisible();
   await page.getByRole("button", { name: "Опубликовать" }).click();
-  await expect(page.getByText("Версия 0.1.6 опубликована.")).toBeVisible();
+  await expect(page.getByText(`Версия ${releaseTemplate.version} опубликована.`)).toBeVisible();
   await expect(page.getByText("Опубликован", { exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.setViewportSize({ width: 800, height: 375 });

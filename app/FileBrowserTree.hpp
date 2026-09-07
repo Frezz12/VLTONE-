@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QHash>
+#include <QSet>
+#include <memory>
 #include <QStringList>
 #include <QTreeWidget>
 #include <QVector>
@@ -13,8 +15,8 @@ class QFileSystemWatcher;
 /// reasons: the roots are several unrelated folders (a file-system model has
 /// exactly one), and the rows carry meaning of their own — what can be dragged
 /// into the project, and what is only listed. Directories are read on expand;
-/// one `readdir` is fast enough not to need a thread, and a folder nobody
-/// opened is never touched.
+/// enumeration runs off the GUI thread, and children arrive in bounded batches.
+/// A folder nobody opened is never touched.
 class FileBrowserTree : public QTreeWidget {
     Q_OBJECT
 public:
@@ -122,7 +124,14 @@ private:
     void collapseNode(QTreeWidgetItem* item);
     /// Re-read one directory in place, keeping selection and open children.
     void reloadNode(QTreeWidgetItem* item);
-    QTreeWidgetItem* makeItem(const QString& path, bool isDirectory);
+    QTreeWidgetItem* makeItem(const QString& path, bool isDirectory, int cachedKind = -1);
+    struct DirectoryResult;
+    void applyDirectoryChunk(const std::shared_ptr<DirectoryResult>& result);
+    quint64 m_loadSerial = 0;
+    QSet<QString> m_restoreExpanded;
+    QString m_restoreSelected;
+    QSet<QString> m_changedDirectories;
+    bool m_watchRefreshPending = false;
     /// Absolute paths of every expanded folder, so a rebuild can restore them.
     QStringList expandedPaths() const;
     void restoreExpanded(const QStringList& paths);

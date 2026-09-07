@@ -84,7 +84,7 @@ const PluginDescriptor& GraphitInstance::staticDescriptor() noexcept {
         d.uid = std::string(kUid);
         d.path = std::string(kUid);
         d.name = "Graphit";
-        d.vendor = "VLT Studio Pro";
+        d.vendor = "VLTONE";
         d.version = "1.1";
         d.category = "Effect|Distortion|Saturation";
         d.stateSchemaVersion = kStateVersion;

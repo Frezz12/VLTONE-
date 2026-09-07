@@ -1,4 +1,5 @@
 #pragma once
+#include "Job/BackgroundExecutor.hpp"
 
 #include "Host/PluginInstance.hpp"
 #include "Internal/SamplerParams.hpp"
@@ -96,6 +97,7 @@ public:
     /// Returns false when there is no decoder installed or the file will not
     /// read; the previous sample is then left alone.
     bool loadSample(const std::string& path);
+    bool adoptSample(const std::string& path, std::shared_ptr<const engine::SampleBuffer> decoded);
     void clearSample();
     std::string samplePath() const;
     std::string sampleName() const;
@@ -117,6 +119,8 @@ public:
     void rebuildProcessedSample();
     void flushPendingPrecompute();
     bool precomputePending() const noexcept;
+    /// Prepare every profile needed by mode automation before audio/export starts.
+    void prepareStretchModeAutomation();
 
 private:
     /// Read the parameter array into the plain snapshot a block's voices use.
@@ -144,6 +148,16 @@ private:
     void publishRawSample();
 
     static constexpr std::size_t kMaxVoices = 32;
+    struct StretchBank {
+        int mode = 0;
+        double sampleRate = 0;
+        std::array<std::unique_ptr<engine::dsp::TimeStretch>, kMaxVoices> voices;
+    };
+    void prepareStretchBank(int mode = -1); // control thread only
+    engine::RealtimeSnapshot<StretchBank> m_stretchBanks[4];
+    bool m_stretchModeAutomated = false;
+    std::atomic<bool> m_stretchDirty{false};
+
 
     PluginDescriptor m_descriptor;
     PluginListener* m_listener = nullptr;
@@ -178,7 +192,8 @@ private:
     std::condition_variable m_bakeChanged;
     std::optional<BakeRequest> m_pendingBake;
     bool m_stopBakeWorker = false;
-    std::thread m_bakeWorker;
+    engine::BackgroundExecutor::Handle m_bakeTask;
+    bool m_bakeScheduled = false;
 
     Voice m_voices[kMaxVoices];
     std::uint64_t m_voiceStamp = 0;

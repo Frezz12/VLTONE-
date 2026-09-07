@@ -2,6 +2,7 @@
 
 #include "Audio/SampleBuffer.hpp"
 #include "DSP/Simd.hpp"
+#include "DSP/TimeStretch.hpp"
 #include "Graph/Node.hpp"
 #include "Common/RealtimeSnapshot.hpp"
 
@@ -10,6 +11,7 @@
 #include <atomic>
 #include <cmath>
 #include <memory>
+#include <limits>
 #include <numbers>
 #include <string>
 #include <vector>
@@ -44,6 +46,9 @@ struct ClipPlacement {
     float gain = 1.0f;
     float pan = 0.0f;
     bool muted = false;
+    // Prepared by setClips on the control thread.
+    float fadeInExponent = 1.0f, fadeOutExponent = 1.0f;
+    std::shared_ptr<dsp::TimeStretch> stretcher; // prepared off the audio thread
 };
 
 /// The audio source of one track: plays whatever clips overlap the block.
@@ -54,10 +59,16 @@ struct ClipPlacement {
 class ClipPlayerNode : public Node {
 public:
     using ClipList = std::vector<ClipPlacement>;
+private:
+    struct ClipSchedule {
+        std::shared_ptr<const ClipList> clips = std::make_shared<const ClipList>();
+        std::vector<SamplePos> subtreeMaxEnd;
+    };
+public:
 
     explicit ClipPlayerNode(std::string name = "Clips")
         : m_name(std::move(name)),
-          m_clips(std::make_shared<const ClipList>()) {}
+          m_clips(std::make_shared<const ClipSchedule>()) {}
 
     std::string_view name() const noexcept override { return m_name; }
     bool isSource() const noexcept override { return true; }
@@ -65,23 +76,103 @@ public:
 
     /// Control thread: swap in a new arrangement for this track.
     void setClips(std::shared_ptr<const ClipList> clips) {
-        m_clips.publish(std::move(clips));
+        if (!clips) { m_clips.publish({}); return; }
+        auto previous = this->clips();
+        auto prepared = std::make_shared<ClipList>(*clips);
+        for (std::size_t index = 0; index < prepared->size(); ++index) {
+            auto& clip = (*prepared)[index];
+            clip.fadeInExponent = std::pow(4.0f, -std::clamp(clip.fadeInCurve, -1.0f, 1.0f));
+            clip.fadeOutExponent = std::pow(4.0f, -std::clamp(clip.fadeOutCurve, -1.0f, 1.0f));
+            const int mode = clip.stretchMode ? clip.stretchMode : 4;
+            const double ratio = std::max(clip.stretchTime, 1.0 / std::max(clip.stretchTime, .001));
+            if (clip.audio && clip.sourceStartFrame >= 0 &&
+                (clip.stretchMode != 0 || std::abs(clip.stretchPitch) > 0.001)) {
+                // Reuse one processor per placement across control edits.
+                // Matching by index is one-to-one even for overlapping copies
+                // of the same file. The DSP detects source changes/seeks itself.
+                clip.stretcher.reset();
+                if (previous && index < previous->size()) {
+                    const auto& old = (*previous)[index];
+                    if (old.stretcher && old.audio == clip.audio &&
+                        old.stretcher->mode() == mode &&
+                        old.stretcher->sampleRate() == m_sampleRate &&
+                        old.stretcher->maximumRatio() >= ratio)
+                        clip.stretcher = old.stretcher;
+                }
+                if (!clip.stretcher)
+                    clip.stretcher = std::make_shared<dsp::TimeStretch>(m_sampleRate, mode, ratio);
+            } else clip.stretcher.reset();
+        }
+        std::stable_sort(prepared->begin(), prepared->end(), [](const auto& a, const auto& b) {
+            return a.startSample < b.startSample;
+        });
+        auto schedule = std::make_shared<ClipSchedule>();
+        schedule->clips = std::move(prepared);
+        schedule->subtreeMaxEnd.resize(schedule->clips->size());
+        auto build = [&](auto&& self, std::size_t first, std::size_t last) -> SamplePos {
+            if (first == last) return std::numeric_limits<SamplePos>::min();
+            const auto mid = first + (last - first) / 2;
+            return schedule->subtreeMaxEnd[mid] = std::max({clipEnd((*schedule->clips)[mid]),
+                self(self, first, mid), self(self, mid + 1, last)});
+        };
+        build(build, 0, schedule->clips->size());
+        m_clips.publish(std::move(schedule));
+        preparePlayback(0);
     }
     std::shared_ptr<const ClipList> clips() const {
-        return m_clips.controlCopy();
+        const auto schedule = m_clips.controlCopy();
+        return schedule ? schedule->clips : nullptr;
     }
 
     void prepare(const PrepareInfo& info) override {
         m_sampleRate = info.sampleRate;
-        m_hasPosition = false;
-        m_activeCount = 0;
-        m_clipCursor = 0;
+        setClips(clips());
+        m_fadeBuffer.resize(info.maxBlockSize);
+
     }
 
+    void preparePlayback(SamplePos position) override {
+        const auto schedule = m_clips.controlCopy();
+        prepareRange(schedule.get(), position, true);
+    }
+private:
+    void prepareRange(const ClipSchedule* schedule, SamplePos position, bool synchronous) const {
+        if (!schedule) return;
+        const auto end = position + SamplePos(m_sampleRate * .35);
+        auto warm = [&](auto&& self, std::size_t first, std::size_t last) -> void {
+            if (first == last) return;
+            const auto mid = first + (last - first) / 2;
+            if (schedule->subtreeMaxEnd[mid] <= position) return;
+            self(self, first, mid);
+            const auto& clip = (*schedule->clips)[mid];
+            if (clip.startSample >= end) return;
+            if (clip.audio && clipEnd(clip) > position) {
+                const double rate = clip.audio->sampleRate() / m_sampleRate;
+                const double rel = double(std::max<SamplePos>(0, position - clip.startSample));
+                const double start = clip.sourceStartFrame >= 0 ? clip.sourceStartFrame + rel * rate / std::max(.001, clip.stretchTime)
+                                                               : (clip.offsetSamples + rel) * rate;
+                const auto request = [&](double frame) {
+                    const auto first = FrameCount(std::clamp(frame, 0., double(clip.audio->frames())));
+                    if (synchronous) clip.audio->prepareRead(first); else clip.audio->hintRead(first);
+                };
+                request(start);
+                // The stretch window also reads before its centre.
+                request(std::max(0., start - 8192.));
+                if (clip.loopMode && clip.sourceStartFrame >= 0)
+                    request(clip.sourceStartFrame + clip.loopStart *
+                        (clip.sourceEndFrame - clip.sourceStartFrame));
+            }
+            self(self, mid + 1, last);
+        };
+        warm(warm, 0, schedule->clips->size());
+    }
+public:
+
     void reset() override {
-        m_hasPosition = false;
-        m_activeCount = 0;
-        m_clipCursor = 0;
+
+        auto schedule = m_clips.read();
+        if (schedule) for (const auto& clip : *schedule->clips)
+            if (clip.stretcher) clip.stretcher->reset();
     }
 
     void process(const ProcessContext& context) override {
@@ -91,42 +182,22 @@ public:
         }
         if (!context.playing) return;
 
-        auto clips = m_clips.read();
-        if (!clips) return;
+        auto schedule = m_clips.read();
+        if (!schedule) return;
+        const auto* clips = schedule->clips.get();
 
         const SamplePos blockStart = context.timelinePosition;
         const SamplePos blockEnd = blockStart + SamplePos(context.frames);
-
-        const bool snapshotChanged = m_clipsFor != clips.get();
-        const bool jumped = m_hasPosition && blockStart != m_expectedPosition;
-        if (snapshotChanged || jumped || !m_hasPosition) {
-            m_activeCount = 0;
-            m_activeOverflow = false;
-            m_clipCursor = std::size_t(std::lower_bound(
-                clips->begin(), clips->end(), blockStart,
-                [](const ClipPlacement& clip, SamplePos position) {
-                    return clip.startSample < position;
-                }) - clips->begin());
-            for (std::size_t i = 0; i < m_clipCursor; ++i) {
-                if (clipEnd((*clips)[i]) > blockStart) addActive(i);
+        if (!context.offline && (schedule.get() != m_hintSchedule ||
+            blockStart < m_lastHint || blockStart - m_lastHint >= SamplePos(m_sampleRate * .05))) {
+            prepareRange(schedule.get(), blockStart, false);
+            if (context.transport.looping && context.transport.tempo > 0) {
+                const double beatSamples = 60.0 * m_sampleRate / context.transport.tempo;
+                if (blockEnd >= SamplePos(context.transport.loopEndPpq * beatSamples - m_sampleRate * .5))
+                    prepareRange(schedule.get(), SamplePos(context.transport.loopStartPpq * beatSamples), false);
             }
-            m_clipsFor = clips.get();
-        } else {
-            for (std::size_t i = 0; i < m_activeCount;) {
-                if (clipEnd((*clips)[m_active[i]]) <= blockStart) {
-                    m_active[i] = m_active[--m_activeCount];
-                } else {
-                    ++i;
-                }
-            }
+            m_lastHint = blockStart; m_hintSchedule = schedule.get();
         }
-        while (m_clipCursor < clips->size() &&
-               (*clips)[m_clipCursor].startSample < blockEnd) {
-            if (clipEnd((*clips)[m_clipCursor]) > blockStart) addActive(m_clipCursor);
-            ++m_clipCursor;
-        }
-        m_expectedPosition = blockEnd;
-        m_hasPosition = true;
 
         auto renderClip = [&](const ClipPlacement& clip) {
             if (clip.muted || !clip.audio) return;
@@ -193,26 +264,31 @@ public:
             // crossfades so an overlap keeps constant loudness.
             const bool fading =
                 clip.fadeInSamples > 0 || clip.fadeOutSamples > 0;
-            auto fadeAt = [&](SamplePos pos) -> float {
-                float t = 1.0f;
-                float curve = 0.0f;
-                if (clip.fadeInSamples > 0 && pos < clip.fadeInSamples) {
-                    t = float(double(pos) / double(clip.fadeInSamples));
-                    curve = clip.fadeInCurve;
+            const double inStep = clip.fadeInSamples > 0 ? 1.0 / double(clip.fadeInSamples) : 0.0;
+            const double outStep = clip.fadeOutSamples > 0 ? 1.0 / double(clip.fadeOutSamples) : 0.0;
+            const auto shapeFade = [&](double in, double out) {
+                float t = 1.0f, exponent = 1.0f;
+                if (clip.fadeInSamples > 0 && in < 1.0) {
+                    t = float(in); exponent = clip.fadeInExponent;
                 }
-                if (clip.fadeOutSamples > 0 &&
-                    pos > available - clip.fadeOutSamples) {
-                    const float o =
-                        float(double(available - pos) / double(clip.fadeOutSamples));
-                    if (o < t) {
-                        t = o;
-                        curve = clip.fadeOutCurve;
-                    }
+                if (clip.fadeOutSamples > 0 && out < 1.0 && float(out) < t) {
+                    t = float(out); exponent = clip.fadeOutExponent;
                 }
                 t = std::clamp(t, 0.0f, 1.0f);
                 if (clip.fadeEqualPower) return std::sqrt(t);
-                const float exponent = std::pow(4.0f, -std::clamp(curve, -1.0f, 1.0f));
-                return std::pow(t, exponent);
+                return exponent == 1.0f ? t : std::pow(t, exponent);
+            };
+            const bool cachedFade = fading && count <= m_fadeBuffer.size();
+            if (cachedFade) {
+                double in = double(clipRelStart) * inStep;
+                double out = double(available - clipRelStart) * outStep;
+                for (FrameCount i = 0; i < count; ++i, in += inStep, out -= outStep)
+                    m_fadeBuffer[i] = shapeFade(in, out);
+            }
+            const auto fadeAt = [&](SamplePos pos) {
+                if (!fading) return 1.0f;
+                return cachedFade ? m_fadeBuffer[std::size_t(pos - clipRelStart)]
+                                  : shapeFade(double(pos) * inStep, double(available - pos) * outStep);
             };
 
             const bool sampleEdited = clip.sourceStartFrame >= 0.0 &&
@@ -227,28 +303,28 @@ public:
                 const double loopEnd = sourceBegin +
                     std::clamp(clip.loopEnd, 0.0, 1.0) * sourceSpan;
                 const bool looping = clip.loopMode != 0 && loopEnd - loopBegin >= 16.0;
-                const double pitchRatio = std::pow(2.0, clip.stretchPitch / 12.0);
-                const double timeRatio = std::max(clip.stretchTime, 0.01);
-                const bool granular = !tape && (clip.stretchMode != 0 ||
-                                      std::abs(clip.stretchPitch) > 0.001);
-                double grainLength = 1024.0;
-                switch (clip.stretchMode) {
-                    case 1: grainLength = 384.0; break;
-                    case 2: grainLength = 1024.0; break;
-                    case 3: grainLength = 2048.0; break;
-                    case 4: grainLength = 4096.0; break;
-                    default: break;
+                const double timeRatio = std::max(clip.stretchTime, 0.001);
+                if (!tape && clip.stretcher) {
+                    const dsp::StretchSource source{clip.audio.get(), sourceBegin, sourceEnd,
+                                                   loopBegin, loopEnd, looping ? clip.loopMode : 0};
+                    for (FrameCount done = 0; done < count;) {
+                        const auto n = std::min<FrameCount>(count - done, m_stretchLeft.size());
+                        clip.stretcher->render(source, double(clipRelStart + done) * step / timeRatio,
+                            1.0 / timeRatio, clip.stretchPitch, clip.formant,
+                            m_stretchLeft.data(), m_stretchRight.data(), n);
+                        for (ChannelCount ch = 0; ch < channels; ++ch) {
+                            const float* stretched = ch == 0 ? m_stretchLeft.data() : m_stretchRight.data();
+                            float* destination = context.output.data(ch) + destinationOffset + done;
+                            const float gain = channelGain(ch);
+                            for (FrameCount i = 0; i < n; ++i)
+                                destination[i] += stretched[i] * gain * fadeAt(clipRelStart + done + i);
+                        }
+                        done += n;
+                    }
+                    return;
                 }
-                const double hop = grainLength * 0.5;
-                // One knob and one sample rate decide these, so they are
-                // resolved per clip rather than per sample.
-                // Any mode: the tilt is a filter over whatever the stage above
-                // produced, so it applies to a resampled clip as readily as to
-                // a granular one. Kept in step with SamplerVoice, which makes
-                // the same call for the same reason.
                 const bool shifting = std::abs(clip.formant) > 0.001;
                 const double formantTilt = std::tanh(clip.formant / 12.0);
-                const double windowStep = 2.0 * std::numbers::pi / grainLength;
 
                 auto wrap = [&](double position) {
                     if (!looping) return position;
@@ -275,10 +351,9 @@ public:
                     const float fraction = float(position - double(index));
                     const ChannelCount sourceChannel =
                         std::min<ChannelCount>(channel, clip.audio->channels() - 1);
-                    const float* data = clip.audio->channel(sourceChannel);
                     auto at = [&](std::int64_t i) {
-                        return data[std::clamp<std::int64_t>(
-                            i, 0, std::int64_t(frames) - 1)];
+                        return clip.audio->readSample(sourceChannel, FrameCount(std::clamp<std::int64_t>(
+                            i, 0, std::int64_t(frames) - 1)));
                     };
                     const float y0 = at(index - 1), y1 = at(index);
                     const float y2 = at(index + 1), y3 = at(index + 2);
@@ -290,29 +365,14 @@ public:
                 };
 
                 for (ChannelCount ch = 0; ch < channels; ++ch) {
+                    const float gain = channelGain(ch);
                     float* destination = context.output.data(ch) + destinationOffset;
                     for (FrameCount i = 0; i < count; ++i) {
                         const SamplePos timelineFrame = clipRelStart + i;
                         const double outputFrame = tape
                             ? sourceProgressAt(timelineFrame)
                             : double(timelineFrame);
-                        double value = 0.0;
-                        if (!granular) {
-                            value = read(ch, sourceBegin + outputFrame * step / timeRatio);
-                        } else {
-                            const std::int64_t newest =
-                                std::int64_t(std::floor(outputFrame / hop));
-                            for (std::int64_t grain = newest - 1; grain <= newest; ++grain) {
-                                if (grain < 0) continue;
-                                const double phase = outputFrame - double(grain) * hop;
-                                if (phase < 0.0 || phase >= grainLength) continue;
-                                const double window =
-                                    0.5 - 0.5 * std::cos(windowStep * phase);
-                                const double anchor = sourceBegin +
-                                    double(grain) * hop * step / timeRatio;
-                                value += window * read(ch, anchor + phase * step * pitchRatio);
-                            }
-                        }
+                        double value = read(ch, sourceBegin + outputFrame * step / timeRatio);
 
                         if (shifting) {
                             const double basePos = sourceBegin + outputFrame * step / timeRatio;
@@ -323,7 +383,7 @@ public:
                             value = low * (1.0 - 0.45 * formantTilt) +
                                     high * (1.0 + 0.75 * formantTilt);
                         }
-                        destination[i] += float(value) * channelGain(ch) *
+                        destination[i] += float(value) * gain *
                                           (fading ? fadeAt(clipRelStart + i) : 1.0f);
                     }
                 }
@@ -331,8 +391,8 @@ public:
             }
 
             for (ChannelCount ch = 0; ch < channels; ++ch) {
-                const float* source = clip.audio->channel(
-                    std::min<ChannelCount>(ch, clip.audio->channels() - 1));
+                const float gain = channelGain(ch);
+                const auto sourceChannel = std::min<ChannelCount>(ch, clip.audio->channels() - 1);
                 float* destination = context.output.data(ch) + destinationOffset;
                 const FrameCount sourceFrames = clip.audio->frames();
 
@@ -346,13 +406,17 @@ public:
                         // rate, not inside a fade — is exactly a scaled
                         // accumulate, so it runs on the SIMD kernel rather than
                         // a scalar loop that re-tests `fading` every sample.
-                        dsp::addScaled({destination, usable},
-                                       {source + base, usable}, channelGain(ch));
+                        for (FrameCount done = 0; done < usable;) {
+                            const auto part = clip.audio->readSpan(sourceChannel, FrameCount(base + done), usable - done);
+                            if (part.empty()) break;
+                            dsp::addScaled({destination + done, part.size()}, part, gain);
+                            done += FrameCount(part.size());
+                        }
                         continue;
                     }
                     for (FrameCount i = 0; i < usable; ++i) {
                         destination[i] +=
-                            source[base + i] * channelGain(ch) * fadeAt(clipRelStart + i);
+                            clip.audio->readSample(sourceChannel, FrameCount(base + i)) * gain * fadeAt(clipRelStart + i);
                     }
                 } else {
                     for (FrameCount i = 0; i < count; ++i) {
@@ -364,25 +428,30 @@ public:
                         const SamplePos index = SamplePos(pos);
                         if (index + 1 >= SamplePos(sourceFrames)) break;
                         const float fraction = float(pos - double(index));
-                        const float a = source[index];
-                        const float b = source[index + 1];
+                        const float a = clip.audio->readSample(sourceChannel, FrameCount(index));
+                        const float b = clip.audio->readSample(sourceChannel, FrameCount(index + 1));
                         const float fg = fading ? fadeAt(clipRelStart + i) : 1.0f;
                         destination[i] +=
-                            (a + (b - a) * fraction) * channelGain(ch) * fg;
+                            (a + (b - a) * fraction) * gain * fg;
                     }
                 }
             }
         };
 
-        if (m_activeOverflow) {
-            // Pathological sessions with thousands of simultaneously
-            // overlapping clips retain correctness via a bounded fallback.
-            for (std::size_t i = 0; i < m_clipCursor; ++i) renderClip((*clips)[i]);
-        } else {
-            for (std::size_t i = 0; i < m_activeCount; ++i) {
-                renderClip((*clips)[m_active[i]]);
-            }
-        }
+        // In-order traversal keeps floating-point summation deterministic.
+        // Expired subtrees are pruned even after a seek or a snapshot edit;
+        // thousands of overlaps require no fixed-capacity fallback or RT resize.
+        auto visit = [&](auto&& self, std::size_t first, std::size_t last) -> void {
+            if (first == last) return;
+            const auto mid = first + (last - first) / 2;
+            if (schedule->subtreeMaxEnd[mid] <= blockStart) return;
+            self(self, first, mid);
+            const auto& clip = (*clips)[mid];
+            if (clip.startSample >= blockEnd) return;
+            if (clipEnd(clip) > blockStart) renderClip(clip);
+            self(self, mid + 1, last);
+        };
+        visit(visit, 0, clips->size());
     }
 
 private:
@@ -399,25 +468,14 @@ private:
         return clip.startSample + std::max<SamplePos>(available, 0);
     }
 
-    void addActive(std::size_t index) noexcept {
-        if (m_activeCount < m_active.size()) {
-            m_active[m_activeCount++] = index;
-        } else {
-            m_activeOverflow = true;
-        }
-    }
-
     std::string m_name;
-    RealtimeSnapshot<ClipList> m_clips;
+    RealtimeSnapshot<ClipSchedule> m_clips;
+    SamplePos m_lastHint = 0;
+    const ClipSchedule* m_hintSchedule = nullptr;
     SampleRate m_sampleRate = 48000.0;
-    static constexpr std::size_t kMaxActiveClips = 2048;
-    std::array<std::size_t, kMaxActiveClips> m_active{};
-    std::size_t m_activeCount = 0;
-    std::size_t m_clipCursor = 0;
-    const ClipList* m_clipsFor = nullptr;
-    SamplePos m_expectedPosition = 0;
-    bool m_hasPosition = false;
-    bool m_activeOverflow = false;
+    std::vector<float> m_fadeBuffer;
+    std::array<float, 256> m_stretchLeft{}, m_stretchRight{};
+
 };
 
 /// Live hardware input, for monitoring and for feeding record-armed tracks.

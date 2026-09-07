@@ -23,6 +23,7 @@ public:
 
     std::string_view name() const noexcept override { return m_name; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
+    bool canFuseTask() const noexcept override { return true; }
 
     void process(const ProcessContext& context) override {
         dsp::sumInto(context.output, context.inputs);
@@ -87,6 +88,7 @@ public:
 
     std::string_view name() const noexcept override { return m_name; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
+    bool canFuseTask() const noexcept override { return true; }
 
     /// Control thread; the audio thread reads the target atomically.
     void setGain(float gain) noexcept { m_targetGain.store(gain, std::memory_order_relaxed); }
@@ -284,6 +286,7 @@ public:
     explicit SendNode(std::string name = "Send") : m_name(std::move(name)) {}
     std::string_view name() const noexcept override { return m_name; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
+    bool canFuseTask() const noexcept override { return true; }
 
     void setLevel(float level) noexcept { m_level.store(level, std::memory_order_relaxed); }
     /// A curve for the send amount, on the same terms as `GainNode`'s.

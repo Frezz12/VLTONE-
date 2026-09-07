@@ -16,12 +16,12 @@
 
 [Setup]
 AppId={{C4B1512F-06CD-48F5-AF80-63DB4C6969F2}
-AppName=VLT Studio Pro
+AppName=VLTONE
 AppVersion={#AppVersion}
-AppVerName=VLT Studio Pro {#AppVersion}
-AppPublisher=VLT Studio
-DefaultDirName={autopf}\VLT Studio Pro
-DefaultGroupName=VLT Studio Pro
+AppVerName=VLTONE {#AppVersion}
+AppPublisher=VLTONE
+DefaultDirName={autopf}\VLTONE
+DefaultGroupName=VLTONE
 DisableProgramGroupPage=yes
 AllowNoIcons=yes
 ArchitecturesAllowed=x64compatible
@@ -32,19 +32,19 @@ ChangesAssociations=yes
 CloseApplications=yes
 RestartApplications=no
 UsePreviousAppDir=yes
-UninstallDisplayIcon={app}\bin\VLT Studio Pro.exe
+UninstallDisplayIcon={app}\bin\VLTONE.exe
 SetupIconFile={#IconFile}
 OutputDir={#OutputDir}
-OutputBaseFilename=VLT-Studio-Pro-{#AppVersion}-x64-Setup
+OutputBaseFilename=VLTONE-{#AppVersion}-x64-Setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 VersionInfoVersion={#AppVersion}.0
-VersionInfoCompany=VLT Studio
-VersionInfoDescription=VLT Studio Pro installer
-VersionInfoProductName=VLT Studio Pro
+VersionInfoCompany=VLTONE
+VersionInfoDescription=VLTONE installer
+VersionInfoProductName=VLTONE
 VersionInfoProductVersion={#AppVersion}.0
-VersionInfoCopyright=Copyright (C) 2026 VLT Studio. All rights reserved.
+VersionInfoCopyright=Copyright (C) 2026 VLTONE. All rights reserved.
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
@@ -53,15 +53,22 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#VcRedist}"; DestDir: "{tmp}"; DestName: "vc_redist.x64.exe"; Flags: deleteafterinstall
 
+[InstallDelete]
+; Remove obsolete launchers during an upgrade; AppId and saved data stay stable.
+Type: files; Name: "{app}\bin\VLT Studio Pro.exe"
+Type: files; Name: "{autoprograms}\VLT Studio Pro.lnk"
+Type: files; Name: "{autodesktop}\VLT Studio Pro.lnk"
+
 [Icons]
-Name: "{autoprograms}\VLT Studio Pro"; Filename: "{app}\bin\VLT Studio Pro.exe"; WorkingDir: "{app}\bin"
-Name: "{autodesktop}\VLT Studio Pro"; Filename: "{app}\bin\VLT Studio Pro.exe"; WorkingDir: "{app}\bin"; Tasks: desktopicon
+Name: "{autoprograms}\VLTONE"; Filename: "{app}\bin\VLTONE.exe"; WorkingDir: "{app}\bin"
+Name: "{autodesktop}\VLTONE"; Filename: "{app}\bin\VLTONE.exe"; WorkingDir: "{app}\bin"; Tasks: desktopicon
 
 [Registry]
+; Keep the existing ProgID so project associations survive the rename.
 Root: HKLM; Subkey: "Software\Classes\.vlt"; ValueType: string; ValueName: ""; ValueData: "VLTStudioPro.Project"; Flags: uninsdeletevalue
-Root: HKLM; Subkey: "Software\Classes\VLTStudioPro.Project"; ValueType: string; ValueName: ""; ValueData: "VLT Studio Pro Project"; Flags: uninsdeletekey
-Root: HKLM; Subkey: "Software\Classes\VLTStudioPro.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\VLT Studio Pro.exe,0"
-Root: HKLM; Subkey: "Software\Classes\VLTStudioPro.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\VLT Studio Pro.exe"" ""%1"""
+Root: HKLM; Subkey: "Software\Classes\VLTStudioPro.Project"; ValueType: string; ValueName: ""; ValueData: "VLTONE Project"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\VLTStudioPro.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\VLTONE.exe,0"
+Root: HKLM; Subkey: "Software\Classes\VLTStudioPro.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\VLTONE.exe"" ""%1"""
 
 [Run]
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ Runtime..."; Flags: runhidden waituntilterminated

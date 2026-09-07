@@ -1,4 +1,6 @@
 #include "Job/JobSystem.hpp"
+#include "ScopedNoDenormals.hpp"
+#include "Job/AudioWorkerRegistration.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -68,6 +70,7 @@ JobSystem::JobSystem(unsigned threadCount) {
     m_workerCount = std::clamp(m_workerCount, 1u, 128u);
 
     m_workers = std::vector<Worker>(m_workerCount);
+    m_profiles = std::make_unique<rt::DiagnosticRing<rt::ProfileEvent, 1024>[]>(m_workerCount);
 
     // Worker 0 is the calling (audio) thread — it does not get a std::thread.
     for (unsigned i = 1; i < m_workerCount; ++i) {
@@ -116,6 +119,21 @@ bool JobSystem::acquireItem(unsigned index, std::uint32_t& item) noexcept {
 }
 
 void JobSystem::runUntilPassComplete(unsigned index) noexcept {
+    const rt::ScopedNoDenormals noDenormals;
+    const bool profile = profiling();
+    std::uint64_t waitingSince = 0, waited = 0;
+    struct WaitReport {
+        JobSystem& jobs;
+        unsigned worker;
+        bool enabled;
+        std::uint64_t& since;
+        std::uint64_t& waited;
+        ~WaitReport() {
+            if (!enabled) return;
+            if (since) waited += rt::nowNanos() - since;
+            jobs.recordProfile(worker, {0, waited, 0, 0, worker, rt::ProfileEvent::Kind::Wait});
+        }
+    } report{*this, index, profile, waitingSince, waited};
     // Worker 0 is the audio thread: it must not leave before the block it is
     // rendering is finished. Pool workers are free to give up and park.
     const bool mustFinish = (index == 0);
@@ -135,6 +153,7 @@ void JobSystem::runUntilPassComplete(unsigned index) noexcept {
            m_target.load(std::memory_order_acquire)) {
         std::uint32_t item = 0;
         if (acquireItem(index, item)) {
+            if (waitingSince) { waited += rt::nowNanos() - waitingSince; waitingSince = 0; }
             idleSpins = 0;
             idleSince = {};
             m_sink.execute(m_sink.context, item, index);
@@ -145,6 +164,7 @@ void JobSystem::runUntilPassComplete(unsigned index) noexcept {
             continue;
         }
         // Out of work: publish what we have done so the others can see the pass
+        if (profile && !waitingSince) waitingSince = rt::nowNanos();
         // progress, then wait.
         if (local > 0) {
             m_completed.fetch_add(local, std::memory_order_release);
@@ -194,9 +214,25 @@ void JobSystem::park(unsigned index, std::uint64_t lastGeneration) noexcept {
 
 void JobSystem::workerLoop(unsigned index) {
     markAsAudioWorker();
+    AudioWorkerRegistration registration;
+    std::uint64_t configurationEpoch = 0;
 
     std::uint64_t lastGeneration = 0;
     while (m_running.load(std::memory_order_acquire)) {
+        const auto requested = m_configurationEpoch.load(std::memory_order_acquire);
+        if (requested != configurationEpoch) {
+            rt::AudioWorkerConfig config;
+            {
+                std::lock_guard lock(m_configurationMutex);
+                config = m_configuration;
+            }
+            const auto status = registration.configure(config);
+            if (status & 1) m_realtimeWorkers.fetch_add(1);
+            if (status & 2) m_workgroupWorkers.fetch_add(1);
+            configurationEpoch = requested;
+            m_configurationApplied.fetch_add(1, std::memory_order_release);
+            m_configurationApplied.notify_one();
+        }
         const std::uint64_t generation = m_generation.load(std::memory_order_acquire);
         if (generation == lastGeneration) {
             park(index, lastGeneration);
@@ -205,6 +241,23 @@ void JobSystem::workerLoop(unsigned index) {
         lastGeneration = generation;
         if (!m_running.load(std::memory_order_acquire)) break;
         runUntilPassComplete(index);
+    }
+}
+
+void JobSystem::configureAudioWorkers(const rt::AudioWorkerConfig& config) {
+    {
+        std::lock_guard lock(m_configurationMutex);
+        m_configuration = config;
+    }
+    m_configurationApplied.store(0, std::memory_order_relaxed);
+    m_realtimeWorkers.store(0); m_workgroupWorkers.store(0);
+    m_configurationEpoch.fetch_add(1, std::memory_order_release);
+    m_generation.fetch_add(1, std::memory_order_seq_cst);
+    m_generation.notify_all();
+    for (;;) {
+        const auto applied = m_configurationApplied.load(std::memory_order_acquire);
+        if (applied == m_workerCount - 1) break;
+        m_configurationApplied.wait(applied, std::memory_order_acquire);
     }
 }
 

@@ -229,7 +229,7 @@ QString timedCueTimeText(double seconds) {
 }
 
 bool parseTimedCueTime(const QString& text, double& seconds) {
-    const QStringList parts = text.trimmed().split(QLatin1Char(':'));
+    const QStringList parts = QString(text).replace(QLatin1Char(','), QLatin1Char('.')).trimmed().split(QLatin1Char(':'));
     if (parts.isEmpty() || parts.size() > 3) return false;
     bool ok = false;
     const double tail = parts.back().toDouble(&ok);

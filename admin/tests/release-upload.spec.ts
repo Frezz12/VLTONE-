@@ -2,6 +2,17 @@ import { expect, test } from "@playwright/test";
 
 const releaseID = "10000000-0000-4000-8000-000000000001";
 
+test("background upload streams a large multipart image through the server route", async ({ request }) => {
+  const response = await request.post("/release-upload/v1/admin/browser-backgrounds", {
+    headers: { "X-CSRF-Token": "csrf", Origin: "http://127.0.0.1:3101", Cookie: "vlt_admin_session=test" },
+    multipart: { title: "Горы", file: { name: "wallpaper.png", mimeType: "image/png", buffer: Buffer.alloc(6 * 1024 * 1024, 1) } },
+  });
+  expect(response.ok()).toBe(true);
+  const result = await response.json();
+  expect(result.path).toBe("/v1/admin/browser-backgrounds");
+  expect(result.bytes).toBeGreaterThan(6 * 1024 * 1024);
+});
+
 test("release upload proxy streams artifacts and screenshots to a versioned API origin", async ({ request }) => {
   const artifact = await request.put(`/release-upload/v1/admin/releases/${releaseID}/artifacts/windows-exe`, {
     headers: { "X-CSRF-Token": "csrf", Origin: "http://127.0.0.1:3101", Cookie: "vlt_admin_session=test" },

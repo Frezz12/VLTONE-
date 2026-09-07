@@ -38,6 +38,120 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/browser-backgrounds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listPublicBrowserBackgrounds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser-backgrounds/{backgroundID}/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getPublicBrowserBackgroundImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser-backgrounds/{backgroundID}/thumbnail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getPublicBrowserBackgroundThumbnail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/browser-backgrounds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAdminBrowserBackgrounds"];
+        put?: never;
+        post: operations["uploadBrowserBackground"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/browser-backgrounds/{backgroundID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                backgroundID: components["parameters"]["BackgroundID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["updateBrowserBackground"];
+        post?: never;
+        delete: operations["deleteBrowserBackground"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/browser-backgrounds/{backgroundID}/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminBrowserBackgroundImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/browser-backgrounds/{backgroundID}/thumbnail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminBrowserBackgroundThumbnail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/meta": {
         parameters: {
             query?: never;
@@ -1322,6 +1436,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/users/{userId}/telemetry/{eventId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["adminGetUserTelemetryDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/users/{userId}/ledger": {
         parameters: {
             query?: never;
@@ -1662,6 +1792,28 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        BrowserBackgroundList: {
+            backgrounds: components["schemas"]["BrowserBackground"][];
+        };
+        BrowserBackground: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            published: boolean;
+            sort_order: number;
+            /** @enum {string} */
+            mime_type: "image/png" | "image/jpeg";
+            bytes: number;
+            width: number;
+            height: number;
+            sha256: string;
+            url: string;
+            thumbnail_url: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
         APIError: {
             code: string;
             message: string;
@@ -2437,6 +2589,11 @@ export interface components {
         };
         DesktopRefreshRequest: {
             refresh_token: string;
+            /**
+             * Format: uuid
+             * @description Persist this random ID before refreshing and reuse it after a lost reply until the new credential is durably stored
+             */
+            request_id?: string;
             app_version: string;
         };
         DesktopSession: components["schemas"]["AccountSession"] & {
@@ -2462,7 +2619,7 @@ export interface components {
             kind: "session_started" | "sample" | "session_ended";
             /** Format: date-time */
             occurred_at: string;
-            /** @description Strict kind-specific allowlist; never project content or paths */
+            /** @description Strict kind-specific allowlist. Samples may include TelemetrySnapshot metadata; no media */
             payload: Record<string, never>;
         };
         CrashMetadata: {
@@ -2495,6 +2652,127 @@ export interface components {
             /** @enum {string} */
             status: "new" | "triage" | "in_progress" | "fixed" | "duplicate" | "wont_fix";
             internal_note: string;
+        };
+        TelemetrySnapshot: {
+            schema_version?: number;
+            truncated?: boolean;
+            window_ms?: number;
+            measurement_count?: number;
+            tempo?: number;
+            time_signature_numerator?: number;
+            time_signature_denominator?: number;
+            position_seconds?: number;
+            loop_enabled?: boolean;
+            loop_start_seconds?: number;
+            loop_end_seconds?: number;
+            master_volume?: number;
+            master_pan?: number;
+            master_inserts?: components["schemas"]["TelemetrySlot"][];
+            tracks?: components["schemas"]["TelemetryTrack"][];
+            audio?: components["schemas"]["TelemetryAudio"];
+        };
+        TelemetryClipFX: {
+            id?: string;
+            name?: string;
+            kind?: string;
+            start_seconds?: number;
+            duration_seconds?: number;
+            muted?: boolean;
+            inserts?: components["schemas"]["TelemetrySlot"][];
+            offline_inserts?: components["schemas"]["TelemetrySlot"][];
+        };
+        TelemetryTrack: {
+            clip_fx?: components["schemas"]["TelemetryClipFX"][];
+            id?: string;
+            name?: string;
+            kind?: string;
+            parent_id?: string;
+            output_bus_id?: string;
+            volume?: number;
+            pan?: number;
+            muted?: boolean;
+            soloed?: boolean;
+            armed?: boolean;
+            monitor?: boolean;
+            mono?: boolean;
+            frozen?: boolean;
+            input_enabled?: boolean;
+            input_channel?: number;
+            input_channel_count?: number;
+            clip_count?: number;
+            instrument?: components["schemas"]["TelemetrySlot"] | null;
+            inserts?: components["schemas"]["TelemetrySlot"][];
+            sampler_fx?: components["schemas"]["TelemetrySlot"][];
+            sampler_fx_active?: boolean;
+            sends?: components["schemas"]["TelemetrySend"][];
+        };
+        TelemetrySlot: {
+            id?: string;
+            slot?: number;
+            name?: string;
+            vendor?: string;
+            version?: string;
+            format?: string;
+            bypassed?: boolean;
+            mix?: number;
+            channel_mode?: string;
+            sidechain_track_id?: string;
+        };
+        TelemetrySend: {
+            destination_track_id?: string;
+            level?: number;
+            pre_fader?: boolean;
+            enabled?: boolean;
+        };
+        TelemetryAudio: {
+            input?: components["schemas"]["TelemetryAudioDevice"];
+            output?: components["schemas"]["TelemetryAudioDevice"];
+            running?: boolean;
+            input_enabled?: boolean;
+            input_channels?: number[];
+            output_channels?: number[];
+            input_underflow?: number;
+            input_overflow?: number;
+            output_underflow?: number;
+            output_overflow?: number;
+            gated_blocks?: number;
+            workers?: number;
+            realtime_workers?: number;
+            workgroup_workers?: number;
+        };
+        TelemetryAudioDevice: {
+            name?: string;
+            manufacturer?: string;
+            host_api?: string;
+            input_channels?: number;
+            output_channels?: number;
+            is_asio?: boolean;
+            is_alive?: boolean;
+        };
+        TelemetryPlugin: {
+            name?: string;
+            vendor?: string;
+            version?: string;
+            format?: string;
+            count?: number;
+        };
+        TelemetrySamplePayload: {
+            snapshot?: components["schemas"]["TelemetrySnapshot"] | null;
+            process_cpu?: number;
+            system_cpu?: number;
+            dsp_load?: number;
+            dsp_peak?: number;
+            xruns?: number;
+            resident_bytes?: number;
+            sample_rate?: number;
+            buffer_frames?: number;
+            track_count?: number;
+            clip_count?: number;
+            plugin_count?: number;
+            playback_state?: string;
+            recording?: boolean;
+            foreground?: boolean;
+            plugins?: components["schemas"]["TelemetryPlugin"][];
         };
         /** Format: uuid */
         id: string;
@@ -4753,6 +5031,7 @@ export interface components {
         };
     };
     parameters: {
+        BackgroundID: string;
         UserId: string;
         DeviceId: string;
         ProjectId: string;
@@ -4883,6 +5162,227 @@ export interface operations {
                     };
                 };
             };
+        };
+    };
+    listPublicBrowserBackgrounds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backgrounds ordered by sort_order then newest first; public list includes only published images */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserBackgroundList"];
+                };
+            };
+        };
+    };
+    getPublicBrowserBackgroundImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                backgroundID: components["parameters"]["BackgroundID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sanitized image; hidden images require admin session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/png": string;
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    getPublicBrowserBackgroundThumbnail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                backgroundID: components["parameters"]["BackgroundID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sanitized image; hidden images require admin session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/png": string;
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    listAdminBrowserBackgrounds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backgrounds ordered by sort_order then newest first; public list includes only published images */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserBackgroundList"];
+                };
+            };
+        };
+    };
+    uploadBrowserBackground: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    title: string;
+                    /**
+                     * Format: binary
+                     * @description PNG/JPEG/WebP up to 10 MiB and 16 MP; server re-encodes and generates a thumbnail
+                     */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Published background */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserBackground"];
+                };
+            };
+            422: components["responses"]["Error"];
+        };
+    };
+    updateBrowserBackground: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                backgroundID: components["parameters"]["BackgroundID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    title: string;
+                    published: boolean;
+                    sort_order: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserBackground"];
+                };
+            };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    deleteBrowserBackground: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                backgroundID: components["parameters"]["BackgroundID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed from collection and server storage; existing client copies are retained */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    getAdminBrowserBackgroundImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                backgroundID: components["parameters"]["BackgroundID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sanitized image; hidden images require admin session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/png": string;
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    getAdminBrowserBackgroundThumbnail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                backgroundID: components["parameters"]["BackgroundID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sanitized image; hidden images require admin session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/png": string;
+                };
+            };
+            404: components["responses"]["Error"];
         };
     };
     getMeta: {
@@ -5250,7 +5750,10 @@ export interface operations {
     desktopRefresh: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Durable refresh operation ID; resend the same ID after a lost response */
+                "Idempotency-Key"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6838,7 +7341,11 @@ export interface operations {
     };
     adminGetUserTelemetry: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                /** @description Opaque next_cursor from the preceding page. Stable for equal timestamps. */
+                before?: string;
+            };
             header?: never;
             path: {
                 userId: components["parameters"]["UserId"];
@@ -6847,13 +7354,35 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Sessions */
+            /** @description Lightweight samples ordered newest first */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
+        };
+    };
+    adminGetUserTelemetryDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: components["parameters"]["UserId"];
+                eventId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sanitized sample payload (including optional snapshot), session hardware, recorded_at, event_id, and device_id. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Error"];
         };
     };
     adminGetUserTokenLedger: {

@@ -69,9 +69,9 @@ public:
     /// Where the plate should sit, asked rather than pushed.
     ///
     /// Fills `centreX` — in this widget's parent's coordinates — and returns
-    /// true when the selection has a horizontal extent. False for a whole
-    /// track or the recording options, which have none, and the plate returns
-    /// to the middle.
+    /// true when the selected clips have a horizontal extent. Asked only for
+    /// clip contexts; tracks and recording return to the middle of the
+    /// available strip even if the timeline still remembers a clip selection.
     ///
     /// A callback rather than a setter on purpose: the plate recomputes its
     /// geometry from inside a selection change, and a value pushed afterwards
@@ -101,6 +101,7 @@ public:
     /// Reveal and focus the plugin search for a track or one audio clip. Used
     /// by the global Ctrl+F command as well as the inline search button.
     void openPluginSearch();
+    bool checkAdaptiveLayoutForTest();
 
 protected:
     void resizeEvent(QResizeEvent*) override;
@@ -155,6 +156,7 @@ private:
     };
 
     Context resolve() const;
+    bool followsClipSelection() const;
     QColor accentFor(Context context) const;
 
     QWidget* buildContent(Context context);
@@ -172,7 +174,7 @@ private:
     std::vector<std::string> selectedTracks() const;
     QWidget* buildRecording();
 
-    void onSelectionChanged();
+    void onSelectionChanged(bool force = false);
     /// Swap in `next`, animating the change: the old content slides out, the
     /// plate springs to the new size, the new controls cascade in. The same
     /// motion whatever changed — clip to clip moves exactly like clip to track.

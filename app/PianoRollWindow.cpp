@@ -519,7 +519,7 @@ const QVector<double>& snapLadder() {
 // ── PianoRollView ───────────────────────────────────────────────────────────
 
 PianoRollView::PianoRollView(daw::EngineController* controller, QWidget* parent)
-    : QWidget(parent), m_controller(controller) {
+    : ui::FrameWidget(parent), m_controller(controller) {
     setMouseTracking(true);
     // Delete has to reach us, and a click must be able to take focus away from
     // a menu or a tool dialog.
@@ -572,7 +572,7 @@ void PianoRollView::setClip(const QString& trackId, const QString& clipId) {
     m_paintClip = nullptr;
     m_trackId = trackId;
     m_clipId = clipId;
-    m_lastPlayheadPixel = -1;
+    m_lastPlayheadX = -1;
     m_lastSoundingPitches.reset();
     invalidateSoundingPitchIndex();
     invalidateDocumentPaintCaches();
@@ -855,7 +855,7 @@ void PianoRollView::setScrollX(double x) {
     const double clamped = std::clamp(x, 0.0, maxScrollX());
     if (std::abs(clamped - m_scrollX) < 1.0e-6) return;
     m_scrollX = clamped;
-    m_lastPlayheadPixel = -1;
+    m_lastPlayheadX = -1;
     update();
 }
 
@@ -964,6 +964,16 @@ bool PianoRollView::checkInteractionGesturesForTest() {
     seekToLocalBeat(localSeekBeat);
     const bool localPlayheadMapped =
         std::abs(m_controller->positionSeconds() - expectedSeek) < 1e-4;
+
+    m_controller->seekSeconds(current->startSeconds +
+        daw::beatsToSeconds(0.37123, m_controller->project().tempo));
+    refreshPlayheadFrame();
+    const double precisePlayheadX = beatsToX(daw::secondsToBeats(
+        m_controller->positionSeconds() - current->startSeconds,
+        m_controller->project().tempo));
+    const bool fractionalPlayhead = std::abs(m_lastPlayheadX - precisePlayheadX) < 1e-8 &&
+        std::abs(m_lastPlayheadX - std::round(m_lastPlayheadX)) > 0.01;
+    m_controller->seekSeconds(expectedSeek);
 
     // Ruler positioning follows the same visible grid as note edits. Use an
     // off-grid click so this exercises the pointer route, not just conversion.
@@ -1506,7 +1516,7 @@ bool PianoRollView::checkInteractionGesturesForTest() {
     emit viewportChanged();
     update();
     const bool ok = noteStylesClean && keyboardShapeClean &&
-                    localPlayheadMapped && rulerSeekSnapped &&
+                    localPlayheadMapped && fractionalPlayhead && rulerSeekSnapped &&
                     blankRightClearsSelection &&
                     eraseDeferred && sweptAll && brushSafe && singleHidden && groupOffset &&
                     groupTrim && groupTrimAtomic && copiesMovedTogether &&
@@ -1519,6 +1529,7 @@ bool PianoRollView::checkInteractionGesturesForTest() {
                     editInvalidatesIndex && logarithmicPlayheadLookup &&
                     controllerLaneCoalesced;
     if (!ok) {
+        if (!fractionalPlayhead) std::fprintf(stderr, "piano-roll fractional playhead check failed\n");
         std::fprintf(stderr,
                      "piano-roll view checks: styles=%d keyboard=%d seek=%d ruler=%d deselect=%d deferErase=%d erase=%d "
                      "brush=%d single=%d "
@@ -5032,7 +5043,7 @@ void PianoRollView::refreshPlayheadFrame() {
     if (!m_controller || !isVisible()) return;
     followPlayhead();
 
-    int currentPixel = -1;
+    double currentX = -1.0;
     if (const auto* c = clip()) {
         const double beats = daw::secondsToBeats(
             m_controller->presentationPositionSeconds() - c->startSeconds,
@@ -5040,19 +5051,21 @@ void PianoRollView::refreshPlayheadFrame() {
         if (beats >= 0.0 && beats <= clipBeats()) {
             const double x = beatsToX(beats);
             if (x >= keyboardWidth() && x <= width())
-                currentPixel = int(std::lround(x));
+                currentX = x;
         }
     }
 
     QRegion dirty;
     const int playheadBottom = int(std::ceil(laneTop()));
-    const auto addPlayhead = [&](int x) {
-        if (x >= 0) dirty += QRect(x - 7, 0, 15, playheadBottom);
+    const auto addPlayhead = [&](double x) {
+        const double reach = 10.0 + ui::playheadWidth();
+        if (x >= 0) dirty += QRectF(x - reach, 0.0, reach * 2.0, playheadBottom).toAlignedRect();
     };
-    if (currentPixel != m_lastPlayheadPixel) {
-        addPlayhead(m_lastPlayheadPixel);
-        addPlayhead(currentPixel);
-        m_lastPlayheadPixel = currentPixel;
+    // Advancing within one logical pixel still changes antialiased coverage.
+    if (currentX != m_lastPlayheadX) {
+        addPlayhead(m_lastPlayheadX);
+        addPlayhead(currentX);
+        m_lastPlayheadX = currentX;
     }
 
     const PitchMask sounding = keyboardPitches();
@@ -5914,6 +5927,7 @@ void PianoRollWindow::buildViewMenu(QMenu* menu) {
     // Both hang off their own toolbar buttons rather than appearing here too:
     // one menu shown from two places is one menu the user has to learn twice.
     m_ghostMenu = new QMenu(tr("Ghost Notes"), this);
+    m_ghostMenu->setObjectName(QStringLiteral("PianoRollGhostMenu"));
     connect(m_ghostMenu, &QMenu::aboutToShow, this,
             &PianoRollWindow::refreshGhostMenu);
 
@@ -6551,9 +6565,60 @@ void PianoRollWindow::openToolFor(NoteContextPanel::Tool tool) {
     }
 }
 
+void PianoRollWindow::refreshPatternGhosts() {
+    if (!m_view || !m_controller) return;
+    const auto& project = m_controller->project();
+    const auto patternFor = [&project](const daw::TrackModel* source) {
+        // Folder nesting is supported; a plain sibling elsewhere in the
+        // project is never automatically made a ghost of this Pattern.
+        for (const auto* parent = source ? project.findTrack(source->parentId) : nullptr;
+             parent; parent = project.findTrack(parent->parentId)) {
+            if (parent->kind == daw::TrackKind::Pattern)
+                return QString::fromStdString(parent->id);
+        }
+        return QString{};
+    };
+    const QString pattern = patternFor(project.findTrack(m_trackId.toStdString()));
+    if (pattern != m_ghostPatternId) {
+        m_ghostPatternId = pattern;
+        m_autoPatternGhosts = true;
+        m_hiddenPatternGhosts.clear();
+    }
+    m_patternGhostTracks.clear();
+    QSet<QString> available;
+    for (const auto& track : project.tracks) {
+        if (track.kind != daw::TrackKind::Midi && track.kind != daw::TrackKind::Instrument)
+            continue;
+        const QString id = QString::fromStdString(track.id);
+        available.insert(id);
+        if (!pattern.isEmpty() && patternFor(&track) == pattern)
+            m_patternGhostTracks.insert(id);
+    }
+    m_manualGhostTracks.intersect(available);
+    m_hiddenPatternGhosts.intersect(m_patternGhostTracks);
+    QSet<QString> active = m_manualGhostTracks;
+    if (m_autoPatternGhosts)
+        active.unite(m_patternGhostTracks - m_hiddenPatternGhosts);
+    active.remove(m_trackId);
+    m_view->setGhostTracks(active);
+}
+
 void PianoRollWindow::refreshGhostMenu() {
     if (!m_ghostMenu) return;
+    refreshPatternGhosts();
     m_ghostMenu->clear();
+    if (!m_ghostPatternId.isEmpty()) {
+        auto* automatic = m_ghostMenu->addAction(tr("Show all pattern sources automatically"));
+        automatic->setObjectName(QStringLiteral("pianoRoll.autoPatternGhosts"));
+        automatic->setCheckable(true);
+        automatic->setChecked(m_autoPatternGhosts && m_hiddenPatternGhosts.isEmpty());
+        connect(automatic, &QAction::triggered, this, [this](bool on) {
+            m_autoPatternGhosts = on;
+            m_hiddenPatternGhosts.clear();
+            refreshPatternGhosts();
+        });
+        m_ghostMenu->addSeparator();
+    }
     const QSet<QString> active = m_view->ghostTracks();
     bool any = false;
     for (const auto& track : m_controller->project().tracks) {
@@ -6569,9 +6634,15 @@ void PianoRollWindow::refreshGhostMenu() {
         action->setCheckable(true);
         action->setChecked(active.contains(trackId));
         connect(action, &QAction::toggled, this, [this, trackId](bool on) {
-            QSet<QString> tracks = m_view->ghostTracks();
-            if (on) tracks.insert(trackId); else tracks.remove(trackId);
-            m_view->setGhostTracks(tracks);
+            if (m_autoPatternGhosts && m_patternGhostTracks.contains(trackId)) {
+                if (on) m_hiddenPatternGhosts.remove(trackId);
+                else m_hiddenPatternGhosts.insert(trackId);
+                m_manualGhostTracks.remove(trackId);
+            } else {
+                if (on) m_manualGhostTracks.insert(trackId);
+                else m_manualGhostTracks.remove(trackId);
+            }
+            refreshPatternGhosts();
         });
     }
     if (!any) {
@@ -6580,7 +6651,11 @@ void PianoRollWindow::refreshGhostMenu() {
     } else {
         m_ghostMenu->addSeparator();
         m_ghostMenu->addAction(tr("Show none"), this,
-                               [this] { m_view->setGhostTracks({}); });
+                               [this] {
+                                   m_autoPatternGhosts = false;
+                                   m_manualGhostTracks.clear();
+                                   refreshPatternGhosts();
+                               });
     }
 }
 
@@ -6591,6 +6666,7 @@ void PianoRollWindow::setClip(const QString& trackId, const QString& clipId) {
     m_clipId = clipId;
     m_view->setLivePitches({});
     m_view->setClip(trackId, clipId);
+    refreshPatternGhosts();
     m_previewOwner = nullptr;
     updateTitle();
     refreshLaneSelector();
@@ -6627,6 +6703,7 @@ void PianoRollWindow::refresh() {
     // here would force needless full-note rebuilds. Only the playhead keyboard
     // state needs a cheap dirty bit for external mute/undo changes.
     if (m_view) m_view->invalidateSoundingPitchIndex();
+    refreshPatternGhosts();
     updateTitle();
     // An undo can put a controller lane back or take one away, so the picker is
     // rebuilt rather than trusted.

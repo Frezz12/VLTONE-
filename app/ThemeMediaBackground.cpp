@@ -1,4 +1,7 @@
 #include "ThemeMediaBackground.hpp"
+#include <QApplication>
+#include <QPointer>
+#include <QThreadPool>
 
 #include <QDateTime>
 #include <QImage>
@@ -88,8 +91,11 @@ void ThemeMediaBackground::clearDecoder() {
 }
 
 void ThemeMediaBackground::setSource(const QString& path) {
-    if (path == m_path) return;
+    if (!m_external && path == m_path) return;
     clearDecoder();
+    m_external = false;
+    ++m_sourceGeneration;
+    ++m_generation;
     m_path = path;
     m_sourceFrame = {};
     m_frame = {};
@@ -98,9 +104,18 @@ void ThemeMediaBackground::setSource(const QString& path) {
 
     using namespace timelinebackgroundprefs;
     switch (mediaKind(path)) {
-    case MediaKind::Image:
-        acceptSourceFrame(QImage(path), false);
+    case MediaKind::Image: {
+        const QPointer<ThemeMediaBackground> guard(this);
+        const auto generation = m_sourceGeneration;
+        QThreadPool::globalInstance()->start([guard, generation, path] {
+            QImage image(path);
+            QMetaObject::invokeMethod(qApp, [guard, generation, path, image] {
+                if (guard && guard->m_sourceGeneration == generation && guard->m_path == path)
+                    guard->acceptSourceFrame(image, false);
+            }, Qt::QueuedConnection);
+        });
         break;
+    }
     case MediaKind::AnimatedImage:
         m_movie = new QMovie(path, QByteArray(), this);
         // Retaining every high-resolution GIF frame is unnecessary for a
@@ -138,6 +153,18 @@ void ThemeMediaBackground::setSource(const QString& path) {
     case MediaKind::None:
         break;
     }
+}
+
+void ThemeMediaBackground::setExternalFrame(const QImage& frame, quint64 sourceId) {
+    if (frame.isNull()) return;
+    if (!m_external || m_externalSourceId != sourceId) {
+        clearDecoder();
+        m_external = true;
+        m_externalSourceId = sourceId;
+        ++m_sourceGeneration;
+        m_path.clear();
+    }
+    acceptSourceFrame(frame, true);
 }
 
 void ThemeMediaBackground::setTargetSize(const QSize& logicalSize,
@@ -198,20 +225,41 @@ void ThemeMediaBackground::acceptSourceFrame(const QImage& source,
 }
 
 void ThemeMediaBackground::rebuild(bool animatedFrame) {
+    ++m_generation;
+    m_pendingAnimated = animatedFrame;
     if (m_sourceFrame.isNull() || m_logicalSize.isEmpty()) {
-        m_frame = {};
-    } else {
-        const QSize pixels(
-            std::max(1, int(std::ceil(m_logicalSize.width() *
-                                     m_devicePixelRatio))),
-            std::max(1, int(std::ceil(m_logicalSize.height() *
-                                     m_devicePixelRatio))));
-        m_frame = QPixmap::fromImage(composeFrame(
-            m_sourceFrame, pixels, m_placement,
-            int(std::lround(m_blurRadius * m_devicePixelRatio))));
-        m_frame.setDevicePixelRatio(m_devicePixelRatio);
+        m_frame = {}; m_composePending = false;
+        emit frameChanged(animatedFrame);
+        return;
     }
-    emit frameChanged(animatedFrame);
+    if (m_composing) { m_composePending = true; return; }
+    m_composing = true; m_composePending = false;
+    const auto path = m_path;
+    const auto sourceGeneration = m_sourceGeneration;
+    const auto logical = m_logicalSize;
+    const auto source = m_sourceFrame;
+    const auto placement = m_placement;
+    const auto dpr = m_devicePixelRatio;
+    const int blur = int(std::lround(m_blurRadius * dpr));
+    const QSize pixels(std::max(1, int(std::ceil(m_logicalSize.width() * dpr))),
+                       std::max(1, int(std::ceil(m_logicalSize.height() * dpr))));
+    const QPointer<ThemeMediaBackground> guard(this);
+    QThreadPool::globalInstance()->start([guard, path, sourceGeneration, logical, source, pixels, placement, blur, dpr, animatedFrame] {
+        auto image = composeFrame(source, pixels, placement, blur);
+        QMetaObject::invokeMethod(qApp, [guard, path, sourceGeneration, logical, placement, blur, image = std::move(image), dpr, animatedFrame] {
+            if (!guard) return;
+            guard->m_composing = false;
+            if (guard->m_sourceGeneration == sourceGeneration &&
+                guard->m_path == path && guard->m_logicalSize == logical &&
+                guard->m_placement == placement && guard->m_devicePixelRatio == dpr &&
+                int(std::lround(guard->m_blurRadius * dpr)) == blur) {
+                guard->m_frame = QPixmap::fromImage(image);
+                guard->m_frame.setDevicePixelRatio(dpr);
+                emit guard->frameChanged(animatedFrame);
+            }
+            if (guard->m_composePending) guard->rebuild(guard->m_pendingAnimated);
+        }, Qt::QueuedConnection);
+    });
 }
 
 bool checkThemeMediaBackgroundForTest(QString* error) {

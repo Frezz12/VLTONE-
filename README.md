@@ -1,10 +1,12 @@
-# VLT Studio Pro
+# VLTONE
 
-VLT Studio Pro is a cross-platform (Windows + macOS) digital audio workstation.
+VLTONE is a cross-platform (Windows + macOS) digital audio workstation.
 
 - **Core** — a portable C++23 audio engine: realtime-safe mixing graph,
   transport, tempo, tracks/clips, recording and offline render. No OS-specific
   code; device I/O runs on **PortAudio** and file decoding on **libsndfile**.
+  M4A/MP4A/MP4 audio and standalone AAC use the native macOS/Windows codecs
+  for import, preview, sampler loading and project reopening.
 - **Controller** — a framework-agnostic C++ layer (`EngineController`) that owns
   the engine and the document model, with undo/redo and a JSON project format.
 - **App** — a **Qt 6 Widgets** front-end: arrangement view (track list +
@@ -27,7 +29,7 @@ macOS:
 brew install cmake ninja qt qtmultimedia qtwebengine qtserialport portaudio rtmidi libsndfile nlohmann-json
 cmake --preset macos
 cmake --build build
-./build/bin/daw
+./build/bin/VLTONE
 ```
 
 ## Status
@@ -42,9 +44,31 @@ built-in sampler, browse and audition sample folders, choose the audio device,
 export a mixdown, and save/open portable `.vlt` projects — with undo/redo and
 themes.
 
-The integrated Web browser (right edge, `Alt+W`) uses a persistent, single-tab
+The integrated Web browser (right edge, `Alt+W`) uses a persistent, tabbed
 Qt WebEngine profile. Audio downloaded there can be imported at the playhead on
 a new or selected Audio Track. It can stay open beside the independent AI panel.
+
+The image icon in the browser's bottom bar sends a video from the current page
+to the existing timeline background. It initially fills the whole arrangement;
+Settings ▸ Themes ▸ Timeline Background controls its layout, blur and visibility
+just like a local background file. The video continues independently of the
+original tab and is restored after restart. Sound starts muted and can be toggled
+in the bottom bar. Removing the web background returns to the retained local
+file; choosing a local file stops the web player. Web backgrounds need a network
+connection, and protected or incompatible site players may not work.
+
+`web_video_background_test` checks this flow with local HTTP pages and a bundled
+synthetic video, including cross-origin frames, seeking, looping, replacement,
+sound, restoration and theme composition. It needs a working Qt WebEngine GUI
+runtime. A real-site smoke check is opt-in:
+
+```bash
+./build/bin/web_video_background_test --url 'https://www.youtube.com/watch?v=aqz-KE-bpKQ'
+```
+
+For a full-window visual check, combine `DAW_SHOT_WEB=1`,
+`DAW_SHOT_WEB_URL=<video page>`, `DAW_SHOT_WEB_BACKGROUND=1` and
+`DAW_SHOT_DELAY=8000` with `--screenshot`; the same bottom-bar action is invoked.
 
 The AI assistant panel (right edge, off by default, `Alt+A`) works the program
 from a description: it creates tracks, loads instruments, writes MIDI parts and
@@ -65,7 +89,7 @@ The app builds and drives itself without a screen, which is how the UI is
 verified:
 
 ```bash
-QT_QPA_PLATFORM=offscreen ./build/bin/daw --selftest        # builds every
+QT_QPA_PLATFORM=offscreen ./build/bin/VLTONE --selftest        # builds every
                                                             # window, plays a
                                                             # typing-keyboard
                                                             # note, drops a MIDI
@@ -77,7 +101,7 @@ QT_QPA_PLATFORM=offscreen ./build/bin/daw --selftest        # builds every
                                                             # key, no network);
                                                             # non-zero exit on
                                                             # failure
-QT_QPA_PLATFORM=offscreen ./build/bin/daw --screenshot shot.png
+QT_QPA_PLATFORM=offscreen ./build/bin/VLTONE --screenshot shot.png
 ```
 
 `--screenshot` grabs the shell; environment variables aim it at a particular
@@ -108,8 +132,8 @@ Crash recovery has two modes of its own, and they are meant to be run as a pair:
 
 ```bash
 export DAW_RECOVERY_ROOT=/tmp/daw-recovery      # never the real one
-QT_QPA_PLATFORM=offscreen ./build/bin/daw --crashtest     # exits 139: SIGSEGV
-QT_QPA_PLATFORM=offscreen ./build/bin/daw --recovercheck  # prints the tracks
+QT_QPA_PLATFORM=offscreen ./build/bin/VLTONE --crashtest     # exits 139: SIGSEGV
+QT_QPA_PLATFORM=offscreen ./build/bin/VLTONE --recovercheck  # prints the tracks
 ```
 
 `--crashtest` builds a project, waits for the journal to write, then faults for

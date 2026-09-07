@@ -292,6 +292,7 @@ func deriveCommandMetadataForSchema(kind string, payload json.RawMessage,
 			addTrackClipLandingHead(trackID)
 		case "clip.setSampleEdit":
 			add(prefix + "sampleEdit")
+			add("project:tempoCascade")
 			addTrackClipLandingHead(trackID)
 		case "clip.setFade":
 			add(prefix+"fadeInSeconds", prefix+"fadeOutSeconds")

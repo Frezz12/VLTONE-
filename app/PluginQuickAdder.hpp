@@ -56,6 +56,8 @@ public:
     void closeSearch();
 
     bool isExpanded() const { return m_expanded; }
+    /// Constrain an expanded search to the context strip's available width.
+    void setAvailableWidth(int width);
 
     /// Kept at toolbar height in both states; only width changes.
     int preferredHeight() const;
@@ -91,6 +93,7 @@ protected:
     bool eventFilter(QObject*, QEvent*) override;
 
 private:
+    int m_availableWidth = QWIDGETSIZE_MAX;
     struct Entry {
         daw::plugins::PluginDescriptor descriptor;
         bool favorite = false;

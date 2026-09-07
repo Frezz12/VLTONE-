@@ -95,7 +95,7 @@ void LlmClient::send(const QString& system,
                     m_config.accessToken.isEmpty() ||
                     m_config.connectionId.isEmpty())) {
         ai::ModelReply reply;
-        reply.error = "VLT account authorization is unavailable. Sign in again.";
+        reply.error = "VLTONE account authorization is unavailable. Sign in again.";
         answer(std::move(reply));
         return;
     }

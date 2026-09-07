@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 if (-not $Executable) {
-    $Executable = Join-Path $repoRoot "build-windows\stage\bin\VLT Studio Pro.exe"
+    $Executable = Join-Path $repoRoot "build-windows\stage\bin\VLTONE.exe"
 }
 if (-not $OutputRoot) {
     $OutputRoot = Join-Path $repoRoot "web\public\manual"
@@ -18,7 +18,7 @@ $Executable = [IO.Path]::GetFullPath($Executable)
 $OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
 
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
-    throw "VLT Studio Pro executable was not found: $Executable"
+    throw "VLTONE executable was not found: $Executable"
 }
 
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
@@ -94,13 +94,13 @@ $states = @(
     @{ Name = "settings-recording"; Env = @{ DAW_SHOT_SETTINGS = "2" } },
     @{ Name = "settings-context"; Env = @{ DAW_SHOT_SETTINGS = "3" } },
     @{ Name = "settings-browser"; Env = @{ DAW_SHOT_SETTINGS = "4" } },
-    @{ Name = "settings-ai"; Env = @{ DAW_SHOT_SETTINGS = "5" } },
-    @{ Name = "settings-account"; Env = @{ DAW_SHOT_SETTINGS = "6" } },
-    @{ Name = "settings-language"; Env = @{ DAW_SHOT_SETTINGS = "7" } },
-    @{ Name = "settings-recovery"; Env = @{ DAW_SHOT_SETTINGS = "8" } },
-    @{ Name = "settings-themes"; Env = @{ DAW_SHOT_SETTINGS = "9" } },
-    @{ Name = "settings-theme-editor"; Env = @{ DAW_SHOT_SETTINGS = "10" } },
-    @{ Name = "settings-shortcuts"; Env = @{ DAW_SHOT_SETTINGS = "11" } }
+    @{ Name = "settings-ai"; Env = @{ DAW_SHOT_SETTINGS = "6" } },
+    @{ Name = "settings-account"; Env = @{ DAW_SHOT_SETTINGS = "7" } },
+    @{ Name = "settings-language"; Env = @{ DAW_SHOT_SETTINGS = "8" } },
+    @{ Name = "settings-recovery"; Env = @{ DAW_SHOT_SETTINGS = "9" } },
+    @{ Name = "settings-themes"; Env = @{ DAW_SHOT_SETTINGS = "10" } },
+    @{ Name = "settings-theme-editor"; Env = @{ DAW_SHOT_SETTINGS = "11" } },
+    @{ Name = "settings-shortcuts"; Env = @{ DAW_SHOT_SETTINGS = "12" } }
 )
 
 $shotKeys = @(

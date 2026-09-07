@@ -1,5 +1,7 @@
 #include "Graph/GraphProcessor.hpp"
 #include "DSP/Simd.hpp"
+#include "ScopedNoDenormals.hpp"
+#include "Memory/PcmReadCache.hpp"
 
 #include <algorithm>
 
@@ -63,6 +65,7 @@ FrameCount GraphProcessor::latencySamples() const {
 
 void GraphProcessor::prepareBlockState(const CompiledGraph& graph) noexcept {
     for (std::size_t i = 0; i < graph.nodes.size(); ++i) {
+        if (m_fuseBlock && graph.nodes[i].inlineTask) continue;
         graph.pending[i].value.store(graph.pendingTemplate[i],
                                      std::memory_order_relaxed);
     }
@@ -169,10 +172,21 @@ ProcessContext GraphProcessor::makeContext(
 void GraphProcessor::runNode(const CompiledGraph& graph,
                              std::uint32_t nodeIndex,
                              unsigned workerIndex) noexcept {
+    for (;;) {
     const auto& entry = graph.nodes[nodeIndex];
 
     const ProcessContext context = makeContext(graph, entry);
+    const PcmReadScope pcmRead(!m_offline);
+    const bool profiling = m_jobs.profiling();
+    const auto started = profiling ? rt::nowNanos() : 0;
     entry.node->process(context);
+    if (profiling) m_jobs.recordProfile(workerIndex,
+        {graph.generation, rt::nowNanos() - started, m_position,
+         entry.id, workerIndex, rt::ProfileEvent::Kind::Node});
+    if (m_fuseBlock && entry.inlineSuccessor != kInvalidNode) {
+        nodeIndex = entry.inlineSuccessor;
+        continue;
+    }
 
     // Release the successors this node was blocking; any that hit zero are
     // ready and go straight onto this worker's deque (their input data is warm
@@ -191,6 +205,8 @@ void GraphProcessor::runNode(const CompiledGraph& graph,
     // that gap and just exposed a wide frontier, wake enough of them to share
     // it. The current worker accounts for one ready item itself.
     if (newlyReady > 1) m_jobs.wakeHelpers(newlyReady - 1);
+    break;
+    }
 }
 
 void GraphProcessor::executeJob(void* context, std::uint32_t nodeIndex,
@@ -202,6 +218,7 @@ void GraphProcessor::executeJob(void* context, std::uint32_t nodeIndex,
 Status GraphProcessor::process(const AudioBlock& output, FrameCount frames,
                                SamplePos timelinePosition, bool playing,
                                bool offline, const TransportInfo& transport) {
+    const rt::ScopedNoDenormals noDenormals;
     const CompiledGraph* snapshot = acquireGraph();
     if (!snapshot) return fail(EngineError::NotCompiled);
     if (frames > snapshot->maxBlockSize) {
@@ -231,6 +248,7 @@ Status GraphProcessor::process(const AudioBlock& output, FrameCount frames,
     m_playing = playing;
     m_offline = offline;
     m_transport = transport;
+    m_fuseBlock = m_taskFusion.load(std::memory_order_relaxed);
 
     prepareMidiTimeline(*snapshot, frames, timelinePosition, playing, offline);
     prepareBlockState(*snapshot);
@@ -242,7 +260,7 @@ Status GraphProcessor::process(const AudioBlock& output, FrameCount frames,
     constexpr std::size_t kNodesPerHelper = 16;
     const unsigned helpers =
         unsigned(std::max<std::size_t>(snapshot->nodes.size() / kNodesPerHelper, 1));
-    m_jobs.beginPass(std::uint32_t(snapshot->nodes.size()), helpers);
+    m_jobs.beginPass(m_fuseBlock ? snapshot->taskCount : std::uint32_t(snapshot->nodes.size()), helpers);
 
     // Seed every source into worker 0's deque — this thread owns it, and a
     // work-stealing deque may only be pushed to by its owner. The other workers
@@ -262,6 +280,7 @@ Status GraphProcessor::processSerial(const AudioBlock& output, FrameCount frames
                                      SamplePos timelinePosition, bool playing,
                                      bool offline,
                                      const TransportInfo& transport) {
+    const rt::ScopedNoDenormals noDenormals;
     const CompiledGraph* snapshot = acquireGraph();
     if (!snapshot) return fail(EngineError::NotCompiled);
     if (frames > snapshot->maxBlockSize) {
@@ -283,7 +302,13 @@ Status GraphProcessor::processSerial(const AudioBlock& output, FrameCount frames
     for (std::uint32_t nodeIndex : snapshot->order) {
         const auto& entry = snapshot->nodes[nodeIndex];
         const ProcessContext context = makeContext(*snapshot, entry);
+        const PcmReadScope pcmRead(!offline);
+        const bool profiling = m_jobs.profiling();
+        const auto started = profiling ? rt::nowNanos() : 0;
         entry.node->process(context);
+        if (profiling) m_jobs.recordProfile(0,
+            {snapshot->generation, rt::nowNanos() - started, m_position,
+             entry.id, 0, rt::ProfileEvent::Kind::Node});
     }
 
     writeSink(*snapshot, output, frames);

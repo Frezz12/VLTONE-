@@ -2,7 +2,7 @@
 
 ## FST 0.177.0
 
-VLT Studio Pro vendors the clean-room FST compatibility headers
+VLTONE vendors the clean-room FST compatibility headers
 `aeffect.h`, `aeffectx.h`, and `fst.h` to describe the legacy AEffect plugin
 ABI. FST is copyright 2019 IOhannes m zmölnig and IEM and is distributed under
 the GNU General Public License, version 3 or later.

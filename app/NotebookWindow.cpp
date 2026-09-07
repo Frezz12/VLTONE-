@@ -1,4 +1,5 @@
 #include "NotebookWindow.hpp"
+#include "Typography.hpp"
 
 #include "Controls.hpp"
 #include "GlassPanel.hpp"
@@ -9,8 +10,16 @@
 #include "EngineController.hpp"
 
 #include <QAbstractItemView>
+#include <QApplication>
 #include <QBuffer>
 #include <QCloseEvent>
+#include <QCheckBox>
+#include <QLineEdit>
+#include <QPointer>
+#include <QStackedWidget>
+#include <QTabBar>
+#include <QMenu>
+#include <QScrollArea>
 #include <QColorDialog>
 #include <QComboBox>
 #include <QCryptographicHash>
@@ -27,6 +36,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QKeyEvent>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QSettings>
@@ -45,8 +55,26 @@
 #include <QWebEngineView>
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
+
+class NotebookLineEdit final : public QLineEdit {
+public:
+    using QLineEdit::QLineEdit;
+protected:
+    bool event(QEvent* event) override {
+        if (event->type() == QEvent::ShortcutOverride) {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
+                !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
+                event->accept();
+                return true;
+            }
+        }
+        return QLineEdit::event(event);
+    }
+};
 
 class NotebookPage final : public QWebEnginePage {
 public:
@@ -117,12 +145,12 @@ QStringList timedTextFontFamilies() {
 
 NotebookWindow::NotebookWindow(daw::EngineController* controller,
                                QWidget* parent)
-    : QDialog(parent, Qt::Window), m_controller(controller) {
+    : QWidget(parent), m_controller(controller) {
     setWindowTitle(tr("Notebook"));
     setObjectName(QStringLiteral("NotebookWindow"));
     setAttribute(Qt::WA_DeleteOnClose, false);
-    setMinimumSize(680, 480);
-    resize(920, 700);
+    setMinimumSize(0, 0);
+    setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
 
     auto* column = new QVBoxLayout(this);
     column->setContentsMargins(0, 0, 0, 0);
@@ -131,28 +159,40 @@ NotebookWindow::NotebookWindow(daw::EngineController* controller,
     column->addWidget(m_toolbar);
 
     auto* profile = new QWebEngineProfile(this);
+    ui::installFontUrlHandler(profile);
     profile->setHttpCacheType(QWebEngineProfile::MemoryHttpCache);
     profile->setPersistentCookiesPolicy(
         QWebEngineProfile::NoPersistentCookies);
     m_view = new QWebEngineView(this);
+    m_view->setProperty("dawWebInput", true);
     auto* page = new NotebookPage(profile, m_view);
     m_view->setPage(page);
     page->settings()->setAttribute(
         QWebEngineSettings::LocalContentCanAccessFileUrls, true);
     page->settings()->setAttribute(
-        QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
+        // Chromium classifies custom CORS schemes as remote. The document's
+        // CSP still permits only local files and the embedded font handler;
+        // all network connections, frames and remote scripts remain blocked.
+        QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);
     page->settings()->setAttribute(QWebEngineSettings::JavascriptCanOpenWindows,
                                    false);
     auto* channel = new QWebChannel(page);
     channel->registerObject(QStringLiteral("notebook"), this);
     page->setWebChannel(channel);
-    auto* content = new QHBoxLayout;
-    content->setContentsMargins(0, 0, 0, 0);
-    content->setSpacing(0);
-    content->addWidget(m_view, 1);
+    m_pages = new QStackedWidget(this);
+    m_pages->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
+    m_pages->addWidget(m_view);
     buildTimedTextPanel();
-    content->addWidget(m_timedTextPanel);
-    column->addLayout(content, 1);
+    auto* timedScroll = new QScrollArea(this);
+    timedScroll->setFrameShape(QFrame::NoFrame);
+    timedScroll->setWidgetResizable(true);
+    timedScroll->setWidget(m_timedTextPanel);
+    m_pages->addWidget(timedScroll);
+    column->addWidget(m_pages, 1);
+    m_positionTimer = new QTimer(this);
+    m_positionTimer->setInterval(100);
+    connect(m_positionTimer, &QTimer::timeout, this,
+            &NotebookWindow::updateTimedTextPosition);
 
     connect(m_view, &QWebEngineView::loadFinished, this, [this](bool ok) {
         if (!ok) {
@@ -193,12 +233,14 @@ NotebookWindow::NotebookWindow(daw::EngineController* controller,
     applyTheme();
     reloadSettings();
 
-    const QByteArray geometry =
-        QSettings().value(QStringLiteral("notebook/geometry")).toByteArray();
-    if (!geometry.isEmpty()) restoreGeometry(geometry);
 }
 
-NotebookWindow::~NotebookWindow() { saveNow(); }
+NotebookWindow::~NotebookWindow() {
+    saveNow();
+    // The profile is owned by this panel; destroy its page before that profile.
+    delete m_view;
+    m_view = nullptr;
+}
 
 void NotebookWindow::buildToolbar() {
     m_toolbar = new QWidget(this);
@@ -217,38 +259,6 @@ void NotebookWindow::buildToolbar() {
     m_saveStatus->setObjectName(QStringLiteral("NotebookSaveStatus"));
     m_saveStatus->setAccessibleName(tr("Notebook save status"));
     header->addWidget(m_saveStatus);
-
-    m_timedTextEditorButton = new ui::IconButton(
-        icons::Glyph::Clock, tr("Edit timed text"), m_toolbar);
-    m_timedTextEditorButton->setObjectName(
-        QStringLiteral("NotebookTimedTextEditorButton"));
-    m_timedTextEditorButton->setAccessibleName(tr("Edit timed text"));
-    m_timedTextEditorButton->setButtonSize(28, 28);
-    m_timedTextEditorButton->setCheckable(true);
-    connect(m_timedTextEditorButton, &QAbstractButton::toggled, this,
-            [this](bool visible) {
-                if (m_timedTextPanel) m_timedTextPanel->setVisible(visible);
-                updateTimedTextButtons();
-            });
-    header->addWidget(m_timedTextEditorButton);
-
-    m_timedTextPlaybackButton = new ui::IconButton(
-        icons::Glyph::Power, tr("Show timed text on the timeline"), m_toolbar);
-    m_timedTextPlaybackButton->setObjectName(
-        QStringLiteral("NotebookTimedTextPlaybackButton"));
-    m_timedTextPlaybackButton->setAccessibleName(
-        tr("Show timed text on the timeline"));
-    m_timedTextPlaybackButton->setButtonSize(28, 28);
-    m_timedTextPlaybackButton->setCheckable(true);
-    m_timedTextPlaybackButton->setChecked(
-        ui::notebookprefs::timedTextEnabled());
-    connect(m_timedTextPlaybackButton, &QAbstractButton::toggled, this,
-            [this](bool enabled) {
-                ui::notebookprefs::setTimedTextEnabled(enabled);
-                updateTimedTextButtons();
-                emit timedTextChanged();
-            });
-    header->addWidget(m_timedTextPlaybackButton);
 
     m_motionButton = new ui::IconButton(
         icons::Glyph::Pause, tr("Pause animated background"), m_toolbar);
@@ -273,10 +283,44 @@ void NotebookWindow::buildToolbar() {
     connect(settings, &QAbstractButton::clicked, this,
             &NotebookWindow::settingsRequested);
     header->addWidget(settings);
+    m_detachButton = new ui::IconButton(
+        icons::Glyph::Detach, tr("Open in separate window"), m_toolbar);
+    m_detachButton->setObjectName(QStringLiteral("NotebookDetachButton"));
+    m_detachButton->setButtonSize(28, 28);
+    connect(m_detachButton, &QAbstractButton::clicked, this,
+            &NotebookWindow::detachRequested);
+    header->addWidget(m_detachButton);
+    auto* close = new ui::IconButton(icons::Glyph::Close, tr("Close notebook"), m_toolbar);
+    close->setObjectName(QStringLiteral("NotebookCloseButton"));
+    close->setAccessibleName(tr("Close notebook"));
+    close->setButtonSize(28, 28);
+    connect(close, &QAbstractButton::clicked, this, &NotebookWindow::closeRequested);
+    header->addWidget(close);
     column->addLayout(header);
+    setDetached(false);
 
+    m_tabs = new QTabBar(m_toolbar);
+    m_tabs->setObjectName(QStringLiteral("NotebookTabs"));
+    m_tabs->addTab(tr("Notes"));
+    m_tabs->addTab(tr("Text by time"));
+    m_tabs->setExpanding(true);
+    m_tabs->setAccessibleName(tr("Notebook pages"));
+    column->addWidget(m_tabs);
+    connect(m_tabs, &QTabBar::currentChanged, this, [this](int index) {
+        if (!m_pages) return;
+        if (index == 1) readCurrentLine();
+        m_pages->setCurrentIndex(index);
+        m_formatControls->setVisible(index == 0);
+        updateTimedTextPosition();
+    });
+    m_formatControls = new QWidget(m_toolbar);
+    auto* formatting = new QVBoxLayout(m_formatControls);
+    formatting->setContentsMargins(0, 0, 0, 0);
+    formatting->setSpacing(5);
+    auto* fontRow = new QHBoxLayout;
+    fontRow->setSpacing(5);
     auto* formats = new QHBoxLayout;
-    formats->setSpacing(5);
+    formats->setSpacing(4);
     const auto iconButton = [this, formats](icons::Glyph glyph,
                                             const QString& name,
                                             const auto& callback) {
@@ -298,22 +342,26 @@ void NotebookWindow::buildToolbar() {
     m_block->addItem(tr("Heading 1"), QStringLiteral("h1"));
     m_block->addItem(tr("Heading 2"), QStringLiteral("h2"));
     m_block->addItem(tr("Quote"), QStringLiteral("blockquote"));
-    m_block->setMinimumWidth(110);
+    m_block->setMinimumWidth(80);
+    m_block->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_block->setMinimumContentsLength(6);
     connect(m_block, &QComboBox::currentIndexChanged, this, [this](int index) {
         runCommand(QStringLiteral("formatBlock"),
                    m_block->itemData(index).toString());
     });
-    formats->addWidget(m_block);
+    fontRow->addWidget(m_block);
 
     m_font = new QComboBox(m_toolbar);
     m_font->setEditable(true);
     m_font->setInsertPolicy(QComboBox::NoInsert);
     m_font->setAccessibleName(tr("Text font"));
-    m_font->setMinimumWidth(150);
+    m_font->setMinimumWidth(80);
+    m_font->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_font->setMinimumContentsLength(6);
     connect(m_font, &QComboBox::textActivated, this, [this](const QString& font) {
         runCommand(QStringLiteral("fontName"), font);
     });
-    formats->addWidget(m_font, 1);
+    fontRow->addWidget(m_font, 1);
 
     m_size = new QComboBox(m_toolbar);
     m_size->setEditable(true);
@@ -331,7 +379,7 @@ void NotebookWindow::buildToolbar() {
         if (ok) runCommand(QStringLiteral("fontSizePx"),
                            QString::number(std::clamp(pixels, 8, 96)));
     });
-    formats->addWidget(m_size);
+    fontRow->addWidget(m_size);
 
     const auto textButton = [this, formats](const QString& text,
                                             const QString& name,
@@ -352,6 +400,8 @@ void NotebookWindow::buildToolbar() {
     QFont boldFont = bold->font();
     boldFont.setBold(true);
     bold->setFont(boldFont);
+    // The formatting glyph must stay bold over the default Medium buttons.
+    bold->setStyleSheet(QStringLiteral("font-weight:700;"));
     auto* italic = textButton(QStringLiteral("I"), tr("Italic"),
                               QStringLiteral("italic"));
     QFont italicFont = italic->font();
@@ -382,22 +432,35 @@ void NotebookWindow::buildToolbar() {
             runCommand(QStringLiteral("hiliteColor"), color.name());
     });
 
-    textButton(QStringLiteral("•"), tr("Bulleted list"),
-               QStringLiteral("insertUnorderedList"));
-    textButton(QStringLiteral("1."), tr("Numbered list"),
-               QStringLiteral("insertOrderedList"));
-    iconButton(icons::Glyph::Image, tr("Insert image"),
-               [this] { chooseImage(); });
-    iconButton(icons::Glyph::Eraser, tr("Clear formatting"),
-               [this] { runCommand(QStringLiteral("removeFormat")); });
-    column->addLayout(formats);
+    auto* more = new QToolButton(m_formatControls);
+    more->setText(QStringLiteral("…"));
+    more->setObjectName(QStringLiteral("NotebookMoreFormatting"));
+    more->setToolTip(tr("More formatting"));
+    more->setAccessibleName(tr("More formatting"));
+    more->setFixedSize(28, 28);
+    more->setPopupMode(QToolButton::InstantPopup);
+    auto* menu = new QMenu(more);
+    menu->addAction(tr("Bulleted list"), this,
+                    [this] { runCommand(QStringLiteral("insertUnorderedList")); });
+    menu->addAction(tr("Numbered list"), this,
+                    [this] { runCommand(QStringLiteral("insertOrderedList")); });
+    menu->addAction(icons::icon(icons::Glyph::Image, th().textPrimary), tr("Insert image"),
+                    this, &NotebookWindow::chooseImage);
+    menu->addSeparator();
+    menu->addAction(tr("Clear formatting"), this,
+                    [this] { runCommand(QStringLiteral("removeFormat")); });
+    more->setMenu(menu);
+    formats->addWidget(more);
+    formats->addStretch(1);
+    formatting->addLayout(fontRow);
+    formatting->addLayout(formats);
+    column->addWidget(m_formatControls);
 }
 
 void NotebookWindow::buildTimedTextPanel() {
     m_timedTextPanel = new QWidget(this);
     m_timedTextPanel->setObjectName(QStringLiteral("NotebookTimedTextPanel"));
-    m_timedTextPanel->setMinimumWidth(290);
-    m_timedTextPanel->setMaximumWidth(360);
+    m_timedTextPanel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     auto* column = new QVBoxLayout(m_timedTextPanel);
     column->setContentsMargins(12, 12, 12, 12);
     column->setSpacing(8);
@@ -406,24 +469,54 @@ void NotebookWindow::buildTimedTextPanel() {
     title->setObjectName(QStringLiteral("NotebookTimedTextTitle"));
     column->addWidget(title);
     auto* help = new QLabel(
-        tr("Place the caret in a notebook line, then stamp it at the current "
-           "playhead position. You can edit both time and text below."),
+        tr("Select a line in Notes or type it below. Move the playhead to the "
+           "right moment and click Bind line. Each line stays visible until the next one."),
         m_timedTextPanel);
     help->setObjectName(QStringLiteral("NotebookTimedTextHelp"));
     help->setWordWrap(true);
     column->addWidget(help);
 
-    auto* stamp = new QPushButton(
-        tr("Stamp selected line at playhead"), m_timedTextPanel);
+    auto* lineLabel = new QLabel(tr("Line to display"), m_timedTextPanel);
+    m_cueText = new NotebookLineEdit(m_timedTextPanel);
+    m_cueText->setObjectName(QStringLiteral("NotebookCueText"));
+    m_cueText->setMaxLength(500);
+    m_cueText->setPlaceholderText(tr("Select text in Notes or type a line"));
+    m_cueText->setAccessibleName(tr("Line to display"));
+    lineLabel->setBuddy(m_cueText);
+    column->addWidget(lineLabel);
+    column->addWidget(m_cueText);
+    m_cuePosition = new QLabel(m_timedTextPanel);
+    m_cuePosition->setObjectName(QStringLiteral("NotebookCuePosition"));
+    column->addWidget(m_cuePosition);
+    auto* stamp = new QPushButton(tr("Bind line to playhead"), m_timedTextPanel);
     stamp->setObjectName(QStringLiteral("NotebookTimedTextStampButton"));
-    stamp->setAccessibleName(tr("Stamp selected notebook line at playhead"));
-    stamp->setToolTip(
-        tr("Add the selected notebook line at the current project time"));
-    connect(stamp, &QPushButton::clicked, this,
-            &NotebookWindow::captureCurrentLine);
+    stamp->setAccessibleName(tr("Bind line to playhead"));
+    stamp->setToolTip(tr("Save this line at the current project position and show it on the timeline"));
+    stamp->setEnabled(false);
+    connect(m_cueText, &QLineEdit::textChanged, stamp, [stamp](const QString& text) {
+        stamp->setEnabled(!text.trimmed().isEmpty());
+    });
+    connect(stamp, &QPushButton::clicked, this, &NotebookWindow::captureCurrentLine);
+    connect(m_cueText, &QLineEdit::returnPressed, this, &NotebookWindow::captureCurrentLine);
     column->addWidget(stamp);
 
+    m_timedTextPlaybackButton = new QCheckBox(tr("Show text on the timeline"), m_timedTextPanel);
+    m_timedTextPlaybackButton->setObjectName(QStringLiteral("NotebookTimedTextPlaybackButton"));
+    m_timedTextPlaybackButton->setChecked(ui::notebookprefs::timedTextEnabled());
+    connect(m_timedTextPlaybackButton, &QCheckBox::toggled, this, [this](bool enabled) {
+        ui::notebookprefs::setTimedTextEnabled(enabled);
+        updateTimedTextButtons();
+        emit timedTextChanged();
+    });
+    column->addWidget(m_timedTextPlaybackButton);
+    m_cuePreview = new QLabel(m_timedTextPanel);
+    m_cuePreview->setObjectName(QStringLiteral("NotebookCuePreview"));
+    m_cuePreview->setWordWrap(true);
+    column->addWidget(m_cuePreview);
+
     m_timedTextTable = new QTableWidget(0, 2, m_timedTextPanel);
+    m_timedTextTable->setObjectName(QStringLiteral("NotebookTimedTextTable"));
+    m_timedTextTable->setMinimumHeight(100);
     m_timedTextTable->setHorizontalHeaderLabels({tr("Time"), tr("Text")});
     m_timedTextTable->horizontalHeader()->setSectionResizeMode(
         0, QHeaderView::ResizeToContents);
@@ -442,7 +535,19 @@ void NotebookWindow::buildTimedTextPanel() {
 
     auto* editRow = new QHBoxLayout;
     editRow->setSpacing(6);
-    m_setCueTime = new QPushButton(tr("Set to playhead"), m_timedTextPanel);
+    m_seekCue = new QPushButton(tr("Go to time"), m_timedTextPanel);
+    m_seekCue->setAccessibleName(tr("Move playhead to selected line"));
+    m_seekCue->setEnabled(false);
+    connect(m_seekCue, &QPushButton::clicked, this, [this] {
+        const int row = m_timedTextTable->currentRow();
+        double seconds = 0.0;
+        if (row < 0 || !m_controller || !ui::notebookprefs::parseTimedCueTime(
+                m_timedTextTable->item(row, 0)->text(), seconds)) return;
+        m_controller->seekSeconds(seconds);
+        updateTimedTextPosition();
+        emit timedTextChanged();
+    });
+    m_setCueTime = new QPushButton(tr("Update time"), m_timedTextPanel);
     m_setCueTime->setAccessibleName(
         tr("Set selected line time to playhead"));
     m_deleteCue = new QPushButton(tr("Delete"), m_timedTextPanel);
@@ -458,7 +563,9 @@ void NotebookWindow::buildTimedTextPanel() {
                 const bool selected = row >= 0;
                 m_setCueTime->setEnabled(selected);
                 m_deleteCue->setEnabled(selected);
+                m_seekCue->setEnabled(selected);
             });
+    editRow->addWidget(m_seekCue);
     editRow->addWidget(m_setCueTime);
     editRow->addWidget(m_deleteCue);
     column->addLayout(editRow);
@@ -484,11 +591,16 @@ void NotebookWindow::buildTimedTextPanel() {
     m_timedTextStatus->setAccessibleName(tr("Timed text save status"));
     m_timedTextStatus->setWordWrap(true);
     column->addWidget(m_timedTextStatus);
-    m_timedTextPanel->hide();
+
 }
 
 void NotebookWindow::reloadTimedTextTable() {
     if (!m_timedTextTable) return;
+    const int selectedRow = m_timedTextTable->currentRow();
+    const auto* oldTime = m_timedTextTable->item(selectedRow, 0);
+    const auto* oldText = m_timedTextTable->item(selectedRow, 1);
+    const QString selectedTime = oldTime ? oldTime->text() : QString();
+    const QString selectedText = oldText ? oldText->text() : QString();
     m_loadingTimedText = true;
     m_timedTextTable->setRowCount(0);
     const QVector<ui::notebookprefs::TimedCue> cues =
@@ -500,10 +612,16 @@ void NotebookWindow::reloadTimedTextTable() {
             new QTableWidgetItem(ui::notebookprefs::timedCueTimeText(
                 cue.seconds)));
         m_timedTextTable->setItem(row, 1, new QTableWidgetItem(cue.text));
+        double oldSeconds = 0.0;
+        if (ui::notebookprefs::parseTimedCueTime(selectedTime, oldSeconds) &&
+            std::abs(oldSeconds - cue.seconds) < 0.0005 && selectedText == cue.text)
+            m_timedTextTable->setCurrentCell(row, 1);
     }
     m_loadingTimedText = false;
-    m_setCueTime->setEnabled(false);
-    m_deleteCue->setEnabled(false);
+    const bool selected = m_timedTextTable->currentRow() >= 0;
+    m_setCueTime->setEnabled(selected);
+    m_deleteCue->setEnabled(selected);
+    m_seekCue->setEnabled(selected);
 }
 
 void NotebookWindow::saveTimedTextTable() {
@@ -552,33 +670,63 @@ void NotebookWindow::saveTimedTextTable() {
     m_timedTextStatus->style()->polish(m_timedTextStatus);
 }
 
-void NotebookWindow::captureCurrentLine() {
-    if (!m_view || !m_controller) return;
-    const double seconds =
-        std::max(0.0, m_controller->presentationPositionSeconds());
-    m_view->page()->runJavaScript(
-        QStringLiteral("currentNotebookLine();"),
-        [this, seconds](const QVariant& result) {
+void NotebookWindow::readCurrentLine() {
+    if (!m_view) return;
+    const QPointer<NotebookWindow> guard(this);
+    const QString before = m_cueText->text();
+    m_view->page()->runJavaScript(QStringLiteral("currentNotebookLine();"),
+        [guard, before](const QVariant& result) {
+            if (!guard || guard->m_cueText->text() != before) return;
             const QString text = result.toString().simplified().left(500);
-            if (text.isEmpty()) {
-                m_timedTextStatus->setProperty("error", true);
-                m_timedTextStatus->setText(
-                    tr("Place the caret in a non-empty notebook line first."));
-                m_timedTextStatus->style()->unpolish(m_timedTextStatus);
-                m_timedTextStatus->style()->polish(m_timedTextStatus);
-                return;
-            }
-            m_loadingTimedText = true;
-            const int row = m_timedTextTable->rowCount();
-            m_timedTextTable->insertRow(row);
-            m_timedTextTable->setItem(
-                row, 0, new QTableWidgetItem(
-                            ui::notebookprefs::timedCueTimeText(seconds)));
-            m_timedTextTable->setItem(row, 1, new QTableWidgetItem(text));
-            m_timedTextTable->selectRow(row);
-            m_loadingTimedText = false;
-            saveTimedTextTable();
+            if (!text.isEmpty()) guard->m_cueText->setText(text);
         });
+}
+
+void NotebookWindow::captureCurrentLine() {
+    if (!m_controller) return;
+    const QString text = m_cueText->text().simplified();
+    if (text.isEmpty()) return;
+    const double seconds = std::max(0.0, m_controller->positionSeconds());
+    m_loadingTimedText = true;
+    const int row = m_timedTextTable->rowCount();
+    m_timedTextTable->insertRow(row);
+    m_timedTextTable->setItem(row, 0, new QTableWidgetItem(
+        ui::notebookprefs::timedCueTimeText(seconds)));
+    m_timedTextTable->setItem(row, 1, new QTableWidgetItem(text));
+    m_timedTextTable->setCurrentCell(row, 1);
+    m_loadingTimedText = false;
+    saveTimedTextTable();
+    if (!m_timedTextStatus->property("error").toBool())
+        m_timedTextPlaybackButton->setChecked(true);
+    updateTimedTextPosition();
+}
+
+void NotebookWindow::updateTimedTextPosition() {
+    if (!m_controller || !m_cuePosition || !m_cuePreview || m_tabs->currentIndex() != 1) return;
+    const double seconds = std::max(0.0, m_controller->presentationPositionSeconds());
+    m_cuePosition->setText(tr("Playhead: %1").arg(ui::notebookprefs::timedCueTimeText(seconds)));
+    // Use the visible table; no disk reads on the playback timer.
+    QString active;
+    double activeTime = -1.0;
+    for (int row = 0; row < m_timedTextTable->rowCount(); ++row) {
+        const auto* time = m_timedTextTable->item(row, 0);
+        const auto* text = m_timedTextTable->item(row, 1);
+        double cueTime = 0.0;
+        if (time && text && ui::notebookprefs::parseTimedCueTime(time->text(), cueTime) &&
+            cueTime <= seconds && cueTime >= activeTime) {
+            active = text->text(); activeTime = cueTime;
+        }
+    }
+    m_cuePreview->setText(active.isEmpty() ? tr("No line at this position")
+                                          : tr("Current line: %1").arg(active));
+}
+
+void NotebookWindow::setDetached(bool detached) {
+    if (!m_detachButton) return;
+    const QString text = detached ? tr("Return to right panel") : tr("Open in separate window");
+    m_detachButton->setGlyph(detached ? icons::Glyph::Sidebar : icons::Glyph::Detach);
+    m_detachButton->setToolTip(text);
+    m_detachButton->setAccessibleName(text);
 }
 
 void NotebookWindow::setSelectedCueToPlayhead() {
@@ -588,7 +736,7 @@ void NotebookWindow::setSelectedCueToPlayhead() {
     m_loadingTimedText = true;
     m_timedTextTable->item(row, 0)->setText(
         ui::notebookprefs::timedCueTimeText(
-            std::max(0.0, m_controller->presentationPositionSeconds())));
+            std::max(0.0, m_controller->positionSeconds())));
     m_loadingTimedText = false;
     saveTimedTextTable();
 }
@@ -618,13 +766,6 @@ void NotebookWindow::refreshTimedTextFontChoices() {
 }
 
 void NotebookWindow::updateTimedTextButtons() {
-    if (m_timedTextEditorButton) {
-        const bool visible = m_timedTextEditorButton->isChecked();
-        const QString name = visible ? tr("Close timed text editor")
-                                     : tr("Edit timed text");
-        m_timedTextEditorButton->setToolTip(name);
-        m_timedTextEditorButton->setAccessibleName(name);
-    }
     if (m_timedTextPlaybackButton) {
         const bool enabled = m_timedTextPlaybackButton->isChecked();
         const QString name = enabled
@@ -678,7 +819,7 @@ QString NotebookWindow::pageHtml() const {
     const double visibility =
         double(ui::notebookprefs::backgroundVisibility()) / 100.0;
 
-    QString fontFaces;
+    QString fontFaces = ui::bundledFontFaceCss();
     for (const QString& path : ui::notebookprefs::customFontFiles()) {
         const QString alias = cssQuoted(QFileInfo(path).completeBaseName());
         const QString url = cssQuoted(QUrl::fromLocalFile(path).toString());
@@ -710,17 +851,17 @@ QString NotebookWindow::pageHtml() const {
         : QString();
     return QStringLiteral(R"HTML(<!doctype html>
 <html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file: data:; media-src file:; font-src file:; style-src 'unsafe-inline'; script-src 'unsafe-inline' qrc:; object-src 'none'; connect-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file: data:; media-src file:; font-src file: vlt-font:; style-src 'unsafe-inline'; script-src 'unsafe-inline' qrc:; object-src 'none'; connect-src 'none'">
 <style>
 %1
 :root{color-scheme:%2;--accent:%3;--text:%4;--muted:%5;--surface:%6;--page:%7;}
 *{box-sizing:border-box}html,body{height:100%;margin:0;overflow:hidden}
-body{background:var(--page);color:var(--text);font:16px/1.58 system-ui,-apple-system,"Segoe UI",sans-serif}
+body{background:var(--page);color:var(--text);font:400 16px/1.58 "Inter",system-ui,sans-serif}
 .background-media{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;opacity:%8;pointer-events:none}
 #backgroundStill{display:none}
 .scrim{position:fixed;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.08),rgba(0,0,0,.20));pointer-events:none}
-.stage{height:100%;padding:clamp(18px,4vw,52px);overflow:auto}
-.paper{width:min(860px,100%);min-height:100%;margin:0 auto;padding:clamp(24px,5vw,64px);border:1px solid color-mix(in srgb,var(--accent) 25%,transparent);border-radius:20px;background:var(--surface);background:color-mix(in srgb,var(--surface) 84%,transparent);box-shadow:0 18px 55px rgba(0,0,0,.20);backdrop-filter:blur(18px) saturate(125%)}
+.stage{height:100%;padding:clamp(10px,3vw,32px);overflow:auto}
+.paper{width:min(860px,100%);min-height:100%;margin:0 auto;padding:clamp(12px,4vw,48px);border:1px solid color-mix(in srgb,var(--accent) 25%,transparent);border-radius:20px;background:var(--surface);background:color-mix(in srgb,var(--surface) 84%,transparent);box-shadow:0 18px 55px rgba(0,0,0,.20);backdrop-filter:blur(18px) saturate(125%)}
 #editor{min-height:calc(100vh - 170px);outline:none;overflow-wrap:anywhere;white-space:normal}
 #editor:empty::before{content:attr(data-placeholder);color:var(--muted);pointer-events:none}
 #editor:focus-visible{box-shadow:inset 3px 0 var(--accent);padding-left:12px}
@@ -759,11 +900,25 @@ function sanitize(html){
 function rememberSelection(){const s=getSelection();if(s.rangeCount&&editor.contains(s.anchorNode))savedRange=s.getRangeAt(0).cloneRange()}
 function restoreSelection(){editor.focus();if(!savedRange)return;const s=getSelection();s.removeAllRanges();s.addRange(savedRange)}
 function currentNotebookLine(){
- if(!savedRange)return '';
+ rememberSelection();
+ if(!savedRange||!editor.contains(savedRange.startContainer))return '';
  const selected=savedRange.toString().trim();if(selected)return selected;
- let node=savedRange.startContainer;if(node.nodeType===Node.TEXT_NODE)node=node.parentElement;
- while(node&&node.parentElement&&node.parentElement!==editor)node=node.parentElement;
- return node&&editor.contains(node)?(node.innerText||node.textContent||'').trim():'';
+ const caret=savedRange.cloneRange();
+ // A fresh contenteditable starts with a bare text node, not a paragraph.
+ // Keep the editor as a valid line root, and split Shift+Enter at <br>.
+ if(caret.startContainer===editor&&editor.childNodes.length){
+  const offset=caret.startOffset,children=editor.childNodes;
+  const child=children[Math.min(offset,children.length-1)];
+  caret.selectNodeContents(child);caret.collapse(offset<children.length);
+ }
+ let block=caret.startContainer;
+ if(block.nodeType===Node.TEXT_NODE)block=block.parentElement;
+ while(block!==editor&&!/^(P|DIV|LI|H[1-6]|BLOCKQUOTE|PRE)$/.test(block.tagName))block=block.parentElement;
+ if(!block)return '';
+ const before=document.createRange();before.selectNodeContents(block);before.setEnd(caret.startContainer,caret.startOffset);
+ const after=document.createRange();after.selectNodeContents(block);after.setStart(caret.startContainer,caret.startOffset);
+ const lineText=range=>{const fragment=range.cloneContents();for(const br of fragment.querySelectorAll('br'))br.replaceWith('\n');return fragment.textContent||''};
+ return (lineText(before).split('\n').pop()+lineText(after).split('\n')[0]).trim();
 }
 function applyCommand(command,value=''){
  restoreSelection();document.execCommand('styleWithCSS',false,true);
@@ -843,6 +998,9 @@ void NotebookWindow::applyTheme() {
     m_toolbar->setStyleSheet(QStringLiteral(R"CSS(
 #NotebookToolbar { background: %1; border-bottom: 1px solid %2; }
 #NotebookTitle { color: %3; font-size: 11px; font-weight: 700; letter-spacing: 1.4px; }
+QTabBar::tab { background: transparent; color: %4; border-bottom: 2px solid transparent; padding: 8px 14px; }
+QTabBar::tab:selected { color: %3; border-bottom-color: %2; }
+QTabBar::tab:focus { background: %8; }
 #NotebookSaveStatus { color: %4; font-size: 11px; }
 #NotebookSaveStatus[error="true"] { color: %5; }
 QComboBox, QToolButton { background: %6; color: %3; border: 1px solid %7; border-radius: 7px; padding: 3px 7px; }
@@ -864,14 +1022,16 @@ QToolButton:hover { background: %8; }
         QColor selection = theme.accent;
         selection.setAlpha(110);
         m_timedTextPanel->setStyleSheet(QStringLiteral(R"CSS(
-#NotebookTimedTextPanel { background: %1; border-left: 1px solid %2; }
+#NotebookTimedTextPanel { background: %1; border-top: 1px solid %2; }
 #NotebookTimedTextTitle { color: %3; font-size: 11px; font-weight: 700; letter-spacing: 1.3px; }
-#NotebookTimedTextHelp, #NotebookTimedTextStatus { color: %4; font-size: 11px; }
+#NotebookTimedTextHelp, #NotebookTimedTextStatus, #NotebookCuePosition { color: %4; font-size: 11px; }
 #NotebookTimedTextStatus[error="true"] { color: %5; }
 QTableWidget { background: %6; alternate-background-color: %7; color: %3; border: 1px solid %2; border-radius: 8px; gridline-color: %2; }
 QTableWidget::item:selected { background: %8; color: %3; }
 QHeaderView::section { background: %7; color: %4; border: 0; border-bottom: 1px solid %2; padding: 5px; }
-QComboBox:focus, QPushButton:focus { border: 2px solid %9; }
+#NotebookCuePreview { color: %3; background: %7; padding: 8px; border-radius: 6px; }
+QLineEdit { background: %6; color: %3; border: 1px solid %2; border-radius: 6px; padding: 6px; }
+QComboBox:focus, QPushButton:focus, QLineEdit:focus { border: 2px solid %9; }
 )CSS")
                                              .arg(
                                                  panel.name(QColor::HexArgb),
@@ -891,6 +1051,38 @@ void NotebookWindow::runCommand(const QString& command, const QString& value) {
     m_view->page()->runJavaScript(
         QStringLiteral("applyCommand(%1[0],%2[0]);")
             .arg(jsArray(command), jsArray(value)));
+}
+
+bool NotebookWindow::ownsEditorFocus() const {
+    const bool lineEdit = qobject_cast<QLineEdit*>(QApplication::focusWidget()) != nullptr;
+    for (QWidget* focus = QApplication::focusWidget(); focus; focus = focus->parentWidget()) {
+        if (focus == m_view) return true;
+        if (focus == this) return lineEdit;
+    }
+    return false;
+}
+
+bool NotebookWindow::handleEditorCommand(const QString& command) {
+    if (!ownsEditorFocus()) return false;
+    if (auto* line = qobject_cast<QLineEdit*>(QApplication::focusWidget())) {
+        if (command == QLatin1String("cut")) line->cut();
+        else if (command == QLatin1String("copy")) line->copy();
+        else if (command == QLatin1String("paste")) line->paste();
+        else if (command == QLatin1String("undo")) line->undo();
+        else if (command == QLatin1String("redo")) line->redo();
+        else if (command == QLatin1String("delete")) line->del();
+        return true;
+    }
+    using Action = QWebEnginePage::WebAction;
+    Action action = Action::NoWebAction;
+    if (command == QLatin1String("cut")) action = Action::Cut;
+    else if (command == QLatin1String("copy")) action = Action::Copy;
+    else if (command == QLatin1String("paste")) action = Action::Paste;
+    else if (command == QLatin1String("undo")) action = Action::Undo;
+    else if (command == QLatin1String("redo")) action = Action::Redo;
+    if (action != Action::NoWebAction) m_view->page()->triggerAction(action);
+    else if (command == QLatin1String("delete")) runCommand(command);
+    return true;
 }
 
 void NotebookWindow::chooseImage() {
@@ -1034,19 +1226,23 @@ void NotebookWindow::updateMotionButton() {
 void NotebookWindow::closeEvent(QCloseEvent* event) {
     if (m_saveTimer) m_saveTimer->stop();
     saveNow();
-    QSettings().setValue(QStringLiteral("notebook/geometry"), saveGeometry());
-    QDialog::closeEvent(event);
+    emit closeRequested();
+    QWidget::closeEvent(event);
 }
 
 void NotebookWindow::hideEvent(QHideEvent* event) {
     if (m_view)
         m_view->page()->runJavaScript(QStringLiteral("setBackgroundMotion(false);"));
     emit visibilityChanged(false);
-    QDialog::hideEvent(event);
+    if (m_positionTimer) m_positionTimer->stop();
+    saveNow();
+    QWidget::hideEvent(event);
 }
 
 void NotebookWindow::showEvent(QShowEvent* event) {
-    QDialog::showEvent(event);
+    QWidget::showEvent(event);
+    if (m_positionTimer) m_positionTimer->start();
+    updateTimedTextPosition();
     if (m_view && m_backgroundPlaying)
         m_view->page()->runJavaScript(QStringLiteral("setBackgroundMotion(true);"));
     emit visibilityChanged(true);

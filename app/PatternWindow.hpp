@@ -5,9 +5,12 @@
 #include <QPoint>
 #include <QString>
 #include <QStringList>
+#include <string>
+#include <vector>
 
-namespace daw { class EngineController; }
+namespace daw { class EngineController; struct NoteModel; }
 class QVBoxLayout;
+class QMenu;
 
 /// Compact editor for a Pattern container.
 ///
@@ -24,6 +27,7 @@ public:
     const QString& patternId() const { return m_patternId; }
     void refresh();
     bool checkInteractionGesturesForTest();
+    static bool checkEditingForTest();
 
 signals:
     void projectEdited(bool localFileDirty = true);
@@ -62,6 +66,14 @@ private:
     void moveSelectedSources(int direction);
     void reorderSelectedSources(int dropIndex);
     void openRoll(const QString& trackId);
+    void populateRhythmMenu(QMenu* menu, const QString& trackId);
+    void populateSourceMenu(QMenu* menu, const QString& trackId);
+    void fillRhythm(const QString& trackId, int divisionsPerBar);
+    bool applyMidiFile(const QString& trackId, const QString& path,
+                      QString* error = nullptr);
+    bool replaceSourceNotes(const QString& trackId,
+                            std::vector<daw::NoteModel> notes,
+                            double lengthBeats, const std::string& label);
     void showSelectionMenu(const QString& trackId, const QPoint& globalPos);
     void beginRowGesture(const QString& trackId, const QPoint& globalPos,
                          Qt::KeyboardModifiers modifiers);

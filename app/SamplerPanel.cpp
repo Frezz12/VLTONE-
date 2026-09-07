@@ -1,4 +1,8 @@
 #include "SamplerPanel.hpp"
+#include "AudioImportPreparation.hpp"
+#include <QThreadPool>
+#include <QPointer>
+#include <QApplication>
 #include "FileTypes.hpp"
 
 #include "Controls.hpp"
@@ -18,10 +22,8 @@
 #include <QEnterEvent>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFontDatabase>
 #include <QMimeData>
 #include <QGridLayout>
-#include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineF>
@@ -44,6 +46,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -71,9 +74,14 @@ QWidget* sectionBox(const QString& title, QLayout* content, QWidget* parent) {
     auto* box = new QWidget(parent);
     box->setObjectName(QStringLiteral("SamplerSection"));
     auto* column = new QVBoxLayout(box);
-    column->setContentsMargins(10, 8, 10, 10);
+    column->setContentsMargins(10, 8, 10, 8);
     column->setSpacing(6);
-    column->addWidget(ui::sectionLabel(title, box));
+    if (!title.isEmpty()) {
+        auto* label = new QLabel(title, box);
+        label->setObjectName(QStringLiteral("SamplerGroupTitle"));
+        label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        column->addWidget(label);
+    }
     column->addLayout(content);
     return box;
 }
@@ -90,6 +98,45 @@ QLabel* caption(const QString& text, QWidget* parent) {
     label->setObjectName(QStringLiteral("SamplerCaption"));
     return label;
 }
+
+// A small checkbox is easier to discover than an unlit LED on a dark well.
+// Keep Led's binding API; only the Sampler's boolean controls use this paint.
+class SamplerToggle final : public ui::Led {
+public:
+    using ui::Led::Led;
+    QSize sizeHint() const override {
+        QFont label = font();
+        label.setPixelSize(10);
+        return QSize(QFontMetrics(label).horizontalAdvance(text()) + 22, 24);
+    }
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        const Theme& t = th();
+        if (!isEnabled()) p.setOpacity(0.42);
+        const QRectF box(1, (height() - 12) / 2.0, 12, 12);
+        p.setPen(QPen(isChecked() ? t.accent : t.textSecondary, 1));
+        p.setBrush(isChecked() ? t.accent : t.well());
+        p.drawRoundedRect(box, 3, 3);
+        if (isChecked()) {
+            p.setPen(QPen(t.background, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            p.drawPolyline(QPolygonF{box.topLeft() + QPointF(3, 6),
+                                      box.topLeft() + QPointF(5, 8),
+                                      box.topLeft() + QPointF(9, 4)});
+        }
+        QFont label = font();
+        label.setPixelSize(10);
+        p.setFont(label);
+        p.setPen(isChecked() ? t.textPrimary : t.textSecondary);
+        p.drawText(rect().adjusted(20, 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter, text());
+        if (hasFocus()) {
+            p.setPen(QPen(t.accent, 1));
+            p.setBrush(Qt::NoBrush);
+            p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 4, 4);
+        }
+    }
+};
 
 /// Resolution of the waveform strip's peak envelope. Wide enough that the
 /// strip is never visibly blockier than a per-pixel scan would be, small enough
@@ -175,7 +222,7 @@ private:
 
 // ── Waveform ───────────────────────────────────────────────────────────────
 
-SamplerWaveform::SamplerWaveform(QWidget* parent) : QWidget(parent) {
+SamplerWaveform::SamplerWaveform(QWidget* parent) : ui::FrameWidget(parent) {
     setMinimumHeight(110);
     setMouseTracking(true);
     setCursor(Qt::PointingHandCursor);
@@ -221,12 +268,17 @@ void SamplerWaveform::setMarkers(double startOffset, double endOffset,
 }
 
 void SamplerWaveform::rebuildPeaks() {
+    ++m_peakGeneration;
     m_minima.clear();
     m_maxima.clear();
     m_peaksFor = m_sample && m_sample->audio ? m_sample->audio.get() : nullptr;
     if (!m_peaksFor) return;
 
-    const daw::engine::SampleBuffer& audio = *m_sample->audio;
+    const auto sample = m_sample->audio;
+    const quint64 generation = m_peakGeneration;
+    const QPointer<SamplerWaveform> guard(this);
+    QThreadPool::globalInstance()->start([sample, generation, guard] {
+    const daw::engine::SampleBuffer& audio = *sample;
     const daw::engine::FrameCount frames = audio.frames();
     if (frames == 0) return;
 
@@ -235,8 +287,7 @@ void SamplerWaveform::rebuildPeaks() {
     // O(length of the sample) work the panel does.
     const int buckets =
         int(std::min<daw::engine::FrameCount>(frames, kWaveformBuckets));
-    m_minima.resize(buckets);
-    m_maxima.resize(buckets);
+    QVector<float> minima(buckets), maxima(buckets);
     const double perBucket = double(frames) / double(buckets);
     for (int b = 0; b < buckets; ++b) {
         const auto from = daw::engine::FrameCount(double(b) * perBucket);
@@ -252,9 +303,16 @@ void SamplerWaveform::rebuildPeaks() {
                 high = std::max(high, data[i]);
             }
         }
-        m_minima[b] = low;
-        m_maxima[b] = high;
+        minima[b] = low;
+        maxima[b] = high;
     }
+        QMetaObject::invokeMethod(qApp, [guard, generation, minima = std::move(minima), maxima = std::move(maxima)]() mutable {
+            if (!guard || guard->m_peakGeneration != generation) return;
+            guard->m_minima = std::move(minima);
+            guard->m_maxima = std::move(maxima);
+            guard->update();
+        }, Qt::QueuedConnection);
+    });
 }
 
 double SamplerWaveform::xForFraction(double fraction) const {
@@ -830,7 +888,7 @@ SamplerPanel::SamplerPanel(daw::EngineController* controller, Context context,
     splitter->setHandleWidth(1);
     splitter->addWidget(buildFxStrip());
     splitter->addWidget(buildSamplerBody());
-    splitter->setSizes({118, 1002});
+    splitter->setSizes({118, 842});
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
     outer->addWidget(splitter);
@@ -895,6 +953,8 @@ void SamplerPanel::dropEvent(QDropEvent* event) {
     if (!m_controller || !event->mimeData()->hasUrls()) return;
     for (const QUrl& url : event->mimeData()->urls()) {
         if (!url.isLocalFile() || !ui::isAudioFile(url.toLocalFile())) continue;
+        const QPointer<SamplerPanel> guard(this);
+        if (!ui::prepareAudioImport(this, *m_controller, url.toLocalFile()) || !guard) return;
         const bool loaded = m_context == Context::Instrument
             ? m_controller->loadSamplerSample(m_channelId.toStdString(),
                                               m_slotId.toStdString(),
@@ -911,6 +971,12 @@ void SamplerPanel::dropEvent(QDropEvent* event) {
 }
 
 bool SamplerPanel::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::Wheel &&
+        watched->objectName().startsWith(QStringLiteral("SamplerParameter."))) {
+        // Propagate to the surrounding scroll area, never to the control.
+        event->ignore();
+        return true;
+    }
     if (watched == m_fileLabel && event->type() == QEvent::MouseButtonRelease) {
         revealSample();
         return true;
@@ -920,29 +986,23 @@ bool SamplerPanel::eventFilter(QObject* watched, QEvent* event) {
 
 void SamplerPanel::applyTheme() {
     const Theme& t = th();
-#ifdef Q_OS_MACOS
-    QString fixedFamily = QStringLiteral("Menlo");
-#else
-    QString fixedFamily =
-        QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
-#endif
-    fixedFamily.replace('"', QStringLiteral("\\\""));
     setStyleSheet(QString(R"(
-#SamplerSection { background: %SURFACE%; border: 1px solid %BORDER%; border-radius: 8px; }
+#SamplerSection { background: %SURFACE%; border: 1px solid %BORDER%; border-radius: 7px; }
+#SamplerGroupTitle { color: %TEXT2%; font-size: 10px; font-weight: 600; }
 #SamplerBody { background: %BG%; }
 #SamplerFxStrip { background: %FXSURFACE%; border-right: 1px solid %BORDER%; }
 #SamplerAccentBar { background: %ACCENT%; border-radius: 2px; }
 #SamplerStripName { color: %TEXT%; font-size: 10px; font-weight: 700; }
 #SamplerSlotWell { background: %WELL%; border: 1px solid %BORDER%; border-radius: 5px; }
 #SamplerMixerSlot { background: %SLOT%; border: 1px solid %BORDER%; border-radius: 3px;
-    color: %TEXT2%; font-size: 8px; font-weight: 600; padding: 0 4px;
+    color: %TEXT2%; font-size: 9px; font-weight: 500; padding: 0 4px;
     text-align: left; }
 #SamplerMixerSlot[active="true"] { color: %TEXT%; }
 #SamplerMixerSlot[bypassed="true"] { color: %DIM%; border-color: %BYPASS%; }
 #SamplerMixerSlot:hover { background: %HOVER%; }
 #SamplerMixerSlot::menu-indicator { image: none; width: 0; }
 #SamplerFxRouting { background: %WELL%; border: 1px solid %BORDER%; border-radius: 5px; }
-#SamplerFxReadout { color: %TEXT2%; font-size: 8px; font-family: "%MONO%"; }
+#SamplerFxReadout { color: %TEXT%; font-size: 10px; font-weight: 500; }
 #SamplerNamePlate { color: %TEXT%; background: %NAMEPLATE%; border-radius: 4px;
     font-size: 10px; font-weight: 700; }
 #SamplerStretchBlock { background: %WELL%; border: 1px solid %BORDER%; border-radius: 6px; }
@@ -950,21 +1010,22 @@ void SamplerPanel::applyTheme() {
     text-align: left; padding: 2px 0; font-size: 10px; font-weight: 700; }
 #SamplerCollapse:hover { color: %ACCENT%; }
 QTabBar#SamplerToolsTabs::tab { color: %TEXT2%; background: transparent;
-    border: none; border-bottom: 2px solid transparent; padding: 4px 12px;
-    font-size: 9px; font-weight: 700; }
+    border: none; border-bottom: 2px solid transparent; padding: 7px 12px;
+    font-size: 11px; font-weight: 600; }
 QTabBar#SamplerToolsTabs::tab:selected { color: %TEXT%; border-bottom-color: %ACCENT%; }
 QTabBar#SamplerToolsTabs::tab:hover { color: %ACCENT%; }
 #SamplerCaption { color: %TEXT2%; font-size: 10px; }
 #SamplerFile { color: %TEXT%; font-size: 12px; font-weight: 600; }
 #SamplerButton { color: %TEXT%; background: %WELL%; border: none; border-radius: 4px;
                  padding: 4px 10px; font-size: 11px; }
-#SamplerButton:hover { background: %ACCENT%; color: %BG%; }
+#SamplerButton:hover { background: %HOVER%; }
+#SamplerButton:pressed { background: %ACCENT%; color: %BG%; }
+#SamplerButton:focus, QComboBox:focus { border: 1px solid %ACCENT%; }
 QComboBox { color: %TEXT%; background: %WELL%; border: none; border-radius: 4px;
             padding: 3px 8px; font-size: 11px; }
 QComboBox QAbstractItemView { background: %SURFACE%; color: %TEXT%;
                               selection-background-color: %ACCENT%; }
 )")
-            .replace("%MONO%", fixedFamily)
             .replace("%SURFACE%", t.surface.name())
             .replace("%WELL%", t.well().name())
             .replace("%TEXT%", t.textPrimary.name())
@@ -1073,6 +1134,10 @@ ui::Knob* SamplerPanel::knob(const QString& parameterId, const QString& captionT
     }
     if (compact) control->setCompact(true);
     control->setVisualStyle(ui::Knob::VisualStyle::SamplerDigital);
+    control->setObjectName(QStringLiteral("SamplerParameter.") + parameterId);
+    control->installEventFilter(this);
+    control->setAccessibleName(captionText);
+    control->setAccessibleDescription(tr("Drag vertically to adjust. Hold Shift for fine control. Double click to reset."));
 
     connect(control, &ui::Knob::valueChanged, this, [this, parameterId](double value) {
         beginGesture(parameterId);
@@ -1091,7 +1156,7 @@ ui::Knob* SamplerPanel::knob(const QString& parameterId, const QString& captionT
 }
 
 ui::Led* SamplerPanel::led(const QString& parameterId, const QString& captionText) {
-    auto* lamp = new ui::Led(captionText, this);
+    auto* lamp = new SamplerToggle(captionText, this);
     lamp->setChecked(readParameter(parameterId) >= 0.5);
     connect(lamp, &ui::Led::toggled, this, [this, parameterId](bool on) {
         // A lamp is one gesture in itself, so it opens and closes the undo
@@ -1101,12 +1166,25 @@ ui::Led* SamplerPanel::led(const QString& parameterId, const QString& captionTex
         endGesture(parameterId);
         refresh();
     });
+    lamp->setObjectName(QStringLiteral("SamplerParameter.") + parameterId);
+    lamp->setAccessibleName(captionText);
+    lamp->setFocusPolicy(Qt::TabFocus);
+    lamp->setMinimumHeight(24);
     m_leds.insert(parameterId, lamp);
     return lamp;
 }
 
 QComboBox* SamplerPanel::combo(const QString& parameterId, const QStringList& items) {
     auto* box = new QComboBox(this);
+    box->setObjectName(QStringLiteral("SamplerParameter.") + parameterId);
+    box->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    box->setMinimumContentsLength(5);
+    box->setMinimumWidth(0);
+    box->setFixedWidth(120);
+    box->setMinimumHeight(26);
+    if (const auto* info = infoFor(parameterId))
+        box->setAccessibleName(QString::fromStdString(info->name));
+    box->installEventFilter(this);
     box->addItems(items);
     box->setCurrentIndex(int(std::lround(readParameter(parameterId))));
     connect(box, &QComboBox::currentIndexChanged, this, [this, parameterId](int index) {
@@ -1135,7 +1213,7 @@ QWidget* SamplerPanel::buildFxStrip() {
     swatch->setObjectName(QStringLiteral("SamplerAccentBar"));
     swatch->setFixedSize(2, 12);
     auto* stripName = new QLabel(
-        m_context == Context::Instrument ? tr("SAMPLER FX") : tr("CLIP FX"), strip);
+        tr("Effects"), strip);
     stripName->setObjectName(QStringLiteral("SamplerStripName"));
     stripHeader->addWidget(swatch);
     stripHeader->addWidget(stripName, 1);
@@ -1195,7 +1273,7 @@ QWidget* SamplerPanel::buildFxStrip() {
     auto* panCaption = caption(tr("Pan"), routing);
     panCaption->setAlignment(Qt::AlignCenter);
     m_fxPan = new ui::PanKnob(routing);
-    m_fxPan->setFixedSize(56, 56);
+    m_fxPan->setFixedSize(44, 44);
     m_fxPanLabel = new QLabel(QStringLiteral("C"), routing);
     m_fxPanLabel->setObjectName(QStringLiteral("SamplerFxReadout"));
     m_fxPanLabel->setAlignment(Qt::AlignCenter);
@@ -1495,26 +1573,15 @@ QWidget* SamplerPanel::buildSamplerBody() {
     auto* hostLayout = new QVBoxLayout(host);
     hostLayout->setContentsMargins(0, 0, 0, 0);
     auto* scroll = new QScrollArea(host);
+    scroll->setObjectName(QStringLiteral("SamplerBodyScroll"));
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* page = new QWidget(scroll);
     auto* column = new QVBoxLayout(page);
-    column->setContentsMargins(14, 12, 14, 14);
+    column->setContentsMargins(12, 10, 12, 10);
     column->setSpacing(9);
-    QWidget* envelopeSection = buildEnvelopeSection();
-    if (m_context == Context::Clip) {
-        envelopeSection->setEnabled(false);
-        auto* disabledAppearance = new QGraphicsOpacityEffect(envelopeSection);
-        disabledAppearance->setOpacity(0.48);
-        envelopeSection->setGraphicsEffect(disabledAppearance);
-        envelopeSection->setToolTip(
-            tr("Volume Envelope is shown for layout parity with Sampler, but "
-               "timeline clips use their own Start/End and fade geometry."));
-        envelopeSection->setAccessibleDescription(
-            tr("Unavailable in timeline Clip context"));
-    }
-    column->addWidget(envelopeSection);
+    column->addWidget(buildWaveformSection());
     column->addWidget(buildToolSection());
 
     {
@@ -1525,7 +1592,7 @@ QWidget* SamplerPanel::buildSamplerBody() {
         keysLayout->setSpacing(5);
         auto* toggle = new QToolButton(keysBox);
         toggle->setObjectName(QStringLiteral("SamplerCollapse"));
-        toggle->setText(tr("KEYBOARD"));
+        toggle->setText(tr("Keyboard"));
         toggle->setArrowType(Qt::RightArrow);
         toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         toggle->setCheckable(true);
@@ -1592,7 +1659,6 @@ QWidget* SamplerPanel::buildSamplerBody() {
         keysLayout->addWidget(keyBody);
         column->addWidget(keysBox);
     }
-    column->addWidget(buildWaveformSection());
     column->addStretch(1);
     scroll->setWidget(page);
     hostLayout->addWidget(scroll);
@@ -1600,22 +1666,11 @@ QWidget* SamplerPanel::buildSamplerBody() {
 }
 
 QWidget* SamplerPanel::buildEnvelopeSection() {
-    auto* content = new QVBoxLayout;
-    content->setSpacing(5);
     auto* row = knobRow();
-    row->addWidget(led(QStringLiteral("amp.on"), tr("On")));
-    row->addWidget(knob(QStringLiteral("amp.delay"), tr("Delay")));
-    row->addWidget(knob(QStringLiteral("amp.att"), tr("Attack")));
-    row->addWidget(knob(QStringLiteral("amp.atttens"), tr("A Tens"), true));
-    row->addWidget(knob(QStringLiteral("amp.hold"), tr("Hold")));
-    row->addWidget(knob(QStringLiteral("amp.dec"), tr("Decay")));
-    row->addWidget(knob(QStringLiteral("amp.dectens"), tr("D Tens"), true));
-    row->addWidget(knob(QStringLiteral("amp.sus"), tr("Sustain")));
-    row->addWidget(knob(QStringLiteral("amp.rel"), tr("Release")));
-    row->addWidget(knob(QStringLiteral("amp.reltens"), tr("R Tens"), true));
-    row->addStretch(1);
-    content->addLayout(row);
+    auto* shape = new QVBoxLayout;
+    shape->setSpacing(8);
     m_envelope = new SamplerEnvelopeView(this);
+    m_envelope->setFixedHeight(114);
     m_envelope->beginEdit = [this](const QString& id) { beginGesture(id); };
     m_envelope->changeValue = [this](const QString& id, double value) {
         writeParameter(id, value);
@@ -1624,149 +1679,181 @@ QWidget* SamplerPanel::buildEnvelopeSection() {
     m_envelope->endEdit = [this](const QString& id) {
         endGesture(id); emit projectEdited();
     };
-    content->addWidget(m_envelope);
-    return sectionBox(m_context == Context::Instrument
-                          ? tr("VOLUME ENVELOPE")
-                          : tr("VOLUME ENVELOPE · DISABLED IN CLIP"),
-                      content, this);
+    shape->addWidget(m_envelope);
+    auto* curves = knobRow();
+    curves->addWidget(knob(QStringLiteral("amp.atttens"), tr("Attack curve")));
+    curves->addWidget(knob(QStringLiteral("amp.dectens"), tr("Decay curve")));
+    curves->addWidget(knob(QStringLiteral("amp.reltens"), tr("Release curve")));
+    curves->addStretch();
+    shape->addLayout(curves);
+    shape->addStretch();
+    row->addWidget(sectionBox(tr("Envelope shape"), shape, this), 1);
+
+    auto* levels = new QVBoxLayout;
+    auto* enabled = led(QStringLiteral("amp.on"), tr("On"));
+    levels->addWidget(enabled);
+    auto* grid = new QGridLayout;
+    grid->setSpacing(6);
+    const std::pair<const char*, QString> parameters[] = {
+        {"amp.delay", tr("Delay")}, {"amp.att", tr("Attack")},
+        {"amp.hold", tr("Hold")}, {"amp.dec", tr("Decay")},
+        {"amp.sus", tr("Sustain")}, {"amp.rel", tr("Release")}};
+    for (int i = 0; i < 6; ++i)
+        grid->addWidget(knob(QString::fromLatin1(parameters[i].first),
+                             parameters[i].second), i / 3, i % 3);
+    levels->addLayout(grid);
+    levels->addStretch();
+    row->addWidget(sectionBox(tr("Volume envelope"), levels, this));
+    auto* page = new QWidget(this);
+    page->setLayout(row);
+    return page;
 }
 
 QWidget* SamplerPanel::buildToolSection() {
-    auto* content = new QVBoxLayout;
-    content->setSpacing(4);
-
-    auto* tabs = new QTabBar(this);
+    auto* host = new QWidget(this);
+    auto* content = new QVBoxLayout(host);
+    content->setContentsMargins(0, 0, 0, 0);
+    content->setSpacing(8);
+    auto* tabs = new QTabBar(host);
     tabs->setObjectName(QStringLiteral("SamplerToolsTabs"));
     tabs->setExpanding(false);
     tabs->setDrawBase(false);
-    tabs->addTab(tr("PLAYBACK"));
-    tabs->addTab(tr("PROCESSING"));
-    content->addWidget(tabs);
-
-    auto* pages = new QStackedWidget(this);
+    tabs->setAccessibleName(tr("Sample settings"));
+    auto* pages = new QStackedWidget(host);
     pages->setObjectName(QStringLiteral("SamplerToolsPages"));
+    content->addWidget(tabs);
+    content->addWidget(pages);
 
+    // Small groups give every dial a stable caption and readout without
+    // requiring the whole processing chain to fit into one horizontal row.
+    const auto group = [this](const QString& title, QLayout* layout) {
+        return sectionBox(title, layout, this);
+    };
+    const auto choice = [this](const QString& title, QComboBox* box) {
+        auto* column = new QVBoxLayout;
+        auto* label = caption(title, this);
+        label->setBuddy(box);
+        column->addStretch();
+        column->addWidget(label);
+        column->addWidget(box);
+        column->addStretch();
+        return column;
+    };
+    const auto addPage = [tabs, pages](const QString& name, QWidget* page) {
+        tabs->addTab(name);
+        pages->addWidget(page);
+    };
     auto* playbackPage = new QWidget(pages);
-    auto* playbackLayout = new QVBoxLayout(playbackPage);
-    playbackLayout->setContentsMargins(0, 0, 0, 0);
-    playbackLayout->setSpacing(3);
-    auto* playback = knobRow();
-    playback->setSpacing(4);
-    auto* cutItself = led(QStringLiteral("cutitself"), tr("CUT ITSELF"));
-    cutItself->setToolTip(
-        m_context == Context::Instrument
-            ? tr("A new trigger immediately stops every older voice in this Sampler.")
-            : tr("CUT ITSELF is note-triggered and is unavailable for a timeline clip."));
-    cutItself->setEnabled(m_context == Context::Instrument);
-    playback->addWidget(cutItself);
-    playback->addWidget(knob(QStringLiteral("startoffset"), tr("Start"), true));
-    playback->addWidget(knob(QStringLiteral("endoffset"), tr("End"), true));
-    playback->addWidget(knob(QStringLiteral("fadein"), tr("Fade In"), true));
-    playback->addWidget(knob(QStringLiteral("fadeout"), tr("Fade Out"), true));
-    auto* loopColumn = new QVBoxLayout;
-    loopColumn->addWidget(caption(tr("Loop Mode"), this));
-    loopColumn->addWidget(combo(QStringLiteral("loop.mode"),
-                                {tr("Off"), tr("Forward"), tr("Ping-Pong")}));
-    playback->addLayout(loopColumn);
-    // Short enough to fit under the ring; the full names are still on the
-    // tooltips, which every knob takes from the parameter table.
-    playback->addWidget(knob(QStringLiteral("loop.start"), tr("L Start"), true));
-    playback->addWidget(knob(QStringLiteral("loop.end"), tr("L End"), true));
-    auto* tune = knob(QStringLiteral("pitch"), tr("Tune"), true);
-    auto* range = knob(QStringLiteral("pitchrange"), tr("Range"), true);
-    tune->setEnabled(m_context == Context::Instrument);
-    range->setEnabled(m_context == Context::Instrument);
-    if (m_context == Context::Clip) {
-        tune->setToolTip(tr("MIDI key tracking is unavailable for a timeline clip."));
-        range->setToolTip(tr("MIDI pitch range is unavailable for a timeline clip."));
-    }
-    playback->addWidget(tune);
-    playback->addWidget(range);
-    playback->addStretch(1);
-    playbackLayout->addLayout(playback);
+    auto* playback = new QVBoxLayout(playbackPage);
+    playback->setContentsMargins(0, 0, 0, 0);
+    playback->setSpacing(8);
+    auto* first = knobRow();
+    auto* region = knobRow();
+    region->addWidget(knob(QStringLiteral("startoffset"), tr("Start")));
+    region->addWidget(knob(QStringLiteral("endoffset"), tr("End")));
+    region->addWidget(knob(QStringLiteral("fadein"), tr("Fade In")));
+    region->addWidget(knob(QStringLiteral("fadeout"), tr("Fade Out")));
+    region->addStretch();
+    first->addWidget(group(tr("Sample region"), region), 1);
+    auto* loop = knobRow();
+    loop->addLayout(choice(tr("Loop Mode"), combo(QStringLiteral("loop.mode"),
+                            {tr("Off"), tr("Forward"), tr("Ping-Pong")})));
+    loop->addWidget(knob(QStringLiteral("loop.start"), tr("Start")));
+    loop->addWidget(knob(QStringLiteral("loop.end"), tr("End")));
+    first->addWidget(group(tr("Loop"), loop), 1);
+    playback->addLayout(first);
 
-    auto* stretchBlock = new QWidget(playbackPage);
-    stretchBlock->setObjectName(QStringLiteral("SamplerStretchBlock"));
-    auto* stretch = new QHBoxLayout(stretchBlock);
-    stretch->setContentsMargins(7, 3, 7, 3);
-    stretch->setSpacing(5);
-    stretch->addWidget(ui::sectionLabel(tr("STRETCH"), stretchBlock));
+    auto* second = knobRow();
+    auto* stretch = knobRow();
     auto* mode = combo(QStringLiteral("stretch.mode"),
-                       {tr("Resample"), tr("Drums"), tr("Loop"),
+                       {tr("Resample"), tr("Stretch"), tr("Loop"),
                         tr("Vocal"), tr("Complex")});
-    mode->setToolTip(tr("Selects the playback strategy, not only a control preset."));
-    stretch->addWidget(mode);
-    stretch->addWidget(knob(QStringLiteral("stretch.time"), tr("Time"), true));
-    stretch->addWidget(knob(QStringLiteral("stretch.pitch"), tr("Pitch"), true));
-    m_formantKnob = knob(QStringLiteral("formant"), tr("Formant"), true);
-    m_formantKnob->setToolTip(
-        tr("Tilts the spectral envelope — darker below zero, brighter above — "
-           "without changing pitch or duration."));
+    mode->setToolTip(tr("Stretch: general audio. Loop: repeated phrases. Vocal: voice with formant preservation. Complex: full mixes. These modes keep clip length in beats when BPM changes."));
+    stretch->addLayout(choice(tr("Mode"), mode));
+    stretch->addWidget(knob(QStringLiteral("stretch.time"), tr("Time")));
+    stretch->addWidget(knob(QStringLiteral("stretch.pitch"), tr("Pitch")));
+    m_formantKnob = knob(QStringLiteral("formant"), tr("Formant"));
+    m_formantKnob->setToolTip(tr("Shifts the vocal character without changing pitch or duration. Vocal mode also preserves formants when pitch changes; Resample uses a tonal tilt."));
     stretch->addWidget(m_formantKnob);
-    auto* keepOnDisk = led(QStringLiteral("keepondisk"), tr("Disk"));
-    keepOnDisk->setEnabled(m_context == Context::Instrument);
-    if (m_context == Context::Clip) {
-        keepOnDisk->setToolTip(
-            tr("Timeline clips already stream from their referenced media file."));
+    stretch->addStretch();
+    second->addWidget(group(tr("Time & pitch"), stretch), 1);
+    if (m_context == Context::Instrument) {
+        auto* tuning = knobRow();
+        tuning->addWidget(knob(QStringLiteral("pitch"), tr("Tune")));
+        tuning->addWidget(knob(QStringLiteral("pitchrange"), tr("Range")));
+        auto* switches = new QVBoxLayout;
+        auto* cutItself = led(QStringLiteral("cutitself"), tr("CUT ITSELF"));
+        cutItself->setToolTip(tr("A new trigger immediately stops every older voice in this Sampler."));
+        switches->addWidget(cutItself);
+        switches->addWidget(led(QStringLiteral("keepondisk"), tr("Disk")));
+        tuning->addLayout(switches);
+        second->addWidget(group(tr("Voice"), tuning));
     }
-    stretch->addWidget(keepOnDisk);
-    stretch->addStretch(1);
-    playbackLayout->addWidget(stretchBlock);
-    pages->addWidget(playbackPage);
+    playback->addLayout(second);
+    playback->addStretch();
+    addPage(tr("Playback"), playbackPage);
+
+    if (m_context == Context::Instrument)
+        addPage(tr("Envelope"), buildEnvelopeSection());
 
     auto* processingPage = new QWidget(pages);
-    auto* processingLayout = new QVBoxLayout(processingPage);
-    processingLayout->setContentsMargins(0, 0, 0, 0);
-    processingLayout->setSpacing(3);
-    auto* effects = knobRow();
-    effects->setSpacing(2);
-    auto* modX = knob(QStringLiteral("modx"), tr("Mod X"), true);
-    auto* modY = knob(QStringLiteral("mody"), tr("Mod Y"), true);
-    modX->setEnabled(m_context == Context::Instrument);
-    modY->setEnabled(m_context == Context::Instrument);
-    if (m_context == Context::Clip) {
-        modX->setToolTip(tr("Sampler modulation routing is unavailable for a timeline clip."));
-        modY->setToolTip(tr("Sampler modulation routing is unavailable for a timeline clip."));
+    auto* processing = new QVBoxLayout(processingPage);
+    processing->setContentsMargins(0, 0, 0, 0);
+    processing->setSpacing(8);
+    auto* toneRow = knobRow();
+    auto* tone = knobRow();
+    tone->addWidget(knob(QStringLiteral("pre.boost"), tr("Boost")));
+    tone->addWidget(knob(QStringLiteral("pre.eq.low"), tr("Low")));
+    tone->addWidget(knob(QStringLiteral("pre.eq.mid"), tr("Mid")));
+    tone->addWidget(knob(QStringLiteral("pre.eq.high"), tr("High")));
+    tone->addStretch();
+    toneRow->addWidget(group(tr("Tone"), tone), 1);
+    auto* filter = knobRow();
+    filter->addWidget(knob(QStringLiteral("pre.cut"), tr("Cutoff")));
+    filter->addWidget(knob(QStringLiteral("pre.res"), tr("Resonance")));
+    toneRow->addWidget(group(tr("Filter"), filter));
+    auto* ring = knobRow();
+    ring->addWidget(knob(QStringLiteral("pre.rm.mix"), tr("Mix")));
+    ring->addWidget(knob(QStringLiteral("pre.rm.freq"), tr("Frequency")));
+    toneRow->addWidget(group(tr("Ring modulation"), ring));
+    processing->addLayout(toneRow);
+
+    auto* spaceRow = knobRow();
+    auto* space = knobRow();
+    space->addLayout(choice(tr("Reverb"), combo(QStringLiteral("pre.rev.type"),
+                                                {tr("Room"), tr("Hall")})));
+    space->addWidget(knob(QStringLiteral("pre.rev"), tr("Amount")));
+    space->addWidget(knob(QStringLiteral("pre.delay"), tr("St Delay")));
+    space->addWidget(knob(QStringLiteral("pre.pogo"), tr("Pogo")));
+    if (m_context == Context::Instrument) {
+        space->addWidget(knob(QStringLiteral("modx"), tr("Mod X")));
+        space->addWidget(knob(QStringLiteral("mody"), tr("Mod Y")));
     }
-    effects->addWidget(modX);
-    effects->addWidget(modY);
-    effects->addWidget(knob(QStringLiteral("pre.boost"), tr("Boost")));
-    effects->addWidget(knob(QStringLiteral("pre.eq.low"), tr("EQ Lo")));
-    effects->addWidget(knob(QStringLiteral("pre.eq.mid"), tr("EQ Mid")));
-    effects->addWidget(knob(QStringLiteral("pre.eq.high"), tr("EQ Hi")));
-    effects->addWidget(knob(QStringLiteral("pre.rm.mix"), tr("RM Mix")));
-    effects->addWidget(knob(QStringLiteral("pre.rm.freq"), tr("RM Freq")));
-    effects->addWidget(knob(QStringLiteral("pre.cut"), tr("Cut")));
-    effects->addWidget(knob(QStringLiteral("pre.res"), tr("Res")));
-    auto* reverbColumn = new QVBoxLayout;
-    reverbColumn->addWidget(caption(tr("Reverb"), this));
-    reverbColumn->addWidget(combo(QStringLiteral("pre.rev.type"),
-                                  {tr("Room"), tr("Hall")}));
-    effects->addLayout(reverbColumn);
-    effects->addWidget(knob(QStringLiteral("pre.rev"), tr("Amount")));
-    effects->addWidget(knob(QStringLiteral("pre.delay"), tr("St Delay")));
-    effects->addWidget(knob(QStringLiteral("pre.pogo"), tr("Pogo")));
-    effects->addStretch(1);
-    processingLayout->addLayout(effects);
-    auto* switches = knobRow();
-    switches->addWidget(led(QStringLiteral("pre.dc"), tr("Remove DC")));
-    switches->addWidget(led(QStringLiteral("pre.polarity"), tr("Polarity")));
-    switches->addWidget(led(QStringLiteral("pre.normalize"), tr("Normalize")));
-    switches->addWidget(led(QStringLiteral("pre.fadestereo"), tr("Fade Stereo")));
-    switches->addWidget(led(QStringLiteral("pre.reverse"), tr("Reverse")));
-    switches->addWidget(led(QStringLiteral("pre.swap"), tr("Swap Stereo")));
-    switches->addStretch(1);
-    processingLayout->addLayout(switches);
-    pages->addWidget(processingPage);
+    space->addStretch();
+    spaceRow->addWidget(group(tr("Space & modulation"), space), 1);
+    processing->addLayout(spaceRow);
+    auto* switches = new QGridLayout;
+    switches->setHorizontalSpacing(12);
+    switches->setVerticalSpacing(0);
+    const std::pair<const char*, QString> options[] = {
+        {"pre.dc", tr("Remove DC")}, {"pre.polarity", tr("Polarity")},
+        {"pre.normalize", tr("Normalize")}, {"pre.fadestereo", tr("Fade Stereo")},
+        {"pre.reverse", tr("Reverse")}, {"pre.swap", tr("Swap Stereo")}};
+    for (int i = 0; i < 6; ++i)
+        switches->addWidget(led(QString::fromLatin1(options[i].first),
+                                options[i].second), i / 3, i % 3);
+    processing->addLayout(switches);
+    processing->addStretch();
+    addPage(tr("Processing"), processingPage);
 
     connect(tabs, &QTabBar::currentChanged, pages, &QStackedWidget::setCurrentIndex);
     const int initialPage = qEnvironmentVariableIsSet("DAW_SHOT_SAMPLER_PROCESSING")
-                                ? 1
-                                : 0;
+                                ? pages->count() - 1
+                                : qEnvironmentVariableIsSet("DAW_SHOT_SAMPLER_ENVELOPE") &&
+                                          m_context == Context::Instrument ? 1 : 0;
     tabs->setCurrentIndex(initialPage);
     pages->setCurrentIndex(initialPage);
-    content->addWidget(pages);
-    return sectionBox(tr("SAMPLE TOOLS"), content, this);
+    return host;
 }
 
 QWidget* SamplerPanel::buildWaveformSection() {
@@ -1808,7 +1895,7 @@ QWidget* SamplerPanel::buildWaveformSection() {
     fileRow->addWidget(clear);
     content->addLayout(fileRow);
     m_waveform = new SamplerWaveform(this);
-    m_waveform->setMinimumHeight(132);
+    m_waveform->setFixedHeight(116);
     connect(m_waveform, &SamplerWaveform::markerMoved, this,
             [this](const QString& id, double value) {
                 beginGesture(id); writeParameter(id, value);
@@ -1819,7 +1906,7 @@ QWidget* SamplerPanel::buildWaveformSection() {
             [this](const QString& id) { endGesture(id); emit projectEdited(); });
     content->addWidget(m_waveform);
     m_fileLabel->installEventFilter(this);
-    return sectionBox(tr("SAMPLE WAVEFORM"), content, this);
+    return sectionBox(QString(), content, this);
 }
 
 // ── Refresh ──
@@ -1841,6 +1928,7 @@ void SamplerPanel::refresh() {
                                             .fileName().toStdString()
                                       : clip->name;
         }
+        m_fileLabel->setToolTip(QString::fromStdString(path));
         m_fileLabel->setText(name.empty() ? tr("No sample")
                                           : QString::fromStdString(name));
         m_waveform->setSample(data);
@@ -1982,6 +2070,8 @@ void SamplerPanel::openSampleDialog() {
     const QString path = QFileDialog::getOpenFileName(
         this, tr("Load Sample"), QString(), ui::audioNameFilter());
     if (path.isEmpty()) return;
+    const QPointer<SamplerPanel> guard(this);
+    if (!ui::prepareAudioImport(this, *m_controller, path) || !guard) return;
     const bool loaded = m_context == Context::Instrument
         ? m_controller->loadSamplerSample(m_channelId.toStdString(),
                                           m_slotId.toStdString(), path.toStdString())
@@ -2009,4 +2099,95 @@ void SamplerPanel::revealSample() {
     // The containing folder, not the file: opening the file itself would hand
     // it to whatever audio player is registered, which is not what "show" means.
     QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+}
+
+
+bool SamplerPanel::checkLayoutForTest() {
+    daw::EngineController controller;
+    if (!controller.initialize(48000, 512, false).isOk()) return false;
+    const auto descriptor = controller.pluginManager().find(
+        daw::plugins::Format::Internal, "daw.sampler");
+    if (!descriptor) return false;
+    const auto track = controller.addTrack(daw::TrackKind::Instrument, "Sampler UI check");
+    controller.setTrackInstrumentPlugin(track, *descriptor);
+    const auto slot = controller.project().findTrack(track)->instrument.id;
+    bool ok = true;
+    const auto check = [&ok](bool condition, const char* message) {
+        if (!condition) std::fprintf(stderr, "sampler UI: %s\n", message);
+        ok &= condition;
+    };
+    const auto wheel = [](QWidget* widget) {
+        const QPointF at(widget->rect().center());
+        QWheelEvent event(at, widget->mapToGlobal(at.toPoint()), {}, QPoint(0, 120),
+                          Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(widget, &event);
+    };
+    for (const Context context : {Context::Instrument, Context::Clip}) {
+        // The Clip shell also needs to fit while its file/target is missing.
+        SamplerPanel panel(&controller, context, QString::fromStdString(track),
+                           QString::fromStdString(slot));
+        panel.show();
+        auto* tabs = panel.findChild<QTabBar*>("SamplerToolsTabs");
+        auto* scroll = panel.findChild<QScrollArea*>("SamplerBodyScroll");
+        auto* pages = panel.findChild<QStackedWidget*>("SamplerToolsPages");
+        for (const QSize size : {QSize(960, 562), QSize(860, 520)}) {
+            panel.resize(size);
+            for (int index = 0; index < tabs->count(); ++index) {
+                tabs->setCurrentIndex(index);
+                QApplication::processEvents();
+                check(scroll->horizontalScrollBar()->maximum() == 0,
+                      "horizontal overflow at supported editor size");
+                // A hidden scrollbar cannot disguise a clipped child.
+                for (QWidget* control : pages->currentWidget()->findChildren<QWidget*>()) {
+                    if (!control->isVisible() || !control->objectName().startsWith("SamplerParameter."))
+                        continue;
+                    const QRect bounds(control->mapTo(scroll->widget(), QPoint()), control->size());
+                    check(scroll->widget()->rect().contains(bounds), "parameter extends outside its page");
+                    for (QWidget* parent = control->parentWidget(); parent && parent != pages;
+                         parent = parent->parentWidget()) {
+                        check(parent->rect().contains(QRect(control->mapTo(parent, QPoint()), control->size())),
+                              "parameter clipped by a control group");
+                    }
+                }
+                check(panel.m_waveform->isVisible(), "waveform disappeared when changing settings tabs");
+            }
+        }
+        tabs->setCurrentIndex(0);
+        const double before = panel.readParameter("stretch.pitch");
+        ui::Knob* pitch = panel.m_knobs.value("stretch.pitch");
+        wheel(pitch);
+        check(panel.readParameter("stretch.pitch") == before && pitch->value() == before,
+              "scrolling over a dial changes the parameter");
+        auto* mode = panel.m_combos.value("stretch.mode");
+        const int modeBefore = mode->currentIndex();
+        wheel(mode);
+        check(mode->currentIndex() == modeBefore, "scrolling changes playback mode");
+        if (context == Context::Instrument) {
+            const QPoint start(pitch->rect().center());
+            const QPoint end = start - QPoint(0, 18);
+            const auto mouse = [pitch](QEvent::Type type, QPoint point, Qt::MouseButton button,
+                                       Qt::MouseButtons buttons) {
+                QMouseEvent event(type, point, pitch->mapToGlobal(point), button, buttons, Qt::NoModifier);
+                QApplication::sendEvent(pitch, &event);
+            };
+            mouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+            mouse(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+            const double changed = panel.readParameter("stretch.pitch");
+            panel.refresh();
+            check(changed > before && pitch->isEditing() && pitch->value() == changed,
+                  "drag/refresh loses the live parameter value");
+            mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+            controller.undo();
+            panel.refresh();
+            check(panel.readParameter("stretch.pitch") == before,
+                  "one drag is not restored by one undo");
+        }
+        auto* keyboard = panel.findChild<QToolButton*>("SamplerCollapse");
+        keyboard->setChecked(true);
+        QApplication::processEvents();
+        check(panel.m_keyboard->isVisible() && scroll->horizontalScrollBar()->maximum() == 0,
+              "keyboard disclosure breaks the compact page");
+    }
+    if (ok) std::fprintf(stderr, "PASS Sampler: all tabs fit at 960/860 px, Clip shell, keyboard, wheel protection, drag and undo\n");
+    return ok;
 }

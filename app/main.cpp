@@ -1,4 +1,8 @@
+#include "UiPerformanceChecks.hpp"
 #include "MainWindow.hpp"
+#include "PatternWindow.hpp"
+#include "SamplerPanel.hpp"
+#include "InternalEditorFrame.hpp"
 #include "AccountService.hpp"
 #include "AssetCache.hpp"
 #include "CollaborationService.hpp"
@@ -31,6 +35,7 @@
 #include "PianoRollWindow.hpp"
 #include "AutomationEditorWindow.hpp"
 #include "AudioPreferences.hpp"
+#include "BrowserPrefs.hpp"
 #include "LocalizationManager.hpp"
 #include "NotebookPrefs.hpp"
 #include "TimelineBackgroundPrefs.hpp"
@@ -46,13 +51,16 @@
 #include "PluginQuickAdder.hpp"
 #include "ProjectDialogs.hpp"
 #include "Theme.hpp"
+#include "Typography.hpp"
 
 #include <QApplication>
+#include <QNetworkProxyFactory>
 #include <QDir>
 #include <QSettings>
 #include <QFile>
 #include <QFont>
 #include <QToolTip>
+#include <QToolButton>
 #include <QEvent>
 #include <QEventLoop>
 #include <QFileOpenEvent>
@@ -217,6 +225,10 @@ private:
 
 int main(int argc, char** argv) {
     bool selftest = false;
+    bool uiPerfCheck = false;
+    bool patternCheck = false;
+    bool samplerCheck = false;
+    bool editorCheck = false;
     bool collaborationSelftest = false;
     bool updateSelftest = false;
     // Deliberately faults after writing a known project into the recovery
@@ -232,6 +244,10 @@ int main(int argc, char** argv) {
     QString projectArgument;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--selftest") == 0) selftest = true;
+        else if (std::strcmp(argv[i], "--uiperfcheck") == 0) uiPerfCheck = true;
+        else if (std::strcmp(argv[i], "--samplercheck") == 0) samplerCheck = true;
+        else if (std::strcmp(argv[i], "--patterncheck") == 0) patternCheck = true;
+        else if (std::strcmp(argv[i], "--editorcheck") == 0) editorCheck = true;
         else if (std::strcmp(argv[i], "--collaboration-selftest") == 0)
             collaborationSelftest = true;
         else if (std::strcmp(argv[i], "--update-selftest") == 0)
@@ -269,7 +285,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    const bool headless = selftest || collaborationSelftest || screenshotPath ||
+    const bool headless = samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
                           crashtest || recovercheck;
     if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) {
         QByteArray chromiumFlags;
@@ -299,7 +315,11 @@ int main(int argc, char** argv) {
     // never sees a click. Siblings stay ordinary widgets instead.
     QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
 
+    ui::registerFontUrlScheme();
     QApplication app(argc, argv);
+    // Qt forwards the system proxy configuration (including local VPN proxy
+    // endpoints and PAC rules) to Chromium. Tunnel VPNs use OS routing normally.
+    QNetworkProxyFactory::setUseSystemConfiguration(true);
 
 #if defined(Q_OS_WIN)
     // The narrow CRT argv follows the active ANSI code page. Qt reconstructs
@@ -335,24 +355,21 @@ int main(int argc, char** argv) {
                      "%s: no display is available (no screen attached to this "
                      "session). Nothing can be drawn, so the program is "
                      "stopping instead of crashing.\n",
-                     VLT_STUDIO_PRO_NAME);
+                     VLTONE_NAME);
         return 1;
     }
 
     ProjectOpenFilter projectOpenFilter;
     app.installEventFilter(&projectOpenFilter);
-    QApplication::setApplicationName(QStringLiteral(VLT_STUDIO_PRO_NAME));
-    QApplication::setApplicationDisplayName(QStringLiteral(VLT_STUDIO_PRO_NAME));
+    // Keep the native settings domain and QStandardPaths roots stable across
+    // the rename. All UI uses applicationDisplayName; this is a storage ID.
+    QApplication::setApplicationName(QStringLiteral("VLT Studio Pro"));
+    QApplication::setApplicationDisplayName(QStringLiteral(VLTONE_NAME));
     QApplication::setOrganizationName(QStringLiteral("VLT Studio"));
     // Recorded in every recovery session, so a leftover file says which build
     // wrote it — the first thing worth knowing about a crash report.
-    QApplication::setApplicationVersion(QStringLiteral(VLT_STUDIO_PRO_VERSION));
-#ifdef Q_OS_MACOS
-    // The generic family exposed by the offscreen Cocoa path is "Sans Serif",
-    // which is not a real macOS family and forces Qt to populate its complete
-    // alias table on first use. Select the native system face explicitly.
-    QApplication::setFont(QFont(QStringLiteral("Helvetica Neue")));
-#endif
+    QApplication::setApplicationVersion(QStringLiteral(VLTONE_VERSION));
+    ui::initializeApplicationFonts();
     if (selftest) {
         g_previousMessageHandler = qInstallMessageHandler(selftestMessageHandler);
     }
@@ -397,6 +414,12 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Screenshot-only width override uses the isolated headless preferences.
+    if (screenshotPath) {
+        if (const char* browserWidth = std::getenv("DAW_SHOT_BROWSER_WIDTH"))
+            ui::browserprefs::setWidth(std::atoi(browserWidth));
+    }
+
     if (std::getenv("DAW_DEBUG_HOVER")) {
         static HoverDebugFilter filter;
         QApplication::instance()->installEventFilter(&filter);
@@ -412,6 +435,7 @@ int main(int argc, char** argv) {
             if (headless) return 34;
         }
     }
+    if (uiPerfCheck) return ui::checkUiScaling() ? 0 : 60;
     if (selftest) {
         QString localizationError;
         if (!ui::LocalizationManager::instance().checkJsonPackForTest(
@@ -426,6 +450,9 @@ int main(int argc, char** argv) {
     if (themeId)
         ThemeManager::instance().setThemeId(QString::fromUtf8(themeId),
                                             /*persist=*/false);
+    if (editorCheck) return InternalEditorFrame::checkPlacementForTest() && PatternWindow::checkEditingForTest() ? 0 : 18;
+    if (samplerCheck) return SamplerPanel::checkLayoutForTest() ? 0 : 19;
+    if (patternCheck) return PatternWindow::checkEditingForTest() ? 0 : 19;
     if (selftest) {
         QString fontError;
         if (!ThemeManager::instance().checkFontForTest(&fontError)) {
@@ -1082,12 +1109,11 @@ int main(int argc, char** argv) {
         // size check; this also makes CLIP screenshots prove layout parity.
         if ((shootSampler || shootClip) &&
             std::getenv("DAW_SHOT_SAMPLER_MIN")) {
-            QTimer::singleShot(0, &window, [&window] {
-                for (QWidget* widget : QApplication::topLevelWidgets()) {
-                    if (widget != &window && widget->isVisible() &&
-                        widget->width() > 600) {
-                        widget->resize(860, 520);
-                    }
+            QTimer::singleShot(300, &window, [&window] {
+                for (auto* frame : window.findChildren<InternalEditorFrame*>()) {
+                    if (frame->isVisible() && frame->content() &&
+                        frame->content()->findChild<SamplerPanel*>())
+                        frame->resizeForContent(frame->content()->minimumSize().expandedTo(QSize(860, 520)));
                 }
             });
         }
@@ -1122,6 +1148,7 @@ int main(int argc, char** argv) {
         // DAW_SHOT_WEB opens the integrated browser. Combining it with
         // DAW_SHOT_AI photographs the independent workspace | Web | AI layout.
         if (std::getenv("DAW_SHOT_WEB")) window.openWebBrowserForShot();
+        if (std::getenv("DAW_SHOT_NOTEBOOK")) window.openNotebookForShot();
         // DAW_SHOT_SETTINGS is a settings tab index, so each page can be
         // grabbed on its own.
         const char* shotSettings = std::getenv("DAW_SHOT_SETTINGS");
@@ -1136,6 +1163,11 @@ int main(int argc, char** argv) {
             // The demo is already populated above; populating again here (as
             // this used to) gave the grab two of every track.
             window.selectDemoClipsForShot(QString::fromUtf8(shotContext));
+        }
+        // Show the complete narrow inspector for layout/translation review.
+        if (std::getenv("DAW_SHOT_INSPECTOR_ADVANCED")) {
+            if (auto* more = window.findChild<QToolButton*>("InspectorMoreClipSettings"))
+                more->setChecked(true);
         }
         // DAW_SHOT_CONTEXT_THEN switches to a second selection once the event
         // loop is running, so the grab lands inside the swap rather than after
@@ -1284,6 +1316,11 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+            if (qEnvironmentVariable("DAW_SHOT_NOTEBOOK").contains(QLatin1String("detached"))) {
+                for (QWidget* widget : QApplication::topLevelWidgets())
+                    if (widget->isVisible() && widget->objectName() == QLatin1String("NotebookDetachedWindow"))
+                        target = widget;
+            }
             target->grab().save(QString::fromUtf8(screenshotPath));
             QApplication::quit();
         });
@@ -1332,7 +1369,10 @@ int main(int argc, char** argv) {
         // Keep each built-in editor's widget and undo invariants independently runnable:
         // the full UI selftest also exercises platform codecs, file watching
         // and WebEngine, which may be unavailable on a sanitizer machine.
-        if (qEnvironmentVariableIsSet("DAW_SELFTEST_GRAPHIT_ONLY")) {
+        if (qEnvironmentVariableIsSet("DAW_SELFTEST_NOTEBOOK_ONLY")) {
+            if (!window.checkNotebookForTest()) return 41;
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_GRAPHIT_ONLY")) {
             window.populateDemo();
             if (!window.checkGraphitPanelForTest()) {
                 std::fprintf(stderr, "Graphit panel UI invariants failed\n");
@@ -1417,7 +1457,8 @@ int main(int argc, char** argv) {
                          "the render dialog did not build a usable channel or format list\n");
             return 19;
         }
-        if (!window.checkAuxiliaryWindowPolicyForTest()) {
+        if (!InternalEditorFrame::checkPlacementForTest() ||
+            !window.checkAuxiliaryWindowPolicyForTest()) {
             std::fprintf(stderr,
                          "the internal piano-roll frame did not follow workspace policy\n");
             return 18;
@@ -1426,6 +1467,10 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                          "hardware MIDI routing or Piano Roll highlighting failed\n");
             return 32;
+        }
+        if (!SamplerPanel::checkLayoutForTest() || !PatternWindow::checkEditingForTest()) {
+            std::fprintf(stderr, "sampler or pattern editing invariants failed\n");
+            return 19;
         }
         if (!window.checkPianoRollForTest()) {
             std::fprintf(stderr, "piano-roll gesture invariants failed\n");
@@ -1524,6 +1569,7 @@ int main(int argc, char** argv) {
                 return 27;
             }
         }
+        if (!window.checkNotebookForTest()) return 41;
         // The assistant: a scripted stand-in for a provider drives a whole
         // turn, so the panel -> session -> dispatch -> document -> undo path is
         // checked on every build with no key and no network.

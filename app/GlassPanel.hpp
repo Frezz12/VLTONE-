@@ -108,6 +108,7 @@ private:
     QPixmap m_backdrop;
     QElapsedTimer m_sinceCapture;
     bool m_capturePending = false;
+    quint64 m_backdropGeneration = 0;
     bool m_backdropFrozen = false;
     bool m_backdropValid = false;
     double m_flash = 0.0;

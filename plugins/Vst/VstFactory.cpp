@@ -37,10 +37,10 @@ VstIntPtr scanHostDispatch(vst::HostContext&, AEffect*, VstInt32 opcode,
         case audioMasterGetCurrentProcessLevel: return kVstProcessLevelRealtime;
         case audioMasterGetVendorVersion: return 1;
         case audioMasterGetVendorString:
-            writeName(ptr, "VLT Studio");
+            writeName(ptr, "VLTONE");
             return ptr ? 1 : 0;
         case audioMasterGetProductString:
-            writeName(ptr, "VLT Studio Pro");
+            writeName(ptr, "VLTONE");
             return ptr ? 1 : 0;
         case audioMasterCanDo:
             if (!ptr) return 0;

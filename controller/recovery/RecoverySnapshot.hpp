@@ -3,6 +3,7 @@
 #include "model/Document.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,11 @@ struct RecoverySnapshot {
 
     ProjectModel project;
     std::vector<PluginState> pluginStates;
+    // Optional immutable parts. The journal worker materializes these for the
+    // serializer; it never reads the live model or a mutable cache.
+    bool fragmented = false;
+    std::vector<std::shared_ptr<const TrackModel>> trackParts;
+    std::vector<std::shared_ptr<const PluginState>> sharedPluginStates;
 };
 
 } // namespace daw::recovery

@@ -43,7 +43,7 @@ inline constexpr int kMinTimelineWidth = 180;
 inline constexpr int kTransportHeight = 80;
 inline constexpr int kBottomBarHeight = 28;
 
-/// The condensed, tabular face used by the transport's position/BPM display.
+/// The application family with tabular figures for position/BPM displays.
 /// Timed notebook text uses the same family by default so it feels like part
 /// of the instrument instead of a separate subtitle widget.
 QFont transportDisplayFont(int pixelSize,
@@ -104,6 +104,8 @@ inline constexpr int kDefaultGridIndex = 5;
 /// QSettings key for the Space play/pause behaviour, an int matching
 /// EngineController::PlaybackMode.
 inline constexpr const char* kPlaybackModeSetting = "transport/playMode";
+/// Appearance of the top readout: "neon" (default) or "plain".
+inline constexpr const char* kTransportPanelStyleSetting = "transport/panelStyle";
 /// Optional audio file used for the metronome. Empty selects the built-in
 /// muted knock.
 inline constexpr const char* kMetronomeSampleSetting =
@@ -119,6 +121,8 @@ inline constexpr const char* kMainGeometrySetting = "ui/mainGeometry";
 /// Whether the compact audio-CPU status strip is shown below the workspace.
 inline constexpr const char* kCpuStatusBarVisibleSetting =
     "ui/showCpuStatusBar";
+/// Click the CPU readout to switch between percentages (default) and a meter.
+inline constexpr const char* kCpuStatusMeterModeSetting = "ui/cpuStatusMeterMode";
 /// User-chosen width of the track-header column.
 inline constexpr const char* kTrackHeaderWidthSetting = "ui/trackHeaderWidth";
 

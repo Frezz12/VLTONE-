@@ -9,6 +9,9 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QDir>
+#include <QLockFile>
+#include <QStandardPaths>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -22,6 +25,7 @@
 #include <openssl/evp.h>
 
 #include <algorithm>
+#include <utility>
 
 namespace account {
 
@@ -104,6 +108,18 @@ Service::Service(QObject* parent)
     settings.setValue(QStringLiteral("account/legacyAiSecretsRemoved"), true);
     m_refreshTimer->setInterval(12 * 60 * 1000);
     connect(m_refreshTimer, &QTimer::timeout, this, &Service::beginRestore);
+    m_restoreRetryTimer = new QTimer(this);
+    m_restoreRetryTimer->setSingleShot(true);
+    m_restoreRetryTimer->setInterval(500);
+    connect(m_restoreRetryTimer, &QTimer::timeout, this, &Service::beginRestore);
+}
+
+Service::~Service() {
+    for (auto* reply : m_network->findChildren<QNetworkReply*>()) {
+        reply->disconnect(this);
+        reply->abort();
+    }
+    s_instance = nullptr;
 }
 
 Service* Service::instance() { return s_instance; }
@@ -118,44 +134,124 @@ QString Service::installationId() const {
     return value;
 }
 
+bool Service::lockCredentials(bool retry) {
+    if (m_credentialLock && m_credentialLock->isLocked()) return true;
+    const QString directory = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (!directory.isEmpty() && QDir().mkpath(directory)) {
+        m_credentialLock = std::make_unique<QLockFile>(QDir(directory).filePath("account-session.lock"));
+        m_credentialLock->setStaleLockTime(0);
+        if (m_credentialLock->tryLock(0)) return true;
+        if (retry && m_credentialLock->error() == QLockFile::LockFailedError) {
+            if (!m_restoreRetryTimer->isActive()) m_restoreRetryTimer->start();
+            return false;
+        }
+    }
+    emit errorOccurred(QStringLiteral("session_storage_busy"),
+                       tr("Saved sign-in is temporarily unavailable. Close other copies of VLTONE and try again."));
+    return false;
+}
+
+void Service::restoreSavedSession() {
+    if (m_busy) return;
+    m_allowVaultAccess = true;
+    beginRestore();
+}
+
 void Service::beginRestore() {
     if (m_busy) return;
-    const QJsonDocument stored = QJsonDocument::fromJson(securestorage::read());
+    if (!lockCredentials(true)) return;
+    const auto interaction = std::exchange(m_allowVaultAccess, false)
+        ? securestorage::Interaction::Allow : securestorage::Interaction::Disallow;
+    if (!m_pendingSession.isEmpty()) {
+        // A refresh already consumed the old token. Retry its local save before
+        // sending another request. The durable request ID also protects this
+        // rotation if the process exits before the pending save succeeds.
+        acceptSession(m_pendingSession, interaction == securestorage::Interaction::Allow);
+        return;
+    }
+    const auto saved = securestorage::readSession(interaction);
+    if (saved.unavailable) {
+        m_credentialLock.reset();
+        emit errorOccurred(QStringLiteral("secure_storage_locked"),
+            tr("Saved sign-in is locked by the operating system. Choose Restore saved sign-in to allow access without entering your account password again."));
+        return;
+    }
+    const QJsonDocument stored = QJsonDocument::fromJson(saved.value);
     if (!stored.isObject()) {
+        m_credentialLock.reset();
         emit authenticationRequired(tr("Sign in to continue."), false);
         return;
     }
-    const QJsonObject credentials = stored.object();
+    QJsonObject credentials = stored.object();
     m_refreshToken = credentials.value(QStringLiteral("refresh_token")).toString();
     if (m_refreshToken.isEmpty()) {
-        securestorage::clear();
+        m_credentialLock.reset();
         emit authenticationRequired(tr("Sign in to continue."), false);
         return;
+    }
+    // Persist the operation BEFORE the server consumes the token. A crash,
+    // lost response or failed write can then retry exactly the same rotation.
+    QString requestID = credentials.value(QStringLiteral("refresh_request_id")).toString();
+    if (QUuid(requestID).isNull()) {
+        requestID = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        credentials.insert(QStringLiteral("refresh_request_id"), requestID);
+        const auto envelope = QJsonDocument(credentials).toJson(QJsonDocument::Compact);
+        if (!securestorage::write(envelope, interaction) || securestorage::read() != envelope) {
+            m_credentialLock.reset();
+            emit errorOccurred(QStringLiteral("secure_storage_failed"),
+                               tr("The operating-system credential vault could not save this session."));
+            return;
+        }
     }
     setBusy(true);
     QNetworkReply* reply = postJson(QStringLiteral("/desktop/auth/refresh"), {
         {QStringLiteral("refresh_token"), m_refreshToken},
         {QStringLiteral("app_version"), QCoreApplication::applicationVersion()},
-    });
+    }, {}, requestID);
     connect(reply, &QNetworkReply::finished, this, [this, reply, credentials] {
-        setBusy(false);
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        if (reply->error() == QNetworkReply::NoError && status >= 200 && status < 300) {
+        const auto session = QJsonDocument::fromJson(reply->peek(reply->bytesAvailable())).object();
+        const bool validSession = !session.value("access_token").toString().isEmpty() &&
+                                  !session.value("refresh_token").toString().isEmpty();
+        if (reply->error() == QNetworkReply::NoError && status >= 200 && status < 300 && validSession) {
             handleSessionReply(reply, true);
+            if (m_pendingSession.isEmpty()) m_credentialLock.reset();
+            setBusy(false);
             return;
         }
-        const bool transportFailure = status == 0;
+        const auto error = QJsonDocument::fromJson(reply->readAll()).object();
+        const QString code = error.value(QStringLiteral("code")).toString();
+        const bool rejected = (status == 401 &&
+            (code == "refresh_token_invalid" || code == "refresh_token_reused")) ||
+            (status == 403 && code == "account_unavailable");
+        const bool temporaryFailure = status == 0 || status == 408 || status == 429 ||
+                                      status >= 500 || (status >= 200 && status < 300) ||
+                                      ((status == 401 || status == 403) && !rejected);
         reply->deleteLater();
         QString reason;
-        if (transportFailure && acceptOffline(credentials, &reason)) return;
-        if (!transportFailure) securestorage::clear();
+        if (temporaryFailure && acceptOffline(credentials, &reason)) {
+            m_credentialLock.reset();
+            setBusy(false);
+            return;
+        }
+        // Only an explicit credential rejection invalidates the saved login.
+        // Maintenance, proxy errors and rate limiting must not sign users out.
+        if (rejected) {
+            securestorage::clear();
+            m_authenticated = false;
+            m_accessToken.clear();
+            m_refreshTimer->stop();
+        }
+        m_credentialLock.reset();
+        setBusy(false);
         emit authenticationRequired(reason.isEmpty() ? tr("Online sign-in is required.") : reason,
-                                    transportFailure);
+                                    temporaryFailure);
     });
 }
 
 void Service::login(const QString& email, const QString& password) {
     if (m_busy) return;
+    if (!lockCredentials(false)) return;
     setBusy(true);
     const QJsonObject hardware = PlatformDiagnostics::hardwareSnapshot();
     QNetworkReply* reply = postJson(QStringLiteral("/desktop/auth/login"), {
@@ -170,8 +266,9 @@ void Service::login(const QString& email, const QString& password) {
         {QStringLiteral("hardware"), hardware},
     });
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
-        setBusy(false);
         handleSessionReply(reply, false);
+        if (m_pendingSession.isEmpty()) m_credentialLock.reset();
+        setBusy(false);
     });
 }
 
@@ -209,10 +306,25 @@ void Service::handleSessionReply(QNetworkReply* reply, bool refresh) {
         else emit errorOccurred(code, message);
         return;
     }
-    acceptSession(document.object());
+    acceptSession(document.object(), !refresh);
 }
 
-void Service::acceptSession(const QJsonObject& response) {
+void Service::acceptSession(const QJsonObject& response, bool explicitSignIn) {
+    // Never close the login gate before the rotated credential is durable and
+    // readable without an OS dialog. Otherwise a successful login immediately
+    // hides the storage error and the next launch asks for a password again.
+    if (response.value(QStringLiteral("access_token")).toString().isEmpty() ||
+        response.value(QStringLiteral("refresh_token")).toString().isEmpty()) {
+        m_credentialLock.reset();
+        emit errorOccurred(QStringLiteral("invalid_server_response"),
+                           tr("The server could not complete sign-in."));
+        return;
+    }
+    if (!persistCredentials(response, explicitSignIn)) {
+        m_pendingSession = response;
+        return;
+    }
+    // response may refer to m_pendingSession; clear it only after consuming it.
     m_accessToken = response.value(QStringLiteral("access_token")).toString();
     m_refreshToken = response.value(QStringLiteral("refresh_token")).toString();
     m_reporterToken = response.value(QStringLiteral("reporter_token")).toString();
@@ -229,7 +341,8 @@ void Service::acceptSession(const QJsonObject& response) {
     applyQuota(quota);
     m_snapshot.lastSyncAt = QDateTime::fromSecsSinceEpoch(m_lastServerTime, QTimeZone::UTC);
     m_snapshot.offline = false;
-    persistCredentials(response);
+    m_pendingSession = {};
+    m_credentialLock.reset();
     m_authenticated = true;
     m_refreshTimer->start();
     emit snapshotChanged();
@@ -237,7 +350,7 @@ void Service::acceptSession(const QJsonObject& response) {
     refreshAiModels();
 }
 
-void Service::persistCredentials(const QJsonObject& response) {
+bool Service::persistCredentials(const QJsonObject& response, bool explicitSignIn) {
     QJsonObject stored;
     for (const QString& key : {QStringLiteral("refresh_token"), QStringLiteral("reporter_token"),
                                QStringLiteral("offline_entitlement"), QStringLiteral("public_key"),
@@ -264,10 +377,15 @@ void Service::persistCredentials(const QJsonObject& response) {
     stored.insert(QStringLiteral("quota"), storedQuota);
     stored.insert(QStringLiteral("last_observed_time"),
                   response.value(QStringLiteral("server_time")));
-    if (!securestorage::write(QJsonDocument(stored).toJson(QJsonDocument::Compact))) {
+    const auto interaction = explicitSignIn ? securestorage::Interaction::Allow
+                                            : securestorage::Interaction::Disallow;
+    const QByteArray envelope = QJsonDocument(stored).toJson(QJsonDocument::Compact);
+    if (!securestorage::write(envelope, interaction) || securestorage::read() != envelope) {
         emit errorOccurred(QStringLiteral("secure_storage_failed"),
                            tr("The operating-system credential vault could not save this session."));
+        return false;
     }
+    return true;
 }
 
 bool Service::acceptOffline(const QJsonObject& credentials, QString* reason) {
@@ -323,6 +441,17 @@ bool Service::acceptOffline(const QJsonObject& credentials, QString* reason) {
 }
 
 void Service::logout() {
+    if (!lockCredentials(false)) return;
+    m_refreshTimer->stop();
+    m_restoreRetryTimer->stop();
+    for (auto* pending : m_network->findChildren<QNetworkReply*>()) {
+        pending->disconnect(this);
+        pending->abort();
+        pending->deleteLater();
+    }
+    m_pendingSession = {};
+    m_allowVaultAccess = false;
+    setBusy(true);
     if (!m_accessToken.isEmpty()) {
         QNetworkReply* reply = postJson(QStringLiteral("/desktop/auth/logout"), {}, m_accessToken);
         QTimer::singleShot(5000, reply, [reply] {
@@ -338,11 +467,14 @@ void Service::logout() {
 }
 
 void Service::finishLogout() {
-    securestorage::clear();
+    securestorage::clear(securestorage::Interaction::Allow);
     m_refreshTimer->stop();
     m_accessToken.clear(); m_refreshToken.clear(); m_reporterToken.clear();
     m_offlineEntitlement.clear(); m_publicKey.clear(); m_snapshot = {};
+    m_pendingSession = {};
+    m_credentialLock.reset();
     m_authenticated = false;
+    setBusy(false);
     ui::aiprefs::setManagedModels({});
     emit snapshotChanged();
     emit aiModelsChanged();
@@ -433,12 +565,13 @@ void Service::setBusy(bool busy) {
 }
 
 QNetworkReply* Service::postJson(const QString& path, const QJsonObject& body,
-                                 const QString& bearer) {
+                                 const QString& bearer, const QString& requestID) {
     QNetworkRequest request(QUrl(m_apiOrigin + path));
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setRawHeader("Accept", "application/json");
     request.setTransferTimeout(15'000);
     if (!bearer.isEmpty()) request.setRawHeader("Authorization", "Bearer " + bearer.toUtf8());
+    if (!requestID.isEmpty()) request.setRawHeader("Idempotency-Key", requestID.toUtf8());
     return m_network->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
 }
 

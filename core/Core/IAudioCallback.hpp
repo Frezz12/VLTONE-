@@ -2,6 +2,7 @@
 
 #include "Types.hpp"
 #include "AudioBuffer.hpp"
+#include "AudioWorkerConfig.hpp"
 
 namespace audio {
 
@@ -21,6 +22,9 @@ public:
     /// onAudioCallback returns. The device keeps its defensive pre-clear for
     /// the default/partial-writer contract.
     virtual bool writesCompleteOutput() const noexcept { return false; }
+    // Device-control thread only, with the stream stopped. Never called by the
+    // PortAudio render trampoline.
+    virtual void configureAudioWorkers(const daw::rt::AudioWorkerConfig&) {}
     virtual void onAudioCallback(AudioCallbackContext& ctx) = 0;
 };
 

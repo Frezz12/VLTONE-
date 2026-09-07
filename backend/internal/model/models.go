@@ -101,17 +101,19 @@ type Device struct {
 }
 
 type DesktopSession struct {
-	ID                uuid.UUID `gorm:"type:uuid;primaryKey"`
-	UserID            uuid.UUID `gorm:"type:uuid;index;not null"`
-	DeviceID          uuid.UUID `gorm:"type:uuid;index;not null"`
-	RefreshTokenHash  string    `gorm:"uniqueIndex;not null"`
-	ReporterTokenHash string    `gorm:"uniqueIndex;not null"`
-	ReporterExpiresAt time.Time `gorm:"index;not null"`
-	ExpiresAt         time.Time `gorm:"index;not null"`
-	CreatedAt         time.Time
-	LastSeenAt        time.Time
-	RotatedAt         *time.Time
-	RevokedAt         *time.Time
+	ID                 uuid.UUID `gorm:"type:uuid;primaryKey"`
+	UserID             uuid.UUID `gorm:"type:uuid;index;not null"`
+	DeviceID           uuid.UUID `gorm:"type:uuid;index;not null"`
+	RefreshTokenHash   string    `gorm:"uniqueIndex;not null"`
+	ReporterTokenHash  string    `gorm:"uniqueIndex;not null"`
+	ReporterExpiresAt  time.Time `gorm:"index;not null"`
+	ExpiresAt          time.Time `gorm:"index;not null"`
+	CreatedAt          time.Time
+	LastSeenAt         time.Time
+	RotatedAt          *time.Time
+	RefreshRequestHash string
+	RotatedToID        *uuid.UUID `gorm:"type:uuid"`
+	RevokedAt          *time.Time
 }
 
 type PasswordResetToken struct {
@@ -373,3 +375,19 @@ type AIModel struct {
 }
 
 func (AIModel) TableName() string { return "ai_models" }
+
+// BrowserBackground owns an immutable image; edits change catalogue metadata.
+type BrowserBackground struct {
+	ID        uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	Title     string    `json:"title"`
+	Published bool      `json:"published"`
+	SortOrder int       `json:"sort_order"`
+	MimeType  string    `json:"mime_type"`
+	Extension string    `json:"-"`
+	Bytes     int64     `json:"bytes"`
+	Width     int       `json:"width"`
+	Height    int       `json:"height"`
+	SHA256    string    `json:"sha256"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}

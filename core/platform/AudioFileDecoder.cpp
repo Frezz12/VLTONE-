@@ -1,11 +1,13 @@
 #include "platform/AudioFileDecoder.hpp"
 #include "platform/PathUtils.hpp"
+#include "platform/NativeAudioFileReader.hpp"
 
 #include <sndfile.h>
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cctype>
 #include <cstdio>
 #include <cmath>
 #include <fstream>
@@ -21,9 +23,21 @@ namespace {
 // `w64` are here because the sampler already offered them and libsndfile does
 // read both — platform_test writes and decodes one of each rather than taking
 // that on trust.
-constexpr std::array<std::string_view, 11> kSupported = {
+constexpr std::string_view kSupported[] = {
     "wav", "aiff", "aif", "aifc", "flac", "ogg",
-    "oga", "opus", "mp3",  "caf",  "w64"};
+    "oga", "opus", "mp3",  "caf",  "w64",
+#if defined(__APPLE__) || defined(_WIN32)
+    "m4a", "mp4a", "mp4", "aac",
+#endif
+};
+
+bool nativeAudioPath(const std::string& path) {
+    auto extension = daw::platform::pathFromUtf8(path).extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char c) { return char(std::tolower(c)); });
+    return extension == ".m4a" || extension == ".mp4a" ||
+           extension == ".mp4" || extension == ".aac";
+}
 
 SNDFILE* openSoundFile(const std::string& path, int mode, SF_INFO* info) {
 #if defined(_WIN32)
@@ -45,6 +59,12 @@ bool isDecodableExtension(const std::string& extLower) {
 }
 
 Result probeAudioFile(const std::string& path, AudioFileInfo& out) {
+    if (nativeAudioPath(path)) {
+        AudioFileReader reader;
+        const auto result = reader.open(path);
+        if (result) out = reader.info();
+        return result;
+    }
     SF_INFO info{};
     SNDFILE* file = openSoundFile(path, SFM_READ, &info);
     if (!file) {
@@ -61,6 +81,7 @@ Result probeAudioFile(const std::string& path, AudioFileInfo& out) {
     out.frames = static_cast<FrameCount>(info.frames);
     out.sampleRate = static_cast<SampleRate>(info.samplerate);
     out.channels = static_cast<ChannelCount>(info.channels);
+    out.frameCountIsEstimate = (info.format & SF_FORMAT_TYPEMASK) == SF_FORMAT_MPEG;
     return Result::ok();
 }
 
@@ -86,10 +107,14 @@ Result decodeAudioFile(const std::string& path, DecodedAudio& out,
             const auto count = std::min<FrameCount>(8192, info.frames - decoded.frames);
             const auto read = reader.read(decoded.interleaved.data() +
                 std::size_t(decoded.frames) * info.channels, count);
-            if (read == 0)
+            if (const auto status = reader.readStatus(); !status) return status;
+            if (read == 0) {
+                if (info.frameCountIsEstimate && decoded.frames > 0) break;
                 return Result::fail(EngineError::UnsupportedFormat, "truncated audio file");
+            }
             decoded.frames += read;
         }
+        decoded.interleaved.resize(std::size_t(decoded.frames) * info.channels);
         out = std::move(decoded);
         return Result::ok();
     } catch (const std::exception& error) {
@@ -99,6 +124,7 @@ Result decodeAudioFile(const std::string& path, DecodedAudio& out,
 
 struct AudioFileReader::Impl {
     SNDFILE* file = nullptr;
+    std::unique_ptr<NativeAudioFileReader> native;
     AudioFileInfo info;
 };
 
@@ -113,6 +139,14 @@ AudioFileReader& AudioFileReader::operator=(AudioFileReader&& other) noexcept {
 Result AudioFileReader::open(const std::string& path) {
     close();
     if (!m_impl) m_impl = std::make_unique<Impl>();
+    if (nativeAudioPath(path)) {
+        auto native = std::make_unique<NativeAudioFileReader>();
+        const auto result = native->open(path);
+        if (!result) return result;
+        m_impl->info = native->info();
+        m_impl->native = std::move(native);
+        return Result::ok();
+    }
     SF_INFO opened{};
     m_impl->file = openSoundFile(path, SFM_READ, &opened);
     if (!m_impl->file) {
@@ -128,18 +162,21 @@ Result AudioFileReader::open(const std::string& path) {
     m_impl->info.frames = static_cast<FrameCount>(opened.frames);
     m_impl->info.sampleRate = static_cast<SampleRate>(opened.samplerate);
     m_impl->info.channels = static_cast<ChannelCount>(opened.channels);
+    m_impl->info.frameCountIsEstimate =
+        (opened.format & SF_FORMAT_TYPEMASK) == SF_FORMAT_MPEG;
     return Result::ok();
 }
 
 void AudioFileReader::close() {
-    if (!m_impl || !m_impl->file) return;
-    sf_close(m_impl->file);
+    if (!m_impl) return;
+    m_impl->native.reset();
+    if (m_impl->file) sf_close(m_impl->file);
     m_impl->file = nullptr;
     m_impl->info = {};
 }
 
 bool AudioFileReader::isOpen() const noexcept {
-    return m_impl && m_impl->file;
+    return m_impl && (m_impl->file || m_impl->native);
 }
 
 const AudioFileInfo& AudioFileReader::info() const noexcept {
@@ -151,6 +188,7 @@ Result AudioFileReader::seek(FrameCount frame) {
     if (!isOpen())
         return Result::fail(EngineError::InvalidArgument, "audio reader is closed");
     const FrameCount clamped = std::min(frame, m_impl->info.frames);
+    if (m_impl->native) return m_impl->native->seek(clamped);
     if (sf_seek(m_impl->file, static_cast<sf_count_t>(clamped), SEEK_SET) < 0) {
         return Result::fail(EngineError::UnsupportedFormat,
                             std::string("audio seek failed: ") +
@@ -161,10 +199,21 @@ Result AudioFileReader::seek(FrameCount frame) {
 
 FrameCount AudioFileReader::read(float* destination, FrameCount frames) {
     if (!isOpen() || !destination || frames == 0) return 0;
+    if (m_impl->native) return m_impl->native->read(destination, frames);
     const sf_count_t requested = static_cast<sf_count_t>(std::min<FrameCount>(
         frames, FrameCount(std::numeric_limits<sf_count_t>::max())));
     const sf_count_t received = sf_readf_float(m_impl->file, destination, requested);
     return received > 0 ? static_cast<FrameCount>(received) : 0;
+}
+
+Result AudioFileReader::readStatus() const {
+    if (!isOpen())
+        return Result::fail(EngineError::InvalidArgument, "audio reader is closed");
+    if (m_impl->native) return m_impl->native->readStatus();
+    if (sf_error(m_impl->file) != SF_ERR_NO_ERROR)
+        return Result::fail(EngineError::UnsupportedFormat,
+                            std::string("audio decode failed: ") + sf_strerror(m_impl->file));
+    return Result::ok();
 }
 
 // ── Format mapping ─────────────────────────────────────────────────────────

@@ -39,6 +39,9 @@ public:
     /// Mouse-down there must not deactivate the editor before the control gets
     /// its matching release/click.
     void setAccessoryWidget(QWidget* accessory);
+    /// The body below the transport is used for initial placement and maximize.
+    /// Floating windows can move across the entire parent, including its header.
+    void setWorkspaceArea(QWidget* area);
 
     /// Restore the saved placement on first use, show, raise and activate.
     void present();
@@ -48,12 +51,13 @@ public:
     void setMaximized(bool maximized);
     bool isMaximized() const { return m_maximized; }
 
-    /// Resize the outer frame to a content-requested size while keeping it
-    /// inside the workspace. Used by resizable plugin UIs and parameter docks.
+    /// Resize for plugin UIs and parameter docks. Keep an on-screen editor
+    /// fully visible, or preserve the title position of a parked editor.
     void resizeForContent(const QSize& contentSize);
     /// Largest content rectangle the workspace can expose after subtracting
     /// this frame's title bar and one-pixel contour.
     QSize maximumContentSize() const;
+    static bool checkPlacementForTest();
 
 signals:
     void closeRequested();
@@ -81,6 +85,7 @@ private:
     void savePlacement();
     void constrainToParent();
     QRect availableRect() const;
+    QRect workspaceRect() const;
     QRect constrainedGeometry(const QRect& wanted) const;
     void updateResizeHandles();
     void updateMaximizeButton();
@@ -102,6 +107,7 @@ private:
     ui::IconButton* m_closeButton = nullptr;
     QPointer<QWidget> m_content;
     QPointer<QWidget> m_accessory;
+    QPointer<QWidget> m_workspaceArea;
     QPointer<QWidget> m_lastContentFocus;
     QSize m_preferredContentSize{1100, 640};
     std::array<QWidget*, 8> m_resizeHandles{};

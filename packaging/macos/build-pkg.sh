@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Build VLT Studio Pro.app and wrap it in macOS PKG and DMG installers.
+# Build VLTONE.app and wrap it in macOS PKG and DMG installers.
 #
 #   packaging/macos/build-pkg.sh [version]
 #
-# Produces  build-pkg/stage-vlt/VLT Studio Pro.app — the self-contained bundle,
-#           build-pkg/VLT-Studio-Pro-<version>.pkg — Installer package, and
-#           build-pkg/VLT-Studio-Pro-<version>.dmg — drag-to-Applications image.
+# Produces  build-pkg/stage-vlt/VLTONE.app — the self-contained bundle,
+#           build-pkg/VLTONE-<version>.pkg — Installer package, and
+#           build-pkg/VLTONE-<version>.dmg — drag-to-Applications image.
 #
 # The bundle carries its own Qt, PortAudio, RtMidi and libsndfile (macdeployqt
 # copies every non-system dylib and rewrites the load commands), plus the three helper
@@ -24,16 +24,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD="$ROOT/build-pkg"
-# Keep VLT Studio Pro releases separate from the legacy root-owned DAW.app
+# Keep VLTONE releases separate from the legacy root-owned DAW.app
 # staging directory that may exist on developer machines.
 STAGE="$BUILD/stage-vlt"
-APP_NAME="VLT Studio Pro"
+APP_NAME="VLTONE"
 APP_BUNDLE="$APP_NAME.app"
-ARTIFACT_NAME="VLT-Studio-Pro"
+ARTIFACT_NAME="VLTONE"
 IDENTIFIER="com.vltstudio.pro"
 # The project's own version, not the `cmake_minimum_required` line above it.
 VERSION="${1:-$(sed -n 's/^[[:space:]]*VERSION[[:space:]]*\([0-9][0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt" | head -1)}"
-VERSION="${VERSION:-0.1.7}"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid or missing project version: $VERSION" >&2; exit 1; }
 PKG="$BUILD/$ARTIFACT_NAME-$VERSION.pkg"
 DMG="$BUILD/$ARTIFACT_NAME-$VERSION.dmg"
 # A distributable build must use the hosted account platform. Local developer

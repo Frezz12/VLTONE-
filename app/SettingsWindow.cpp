@@ -1,4 +1,6 @@
 #include "SettingsWindow.hpp"
+#include "UiFrameClock.hpp"
+#include <QSpinBox>
 #include "AiSettingsPage.hpp"
 #include "AccountSettingsPage.hpp"
 #include "BrowserSettingsPage.hpp"
@@ -136,7 +138,7 @@ QScrollArea* scrollablePage(QWidget* page) {
 SettingsWindow::SettingsWindow(daw::EngineController* controller,
                                ShortcutManager* shortcuts, QWidget* parent)
     : QDialog(parent, Qt::Widget), m_controller(controller), m_shortcuts(shortcuts) {
-    setWindowTitle(tr("Settings — %1").arg(QApplication::applicationName()));
+    setWindowTitle(tr("Settings — %1").arg(QApplication::applicationDisplayName()));
     resize(640, 560);
     setSizeGripEnabled(false);
 
@@ -151,7 +153,10 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     connect(m_audioPage, &AudioSettingsPage::cpuStatusBarVisibilityChanged,
             this, &SettingsWindow::cpuStatusBarVisibilityChanged);
     addPage(m_audioPage, tr("Audio"));
-    addPage(new TransportSettingsPage(m_controller, this), tr("Transport"));
+    auto* transportPage = new TransportSettingsPage(m_controller, this);
+    addPage(transportPage, tr("Transport"));
+    connect(transportPage, &TransportSettingsPage::panelStyleChanged, this,
+            &SettingsWindow::transportPanelStyleChanged);
     m_recordingPage = new RecordingSettingsPage(m_controller, this);
     connect(m_recordingPage, &RecordingSettingsPage::recordModeChanged, this,
             &SettingsWindow::recordModeChanged);
@@ -181,6 +186,7 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     addPage(buildThemesTab(), tr("Themes"));
     addPage(buildThemeEditorTab(), tr("Theme Editor"));
     addPage(buildShortcutsTab(), tr("Keyboard Shortcuts"));
+    addPage(buildInterfaceTab(), tr("Interface"));
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
@@ -192,7 +198,19 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     constrainToScreen();
 }
 
+void SettingsWindow::refreshTimelineBackgroundSource() {
+    if (!m_timelineBackgroundPath) return;
+    const QString webUrl = ui::timelinebackgroundprefs::webSource().value("pageUrl").toString();
+    const QString display = webUrl.isEmpty()
+        ? QDir::toNativeSeparators(ui::timelinebackgroundprefs::path()) : webUrl;
+    m_timelineBackgroundPath->setText(display);
+    m_timelineBackgroundPath->setToolTip(display);
+    m_clearTimelineBackground->setEnabled(!display.isEmpty());
+    m_enableTimelineBackground->setChecked(ui::timelinebackgroundprefs::enabled());
+}
+
 void SettingsWindow::showEvent(QShowEvent* event) {
+    refreshTimelineBackgroundSource();
     QDialog::showEvent(event);
     constrainToScreen();
     // Native frame margins become reliable only after the first show. Clamp a
@@ -309,7 +327,7 @@ QWidget* SettingsWindow::buildLanguageTab() {
 
                 QMessageBox box(QMessageBox::Question,
                                 tr("Restart required"),
-                                tr("Restart VLT Studio Pro now to apply the new "
+                                tr("Restart VLTONE now to apply the new "
                                    "language?"),
                                 QMessageBox::Yes | QMessageBox::No, this);
                 box.button(QMessageBox::Yes)->setText(tr("Restart Now"));
@@ -320,7 +338,7 @@ QWidget* SettingsWindow::buildLanguageTab() {
     connect(importButton, &QPushButton::clicked, this, [this] {
         const QString path = QFileDialog::getOpenFileName(
             this, tr("Import Language"), QString(),
-            tr("VLT Language Pack (*.vltlang.json *.json);;All Files (*)"));
+            tr("VLTONE Language Pack (*.vltlang.json *.json);;All Files (*)"));
         if (path.isEmpty()) return;
 
         auto result =
@@ -355,7 +373,7 @@ QWidget* SettingsWindow::buildLanguageTab() {
         const QString path = QFileDialog::getSaveFileName(
             this, tr("Export Language Template"),
             QStringLiteral("vlt-language-template.vltlang.json"),
-            tr("VLT Language Pack (*.vltlang.json *.json)"));
+            tr("VLTONE Language Pack (*.vltlang.json *.json)"));
         if (path.isEmpty()) return;
         QString error;
         if (!ui::LocalizationManager::instance().exportTemplate(path, &error)) {
@@ -487,10 +505,11 @@ QWidget* SettingsWindow::buildThemesTab() {
     auto* preview = new QLabel(
         tr("Preview: Music, rhythm, automation — 123 BPM"), fontGroup);
     preview->setObjectName(QStringLiteral("InterfaceFontPreview"));
+    preview->setWordWrap(true);
     fontColumn->addWidget(preview);
 
     auto* importFont = new QPushButton(tr("Import Font…"), fontGroup);
-    m_resetFont = new QPushButton(tr("Use System Font"), fontGroup);
+    m_resetFont = new QPushButton(tr("Use Default Font"), fontGroup);
     auto* fontButtons = new QHBoxLayout;
     fontButtons->addWidget(importFont);
     fontButtons->addWidget(m_resetFont);
@@ -522,15 +541,16 @@ QWidget* SettingsWindow::buildThemesTab() {
     auto* backgroundGroup = new QGroupBox(tr("Timeline Background"), page);
     auto* backgroundColumn = new QVBoxLayout(backgroundGroup);
     auto* backgroundHint = new QLabel(
-        tr("Choose a local photo, animated GIF or video for the arrangement "
-           "grid. The file stays on this computer and is not saved in the "
-           "project."),
+        tr("Choose a local photo, animated GIF or video, or send a video from "
+           "the browser to the timeline background. Backgrounds are appearance "
+           "settings and are not saved in the project."),
         backgroundGroup);
     backgroundHint->setWordWrap(true);
     backgroundColumn->addWidget(backgroundHint);
 
     auto* enableTimelineBackground = new QCheckBox(
         tr("Enable custom timeline background"), backgroundGroup);
+    m_enableTimelineBackground = enableTimelineBackground;
     enableTimelineBackground->setChecked(
         ui::timelinebackgroundprefs::enabled());
     enableTimelineBackground->setAccessibleName(
@@ -544,12 +564,14 @@ QWidget* SettingsWindow::buildThemesTab() {
     fileLayout->setContentsMargins(0, 0, 0, 0);
     fileLayout->setSpacing(6);
     auto* backgroundPath = new QLineEdit(fileRow);
+    m_timelineBackgroundPath = backgroundPath;
     backgroundPath->setReadOnly(true);
     backgroundPath->setPlaceholderText(tr("Theme colour only"));
-    backgroundPath->setAccessibleName(tr("Timeline background file"));
+    backgroundPath->setAccessibleName(tr("Timeline background source"));
     auto* chooseBackground = new QPushButton(tr("Choose…"), fileRow);
     chooseBackground->setAccessibleName(tr("Choose timeline background"));
     auto* clearBackground = new QPushButton(tr("Clear"), fileRow);
+    m_clearTimelineBackground = clearBackground;
     fileLayout->addWidget(backgroundPath, 1);
     fileLayout->addWidget(chooseBackground);
     fileLayout->addWidget(clearBackground);
@@ -581,12 +603,7 @@ QWidget* SettingsWindow::buildThemesTab() {
             });
     backgroundForm->addRow(tr("Layout"), timelinePlacement);
 
-    const auto refreshBackgroundPath = [backgroundPath, clearBackground] {
-        const QString path = ui::timelinebackgroundprefs::path();
-        backgroundPath->setText(QDir::toNativeSeparators(path));
-        backgroundPath->setToolTip(path);
-        clearBackground->setEnabled(!path.isEmpty());
-    };
+    const auto refreshBackgroundPath = [this] { refreshTimelineBackgroundSource(); };
     connect(chooseBackground, &QPushButton::clicked, this,
             [this, refreshBackgroundPath] {
                 const QString selected = QFileDialog::getOpenFileName(
@@ -608,7 +625,9 @@ QWidget* SettingsWindow::buildThemesTab() {
             });
     connect(clearBackground, &QPushButton::clicked, this,
             [this, refreshBackgroundPath] {
-                ui::timelinebackgroundprefs::clear();
+                if (!ui::timelinebackgroundprefs::webSource().isEmpty())
+                    ui::timelinebackgroundprefs::clearWebSource();
+                else ui::timelinebackgroundprefs::clear();
                 refreshBackgroundPath();
                 emit themeBackgroundSettingsChanged();
             });
@@ -986,7 +1005,7 @@ void SettingsWindow::refreshFontStatus() {
                 .arg(manager.customFontFamily(), manager.customFontFileName()));
     } else {
         m_fontStatus->setText(
-            tr("System font: %1").arg(manager.systemFontFamily()));
+            tr("Default font: %1").arg(manager.defaultFontFamily()));
     }
     m_resetFont->setEnabled(manager.hasCustomFont());
 }
@@ -1066,7 +1085,7 @@ QWidget* SettingsWindow::buildThemeEditorTab() {
         const QString path = QFileDialog::getSaveFileName(
             this, tr("Export Theme"),
             m_editTheme.name + ".dawtheme.json",
-            tr("VLT Studio Pro Theme (*.json *.dawtheme.json)"));
+            tr("VLTONE Theme (*.json *.dawtheme.json)"));
         if (path.isEmpty()) return;
         QFile file(path);
         if (!file.open(QIODevice::WriteOnly)) {
@@ -1081,7 +1100,7 @@ QWidget* SettingsWindow::buildThemeEditorTab() {
     connect(importBtn, &QPushButton::clicked, this, [this] {
         const QString path = QFileDialog::getOpenFileName(
             this, tr("Import Theme"), QString(),
-            tr("VLT Studio Pro Theme (*.json *.dawtheme.json);;All Files (*)"));
+            tr("VLTONE Theme (*.json *.dawtheme.json);;All Files (*)"));
         if (path.isEmpty()) return;
         QFile file(path);
         if (!file.open(QIODevice::ReadOnly)) return;
@@ -1229,4 +1248,55 @@ void SettingsWindow::refreshShortcutEditors() {
         QSignalBlocker block(it.value());
         it.value()->setKeySequence(m_shortcuts->shortcut(it.key()));
     }
+}
+
+QWidget* SettingsWindow::buildInterfaceTab() {
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    auto* group = new QGroupBox(tr("Refresh rate"), page);
+    auto* form = new QFormLayout(group);
+    auto* mode = new QComboBox(group);
+    mode->setObjectName("UiFrameMode");
+    mode->setAccessibleName(tr("Refresh rate"));
+    for (int fps : {30, 60, 75, 90, 120, 144, 165, 240, 360})
+        mode->addItem(tr("%1 FPS").arg(fps), fps);
+    mode->addItem(tr("Custom"), -1);
+    mode->addItem(tr("Follow display"), -2);
+    mode->addItem(tr("Unlimited"), -3);
+    auto* limit = new QSpinBox(group);
+    limit->setObjectName("UiFrameLimit");
+    limit->setRange(1, 1000);
+    limit->setSuffix(tr(" FPS"));
+    limit->setAccessibleName(tr("Custom refresh rate"));
+    auto& clock = ui::FrameClock::instance();
+    const auto reload = [mode, limit, &clock] {
+        const QSignalBlocker a(mode), b(limit);
+        limit->setValue(clock.limit());
+        const int data = clock.mode() == ui::FrameMode::Display ? -2 :
+                         clock.mode() == ui::FrameMode::Unlimited ? -3 : clock.limit();
+        const int index = mode->findData(data);
+        mode->setCurrentIndex(index >= 0 ? index : mode->findData(-1));
+        limit->setEnabled(mode->currentData().toInt() == -1);
+    };
+    reload();
+    form->addRow(tr("Refresh rate"), mode);
+    form->addRow(tr("Custom refresh rate"), limit);
+    const auto apply = [mode, limit, &clock] {
+        const int choice = mode->currentData().toInt();
+        limit->setEnabled(choice == -1);
+        clock.setPreference(choice == -2 ? ui::FrameMode::Display :
+                            choice == -3 ? ui::FrameMode::Unlimited : ui::FrameMode::Fixed,
+                            choice > 0 ? choice : limit->value());
+    };
+    connect(mode, &QComboBox::currentIndexChanged, page, apply);
+    connect(limit, &QSpinBox::valueChanged, page, apply);
+    connect(&clock, &ui::FrameClock::preferenceChanged, page, reload);
+    auto* explanation = new QLabel(tr("Applies immediately to the application's visual updates. "
+        "Unlimited removes the application limit; the actual rate depends on your display and system. "
+        "Third-party plugin windows control their own refresh rate."), group);
+    explanation->setWordWrap(true);
+    form->addRow(explanation);
+    layout->addWidget(group);
+    layout->addStretch();
+    return page;
 }

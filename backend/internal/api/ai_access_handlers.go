@@ -79,7 +79,7 @@ func (s *Server) leaseAIModel(w http.ResponseWriter, r *http.Request) {
 	reserved := input.InputBytes + input.MaxOutputTokens
 	reservation, err := s.Quota.Reserve(userFrom(r).ID, connection.Provider, connection.ModelName, reserved, time.Now().UTC())
 	if errors.Is(err, quota.ErrExhausted) {
-		writeError(w, r, http.StatusPaymentRequired, "ai_quota_exhausted", "Your monthly AI quota is exhausted. The rest of VLT Studio remains available.", nil)
+		writeError(w, r, http.StatusPaymentRequired, "ai_quota_exhausted", "Your monthly AI quota is exhausted. The rest of VLTONE remains available.", nil)
 		return
 	}
 	if errors.Is(err, quota.ErrGlobalExhausted) {

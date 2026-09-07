@@ -1,14 +1,17 @@
 #pragma once
 
+#include "DSP/TimeStretch.hpp"
+
 #include "Audio/SampleBuffer.hpp"
 #include "Internal/SamplerParams.hpp"
 
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <string>
 
 /// The sampler's per-note DSP: envelopes, LFOs, the filter and the two
-/// playback engines (plain resampling and a granular stretch).
+/// playback engines (plain resampling and phase-coherent stretching).
 ///
 /// Everything here is realtime-safe and allocation-free once `prepare` has run.
 /// Nothing in this file knows about the plugin API — the instance builds a
@@ -58,6 +61,10 @@ private:
     double m_time = 0.0;        ///< seconds inside the current stage
     double m_value = 0.0;
     double m_releaseFrom = 0.0;
+    double bend(double phase, double tension) noexcept;
+    double m_tension = std::numeric_limits<double>::quiet_NaN();
+    double m_curveK = 0.0;
+    double m_curveScale = 1.0;
 };
 
 /// One modulation oscillator. `global` LFOs read a phase the instance keeps
@@ -68,7 +75,7 @@ public:
     void noteOn() noexcept { m_phase = 0.0; m_time = 0.0; }
     /// Returns −1 … 1, already scaled by the delay/attack ramp.
     double advance(double dt, double rateHz, int shape, double delay,
-                   double attack, const double* globalPhase) noexcept;
+                   double attack, const double* globalPhase, engine::dsp::TimeStretch* stretcher = nullptr) noexcept;
 
 private:
     double m_phase = 0.0;
@@ -182,18 +189,9 @@ public:
     void render(const SampleData& sample, const SamplerSettings& settings,
                 float* const* out, engine::ChannelCount channels,
                 engine::FrameCount frames, double sampleRate, double tempo,
-                const double* globalPhase) noexcept;
+                const double* globalPhase, engine::dsp::TimeStretch* stretcher = nullptr) noexcept;
 
 private:
-    /// Two overlapping grains is the smallest overlap-add that reconstructs a
-    /// continuous signal from a Hann window, and enough for a sampler's modest
-    /// stretch ratios.
-    struct Grain {
-        bool active = false;
-        double read = 0.0;    ///< source position
-        double phase = 0.0;   ///< 0 … grain length, in output frames
-    };
-
     /// Where playback may go: the loop if there is one, the whole sample if not.
     struct Region {
         double start = 0.0;      ///< the START OFFSET position
@@ -203,6 +201,8 @@ private:
         double base = 0.0;       ///< the original sample's length
         double end = 0.0;        ///< end marker, with tail when set to 100 %
         int loopMode = 0;
+        double fadeInLength = 0.0, fadeOutLength = 0.0;
+        double fadeInInverse = 0.0, fadeOutInverse = 0.0;
     };
     static Region regionFor(const SamplerSettings& settings,
                             const SampleData& sample) noexcept;
@@ -221,11 +221,11 @@ private:
                                      const SamplerSettings& settings,
                                      const Region& region, float* left, float* right,
                                      engine::FrameCount count, double rate) noexcept;
-    engine::FrameCount fillGranular(const SampleData& sample,
-                                    const SamplerSettings& settings,
-                                    const Region& region, float* left, float* right,
-                                    engine::FrameCount count, double pitchRatio,
-                                    double timeRate, double grainLength) noexcept;
+    engine::FrameCount fillStretched(const SampleData& sample,
+                                     const SamplerSettings& settings,
+                                     const Region& region, float* left, float* right,
+                                     engine::FrameCount count, double pitch,
+                                     double timeRate, engine::dsp::TimeStretch& stretcher) noexcept;
 
     /// Where the fade-in/fade-out envelope stands at a source position.
     double fadeGain(const SamplerSettings& settings, const Region& region,
@@ -240,10 +240,8 @@ private:
 
     double m_position = 0.0;
     bool m_forward = true;
-    /// Where the granular engine's playhead sits; the grains chase it.
-    double m_grainSource = 0.0;
-    double m_grainTimer = 0.0;
-    Grain m_grains[2];
+    bool m_resetStretch = true;
+    engine::dsp::TimeStretch* m_lastStretcher = nullptr;
 
     /// Frames left of the short fade that ends a looping note whose amplitude
     /// envelope is switched off. Negative means "not cutting" — with the

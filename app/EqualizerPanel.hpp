@@ -1,4 +1,5 @@
 #pragma once
+#include "UiFrameClock.hpp"
 
 #include "Internal/EqualizerInstance.hpp"
 
@@ -25,7 +26,7 @@ class QHideEvent;
 namespace ui { class Knob; }
 namespace daw { class EngineController; }
 
-class EqualizerGraph final : public QWidget {
+class EqualizerGraph final : public ui::FrameWidget {
     Q_OBJECT
 public:
     /// Samples per band curve. Each enabled band draws its own filled shape, so
@@ -195,4 +196,10 @@ private:
     QString m_selectedKind{QStringLiteral("factory")};
     QString m_selectedName{QStringLiteral("Flat")};
     bool m_refreshing = false;
+    bool m_responseValid = false;
+    Values m_responseValues{};
+    double m_responseSampleRate = 0.0;
+    std::array<double, 256> m_cachedResponse{};
+    EqualizerGraph::CurveSet m_cachedCurves{};
+
 };

@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"github.com/google/uuid"
 	"net/http"
 	"strings"
 	"time"
@@ -103,19 +104,35 @@ func (s *Server) desktopAuth(next http.Handler) http.Handler {
 			writeError(w, r, http.StatusUnauthorized, "access_token_invalid", "Desktop session has expired.", nil)
 			return
 		}
-		var user model.User
-		var device model.Device
-		var session model.DesktopSession
-		if err := s.DB.First(&user, "id = ?", claims.Subject).Error; err != nil || user.Status != model.UserActive {
+		// One statement observes account, device and session revocation in the
+		// same database snapshot. Keep the distinct response codes below.
+		var access struct {
+			User         model.User   `gorm:"embedded"`
+			Device       model.Device `gorm:"embedded;embeddedPrefix:device_"`
+			SessionValid bool
+		}
+		result := s.DB.WithContext(r.Context()).Raw(`SELECT u.*,
+            d.id AS device_id, d.user_id AS device_user_id, d.install_id AS device_install_id,
+            d.display_name AS device_display_name, d.platform AS device_platform,
+            d.os_version AS device_os_version, d.app_version AS device_app_version,
+            d.hardware AS device_hardware, d.first_seen_at AS device_first_seen_at,
+            d.last_seen_at AS device_last_seen_at, d.revoked_at AS device_revoked_at,
+            (ds.id IS NOT NULL) AS session_valid
+            FROM users u
+            LEFT JOIN devices d ON d.id = ? AND d.user_id = u.id AND d.revoked_at IS NULL
+            LEFT JOIN desktop_sessions ds ON ds.id = ? AND ds.user_id = u.id
+                AND ds.device_id = d.id AND ds.revoked_at IS NULL AND ds.expires_at > ?
+            WHERE u.id = ?`, claims.DeviceID, claims.SessionID, time.Now().UTC(), claims.Subject).Scan(&access)
+		user, device := access.User, access.Device
+		if result.Error != nil || result.RowsAffected != 1 || user.Status != model.UserActive {
 			writeError(w, r, http.StatusForbidden, "account_unavailable", "This account is unavailable.", nil)
 			return
 		}
-		if err := s.DB.Where("id = ? AND user_id = ? AND revoked_at IS NULL", claims.DeviceID, user.ID).First(&device).Error; err != nil {
+		if device.ID == uuid.Nil {
 			writeError(w, r, http.StatusForbidden, "device_revoked", "This device has been revoked.", nil)
 			return
 		}
-		if err := s.DB.Where("id = ? AND user_id = ? AND device_id = ? AND revoked_at IS NULL AND expires_at > ?",
-			claims.SessionID, user.ID, device.ID, time.Now().UTC()).First(&session).Error; err != nil {
+		if !access.SessionValid {
 			writeError(w, r, http.StatusUnauthorized, "desktop_session_revoked", "Desktop session has been revoked.", nil)
 			return
 		}

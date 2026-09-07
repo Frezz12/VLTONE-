@@ -66,6 +66,13 @@ public:
     }
 
     unsigned workerCount() const noexcept { return m_jobs.workerCount(); }
+    void configureAudioWorkers(const rt::AudioWorkerConfig& config) { m_jobs.configureAudioWorkers(config); }
+    unsigned realtimeWorkerCount() const noexcept { return m_jobs.realtimeWorkerCount(); }
+    unsigned workgroupWorkerCount() const noexcept { return m_jobs.workgroupWorkerCount(); }
+    void setProfiling(bool enabled) noexcept { m_jobs.setProfiling(enabled); }
+    void setTaskFusion(bool enabled) noexcept { m_taskFusion.store(enabled, std::memory_order_relaxed); }
+    bool popProfile(unsigned worker, rt::ProfileEvent& event) noexcept { return m_jobs.popProfile(worker, event); }
+    std::uint64_t droppedProfileEvents() const noexcept { return m_jobs.droppedProfileEvents(); }
     FrameCount latencySamples() const;
 
 private:
@@ -108,6 +115,8 @@ private:
     SamplePos m_position = 0;
     bool m_playing = false;
     bool m_offline = false;
+    std::atomic<bool> m_taskFusion{true};
+    bool m_fuseBlock = true;
     TransportInfo m_transport;
     /// Audio-thread-owned continuity stamp. A seek or loop wrap invalidates
     /// queued PDC MIDI from the old playhead; ordinary stopped/live/offline

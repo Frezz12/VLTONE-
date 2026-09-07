@@ -15,7 +15,7 @@
 
 AuthWindow::AuthWindow(account::Service* service, QWidget* parent)
     : QDialog(parent), m_service(service) {
-    setWindowTitle(QStringLiteral("VLT Studio Pro — Account"));
+    setWindowTitle(QStringLiteral("VLTONE — Account"));
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
     setModal(true);
     setMinimumWidth(440);
@@ -24,7 +24,7 @@ AuthWindow::AuthWindow(account::Service* service, QWidget* parent)
                    ? QStringLiteral("ru") : QStringLiteral("en");
 
     auto* header = new QHBoxLayout;
-    auto* brand = new QLabel(QStringLiteral("VLT  /  STUDIO PRO"), this);
+    auto* brand = new QLabel(QStringLiteral("VLTONE"), this);
     QFont brandFont = brand->font();
     brandFont.setBold(true);
     brandFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.2);
@@ -164,8 +164,8 @@ void AuthWindow::updateTexts() {
     m_title->setText(ru ? QStringLiteral("Войдите, чтобы продолжить")
                         : QStringLiteral("Sign in to continue"));
     m_copy->setText(ru
-        ? QStringLiteral("VLT Studio Pro проверит Demo-доступ. После успешного входа программа сможет работать без сети до 72 часов.")
-        : QStringLiteral("VLT Studio Pro will verify Demo access. After a successful sign-in, the app can work offline for up to 72 hours."));
+        ? QStringLiteral("VLTONE проверит Demo-доступ. После успешного входа программа сможет работать без сети до 72 часов.")
+        : QStringLiteral("VLTONE will verify Demo access. After a successful sign-in, the app can work offline for up to 72 hours."));
     m_emailLabel->setText(ru ? QStringLiteral("Почта") : QStringLiteral("Email"));
     m_passwordLabel->setText(ru ? QStringLiteral("Пароль") : QStringLiteral("Password"));
     m_login->setText(ru ? QStringLiteral("Войти") : QStringLiteral("Sign in"));

@@ -42,19 +42,19 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           QTWEBENGINE_DISABLE_SANDBOX: "1"
-        run: build/bin/daw --selftest
+        run: build/bin/VLTONE --selftest
 
       - name: Preserve private build-ID symbols
         if: always()
         run: |
           mkdir -p build/symbols
-          dsymutil build/bin/daw -o build/symbols/daw.dSYM
+          dsymutil build/bin/VLTONE -o build/symbols/VLTONE.dSYM
           dsymutil build/bin/daw_reporter -o build/symbols/daw_reporter.dSYM
 
       - name: Upload symbols
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: VLT-Studio-Pro-${{ github.sha }}-macos-symbols
+          name: VLTONE-${{ github.sha }}-macos-symbols
           path: build/symbols/**
           if-no-files-found: error

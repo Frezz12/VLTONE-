@@ -1,6 +1,7 @@
 #include "TimelineBackgroundPrefs.hpp"
 
 #include <QDir>
+#include <QJsonDocument>
 #include <QFileInfo>
 #include <QSettings>
 #include <QStringList>
@@ -92,10 +93,32 @@ QString path() {
 }
 
 bool setPath(const QString& candidate) {
-    return storePath(kTimelinePrefix, candidate);
+    if (!storePath(kTimelinePrefix, candidate)) return false;
+    clearWebSource();
+    return true;
 }
 
-void clear() { QSettings().remove(key(kTimelinePrefix, "path")); }
+void clear() {
+    QSettings().remove(key(kTimelinePrefix, "path"));
+    clearWebSource();
+}
+
+QJsonObject webSource() {
+    return QJsonDocument::fromJson(QSettings().value(
+        key(kTimelinePrefix, "webSource")).toByteArray()).object();
+}
+void setWebSource(const QJsonObject& source) {
+    QSettings().setValue(key(kTimelinePrefix, "webSource"),
+        QJsonDocument(source).toJson(QJsonDocument::Compact));
+}
+quint64 sourceRevision() {
+    return QSettings().value(key(kTimelinePrefix, "sourceRevision"), 0).toULongLong();
+}
+void clearWebSource() {
+    QSettings settings;
+    settings.remove(key(kTimelinePrefix, "webSource"));
+    settings.setValue(key(kTimelinePrefix, "sourceRevision"), sourceRevision() + 1);
+}
 
 bool enabled() {
     return QSettings().value(key(kTimelinePrefix, "enabled"), true).toBool();

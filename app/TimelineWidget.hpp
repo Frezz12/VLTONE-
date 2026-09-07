@@ -1,6 +1,8 @@
 #pragma once
+#include "UiFrameClock.hpp"
 
 #include <QPixmap>
+#include <QElapsedTimer>
 #include <QRectF>
 #include <QRegion>
 
@@ -69,6 +71,12 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
     explicit TimelineWidget(daw::EngineController* controller,
                             QWidget* parent = nullptr);
     ~TimelineWidget() override;
+    using QWidget::update;
+    void update();
+    void update(const QRect& region);
+    void update(const QRegion& region);
+    void invalidateTrack(const QString& trackId);
+
 
     void setTool(Tool tool);
     /// The tool Ctrl borrows while it is held: the pointer changes at key
@@ -108,6 +116,9 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
     /// Re-open the local image/GIF/video selected on the Themes settings page.
     /// Media is presentation-only and never enters the project document.
     void reloadBackgroundSettings();
+    void setWebBackgroundFrame(const QImage& frame, quint64 sourceId);
+    void clearWebBackground();
+    bool backgroundPlaying() const;
     /// Re-read locally timed notebook lines and their presentation settings.
     void reloadTimedTextSettings();
     /// Replace the local recovery/outbox overlay. These spans are display-only
@@ -129,6 +140,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
     void setWaveformScale(double scale);
     double waveformScale() const { return m_waveformScale; }
 
+    /// Centre zoom on the selected clip span, or the playhead without a selection.
     void zoomBy(double factor);
     void zoomToFit();
 
@@ -224,17 +236,22 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
     void setRightCornerRadius(int radius);
     /// Where a lane starts on screen, for the headless check that the header
     /// column is in step with the lanes.
+    bool checkClipIndexForTest() const;
+    bool checkAdaptiveGridForTest();
     int laneTopForTest(int lane) const { return laneTop(lane); }
     int bottomInsetForTest() const { return m_bottomInset; }
     Tool activeToolForTest() const { return tool(); }
     int displayedPlayheadXForTest() const {
-        return m_lastPlayheadX.value_or(-1);
+        return int(m_lastPlayheadX.value_or(-1));
     }
+    double displayedPlayheadSubpixelXForTest() const { return m_lastPlayheadX.value_or(-1); }
+    double displayedPlayheadTrailForTest() const { return m_lastPlayheadTrailPx; }
     std::uint64_t staticFramePaintCountForTest() const {
         return m_staticFramePaintCount;
     }
     /// Horizontal navigation state for the headless middle-drag check.
     double horizontalScrollForTest() const { return m_scrollSeconds; }
+    double pixelsPerSecondForTest() const { return m_pixelsPerSecond; }
     bool hasNavigationControlsForTest() const {
         return m_horizontalScrollBar && m_verticalScrollBar;
     }
@@ -257,6 +274,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
                                   bool fadeIn) const;
 
 signals:
+    void backgroundPlaybackChanged(bool playing);
     void clipSelected(const QString& trackId, const QString& clipId);
     void bounceInPlaceRequested();
     void offlineRenderRequested();
@@ -325,6 +343,35 @@ protected:
     void dropEvent(class QDropEvent*) override;
 
 private:
+    const std::vector<daw::TrackRow>& visibleRows() const;
+    mutable bool m_laneGeometryValid = false;
+    mutable std::vector<daw::TrackRow> m_layoutRows;
+    mutable std::vector<int> m_laneOffsets;
+    mutable std::unordered_map<std::string, int> m_laneById;
+    mutable std::uint64_t m_layoutGeometryRevision = 0, m_layoutStructureRevision = 0,
+                          m_layoutUndoRevision = 0, m_layoutCompRevision = 0;
+    mutable const daw::TrackModel* m_layoutData = nullptr;
+    mutable std::size_t m_layoutTrackCount = 0;
+    struct ClipIntervals {
+        struct Entry { double start, end, prefixEnd; std::size_t index; };
+        std::vector<Entry> entries;
+        std::unordered_map<std::string, std::size_t> ids;
+        const daw::ClipModel* data = nullptr;
+        std::uint64_t geometryRevision = 0, undoRevision = 0, lastUse = 0;
+    };
+    const ClipIntervals& clipIntervals(const daw::TrackModel& track) const;
+    std::vector<std::size_t> clipsInRange(const daw::TrackModel& track,
+                                         int left, int right) const;
+    mutable std::unordered_map<std::string, ClipIntervals> m_clipIntervals;
+    mutable std::uint64_t m_clipIntervalClock = 0;
+    mutable std::size_t m_clipIntervalEntries = 0;
+    QRegion m_staticDirty;
+    bool m_collectingGestureDamage = false;
+    bool m_gestureRequestedPaint = false;
+    QRegion m_lastKnifeDamage;
+    QRegion gestureDamage() const;
+    QHash<QString, double> m_dragOriginalStarts;
+
     enum class Edge { None, Left, Right };
     enum class Fade { None, In, Out };
 
@@ -408,8 +455,11 @@ private:
     int maxVerticalScroll() const;
     double visibleSeconds() const;
     void setHorizontalScroll(double seconds);
+    double zoomFocusSeconds() const;
     void layoutNavigationControls();
     void syncNavigationControls();
+    void scheduleNavigationSync();
+    ui::FrameTimer* m_navigationFrame = nullptr;
     QString trackIdForLane(int lane) const;  // track id for a lane, or empty
     int laneForTrackId(const QString& trackId) const;
     QRectF clipRect(int lane, const daw::ClipModel& clip) const;
@@ -554,6 +604,8 @@ private:
     double snapBeats(double beats, bool enabled) const;
     /// Resolves the adaptive sentinel against the current horizontal zoom.
     double effectiveGridBeats() const;
+    double barLengthBeats() const;
+    int gridBarStride() const;
 
     /// Where a normalised value sits inside a clip's body, and the inverse.
     /// Everything the curve editor does goes through this pair, so the drawing
@@ -603,14 +655,12 @@ private:
         std::uint64_t midiNotesRevision);
     void trimMidiPreviewCache(const MidiPreviewCacheEntry* keepEntry);
     /// Bounding box of the cursor line and its ruler handle at `x`.
-    QRect playheadDirtyRect(int x) const;
+    QRect playheadDirtyRect(double x, double trail) const;
+    double playheadTrailPixels() const;
 
 public:
-    /// Seed the playhead's motion trail (screenshot hook). A grab runs without
-    /// an audio device, so the transport never advances and a trail measured
-    /// from how far the head moved between two frames is always zero — the same
-    /// reason MainWindow seeds a staged take's clock.
-    void seedPlayheadTrailForShot(double pixels, int direction);
+    /// Show the playback trail in a screenshot without running an audio device.
+    void seedPlayheadTrailForShot(double pixels);
 
 private:
     void drawFades(QPainter& p, const daw::ClipModel& clip, const QRectF& r);
@@ -642,7 +692,7 @@ private:
     /// The small volume-handle circle at the bottom-centre of a clip.
     void drawGainHandle(QPainter& p, const daw::ClipModel& clip,
                         const QRectF& r, bool sel);
-    void drawPlayhead(QPainter& p);
+    void drawPlayhead(QPainter& p, double x, double trail);
 
     daw::EngineController* m_controller;
     QVector<PendingCloudRecordingSpan> m_pendingCloudRecordingSpans;
@@ -682,6 +732,7 @@ private:
     /// top. Horizontal scrolling is in seconds (`m_scrollSeconds`) because time
     /// is the axis there — lanes have no unit but pixels.
     int m_scrollY = 0;
+    double m_wheelScrollRemainder = 0.0;
     /// How many pixels at the bottom are covered by the mixer overlay.
     int m_bottomInset = 0;
     /// Radius of the right-hand corners; 0 while the edge is square.
@@ -691,16 +742,14 @@ private:
     QScrollBar* m_horizontalScrollBar = nullptr;
     QScrollBar* m_verticalScrollBar = nullptr;
     bool m_followPlayhead = false;
-    /// Last cursor x requested or painted. Playback invalidates this narrow
-    /// strip and the new one instead of repainting every lane.
-    std::optional<int> m_lastPlayheadX;
-    /// Length in pixels of the trail the playhead drags behind it, and which
-    /// way it is going. Derived from how far the head actually moved between
-    /// two frames, so it lengthens with the scroll speed and collapses on its
-    /// own when the transport stops.
-    double m_playheadTrailPx = 0.0;
-    int m_playheadTrailDir = 1;
-    bool m_playheadTrailSeeded = false;
+    /// Preserve subpixel motion, including on a zoomed-out timeline. Remember
+    /// the entire painted footprint so a shrinking/disabled trail is erased.
+    std::optional<double> m_lastPlayheadX;
+    double m_lastPlayheadTrailPx = 0.0;
+    /// Use the same transport sample for damage and painting. Time rather than
+    /// screen x keeps this snapshot valid if a pan/zoom arrives before paint.
+    std::optional<double> m_requestedPlayheadSeconds;
+    double m_seededPlayheadTrailPx = 0.0;
     QPixmap m_staticFrame;
     bool m_staticFrameValid = false;
     std::uint64_t m_staticFramePaintCount = 0;
@@ -729,6 +778,7 @@ private:
     /// a new video frame must not redraw every clip and waveform.
     bool m_backgroundFrameRepaint = false;
     ui::ThemeMediaBackground* m_backgroundMedia = nullptr;
+    bool m_webBackground = false;
     int m_backgroundVisibility = 0;
     bool m_backgroundEnabled = true;
     bool m_backgroundActive = false;
@@ -758,7 +808,8 @@ private:
     // it is navigation, so grabbing the canvas must never select, seek or edit
     // a clip underneath it.
     bool m_panning = false;
-    QPoint m_panLastPosition;
+    QPointF m_panLastPosition;
+    double m_panVerticalRemainder = 0.0;
     bool m_dragging = false;
     bool m_scrubbing = false;
     bool m_projectGestureActive = false;
@@ -908,7 +959,7 @@ private:
     // Comp editor. Expanding grows the lane (see CompLayout.hpp), so the
     // animation is per *track* — one timer walks the factor and both this widget
     // and the header column re-read it each frame.
-    class QTimer* m_compTimer = nullptr;
+    ui::FrameTimer* m_compTimer = nullptr;
     QString m_compAnimTrackId;
     QString m_compAnimClipId;
     bool m_compAnimOpening = false;

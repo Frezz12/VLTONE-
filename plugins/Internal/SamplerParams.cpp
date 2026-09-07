@@ -213,7 +213,7 @@ std::string parameterText(std::uint32_t index, double value) {
         }
         case Param::StretchMode:
             switch (int(std::lround(value))) {
-                case 1: return "Drums";
+                case 1: return "Stretch";
                 case 2: return "Loop";
                 case 3: return "Vocal";
                 case 4: return "Complex";

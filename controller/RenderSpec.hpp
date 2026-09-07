@@ -82,6 +82,9 @@ struct Spec {
     /// every musical clip on those tracks. Automation clips remain active so
     /// the isolated signal is rendered with its current automation.
     std::vector<std::string> sourceTrackIds;
+    /// Internal freeze render: build only this independent source, at unity,
+    /// so downstream/unrelated latency and faders cannot shift or truncate it.
+    std::string independentTrackId;
     std::vector<std::string> sourceClipIds;
     /// Render every channel as though nothing were muted or soloed.
     bool ignoreMuteSolo = false;

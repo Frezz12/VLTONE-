@@ -1,9 +1,9 @@
 #pragma code_page(65001)
 #include <windows.h>
 
-#define IDI_VLT_STUDIO_PRO 101
+#define IDI_VLTONE 101
 
-IDI_VLT_STUDIO_PRO ICON "@DAW_RC_ICON@"
+IDI_VLTONE ICON "@DAW_RC_ICON@"
 1 RT_MANIFEST "@DAW_RC_MANIFEST@"
 
 VS_VERSION_INFO VERSIONINFO
@@ -23,13 +23,13 @@ BEGIN
     BEGIN
         BLOCK "040904B0"
         BEGIN
-            VALUE "CompanyName", "VLT Studio\0"
+            VALUE "CompanyName", "VLTONE\0"
             VALUE "FileDescription", "@DAW_RC_FILE_DESCRIPTION@\0"
             VALUE "FileVersion", "@PROJECT_VERSION@.0\0"
             VALUE "InternalName", "@DAW_RC_INTERNAL_NAME@\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 VLT Studio. All rights reserved.\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 VLTONE. All rights reserved.\0"
             VALUE "OriginalFilename", "@DAW_RC_ORIGINAL_FILENAME@\0"
-            VALUE "ProductName", "VLT Studio Pro\0"
+            VALUE "ProductName", "VLTONE\0"
             VALUE "ProductVersion", "@PROJECT_VERSION@.0\0"
         END
     END

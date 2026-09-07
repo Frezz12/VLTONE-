@@ -16,6 +16,9 @@
 
 #include <QFileDialog>
 #include <QEventLoop>
+#include <QElapsedTimer>
+#include <QApplication>
+#include <QThread>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -411,6 +414,7 @@ QMimeData* FileBrowserPanel::pluginDragForTest() const {
 QStringList FileBrowserPanel::searchForTest(const QString& query) {
     QStringList result;
     if (!m_search || query.trimmed().isEmpty()) return result;
+    m_searchTimer->stop();
 
     QEventLoop loop;
     QTimer timeout;
@@ -423,9 +427,9 @@ QStringList FileBrowserPanel::searchForTest(const QString& query) {
         });
     connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
 
-    QStringList roots = ui::browserprefs::folders();
-    roots.prepend(ui::channelstrippresets::rootFolder());
-    roots.removeDuplicates();
+    // This regression searches its temporary preset fixtures. User folders
+    // can be network volumes and must not determine a fixed test timeout.
+    const QStringList roots{ui::channelstrippresets::rootFolder()};
     m_search->search(roots, query);
     timeout.start(5000);
     loop.exec();
@@ -639,17 +643,25 @@ bool FileBrowserPanel::showFolderForTest(const QString& folder,
     m_tree->setRoots(roots);
 
     if (wanted.isEmpty()) return m_tree->topLevelItemCount() > 0;
-    for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
-        QTreeWidgetItem* item = m_tree->topLevelItem(i);
-        if (item->data(0, Qt::UserRole).toString() != root) continue;
-        item->setExpanded(true);
-        for (int c = 0; c < item->childCount(); ++c) {
-            QTreeWidgetItem* child = item->child(c);
-            if (child->data(0, Qt::UserRole).toString() != wanted) continue;
-            m_tree->setCurrentItem(child);
-            return true;
+    // Enumeration and chunk insertion are asynchronous. Re-resolve items on
+    // every turn, since a watcher refresh may replace them while we wait.
+    QElapsedTimer timeout;
+    timeout.start();
+    do {
+        for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
+            auto* item = m_tree->topLevelItem(i);
+            if (item->data(0, Qt::UserRole).toString() != root) continue;
+            item->setExpanded(true);
+            for (int c = 0; c < item->childCount(); ++c) {
+                auto* child = item->child(c);
+                if (child->data(0, Qt::UserRole).toString() != wanted) continue;
+                m_tree->setCurrentItem(child);
+                return true;
+            }
         }
-    }
+        QApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    } while (timeout.elapsed() < 5000);
     return false;
 }
 

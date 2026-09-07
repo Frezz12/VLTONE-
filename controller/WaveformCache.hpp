@@ -28,6 +28,9 @@ struct WaveformPeaks {
     double durationSeconds = 0.0;
     double bucketsPerSecond = 0.0;
     int channels = 0;             // source channel count
+    // Nonzero only for completed buildPeaks results. Those arrays are immutable
+    // once published; manually edited/live envelopes leave this zero.
+    std::uint64_t geometryId = 0;
 
     bool isValid() const { return !minima.empty() && bucketsPerSecond > 0.0; }
     size_t bucketCount() const { return minima.size(); }
@@ -73,6 +76,8 @@ public:
         const std::string& filePath,
         const audio::platform::DecodedAudio& decoded);
 
+    /// Publish peaks prepared on a worker; this cache remains GUI/control-thread only.
+    const WaveformPeaks* storePrepared(const std::string& filePath, WaveformPeaks peaks);
     void clear();
     const WaveformPeaks* storeSample(const std::string& filePath,
                                      const engine::SampleBuffer& buffer);

@@ -675,10 +675,10 @@ VstIntPtr VstInstance::hostDispatch(vst::HostContext& host, AEffect*,
         case audioMasterGetCurrentProcessLevel:
             return self->m_offline ? kVstProcessLevelOffline : kVstProcessLevelRealtime;
         case audioMasterGetVendorString:
-            if (ptr) std::memcpy(ptr, "VLT Studio", sizeof("VLT Studio"));
+            if (ptr) std::memcpy(ptr, "VLTONE", sizeof("VLTONE"));
             return ptr ? 1 : 0;
         case audioMasterGetProductString:
-            if (ptr) std::memcpy(ptr, "VLT Studio Pro", sizeof("VLT Studio Pro"));
+            if (ptr) std::memcpy(ptr, "VLTONE", sizeof("VLTONE"));
             return ptr ? 1 : 0;
         case audioMasterGetVendorVersion: return 1;
         case audioMasterCanDo:

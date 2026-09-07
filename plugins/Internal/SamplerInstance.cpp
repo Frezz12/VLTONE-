@@ -50,7 +50,7 @@ SamplerInstance::SamplerInstance() {
     for (std::uint32_t i = 0; i < kParameterCount; ++i) {
         m_values[i].store(table[i].defaultValue, std::memory_order_relaxed);
     }
-    m_bakeWorker = std::thread([this] { bakeWorkerLoop(); });
+    (void)engine::BackgroundExecutor::instance();
 }
 
 SamplerInstance::~SamplerInstance() {
@@ -61,7 +61,7 @@ SamplerInstance::~SamplerInstance() {
         m_pendingBake.reset();
     }
     m_bakeChanged.notify_all();
-    if (m_bakeWorker.joinable()) m_bakeWorker.join();
+    engine::BackgroundExecutor::instance().cancelAndWait(m_bakeTask);
 }
 
 const PluginDescriptor& SamplerInstance::staticDescriptor() noexcept {
@@ -74,7 +74,7 @@ const PluginDescriptor& SamplerInstance::staticDescriptor() noexcept {
         // older build — still has something stable to hold.
         d.path = std::string(kUid);
         d.name = "Sampler";
-        d.vendor = "VLT Studio Pro";
+        d.vendor = "VLTONE";
         d.version = "1.0";
         d.stateSchemaVersion = kStateVersion;
         d.category = "Instrument";
@@ -106,6 +106,8 @@ PluginBusLayout SamplerInstance::busLayout() const {
 bool SamplerInstance::activate(const PluginProcessInfo& info) {
     m_sampleRate = info.sampleRate > 0.0 ? info.sampleRate : 48000.0;
     m_maxBlockSize = info.maxBlockSize;
+    if (m_stretchModeAutomated) prepareStretchModeAutomation();
+    else prepareStretchBank();
     m_active = true;
     reset();
     return true;
@@ -150,10 +152,32 @@ void SamplerInstance::setParameter(std::uint32_t index, double plainValue) {
     const double value = clampToRange(index, plainValue);
     const double previous =
         m_values[index].exchange(value, std::memory_order_relaxed);
+    if (Param(index) == Param::StretchMode && previous != value) prepareStretchBank();
     if (previous != value &&
         (isPrecomputed(index) || Param(index) == Param::KeepOnDisk)) {
         markPrecomputeDirty();
     }
+}
+
+void SamplerInstance::prepareStretchModeAutomation() {
+    m_stretchModeAutomated = true;
+    for (int mode = 1; mode <= 4; ++mode) prepareStretchBank(mode);
+}
+
+void SamplerInstance::prepareStretchBank(int mode) {
+    if (mode < 0) mode = int(std::lround(parameterValue(std::uint32_t(Param::StretchMode))));
+    if (mode == 0) return;
+    const auto previous = m_stretchBanks[mode - 1].controlCopy();
+    if (previous && previous->sampleRate == m_sampleRate) return;
+    auto bank = std::make_shared<StretchBank>();
+    bank->mode = mode;
+    bank->sampleRate = m_sampleRate;
+    for (auto& voice : bank->voices)
+        voice = std::make_unique<engine::dsp::TimeStretch>(m_sampleRate, mode);
+    m_stretchBanks[mode - 1].publish(std::move(bank));
+    if (!m_stretchModeAutomated)
+        for (int other = 1; other <= 4; ++other)
+            if (other != mode) m_stretchBanks[other - 1].publish({});
 }
 
 void SamplerInstance::setParameterFromHost(std::uint32_t index, double plainValue) {
@@ -162,12 +186,17 @@ void SamplerInstance::setParameterFromHost(std::uint32_t index, double plainValu
 
 void SamplerInstance::pumpMainThread() {
     schedulePendingPrecompute();
+    if (m_stretchDirty.exchange(false, std::memory_order_acq_rel)) prepareStretchBank();
 }
 
 // ── The sample ─────────────────────────────────────────────────────────────
 
 bool SamplerInstance::loadSample(const std::string& path) {
-    std::shared_ptr<const engine::SampleBuffer> decoded = decodeSample(path);
+    return adoptSample(path, decodeSample(path));
+}
+
+bool SamplerInstance::adoptSample(const std::string& path,
+    std::shared_ptr<const engine::SampleBuffer> decoded) {
     if (!decoded || decoded->frames() == 0) return false;
 
     m_raw = std::move(decoded);
@@ -255,6 +284,7 @@ void SamplerInstance::publishRawSample() {
         return;
     }
     auto data = std::make_shared<SampleData>();
+    m_raw->prepareRead();
     data->audio = m_raw;
     data->baseFrames = m_raw->frames();
     data->path = m_samplePath;
@@ -271,6 +301,16 @@ void SamplerInstance::schedulePendingPrecompute() {
         std::lock_guard lock(m_bakeMutex);
         if (m_stopBakeWorker) return;
         m_pendingBake = std::move(request);
+        if (!m_bakeScheduled) {
+            m_bakeScheduled = true;
+            try {
+                m_bakeTask = engine::BackgroundExecutor::instance().submit([this] { bakeWorkerLoop(); });
+            } catch (...) {
+                m_bakeScheduled = false;
+                m_precomputeDirty.store(true, std::memory_order_release);
+                throw;
+            }
+        }
     }
     m_bakeChanged.notify_one();
 }
@@ -279,11 +319,11 @@ void SamplerInstance::bakeWorkerLoop() {
     for (;;) {
         BakeRequest request;
         {
-            std::unique_lock lock(m_bakeMutex);
-            m_bakeChanged.wait(lock, [this] {
-                return m_stopBakeWorker || m_pendingBake.has_value();
-            });
-            if (m_stopBakeWorker) return;
+            std::lock_guard lock(m_bakeMutex);
+            if (m_stopBakeWorker || !m_pendingBake) {
+                m_bakeScheduled = false;
+                return;
+            }
             request = std::move(*m_pendingBake);
             m_pendingBake.reset();
         }
@@ -327,8 +367,13 @@ void SamplerInstance::bakeWorkerLoop() {
             if (m_precomputeGeneration.load(std::memory_order_acquire) ==
                 request.generation) {
                 if (!bakeFailed) {
-                    m_sample.publish(
-                        std::shared_ptr<const SampleData>(std::move(data)));
+                    try {
+                        if (data && data->audio) data->audio->prepareRead();
+                        m_sample.publish(std::shared_ptr<const SampleData>(std::move(data)));
+                    } catch (...) {
+                        // Retain the previous sample and complete this request,
+                        // allowing the next edit to retry after memory pressure.
+                    }
                 }
                 m_completedPrecomputeGeneration.store(
                     request.generation, std::memory_order_release);
@@ -431,6 +476,7 @@ bool SamplerInstance::loadProjectState(
         }
     }
 
+    prepareStretchBank();
     std::string path = document.value("sample", std::string{});
     if (!path.empty() && !contentDirectory.empty() &&
         platform::pathFromUtf8(path).is_relative()) {
@@ -583,6 +629,10 @@ void SamplerInstance::applyEvent(const PluginEvent& event, std::uint32_t) noexce
                 const double value = clampToRange(event.paramIndex, event.value);
                 const double previous = m_values[event.paramIndex].exchange(
                     value, std::memory_order_relaxed);
+                if (previous != value && Param(event.paramIndex) == Param::StretchMode) {
+                    m_stretchDirty.store(true, std::memory_order_release);
+                    PluginMainThreadWork::request();
+                }
                 // Automation cannot reach a precomputed knob (they are not
                 // automatable), but a project load pushes stored values through
                 // this same path — so the re-bake is requested here too. The
@@ -631,10 +681,12 @@ void SamplerInstance::renderSlice(const PluginProcessContext& context,
     }
 
     const double tempo = context.transport.tempo > 0.0 ? context.transport.tempo : 120.0;
-    for (Voice& voice : m_voices) {
+    auto stretchBank = m_stretchBanks[std::clamp(settings.stretchMode, 1, 4) - 1].read();
+    for (std::size_t index = 0; index < kMaxVoices; ++index) {
+        auto& voice = m_voices[index];
         if (!voice.active()) continue;
         voice.render(*sample, settings, slice, channels, frames, m_sampleRate, tempo,
-                     m_globalPhase);
+                     m_globalPhase, stretchBank ? stretchBank->voices[index].get() : nullptr);
     }
 
     // The free-running phases the Global switch reads. Advanced per slice so a

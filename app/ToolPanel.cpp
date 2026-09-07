@@ -198,8 +198,7 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
 
     m_createAutomation = new ui::IconButton(
         icons::Glyph::AutomationCreate,
-        tr("Create automation: hold Alt/Option, or click to latch; then "
-           "double-click an automatable control"),
+        tr("Create automation: click to enable, then double-click a parameter"),
         m_trackZone);
     m_createAutomation->setObjectName(QStringLiteral("AutomationCreateMode"));
     m_createAutomation->setCheckable(true);
@@ -246,6 +245,9 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     timelineLayout->addStretch(1);
     m_waveformScale = new WaveformScaleButton(
         [this](double scale) { emit waveformScaleChanged(scale); }, timelineZone);
+    auto waveformPolicy = m_waveformScale->sizePolicy();
+    waveformPolicy.setRetainSizeWhenHidden(true);
+    m_waveformScale->setSizePolicy(waveformPolicy);
     timelineLayout->addWidget(m_waveformScale);
     row->addWidget(timelineZone, 1);
 
@@ -283,6 +285,12 @@ void ToolPanel::setAutomationCreationActive(bool active) {
     if (!m_createAutomation || m_createAutomation->isChecked() == active) return;
     QSignalBlocker blocker(m_createAutomation);
     m_createAutomation->setChecked(active);
+}
+
+void ToolPanel::setAutomationCreationShortcut(const QString& shortcut) {
+    QString tip = tr("Create automation: click to enable, then double-click a parameter");
+    if (!shortcut.isEmpty()) tip += QStringLiteral(" (%1)").arg(shortcut);
+    m_createAutomation->setToolTip(tip);
 }
 
 void ToolPanel::setInspectorVisible(bool) {}
@@ -366,6 +374,65 @@ void ToolPanel::paintEvent(QPaintEvent*) {
 void ToolPanel::resizeEvent(QResizeEvent* ev) {
     QWidget::resizeEvent(ev);
     emit resized();
+}
+
+int ToolPanel::contextLeftEdge() const {
+    int edge = 12;
+    if (!m_trackZone) return edge;
+    for (auto* button : m_trackZone->findChildren<QAbstractButton*>()) {
+        if (!button->isHidden())
+            edge = std::max(edge, button->mapTo(this, QPoint(button->width(), 0)).x() + 8);
+    }
+    return edge;
+}
+
+int ToolPanel::contextRightEdge() const {
+    if (!m_waveformScale) return width() - 12;
+    return m_waveformScale->mapTo(this, QPoint()).x() - 8;
+}
+
+void ToolPanel::watchContextPanel(QWidget* panel) {
+    if (!panel || m_contextPanels.contains(panel)) return;
+    m_contextPanels.push_back(panel);
+    panel->installEventFilter(this);
+    updateWaveformVisibility();
+}
+
+void ToolPanel::updateWaveformVisibility(QWidget* changingPanel, bool showing) {
+    if (!m_waveformScale) return;
+    const int waveLeft = m_waveformScale->mapTo(this, QPoint()).x();
+    // A little hysteresis prevents repeated hide/show at a splitter boundary.
+    const int gap = m_waveformScale->isHidden() ? 32 : 20;
+    bool crowded = false;
+    for (const auto& panel : m_contextPanels) {
+        if (!panel || panel->width() == 0 ||
+            (panel == changingPanel ? !showing : panel->isHidden())) continue;
+        const int right = panel->mapTo(this, QPoint(panel->width(), 0)).x();
+        if (right + gap > waveLeft) crowded = true;
+    }
+    m_waveformScale->setVisible(!crowded);
+}
+
+bool ToolPanel::event(QEvent* event) {
+    const bool handled = QWidget::event(event);
+    if (event->type() == QEvent::LayoutRequest) {
+        // Sidebar/track-zone widths can change without resizing this strip.
+        // Notify after Qt has positioned the reserved waveform slot.
+        if (m_row) m_row->activate();
+        emit resized();
+        updateWaveformVisibility();
+    }
+    return handled;
+}
+
+bool ToolPanel::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::Show || event->type() == QEvent::Hide) {
+        // Visibility flags are not final until the event has been delivered.
+        updateWaveformVisibility(qobject_cast<QWidget*>(watched), event->type() == QEvent::Show);
+    } else if (event->type() == QEvent::Move || event->type() == QEvent::Resize) {
+        updateWaveformVisibility();
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void ToolPanel::applyTheme() {

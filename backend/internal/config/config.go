@@ -130,7 +130,7 @@ func Load() (Config, error) {
 		SMTPPort:                        int(int64Env("SMTP_PORT", 587)),
 		SMTPUsername:                    os.Getenv("SMTP_USERNAME"),
 		SMTPPassword:                    os.Getenv("SMTP_PASSWORD"),
-		SMTPFrom:                        env("SMTP_FROM", "VLT Studio <no-reply@example.com>"),
+		SMTPFrom:                        env("SMTP_FROM", "VLTONE <no-reply@example.com>"),
 		TrustedProxyCIDRs:               csv(env("TRUSTED_PROXY_CIDRS", "")),
 	}
 	for _, raw := range csv(os.Getenv("COLLAB_ALLOWED_USER_IDS")) {

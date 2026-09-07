@@ -215,7 +215,7 @@ QWidget* controlCell(QWidget* control, const QString& caption, QWidget* parent) 
 
 } // namespace
 
-EqualizerGraph::EqualizerGraph(QWidget* parent) : QWidget(parent) {
+EqualizerGraph::EqualizerGraph(QWidget* parent) : ui::FrameWidget(parent) {
     setMinimumHeight(275);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setFocusPolicy(Qt::StrongFocus);
@@ -766,7 +766,7 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     setObjectName(QStringLiteral("EqualizerPanel"));
     setMinimumSize(880, 560);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    setAccessibleName(tr("VLT Equalizer editor"));
+    setAccessibleName(tr("VLTONE Equalizer editor"));
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(10, 8, 10, 9);
@@ -774,8 +774,8 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
 
     auto* top = new QHBoxLayout;
     top->setSpacing(6);
-    auto* title = new QLabel(QStringLiteral("VLT  EQUALIZER"), this);
-    title->setAccessibleName(tr("VLT Equalizer"));
+    auto* title = new QLabel(QStringLiteral("VLTONE  EQUALIZER"), this);
+    title->setAccessibleName(tr("VLTONE Equalizer"));
     QFont titleFont = title->font();
     titleFont.setBold(true);
     titleFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.1);
@@ -1553,6 +1553,7 @@ void EqualizerPanel::showPresetMenu() {
 }
 
 void EqualizerPanel::reloadUserPresets() {
+    m_responseValid = false;
     m_userPresets.clear();
     const QByteArray raw = QSettings().value(QLatin1String(kUserPresetKey)).toByteArray();
     const QJsonDocument document = QJsonDocument::fromJson(raw);
@@ -1617,7 +1618,7 @@ void EqualizerPanel::saveUserPreset() {
     } else {
         if (m_userPresets.size() >= 128) {
             QMessageBox::warning(this, tr("Preset library full"),
-                                 tr("VLT Equalizer supports up to 128 user presets."));
+                                 tr("VLTONE Equalizer supports up to 128 user presets."));
             return;
         }
         m_userPresets.push_back(UserPreset{});
@@ -1833,12 +1834,19 @@ void EqualizerPanel::refresh() {
 
     eq::Telemetry telemetry;
     std::array<eq::BandState, eq::kBandCount> bands{};
-    std::array<double, 256> response{};
-    EqualizerGraph::CurveSet curves{};
+    const Values actual = currentValues();
+    const double sampleRate = m_controller->sampleRate();
+    const bool responseChanged = !m_responseValid || actual != m_responseValues ||
+                                 sampleRate != m_responseSampleRate;
+    auto& response = m_cachedResponse;
+    auto& curves = m_cachedCurves;
     if (eq::EqualizerInstance* instance = equalizerInstance()) {
         telemetry = instance->consumeTelemetry();
         for (std::uint32_t band = 0; band < eq::kBandCount; ++band)
             bands[band] = instance->bandState(band);
+        if (responseChanged) {
+            response.fill(0.0);
+            for (auto& curve : curves) curve.fill(0.0f);
         for (std::size_t i = 0; i < response.size(); ++i) {
             const double frequency = 10.0 * std::pow(3000.0,
                 double(i) / double(response.size() - 1));
@@ -1855,6 +1863,10 @@ void EqualizerPanel::refresh() {
                     float(instance->bandResponseDb(band, frequency));
             }
         }
+            m_responseValues = actual;
+            m_responseSampleRate = sampleRate;
+            m_responseValid = true;
+        }
         const char active = instance->activeComparison();
         m_a->setChecked(active == 'A');
         m_b->setChecked(active == 'B');
@@ -1862,8 +1874,8 @@ void EqualizerPanel::refresh() {
         m_selectedKind = QString::fromStdString(kind);
         m_selectedName = QString::fromStdString(name);
     }
+    if (responseChanged) {
     bool exact = false;
-    const Values actual = currentValues();
     for (const eq::FactoryPreset& preset : eq::factoryPresets()) {
         bool same = true;
         for (std::uint32_t i = 0; i < eq::kParameterCount; ++i)
@@ -1889,6 +1901,7 @@ void EqualizerPanel::refresh() {
         }
     }
     m_preset->setText(exact ? m_selectedName : tr("Custom"));
+    }
     const bool externalWanted = std::any_of(bands.begin(), bands.end(),
         [](const eq::BandState& band) {
             return band.enabled && band.dynamicEnabled && band.externalSidechain;

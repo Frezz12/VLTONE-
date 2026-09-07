@@ -1,4 +1,6 @@
+#include "UiPerformance.hpp"
 #include "TrackListWidget.hpp"
+#include "ScrollInput.hpp"
 #include "CompLayout.hpp"
 #include "Controls.hpp"
 #include "ChannelStripPresets.hpp"
@@ -26,6 +28,8 @@
 #include <QSignalBlocker>
 #include <QLinearGradient>
 #include <QMenu>
+#include <QProgressDialog>
+#include <QMessageBox>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
@@ -36,6 +40,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <unordered_map>
 
 namespace {
 /// Horizontal offset per folder level.
@@ -415,9 +420,7 @@ TrackListWidget::TrackListWidget(daw::EngineController* controller,
     outer->addWidget(m_viewport, 1);
 
     m_rowsHost = new QWidget(m_viewport);
-    m_rowsLayout = new QVBoxLayout(m_rowsHost);
-    m_rowsLayout->setContentsMargins(0, 0, 0, 0);
-    m_rowsLayout->setSpacing(0);
+    // Logical rows own geometry; only rows near the viewport own widgets.
 
     m_indicator = new DropIndicator(this);
 
@@ -466,6 +469,7 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
     const bool channel = daw::carriesAudio(track);
     const QColor color = colorFromRgb(track.color);
 
+    ui::perf::sample("track.row.created", 1);
     auto* container = new TrackRowSurface(this);
     container->setTrackColor(color);
     container->setObjectName("TrackRow");
@@ -621,11 +625,13 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
                 });
         connect(fader, &ui::FaderWidget::editFinished, this, [this] {
             m_controller->commitTrackVolumeEdit(m_gainGesture.start);
+            QStringList ids;
+            for (const auto& [id, value] : m_gainGesture.start) ids.push_back(QString::fromStdString(id));
             m_gainGesture.clear();
-            emit tracksChanged();
+            emit trackValuesChanged(ids, true, false);
         });
-        // A plain double-click resets it; Alt/Option+double-click or the
-        // toolbar's latched mode creates automation.
+        // A double-click resets it unless the toolbar's creation mode is on.
+        // The context menu can create automation in either mode.
         fader->setAutomatable(true);
         connect(fader, &ui::FaderWidget::automateRequested, this,
                 [this, id] { emit automateControlRequested(id, false); });
@@ -640,8 +646,10 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
         });
         connect(pan, &ui::PanKnob::editFinished, this, [this] {
             m_controller->commitTrackPanEdit(m_panGesture.start);
+            QStringList ids;
+            for (const auto& [id, value] : m_panGesture.start) ids.push_back(QString::fromStdString(id));
             m_panGesture.clear();
-            emit tracksChanged();
+            emit trackValuesChanged(ids, true, false);
         });
         pan->setAutomatable(true);
         connect(pan, &ui::PanKnob::automateRequested, this,
@@ -721,12 +729,15 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
     m_rows.push_back({track.id, folder, channel, depth, container, colorBar,
                       icon, fader, pan, meter, mute, solo, monitor, record,
                       patternButton, name});
+    m_rows.back().kind = int(track.kind);
     applyRowAdaptivity(m_rows.back());
     return container;
 }
 
-void TrackListWidget::syncTrackValues() {
-    for (const Row& row : m_rows) {
+void TrackListWidget::syncTrackValues(const QStringList& trackIds) {
+    for (Row& row : m_rows) {
+        if (!row.container || (!trackIds.isEmpty() &&
+            !trackIds.contains(QString::fromStdString(row.id)))) continue;
         const daw::TrackModel* t = m_controller->project().findTrack(row.id);
         if (!t) continue;
         const QColor color = colorFromRgb(t->color);
@@ -734,18 +745,21 @@ void TrackListWidget::syncTrackValues() {
         static_cast<TrackColorRail*>(row.colorRail)->setTrackColor(color);
         static_cast<TrackIcon*>(row.icon)->setTrackColor(color);
         if (auto* name = qobject_cast<QLineEdit*>(row.nameEdit);
-            name && !name->hasFocus() && name->text() != QString::fromStdString(t->name)) {
+            name && !name->hasFocus() && row.displayedName != t->name) {
             QSignalBlocker block(name);
             name->setText(QString::fromStdString(t->name));
+            row.displayedName = t->name;
         }
         // Blocked: these setters are how the row *reports* an edit, and a value
         // arriving from elsewhere must not be echoed back as one.
-        if (row.fader) {
+        if (row.fader && !row.fader->isEditing() && (row.displayedGain != t->volume || row.fader->gain() != t->volume)) {
+            row.displayedGain = t->volume;
             QSignalBlocker block(row.fader);
             row.fader->setGain(t->volume);
             row.fader->setToolTip(tr("Level  %1").arg(ui::formatGainDb(t->volume)));
         }
-        if (row.pan) {
+        if (row.pan && !row.pan->isEditing() && (row.displayedPan != t->pan || row.pan->pan() != t->pan)) {
+            row.displayedPan = t->pan;
             QSignalBlocker block(row.pan);
             row.pan->setPan(t->pan);
             row.pan->setToolTip(tr("Pan  %1").arg(panText(t->pan)));
@@ -772,7 +786,7 @@ void TrackListWidget::refreshAutomationValues() {
     if (!isVisible() || !m_viewport) return;
     const QRect visible = m_viewport->rect();
     for (const Row& row : m_rows) {
-        if (!row.container->isVisible()) continue;
+        if (!row.container || !row.container->isVisible()) continue;
         const QRect rowRect(row.container->mapTo(m_viewport, QPoint{}),
                             row.container->size());
         if (!visible.intersects(rowRect)) continue;
@@ -843,27 +857,46 @@ void TrackListWidget::applyRecordChips() {
 }
 
 void TrackListWidget::rebuild() {
-    for (auto& row : m_rows) {
+    ui::perf::Scope timing("rebuild.TrackListWidget.ms");
+    std::unordered_map<std::string, Row> previous;
+    previous.reserve(m_rows.size());
+    for (auto& row : m_rows) previous.emplace(row.id, std::move(row));
+    m_rows.clear();
+    const auto& project = m_controller->project();
+    for (const auto& visible : daw::visibleTracks(project)) {
+        const auto& track = project.tracks[visible.index];
+        auto found = previous.find(track.id);
+        if (found != previous.end() && found->second.kind == int(track.kind) &&
+            found->second.hasChannel == daw::carriesAudio(track)) {
+            m_rows.push_back(std::move(found->second));
+            previous.erase(found);
+        } else {
+            Row row;
+            row.id = track.id;
+            row.kind = int(track.kind);
+            row.isFolder = daw::isFolder(track);
+            row.hasChannel = daw::carriesAudio(track);
+            m_rows.push_back(std::move(row));
+        }
+        auto& row = m_rows.back();
+        if (row.container && row.depth != visible.depth) {
+            if (auto* spacer = row.container->layout()->itemAt(0)->spacerItem())
+                spacer->changeSize(visible.depth * kIndentStep, 0,
+                                   QSizePolicy::Fixed, QSizePolicy::Minimum);
+            row.container->layout()->invalidate();
+        }
+        row.depth = visible.depth;
+        if (row.container && row.isFolder) {
+            static_cast<TrackIcon*>(row.icon)->makeDisclosure(track.expanded);
+            row.icon->setToolTip(track.expanded ? tr("Collapse folder") : tr("Expand folder"));
+            if (auto* count = row.container->findChild<QLabel*>("FolderCount"))
+                count->setText(QString::number(daw::subtreeOf(project, track.id).size()));
+        }
+    }
+    for (auto& [id, row] : previous) {
         if (!row.container) continue;
-        // Out of the layout **now**, not when it is finally deleted.
-        // `deleteLater` keeps the widget alive until the next turn of the event
-        // loop — it has to, since a rebuild is often triggered from inside a
-        // click on one of these very rows — and a layout still holding the old
-        // rows lays itself out for both sets at once. That is what put the new
-        // rows hundreds of pixels down the column and made every track look
-        // squeezed the moment another one was added.
-        m_rowsLayout->removeWidget(row.container);
         row.container->hide();
         row.container->deleteLater();
-    }
-    m_rows.clear();
-
-    const auto& project = m_controller->project();
-    int number = 0;
-    for (const auto& visible : daw::visibleTracks(project)) {
-        const daw::TrackModel& track = project.tracks[visible.index];
-        if (!daw::isFolder(track)) ++number;
-        m_rowsLayout->addWidget(buildRow(track, number, visible.depth));
     }
 
     // Anything that has been deleted, or is hidden inside a collapsed folder,
@@ -933,8 +966,9 @@ void TrackListWidget::applyRowAdaptivity(const Row& row) {
     // When the normal throw no longer fits, level and pan both stay reachable
     // as a compact pair of round controls.
     constexpr int kCompactFaderSide = 24;
-    const bool normalFader =
-        flexible >= kFullChipStrip + kPartGap + kFaderMin;
+    // Compact before the full throw would squeeze the pan off the row.
+    const bool normalFader = flexible >= kFullChipStrip + kPartGap + kFaderMin +
+        (row.pan ? kPartGap + kPanWidth : 0);
     const bool showFader = normalFader ||
         flexible >= kFullChipStrip + kPartGap + kCompactFaderSide;
     const bool showPan =
@@ -951,8 +985,9 @@ void TrackListWidget::applyRowAdaptivity(const Row& row) {
 /// widget that the scroll offset moves, so their own geometry is relative to
 /// that host and every hit test has to add where the host currently is.
 QRect TrackListWidget::rowGeometry(size_t index) const {
-    if (index >= m_rows.size() || !m_rows[index].container) return {};
-    return m_rows[index].container->geometry().translated(
+    if (index >= m_rows.size()) return {};
+    const auto& row = m_rows[index];
+    return QRect(0, row.top, m_rowsHost->width(), row.height).translated(
         m_rowsHost ? m_rowsHost->mapTo(const_cast<TrackListWidget*>(this),
                                        QPoint(0, 0))
                    : QPoint(0, 0));
@@ -1002,38 +1037,71 @@ void TrackListWidget::positionRowsHost() {
     if (!m_rowsHost) return;
     const QPoint wanted(0, -m_scrollY);
     if (m_rowsHost->pos() != wanted) m_rowsHost->move(wanted);
+    syncVisibleRows();
 }
 
 void TrackListWidget::layoutRows() {
     if (!m_rowsHost || !m_viewport) return;
-    // Each row's height re-read from the document — the very number the
-    // timeline draws its lane with — and the host sized to their sum.
-    //
-    // Both halves have to happen here, together. The host is positioned by
-    // hand, and a QVBoxLayout holding nothing but fixed-height widgets
-    // *centres* them when it is given more room than they need and *squeezes*
-    // them when it is given less: either way, a host whose height is not
-    // exactly the sum of its rows puts every header out of step with its lane.
-    // Asking the layout for that sum is no good — its cached hint is still the
-    // old total in the same call stack that added a row to it, which is what
-    // made every track shrink the moment a new one was added.
     int total = 0;
-    for (const auto& row : m_rows) {
-        if (!row.container) continue;
-        if (const auto* track = m_controller->project().findTrack(row.id)) {
-            const int height = ui::laneHeightForTrack(*track);
-            if (row.container->minimumHeight() != height) {
-                row.container->setFixedHeight(height);
+    for (auto& row : m_rows) {
+        row.top = total;
+        if (const auto* track = m_controller->project().findTrack(row.id))
+            row.height = ui::laneHeightForTrack(*track);
+        total += row.height;
+    }
+    m_rowsHost->setGeometry(0, -m_scrollY, m_viewport->width(), total);
+    syncVisibleRows();
+}
+
+void TrackListWidget::syncVisibleRows() {
+    ui::perf::Scope timing("syncVisibleRows.TrackListWidget.ms");
+    if (!m_rowsHost || !m_viewport) return;
+    // Keep one screen of overscan. Focused/dragged controls remain alive even
+    // when auto-scroll moves them outside it; callbacks always capture IDs.
+    const int margin = std::max(160, m_viewport->height());
+    const int first = m_scrollY - margin;
+    const int last = m_scrollY + m_viewport->height() + margin;
+    const auto owns = [](QWidget* row, QWidget* child) {
+        return row && child && (row == child || row->isAncestorOf(child));
+    };
+    bool created = false;
+    for (size_t i = 0; i < m_rows.size(); ++i) {
+        const auto& row = m_rows[i];
+        const bool pinned = owns(row.container, QApplication::focusWidget()) ||
+            owns(row.container, QWidget::mouseGrabber()) ||
+            owns(row.container, QApplication::activePopupWidget()) ||
+            (row.fader && row.fader->isEditing()) || (row.pan && row.pan->isEditing());
+        const bool wanted = (row.top + row.height >= first && row.top <= last) || pinned;
+        if (!wanted && row.container) {
+            row.container->hide();
+            row.container->deleteLater();
+            Row logical;
+            logical.id = row.id; logical.kind = row.kind;
+            logical.isFolder = row.isFolder; logical.hasChannel = row.hasChannel;
+            logical.depth = row.depth; logical.top = row.top; logical.height = row.height;
+            m_rows[i] = std::move(logical);
+        } else if (wanted && !row.container) {
+            if (const auto* track = m_controller->project().findTrack(row.id)) {
+                const int top = row.top, height = row.height, depth = row.depth;
+                buildRow(*track, 0, depth); // appends; may reallocate m_rows
+                Row widget = std::move(m_rows.back());
+                m_rows.pop_back();
+                widget.top = top; widget.height = height;
+                widget.container->setParent(m_rowsHost);
+                m_rows[i] = std::move(widget);
+                created = true;
             }
         }
-        total += row.container->minimumHeight();
+        auto& live = m_rows[i];
+        if (live.container) {
+            live.container->setFixedHeight(live.height);
+            live.container->setGeometry(0, live.top, m_rowsHost->width(), live.height);
+            applyRowAdaptivity(live);
+            live.container->show();
+        }
     }
-
-    m_rowsHost->setGeometry(0, -m_scrollY, m_viewport->width(), total);
-    for (const auto& row : m_rows) applyRowAdaptivity(row);
-    // The rows take their new places now rather than on the next event loop
-    // turn: the caller is usually mid-rebuild and about to be painted.
-    if (m_rowsLayout) m_rowsLayout->activate();
+    if (created) { applyRecordChips(); applyHighlight(); }
+    syncTrackValues();
 }
 
 void TrackListWidget::resizeEvent(QResizeEvent* ev) {
@@ -1045,7 +1113,10 @@ void TrackListWidget::wheelEvent(QWheelEvent* ev) {
     // The headers scroll with the lanes, and the lanes own the offset — so the
     // wheel over this column asks for the same movement the timeline would
     // have made.
-    emit verticalScrollRequested(-ev->angleDelta().y() / 2);
+    if (ev->phase() == Qt::ScrollBegin) m_wheelScrollRemainder = 0.0;
+    const int delta = ui::wholeScrollPixels(-ui::scrollPixels(*ev).y(), m_wheelScrollRemainder);
+    if (delta) emit verticalScrollRequested(delta);
+    if (ev->phase() == Qt::ScrollEnd) m_wheelScrollRemainder = 0.0;
     ev->accept();
 }
 
@@ -1122,7 +1193,10 @@ void TrackListWidget::applyGroupGain(const QString& id, float gain) {
         }
     }
     m_applyingGroup = false;
-    if (gesture.start.size() > 1) syncTrackValues();
+    QStringList ids;
+    for (const auto& [target, value] : gesture.start) ids.push_back(QString::fromStdString(target));
+    if (gesture.start.size() > 1) syncTrackValues(ids);
+    emit trackValuesChanged(ids, false, false);
 }
 
 void TrackListWidget::applyGroupPan(const QString& id, float pan) {
@@ -1141,7 +1215,10 @@ void TrackListWidget::applyGroupPan(const QString& id, float pan) {
                         : std::clamp(from + delta, -1.0f, 1.0f));
     }
     m_applyingGroup = false;
-    if (gesture.start.size() > 1) syncTrackValues();
+    QStringList ids;
+    for (const auto& [target, value] : gesture.start) ids.push_back(QString::fromStdString(target));
+    if (gesture.start.size() > 1) syncTrackValues(ids);
+    emit trackValuesChanged(ids, false, false);
 }
 
 const TrackListWidget::GroupGesture& TrackListWidget::beginGroupGesture(
@@ -1414,6 +1491,7 @@ void TrackListWidget::emitSelection() {
 
 void TrackListWidget::applyHighlight() {
     for (const auto& row : m_rows) {
+        if (!row.container) continue;
         const QString id = QString::fromStdString(row.id);
         static_cast<TrackRowSurface*>(row.container)
             ->setVisualState(m_selectedIds.contains(id), id == m_selectedId,
@@ -2050,6 +2128,18 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
         }
         menu.addSeparator();
     }
+    QAction* freeze = nullptr;
+    const bool frozen = m_controller->isTrackFrozen(id.toStdString());
+    if (channel && !isFolder) {
+        freeze = menu.addAction(frozen ? tr("Unfreeze Track") : tr("Freeze Track…"));
+        const auto reason = m_controller->freezeUnavailableReason(id.toStdString());
+        freeze->setEnabled(frozen || reason.empty());
+        if (!reason.empty()) {
+            menu.setToolTipsVisible(true);
+            freeze->setToolTip(QCoreApplication::translate("TrackListWidget", reason.c_str()));
+        }
+        menu.addSeparator();
+    }
     QAction* colour = menu.addAction(
         isFolder ? tr("Folder Colour…") : tr("Track Colour…"));
     colour->setToolTip(isFolder
@@ -2127,6 +2217,28 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
     const auto trackKinds = ui::addTrackKindItems(menu);
 
     QAction* chosen = menu.exec(globalPos);
+    if (freeze && chosen == freeze) {
+        if (frozen) m_controller->unfreezeTrack(id.toStdString());
+        else {
+            QProgressDialog progress(tr("Freezing track…"), tr("Cancel"), 0, 1000, window());
+            progress.setWindowTitle(tr("Freeze Track"));
+            progress.setWindowModality(Qt::WindowModal);
+            progress.setMinimumDuration(0);
+            progress.setAutoClose(false);
+            daw::rendering::Report report;
+            const auto result = m_controller->freezeTrack(id.toStdString(),
+                [&](const daw::rendering::Progress& state) {
+                    progress.setValue(int(std::clamp(state.fraction, 0.0, 1.0) * 1000));
+                    QApplication::processEvents();
+                    return !progress.wasCanceled();
+                }, report);
+            progress.close();
+            if (!result) QMessageBox::warning(window(), tr("Freeze Track"),
+                QString::fromStdString(result.message()));
+        }
+        emit orderChanged();
+        return;
+    }
     if (!chosen) return;
     if (chosen == automationVolume || chosen == automationPan) {
         emit automateControlRequested(id, chosen == automationPan);

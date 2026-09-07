@@ -13,7 +13,7 @@ class QLineEdit;
 class QProgressBar;
 class QPushButton;
 
-/// The one visible surface while VLT Studio Pro boots.
+/// The one visible surface while VLTONE boots.
 ///
 /// It restores the account silently first and reveals login controls only when
 /// they are actually required. Once authenticated, the same window reports
@@ -78,6 +78,7 @@ private:
     QLineEdit* m_email = nullptr;
     QLineEdit* m_password = nullptr;
     QPushButton* m_login = nullptr;
+    QPushButton* m_restore = nullptr;
     QPushButton* m_register = nullptr;
     QPushButton* m_reset = nullptr;
     Stage m_stage = Stage::Preparing;

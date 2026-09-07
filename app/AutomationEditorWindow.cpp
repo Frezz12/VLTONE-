@@ -1,4 +1,5 @@
 #include "AutomationEditorWindow.hpp"
+#include <QtMath>
 
 #include "Controls.hpp"
 #include "EngineController.hpp"
@@ -64,10 +65,11 @@ const at::Points& emptyPoints() {
 
 AutomationCurveView::AutomationCurveView(daw::EngineController* controller,
                                          QWidget* parent)
-    : QWidget(parent), m_controller(controller) {
+    : ui::FrameWidget(parent), m_controller(controller) {
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
     setMinimumHeight(220);
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this, [this] { update(); });
     setCursor(Qt::CrossCursor);
 }
 
@@ -375,8 +377,7 @@ QString AutomationCurveView::readoutFor(double beats, double value) const {
             m_controller->automationValueText(c->automation.target, value)));
 }
 
-void AutomationCurveView::paintEvent(QPaintEvent*) {
-    QPainter p(this);
+void AutomationCurveView::paintStatic(QPainter& p) {
     const Theme& t = th();
     const QRectF box = plot();
     p.fillRect(rect(), t.background);
@@ -412,7 +413,9 @@ void AutomationCurveView::paintEvent(QPaintEvent*) {
     // same references.
     const double beatWidth = box.width() / length;
     p.setPen(QPen(mixColors(t.gridLine, t.background, 0.4), 1.0));
-    for (double beat = 0.0; beat <= length + 1e-6; beat += 1.0) {
+    for (double beat = 0.0, step = beatWidth >= 9.0 ? 1.0 :
+             numerator * std::max(1.0, std::ceil(9.0 / std::max(1e-9, beatWidth * numerator)));
+         beat <= length + 1e-6; beat += step) {
         const bool bar = std::fmod(beat, double(numerator)) < 1e-6;
         if (!bar && beatWidth < 9.0) continue;
         p.setPen(QPen(bar ? t.gridLineStrong : mixColors(t.gridLine, t.background, 0.4),
@@ -448,7 +451,9 @@ void AutomationCurveView::paintEvent(QPaintEvent*) {
                        c->automation.target, level)));
     }
     // Bar numbers under the plot.
-    for (double beat = 0.0; beat <= length + 1e-6; beat += double(numerator)) {
+    for (double beat = 0.0, step = numerator * std::max(1.0,
+             std::ceil(52.0 / std::max(1e-9, beatWidth * numerator)));
+         beat <= length + 1e-6; beat += step) {
         p.drawText(QRectF(beatsToX(beat) + 3, box.bottom() + 2, 48, kRulerHeight - 3),
                    Qt::AlignLeft | Qt::AlignVCenter,
                    QString::number(int(beat) / numerator + 1));
@@ -489,7 +494,7 @@ void AutomationCurveView::paintEvent(QPaintEvent*) {
         if (points[i].beats > length + 1e-9) continue;
         const QPointF centre(beatsToX(points[i].beats), valueToY(points[i].value));
         const bool inRange = m_hasSelection && selected.contains(points[i].beats);
-        const double radius = int(i) == m_hoverPoint ? kPointRadius + 2.0 : kPointRadius;
+        const double radius = kPointRadius;
         p.setBrush(inRange ? t.accent : t.surfaceElevated);
         p.setPen(QPen(mixColors(accent, t.textPrimary, 0.35), 1.8));
         p.drawEllipse(centre, radius, radius);
@@ -504,6 +509,55 @@ void AutomationCurveView::paintEvent(QPaintEvent*) {
     }
     p.setRenderHint(QPainter::Antialiasing, false);
 
+}
+
+QRegion AutomationCurveView::overlayRegion() const {
+    QRegion dirty;
+    if (m_hasCursor) dirty += QRect(0, int(m_cursor.y()) - 32, width(), 44);
+    const auto& points = curve();
+    if (m_hoverPoint >= 0 && std::size_t(m_hoverPoint) < points.size()) {
+        const auto& point = points[std::size_t(m_hoverPoint)];
+        dirty += QRect(int(beatsToX(point.beats)) - 10, int(valueToY(point.value)) - 10, 21, 21);
+    }
+    return dirty.intersected(rect());
+}
+
+void AutomationCurveView::paintEvent(QPaintEvent*) {
+    const qreal dpr = devicePixelRatioF();
+    const QSize pixels(qCeil(width() * dpr), qCeil(height() * dpr));
+    const auto revision = m_controller ? m_controller->projectRevision() : 0;
+    if (!m_staticValid || m_staticFont != font() || m_staticFrame.size() != pixels ||
+        m_staticFrame.devicePixelRatioF() != dpr || m_staticRevision != revision) {
+        if (m_staticFrame.size() != pixels) m_staticFrame = QPixmap(pixels);
+        m_staticFrame.setDevicePixelRatio(dpr);
+        QPainter cache(&m_staticFrame);
+        cache.setFont(font());
+        paintStatic(cache);
+        m_staticValid = true; m_staticRevision = revision; m_staticFont = font();
+    }
+    QPainter p(this);
+    p.drawPixmap(0, 0, m_staticFrame);
+    const auto* c = clip();
+    if (!c || !m_controller) return;
+    const Theme& t = th();
+    const QRectF box = plot();
+    QFont small = font();
+    small.setPointSizeF(std::max(8.0, small.pointSizeF() - 2.0));
+    p.setFont(small);
+    const auto& points = curve();
+    if (m_hoverPoint >= 0 && std::size_t(m_hoverPoint) < points.size()) {
+        const auto& point = points[std::size_t(m_hoverPoint)];
+        const QColor accent = colorFromRgb(c->color);
+        const QPointF centre(beatsToX(point.beats), valueToY(point.value));
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setBrush(m_hasSelection && range().contains(point.beats) ? t.accent : t.surfaceElevated);
+        p.setPen(QPen(mixColors(accent, t.textPrimary, .35), 1.8));
+        p.drawEllipse(centre, kPointRadius + 2.0, kPointRadius + 2.0);
+        if (point.shape == daw::AutomationSegment::SCurve) {
+            p.setPen(Qt::NoPen); p.setBrush(mixColors(accent, t.textPrimary, .35));
+            p.drawEllipse(centre, 1.8, 1.8);
+        }
+    }
     // The pointer's own readout, drawn where the pointer is rather than in a
     // corner: shaping a curve is a thing done while looking at the curve.
     if (m_hasCursor && box.contains(m_cursor)) {
@@ -599,6 +653,7 @@ void AutomationCurveView::mousePressEvent(QMouseEvent* ev) {
 }
 
 void AutomationCurveView::mouseMoveEvent(QMouseEvent* ev) {
+    const QRegion oldOverlay = overlayRegion();
     const QPointF pos = ev->position();
     m_cursor = pos;
     m_hasCursor = true;
@@ -666,14 +721,11 @@ void AutomationCurveView::mouseMoveEvent(QMouseEvent* ev) {
     }
 
     const int hover = pointAt(pos);
-    if (hover != m_hoverPoint) {
-        m_hoverPoint = hover;
-        update();
-    }
+    m_hoverPoint = hover;
     if (plot().contains(pos)) {
         emit readoutChanged(readoutFor(xToBeats(pos.x()), yToValue(pos.y())));
     }
-    update();
+    ui::FrameWidget::update(oldOverlay.united(overlayRegion()));
 }
 
 void AutomationCurveView::mouseReleaseEvent(QMouseEvent*) {
@@ -750,9 +802,10 @@ void AutomationCurveView::keyPressEvent(QKeyEvent* ev) {
 }
 
 void AutomationCurveView::leaveEvent(QEvent*) {
+    const auto dirty = overlayRegion();
     m_hasCursor = false;
     m_hoverPoint = -1;
-    update();
+    ui::FrameWidget::update(dirty);
 }
 
 void AutomationCurveView::contextMenuEvent(QContextMenuEvent* ev) {

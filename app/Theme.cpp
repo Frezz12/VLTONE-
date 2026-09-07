@@ -1,4 +1,5 @@
 #include "Theme.hpp"
+#include "Typography.hpp"
 
 #include <QApplication>
 #include <QDir>
@@ -97,7 +98,7 @@ ThemeManager& ThemeManager::instance() {
 
 ThemeManager::ThemeManager() {
     if (auto* app = qobject_cast<QApplication*>(QCoreApplication::instance()))
-        m_systemFont = app->font();
+        m_defaultFont = app->font();
 
     m_presets = {
         make("logic", "Logic Graphite", true,
@@ -419,15 +420,15 @@ void ThemeManager::applyFont() {
     auto* app = qobject_cast<QApplication*>(QCoreApplication::instance());
     if (!app) return;
 
-    QStringList families = m_systemFont.families();
-    if (families.isEmpty() && !m_systemFont.family().isEmpty())
-        families.append(m_systemFont.family());
+    QStringList families = m_defaultFont.families();
+    if (families.isEmpty() && !m_defaultFont.family().isEmpty())
+        families.append(m_defaultFont.family());
     if (!m_fontFamily.isEmpty()) {
         families.removeAll(m_fontFamily);
         families.prepend(m_fontFamily);
     }
 
-    QFont applicationFont = m_systemFont;
+    QFont applicationFont = m_defaultFont;
     applicationFont.setFamilies(families);
     app->setFont(applicationFont);
     // Some controls derive a bold/small font once at construction time. Keep
@@ -440,6 +441,7 @@ void ThemeManager::applyFont() {
 }
 
 bool ThemeManager::checkFontForTest(QString* error) {
+    if (!ui::checkBundledFontsForTest(error)) return false;
     if (hasCustomFont()) {
         if (error) *error = QStringLiteral("test started with a custom font");
         return false;
@@ -511,7 +513,8 @@ bool ThemeManager::checkFontForTest(QString* error) {
         return false;
     }
     resetFont();
-    if (hasCustomFont() || existingWidget.font().family() != m_systemFont.family()) {
+    if (hasCustomFont() || existingWidget.font().family() != QStringLiteral("Inter") ||
+        !existingWidget.font().bold() || QApplication::font().family() != QStringLiteral("Inter")) {
         if (error) *error = QStringLiteral("font reset did not restore defaults");
         return false;
     }
@@ -576,7 +579,7 @@ QMenu { background: %WELL%; border: 1px solid %SEP%; border-radius: 10px;
 QMenu::item { min-height: 17px; padding: 3px 20px 3px 9px; border-radius: 6px;
               font-size: 12px; }
 QMenu::item:selected { background: %ACCENT_SOFT%; color: %TEXT%; }
-QMenu::item:checked { color: %ACCENT_HL%; font-weight: 700; }
+QMenu::item:checked { color: %ACCENT_HL%; font-weight: 600; }
 QMenu::item:disabled { color: %TEXT2%; }
 QMenu::icon { padding-left: 5px; }
 QMenu::indicator { width: 0; height: 0; }
@@ -612,7 +615,7 @@ QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {
    different-looking ways to pick from a list. */
 QComboBox {
     background: %WELL%; border: 1px solid %SEP%; border-radius: 9px;
-    padding: 3px 9px; min-height: 20px; color: %TEXT%; font-weight: 600;
+    padding: 3px 9px; min-height: 20px; color: %TEXT%; font-weight: 500;
     selection-background-color: %ACCENT%;
 }
 QComboBox:hover { background: %HOVER%; border-color: %HOVER%; }
@@ -633,14 +636,14 @@ QComboBox QAbstractItemView::item { min-height: 18px; padding: 3px 7px;
 
 QPushButton {
     background: %ELEV%; border: 1px solid %SEP%; border-radius: 6px;
-    padding: 4px 12px;
+    padding: 4px 12px; font-weight: 500;
 }
 QPushButton:hover { background: %ELEV_HOVER%; }
 QPushButton:pressed { background: %ACCENT_SOFT%; }
 QPushButton:checked { background: %ACCENT%; color: white; border-color: %ACCENT%; }
 QPushButton:disabled { color: %TEXT2%; }
 
-QToolButton { background: transparent; border: none; border-radius: 6px; padding: 3px; }
+QToolButton { background: transparent; border: none; border-radius: 6px; padding: 3px; font-weight: 500; }
 QToolButton:hover { background: %HOVER%; }
 QToolButton:checked { background: %ACCENT_SOFT%; }
 
@@ -651,9 +654,9 @@ QDockWidget { titlebar-close-icon: none; titlebar-normal-icon: none; }
 QDockWidget::title { background: %TOOLBAR%; padding: 5px 8px; border-bottom: 1px solid %SEP%; }
 
 QGroupBox { border: 1px solid %SEP%; border-radius: 8px; margin-top: 14px; padding-top: 6px; }
-QGroupBox::title { subcontrol-origin: margin; left: 10px; color: %TEXT2%; }
+QGroupBox::title { subcontrol-origin: margin; left: 10px; color: %TEXT2%; font-weight: 600; }
 
-QLabel[role="section"] { color: %TEXT2%; font-size: 10px; font-weight: 700; }
+QLabel[role="section"] { color: %TEXT2%; font-size: 10px; font-weight: 600; }
 
 /* One thick track with a round glass handle riding inside it — the same look
    `ui::paintSlider` paints by hand for the faders, so a plain QSlider in the

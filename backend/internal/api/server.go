@@ -38,7 +38,14 @@ const (
 	maxJSONBody = 2 << 20
 )
 
+// Requests share a connection pool even when Server is constructed directly in tests.
+var defaultAIHTTPClient = &http.Client{Timeout: 4 * time.Minute}
+
 type Server struct {
+	telemetryPartitionMu sync.Mutex
+	telemetryPartitions  map[string]bool
+	AIHTTPClient         *http.Client
+
 	Config             config.Config
 	DB                 *gorm.DB
 	Signer             *auth.Signer
@@ -106,7 +113,8 @@ func New(cfg config.Config, db *gorm.DB) (*Server, error) {
 	}
 	return &Server{
 		Config: cfg, DB: db, Signer: auth.NewSigner(cfg.SigningSeed),
-		Quota: quota.Service{DB: db, GlobalMonthlyLimit: cfg.AIGlobalMonthlyLimit}, limiter: newRateLimiter(),
+		AIHTTPClient: defaultAIHTTPClient,
+		Quota:        quota.Service{DB: db, GlobalMonthlyLimit: cfg.AIGlobalMonthlyLimit}, limiter: newRateLimiter(),
 		Collab:             newCollabStore(db, cfg),
 		CollabAssets:       collaborationAssets,
 		Rooms:              collab.NewInProcessRoomBus(),
@@ -131,6 +139,9 @@ func (s *Server) Router() http.Handler {
 	r.Get("/readyz", s.ready)
 	r.Get("/metrics", s.collaborationMetrics)
 	r.Get("/v1/meta", s.meta)
+	r.Get("/v1/browser-backgrounds", s.publicBrowserBackgrounds)
+	r.Get("/v1/browser-backgrounds/{backgroundID}/image", func(w http.ResponseWriter, r *http.Request) { s.serveBrowserBackground(w, r, false, false) })
+	r.Get("/v1/browser-backgrounds/{backgroundID}/thumbnail", func(w http.ResponseWriter, r *http.Request) { s.serveBrowserBackground(w, r, false, true) })
 	r.Get("/v1/releases", s.publicReleases)
 	r.Get("/v1/releases/latest", s.latestRelease)
 	r.Get("/v1/releases/{version}", s.publicRelease)
@@ -229,7 +240,14 @@ func (s *Server) Router() http.Handler {
 		r.Get("/v1/admin/dashboard", s.adminDashboard)
 		r.Get("/v1/admin/users", s.adminUsers)
 		r.Get("/v1/admin/users/{userID}", s.adminUser)
+		r.Get("/v1/admin/browser-backgrounds", s.adminBrowserBackgrounds)
+		r.With(s.adminCSRF).Post("/v1/admin/browser-backgrounds", s.adminUploadBrowserBackground)
+		r.With(s.adminCSRF).Put("/v1/admin/browser-backgrounds/{backgroundID}", s.adminUpdateBrowserBackground)
+		r.With(s.adminCSRF).Delete("/v1/admin/browser-backgrounds/{backgroundID}", s.adminDeleteBrowserBackground)
+		r.Get("/v1/admin/browser-backgrounds/{backgroundID}/image", func(w http.ResponseWriter, r *http.Request) { s.serveBrowserBackground(w, r, true, false) })
+		r.Get("/v1/admin/browser-backgrounds/{backgroundID}/thumbnail", func(w http.ResponseWriter, r *http.Request) { s.serveBrowserBackground(w, r, true, true) })
 		r.Get("/v1/admin/users/{userID}/telemetry", s.adminUserTelemetry)
+		r.Get("/v1/admin/users/{userID}/telemetry/{eventID}", s.adminUserTelemetryDetail)
 		r.Get("/v1/admin/users/{userID}/ledger", s.adminUserLedger)
 		r.With(s.adminCSRF).Put("/v1/admin/users/{userID}/collaboration-access", s.adminSetCollaborationAccess)
 		r.With(s.adminCSRF).Post("/v1/admin/users/{userID}/suspend", s.adminSuspendUser)
@@ -461,15 +479,35 @@ func contextWith(r *http.Request, key contextKey, value any) *http.Request {
 }
 
 type rateLimiter struct {
-	mu      sync.Mutex
-	buckets map[string][]time.Time
+	mu        sync.Mutex
+	buckets   map[string][]time.Time
+	expires   map[string]time.Time
+	nextSweep time.Time
 }
 
-func newRateLimiter() *rateLimiter { return &rateLimiter{buckets: make(map[string][]time.Time)} }
+func newRateLimiter() *rateLimiter {
+	return &rateLimiter{buckets: make(map[string][]time.Time), expires: make(map[string]time.Time)}
+}
 
 func (l *rateLimiter) Allow(key string, limit int, window time.Duration, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if limit <= 0 || window <= 0 {
+		return false
+	}
+	if !now.Before(l.nextSweep) {
+		for entry, expires := range l.expires {
+			if !now.Before(expires) {
+				delete(l.buckets, entry)
+				delete(l.expires, entry)
+			}
+		}
+		l.nextSweep = now.Add(time.Minute)
+	}
+	// Never evict an active bucket: that would let an attacker reset its limit.
+	if _, found := l.buckets[key]; !found && len(l.buckets) >= 100000 {
+		return false
+	}
 	cutoff := now.Add(-window)
 	values := l.buckets[key][:0]
 	for _, value := range l.buckets[key] {
@@ -482,6 +520,7 @@ func (l *rateLimiter) Allow(key string, limit int, window time.Duration, now tim
 		return false
 	}
 	l.buckets[key] = append(values, now)
+	l.expires[key] = now.Add(window)
 	return true
 }
 

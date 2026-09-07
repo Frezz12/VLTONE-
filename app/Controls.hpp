@@ -1,4 +1,5 @@
 #pragma once
+#include <QElapsedTimer>
 
 #include "Icons.hpp"
 #include "model/Document.hpp"
@@ -27,6 +28,7 @@ class QVariantAnimation;
 namespace daw { class EngineController; }
 
 namespace ui {
+class FrameTimer;
 
 /// Linear gain ↔ fader travel with a dB taper (−60 … +6 dB), so unity sits at
 /// ~80 % of the throw and the top of the fader is usable for fine moves.
@@ -35,9 +37,8 @@ double faderPositionFromGain(double gain);
 /// "−12.3 dB" / "−∞ dB"
 QString formatGainDb(double gain);
 
-/// Global, latched half of the "create automation" gesture. Alt/Option is
-/// still read directly from each mouse event; the toolbar button sets this
-/// half so the same double-click works without holding a modifier.
+/// Explicit automation-creation mode, toggled by the toolbar or its command.
+/// Modifier keys alone never enable it; the context menu works in either mode.
 void setAutomationCreationMode(bool enabled);
 bool automationCreationMode();
 
@@ -108,7 +109,10 @@ public:
 
 private:
     QWidget* m_owner = nullptr;
-    QVariantAnimation* m_anim = nullptr;
+    FrameTimer* m_anim = nullptr;
+    QElapsedTimer m_elapsed;
+    int m_durationMs = 120;
+    double m_start = 0.0, m_target = 0.0;
     double m_value = 0.0;
 };
 
@@ -172,7 +176,8 @@ private:
     QColor m_idleColor;
     bool m_pulse = false;
     double m_pulseValue = 0.0;
-    QVariantAnimation* m_pulseAnim = nullptr;
+    FrameTimer* m_pulseAnim = nullptr;
+    QElapsedTimer m_pulseClock;
     Fade m_hoverFade{this};
     Fade m_pressFade{this, 90};
 };
@@ -250,8 +255,8 @@ public:
     void setCompactKnob(bool compact);
     bool isCompactKnob() const noexcept { return m_compactKnob; }
 
-    /// Hand Alt/Option+double-click (or a latched automation-create mode) to
-    /// automation. A plain double-click always resets to unity.
+    /// Hand double-click to automation while creation mode is enabled.
+    /// Otherwise double-click resets to unity.
     ///
     /// Off by default, so controls that drive nothing automatable expose no
     /// creation gesture or context-menu command.
@@ -408,8 +413,8 @@ public:
     double pan() const { return m_pan; }   // −1 … +1
     void setPan(double pan);
 
-    /// Hand Alt/Option+double-click (or a latched automation-create mode) to
-    /// automation. A plain double-click always resets to centre.
+    /// Hand double-click to automation while creation mode is enabled.
+    /// Otherwise double-click resets to centre.
     ///
     /// Off by default, so controls that drive nothing automatable expose no
     /// creation gesture or context-menu command.
@@ -426,6 +431,7 @@ signals:
 
 
 protected:
+    bool event(QEvent*) override;
     void paintEvent(QPaintEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
@@ -484,8 +490,8 @@ public:
     /// is the caption and there is no vertical room for a second one. The
     /// drag readout still floats above it, so the value is never hidden.
     void setBare(int diameter);
-    /// Graphite body, discrete scale and OLED hover readout used only by the
-    /// built-in sampler. The rest of the DAW keeps the standard knob.
+    /// SamplerDigital keeps its caption and numeric readout visible; Gravity
+    /// and Graphite retain the distinct physical dials used by those editors.
     void setVisualStyle(VisualStyle style);
     /// A pull toward values that mean something. Given the value the pointer is
     /// asking for, return the one the knob should take — usually the same, but
@@ -504,8 +510,8 @@ public:
     /// An invalid colour (the default) restores the accent.
     void setArcColor(const QColor& color);
 
-    /// Hand Alt/Option+double-click (or a latched automation-create mode) to
-    /// automation. A plain double-click always resets to the parameter default.
+    /// Hand double-click to automation while creation mode is enabled.
+    /// Otherwise double-click resets to the parameter default.
     ///
     /// Off by default, so controls that drive nothing automatable expose no
     /// creation gesture or context-menu command.
@@ -527,6 +533,7 @@ signals:
 
 
 protected:
+    bool event(QEvent*) override;
     void paintEvent(QPaintEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
@@ -659,6 +666,7 @@ private:
     Style m_style = Style::Panel;
     float m_level[2] = {0.f, 0.f};
     float m_hold[2] = {0.f, 0.f};
+    QElapsedTimer m_decayClock;
     bool m_clipped = false;
 };
 

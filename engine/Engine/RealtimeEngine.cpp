@@ -1,5 +1,6 @@
 #include "Engine/RealtimeEngine.hpp"
 #include "DSP/Simd.hpp"
+#include "ScopedNoDenormals.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -202,10 +203,12 @@ void RealtimeEngine::updateMasterMeters(const AudioBlock& output,
 void RealtimeEngine::renderBlock(const AudioBlock& output,
                                  const float* const* input,
                                  ChannelCount inputChannels, FrameCount frames) {
+    const rt::ScopedNoDenormals noDenormals;
     // Gate check, then claim the render. The claim must be published before the
     // re-check, or a gate opening in between would see `rendering` clear and
     // let the control thread reconfigure nodes underneath this block.
     if (m_gateRequested.load()) {
+        m_gatedBlocks.fetch_add(1, std::memory_order_relaxed);
         for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
             dsp::clear(output.channel(ch).first(frames));
         }
@@ -213,6 +216,7 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
     }
     m_rendering.store(true);
     if (m_gateRequested.load()) {
+        m_gatedBlocks.fetch_add(1, std::memory_order_relaxed);
         m_rendering.store(false);
         for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
             dsp::clear(output.channel(ch).first(frames));
@@ -239,12 +243,15 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
     // `process` writes every channel when it succeeds; only a graph that failed
     // to render leaves the device buffer undefined, and that is the one case
     // that needs silencing.
+    const auto graphStarted = rt::nowNanos();
     if (!m_processor.process(output, frames, position, playing, /*offline=*/false,
                              transport)) {
         for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
             dsp::clear(output.channel(ch).first(frames));
         }
     }
+
+    m_graphMetrics.record(rt::nowNanos() - graphStarted, frames, m_prepareInfo.sampleRate);
 
     updateMasterMeters(output, frames);
     if (m_blockObserver) m_blockObserver(output, frames);

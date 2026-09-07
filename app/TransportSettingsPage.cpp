@@ -89,6 +89,29 @@ TransportSettingsPage::TransportSettingsPage(daw::EngineController* controller,
     });
 
     auto* layout = new QVBoxLayout(this);
+    auto* panelStyle = new QComboBox(this);
+    panelStyle->setObjectName(QStringLiteral("TransportPanelStyle"));
+    panelStyle->setAccessibleName(tr("Top panel style"));
+    panelStyle->addItem(tr("Neon"), QStringLiteral("neon"));
+    panelStyle->addItem(tr("Plain"), QStringLiteral("plain"));
+    const QString savedStyle = QSettings().value(
+        ui::kTransportPanelStyleSetting, QStringLiteral("neon")).toString();
+    panelStyle->setCurrentIndex(savedStyle == QLatin1String("plain") ? 1 : 0);
+    auto* appearanceForm = new QFormLayout;
+    appearanceForm->addRow(tr("Top panel style"), panelStyle);
+    auto* appearanceHint = new QLabel(
+        tr("Neon: colored glow. Plain: black recesses with white text and no glow."),
+        this);
+    appearanceHint->setWordWrap(true);
+    connect(panelStyle, &QComboBox::currentIndexChanged, this,
+            [this, panelStyle] {
+                QSettings().setValue(ui::kTransportPanelStyleSetting,
+                                     panelStyle->currentData());
+                emit panelStyleChanged();
+            });
+    layout->addLayout(appearanceForm);
+    layout->addWidget(appearanceHint);
+    layout->addSpacing(16);
     layout->addLayout(form);
     layout->addWidget(hint);
     layout->addStretch(1);

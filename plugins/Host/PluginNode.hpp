@@ -87,6 +87,10 @@ public:
     /// than blocking the caller.
     bool pushEvent(const PluginEvent& event) noexcept { return m_inbound.push(event); }
 
+    /// A restored state supersedes parameter events queued for the previous
+    /// state. Control thread only, with graph processing parked by RenderGate.
+    void discardPendingEvents() noexcept { m_inbound.clear(); }
+
     /// One automated parameter: breakpoints in **beats** from the start of the
     /// timeline, kept sorted.
     ///

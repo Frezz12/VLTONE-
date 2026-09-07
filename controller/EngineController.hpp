@@ -33,6 +33,7 @@
 #include "Core/Result.hpp"
 
 #include <cstdint>
+#include <chrono>
 #include <functional>
 #include <limits>
 #include <span>
@@ -248,7 +249,16 @@ public:
     void setProjectMetadata(std::string author, std::string coverImagePath);
 
     audio::Result saveProject(const std::string& packageDir);
+    /// Capture plugin state in its owning thread, then persist owned bytes on a worker.
+    recovery::RecoverySnapshot prepareProjectSave();
+    static audio::Result writePreparedProject(recovery::RecoverySnapshot& snapshot,
+                                               const std::string& packageDir);
+    void acceptPreparedProjectSave(const ProjectModel& saved);
     audio::Result openProject(const std::string& packageDir);
+    struct PreparedProject;
+    static audio::Result prepareProjectOpen(const std::string& packageDir, double rate,
+        PreparedProject& output, const std::function<bool()>& keepGoing = {});
+    audio::Result openPreparedProject(PreparedProject prepared);
     /// Freeze the current local document and every built-in plugin instance
     /// into a move-only upload staging object. This never changes the live
     /// project, transport or undo stack. The returned sources deliberately do
@@ -294,6 +304,8 @@ public:
     /// Refresh a bounded round-robin slice of opaque plugin state without
     /// copying the project. Returns true only when a content-addressed state
     /// file changed; recovery can then pay for a full document snapshot once.
+    recovery::RecoverySnapshot captureIncrementalRecoverySnapshot(
+        const std::unordered_set<std::string>& changedTracks, bool allChanged);
     bool refreshRecoveryPluginStates(
         std::size_t maxPluginStateCaptures,
         std::span<const std::string> preferredStems = {});
@@ -610,6 +622,13 @@ public:
         const std::function<bool(const rendering::Progress&)>& onProgress,
         BounceReport& out);
 
+    std::string freezeUnavailableReason(const std::string& trackId);
+    bool isTrackFrozen(const std::string& trackId) const;
+    audio::Result freezeTrack(const std::string& trackId,
+        const std::function<bool(const rendering::Progress&)>& onProgress,
+        rendering::Report& out);
+    bool unfreezeTrack(const std::string& trackId, bool undoable = true);
+
     /// The persisted direct-offline chain for one clip, including opaque state
     /// from the controller's content-addressed state cache.
     ChannelSnapshot offlineProcessChain(const ClipAddress& clip) const;
@@ -873,6 +892,26 @@ public:
     /// Latency the graph compensates for, in samples.
     uint32_t latencySamples() const;
     unsigned workerCount() const;
+
+    struct PreparedAudio {
+        std::string path;
+        std::shared_ptr<const engine::SampleBuffer> source, playback;
+        WaveformPeaks peaks;
+    };
+    struct PreparedProject {
+        ProjectModel document;
+        std::string path;
+        double rate = 0.0;
+        std::vector<PreparedAudio> audio;
+        std::vector<std::string> failedPaths;
+    };
+    /// Pure file/sample work: no access to the controller or live document.
+    static audio::Result prepareAudio(const std::string& path, double rate,
+                                      PreparedAudio& output,
+                                      const std::function<bool()>& keepGoing = {});
+    /// Short control-thread publication; false if the engine rate changed.
+    bool adoptPreparedAudio(PreparedAudio audio);
+    bool hasPreparedAudio(const std::string& path) const;
 
     // ── Clips ──
     /// Create an audio track named after `trackName` (or the file), import the
@@ -1381,6 +1420,18 @@ public:
     void addMasterSpectrumConsumer() noexcept;
     void removeMasterSpectrumConsumer() noexcept;
     float dspLoad() const;
+    // Diagnostics are drained by one control/benchmark consumer, never the UI
+    // and benchmark concurrently. Counters are cumulative and never reset live.
+    rt::BlockMetrics& callbackMetrics();
+    rt::BlockMetrics& graphMetrics() { return m_engine.graphMetrics(); }
+    std::array<std::uint64_t, 4> audioXruns() const;
+    std::uint64_t gatedAudioBlocks() const { return m_engine.gatedBlocks(); }
+    void setAudioProfiling(bool enabled) { m_engine.setProfiling(enabled); }
+    unsigned audioWorkerCount() const { return m_engine.workerCount(); }
+    unsigned realtimeAudioWorkerCount() const { return m_engine.realtimeWorkerCount(); }
+    unsigned workgroupAudioWorkerCount() const { return m_engine.workgroupWorkerCount(); }
+    bool popAudioProfile(unsigned worker, rt::ProfileEvent& event) { return m_engine.popProfile(worker, event); }
+    std::uint64_t droppedAudioProfileEvents() const { return m_engine.droppedProfileEvents(); }
 
     // ── Recording ──
     /// How a recording behaves when it lands on existing material. The mode is
@@ -1642,6 +1693,8 @@ public:
     /// everything it did into one entry.
     std::size_t undoDepth() const { return m_undo.depth(); }
     std::uint64_t projectRevision() const { return m_undo.revision(); }
+    /// Includes live placements before their gesture enters undo history.
+    std::uint64_t clipGeometryRevision() const { return m_clipGeometryRevision; }
     /// How deep the stack can get. Beyond it `undoDepth` stops rising, so a
     /// caller comparing depths across an edit has to expect the ceiling.
     std::size_t undoLimit() const { return m_undo.limit(); }
@@ -1676,6 +1729,10 @@ public:
     std::string currentOutputDeviceUid();
     std::string currentInputDeviceUid();
     audio::DeviceInfo currentInputDeviceInfo() const;
+    audio::DeviceInfo currentOutputDeviceInfo() const {
+        return m_devices ? m_devices->getCurrentOutputDevice() : audio::DeviceInfo{};
+    }
+    bool audioDeviceRunning() const { return m_devices && m_devices->isRunning(); }
     audio::AudioDeviceConfig audioConfiguration() const;
     uint32_t bufferSizeFrames() const { return m_bufferSize; }
     audio::Result applyAudioConfiguration(
@@ -1746,6 +1803,9 @@ private:
     audio::Result rebuildGraph(bool reconfigurePlugins = false);
     /// Push the document's clip list for one track into its player node.
     void syncTrackClips(const TrackModel& track);
+    std::string freezeFingerprint(const TrackModel& track) const;
+    bool invalidateTrackFreeze(const TrackModel& track);
+    bool m_rebuildingFrozenGraph = false;
     /// Flatten the track's MIDI clips into one timeline-ordered note list.
     void syncTrackNotes(const TrackModel& track,
                         bool geometryChanged = true);
@@ -1788,7 +1848,7 @@ private:
     audio::Result activateProject(
         ProjectModel loaded, const std::string& packageDir,
         const std::string& fallbackPackageDir = {},
-        bool toleratePluginStateErrors = false);
+        bool toleratePluginStateErrors = false, PreparedProject* prepared = nullptr);
     /// Pattern clip edits touch several tracks but are one user gesture. Store a
     /// whole-document before/after pair so undo cannot expose a half-moved group.
     void pushProjectSnapshotUndo(const ProjectModel& before,
@@ -1872,11 +1932,13 @@ private:
     };
     std::unordered_map<std::string, PendingSharedAssetMutation>
         m_pendingSharedAssetMutations;
+    std::uint64_t m_clipGeometryRevision = 1;
     UndoStack m_undo;
     WaveformCache m_waveforms;
     PluginManager m_pluginManager;
-    std::unordered_map<std::string, recovery::RecoverySnapshot::PluginState>
-        m_recoveryPluginStateCache;
+    std::unordered_map<std::string, std::shared_ptr<const recovery::RecoverySnapshot::PluginState>>
+        m_recoveryPluginStateCache, m_recoveryOfflineStateParts;
+    std::unordered_map<std::string, std::shared_ptr<const TrackModel>> m_recoveryTrackParts;
     std::size_t m_recoveryPluginCaptureCursor = 0;
     bool m_automationWrite = false;
     mutable bool m_automationReadoutCacheDirty = true;
@@ -1925,6 +1987,7 @@ private:
 
     struct TrackChannel {
         std::shared_ptr<engine::ClipPlayerNode> clips;
+        std::shared_ptr<engine::ClipPlayerNode> frozenPlayer;
         /// Clips with their own inserts are split out of the shared player and
         /// merged back here after their private chains.
         std::unordered_map<std::string, ClipFxChannel> clipFx;
@@ -2017,7 +2080,7 @@ private:
     /// `saveProject`, because only this class holds the live instances.
     audio::Result writePluginState(ProjectModel& document,
                                    const std::string& packageDir);
-    void cleanupPluginState(const ProjectModel& document,
+    static void cleanupPluginState(const ProjectModel& document,
                             const std::string& packageDir);
     /// Restore those chunks after a load, falling back to the stored parameter
     /// values when a blob will not apply.
@@ -2319,7 +2382,20 @@ private:
         double afterDurationSeconds = 0.0;
     };
 
+    void publishClipPositionAudio(const std::unordered_set<std::string>& tracks);
     struct ClipPositionEdit {
+        struct ClipIndex {
+            const ClipModel* data = nullptr;
+            std::size_t size = 0;
+            std::unordered_map<std::string, std::size_t> positions;
+        };
+        struct ClipRef { std::string trackId; std::string clipId; };
+        std::unordered_map<std::string, ClipIndex> indices;
+        std::unordered_map<std::string, ClipRef> patternOwners;
+        std::unordered_map<std::string, std::vector<ClipRef>> patternMembers;
+        bool patternsIndexed = false;
+        std::unordered_set<std::string> pendingAudio;
+        std::chrono::steady_clock::time_point lastAudioPublication{};
         bool active = false;
         // While a private-FX clip is temporarily between owners, keep both
         // live graph channels untouched until the final delta is known.

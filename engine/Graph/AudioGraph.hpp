@@ -69,6 +69,8 @@ struct CompiledGraph {
         std::uint32_t firstSuccessor = 0;
         std::uint32_t successorCount = 0;
         std::uint32_t dependencies = 0;  // in-degree
+        std::uint32_t inlineSuccessor = kInvalidNode;
+        bool inlineTask = false;
         FrameCount latency = 0;          // cumulative, from the sources
     };
 
@@ -85,6 +87,7 @@ struct CompiledGraph {
     /// how many nodes can be ready together. Used to avoid treating every
     /// graph below a fixed node count as serial work.
     std::uint32_t parallelWidth = 0;
+    std::uint32_t taskCount = 0;
     /// Shared rather than unique so a recompile can carry a delay line over
     /// from the previous snapshot instead of restarting it from silence.
     std::vector<std::shared_ptr<EdgeDelay>> delays;

@@ -4,12 +4,12 @@
 <context>
     <name>AccountSettingsPage</name>
     <message>
-        <source>VLT Studio account</source>
-        <translation>Аккаунт VLT Studio</translation>
+        <source>VLTONE account</source>
+        <translation>Аккаунт VLTONE</translation>
     </message>
     <message>
-        <source>Your Demo entitlement and AI allowance are verified by the VLT account service.</source>
-        <translation>Ваше право на демо-версию и лимит AI подтверждены сервисом аккаунта VLT.</translation>
+        <source>Your Demo entitlement and AI allowance are verified by the VLTONE account service.</source>
+        <translation>Ваше право на демо-версию и лимит AI подтверждены сервисом аккаунта VLTONE.</translation>
     </message>
     <message>
         <source>Account</source>
@@ -130,8 +130,8 @@
         <translation>Выбрать модель ИИ</translation>
     </message>
     <message>
-        <source>Use a model provided with VLT Studio, or add your own compatible endpoint in AI Settings.</source>
-        <translation>Используйте модель, предоставленную VLT Studio, или добавьте собственную совместимую конечную точку в настройках ИИ.</translation>
+        <source>Use a model provided with VLTONE, or add your own compatible endpoint in AI Settings.</source>
+        <translation>Используйте модель, предоставленную VLTONE, или добавьте собственную совместимую конечную точку в настройках ИИ.</translation>
     </message>
     <message>
         <source>Open AI Settings…</source>
@@ -477,8 +477,8 @@ Anything changed since — by the assistant or by you — is undone as well. One
 <context>
     <name>AiSettingsPage</name>
     <message>
-        <source>Models provided by VLT</source>
-        <translation>Модели от VLT</translation>
+        <source>Models provided by VLTONE</source>
+        <translation>Модели от VLTONE</translation>
     </message>
     <message>
         <source>These connections are configured by the administrator. In the chat they appear only by their display name.</source>
@@ -1678,12 +1678,12 @@ Will be skipped: %3</source>
         <translation>ВЕБ-БРАУЗЕР</translation>
     </message>
     <message>
-        <source>The integrated browser keeps its own cookies and opens this page when Home is pressed. Leave it blank for the built-in VLT start page.</source>
-        <translation>Встроенный браузер хранит свои файлы cookie и открывает эту страницу при нажатии «Главная». Оставьте поле пустым, чтобы использовать встроенную стартовую страницу VLT.</translation>
+        <source>The integrated browser keeps its own cookies and opens this page when Home is pressed. Leave it blank for the built-in VLTONE start page.</source>
+        <translation>Встроенный браузер хранит свои файлы cookie и открывает эту страницу при нажатии «Главная». Оставьте поле пустым, чтобы использовать встроенную стартовую страницу VLTONE.</translation>
     </message>
     <message>
-        <source>VLT start page</source>
-        <translation>Стартовая страница VLT</translation>
+        <source>VLTONE start page</source>
+        <translation>Стартовая страница VLTONE</translation>
     </message>
     <message>
         <source>Web browser home page</source>
@@ -1744,6 +1744,26 @@ Will be skipped: %3</source>
     <message>
         <source>Add a folder to the browser</source>
         <translation>Добавить папку в браузер</translation>
+    </message>
+    <message>
+        <source>Browse background collection…</source>
+        <translation>Открыть коллекцию фонов…</translation>
+    </message>
+    <message>
+        <source>Choose a background from the collection</source>
+        <translation>Выбрать фон из коллекции</translation>
+    </message>
+    <message>
+        <source>Background collection</source>
+        <translation>Коллекция фонов</translation>
+    </message>
+    <message>
+        <source>Connection</source>
+        <translation>Подключение</translation>
+    </message>
+    <message>
+        <source>The web browser uses the system proxy and VPN connection. If your VPN offers a local proxy, enable its System proxy mode. After changing the connection, reload the tab.</source>
+        <translation>Браузер использует системный прокси и VPN-подключение. Если VPN предоставляет локальный прокси, включите в нём режим «Системный прокси». После смены подключения перезагрузите вкладку.</translation>
     </message>
 </context>
 <context>
@@ -2986,12 +3006,12 @@ The plugin is still listed from an earlier scan but its module no longer offers 
 <context>
     <name>EqualizerPanel</name>
     <message>
-        <source>VLT Equalizer editor</source>
-        <translation>Редактор VLT Equalizer</translation>
+        <source>VLTONE Equalizer editor</source>
+        <translation>Редактор VLTONE Equalizer</translation>
     </message>
     <message>
-        <source>VLT Equalizer</source>
-        <translation>VLT Equalizer</translation>
+        <source>VLTONE Equalizer</source>
+        <translation>VLTONE Equalizer</translation>
     </message>
     <message>
         <source>Flat</source>
@@ -3326,8 +3346,8 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <translation>Библиотека пресетов заполнена</translation>
     </message>
     <message>
-        <source>VLT Equalizer supports up to 128 user presets.</source>
-        <translation>VLT Equalizer поддерживает до 128 пользовательских пресетов.</translation>
+        <source>VLTONE Equalizer supports up to 128 user presets.</source>
+        <translation>VLTONE Equalizer поддерживает до 128 пользовательских пресетов.</translation>
     </message>
     <message>
         <source>Rename Equalizer Preset</source>
@@ -4503,8 +4523,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Ресемплинг</translation>
     </message>
     <message>
-        <source>Drums</source>
-        <translation>Ударные</translation>
+        <source>Stretch</source>
+        <translation>Растягивание</translation>
     </message>
     <message>
         <source>Loop</source>
@@ -4523,8 +4543,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Режим растягивания</translation>
     </message>
     <message>
-        <source>Playback strategy used while stretching the clip.</source>
-        <translation>Алгоритм воспроизведения при растягивании клипа.</translation>
+        <source>Stretch, Loop, Vocal and Complex follow project BPM and preserve clip length in beats. Resample keeps the original duration in seconds.</source>
+        <translation>Stretch, Loop, Vocal и Complex следуют BPM проекта и сохраняют длину клипа в долях. Ресемплинг сохраняет исходную длительность в секундах.</translation>
     </message>
     <message>
         <source>Mode</source>
@@ -4573,6 +4593,14 @@ Up to 10 MB</source><translation>PNG или JPEG
     <message>
         <source>More clip settings</source>
         <translation>Дополнительные настройки клипа</translation>
+    </message>
+    <message>
+        <source>More</source>
+        <translation>Ещё</translation>
+    </message>
+    <message>
+        <source>Drag up or down to adjust. Hold Shift for finer changes. Double-click or press Enter to type a value.</source>
+        <translation>Потяните вверх или вниз, чтобы изменить значение. Удерживайте Shift для точной настройки. Двойной щелчок или Enter — ввод с клавиатуры.</translation>
     </message>
     <message>
         <source>Show more clip settings</source>
@@ -5344,8 +5372,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Перезапуск не удался</translation>
     </message>
     <message>
-        <source>VLT Studio Pro could not start a new process. Please restart the application manually.</source>
-        <translation>VLT Studio Pro не смог запустить новый процесс. Пожалуйста, перезапустите приложение вручную.</translation>
+        <source>VLTONE could not start a new process. Please restart the application manually.</source>
+        <translation>VLTONE не смог запустить новый процесс. Пожалуйста, перезапустите приложение вручную.</translation>
     </message>
     <message>
         <source>Audition: click a take layer to hear it while T is held</source>
@@ -5656,8 +5684,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Шаблон “%1” сохранен</translation>
     </message>
     <message>
-        <source>VLT Project (*.vlt)</source>
-        <translation>Проект VLT (*.vlt)</translation>
+        <source>VLTONE Project (*.vlt)</source>
+        <translation>Проект VLTONE (*.vlt)</translation>
     </message>
     <message>
         <source>Unsaved Project</source>
@@ -5848,6 +5876,14 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Скрыть дорожки автоматизации всех треков, не удаляя кривые.</translation>
     </message>
     <message>
+        <source>Toggle Automation Creation Mode</source>
+        <translation>Переключить режим создания автоматизации</translation>
+    </message>
+    <message>
+        <source>Toggle double-click automation creation for parameters.</source>
+        <translation>Переключить создание автоматизации параметров двойным кликом.</translation>
+    </message>
+    <message>
         <source>Enable Automation Creation Mode</source>
         <translation>Включить режим создания автоматизации</translation>
     </message>
@@ -6020,8 +6056,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Облачная копия опубликована</translation>
     </message>
     <message>
-        <source>The cloud copy was created, but this local project changed while files were uploading. VLT kept the current local document open and did not replace those newer edits.</source>
-        <translation>Облачная копия создана, но локальный проект изменился во время загрузки файлов. VLT оставила текущий локальный документ открытым и не заменила более новые изменения.</translation>
+        <source>The cloud copy was created, but this local project changed while files were uploading. VLTONE kept the current local document open and did not replace those newer edits.</source>
+        <translation>Облачная копия создана, но локальный проект изменился во время загрузки файлов. VLTONE оставила текущий локальный документ открытым и не заменила более новые изменения.</translation>
     </message>
     <message>
         <source>Published. Opening the verified cloud copy…</source>
@@ -6032,8 +6068,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Облачный проект опубликован</translation>
     </message>
     <message>
-        <source>The project was published, but VLT could not start opening the cloud copy. Your original local project remains preserved as a backup.</source>
-        <translation>Проект опубликован, но VLT не смогла начать открытие облачной копии. Исходный локальный проект сохранён как резервная копия.</translation>
+        <source>The project was published, but VLTONE could not start opening the cloud copy. Your original local project remains preserved as a backup.</source>
+        <translation>Проект опубликован, но VLTONE не смогла начать открытие облачной копии. Исходный локальный проект сохранён как резервная копия.</translation>
     </message>
     <message>
         <source>Cloud project is ready</source>
@@ -6112,16 +6148,16 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Безопасная запись недоступна</translation>
     </message>
     <message>
-        <source>VLT could not create durable local recovery storage. Recording was not started.</source>
-        <translation>VLT не смогла создать надёжное локальное хранилище восстановления. Запись не начата.</translation>
+        <source>VLTONE could not create durable local recovery storage. Recording was not started.</source>
+        <translation>VLTONE не смогла создать надёжное локальное хранилище восстановления. Запись не начата.</translation>
     </message>
     <message>
         <source>Cloud Recording Recovery Pending</source>
         <translation>Ожидается восстановление облачной записи</translation>
     </message>
     <message>
-        <source>A previous cloud take still needs recovery. VLT will not replace it with a different project or session.</source>
-        <translation>Предыдущий облачный дубль ещё требует восстановления. VLT не заменит его данными другого проекта или сессии.</translation>
+        <source>A previous cloud take still needs recovery. VLTONE will not replace it with a different project or session.</source>
+        <translation>Предыдущий облачный дубль ещё требует восстановления. VLTONE не заменит его данными другого проекта или сессии.</translation>
     </message>
     <message>
         <source>Reserving selected tracks for recording…</source>
@@ -6292,8 +6328,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Не удалось создать локальную копию</translation>
     </message>
     <message>
-        <source>The selected destination is not a VLT project package.</source>
-        <translation>Выбранное расположение не является пакетом проекта VLT.</translation>
+        <source>The selected destination is not a VLTONE project package.</source>
+        <translation>Выбранное расположение не является пакетом проекта VLTONE.</translation>
     </message>
     <message>
         <source>Cloud Project Changed</source>
@@ -6480,8 +6516,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Проект не сохранён</translation>
     </message>
     <message>
-        <source>VLT could not confirm a clean local project package. Save the project and try again.</source>
-        <translation>VLT не смогла подтвердить целостность локального пакета проекта без несохранённых изменений. Сохраните проект и повторите попытку.</translation>
+        <source>VLTONE could not confirm a clean local project package. Save the project and try again.</source>
+        <translation>VLTONE не смогла подтвердить целостность локального пакета проекта без несохранённых изменений. Сохраните проект и повторите попытку.</translation>
     </message>
     <message>
         <source>Capturing built-in plugin state…</source>
@@ -6492,8 +6528,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Не удалось проверить проект</translation>
     </message>
     <message>
-        <source>VLT could not stage a safe cloud copy. The local project was not changed.</source>
-        <translation>VLT не смогла подготовить безопасную облачную копию. Локальный проект не изменён.</translation>
+        <source>VLTONE could not stage a safe cloud copy. The local project was not changed.</source>
+        <translation>VLTONE не смогла подготовить безопасную облачную копию. Локальный проект не изменён.</translation>
     </message>
     <message>
         <source> “%1”</source>
@@ -6548,8 +6584,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Публикация ещё выполняется</translation>
     </message>
     <message>
-        <source>Cancel the cloud publication and close VLT? The saved local project will remain unchanged.</source>
-        <translation>Отменить публикацию в облаке и закрыть VLT? Сохранённый локальный проект останется без изменений.</translation>
+        <source>Cancel the cloud publication and close VLTONE? The saved local project will remain unchanged.</source>
+        <translation>Отменить публикацию в облаке и закрыть VLTONE? Сохранённый локальный проект останется без изменений.</translation>
     </message>
     <message>
         <source>&amp;Session</source>
@@ -6580,8 +6616,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Завершить совместную сессию</translation>
     </message>
     <message>
-        <source>End this session for everyone? VLT will keep the room connected while the final verified snapshot is saved.</source>
-        <translation>Завершить эту сессию для всех? VLT сохранит подключение к комнате до записи финального проверенного снимка.</translation>
+        <source>End this session for everyone? VLTONE will keep the room connected while the final verified snapshot is saved.</source>
+        <translation>Завершить эту сессию для всех? VLTONE сохранит подключение к комнате до записи финального проверенного снимка.</translation>
     </message>
     <message>
         <source>The session can no longer be ended from this device.</source>
@@ -6688,8 +6724,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Не удалось объединить данные восстановления</translation>
     </message>
     <message>
-        <source>The finished take conflicts with existing recovery metadata. VLT kept both the audio and track reservations for a safe retry.</source>
-        <translation>Завершённый дубль конфликтует с существующими метаданными восстановления. VLT сохранила аудио и резервы дорожек для безопасной повторной попытки.</translation>
+        <source>The finished take conflicts with existing recovery metadata. VLTONE kept both the audio and track reservations for a safe retry.</source>
+        <translation>Завершённый дубль конфликтует с существующими метаданными восстановления. VLTONE сохранила аудио и резервы дорожек для безопасной повторной попытки.</translation>
     </message>
     <message>
         <source>The finished take could not be saved to durable recovery storage. Press R or Stop to retry before leaving the project.</source>
@@ -6839,6 +6875,14 @@ Check free disk space and folder permissions, then try again.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <source>Audio CPU load · Click to show percentages</source>
+        <translation>Нагрузка аудиопроцессора · Нажмите, чтобы показать проценты</translation>
+    </message>
+    <message>
+        <source>Audio CPU load · Click to show the load meter</source>
+        <translation>Нагрузка аудиопроцессора · Нажмите, чтобы показать полоску нагрузки</translation>
+    </message>
+    <message>
         <source>Render and insert selected material</source>
         <translation type="unfinished"></translation>
     </message>
@@ -6923,7 +6967,7 @@ Check free disk space and folder permissions, then try again.</source>
         <translation>Проект «%1» уже существует в этой папке. Заменить его?</translation>
     </message>
     <message>
-        <source>Could not open the VLT project.
+        <source>Could not open the VLTONE project.
 
 %1
 
@@ -7053,6 +7097,14 @@ Make sure the package still contains a matching .vlt manifest and its Content fo
     <message>
         <source>Scanning plugins in isolated helper processes…</source>
         <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Preparing project…</source>
+        <translation>Подготовка проекта…</translation>
+    </message>
+    <message>
+        <source>Saving project…</source>
+        <translation>Сохранение проекта…</translation>
     </message>
 </context>
 <context>
@@ -7518,6 +7570,82 @@ Make sure the package still contains a matching .vlt manifest and its Content fo
         <source>Hide timed text from the timeline</source>
         <translation>Скрыть синхронный текст с таймлайна</translation>
     </message>
+    <message>
+        <source>Open in separate window</source>
+        <translation>Открыть в отдельном окне</translation>
+    </message>
+    <message>
+        <source>Return to right panel</source>
+        <translation>Вернуть в правую панель</translation>
+    </message>
+    <message>
+        <source>Close notebook</source>
+        <translation>Закрыть блокнот</translation>
+    </message>
+    <message>
+        <source>Notes</source>
+        <translation>Заметки</translation>
+    </message>
+    <message>
+        <source>Text by time</source>
+        <translation>Текст по времени</translation>
+    </message>
+    <message>
+        <source>Notebook pages</source>
+        <translation>Вкладки блокнота</translation>
+    </message>
+    <message>
+        <source>Select a line in Notes or type it below. Move the playhead to the right moment and click Bind line. Each line stays visible until the next one.</source>
+        <translation>Выберите строку в заметках или введите её ниже. Переместите курсор воспроизведения в нужный момент и нажмите «Привязать строку». Строка отображается до следующей отметки.</translation>
+    </message>
+    <message>
+        <source>Line to display</source>
+        <translation>Строка для показа</translation>
+    </message>
+    <message>
+        <source>Select text in Notes or type a line</source>
+        <translation>Выберите текст в заметках или введите строку</translation>
+    </message>
+    <message>
+        <source>Bind line to playhead</source>
+        <translation>Привязать строку к курсору</translation>
+    </message>
+    <message>
+        <source>Save this line at the current project position and show it on the timeline</source>
+        <translation>Сохранить строку в текущей позиции проекта и показать её на таймлайне</translation>
+    </message>
+    <message>
+        <source>Show text on the timeline</source>
+        <translation>Показывать текст на таймлайне</translation>
+    </message>
+    <message>
+        <source>Go to time</source>
+        <translation>Перейти</translation>
+    </message>
+    <message>
+        <source>Move playhead to selected line</source>
+        <translation>Перейти ко времени выбранной строки</translation>
+    </message>
+    <message>
+        <source>Update time</source>
+        <translation>Обновить время</translation>
+    </message>
+    <message>
+        <source>Playhead: %1</source>
+        <translation>Позиция: %1</translation>
+    </message>
+    <message>
+        <source>No line at this position</source>
+        <translation>В этой позиции ещё нет строки</translation>
+    </message>
+    <message>
+        <source>Current line: %1</source>
+        <translation>Сейчас: %1</translation>
+    </message>
+    <message>
+        <source>More formatting</source>
+        <translation>Ещё: списки, изображение и очистка оформления</translation>
+    </message>
 </context>
 <context>
     <name>OfflineRenderDialog</name>
@@ -7813,6 +7941,78 @@ Clip: %2</source>
         <source>The following files could not be decoded or loaded into the Sampler:
 %1</source>
         <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>VOL</source>
+        <translation>ГРОМ.</translation>
+    </message>
+    <message>
+        <source>Add sound</source>
+        <translation>Добавить звук</translation>
+    </message>
+    <message>
+        <source>Drop audio to add a sound. Drop MIDI onto a sound to replace its notes.</source>
+        <translation>Перетащите аудио, чтобы добавить звук. Перетащите MIDI на звук, чтобы заменить его ноты.</translation>
+    </message>
+    <message>
+        <source>Fill rhythm — replace this sound’s MIDI with evenly spaced notes</source>
+        <translation>Заполнить ритм — заменить MIDI этого звука равномерными нотами</translation>
+    </message>
+    <message>
+        <source>Fill rhythm</source>
+        <translation>Заполнить ритм</translation>
+    </message>
+    <message>
+        <source>Replace MIDI with a steady rhythm</source>
+        <translation>Заменить MIDI равномерным ритмом</translation>
+    </message>
+    <message>
+        <source>Every bar</source>
+        <translation>Каждый такт</translation>
+    </message>
+    <message>
+        <source>Every 1/%1 bar</source>
+        <translation>Каждую 1/%1 такта</translation>
+    </message>
+    <message>
+        <source>Open Instrument</source>
+        <translation>Открыть инструмент</translation>
+    </message>
+    <message>
+        <source>Open piano roll</source>
+        <translation>Открыть пианоролл</translation>
+    </message>
+    <message>
+        <source>Cut Itself</source>
+        <translation>Cut Itself — обрывать предыдущие ноты</translation>
+    </message>
+    <message>
+        <source>Each new note stops this Sampler’s previous voice.</source>
+        <translation>Каждая новая нота обрывает предыдущие голоса этого сэмплера.</translation>
+    </message>
+    <message>
+        <source>Rename…</source>
+        <translation>Переименовать…</translation>
+    </message>
+    <message>
+        <source>Replace with Sample...</source>
+        <translation>Заменить сэмплом…</translation>
+    </message>
+    <message>
+        <source>Duplicate Source</source>
+        <translation>Дублировать звук</translation>
+    </message>
+    <message>
+        <source>Remove Source</source>
+        <translation>Удалить звук</translation>
+    </message>
+    <message>
+        <source>This MIDI file contains no notes.</source>
+        <translation>В этом MIDI-файле нет нот.</translation>
+    </message>
+    <message>
+        <source>MIDI could not be applied</source>
+        <translation>Не удалось применить MIDI</translation>
     </message>
 </context>
 <context>
@@ -8620,6 +8820,10 @@ Clip: %2</source>
         <source>Swing (50% is straight; higher pushes the off-beats late):</source>
         <translation>Свинг (50% — ровно; большее значение задерживает слабые доли):</translation>
     </message>
+    <message>
+        <source>Show all pattern sources automatically</source>
+        <translation>Автоматически показывать все звуки паттерна</translation>
+    </message>
 </context>
 <context>
     <name>PluginEditorWindow</name>
@@ -8644,8 +8848,8 @@ Clip: %2</source>
         <translation>Плагин включен</translation>
     </message>
     <message>
-        <source>Show this plugin&apos;s parameters — Alt/Option-double-click or right-click a knob to automate it</source>
-        <translation>Показать параметры плагина — Alt/Option-двойной клик или правый клик по ручке для автоматизации</translation>
+        <source>Show this plugin&apos;s parameters — right-click a knob to create automation</source>
+        <translation>Показать параметры плагина — правый клик по ручке для создания автоматизации</translation>
     </message>
     <message>
         <source>Show parameter panel</source>
@@ -8732,8 +8936,8 @@ Clip: %2</source>
         <translation>ПАРАМЕТРЫ</translation>
     </message>
     <message>
-        <source>Alt/Option-double-click or right-click a knob to automate it</source>
-        <translation>Дважды щёлкните или кликните правой кнопкой мыши на ручке, чтобы автоматизировать её</translation>
+        <source>Right-click a knob to create automation, or enable automation creation in the toolbar and double-click</source>
+        <translation>Для создания автоматизации нажмите правой кнопкой по ручке либо включите режим создания автоматизации на панели инструментов и щёлкните дважды</translation>
     </message>
     <message>
         <source>Nothing here can be automated.</source>
@@ -8899,8 +9103,8 @@ Clip: %2</source>
         <translation>Папки ищутся рекурсивно. Изменения вступят в силу при следующем сканировании.</translation>
     </message>
     <message>
-        <source>A plugin that crashed, hung or produced nothing usable during the scan. It is skipped by later scans, because a plugin that crashes the scanner would crash VLT Studio Pro.</source>
-        <translation>Плагин, который аварийно завершил работу, завис или не произвел ничего пригодного во время сканирования. Он будет пропущен при последующих сканированиях, потому что плагин, вызывающий сбой сканера, вызовет сбой VLT Studio Pro.</translation>
+        <source>A plugin that crashed, hung or produced nothing usable during the scan. It is skipped by later scans, because a plugin that crashes the scanner would crash VLTONE.</source>
+        <translation>Плагин, который аварийно завершил работу, завис или не произвел ничего пригодного во время сканирования. Он будет пропущен при последующих сканированиях, потому что плагин, вызывающий сбой сканера, вызовет сбой VLTONE.</translation>
     </message>
     <message>
         <source>Plugin</source>
@@ -9332,8 +9536,8 @@ Clip: %2</source>
         <translation>Восстановить несохраненную работу</translation>
     </message>
     <message>
-        <source>VLT Studio Pro closed unexpectedly while you were working on %1.</source>
-        <translation>VLT Studio Pro неожиданно закрылась во время работы над %1.</translation>
+        <source>VLTONE closed unexpectedly while you were working on %1.</source>
+        <translation>VLTONE неожиданно закрылась во время работы над %1.</translation>
     </message>
     <message>
         <source>Restore</source>
@@ -9412,8 +9616,8 @@ Clip: %2</source>
         <translation>Облачная запись сохранена</translation>
     </message>
     <message>
-        <source>A finished cloud recording in this recovery session is still awaiting upload. VLT kept its audio and recovery metadata; project Restore or Discard does not remove it.</source>
-        <translation>Завершённая облачная запись из этой сессии восстановления всё ещё ожидает загрузки. VLT сохранила аудио и данные восстановления; восстановление или удаление проекта не удалит эту запись.</translation>
+        <source>A finished cloud recording in this recovery session is still awaiting upload. VLTONE kept its audio and recovery metadata; project Restore or Discard does not remove it.</source>
+        <translation>Завершённая облачная запись из этой сессии восстановления всё ещё ожидает загрузки. VLTONE сохранила аудио и данные восстановления; восстановление или удаление проекта не удалит эту запись.</translation>
     </message>
     <message>
         <source>Last saved automatically at %1 — %2.
@@ -9424,7 +9628,7 @@ Notes, clips, the mix and plugin settings come back as of that moment. Audio is 
     <message>
         <source>
 
-This session also contains a finished cloud recording awaiting upload. Restore and Discard affect only the project recovery; VLT will preserve that recording.</source>
+This session also contains a finished cloud recording awaiting upload. Restore and Discard affect only the project recovery; VLTONE will preserve that recording.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -9442,6 +9646,54 @@ This session also contains a finished cloud recording awaiting upload. Restore a
     <message>
         <source>Waveform %1%</source>
         <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Import failed</source>
+        <translation>Ошибка импорта</translation>
+    </message>
+    <message>
+        <source>The audio device changed. Please retry the import.</source>
+        <translation>Аудиоустройство изменилось. Повторите импорт.</translation>
+    </message>
+    <message>
+        <source>Volume</source>
+        <translation>Громкость</translation>
+    </message>
+    <message>
+        <source>Pan</source>
+        <translation>Панорама</translation>
+    </message>
+    <message>
+        <source>Enter volume…</source>
+        <translation>Ввести громкость…</translation>
+    </message>
+    <message>
+        <source>Reset to 0 dB</source>
+        <translation>Сбросить до 0 дБ</translation>
+    </message>
+    <message>
+        <source>Level (dB, −96 = silence):</source>
+        <translation>Уровень (дБ, −96 = тишина):</translation>
+    </message>
+    <message>
+        <source>Enter pan…</source>
+        <translation>Ввести панораму…</translation>
+    </message>
+    <message>
+        <source>Centre pan</source>
+        <translation>Панорама по центру</translation>
+    </message>
+    <message>
+        <source>Pan (−100 left, 0 centre, 100 right):</source>
+        <translation>Панорама (−100 влево, 0 центр, 100 вправо):</translation>
+    </message>
+    <message>
+        <source>Instrument</source>
+        <translation>Инструмент</translation>
+    </message>
+    <message>
+        <source>Draw MIDI or drop a MIDI file</source>
+        <translation>Нарисуйте ноты или перетащите MIDI</translation>
     </message>
 </context>
 <context>
@@ -9720,8 +9972,8 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Сохранять копию моей работы во время редактирования</translation>
     </message>
     <message>
-        <source>Every couple of seconds the project is written to a separate recovery file. If VLT Studio Pro closes unexpectedly, the next launch offers that work back.</source>
-        <translation>Каждые несколько секунд проект записывается в отдельный файл восстановления. Если VLT Studio Pro неожиданно закроется, при следующем запуске будет предложена эта работа.</translation>
+        <source>Every couple of seconds the project is written to a separate recovery file. If VLTONE closes unexpectedly, the next launch offers that work back.</source>
+        <translation>Каждые несколько секунд проект записывается в отдельный файл восстановления. Если VLTONE неожиданно закроется, при следующем запуске будет предложена эта работа.</translation>
     </message>
     <message>
         <source>WHAT COMES BACK</source>
@@ -9732,28 +9984,28 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>НАБЛЮДАТЕЛЬ</translation>
     </message>
     <message>
-        <source>Run a watchdog process alongside VLT Studio Pro</source>
-        <translation>Запустить процесс наблюдения параллельно с VLT Studio Pro</translation>
+        <source>Run a watchdog process alongside VLTONE</source>
+        <translation>Запустить процесс наблюдения параллельно с VLTONE</translation>
     </message>
     <message>
-        <source>A small separate program that notices if VLT Studio Pro freezes — something VLT Studio Pro itself cannot detect — and keeps a log of how it was running. It cannot save anything on its own; that is what the copy above is for. Turning it off loses only the log and freeze detection.</source>
-        <translation>Небольшая отдельная программа, которая отслеживает, если VLT Studio Pro завис — то, что сам VLT Studio Pro обнаружить не может — и ведет журнал его работы. Она сама ничего не может сохранить; для этого предназначена копия выше. Отключение этой функции приводит к потере только журнала и обнаружения зависаний.</translation>
+        <source>A small separate program that notices if VLTONE freezes — something VLTONE itself cannot detect — and keeps a log of how it was running. It cannot save anything on its own; that is what the copy above is for. Turning it off loses only the log and freeze detection.</source>
+        <translation>Небольшая отдельная программа, которая отслеживает, если VLTONE завис — то, что сам VLTONE обнаружить не может — и ведет журнал его работы. Она сама ничего не может сохранить; для этого предназначена копия выше. Отключение этой функции приводит к потере только журнала и обнаружения зависаний.</translation>
     </message>
     <message>
         <source>Open Recovery Folder</source>
         <translation>Открыть папку восстановления</translation>
     </message>
     <message>
-        <source>Recovery is off. Unsaved work will be lost if VLT Studio Pro closes unexpectedly. Takes effect on the next launch.</source>
-        <translation>Восстановление отключено. Несохраненная работа будет потеряна, если VLT Studio Pro неожиданно закроется. Вступает в силу при следующем запуске.</translation>
+        <source>Recovery is off. Unsaved work will be lost if VLTONE closes unexpectedly. Takes effect on the next launch.</source>
+        <translation>Восстановление отключено. Несохраненная работа будет потеряна, если VLTONE неожиданно закроется. Вступает в силу при следующем запуске.</translation>
     </message>
     <message>
-        <source>The watchdog program was not found next to VLT Studio Pro, so freezes will go unnoticed. Your work is still being copied.</source>
-        <translation>Программа наблюдения не найдена рядом с VLT Studio Pro, поэтому зависания останутся незамеченными. Ваша работа все равно копируется.</translation>
+        <source>The watchdog program was not found next to VLTONE, so freezes will go unnoticed. Your work is still being copied.</source>
+        <translation>Программа наблюдения не найдена рядом с VLTONE, поэтому зависания останутся незамеченными. Ваша работа все равно копируется.</translation>
     </message>
     <message>
-        <source>Changes take effect the next time VLT Studio Pro starts.</source>
-        <translation>Изменения вступят в силу при следующем запуске VLT Studio Pro.</translation>
+        <source>Changes take effect the next time VLTONE starts.</source>
+        <translation>Изменения вступят в силу при следующем запуске VLTONE.</translation>
     </message>
     <message>
         <source>• Notes, clips, tracks and the mix — as of the last automatic recovery save.
@@ -9926,11 +10178,11 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     </message>
     <message>
         <source>Sustain</source>
-        <translation>Поддержка</translation>
+        <translation>Сустейн</translation>
     </message>
     <message>
         <source>Release</source>
-        <translation>Отпускание</translation>
+        <translation>Релиз</translation>
     </message>
     <message>
         <source>R Tens</source>
@@ -9954,7 +10206,7 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     </message>
     <message>
         <source>CUT ITSELF</source>
-        <translation>ОБРЫВАТЬ</translation>
+        <translation>Обрывать</translation>
     </message>
     <message>
         <source>A new trigger immediately stops every older voice in this Sampler.</source>
@@ -10006,7 +10258,7 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     </message>
     <message>
         <source>Tune</source>
-        <translation>Настройка</translation>
+        <translation>Строй</translation>
     </message>
     <message>
         <source>Range</source>
@@ -10026,11 +10278,11 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     </message>
     <message>
         <source>Resample</source>
-        <translation>Ресэмплирование</translation>
+        <translation>Ресэмплинг</translation>
     </message>
     <message>
-        <source>Drums</source>
-        <translation>Ударные</translation>
+        <source>Stretch</source>
+        <translation>Растягивание</translation>
     </message>
     <message>
         <source>Loop</source>
@@ -10045,8 +10297,8 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Сложный</translation>
     </message>
     <message>
-        <source>Selects the playback strategy, not only a control preset.</source>
-        <translation>Выбирает стратегию воспроизведения, а не только пресет управления.</translation>
+        <source>Stretch: general audio. Loop: repeated phrases. Vocal: voice with formant preservation. Complex: full mixes. These modes keep clip length in beats when BPM changes.</source>
+        <translation>Stretch — универсальное растягивание. Loop — повторяющиеся фразы. Vocal — голос с сохранением формант. Complex — полный микс. В этих режимах длина клипа в долях сохраняется при смене BPM.</translation>
     </message>
     <message>
         <source>Time</source>
@@ -10054,15 +10306,15 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     </message>
     <message>
         <source>Pitch</source>
-        <translation>Высота тона</translation>
+        <translation>Тон</translation>
     </message>
     <message>
         <source>Formant</source>
         <translation>Форманта</translation>
     </message>
     <message>
-        <source>Tilts the spectral envelope — darker below zero, brighter above — without changing pitch or duration.</source>
-        <translation>Наклоняет спектральную огибающую — темнее ниже нуля, ярче выше — без изменения высоты тона или длительности.</translation>
+        <source>Shifts the vocal character without changing pitch or duration. Vocal mode also preserves formants when pitch changes; Resample uses a tonal tilt.</source>
+        <translation>Меняет характер голоса без изменения высоты тона и длительности. Режим Vocal также сохраняет форманты при транспонировании; в режиме Resample меняется тембральный баланс.</translation>
     </message>
     <message>
         <source>Disk</source>
@@ -10086,7 +10338,7 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     </message>
     <message>
         <source>Boost</source>
-        <translation>Буст</translation>
+        <translation>Усиление</translation>
     </message>
     <message>
         <source>EQ Lo</source>
@@ -10130,11 +10382,11 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     </message>
     <message>
         <source>Amount</source>
-        <translation>Количество</translation>
+        <translation>Уровень</translation>
     </message>
     <message>
         <source>St Delay</source>
-        <translation>Задержка Pogo</translation>
+        <translation>Задержка</translation>
     </message>
     <message>
         <source>Pogo</source>
@@ -10142,7 +10394,7 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     </message>
     <message>
         <source>Remove DC</source>
-        <translation>Удалить постоянный ток</translation>
+        <translation>Убрать DC</translation>
     </message>
     <message>
         <source>Polarity</source>
@@ -10154,15 +10406,15 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     </message>
     <message>
         <source>Fade Stereo</source>
-        <translation>Стерео затухание</translation>
+        <translation>Стереофейд</translation>
     </message>
     <message>
         <source>Reverse</source>
-        <translation>Обратное воспроизведение</translation>
+        <translation>Реверс</translation>
     </message>
     <message>
         <source>Swap Stereo</source>
-        <translation>Поменять стерео</translation>
+        <translation>Сменить L/R</translation>
     </message>
     <message>
         <source>SAMPLE TOOLS</source>
@@ -10215,6 +10467,114 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     <message>
         <source>The audio file could not be loaded safely.</source>
         <translation>Не удалось безопасно загрузить аудиофайл.</translation>
+    </message>
+    <message>
+        <source>Attack curve</source>
+        <translation>Крив. атаки</translation>
+    </message>
+    <message>
+        <source>Decay curve</source>
+        <translation>Крив. спада</translation>
+    </message>
+    <message>
+        <source>Release curve</source>
+        <translation>Крив. релиза</translation>
+    </message>
+    <message>
+        <source>Envelope shape</source>
+        <translation>Форма огибающей</translation>
+    </message>
+    <message>
+        <source>Volume envelope</source>
+        <translation>Громкость</translation>
+    </message>
+    <message>
+        <source>Sample settings</source>
+        <translation>Настройки сэмпла</translation>
+    </message>
+    <message>
+        <source>Sample region</source>
+        <translation>Границы и фейды</translation>
+    </message>
+    <message>
+        <source>Mode</source>
+        <translation>Режим</translation>
+    </message>
+    <message>
+        <source>Time &amp; pitch</source>
+        <translation>Время и высота тона</translation>
+    </message>
+    <message>
+        <source>Voice</source>
+        <translation>Голос</translation>
+    </message>
+    <message>
+        <source>Envelope</source>
+        <translation>Огибающая</translation>
+    </message>
+    <message>
+        <source>Low</source>
+        <translation>Низкие</translation>
+    </message>
+    <message>
+        <source>Mid</source>
+        <translation>Средние</translation>
+    </message>
+    <message>
+        <source>High</source>
+        <translation>Высокие</translation>
+    </message>
+    <message>
+        <source>Cutoff</source>
+        <translation>Срез</translation>
+    </message>
+    <message>
+        <source>Resonance</source>
+        <translation>Резонанс</translation>
+    </message>
+    <message>
+        <source>Mix</source>
+        <translation>Смесь</translation>
+    </message>
+    <message>
+        <source>Frequency</source>
+        <translation>Частота</translation>
+    </message>
+    <message>
+        <source>Tone</source>
+        <translation>Тембр</translation>
+    </message>
+    <message>
+        <source>Filter</source>
+        <translation>Фильтр</translation>
+    </message>
+    <message>
+        <source>Ring modulation</source>
+        <translation>Кольцевая модуляция</translation>
+    </message>
+    <message>
+        <source>Space &amp; modulation</source>
+        <translation>Пространство и модуляция</translation>
+    </message>
+    <message>
+        <source>Drag vertically to adjust. Hold Shift for fine control. Double click to reset.</source>
+        <translation>Тяните вверх или вниз. Shift — точная настройка. Двойной щелчок — сброс.</translation>
+    </message>
+    <message>
+        <source>Effects</source>
+        <translation>Эффекты</translation>
+    </message>
+    <message>
+        <source>Playback</source>
+        <translation>Воспроизведение</translation>
+    </message>
+    <message>
+        <source>Processing</source>
+        <translation>Обработка</translation>
+    </message>
+    <message>
+        <source>Keyboard</source>
+        <translation>Клавиатура</translation>
     </message>
 </context>
 <context>
@@ -10502,8 +10862,8 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Требуется перезапуск</translation>
     </message>
     <message>
-        <source>Restart VLT Studio Pro now to apply the new language?</source>
-        <translation>Перезапустить VLT Studio Pro сейчас, чтобы применить новый язык?</translation>
+        <source>Restart VLTONE now to apply the new language?</source>
+        <translation>Перезапустить VLTONE сейчас, чтобы применить новый язык?</translation>
     </message>
     <message>
         <source>Restart Now</source>
@@ -10518,8 +10878,8 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Импортировать язык</translation>
     </message>
     <message>
-        <source>VLT Language Pack (*.vltlang.json *.json);;All Files (*)</source>
-        <translation>Пакет языка VLT (*.vltlang.json *.json);;Все файлы (*)</translation>
+        <source>VLTONE Language Pack (*.vltlang.json *.json);;All Files (*)</source>
+        <translation>Пакет языка VLTONE (*.vltlang.json *.json);;Все файлы (*)</translation>
     </message>
     <message>
         <source>Replace Language</source>
@@ -10546,8 +10906,8 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Экспортировать шаблон языка</translation>
     </message>
     <message>
-        <source>VLT Language Pack (*.vltlang.json *.json)</source>
-        <translation>Пакет языка VLT (*.vltlang.json *.json)</translation>
+        <source>VLTONE Language Pack (*.vltlang.json *.json)</source>
+        <translation>Пакет языка VLTONE (*.vltlang.json *.json)</translation>
     </message>
     <message>
         <source>Export failed</source>
@@ -10626,8 +10986,8 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Экспорт темы</translation>
     </message>
     <message>
-        <source>VLT Studio Pro Theme (*.json *.dawtheme.json)</source>
-        <translation>Тема VLT Studio Pro (*.json *.dawtheme.json)</translation>
+        <source>VLTONE Theme (*.json *.dawtheme.json)</source>
+        <translation>Тема VLTONE (*.json *.dawtheme.json)</translation>
     </message>
     <message>
         <source>Could not write %1</source>
@@ -10642,8 +11002,8 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Импорт темы</translation>
     </message>
     <message>
-        <source>VLT Studio Pro Theme (*.json *.dawtheme.json);;All Files (*)</source>
-        <translation>Тема VLT Studio Pro (*.json *.dawtheme.json);;Все файлы (*)</translation>
+        <source>VLTONE Theme (*.json *.dawtheme.json);;All Files (*)</source>
+        <translation>Тема VLTONE (*.json *.dawtheme.json);;Все файлы (*)</translation>
     </message>
     <message>
         <source>%1 is not a valid theme file</source>
@@ -10794,8 +11154,8 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Импортировать шрифт…</translation>
     </message>
     <message>
-        <source>Use System Font</source>
-        <translation>Использовать системный шрифт</translation>
+        <source>Use Default Font</source>
+        <translation>Шрифт по умолчанию</translation>
     </message>
     <message>
         <source>Import Font</source>
@@ -10814,8 +11174,8 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Пользовательский шрифт: %1 (%2)</translation>
     </message>
     <message>
-        <source>System font: %1</source>
-        <translation>Системный шрифт: %1</translation>
+        <source>Default font: %1</source>
+        <translation>Шрифт по умолчанию: %1</translation>
     </message>
     <message>
         <source>&quot;%1&quot; is already assigned to &quot;%2&quot;.
@@ -10999,6 +11359,46 @@ Reassign it to &quot;%3&quot;?</source>
         <source>Choose...</source>
         <translation>Выбрать…</translation>
     </message>
+    <message>
+        <source>Interface</source>
+        <translation>Интерфейс</translation>
+    </message>
+    <message>
+        <source>Refresh rate</source>
+        <translation>Частота обновления</translation>
+    </message>
+    <message>
+        <source>%1 FPS</source>
+        <translation>%1 FPS</translation>
+    </message>
+    <message>
+        <source>Custom refresh rate</source>
+        <translation>Своя частота обновления</translation>
+    </message>
+    <message>
+        <source>Follow display</source>
+        <translation>По монитору</translation>
+    </message>
+    <message>
+        <source>Unlimited</source>
+        <translation>Без ограничения</translation>
+    </message>
+    <message>
+        <source> FPS</source>
+        <translation> FPS</translation>
+    </message>
+    <message>
+        <source>Applies immediately to the application's visual updates. Unlimited removes the application limit; the actual rate depends on your display and system. Third-party plugin windows control their own refresh rate.</source>
+        <translation>Применяется сразу к визуальным обновлениям приложения. Режим «Без ограничения» снимает программный лимит; фактическая частота зависит от монитора и системы. Сторонние плагины управляют частотой своих окон самостоятельно.</translation>
+    </message>
+    <message>
+        <source>Choose a local photo, animated GIF or video, or send a video from the browser to the timeline background. Backgrounds are appearance settings and are not saved in the project.</source>
+        <translation>Выберите фото, GIF или видео с компьютера либо отправьте видео из браузера на фон таймлайна. Фон относится к настройкам оформления и не сохраняется в проекте.</translation>
+    </message>
+    <message>
+        <source>Timeline background source</source>
+        <translation>Источник фона таймлайна</translation>
+    </message>
 </context>
 <context>
     <name>SpectrumMeter</name>
@@ -11014,8 +11414,8 @@ Reassign it to &quot;%3&quot;?</source>
 <context>
     <name>StartupWindow</name>
     <message>
-        <source>VLT Studio Pro logo</source>
-        <translation>логотип VLT Studio Pro</translation>
+        <source>VLTONE logo</source>
+        <translation>логотип VLTONE</translation>
     </message>
     <message>
         <source>Digital audio workstation</source>
@@ -11112,6 +11512,10 @@ Reassign it to &quot;%3&quot;?</source>
     <message>
         <source>Sign-in required</source>
         <translation>Требуется вход</translation>
+    </message>
+    <message>
+        <source>Restore saved sign-in</source>
+        <translation>Восстановить сохранённый вход</translation>
     </message>
 </context>
 <context>
@@ -11587,8 +11991,8 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <translation>Из клипа: Пробел проигрывает выбранный клип циклически</translation>
     </message>
     <message>
-        <source>Create automation: hold Alt/Option, or click to latch; then double-click an automatable control</source>
-        <translation>Создать автоматизацию: удерживайте Alt/Option или нажмите для фиксации; затем дважды щелкните по управляющему параметру</translation>
+        <source>Create automation: click to enable, then double-click a parameter</source>
+        <translation>Создать автоматизацию: нажмите для включения режима, затем дважды щёлкните по параметру</translation>
     </message>
     <message>
         <source>Create automation clips</source>
@@ -11601,6 +12005,62 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
 </context>
 <context>
     <name>TrackListWidget</name>
+    <message>
+        <source>Freeze Track…</source>
+        <translation>Заморозить дорожку…</translation>
+    </message>
+    <message>
+        <source>Unfreeze Track</source>
+        <translation>Разморозить дорожку</translation>
+    </message>
+    <message>
+        <source>Freeze Track</source>
+        <translation>Заморозка дорожки</translation>
+    </message>
+    <message>
+        <source>Freezing track…</source>
+        <translation>Заморозка дорожки…</translation>
+    </message>
+    <message>
+        <source>Freeze is available in local projects</source>
+        <translation>Заморозка доступна в локальных проектах</translation>
+    </message>
+    <message>
+        <source>Only audio and MIDI source tracks can be frozen</source>
+        <translation>Можно заморозить аудиодорожку или MIDI-дорожку</translation>
+    </message>
+    <message>
+        <source>Disable recording and monitoring before freezing</source>
+        <translation>Перед заморозкой отключите запись и мониторинг</translation>
+    </message>
+    <message>
+        <source>Tracks with an external sidechain cannot be frozen independently</source>
+        <translation>Нельзя независимо заморозить дорожку с внешним сайдчейном</translation>
+    </message>
+    <message>
+        <source>Linked clips and external clip routing cannot be frozen independently</source>
+        <translation>Связанные клипы и внешняя маршрутизация не позволяют независимо заморозить дорожку</translation>
+    </message>
+    <message>
+        <source>The track has no audio or MIDI clips</source>
+        <translation>На дорожке нет аудио- или MIDI-клипов</translation>
+    </message>
+    <message>
+        <source>The track receives audio from another track</source>
+        <translation>Дорожка получает аудио с другой дорожки</translation>
+    </message>
+    <message>
+        <source>The track receives a send</source>
+        <translation>Дорожка получает сигнал посыла</translation>
+    </message>
+    <message>
+        <source>The track receives externally routed clips</source>
+        <translation>Дорожка получает сигнал клипов через внешнюю маршрутизацию</translation>
+    </message>
+    <message>
+        <source>Disable external plugin automation before freezing</source>
+        <translation>Перед заморозкой отключите внешнюю автоматизацию плагинов</translation>
+    </message>
     <message>
         <source>Unmute every track</source>
         <translation>Размутить все дорожки</translation>
@@ -12049,6 +12509,22 @@ Z…M and Q…P, two octaves from C%1  ·  [ and ] shift the octave</source>
 <context>
     <name>TransportSettingsPage</name>
     <message>
+        <source>Top panel style</source>
+        <translation>Стиль верхней панели</translation>
+    </message>
+    <message>
+        <source>Neon</source>
+        <translation>Неоновый</translation>
+    </message>
+    <message>
+        <source>Plain</source>
+        <translation>Простой</translation>
+    </message>
+    <message>
+        <source>Neon: colored glow. Plain: black recesses with white text and no glow.</source>
+        <translation>Неоновый — цветное свечение. Простой — чёрные углубления с белым текстом, без свечения.</translation>
+    </message>
+    <message>
         <source>Resume — continue from the playhead</source>
         <translation>Возобновить — продолжить с курсора воспроизведения</translation>
     </message>
@@ -12408,8 +12884,8 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <translation>Доступно обновление</translation>
     </message>
     <message>
-        <source>VLT Studio Pro %1 is available.</source>
-        <translation>Доступна версия VLT Studio Pro %1.</translation>
+        <source>VLTONE %1 is available.</source>
+        <translation>Доступна версия VLTONE %1.</translation>
     </message>
     <message>
         <source>You are using %1. The download button opens the release page in your browser.</source>
@@ -12741,6 +13217,62 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <source>Downloaded audio could not be read: %1</source>
         <translation>Не удалось прочитать загруженный аудиофайл: %1</translation>
     </message>
+    <message>
+        <source>Use video as timeline background</source>
+        <translation>На фон таймлайна</translation>
+    </message>
+    <message>
+        <source>Enable background sound</source>
+        <translation>Включить звук фона</translation>
+    </message>
+    <message>
+        <source>Mute background sound</source>
+        <translation>Выключить звук фона</translation>
+    </message>
+    <message>
+        <source>Remove video background</source>
+        <translation>Убрать видео с фона</translation>
+    </message>
+    <message>
+        <source>Open background video page</source>
+        <translation>Открыть страницу фонового видео</translation>
+    </message>
+    <message>
+        <source>Loading video…</source>
+        <translation>Загрузка видео…</translation>
+    </message>
+    <message>
+        <source>Timeline background</source>
+        <translation>Фон таймлайна</translation>
+    </message>
+    <message>
+        <source>Video unavailable</source>
+        <translation>Видео недоступно</translation>
+    </message>
+    <message>
+        <source>No video found on this page</source>
+        <translation>На этой странице нет видео</translation>
+    </message>
+    <message>
+        <source>%1. %2%3</source>
+        <translation>%1. %2%3</translation>
+    </message>
+    <message>
+        <source>Video</source>
+        <translation>Видео</translation>
+    </message>
+    <message>
+        <source> (playing)</source>
+        <translation> (воспроизводится)</translation>
+    </message>
+    <message>
+        <source>Could not load %1: %2 (%3). Check your connection and system proxy.</source>
+        <translation>Не удалось загрузить %1: %2 (%3). Проверьте подключение и системный прокси.</translation>
+    </message>
+    <message>
+        <source>The web page process stopped (%1). Reload the tab to try again.</source>
+        <translation>Процесс веб-страницы остановился (%1). Перезагрузите вкладку.</translation>
+    </message>
 </context>
 <context>
     <name>account::Service</name>
@@ -12791,6 +13323,14 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message>
         <source>The operating-system credential vault could not update the offline clock guard.</source>
         <translation>Хранилище учетных данных операционной системы не смогло обновить защиту офлайн-часов.</translation>
+    </message>
+    <message>
+        <source>Saved sign-in is temporarily unavailable. Close other copies of VLTONE and try again.</source>
+        <translation>Сохранённый вход временно недоступен. Закройте другие копии VLTONE и повторите попытку.</translation>
+    </message>
+    <message>
+        <source>Saved sign-in is locked by the operating system. Choose Restore saved sign-in to allow access without entering your account password again.</source>
+        <translation>Системное хранилище заблокировало доступ к сохранённому входу. Нажмите «Восстановить сохранённый вход», чтобы разрешить доступ без повторного ввода пароля аккаунта.</translation>
     </message>
 </context>
 <context>
@@ -12916,8 +13456,8 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <translation>Скопировать ссылку</translation>
     </message>
     <message>
-        <source>A link that opens this session in VLT Studio. The code travels in the link fragment, so it is never sent to a web server.</source>
-        <translation>Ссылка, открывающая эту сессию в VLT Studio. Код передаётся во фрагменте ссылки и потому никогда не уходит на веб-сервер.</translation>
+        <source>A link that opens this session in VLTONE. The code travels in the link fragment, so it is never sent to a web server.</source>
+        <translation>Ссылка, открывающая эту сессию в VLTONE. Код передаётся во фрагменте ссылки и потому никогда не уходит на веб-сервер.</translation>
     </message>
     <message>
         <source>Show advanced token</source>
@@ -13245,8 +13785,8 @@ Double-click to rename</source>
         <translation>Файл не является корректным JSON в кодировке UTF-8: %1</translation>
     </message>
     <message>
-        <source>This is not a VLT Studio Pro language pack.</source>
-        <translation>Это не языковой пакет VLT Studio Pro.</translation>
+        <source>This is not a VLTONE language pack.</source>
+        <translation>Это не языковой пакет VLTONE.</translation>
     </message>
     <message>
         <source>Unsupported language-pack schema version.</source>
@@ -13461,12 +14001,12 @@ Double-click to rename</source>
         <translation>Отмена</translation>
     </message>
     <message>
-        <source>Open VLT Project</source>
-        <translation>Открыть проект VLT</translation>
+        <source>Open VLTONE Project</source>
+        <translation>Открыть проект VLTONE</translation>
     </message>
     <message>
-        <source>VLT Project (*.vlt);;Project Template (*.vltt);;Legacy Project (project.json);;All Files (*)</source>
-        <translation>Проект VLT (*.vlt);;Шаблон проекта (*.vltt);;Старый проект (project.json);;Все файлы (*)</translation>
+        <source>VLTONE Project (*.vlt);;Project Template (*.vltt);;Legacy Project (project.json);;All Files (*)</source>
+        <translation>Проект VLTONE (*.vlt);;Шаблон проекта (*.vltt);;Старый проект (project.json);;Все файлы (*)</translation>
     </message>
 </context>
 <context>
@@ -13500,8 +14040,8 @@ Double-click to rename</source>
         <translation>Сохранение проекта</translation>
     </message>
     <message>
-        <source>Set the project details and choose where its portable VLT package will be saved.</source>
-        <translation>Укажите данные проекта и выберите папку для переносимого пакета VLT.</translation>
+        <source>Set the project details and choose where its portable VLTONE package will be saved.</source>
+        <translation>Укажите данные проекта и выберите папку для переносимого пакета VLTONE.</translation>
     </message>
     <message>
         <source>Choose Image…</source>
@@ -13585,6 +14125,76 @@ Double-click to rename</source>
     <message>
         <source>the prompt library sent back was not JSON</source>
         <translation>полученная библиотека подсказок не является JSON</translation>
+    </message>
+</context>
+<context>
+    <name>ui::WebVideoBackground</name>
+    <message>
+        <source>This video cannot be used as a timeline background.</source>
+        <translation>Это видео нельзя использовать как фон таймлайна.</translation>
+    </message>
+    <message>
+        <source>The background video player stopped. Open the page and try again.</source>
+        <translation>Фоновый видеоплеер остановился. Откройте страницу и попробуйте снова.</translation>
+    </message>
+    <message>
+        <source>Could not load the video page. Check your connection or open the page to sign in.</source>
+        <translation>Не удалось загрузить страницу видео. Проверьте соединение или откройте страницу для входа.</translation>
+    </message>
+    <message>
+        <source>This player could not start the background video. Open the page and try another video.</source>
+        <translation>Плеер не смог запустить фоновое видео. Откройте страницу и попробуйте другое видео.</translation>
+    </message>
+    <message>
+        <source>No playable video was found. Open the page to sign in or select the video again.</source>
+        <translation>Не найдено видео для воспроизведения. Откройте страницу для входа или выберите видео снова.</translation>
+    </message>
+</context>
+<context>
+    <name>BrowserBackgroundDialog</name>
+    <message>
+        <source>Browser background collection</source>
+        <translation>Коллекция фонов браузера</translation>
+    </message>
+    <message>
+        <source>Choose an image for the start page. Your selected background is saved on this computer and works offline.</source>
+        <translation>Выберите изображение для стартовой страницы. Выбранный фон сохраняется на компьютере и работает без интернета.</translation>
+    </message>
+    <message>
+        <source>Available browser backgrounds</source>
+        <translation>Доступные фоны браузера</translation>
+    </message>
+    <message>
+        <source>Use background</source>
+        <translation>Установить фон</translation>
+    </message>
+    <message>
+        <source>Refresh collection</source>
+        <translation>Обновить коллекцию</translation>
+    </message>
+    <message>
+        <source>Loading collection…</source>
+        <translation>Загрузка коллекции…</translation>
+    </message>
+    <message>
+        <source>The collection is unavailable. Check your connection or VPN and try again. Previously downloaded backgrounds are still available.</source>
+        <translation>Коллекция недоступна. Проверьте подключение или VPN и повторите попытку. Ранее загруженные фоны по-прежнему доступны.</translation>
+    </message>
+    <message>
+        <source>No backgrounds have been published yet.</source>
+        <translation>Пока не опубликовано ни одного фона.</translation>
+    </message>
+    <message>
+        <source>Select a background and click Use background.</source>
+        <translation>Выберите изображение и нажмите «Установить фон».</translation>
+    </message>
+    <message>
+        <source>Downloading background…</source>
+        <translation>Скачивание фона…</translation>
+    </message>
+    <message>
+        <source>The background could not be downloaded or saved. Your current background has not changed. Try again.</source>
+        <translation>Не удалось скачать или сохранить изображение. Текущий фон не изменён. Попробуйте ещё раз.</translation>
     </message>
 </context>
 </TS>

@@ -441,19 +441,18 @@ void PluginNode::process(const engine::ProcessContext& context) {
         }
 
         if (m_dryDelaySamples > 0 && !m_dryDelayStorage.empty()) {
-            for (engine::FrameCount i = 0; i < frames; ++i) {
-                const engine::FrameCount position = m_dryDelayPosition;
-                for (engine::ChannelCount ch = 0; ch < outChannels; ++ch) {
-                    float* dry = m_dryStorage.data() +
-                                 std::size_t(ch) * m_maxBlockSize;
-                    float* ring = m_dryDelayStorage.data() +
-                                  std::size_t(ch) * m_dryDelaySamples;
-                    const float delayed = ring[position];
-                    ring[position] = dry[i];
-                    dry[i] = delayed;
+            for (engine::ChannelCount ch = 0; ch < outChannels; ++ch) {
+                float* dry = m_dryStorage.data() + std::size_t(ch) * m_maxBlockSize;
+                float* ring = m_dryDelayStorage.data() + std::size_t(ch) * m_dryDelaySamples;
+                engine::FrameCount position = m_dryDelayPosition, offset = 0;
+                while (offset < frames) {
+                    const auto count = std::min(frames - offset, m_dryDelaySamples - position);
+                    std::swap_ranges(dry + offset, dry + offset + count, ring + position);
+                    offset += count; position += count;
+                    if (position == m_dryDelaySamples) position = 0;
                 }
-                m_dryDelayPosition = (position + 1) % m_dryDelaySamples;
             }
+            m_dryDelayPosition = (m_dryDelayPosition + frames) % m_dryDelaySamples;
         }
     }
 
@@ -500,14 +499,8 @@ void PluginNode::process(const engine::ProcessContext& context) {
         for (std::uint16_t ch = 0; ch < channels; ++ch) {
             const float* samples = storage.data() +
                                    std::size_t(ch) * m_maxBlockSize;
-            bool silent = true;
-            for (engine::FrameCount frame = 0; frame < frames; ++frame) {
-                if (samples[frame] != 0.0f) {
-                    silent = false;
-                    anyNonZeroInput = true;
-                    break;
-                }
-            }
+            const bool silent = dsp::isSilent({samples, frames});
+            anyNonZeroInput |= !silent;
             if (silent && ch < 64) mask |= std::uint64_t{1} << ch;
         }
         return mask;
@@ -939,11 +932,7 @@ void PluginNode::process(const engine::ProcessContext& context) {
             float* wetData = context.output.data(ch);
             const float* dryData =
                 m_dryStorage.data() + std::size_t(ch) * m_maxBlockSize;
-            for (engine::FrameCount i = 0; i < frames; ++i) {
-                const float t = frames > 1 ? float(i) / float(frames - 1) : 1.0f;
-                const float mix = startWet + (targetWet - startWet) * t;
-                wetData[i] = wetData[i] * mix + dryData[i] * (1.0f - mix);
-            }
+            dsp::wetDryRamp({wetData, frames}, {dryData, frames}, startWet, targetWet);
         }
         m_wet = targetWet;
     }

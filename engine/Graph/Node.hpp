@@ -99,6 +99,9 @@ public:
 
     /// True when the node produces signal without any input (sources).
     virtual bool isSource() const noexcept { return false; }
+    /// Opt-in for fusing cheap, audio-only one-in/one-out chain nodes into one
+    /// scheduler job. This never changes their DSP calls or summation order.
+    virtual bool canFuseTask() const noexcept { return false; }
 
     /// Whether this node reads and/or writes MIDI. Audio-only built-ins return
     /// None, avoiding a reserved 512-event buffer per node. InputOutput remains
@@ -114,6 +117,9 @@ public:
     /// first `process`.
     virtual void prepare(const PrepareInfo&) {}
     virtual void reset() {}
+    /// Control thread: warm immutable source data before play/locate. Must not
+    /// mutate live DSP state; the published graph may still be processing.
+    virtual void preparePlayback(SamplePos) {}
 
     /// Stop and restart the node's own processing around a reconfiguration.
     /// Nothing in the engine calls these; they exist for nodes that wrap

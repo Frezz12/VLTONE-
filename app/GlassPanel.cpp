@@ -3,6 +3,10 @@
 #include "Theme.hpp"
 
 #include <QApplication>
+#include <QFutureWatcher>
+#include <QPromise>
+#include <QThreadPool>
+#include <memory>
 #include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
@@ -121,6 +125,7 @@ void GlassPanel::setSubtleVerticalGradient(bool subtle) {
 }
 
 void GlassPanel::invalidateBackdrop() {
+    ++m_backdropGeneration;
     m_backdropValid = false;
 }
 
@@ -217,28 +222,46 @@ void GlassPanel::captureBackdrop() {
     const QPoint savedPosition = pos();
     const QRect source(savedPosition + plate.topLeft(), plate.size());
     const QRect clipped = source.intersected(host->rect());
-    QPixmap fullResolution(plate.size());
-    fullResolution.fill(Qt::transparent);
+    QImage raw(small, QImage::Format_ARGB32_Premultiplied);
+    raw.fill(Qt::transparent);
     if (!clipped.isEmpty()) {
         move(-width() - host->width() - 32,
              -height() - host->height() - 32);
-        host->render(&fullResolution, -source.topLeft(), QRegion(clipped),
+        QPainter capture(&raw);
+        capture.scale(double(small.width()) / plate.width(),
+                      double(small.height()) / plate.height());
+        host->render(&capture, -source.topLeft(), QRegion(clipped),
                      QWidget::DrawWindowBackground | QWidget::DrawChildren);
+        capture.end();
         move(savedPosition);
     }
-
-    QPixmap raw = fullResolution.scaled(
-        small, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-    if (raw.isNull()) {
-        m_backdrop = {};
-        m_backdropValid = true;
-        m_sinceCapture.restart();
-        return;
-    }
-
-    m_backdrop = QPixmap::fromImage(blurAndTint(raw.toImage()));
-    m_backdropValid = true;
+    // QWidget rendering stays in GUI. Only immutable image pixels cross into
+    // the worker; the previous backdrop remains usable while it is blurred.
+    const auto generation = m_backdropGeneration;
+    m_capturePending = true;
     m_sinceCapture.restart();
+    auto promise = std::make_shared<QPromise<QImage>>();
+    promise->start();
+    auto* watcher = new QFutureWatcher<QImage>(this);
+    connect(watcher, &QFutureWatcher<QImage>::finished, this,
+            [this, watcher, generation] {
+        const QImage image = watcher->result();
+        watcher->deleteLater();
+        m_capturePending = false;
+        if (generation == m_backdropGeneration) {
+            m_backdrop = QPixmap::fromImage(image);
+            m_backdropValid = true;
+        }
+        update();
+        if (!m_backdropValid && isVisible())
+            QTimer::singleShot(kRecaptureMs, this, [this] { update(); });
+    });
+    watcher->setFuture(promise->future());
+    QThreadPool::globalInstance()->start([promise, raw = std::move(raw)]() mutable {
+        try { promise->addResult(blurAndTint(std::move(raw))); }
+        catch (...) { promise->addResult(QImage{}); }
+        promise->finish();
+    });
 }
 
 void GlassPanel::setShadowMargin(int margin) {

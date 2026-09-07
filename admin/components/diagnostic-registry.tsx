@@ -54,7 +54,7 @@ export function DiagnosticRegistry({ kind }: { kind: "bugs" | "crashes" | "audit
   return <AdminShell>
     <div className="admin-page-head"><div><h1 className="vlt-title">{title}</h1><p className="vlt-subtitle">{kind === "audit" ? "Неизменяемая история административных действий." : "Диагностика связана с пользователем и устройством."}</p></div></div>
     {(sessionError || error) && <div className="vlt-error" style={{ marginBottom: 16 }}>{sessionError || error}</div>}
-    <div className="vlt-table-wrap"><table className="vlt-table"><thead><tr>
+    <div className="vlt-table-wrap"><table className="vlt-table diagnostic-table"><thead><tr>
       {kind === "bugs" ? <><th>№ / заголовок</th><th>Статус</th><th>Внутренняя заметка</th><th>Создан</th><th /></> : kind === "crashes" ? <><th>Причина</th><th>Версия / build</th><th>Платформа</th><th>Дата</th><th /></> : <><th>Действие</th><th>Тип</th><th>Обезличенная цель</th><th>IP / дата</th></>}
     </tr></thead><tbody>{items.map((raw) => {
       if (kind === "bugs") {

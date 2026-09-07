@@ -325,8 +325,8 @@ const PluginDescriptor& EqualizerInstance::staticDescriptor() noexcept {
         d.format = Format::Internal;
         d.uid = std::string(kUid);
         d.path = std::string(kUid);
-        d.name = "VLT Equalizer";
-        d.vendor = "VLT Studio Pro";
+        d.name = "VLTONE Equalizer";
+        d.vendor = "VLTONE";
         d.version = "1.0";
         d.stateSchemaVersion = kStateVersion;
         d.category = "Effect|EQ";

@@ -28,7 +28,7 @@ export function Dashboard() {
   const activity = (data?.activity ?? []).map((point) => ({ ...point, label: new Date(point.bucket).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }) }));
   const ai = (data?.ai_daily ?? []).map((point) => ({ ...point, label: new Date(point.bucket).toLocaleDateString("ru", { day: "2-digit", month: "2-digit" }) }));
   return <AdminShell>
-    <div className="admin-page-head"><div><h1 className="vlt-title">Оперативный обзор</h1><p className="vlt-subtitle">Активность VLT Studio Pro и диагностика.</p></div>{data && <span className="vlt-badge"><span className="status-dot" />API обновлён {new Date(data.generated_at).toLocaleTimeString("ru")}</span>}</div>
+    <div className="admin-page-head"><div><h1 className="vlt-title">Оперативный обзор</h1><p className="vlt-subtitle">Активность VLTONE и диагностика.</p></div>{data && <span className="vlt-badge"><span className="status-dot" />API обновлён {new Date(data.generated_at).toLocaleTimeString("ru")}</span>}</div>
     {error && <div className="vlt-error">{error}</div>}
     <div className="vlt-grid vlt-grid-4">{cards.map(([label, value, Icon]) => <section className="vlt-card vlt-stat" key={label}><div className="vlt-row vlt-between"><span className="vlt-stat-label">{label}</span><Icon size={16} className="vlt-muted" aria-hidden /></div><div className="vlt-stat-value">{new Intl.NumberFormat("ru").format(value)}</div></section>)}</div>
     {data && <>

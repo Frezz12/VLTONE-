@@ -9,13 +9,16 @@ class EngineController;
 class QComboBox;
 class QLineEdit;
 
-/// Preferences for the transport's play/pause behaviour — the "Transport" tab
+/// Preferences for the transport's appearance and behaviour — the "Transport" tab
 /// of the settings window.
 class TransportSettingsPage : public QWidget {
     Q_OBJECT
 public:
     explicit TransportSettingsPage(daw::EngineController* controller,
                                    QWidget* parent = nullptr);
+
+signals:
+    void panelStyleChanged();
 
 private:
     daw::EngineController* m_controller;

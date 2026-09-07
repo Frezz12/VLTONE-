@@ -13,8 +13,8 @@
 // CoreFoundation path. Backed by libsndfile, which decodes WAV/AIFF/FLAC/
 // Ogg-Vorbis/Opus and — when built with mpg123 — MP3.
 //
-// Not supported: MP4/M4A/AAC (libsndfile has no AAC decoder). Importing those
-// fails with a clear error rather than silently producing nothing.
+// MP4/M4A/MP4A and AAC use AudioToolbox on macOS and Media Foundation on
+// Windows. Only the audio stream is imported; protected media is not supported.
 namespace audio::platform {
 
 struct DecodedAudio {
@@ -47,6 +47,9 @@ struct AudioFileInfo {
     FrameCount frames = 0;
     SampleRate sampleRate = 0.0;
     ChannelCount channels = 0;
+    // Compressed audio without reliable length metadata can report more frames than the
+    // decoder actually produces. Clean EOF is authoritative for these files.
+    bool frameCountIsEstimate = false;
 
     double durationSeconds() const {
         return sampleRate > 0.0 ? double(frames) / sampleRate : 0.0;
@@ -80,6 +83,8 @@ public:
     /// Decode at most `frames` into `destination`. The span must hold
     /// `frames * info().channels` samples. Returns the number of frames read.
     FrameCount read(float* destination, FrameCount frames);
+    /// Distinguish a normal end of stream from an actual decoding/I/O error.
+    Result readStatus() const;
 
 private:
     struct Impl;

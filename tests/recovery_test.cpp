@@ -335,7 +335,15 @@ int main() {
         check(info.appVersion == "test-1.0", "the session carries the version");
 
         journal.setProjectPath((dir / "song.vlt").string(), "song");
-        journal.requestWrite(ctrl.project());
+        const auto firstParts = ctrl.captureIncrementalRecoverySnapshot({}, true);
+        const float oldPan = firstParts.trackParts[1]->pan;
+        ctrl.setTrackPan(midiTrack, 0.2f);
+        auto nextParts = ctrl.captureIncrementalRecoverySnapshot({midiTrack}, false);
+        check(firstParts.trackParts[0] == nextParts.trackParts[0] && firstParts.trackParts[1] != nextParts.trackParts[1],
+              "recovery shares untouched tracks and replaces only changed parts");
+        check(firstParts.trackParts[1]->pan == oldPan && std::abs(nextParts.trackParts[1]->pan - 0.2f) < 1e-6f,
+              "recovery parts remain immutable after the next edit");
+        journal.requestWrite(std::move(nextParts));
         journal.flush();
         check(journal.writeCount() == 1, "flush forces the pending write out");
         check(fs::exists(session / "project.json"), "the journal file appears");
@@ -872,6 +880,28 @@ int main() {
               "only explicit post-commit cleanup removes cloud recovery");
         check(reopened.removeAfterCommit().ok(),
               "post-commit cloud recovery cleanup is idempotent");
+    }
+
+    // A flush racing with an in-flight write must release the mutex after
+    // publishing that generation. Repeat across the write window: a stale
+    // force flag otherwise spins forever and also blocks clean shutdown.
+    {
+        daw::recovery::RecoveryJournal journal;
+        check(journal.start(root.string(), "flush-race", std::chrono::milliseconds(0)),
+              "flush-race journal starts");
+        for (int i = 0; i < 32; ++i) {
+            daw::recovery::RecoverySnapshot snapshot;
+            snapshot.project = ctrl.project();
+            daw::InsertModel slot;
+            slot.id = "flush-fixture"; slot.stateFile = "flush.bin";
+            snapshot.project.masterInserts.push_back(slot);
+            snapshot.pluginStates.push_back({slot.stateFile, std::vector<std::uint8_t>(256 * 1024, std::uint8_t(i))});
+            journal.requestWrite(std::move(snapshot));
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            journal.flush();
+        }
+        journal.stop();
+        check(true, "in-flight flush and shutdown complete without a mutex spin");
     }
 
     // ── Plugin chunks are part of the same journal generation ──

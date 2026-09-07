@@ -163,7 +163,7 @@ ProjectSaveDialog::ProjectSaveDialog(const QString& name, const QString& author,
     title->setFont(titleFont);
 
     auto* subtitle = new QLabel(
-        tr("Set the project details and choose where its portable VLT package will be saved."),
+        tr("Set the project details and choose where its portable VLTONE package will be saved."),
         this);
     subtitle->setObjectName(QStringLiteral("ProjectDialogSecondary"));
     subtitle->setWordWrap(true);
@@ -509,8 +509,8 @@ ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
 
 void ProjectOpenDialog::browse() {
     const QString path = QFileDialog::getOpenFileName(
-        this, tr("Open VLT Project"), QString(),
-        tr("VLT Project (*.vlt);;Project Template (*.vltt);;"
+        this, tr("Open VLTONE Project"), QString(),
+        tr("VLTONE Project (*.vlt);;Project Template (*.vltt);;"
            "Legacy Project (project.json);;All Files (*)"));
     if (path.isEmpty()) return;
     m_selectedPath = path;

@@ -1,4 +1,5 @@
 #include "WaveformCache.hpp"
+#include <atomic>
 
 #include "platform/AudioFileDecoder.hpp"
 #include "SampleLoader.hpp"
@@ -65,6 +66,8 @@ const WaveformPeaks* WaveformCache::storeDecoded(
     evictToBudget(filePath);
     return entry.peaks->isValid() ? entry.peaks.get() : nullptr;
 }
+
+namespace { std::atomic<std::uint64_t> nextWaveformGeometryId{1}; }
 
 template<class Read>
 void buildPeaksImpl(std::size_t frames, std::size_t channelCount, double sampleRate,
@@ -148,6 +151,7 @@ void buildPeaksImpl(std::size_t frames, std::size_t channelCount, double sampleR
         previousMax = &out.levels.back().maxima;
         previousRate = out.levels.back().bucketsPerSecond;
     }
+    out.geometryId = nextWaveformGeometryId.fetch_add(1, std::memory_order_relaxed);
 }
 
 void buildPeaks(const audio::platform::DecodedAudio& decoded, WaveformPeaks& out) {
@@ -162,6 +166,15 @@ void buildPeaks(const engine::SampleBuffer& buffer, WaveformPeaks& out,
         [&](std::size_t frame, std::size_t ch) { return buffer.channel(ch)[frame]; },
         out, keepGoing);
 }
+const WaveformPeaks* WaveformCache::storePrepared(const std::string& filePath, WaveformPeaks peaks) {
+    Entry& entry = m_cache[filePath];
+    m_bytes -= std::min(m_bytes, entry.bytes);
+    entry.peaks = std::make_shared<WaveformPeaks>(std::move(peaks));
+    entry.bytes = waveformBytes(*entry.peaks); m_bytes += entry.bytes;
+    touch(entry); evictToBudget(filePath);
+    return entry.peaks->isValid() ? entry.peaks.get() : nullptr;
+}
+
 const WaveformPeaks* WaveformCache::storeSample(
     const std::string& filePath, const engine::SampleBuffer& buffer) {
     Entry& entry = m_cache[filePath];

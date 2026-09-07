@@ -431,6 +431,12 @@ public:
         update();
     }
 
+    void setPlain(bool plain) {
+        if (m_plain == plain) return;
+        m_plain = plain;
+        update();
+    }
+
     /// Score a groove down the cavity at this fraction of its width, so one
     /// socket can carry two columns of readings instead of two sockets with a
     /// gap between them. Zero, the default, leaves the cavity unbroken.
@@ -452,7 +458,11 @@ protected:
         shape.addRoundedRect(cavity, radius, radius);
 
         QLinearGradient depth(0, cavity.top(), 0, cavity.bottom());
-        if (m_backlit) {
+        if (m_plain) {
+            depth.setColorAt(0.0, QColor(3, 3, 3));
+            depth.setColorAt(0.55, QColor(6, 6, 6));
+            depth.setColorAt(1.0, QColor(12, 12, 12));
+        } else if (m_backlit) {
             // A lit panel is not a darker hole: the glass itself carries the
             // colour, densest at the bottom where it would be thickest.
             depth.setColorAt(0.0, mixColors(theme.well(), theme.accent,
@@ -475,20 +485,22 @@ protected:
         // Each cavity is softly backlit by the active project colour. The
         // values use the same hue, so the glow feels reflected by the glass
         // instead of painted around the text.
-        QRadialGradient glow(cavity.center(), cavity.width() * 0.68);
-        QColor glowCore = theme.accent;
-        glowCore.setAlpha(m_backlit ? (theme.dark ? 70 : 40)
-                                    : (theme.dark ? 34 : 22));
-        QColor glowEdge = glowCore;
-        glowEdge.setAlpha(0);
-        glow.setColorAt(0.0, glowCore);
-        glow.setColorAt(1.0, glowEdge);
-        painter.fillPath(shape, glow);
+        if (!m_plain) {
+            QRadialGradient glow(cavity.center(), cavity.width() * 0.68);
+            QColor glowCore = theme.accent;
+            glowCore.setAlpha(m_backlit ? (theme.dark ? 70 : 40)
+                                        : (theme.dark ? 34 : 22));
+            QColor glowEdge = glowCore;
+            glowEdge.setAlpha(0);
+            glow.setColorAt(0.0, glowCore);
+            glow.setColorAt(1.0, glowEdge);
+            painter.fillPath(shape, glow);
+        }
 
         painter.save();
         painter.setClipPath(shape);
-        QColor innerShadow = theme.background;
-        innerShadow.setAlpha(theme.dark ? 185 : 72);
+        QColor innerShadow = m_plain ? QColor(Qt::black) : theme.background;
+        innerShadow.setAlpha(m_plain || theme.dark ? 185 : 72);
         painter.setPen(QPen(innerShadow, 1.2));
         painter.drawLine(QPointF(cavity.left() + radius, cavity.top() + 1),
                          QPointF(cavity.right() - radius, cavity.top() + 1));
@@ -500,22 +512,24 @@ protected:
         // here drew a second dark line under every well on a light theme,
         // which read as another shadow rather than as a lit lower lip.
         QColor reflection(255, 255, 255);
-        reflection.setAlpha(theme.dark ? 22 : 170);
+        reflection.setAlpha(m_plain || theme.dark ? 22 : 170);
         painter.setPen(QPen(reflection, 1.0));
         painter.drawLine(QPointF(cavity.left() + radius,
                                  cavity.bottom() - 1),
                          QPointF(cavity.right() - radius,
                                  cavity.bottom() - 1));
 
-        QLinearGradient sheen(0, cavity.top() + 2, 0, cavity.center().y());
-        sheen.setColorAt(0.0,
-                         QColor(255, 255, 255, theme.dark ? 18 : 54));
-        sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(sheen);
-        painter.drawRoundedRect(cavity.adjusted(2, 2, -2,
-                                                 -cavity.height() * 0.48),
-                                radius - 2, radius - 2);
+        if (!m_plain) {
+            QLinearGradient sheen(0, cavity.top() + 2, 0, cavity.center().y());
+            sheen.setColorAt(0.0,
+                             QColor(255, 255, 255, theme.dark ? 18 : 54));
+            sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(sheen);
+            painter.drawRoundedRect(cavity.adjusted(2, 2, -2,
+                                                     -cavity.height() * 0.48),
+                                    radius - 2, radius - 2);
+        }
 
         // The groove between two columns of readings: a dark line with a
         // reflected one beside it, the same pair that makes the header wells
@@ -525,20 +539,22 @@ protected:
                 std::round(cavity.left() + cavity.width() * m_divider) + 0.5;
             const qreal top = cavity.top() + 5;
             const qreal bottom = cavity.bottom() - 5;
-            QColor groove = theme.background;
-            groove.setAlpha(theme.dark ? 150 : 90);
+            QColor groove = m_plain ? QColor(Qt::black) : theme.background;
+            groove.setAlpha(m_plain || theme.dark ? 150 : 90);
             painter.setBrush(Qt::NoBrush);
             painter.setPen(QPen(groove, 1.0));
             painter.drawLine(QPointF(x, top), QPointF(x, bottom));
-            QColor lip = theme.textPrimary;
-            lip.setAlpha(theme.dark ? 18 : 38);
+            QColor lip = m_plain ? QColor(Qt::white) : theme.textPrimary;
+            lip.setAlpha(m_plain || theme.dark ? 18 : 38);
             painter.setPen(QPen(lip, 1.0));
             painter.drawLine(QPointF(x + 1, top), QPointF(x + 1, bottom));
         }
         painter.restore();
 
         painter.setBrush(Qt::NoBrush);
-        if (m_backlit) {
+        if (m_plain) {
+            painter.setPen(QPen(QColor(Qt::black), 1.0));
+        } else if (m_backlit) {
             // A halo one step outside the ring: the light a lit panel throws
             // back onto the socket it is seated in.
             QColor halo = theme.accent;
@@ -559,6 +575,7 @@ protected:
 
 private:
     bool m_backlit = false;
+    bool m_plain = false;
     qreal m_divider = 0.0;
 };
 
@@ -797,7 +814,9 @@ TransportBar::TransportBar(daw::EngineController* controller, QWidget* parent)
 
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             &TransportBar::applyTheme);
-    applyTheme();
+    connect(&ThemeManager::instance(), &ThemeManager::fontChanged, this,
+            &TransportBar::updateResponsiveLayout);
+    reloadPanelStyle();
     reloadBackgroundSettings();
     syncTempo();
     syncTimeSignature();
@@ -1281,7 +1300,7 @@ QWidget* TransportBar::buildPill() {
 QWidget* TransportBar::buildPositionGroup() {
     auto* group = new LcdInsetWell(this);
     group->setObjectName(QStringLiteral("PositionSection"));
-    group->setFixedSize(168, 40);
+    group->setFixedSize(144, 40);
     // The one reading the eye keeps coming back to. It is the only socket that
     // is lit from behind, which is what makes it findable without hunting.
     group->setBacklit(true);
@@ -1290,11 +1309,6 @@ QWidget* TransportBar::buildPositionGroup() {
     auto* row = new QHBoxLayout(group);
     row->setContentsMargins(4, 4, 4, 4);
     row->setSpacing(4);
-
-    m_positionIcon = new QLabel(group);
-    m_positionIcon->setFixedSize(20, 20);
-    m_positionIcon->setAlignment(Qt::AlignCenter);
-    m_positionIcon->setAttribute(Qt::WA_TransparentForMouseEvents);
 
     auto* scrub = new PositionScrubEdit(QStringLiteral("1.1.000"), group);
     m_positionValue = scrub;
@@ -1351,7 +1365,6 @@ QWidget* TransportBar::buildPositionGroup() {
                     setPositionDisplayBars(chosen == bars);
                 }
             });
-    row->addWidget(m_positionIcon);
     row->addWidget(m_positionValue);
     return group;
 }
@@ -1484,8 +1497,18 @@ void TransportBar::toggleMetronome() {
     if (m_metroButton) m_metroButton->toggle();
 }
 
+void TransportBar::reloadPanelStyle() {
+    m_plainPanelStyle = QSettings().value(
+        ui::kTransportPanelStyleSetting, QStringLiteral("neon")).toString() ==
+        QLatin1String("plain");
+    applyTheme();
+}
+
 void TransportBar::applyTheme() {
     const Theme& t = th();
+    for (QWidget* well : {m_positionGroup, m_statsGroup}) {
+        if (well) static_cast<LcdInsetWell*>(well)->setPlain(m_plainPanelStyle);
+    }
 
     if (m_pill) {
         const QColor nested =
@@ -1507,7 +1530,8 @@ void TransportBar::applyTheme() {
         // No other GlassPanel in the application is affected.
         if (auto* lcd = qobject_cast<ui::GlassPanel*>(m_lcdScreen))
             lcd->setAccentColor(
-                mixColors(t.accent, t.surfaceElevated, 0.24));
+                m_plainPanelStyle ? QColor(32, 32, 32)
+                                 : mixColors(t.accent, t.surfaceElevated, 0.24));
         for (QWidget* group : {m_transportGroup, m_rightGroup}) {
             if (auto* glass = qobject_cast<ui::GlassPanel*>(group))
                 glass->setAccentColor(
@@ -1562,6 +1586,21 @@ void TransportBar::applyTheme() {
                   focus.name(QColor::HexArgb), hover.name(), t.accent.name(),
                   accentSoft.name()));
     }
+    // A local sheet keeps the plain readout monochrome in every app theme,
+    // including hover, text selection and keyboard focus.
+    if (m_lcdScreen) m_lcdScreen->setStyleSheet(m_plainPanelStyle
+        ? QStringLiteral(R"(
+#LcdScreen QLabel { color: #ffffff; }
+#BarsPosition, #TempoField, #TimeSignatureButton, #GridChip {
+    color: #ffffff; selection-color: #ffffff; selection-background-color: #454545;
+}
+#BarsPosition:hover, #TempoField:hover, #TimeSignatureButton:hover, #GridChip:hover {
+    background: #202020;
+}
+#BarsPosition:focus, #TempoField:focus, #TimeSignatureButton:focus, #GridChip:focus {
+    border-color: #ffffff; background: #141414;
+}
+)") : QString());
     updatePositionStyle();
     // One label per reading in the 2x2 field, so the icons stay put while the
     // values beside them change width.
@@ -1573,7 +1612,8 @@ void TransportBar::applyTheme() {
     for (const auto& [label, file] : statsIcons) {
         if (!label) continue;
         label->setPixmap(
-            icons::svgIcon(QLatin1String(file), t.textSecondary, 16)
+            icons::svgIcon(QLatin1String(file),
+                           m_plainPanelStyle ? QColor(Qt::white) : t.textSecondary, 16)
                 .pixmap(QSize(16, 16)));
     }
     if (m_snapButton)
@@ -1605,32 +1645,32 @@ void TransportBar::applyTheme() {
 void TransportBar::updatePositionStyle() {
     if (!m_positionGroup || !m_positionValue) return;
     const Theme& t = th();
-    const QColor background = mixColors(t.well(), t.surfaceElevated, 0.26);
+    const QColor background = m_plainPanelStyle ? QColor(20, 20, 20)
+        : mixColors(t.well(), t.surfaceElevated, 0.26);
     // Brighter than the values around it: this socket is backlit, so its ink
     // has to stay ahead of its own glow.
-    const QColor text = m_positionRecording
+    const QColor text = m_plainPanelStyle ? QColor(Qt::white) : m_positionRecording
                             ? Theme::record()
                             : mixColors(t.accent, t.textPrimary,
                                         t.dark ? 0.10 : 0.34);
-    const QColor hover = mixColors(
+    const QColor hover = m_plainPanelStyle ? QColor(32, 32, 32) : mixColors(
         background, m_positionRecording ? Theme::record() : t.accent, 0.14);
-    const QColor focus = m_positionRecording ? Theme::record() : t.accent;
+    const QColor focus = m_plainPanelStyle ? QColor(Qt::white)
+        : m_positionRecording ? Theme::record() : t.accent;
+    const QColor selection = m_plainPanelStyle ? QColor(69, 69, 69) : focus;
     const QString style =
         QString("#PositionSection { background: transparent; border: none; "
                 "border-radius: 7px; } "
                 "#BarsPosition { background: transparent; border: 1px solid "
                 "transparent; border-radius: 7px; color: %1; padding: 0 7px; "
                 "font-size: %5px; "
-                "selection-background-color: %2; } "
+                "selection-background-color: %6; } "
                 "#BarsPosition:hover { background: %3; } "
                 "#BarsPosition:focus { border-color: %2; background: %4; }")
             .arg(text.name(), focus.name(), hover.name(QColor::HexArgb),
-                  background.name(), QString::number(kPositionFontPx));
+                  background.name(), QString::number(kPositionFontPx),
+                  selection.name());
     m_positionGroup->setStyleSheet(style);
-    if (m_positionIcon)
-        m_positionIcon->setPixmap(
-            icons::svgIcon(QStringLiteral("signpost.svg"), text, 18)
-                .pixmap(QSize(18, 18)));
 }
 
 void TransportBar::paintEvent(QPaintEvent*) {
@@ -1749,8 +1789,15 @@ void TransportBar::updateResponsiveLayout() {
     if (!m_pill) return;
 
     const auto setDisplayCompact = [this](bool compact) {
-        if (m_positionGroup) m_positionGroup->setFixedWidth(compact ? 156 : 168);
-        if (m_positionValue) m_positionValue->setFixedWidth(compact ? 124 : 136);
+        // Reserve a three-digit bar and a two-digit beat using the actual
+        // application face. Inter is wider than the old condensed fallback;
+        // fixed pixel widths clipped clock readings in the compact layout.
+        const QFont displayFont = ui::transportDisplayFont(kPositionFontPx, QFont::Bold);
+        const int textWidth = int(std::ceil(QFontMetricsF(displayFont)
+            .horizontalAdvance(QStringLiteral("999.16.999"))));
+        const int fieldWidth = textWidth + 20 + (compact ? 0 : 12);
+        if (m_positionGroup) m_positionGroup->setFixedWidth(fieldWidth + 8);
+        if (m_positionValue) m_positionValue->setFixedWidth(fieldWidth);
     };
 
     const auto fitTransportGroup = [this] {

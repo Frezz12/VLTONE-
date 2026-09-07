@@ -32,6 +32,8 @@ public:
     void syncTempo();
     /// Re-open the local header image/GIF/video selected in Themes settings.
     void reloadBackgroundSettings();
+    /// Apply the saved top readout style immediately.
+    void reloadPanelStyle();
 
     bool snapEnabled() const { return m_snapEnabled; }
     void setSnapEnabled(bool enabled);
@@ -171,7 +173,6 @@ private:
     QWidget* m_positionGroup = nullptr;
     /// Tempo, time signature, grid and time format in one 2x2 socket.
     QWidget* m_statsGroup = nullptr;
-    QLabel* m_positionIcon = nullptr;
     QLabel* m_tempoIcon = nullptr;
     QLabel* m_signatureIcon = nullptr;
     QLabel* m_gridIcon = nullptr;
@@ -217,6 +218,7 @@ private:
     bool m_positionShowsBars = true;
     bool m_recordEngaged = false;   // armed and waiting for R
     bool m_positionRecording = false;
+    bool m_plainPanelStyle = false;
     int m_typingOctave = 5;         // shown in the typing keyboard's tooltip
     bool m_tempoEditing = false;
     std::size_t m_tempoUndoDepth = 0;

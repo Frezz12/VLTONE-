@@ -28,6 +28,7 @@ inline constexpr int kTakeRowHeight = 38;
 inline constexpr int kCompAnimMs = 250;
 inline constexpr double kTakeStagger = 0.55;
 
+inline std::uint64_t& compLayoutRevision() { static std::uint64_t revision = 1; return revision; }
 namespace detail {
 inline std::map<std::string, std::string>& pendingTakeClips() {
     static std::map<std::string, std::string> pending;
@@ -43,8 +44,12 @@ inline std::map<std::string, std::string>& pendingTakeClips() {
 /// refresh, which is the only place that knows a take is running.
 inline void setPendingTakeClip(const std::string& trackId,
                                const std::string& clipId) {
-    if (clipId.empty()) detail::pendingTakeClips().erase(trackId);
-    else detail::pendingTakeClips()[trackId] = clipId;
+    auto& pending = detail::pendingTakeClips();
+    const auto found = pending.find(trackId);
+    if (clipId.empty()) { if (pending.erase(trackId)) ++compLayoutRevision(); }
+    else if (found == pending.end() || found->second != clipId) {
+        pending[trackId] = clipId; ++compLayoutRevision();
+    }
 }
 
 inline std::string pendingTakeClip(const daw::TrackModel& track) {
@@ -86,11 +91,16 @@ inline double compFactor(const daw::TrackModel& track) {
 }
 
 inline void setCompFactor(const std::string& trackId, double factor) {
-    detail::compFactors()[trackId] = std::clamp(factor, 0.0, 1.0);
+    const double value = std::clamp(factor, 0.0, 1.0);
+    auto& factors = detail::compFactors();
+    const auto found = factors.find(trackId);
+    if (found == factors.end() || found->second != value) {
+        factors[trackId] = value; ++compLayoutRevision();
+    }
 }
 
 inline void clearCompFactor(const std::string& trackId) {
-    detail::compFactors().erase(trackId);
+    if (detail::compFactors().erase(trackId)) ++compLayoutRevision();
 }
 
 /// Extra lane height the comp editor needs right now, animation included.

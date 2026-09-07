@@ -115,6 +115,21 @@ audio::Result EngineController::renderProject(
         if (const auto ready = scratch.initialize(rate, m_bufferSize, false); !ready) return ready;
         scratch.m_pluginManager.copyCatalogFrom(m_pluginManager);
         scratch.m_project = std::move(snapshot.project);
+        if (!spec.independentTrackId.empty()) {
+            std::erase_if(scratch.m_project.tracks, [&](const TrackModel& track) {
+                return track.id != spec.independentTrackId;
+            });
+            if (scratch.m_project.tracks.size() != 1)
+                return audio::Result::fail(audio::EngineError::TrackNotFound, "freeze source no longer exists");
+            auto& track = scratch.m_project.tracks.front();
+            track.freeze = {}; track.parentId.clear(); track.outputBusId.clear(); track.sends.clear();
+            track.volume = 1.f; track.pan = 0.f; track.mono = false;
+            track.muted = track.soloed = track.armed = track.monitor = false;
+            std::erase_if(track.clips, [](const ClipModel& clip) { return clip.kind == ClipKind::Automation; });
+            scratch.m_project.masterInserts.clear();
+            scratch.m_project.masterVolume = 1.f; scratch.m_project.masterPan = 0.f;
+            scratch.m_project.invalidateTrackIndex();
+        }
         scratch.m_sourceSamples = m_sourceSamples;
         if (std::abs(rate - m_sampleRate) <= 0.01) {
             scratch.m_samples = m_samples;
@@ -433,7 +448,7 @@ audio::Result EngineController::renderProjectPass(
         // opening them, and each carries the timeline position of the range —
         // which is what lets a stem be dropped back where it belongs.
         if (tags.title.empty()) tags.title = stem;
-        if (tags.software.empty()) tags.software = "VLT Studio Pro";
+        if (tags.software.empty()) tags.software = "VLTONE";
         tags.timeReferenceSamples =
             std::uint64_t(std::max<engine::SamplePos>(0, from));
         ioStatus = sink.writer.setTags(tags);

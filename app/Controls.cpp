@@ -1,4 +1,5 @@
 #include "Controls.hpp"
+#include "UiFrameClock.hpp"
 #include "EngineController.hpp"
 #include "GlassPanel.hpp"
 #include "Theme.hpp"
@@ -296,35 +297,30 @@ ThemedWidget::ThemedWidget(QWidget* parent) : QWidget(parent) {
 
 // ── Fade ──
 
-Fade::Fade(QWidget* owner, int durationMs) : m_owner(owner) {
-    m_anim = new QVariantAnimation(owner);
-    m_anim->setDuration(durationMs);
-    m_anim->setEasingCurve(QEasingCurve::OutCubic);
-    QObject::connect(m_anim, &QVariantAnimation::valueChanged, owner,
-                     [this](const QVariant& v) {
-                         m_value = v.toDouble();
-                         m_owner->update();
-                     });
+Fade::Fade(QWidget* owner, int durationMs)
+    : m_owner(owner), m_durationMs(std::max(1, durationMs)) {
+    m_anim = new FrameTimer(owner);
+    QObject::connect(m_anim, &FrameTimer::timeout, owner, [this] {
+        const double progress = std::clamp(double(m_elapsed.nsecsElapsed()) /
+                                          (m_durationMs * 1e6), 0.0, 1.0);
+        const double tail = 1.0 - progress;
+        m_value = m_start + (m_target - m_start) * (1.0 - tail * tail * tail);
+        if (progress >= 1.0) { m_value = m_target; m_anim->stop(); }
+        FrameClock::instance().request(m_owner, m_owner->rect());
+    });
 }
 
 void Fade::jumpTo(double value) {
     m_anim->stop();
-    m_value = value;
-    m_owner->update();
+    m_value = m_target = value;
+    FrameClock::instance().request(m_owner, m_owner->rect());
 }
 
 void Fade::setTarget(double target) {
-    if (std::abs(target - m_value) < 0.001 &&
-        m_anim->state() != QAbstractAnimation::Running) {
-        return;
-    }
-    if (m_anim->state() == QAbstractAnimation::Running &&
-        std::abs(m_anim->endValue().toDouble() - target) < 0.001) {
-        return;   // already heading there
-    }
-    m_anim->stop();
-    m_anim->setStartValue(m_value);
-    m_anim->setEndValue(target);
+    if (m_anim->isActive() && std::abs(m_target - target) < 0.001) return;
+    if (!m_anim->isActive() && std::abs(target - m_value) < 0.001) return;
+    m_start = m_value; m_target = target;
+    m_elapsed.start();
     m_anim->start();
 }
 
@@ -430,21 +426,14 @@ void IconButton::setPulse(bool on) {
         return;
     }
     if (!m_pulseAnim) {
-        // Symmetric by construction: 0 → 1 → 0 in one loop, so the breath in
-        // and the breath out take the same time without reversing direction.
-        m_pulseAnim = new QVariantAnimation(this);
-        m_pulseAnim->setDuration(1300);
-        m_pulseAnim->setLoopCount(-1);
-        m_pulseAnim->setKeyValueAt(0.0, 0.0);
-        m_pulseAnim->setKeyValueAt(0.5, 1.0);
-        m_pulseAnim->setKeyValueAt(1.0, 0.0);
-        m_pulseAnim->setEasingCurve(QEasingCurve::InOutSine);
-        connect(m_pulseAnim, &QVariantAnimation::valueChanged, this,
-                [this](const QVariant& v) {
-                    m_pulseValue = v.toDouble();
-                    update();
-                });
+        m_pulseAnim = new FrameTimer(this);
+        connect(m_pulseAnim, &FrameTimer::timeout, this, [this] {
+            const double phase = std::fmod(double(m_pulseClock.nsecsElapsed()) / 1.3e9, 1.0);
+            m_pulseValue = 0.5 - 0.5 * std::cos(phase * 6.283185307179586);
+            FrameClock::instance().request(this, rect());
+        });
     }
+    m_pulseClock.start();
     m_pulseAnim->start();
 }
 
@@ -1120,9 +1109,8 @@ void FaderWidget::leaveEvent(QEvent*) {
     update();
 }
 
-void FaderWidget::mouseDoubleClickEvent(QMouseEvent* ev) {
-    if (m_automatable &&
-        (automationCreationMode() || (ev->modifiers() & Qt::AltModifier))) {
+void FaderWidget::mouseDoubleClickEvent(QMouseEvent*) {
+    if (m_automatable && automationCreationMode()) {
         emit automateRequested();
         return;
     }
@@ -1555,9 +1543,8 @@ void MiniSlider::mouseReleaseEvent(QMouseEvent* event) {
     event->accept();
 }
 
-void MiniSlider::mouseDoubleClickEvent(QMouseEvent* event) {
-    if (m_automatable &&
-        (automationCreationMode() || (event->modifiers() & Qt::AltModifier))) {
+void MiniSlider::mouseDoubleClickEvent(QMouseEvent*) {
+    if (m_automatable && automationCreationMode()) {
         emit automateRequested();
         return;
     }
@@ -1730,9 +1717,8 @@ void PanKnob::mouseReleaseEvent(QMouseEvent*) {
     emit editFinished();
 }
 
-void PanKnob::mouseDoubleClickEvent(QMouseEvent* ev) {
-    if (m_automatable &&
-        (automationCreationMode() || (ev->modifiers() & Qt::AltModifier))) {
+void PanKnob::mouseDoubleClickEvent(QMouseEvent*) {
+    if (m_automatable && automationCreationMode()) {
         emit automateRequested();
         return;
     }
@@ -1745,6 +1731,21 @@ void PanKnob::wheelEvent(QWheelEvent* ev) {
     commit(m_pan + (ev->angleDelta().y() >= 0 ? step : -step));
     emit editFinished();
     ev->accept();
+}
+
+bool PanKnob::event(QEvent* event) {
+    if (event->type() == QEvent::ShortcutOverride) {
+        const auto* key = static_cast<QKeyEvent*>(event);
+        if (!(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
+            switch (key->key()) {
+            case Qt::Key_Left: case Qt::Key_Right: case Qt::Key_Up: case Qt::Key_Down:
+            case Qt::Key_Home: case Qt::Key_End:
+                event->accept(); return true;
+            default: break;
+            }
+        }
+    }
+    return QWidget::event(event);
 }
 
 void PanKnob::keyPressEvent(QKeyEvent* ev) {
@@ -1854,8 +1855,9 @@ constexpr int kKnobSize = 38;
 constexpr int kKnobCompactSize = 28;
 /// Every rotary control in the unified Sampler/Clip editor uses one footprint.
 /// Density now comes from spacing and tabs, not from mixing three dial scales.
-constexpr int kSamplerKnobSize = 34;
-constexpr int kSamplerKnobPad = 10;
+constexpr int kSamplerKnobSize = 40;
+constexpr int kSamplerKnobWidth = 72;
+constexpr int kSamplerKnobHeight = 78;
 constexpr int kKnobCaptionHeight = 13;
 } // namespace
 
@@ -1898,8 +1900,7 @@ void Knob::setCaption(const QString& caption) {
 void Knob::setCompact(bool compact) {
     m_compact = compact;
     if (m_visualStyle == VisualStyle::SamplerDigital) {
-        setFixedSize(kSamplerKnobSize + kSamplerKnobPad,
-                     kSamplerKnobSize + kKnobCaptionHeight + 2);
+        setFixedSize(kSamplerKnobWidth, kSamplerKnobHeight);
     } else {
         const int size = compact ? kKnobCompactSize : kKnobSize;
         setFixedSize(size + 12, size + kKnobCaptionHeight);
@@ -1928,8 +1929,7 @@ void Knob::setVisualStyle(VisualStyle style) {
     m_visualStyle = style;
     if (!m_bare) {
         if (style == VisualStyle::SamplerDigital) {
-            setFixedSize(kSamplerKnobSize + kSamplerKnobPad,
-                         kSamplerKnobSize + kKnobCaptionHeight + 2);
+            setFixedSize(kSamplerKnobWidth, kSamplerKnobHeight);
         } else {
             const int size = m_compact ? kKnobCompactSize : kKnobSize;
             setFixedSize(size + 12, size + kKnobCaptionHeight + 2);
@@ -2000,7 +2000,8 @@ void Knob::paintEvent(QPaintEvent*) {
                             : digital ? kSamplerKnobSize
                                       : (m_compact ? kKnobCompactSize : kKnobSize);
     const double inset = m_bare ? 1.5 : 2.0;
-    const QRectF ring(double(width() - size) / 2.0 + inset, inset,
+    const QRectF ring(double(width() - size) / 2.0 + inset,
+                      inset + (digital ? 18.0 : 0.0),
                       size - inset * 2.0, size - inset * 2.0);
     const QPointF centre = ring.center();
     const double radius = ring.width() / 2.0;
@@ -2188,128 +2189,49 @@ void Knob::paintEvent(QPaintEvent*) {
     }
 
     if (digital) {
+        // Labels and values stay put during editing. One clean arc and a
+        // contrasting pointer read better at desktop scale than tiny teeth.
+        if (!isEnabled()) p.setOpacity(0.42);
         const double f = fraction();
-        const double startDegrees = 225.0;
-        const int tickCount = 11;
-        const double interaction = m_dragging ? 1.0 : m_hoverFade.value() * 0.55;
-        QColor idle = mixColors(t.textSecondary, t.background, 0.62);
-        idle.setAlphaF(0.62);
-
-        // Frosted outer bezel: a restrained glass rim while idle, a brighter
-        // halo while the value is actively being changed. The geometry never
-        // grows, so the feedback cannot disturb the surrounding control row.
-        QColor bezelGlow = t.accent;
-        bezelGlow.setAlphaF(0.10 + interaction * 0.42);
+        const QColor accent = m_arcColor.isValid() ? m_arcColor : t.accent;
+        const bool interacting = m_dragging || underMouse();
         p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(bezelGlow, 2.5 + interaction * 1.8,
+        p.setPen(QPen(mixColors(t.separator(), t.textSecondary, 0.25), 2.5,
                       Qt::SolidLine, Qt::RoundCap));
-        p.drawArc(ring.adjusted(1.0, 1.0, -1.0, -1.0),
-                  225 * 16, -270 * 16);
-
-        for (int tick = 0; tick < tickCount; ++tick) {
-            const double tf = double(tick) / double(tickCount - 1);
-            const double angle = (startDegrees - tf * 270.0) * kDegToRad;
-            const bool active = m_bipolar ? (tf >= std::min(0.5, f) &&
-                                              tf <= std::max(0.5, f))
-                                           : tf <= f;
-            const double outer = radius - 0.25;
-            const double inner = outer - (active ? 3.4 : 2.2);
-            QColor tickInk = active ? mixColors(t.accent, t.accentHighlight,
-                                                 interaction * 0.45)
-                                    : idle;
-            p.setPen(QPen(tickInk, active ? 1.55 + interaction * 0.3 : 0.9,
-                          Qt::SolidLine, Qt::RoundCap));
-            p.drawLine(QPointF(centre.x() + std::cos(angle) * inner,
-                               centre.y() - std::sin(angle) * inner),
-                       QPointF(centre.x() + std::cos(angle) * outer,
-                               centre.y() - std::sin(angle) * outer));
-        }
-
-        QRectF body = ring.adjusted(4.6, 4.6, -4.6, -4.6);
-        QColor shadow = t.background;
-        shadow.setAlpha(t.dark ? 165 : 70);
-        p.setPen(Qt::NoPen);
-        p.setBrush(shadow);
-        p.drawEllipse(body.translated(0.0, 1.4));
-
-        QRadialGradient graphite(body.topLeft() +
-                                     QPointF(body.width() * 0.32,
-                                             body.height() * 0.25),
-                                 body.width() * 0.82);
-        graphite.setColorAt(0.0, mixColors(t.surfaceElevated, t.textPrimary,
-                                           t.dark ? 0.18 : 0.08));
-        graphite.setColorAt(0.48, mixColors(t.surfaceElevated, t.well(), 0.28));
-        graphite.setColorAt(1.0, mixColors(t.well(), t.background, 0.58));
-        QColor glassEdge = mixColors(t.separator(), t.textSecondary, 0.20);
-        glassEdge.setAlphaF(0.72);
-        p.setPen(QPen(glassEdge, 1.0));
-        p.setBrush(graphite);
-        p.drawEllipse(body);
-
-        QColor glassSheen = t.textPrimary;
-        glassSheen.setAlphaF(0.12 + interaction * 0.08);
-        p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(glassSheen, 1.0, Qt::SolidLine, Qt::RoundCap));
-        p.drawArc(body.adjusted(1.2, 1.2, -1.2, -1.2), 28 * 16, 112 * 16);
-
-        const double sweep = m_bipolar ? (f - 0.5) * 270.0 : f * 270.0;
+        p.drawArc(ring, 225 * 16, -270 * 16);
         const double from = m_bipolar ? 90.0 : 225.0;
-        QRectF glowRing = ring.adjusted(2.3, 2.3, -2.3, -2.3);
-        QColor glow = t.accent;
-        glow.setAlphaF(0.20 + interaction * 0.48);
-        p.setPen(QPen(glow, 4.0 + interaction * 2.0,
-                      Qt::SolidLine, Qt::RoundCap));
-        p.drawArc(glowRing, int(from * 16), int(-sweep * 16));
-        const QColor activeInk = mixColors(t.accent, t.accentHighlight,
-                                           interaction * 0.60);
-        p.setPen(QPen(activeInk, 1.65 + interaction * 0.35,
-                      Qt::SolidLine, Qt::RoundCap));
-        p.drawArc(glowRing, int(from * 16), int(-sweep * 16));
-
-        const double angle = (startDegrees - f * 270.0) * kDegToRad;
-        const QPointF stem(centre.x() + std::cos(angle) * body.width() * 0.16,
-                           centre.y() - std::sin(angle) * body.width() * 0.16);
-        const QPointF tip(centre.x() + std::cos(angle) * body.width() * 0.38,
-                          centre.y() - std::sin(angle) * body.width() * 0.38);
-        p.setPen(QPen(mixColors(t.textPrimary, activeInk, interaction * 0.44),
-                      1.55 + interaction * 0.25, Qt::SolidLine,
-                      Qt::RoundCap));
-        p.drawLine(stem, tip);
-        p.setBrush(activeInk);
-        p.setPen(Qt::NoPen);
-        p.drawEllipse(centre, 1.25 + interaction * 0.25,
-                      1.25 + interaction * 0.25);
-
+        const double sweep = (m_bipolar ? f - 0.5 : f) * 270.0;
+        p.setPen(QPen(accent, 2.5, Qt::SolidLine, Qt::RoundCap));
+        p.drawArc(ring, int(from * 16), int(-sweep * 16));
+        const QRectF body = ring.adjusted(4, 4, -4, -4);
+        QLinearGradient surface(body.topLeft(), body.bottomLeft());
+        surface.setColorAt(0, mixColors(t.surfaceElevated, t.textPrimary,
+                                         interacting ? 0.12 : 0.05));
+        surface.setColorAt(1, t.well());
+        p.setBrush(surface);
+        p.setPen(QPen(mixColors(t.separator(), t.textSecondary, 0.18), 1));
+        p.drawEllipse(body);
+        const double angle = (225.0 - f * 270.0) * kDegToRad;
+        const QPointF direction(std::cos(angle), -std::sin(angle));
+        p.setPen(QPen(t.textPrimary, 2, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(centre + direction * 3, centre + direction * 10);
         if (hasFocus()) {
-            QColor focus = t.accent;
-            focus.setAlpha(150);
             p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(focus, 1.0, Qt::SolidLine));
-            p.drawEllipse(ring.adjusted(-1.0, -1.0, 1.0, 1.0));
+            p.setPen(QPen(accent, 1.5));
+            p.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 5, 5);
         }
-
-        if (!m_caption.isEmpty()) {
-            const QRect labelRect(0, height() - kKnobCaptionHeight - 1, width(),
-                                  kKnobCaptionHeight + 1);
-            QFont font = p.font();
-            font.setPixelSize(8);
-            font.setLetterSpacing(QFont::PercentageSpacing, 105);
-            const bool showValue = m_hoverFade.value() > 0.35 || m_dragging;
-            if (showValue) {
-                font.setFamily(QStringLiteral("Monaco"));
-                p.setPen(Qt::NoPen);
-                QColor oled = mixColors(t.background, t.well(), 0.25);
-                oled.setAlphaF(0.94);
-                p.setBrush(oled);
-                p.drawRoundedRect(QRectF(labelRect).adjusted(1.0, 0.5, -1.0, -0.5),
-                                  3.0, 3.0);
-            }
-            p.setFont(font);
-            p.setPen(showValue ? activeInk : t.textSecondary);
-            p.drawText(labelRect, Qt::AlignCenter,
-                       elidedCaption(p, showValue ? text() : m_caption.toUpper(),
-                                     labelRect.width()));
-        }
+        QFont labelFont = font();
+        labelFont.setPixelSize(10);
+        labelFont.setWeight(QFont::Medium);
+        p.setFont(labelFont);
+        p.setPen(t.textSecondary);
+        p.drawText(QRect(0, 0, width(), 16), Qt::AlignCenter,
+                   elidedCaption(p, m_caption, width()));
+        labelFont.setPixelSize(11);
+        p.setFont(labelFont);
+        p.setPen(m_dragging ? accent : t.textPrimary);
+        p.drawText(QRect(0, 60, width(), 17), Qt::AlignCenter,
+                   elidedCaption(p, text(), width()));
         return;
     }
 
@@ -2383,9 +2305,8 @@ void Knob::mouseReleaseEvent(QMouseEvent*) {
     emit editFinished();
 }
 
-void Knob::mouseDoubleClickEvent(QMouseEvent* ev) {
-    if (m_automatable &&
-        (automationCreationMode() || (ev->modifiers() & Qt::AltModifier))) {
+void Knob::mouseDoubleClickEvent(QMouseEvent*) {
+    if (m_automatable && automationCreationMode()) {
         emit automateRequested();
         return;
     }
@@ -2411,6 +2332,21 @@ void Knob::wheelEvent(QWheelEvent* ev) {
         commit(m_value + direction * step * fine);
     }
     emit editFinished();
+}
+
+bool Knob::event(QEvent* event) {
+    if (event->type() == QEvent::ShortcutOverride) {
+        const auto* key = static_cast<QKeyEvent*>(event);
+        if (!(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
+            switch (key->key()) {
+            case Qt::Key_Left: case Qt::Key_Right: case Qt::Key_Up: case Qt::Key_Down:
+            case Qt::Key_Home: case Qt::Key_End:
+                event->accept(); return true;
+            default: break;
+            }
+        }
+    }
+    return QWidget::event(event);
 }
 
 void Knob::keyPressEvent(QKeyEvent* event) {
@@ -2653,6 +2589,9 @@ LevelMeter::LevelMeter(Qt::Orientation orientation, int channels,
 void LevelMeter::setPeak(float peak) { setPeaks(peak, peak); }
 
 void LevelMeter::setPeaks(float left, float right) {
+    const double dt = m_decayClock.isValid() ? double(m_decayClock.nsecsElapsed()) / 1e9 : 0.033;
+    m_decayClock.start();
+    const float release = float(std::pow(0.80, dt / 0.033));
     const float in[2] = {left, right};
     bool dirty = false;
     // A rail draws one bar out of both sides, so it has to *hold* both even
@@ -2661,14 +2600,14 @@ void LevelMeter::setPeaks(float left, float right) {
     for (int i = 0; i < tracked; ++i) {
         const float v = std::max(0.0f, in[i]);
         // Fast attack, slow release so short transients stay readable.
-        const float next = v > m_level[i] ? v : m_level[i] * 0.80f + v * 0.20f;
+        const float next = v > m_level[i] ? v : m_level[i] * release + v * (1.0f - release);
         if (std::abs(next - m_level[i]) > 0.0005f) dirty = true;
         m_level[i] = next;
         const float previousHold = m_hold[i];
         if (v > previousHold) {
             m_hold[i] = v;
         } else if (v < previousHold) {
-            m_hold[i] = std::max(0.0f, previousHold - 0.006f);
+            m_hold[i] = std::max(0.0f, previousHold - float(0.006 * dt / 0.033));
         }
         if (std::abs(m_hold[i] - previousHold) > 0.0005f) dirty = true;
         if (v >= 0.999f && !m_clipped) {
@@ -2911,7 +2850,7 @@ QLabel* sectionLabel(const QString& text, QWidget* parent) {
     label->setProperty("role", "section");
     QFont f = label->font();
     f.setPixelSize(9);
-    f.setBold(true);
+    f.setWeight(QFont::DemiBold);
     f.setLetterSpacing(QFont::AbsoluteSpacing, 0.7);
     label->setFont(f);
     return label;

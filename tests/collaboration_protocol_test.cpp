@@ -390,7 +390,7 @@ void serializerV7AndLegacyMigration(const fs::path& dir) {
     insert.format = PluginFormat::Internal;
     insert.uid = "daw.sampler";
     insert.name = "Sampler";
-    insert.vendor = "VLT Studio Pro";
+    insert.vendor = "VLTONE";
     insert.pluginVersion = "1.0";
     insert.stateSchemaVersion = 1;
     insert.stateAsset = AssetRef{"asset-state", std::string(64, 'b'),
@@ -806,7 +806,11 @@ void reducerReplayBatchDeleteAndUndo() {
     midiClip.durationSeconds = 3.0;
     midiClip.fadeInSeconds = 0.25;
     midiClip.fadeOutSeconds = 0.5;
-    tempoTrack.clips = {audioClip, midiClip};
+    ClipModel stretchedClip = audioClip;
+    stretchedClip.id = clipId("tempo-stretched");
+    stretchedClip.sampleEdit.stretchMode = ClipStretchMode::Vocal;
+    stretchedClip.sampleEdit.stretchTime = 1.5;
+    tempoTrack.clips = {audioClip, midiClip, stretchedClip};
     tempoCascade.project.tracks.push_back(std::move(tempoTrack));
     ApplyResult tempoChanged = ProjectReducer::apply(
         tempoCascade, command("tempo-cascade", SetProjectScalar{
@@ -821,13 +825,19 @@ void reducerReplayBatchDeleteAndUndo() {
               retimedTrack.clips[1].fadeInSeconds == 0.5 &&
               tempoChanged.impact.trackIds.contains(retimedTrack.id),
           "tempo reducer preserves audio time and MIDI beats deterministically");
+    check(retimedTrack.clips[2].durationSeconds == 8.0 &&
+              retimedTrack.clips[2].sampleEdit.stretchTime == 3.0 &&
+              retimedTrack.clips[2].fadeInSeconds == 1.0,
+          "cloud tempo cascade stretches enabled audio without changing its source region");
     ProjectCommand undoTempoCascade = *tempoChanged.inverse;
     undoTempoCascade.meta = meta("undo-tempo-cascade");
     const ApplyResult tempoRestored =
         ProjectReducer::apply(tempoCascade, undoTempoCascade);
     const auto& restoredClips =
         tempoCascade.project.tracks.front().clips;
-    check(tempoRestored.changed() && restoredClips.size() == 2 &&
+    check(tempoRestored.changed() && restoredClips.size() == 3 &&
+              restoredClips[2].sampleEdit.stretchTime == 1.5 &&
+              restoredClips[2].durationSeconds == 4.0 &&
               restoredClips[0].startSeconds == audioClip.startSeconds &&
               restoredClips[0].durationSeconds ==
                   audioClip.durationSeconds &&
@@ -1123,7 +1133,7 @@ void clipNoteAutomationReducerAndWire() {
                   "sample-edit-clip-shape",
                   SetClipSampleEdit{midiTrack, midiClip, {}})) ==
                   std::vector<std::string>{clipPrefix + "sampleEdit",
-                                           midiLandingHead},
+                                           "project:tempoCascade", midiLandingHead},
           "clip landing-sensitive mutations advance the owning track head");
     json extraMetadata = clipWire;
     extraMetadata["actorId"] = testUuid("collaboration-test", "extra-actor");

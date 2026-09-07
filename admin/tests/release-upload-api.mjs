@@ -8,7 +8,8 @@ createServer((request, response) => {
   if (url.pathname === "/health") return response.end("ok");
 
   const allowed = (request.method === "PUT" && artifactPath.test(url.pathname))
-    || (request.method === "POST" && screenshotPath.test(url.pathname));
+    || (request.method === "POST" && screenshotPath.test(url.pathname))
+    || (request.method === "POST" && url.pathname === "/v1/admin/browser-backgrounds");
   if (!allowed) {
     response.writeHead(404, { "Content-Type": "application/json" });
     return response.end(JSON.stringify({ code: "not_found", path: url.pathname }));

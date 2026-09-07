@@ -80,12 +80,11 @@ public:
     int progressPercent() const noexcept;
 };
 
-/// Persistent bottom strip: session state, who is here, and what is moving.
+/// Bottom strip for cloud projects: session state, who is here, and what is moving.
 ///
 /// Replaces SessionStatusWidget, which lived in the QStatusBar the user can
-/// switch off along with the CPU meter. What the session is doing with someone's
-/// work is not an optional readout, and the old widget could report state but no
-/// progress at all.
+/// switch off along with the CPU meter. MainWindow shows it while a cloud
+/// project is open, independently of the CPU readout and connection state.
 class SessionStatusStrip final : public QWidget {
     Q_OBJECT
 public:

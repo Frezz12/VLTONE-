@@ -38,6 +38,22 @@ add_executable(device_smoke device_smoke.cpp)
 target_link_libraries(device_smoke PRIVATE daw_controller)
 
 # Phase-2: headless controller round-trip (model, export, save/reload).
+add_executable(mp3_import_test mp3_import_test.cpp)
+target_link_libraries(mp3_import_test PRIVATE daw_controller)
+target_compile_definitions(mp3_import_test PRIVATE
+    DAW_TEST_MP3_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/audio/mp3-vbr-estimated-length.mp3")
+add_test(NAME mp3_import_test COMMAND mp3_import_test)
+set_tests_properties(mp3_import_test PROPERTIES TIMEOUT 30)
+
+if(APPLE OR WIN32)
+    add_executable(m4a_import_test m4a_import_test.cpp)
+    target_link_libraries(m4a_import_test PRIVATE daw_controller)
+    target_compile_definitions(m4a_import_test PRIVATE
+        DAW_TEST_AUDIO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/audio")
+    add_test(NAME m4a_import_test COMMAND m4a_import_test)
+    set_tests_properties(m4a_import_test PROPERTIES TIMEOUT 30)
+endif()
+
 add_executable(controller_test controller_test.cpp)
 target_link_libraries(controller_test PRIVATE daw_controller)
 
@@ -94,6 +110,12 @@ target_link_libraries(resampler_test PRIVATE daw_engine)
 
 add_test(NAME resampler_test COMMAND resampler_test)
 set_tests_properties(resampler_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
+add_executable(time_stretch_test time_stretch_test.cpp)
+target_link_libraries(time_stretch_test PRIVATE daw_engine)
+add_test(NAME time_stretch_test COMMAND time_stretch_test)
+set_tests_properties(time_stretch_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 
 # Offline render: formats, ranges, tails, stems, and the state a render borrows.
@@ -316,6 +338,7 @@ add_dependencies(recovery_test daw_guard)
 
 add_test(NAME recovery_test COMMAND recovery_test)
 set_tests_properties(recovery_test PROPERTIES
+    TIMEOUT 120
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 
 # Plugin hosting against the real CLAP fixture above: scanning, instantiation,
@@ -362,7 +385,7 @@ endif()
 # Phase-7: VST3 hosting, against a real VST3 bundle built in-tree.
 if(DAW_ENABLE_VST3)
     add_executable(plugin_vst3_test plugin_vst3_test.cpp)
-    target_link_libraries(plugin_vst3_test PRIVATE daw_pluginhost)
+    target_link_libraries(plugin_vst3_test PRIVATE daw_controller)
     target_compile_definitions(plugin_vst3_test
         PRIVATE DAW_TEST_VST3_PATH="${DAW_TEST_VST3_PATH}")
     add_dependencies(plugin_vst3_test daw_test_vst3)
@@ -406,3 +429,16 @@ if(DAW_ENABLE_CLAP)
     set_tests_properties(plugin_midi_test PROPERTIES
         FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 endif()
+
+add_executable(audio_realtime_test audio_realtime_test.cpp)
+target_link_libraries(audio_realtime_test PRIVATE daw_engine daw_core)
+add_test(NAME audio_realtime_test COMMAND audio_realtime_test)
+set_tests_properties(audio_realtime_test PROPERTIES TIMEOUT 60)
+
+add_executable(track_freeze_test track_freeze_test.cpp)
+target_link_libraries(track_freeze_test PRIVATE daw_controller)
+add_test(NAME track_freeze_test COMMAND track_freeze_test)
+set_tests_properties(track_freeze_test PROPERTIES TIMEOUT 120)
+
+add_executable(audio_engine_bench EXCLUDE_FROM_ALL audio_engine_bench.cpp)
+target_link_libraries(audio_engine_bench PRIVATE daw_engine)

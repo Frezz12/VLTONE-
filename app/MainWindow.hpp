@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QElapsedTimer>
+#include "UiFrameClock.hpp"
+#include "UiChangeSet.hpp"
 #include <QHash>
 #include <QKeySequence>
 #include <QList>
@@ -22,10 +24,12 @@
 #include "recovery/RecoveryJournal.hpp"
 
 class QLabel;
+class QDialog;
 class QMenu;
 class QProgressBar;
 class QResizeEvent;
 class QTimer;
+class QToolButton;
 class QAction;
 class TrackListWidget;
 class TimelineWidget;
@@ -47,6 +51,7 @@ class NoteContextPanel;
 class FileBrowserPanel;
 class AiChatPanel;
 class WebBrowserPanel;
+namespace ui { class WebVideoBackground; }
 class NotebookWindow;
 class TypingKeyboard;
 class MidiInputManager;
@@ -400,8 +405,8 @@ public:
     /// that act through them. Gesture-level, so the headless controller tests
     /// cannot reach it.
     bool checkAutomationEditorForTest();
-    /// A plain double-click resets a parameter; Alt/Option+double-click (or the
-    /// latched toolbar mode) makes automation for it.
+    /// A plain or Alt/Option double-click resets a parameter; the context menu
+    /// or explicitly enabled toolbar mode makes automation for it.
     bool checkKnobAutomationForTest();
     /// The plugin editor's parameter dock: that it widens the window instead of
     /// cropping the plugin, and that the parameter the plugin itself moves
@@ -479,10 +484,12 @@ public:
     bool checkWebBrowserForTest(const QString& audioFile);
     /// Screenshot hook: open the browser on its remembered/home page.
     void openWebBrowserForShot();
+    void openNotebookForShot();
+    bool checkNotebookForTest();
 
-    /// Privacy-bounded aggregate used by the external telemetry reporter.
+    /// Diagnostic metrics; detailed project state is captured only on flush.
     /// Contains no project name, file paths, audio, MIDI or user-entered text.
-    QJsonObject telemetrySnapshot();
+    QJsonObject telemetrySnapshot(bool detailed = false);
     QString recoverySessionDir() const {
         return QString::fromStdString(m_journal.sessionDir());
     }
@@ -607,9 +614,7 @@ private:
     /// Apply the held state of the two modifier gestures above.
     void setAuditionHeld(bool held);
     void setLayerInvertHeld(bool held);
-    /// Alt/Option is the momentary half of automation creation; the toolbar
-    /// button is the latched half. Both feed one effective state.
-    void setAutomationModifierHeld(bool held);
+    /// Mirror the explicit toolbar/command choice into automatable controls.
     void updateAutomationCreationMode();
 
     /// The tracks a recording would land on: whatever is selected, falling back
@@ -692,7 +697,7 @@ private:
     /// expensive channel-strip reconstruction for the next paint boundary.
     void syncStructureViews();
     void scheduleDeferredStructureRefresh();
-    void markDirty();
+    void markDirty(const QStringList& tracks = {});
     /// Where the selected clips are, in the tool strip's coordinates, so the
     /// context panel can ride above them. False when the selection has no
     /// horizontal extent.
@@ -719,6 +724,7 @@ private:
     void setWebVisible(bool visible, bool persist = true);
     void ensureNotebook();
     void setNotebookVisible(bool visible, bool persist = true);
+    void setNotebookDetached(bool detached);
     void applyRightPanelWidths();
     /// Apply the preferred track-header width against the live arrangement
     /// bounds, and keep the tool strip aligned with it.
@@ -757,8 +763,8 @@ private:
     void onPublishCloudProject();
     /// Asks for an optional session password, then starts the session.
     /// Shows one short, already-safe line to the user. Routed to the session
-    /// strip, which is always visible, rather than the CPU status bar, which
-    /// the user can switch off. `timeoutMs` of 0 leaves it until superseded.
+    /// strip in cloud projects, or the ordinary status bar in local projects.
+    /// `timeoutMs` of 0 leaves it until superseded.
     void showTransientStatus(const QString& safeMessage, int timeoutMs = 5000,
                              bool error = false);
     void onStartCollaborationSession();
@@ -871,8 +877,14 @@ private:
     QWidget* m_browserHandle = nullptr;
     QWidget* m_webContainer = nullptr;
     WebBrowserPanel* m_webPanel = nullptr;
+    ui::WebVideoBackground* m_webVideoBackground = nullptr;
     QWidget* m_webHandle = nullptr;
     NotebookWindow* m_notebookWindow = nullptr;
+    QWidget* m_notebookContainer = nullptr;
+    QWidget* m_notebookHandle = nullptr;
+    QDialog* m_notebookDetachedWindow = nullptr;
+    bool m_notebookDetached = false;
+    bool m_changingNotebookPlacement = false;
     AiChatPanel* m_aiPanel = nullptr;
     QWidget* m_aiHandle = nullptr;
     /// The row holding browser | inspector | arrangement | assistant. Kept
@@ -882,9 +894,10 @@ private:
     /// assistant. Held so the gap at the window's right edge can be matched to
     /// the one the handle leaves on the panel's other side.
     QHBoxLayout* m_shellLayout = nullptr;
-    /// The main body row also acts as the clipping/stacking surface for
-    /// internal editor frames. They are children, but not layout items.
+    /// Floating editors share the whole workspace with the transport/header.
+    /// The body is retained for initial placement and maximized editors.
     QWidget* m_editorHost = nullptr;
+    QWidget* m_editorBody = nullptr;
     QWidget* m_arrangementHost = nullptr;
     QWidget* m_trackHeaderHandle = nullptr;
     QWidget* m_mixerHandle = nullptr;
@@ -892,6 +905,7 @@ private:
 
     QLabel* m_statusLeft = nullptr;
     QLabel* m_statusRight = nullptr;
+    QToolButton* m_cpuStatusButton = nullptr;
     QLabel* m_cpuStatusIcon = nullptr;
     QProgressBar* m_cpuStatusMeter = nullptr;
     QAction* m_showMixerAction = nullptr;
@@ -905,7 +919,11 @@ private:
     QAction* m_offlineRenderAction = nullptr;
     QTimer* m_refreshTimer = nullptr;
     /// Lightweight 60-ish Hz cursor clock. It sleeps while transport is still.
-    QTimer* m_playheadTimer = nullptr;
+    void queueUiChange(const ui::UiChangeSet& change);
+    ui::UiChangeSet m_pendingUiChange;
+    ui::FrameTimer* m_uiChangeTimer = nullptr;
+    ui::FrameTimer* m_playheadTimer = nullptr;
+    ui::FrameTimer* m_pianoPlayheadTimer = nullptr;
     /// Automation controls need 30 Hz updates only while the transport runs.
     /// On the first stopped tick they return to their document values once.
     bool m_wasAutomationPlaying = false;
@@ -954,6 +972,7 @@ private:
     bool m_persistGeometry = true;
 
     QString m_projectPath;
+    bool m_projectFileJob = false;
     QString m_selectedTrackId;
     bool m_dirty = false;
     /// Monotonic identity of document content.  Publication uses this in
@@ -971,17 +990,17 @@ private:
     int m_guardPipe = -1;
     /// Set by markDirty(), cleared when the journal has been handed a copy.
     bool m_journalStale = false;
+    bool m_recoveryAllTracksDirty = true;
+    std::unordered_set<std::string> m_recoveryDirtyTracks;
     /// Content-addressed filenames from the last plugin recovery generation.
     /// While an editor is open these let us notice opaque preset/state changes
     /// that the plugin did not announce, without rewriting an unchanged journal.
     std::vector<std::string> m_recoveryPluginStateFiles;
     double m_recoveryDspPeak = 0.0;
-    double m_telemetryDspPeak = 0.0;
     bool m_playFromClip = false;   // Space loops the selected clip
     // Held-key gestures (see eventFilter).
     bool m_auditionHeld = false;
     bool m_layerInvertHeld = false;
-    bool m_automationModifierHeld = false;
     bool m_automationCreationLatched = false;
     // Global record engage: the transport is armed and R will start a take.
     bool m_recordEngaged = false;
@@ -1000,6 +1019,8 @@ private:
     bool m_browserOnLeft = true;
     int m_browserWidth = 240;
     int m_browserDragStartWidth = 240;
+    int m_notebookWidth = 440;
+    int m_notebookDragStartWidth = 440;
     int m_webWidth = 520;
     int m_webDragStartWidth = 520;
     int m_aiWidth = 320;

@@ -1,4 +1,5 @@
 #include "ContextPanel.hpp"
+#include "AdaptiveContextRow.hpp"
 
 #include "Controls.hpp"
 #include "Icons.hpp"
@@ -311,6 +312,26 @@ ContextPanel::Context ContextPanel::resolve() const {
     return m_recordEngaged ? Context::Recording : Context::None;
 }
 
+bool ContextPanel::followsClipSelection() const {
+    if (!m_follow || m_selection->kind() != ui::SelectionKind::Clip) return false;
+    // The timeline may retain a clip span after another view selects a track.
+    // Recording can also replace the clip's tools without clearing selection.
+    // Only the displayed clip context is allowed to use that span as an anchor.
+    switch (m_context) {
+        case Context::AudioClip:
+        case Context::AudioClipMulti:
+        case Context::AutomationClip:
+        case Context::AutomationClipMulti:
+        case Context::MidiClip:
+        case Context::MidiClipMulti:
+        case Context::PatternClip:
+        case Context::PatternClipMulti:
+            return true;
+        default:
+            return false;
+    }
+}
+
 QColor ContextPanel::accentFor(Context context) const {
     switch (context) {
         case Context::Recording:
@@ -360,6 +381,15 @@ ui::IconButton* islandButton(icons::Glyph glyph, const QString& tip,
                              QWidget* parent) {
     auto* button = new ui::IconButton(glyph, tip, parent);
     button->setButtonSize(kButton, kButton);
+    int priority = 60;
+    switch (glyph) {
+        case icons::Glyph::Power: priority = 100; break;
+        case icons::Glyph::Plus: priority = 85; break;
+        case icons::Glyph::Trash: priority = 80; break;
+        case icons::Glyph::Record: priority = 120; break;
+        default: break;
+    }
+    ui::contextPriority(button, priority);
     return button;
 }
 
@@ -368,7 +398,10 @@ ui::IconButton* islandButton(icons::Glyph glyph, const QString& tip,
 /// for digits, so the number only appears while the value is being changed.
 ui::MiniSlider* islandSlider(icons::Glyph glyph, const QString& tip,
                              QWidget* parent) {
-    return new ui::MiniSlider(glyph, tip, parent);
+    auto* slider = new ui::MiniSlider(glyph, tip, parent);
+    ui::contextPriority(slider, glyph == icons::Glyph::Volume ? 110 :
+                               glyph == icons::Glyph::FadeIn || glyph == icons::Glyph::FadeOut ? 70 : 90);
+    return slider;
 }
 
 QString formatDb(double db) {
@@ -387,6 +420,7 @@ QPushButton* islandSwatch(const QString& tip, QWidget* parent) {
     swatch->setFixedSize(18, kRowHeight);
     swatch->setCursor(Qt::PointingHandCursor);
     swatch->setToolTip(tip);
+    ui::contextPriority(swatch, 10);
     return swatch;
 }
 
@@ -407,7 +441,9 @@ double dbToGain(double db) {
 }
 
 QWidget* islandDivider(QWidget* parent) {
-    return ui::separatorLine(Qt::Vertical, 16, parent);
+    auto* divider = ui::separatorLine(Qt::Vertical, 16, parent);
+    divider->setProperty("islandSeparator", true);
+    return divider;
 }
 
 }  // namespace
@@ -456,6 +492,7 @@ QWidget* ContextPanel::buildAudioClip() {
     QHBoxLayout* outer = nullptr;
     QWidget* host = newRow(outer);
     auto* actionsHost = new QWidget(host);
+    ui::contextContainer(actionsHost);
     auto* row = new QHBoxLayout(actionsHost);
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(6);
@@ -570,6 +607,7 @@ QWidget* ContextPanel::buildAudioClip() {
 
     if (toolEnabled("clip.analysis")) {
         auto* analysisGroup = new QWidget(host);
+        ui::contextPriority(analysisGroup, 0);
         auto* analysisRow = new QHBoxLayout(analysisGroup);
         analysisRow->setContentsMargins(0, 0, 0, 0);
         analysisRow->setSpacing(7);
@@ -584,7 +622,7 @@ QWidget* ContextPanel::buildAudioClip() {
         loaders.push_back([clipOf, analysisGroup, analysisText] {
             const auto* c = clipOf();
             if (!c || c->musicalAnalysis.empty()) {
-                analysisGroup->setVisible(false);
+                ui::contextAvailable(analysisGroup, false);
                 return;
             }
             QStringList parts;
@@ -611,7 +649,7 @@ QWidget* ContextPanel::buildAudioClip() {
             }
             analysisText->setText(parts.join(QStringLiteral("   ")));
             analysisText->setToolTip(details.join(QLatin1Char('\n')));
-            analysisGroup->setVisible(!parts.isEmpty());
+            ui::contextAvailable(analysisGroup, !parts.isEmpty());
         });
     }
 
@@ -644,6 +682,7 @@ QWidget* ContextPanel::buildAudioClip() {
             outer->addWidget(pluginDivider);
         }
         auto* adder = new PluginQuickAdder(m_controller, host);
+        ui::contextPriority(adder, 30);
         adder->setObjectName(QStringLiteral("ContextPanelClipPluginSearch"));
         adder->setClipTarget(QString::fromStdString(trackId),
                              QString::fromStdString(clipId));
@@ -665,9 +704,8 @@ QWidget* ContextPanel::buildAudioClip() {
                 });
         connect(adder, &PluginQuickAdder::searchStateChanged, this,
                 [this, host, actionsHost, pluginDivider](bool expanded) {
-                    actionsHost->setVisible(!expanded);
-                    if (pluginDivider) pluginDivider->setVisible(!expanded);
-                    host->resize(host->sizeHint().width(), kRowHeight);
+                    ui::contextAvailable(actionsHost, !expanded);
+                    if (pluginDivider) ui::contextAvailable(pluginDivider, !expanded);
                     if (QWidget* strip = parentWidget()) strip->setFixedHeight(44);
                     setGeometry(targetGeometry());
                     layoutSelf();
@@ -676,7 +714,6 @@ QWidget* ContextPanel::buildAudioClip() {
                 });
         connect(adder, &PluginQuickAdder::sizeChanged, this, [this, host] {
             if (!m_content || m_content != host) return;
-            host->resize(host->sizeHint().width(), kRowHeight);
             if (QWidget* strip = parentWidget()) strip->setFixedHeight(44);
             setGeometry(targetGeometry());
             layoutSelf();
@@ -736,6 +773,8 @@ QWidget* ContextPanel::buildAudioClipMulti() {
         };
         auto* down = islandButton(icons::Glyph::Minus, tr("Quieter by 1 dB"), host);
         auto* up = islandButton(icons::Glyph::Plus, tr("Louder by 1 dB"), host);
+        ui::contextPriority(down, 110);
+        ui::contextPriority(up, 110);
         connect(down, &QAbstractButton::clicked, this, [nudge] { nudge(-1.0); });
         connect(up, &QAbstractButton::clicked, this, [nudge] { nudge(1.0); });
 
@@ -933,6 +972,7 @@ QWidget* ContextPanel::buildAutomationClip(bool multi) {
             emit automationEditorRequested(sel.trackId, sel.clipId);
         });
         row->addWidget(disable);
+        ui::contextPriority(editor, 110);
         row->addWidget(editor);
         loaders.push_back([this, disable] {
             const auto clips = m_selection->clips();
@@ -1084,6 +1124,7 @@ QWidget* ContextPanel::buildMidiClip(bool multi) {
                   : tr("Open Piano Roll"),
             host);
         editor->setObjectName(QStringLiteral("MidiClipEditorButton"));
+        ui::contextPriority(editor, 110);
         editor->setAccessibleName(tr("Open Piano Roll"));
         connect(editor, &QAbstractButton::clicked, this, [this] {
             if (m_selection->clips().isEmpty()) return;
@@ -1242,6 +1283,7 @@ QWidget* ContextPanel::buildPatternClip(bool multi) {
             if (m_selection->clips().isEmpty()) return;
             emit patternEditorRequested(m_selection->clips().first().trackId);
         });
+        ui::contextPriority(editor, 110);
         row->addWidget(disable);
         row->addWidget(editor);
         loaders.push_back([this, disable] {
@@ -1332,6 +1374,7 @@ QWidget* ContextPanel::buildTrackMulti() {
     QHBoxLayout* outer = nullptr;
     QWidget* host = newRow(outer);
     auto* actionsHost = new QWidget(host);
+    ui::contextContainer(actionsHost);
     auto* row = new QHBoxLayout(actionsHost);
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(6);
@@ -1387,6 +1430,7 @@ QWidget* ContextPanel::buildTrackMulti() {
         // solos) everything and a second press with the chip lit lifts it.
         auto* mute = new ui::MsrButton(
             tr("M"), Theme::mute(), tr("Mute them all"), host);
+        ui::contextPriority(mute, 100);
         connect(mute, &QAbstractButton::clicked, this,
                 [this, mute, tracks](bool on) {
                     const auto result =
@@ -1402,6 +1446,7 @@ QWidget* ContextPanel::buildTrackMulti() {
                                    const QString& onTip, const QString& offTip,
                                    auto&& setter) {
             auto* chip = new ui::MsrButton(letter, colour, onTip, host);
+            ui::contextPriority(chip, 100);
             connect(chip, &QAbstractButton::clicked, this,
                     [this, chip, onTip, offTip, forEach, setter](bool on) {
                         forEach([&](const std::string& id) { setter(id, on); });
@@ -1435,6 +1480,8 @@ QWidget* ContextPanel::buildTrackMulti() {
         };
         auto* down = islandButton(icons::Glyph::Minus, tr("Quieter by 1 dB"), host);
         auto* up = islandButton(icons::Glyph::Plus, tr("Louder by 1 dB"), host);
+        ui::contextPriority(down, 110);
+        ui::contextPriority(up, 110);
         connect(down, &QAbstractButton::clicked, this, [nudge] { nudge(-1.0); });
         connect(up, &QAbstractButton::clicked, this, [nudge] { nudge(1.0); });
         row->addWidget(down);
@@ -1485,6 +1532,7 @@ QWidget* ContextPanel::buildTrackMulti() {
         // The adder loads into the first track, then the same plugin is loaded
         // into the rest — one search, a plugin on every selected channel.
         auto* adder = new PluginQuickAdder(m_controller, host);
+        ui::contextPriority(adder, 30);
         adder->setTrackId(QString::fromStdString(tracks.front()));
         adder->setAccentColor(th().accent);
         outer->addWidget(adder, 0, Qt::AlignVCenter);
@@ -1523,8 +1571,7 @@ QWidget* ContextPanel::buildTrackMulti() {
                 });
         connect(adder, &PluginQuickAdder::searchStateChanged, this,
                 [this, host, actionsHost](bool expanded) {
-                    actionsHost->setVisible(!expanded);
-                    host->resize(host->sizeHint().width(), kRowHeight);
+                    ui::contextAvailable(actionsHost, !expanded);
                     if (QWidget* strip = parentWidget()) strip->setFixedHeight(44);
                     setGeometry(targetGeometry());
                     layoutSelf();
@@ -1533,7 +1580,6 @@ QWidget* ContextPanel::buildTrackMulti() {
                 });
         connect(adder, &PluginQuickAdder::sizeChanged, this, [this, host] {
             if (!m_content || m_content != host) return;
-            host->resize(host->sizeHint().width(), kRowHeight);
             setGeometry(targetGeometry());
             layoutSelf();
             invalidateBackdrop();
@@ -1566,6 +1612,7 @@ QWidget* ContextPanel::buildTrack() {
     QHBoxLayout* outer = nullptr;
     QWidget* host = newRow(outer);
     auto* actionsHost = new QWidget(host);
+    ui::contextContainer(actionsHost);
     auto* row = new QHBoxLayout(actionsHost);
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(6);
@@ -1622,9 +1669,11 @@ QWidget* ContextPanel::buildTrack() {
     if (toolEnabled("track.state") && !automationLane) {
         auto* mute = new ui::MsrButton(tr("M"), Theme::mute(), tr("Mute"), host);
         auto* solo = new ui::MsrButton(tr("S"), Theme::solo(), tr("Solo"), host);
+        ui::contextPriority(mute, 100);
+        ui::contextPriority(solo, 100);
         auto* mono = islandButton(icons::Glyph::MonoRing, tr("Fold to mono"), host);
         mono->setCheckable(true);
-        mono->setVisible(hasChannel);
+        ui::contextAvailable(mono, hasChannel);
 
         if (hasChannel) {
             mute->setAutomatable(true);
@@ -1761,6 +1810,7 @@ QWidget* ContextPanel::buildTrack() {
             outer->addWidget(pluginDivider);
         }
         auto* adder = new PluginQuickAdder(m_controller, host);
+        ui::contextPriority(adder, 30);
         adder->setTrackId(QString::fromStdString(trackId));
         adder->setAccentColor(colorFromRgb(trackOf()->color));
         outer->addWidget(adder, 0, Qt::AlignVCenter);
@@ -1780,9 +1830,8 @@ QWidget* ContextPanel::buildTrack() {
                 });
         connect(adder, &PluginQuickAdder::searchStateChanged, this,
                 [this, host, actionsHost, pluginDivider](bool expanded) {
-                    actionsHost->setVisible(!expanded);
-                    if (pluginDivider) pluginDivider->setVisible(!expanded);
-                    host->resize(host->sizeHint().width(), kRowHeight);
+                    ui::contextAvailable(actionsHost, !expanded);
+                    if (pluginDivider) ui::contextAvailable(pluginDivider, !expanded);
                     if (QWidget* strip = parentWidget()) strip->setFixedHeight(44);
                     setGeometry(targetGeometry());
                     layoutSelf();
@@ -1791,7 +1840,6 @@ QWidget* ContextPanel::buildTrack() {
                 });
         connect(adder, &PluginQuickAdder::sizeChanged, this, [this, host] {
             if (!m_content || m_content != host) return;
-            host->resize(host->sizeHint().width(), kRowHeight);
             if (QWidget* strip = parentWidget()) strip->setFixedHeight(44);
             setGeometry(targetGeometry());
             layoutSelf();
@@ -2022,7 +2070,7 @@ void ContextPanel::openPluginSearch() {
 
 // ── Selection → content ──
 
-void ContextPanel::onSelectionChanged() {
+void ContextPanel::onSelectionChanged(bool force) {
     const Context next = resolve();
 
     // The identity of what is selected, so re-selecting the *same* object after
@@ -2044,7 +2092,7 @@ void ContextPanel::onSelectionChanged() {
         for (const QString& id : m_selection->tracks()) key += '/' + id;
     }
 
-    if (next == m_context && key == m_contextKey) {
+    if (!force && next == m_context && key == m_contextKey) {
         refresh();   // same object, values may have moved under us
         return;
     }
@@ -2055,12 +2103,13 @@ void ContextPanel::onSelectionChanged() {
 
 void ContextPanel::refresh() {
     if (m_applyValues) m_applyValues();
+    if (m_content && isVisible() && targetGeometry().size() != size()) relayout();
 }
 
 void ContextPanel::rebuild() {
-    m_context = Context::None;
-    m_contextKey.clear();
-    onSelectionChanged();
+    // Clearing the current kind first made a disabled panel look like an
+    // unchanged None selection, leaving its old content on screen forever.
+    onSelectionChanged(true);
 }
 
 void ContextPanel::setPanelEnabled(bool enabled) {
@@ -2264,38 +2313,38 @@ QRect ContextPanel::targetGeometry() const {
 
     // The island is only as wide as its controls need and always as tall as the
     // strip it sits in.
-    const int contentWidth = std::max(m_content->width(), m_content->sizeHint().width());
-    const int width = std::min(contentWidth +
-                                   2 * (kShadow + kEndPadding),
-                               host->width() - 24);
     // Height is the plate plus the shadow below it; the top is flush with the
     // strip's own top edge, which is what makes the two read as one surface.
     const int height = kRowHeight + 2 * kPadding + kShadow;
 
-    // Centred is the fallback, and the whole behaviour when the user has pinned
-    // it: under the transport's position readout, where it has always been.
+    // Non-clip contexts and pinned mode use the middle of the available area.
     // The plate belongs over the arrangement — that is what it talks about —
     // so its travel is bounded by the arrangement's own edges rather than by
     // the window's. Without a provider it may use the whole strip.
     int limitLeft = 12;
     int limitRight = std::max(12, host->width() - 12);
     int boundsLeft = 0, boundsRight = 0;
-    if (m_boundsProvider && m_boundsProvider(boundsLeft, boundsRight) &&
-        boundsRight - boundsLeft > 40) {
-        limitLeft = boundsLeft;
-        limitRight = boundsRight;
+    if (m_boundsProvider && m_boundsProvider(boundsLeft, boundsRight)) {
+        limitLeft = std::clamp(boundsLeft, 0, host->width());
+        limitRight = std::clamp(boundsRight, limitLeft, host->width());
     }
+    const int available = std::max(0, limitRight - limitLeft);
+    const int contentSpace = std::max(0, available - 2 * (kShadow + kEndPadding));
+    if (m_quickAdder && m_content->isAncestorOf(m_quickAdder))
+        m_quickAdder->setAvailableWidth(contentSpace);
+    const int contentWidth = ui::fitContextRow(m_content, contentSpace);
+    const int width = std::min(available, contentWidth + 2 * (kShadow + kEndPadding));
     const int rightmost = std::max(limitLeft, limitRight - width);
 
-    int left = std::clamp((host->width() - width) / 2, limitLeft, rightmost);
+    int left = limitLeft + (available - width) / 2;
     int anchorCentreX = 0;
-    if (m_follow && m_anchorProvider && m_anchorProvider(anchorCentreX)) {
+    if (followsClipSelection() && m_anchorProvider && m_anchorProvider(anchorCentreX)) {
         // Above the selection, but never past the arrangement: a clip at the
         // far right pulls the plate to that edge and no further, so it stays
         // whole and never drifts over the track headers.
         left = std::clamp(anchorCentreX - width / 2, limitLeft, rightmost);
     }
-    return QRect(left, 0, std::max(1, width), height);
+    return QRect(left, 0, width, height);
 }
 
 void ContextPanel::layoutSelf() {
@@ -2327,7 +2376,18 @@ void ContextPanel::updateContentMasks() {
 
 void ContextPanel::relayout() {
     if (!m_content || !isVisible()) return;
+    // A splitter is direct manipulation. Old animation endpoints belong to
+    // the old bounds and must never pull the panel back across a neighbour.
+    if (m_transition) m_transition->stop();
+    if (m_drift) m_drift->stop();
+    m_contentSliding = false;
+    if (m_outgoing) {
+        m_outgoing->deleteLater();
+        m_outgoing = nullptr;
+    }
+    setBackdropFrozen(false);
     setGeometry(targetGeometry());
+    layoutSelf();
 }
 
 void ContextPanel::setAnchorProvider(std::function<bool(int&)> provider) {
@@ -2339,12 +2399,14 @@ void ContextPanel::setBoundsProvider(std::function<bool(int&, int&)> provider) {
 }
 
 void ContextPanel::followSelection() {
-    if (!m_follow || !m_content || !isVisible()) return;
+    if (!followsClipSelection() || !m_content || !isVisible()) return;
     // A content swap already animates toward the geometry it read for itself;
     // letting the drift retarget underneath it would make the two fight over
     // the same property.
     if (m_transition && m_transition->state() == QAbstractAnimation::Running) return;
-    driftTo(targetGeometry());
+    const QRect target = targetGeometry();
+    if (target.size() != size()) relayout();
+    else driftTo(target);
 }
 
 void ContextPanel::driftTo(const QRect& target) {

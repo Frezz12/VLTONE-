@@ -1,4 +1,11 @@
+#include "UiPerformance.hpp"
+#include "UiFrameClock.hpp"
+#include <QElapsedTimer>
 #include "MixerWidget.hpp"
+#include "ChannelViewState.hpp"
+#include <QApplication>
+#include <QEvent>
+#include <QScopedValueRollback>
 
 #include <algorithm>
 #include "ChannelStrip.hpp"
@@ -99,6 +106,9 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     connect(m_scroll->verticalScrollBar(), &QScrollBar::valueChanged,
             masterScroll->verticalScrollBar(), &QScrollBar::setValue);
 
+    m_scroll->viewport()->installEventFilter(this);
+    connect(m_scroll->horizontalScrollBar(), &QScrollBar::valueChanged,
+            this, [this] { syncVisibleStrips(); });
     bodyRow->addWidget(m_scroll, 1);
     bodyRow->addWidget(ui::separatorLine(Qt::Vertical, 0, body));
     bodyRow->addWidget(masterScroll, 0);
@@ -106,6 +116,10 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
 
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             &MixerWidget::applyTheme);
+    m_meterTimer = new ui::FrameTimer(this);
+    connect(m_meterTimer, &ui::FrameTimer::timeout, this, &MixerWidget::refreshMeters);
+    m_materializeTimer = new ui::FrameTimer(this);
+    connect(m_materializeTimer, &ui::FrameTimer::timeout, this, &MixerWidget::syncVisibleStrips);
     applyTheme();
     rebuild();
 }
@@ -144,8 +158,9 @@ double MixerWidget::faderGainForTest(const QString& trackId) const {
     return -1.0;
 }
 
-void MixerWidget::syncFromModel() {
-    for (ChannelStrip* strip : m_strips) strip->syncFromModel();
+void MixerWidget::syncFromModel(const QStringList& trackIds) {
+    for (ChannelStrip* strip : m_strips)
+        if (trackIds.isEmpty() || trackIds.contains(strip->trackId())) strip->syncFromModel();
 }
 
 void MixerWidget::refreshAutomationValues() {
@@ -331,26 +346,14 @@ bool MixerWidget::stripIsVisible(const ChannelStrip* strip) const {
     return viewport->rect().intersects(stripRect);
 }
 
-void MixerWidget::rebuild() {
-    // The strips are owned by the two layouts below; clearing those deletes
-    // them, so only the bookkeeping vector is emptied here.
-    m_strips.clear();
-
-    while (QLayoutItem* item = m_stripsLayout->takeAt(0)) {
-        if (QWidget* w = item->widget()) w->deleteLater();
-        delete item;
-    }
-    if (auto* masterLayout = m_masterHost->layout()) {
-        while (QLayoutItem* item = masterLayout->takeAt(0)) {
-            if (QWidget* w = item->widget()) w->deleteLater();
-            delete item;
-        }
-    }
-
-    auto wire = [this](ChannelStrip* strip) {
+void MixerWidget::wireStrip(ChannelStrip* strip) {
+    ui::perf::sample("mixer.strip.created", 1);
         connect(strip, &ChannelStrip::selectRequested, this,
                 &MixerWidget::trackSelected);
-        connect(strip, &ChannelStrip::edited, this, &MixerWidget::edited);
+        connect(strip, &ChannelStrip::edited, this, [this, strip](bool dirty) {
+            emit edited(dirty);
+            emit channelEdited(strip->trackId(), dirty);
+        });
         connect(strip, &ChannelStrip::editorRequested, this,
                 &MixerWidget::pluginEditorRequested);
         connect(strip, &ChannelStrip::patternRequested, this,
@@ -367,35 +370,142 @@ void MixerWidget::rebuild() {
             emit structureChanged();
             rebuild();
         }, Qt::QueuedConnection);
-        m_strips.push_back(strip);
-    };
+}
 
-    int channels = 0;
-    for (const auto& t : m_controller->project().tracks) {
-        // A summing folder is a bus, and belongs in the mixer like one. A
-        // plain folder carries no signal and has no strip to show.
-        if (!daw::carriesAudio(t)) continue;
-        auto* strip = new ChannelStrip(m_controller,
-                                       QString::fromStdString(t.id),
-                                       /*master=*/false, m_stripsHost);
-        strip->setSelected(QString::fromStdString(t.id) == m_selectedTrackId);
-        wire(strip);
-        // No alignment flag: an aligned widget keeps its natural height, and
-        // the strips are meant to fill the pane so the faders grow with it.
-        m_stripsLayout->addWidget(strip);
-        ++channels;
+void MixerWidget::rebuild() {
+    ui::perf::Scope timing("rebuild.MixerWidget.ms");
+    const QScopedValueRollback<bool> guard(m_syncingStrips, true);
+    m_deferredRackChange = false;
+    QHash<QString, ChannelStrip*> previous;
+    for (auto* strip : m_strips) previous.insert(strip->trackId(), strip);
+    m_strips.clear(); m_slots.clear(); m_channels.clear();
+    while (auto* item = m_stripsLayout->takeAt(0)) delete item;
+    const auto& project = m_controller->project();
+    for (const auto& track : project.tracks) {
+        if (!daw::carriesAudio(track)) continue;
+        const auto id = QString::fromStdString(track.id);
+        m_channels.push_back(id);
+        auto* strip = previous.take(id);
+        if (strip && strip->property("channelViewState").toByteArray() !=
+                         ui::channelViewState(project, track.id)) {
+            if (strip->hasActiveGesture()) m_deferredRackChange = true;
+            else { strip->hide(); strip->deleteLater(); strip = nullptr; }
+        }
+        m_slots.push_back(strip);
+        if (strip) m_stripsLayout->addWidget(strip);
+        else m_stripsLayout->addSpacerItem(new QSpacerItem(112, 0, QSizePolicy::Fixed));
     }
     m_stripsLayout->addStretch(1);
+    auto* master = previous.take(QString());
+    const auto state = ui::channelViewState(project, {});
+    if (master && master->property("channelViewState").toByteArray() != state) {
+        if (master->hasActiveGesture()) m_deferredRackChange = true;
+        else {
+            m_masterHost->layout()->removeWidget(master);
+            master->hide(); master->deleteLater(); master = nullptr;
+        }
+    }
+    if (!master) {
+        master = new ChannelStrip(m_controller, {}, true, m_masterHost);
+        master->setProperty("channelViewState", state);
+        wireStrip(master);
+        m_masterHost->layout()->addWidget(master);
+    }
+    m_strips.push_back(master);
+    for (auto* strip : previous) { strip->hide(); strip->deleteLater(); }
+    // A fully virtualised console still needs its ordinary vertical extent.
+    m_stripsHost->setMinimumHeight(master->naturalHeight() + 16);
+    m_headerCount->setText(tr("%1 channels").arg(m_channels.size() + 1));
+    m_syncingStrips = false;
+    syncVisibleStrips();
+    syncFromModel();
+}
 
-    auto* master = new ChannelStrip(m_controller, QString(), /*master=*/true,
-                                    m_masterHost);
-    wire(master);
-    m_masterHost->layout()->addWidget(master);
+bool MixerWidget::eventFilter(QObject* object, QEvent* event) {
+    if (m_scroll && object == m_scroll->viewport() &&
+        (event->type() == QEvent::Resize || event->type() == QEvent::Show))
+        syncVisibleStrips();
+    return QWidget::eventFilter(object, event);
+}
 
-    m_headerCount->setText(tr("%1 channels").arg(channels + 1));
+void MixerWidget::syncVisibleStrips() {
+    ui::perf::Scope timing("syncVisibleStrips.MixerWidget.ms");
+    if (m_syncingStrips || !m_scroll) return;
+    if (m_deferredRackChange) {
+        for (auto* strip : m_strips) {
+            if (!strip->hasActiveGesture() && strip->property("channelViewState").toByteArray() !=
+                ui::channelViewState(m_controller->project(), strip->trackId().toStdString())) {
+                rebuild(); return;
+            }
+        }
+    }
+    const QScopedValueRollback<bool> guard(m_syncingStrips, true);
+    const int left = m_scroll->horizontalScrollBar()->value();
+    const int margin = std::max(234, m_scroll->viewport()->width());
+    const auto owns = [](QWidget* strip, QWidget* widget) {
+        return strip && widget && (strip == widget || strip->isAncestorOf(widget));
+    };
+    ChannelStrip* master = nullptr;
+    for (auto* strip : m_strips) if (strip->isMaster()) master = strip;
+    QElapsedTimer budget;
+    budget.start();
+    bool pending = m_deferredRackChange;
+    // Remove distant controls first; a captured gesture keeps its owning strip.
+    for (size_t i = 0; i < m_slots.size(); ++i) {
+        auto*& strip = m_slots[i];
+        const int x = 8 + int(i) * 117;
+        const bool pinned = (strip && strip->hasActiveGesture()) ||
+            owns(strip, QApplication::focusWidget());
+        const bool wanted = (x + 112 >= left - margin &&
+            x <= left + m_scroll->viewport()->width() + margin) || pinned;
+        if (strip && !wanted) {
+            delete m_stripsLayout->takeAt(int(i));
+            strip->hide(); strip->deleteLater(); strip = nullptr;
+            m_stripsLayout->insertSpacerItem(int(i), new QSpacerItem(112, 0, QSizePolicy::Fixed));
+        }
+    }
+    // Visible channels precede overscan. A large console never constructs the
+    // whole viewport in one event; the frame clock resumes the remaining work.
+    bool created = false;
+    for (int pass = 0; pass < 2; ++pass) {
+        for (size_t i = 0; i < m_slots.size(); ++i) {
+            auto*& strip = m_slots[i];
+            if (strip) continue;
+            const int x = 8 + int(i) * 117;
+            const bool visible = x + 112 >= left && x <= left + m_scroll->viewport()->width();
+            const bool nearby = x + 112 >= left - margin &&
+                x <= left + m_scroll->viewport()->width() + margin;
+            if (!nearby || (pass == 0) != visible) continue;
+            if (created && budget.nsecsElapsed() >= 5'000'000) { pending = true; continue; }
+            strip = new ChannelStrip(m_controller, m_channels[int(i)], false, m_stripsHost);
+            created = true;
+            strip->setProperty("channelViewState", ui::channelViewState(
+                m_controller->project(), m_channels[int(i)].toStdString()));
+            wireStrip(strip);
+            delete m_stripsLayout->takeAt(int(i));
+            m_stripsLayout->insertWidget(int(i), strip);
+            strip->show();
+        }
+    }
+    m_strips.clear();
+    for (auto* strip : m_slots) {
+        if (!strip) continue;
+        m_stripsHost->setMinimumHeight(std::max(m_stripsHost->minimumHeight(), strip->naturalHeight() + 16));
+        strip->setSelected(strip->trackId() == m_selectedTrackId);
+        m_strips.push_back(strip);
+    }
+    if (m_materializeTimer) {
+        if (pending) m_materializeTimer->start();
+        else m_materializeTimer->stop();
+    }
+    if (master) m_strips.push_back(master);
 }
 
 void MixerWidget::refreshMeters() {
+    // A detached console follows its own screen, including while the main
+    // window is minimised. The low-rate control poll wakes playback changes.
+    if (m_controller->isPlaying() || m_controller->isRecording()) m_meterTimer->start();
+    else m_meterTimer->stop();
     if (!isVisible()) return;
     for (ChannelStrip* strip : m_strips) {
         if (stripIsVisible(strip)) strip->refreshMeter();

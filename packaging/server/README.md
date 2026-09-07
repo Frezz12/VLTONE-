@@ -7,6 +7,17 @@ atomic symlinks. Production never builds from a source checkout.
 
 ## Build the artifact
 
+From a Mac, run **Backend and Web Platform → Run workflow** in GitHub Actions
+with **Build the deployable API, website and admin bundle** enabled. After all
+checks pass, download `vlt-account-platform-<commit>` from the run artifacts.
+Manual builds use `<app-version>-<short-commit>` as the deployment directory;
+tagged builds use the tag version. The archive contains the API, migrations,
+website, admin and deployment scripts from the same commit.
+
+The release form's **Fill** template is stored in `admin/release-template.json`.
+It provides both languages and all release-note sections. Save it as a draft
+in Admin → Releases, then add installers later; do not publish an empty release.
+
 On the Ubuntu CI runner, after tests pass:
 
 ```sh

@@ -24,6 +24,7 @@ public:
     ~ThemeMediaBackground() override;
 
     void setSource(const QString& path);
+    void setExternalFrame(const QImage& frame, quint64 sourceId);
     void setTargetSize(const QSize& logicalSize, qreal devicePixelRatio);
     void setPlacement(timelinebackgroundprefs::Placement placement);
     void setBlurRadius(int logicalPixels);
@@ -43,6 +44,13 @@ private:
     void rebuild(bool animatedFrame = false);
     void syncPlayback();
 
+    bool m_composing = false;
+    bool m_composePending = false;
+    bool m_pendingAnimated = false;
+    quint64 m_generation = 0;
+    quint64 m_sourceGeneration = 0;
+    quint64 m_externalSourceId = 0;
+    bool m_external = false;
     QPixmap m_frame;
     QImage m_sourceFrame;
     QString m_path;

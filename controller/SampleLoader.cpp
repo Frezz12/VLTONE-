@@ -36,7 +36,9 @@ audio::Result loadSampleBuffer(const std::string& path,
             if (cached != sourceCache.end() && cached->second.modified == modified &&
                 cached->second.bytes == bytes) {
                 if (auto sample = cached->second.sample.lock(); sample &&
-                    sample->frames() == info.frames && sample->channels() == info.channels &&
+                    (sample->frames() == info.frames ||
+                     (info.frameCountIsEstimate && sample->frames() < info.frames)) &&
+                    sample->channels() == info.channels &&
                     sample->sampleRate() == info.sampleRate) {
                     out = std::move(sample);
                     return audio::Result::ok();
@@ -51,13 +53,17 @@ audio::Result loadSampleBuffer(const std::string& path,
             engine::ChannelCount(info.channels), engine::FrameCount(info.frames), info.sampleRate);
         constexpr std::size_t block = 8192;
         std::vector<float> scratch(block * info.channels);
-        for (audio::FrameCount position = 0; position < info.frames;) {
+        audio::FrameCount position = 0;
+        while (position < info.frames) {
             if (keepGoing && !keepGoing())
                 return audio::Result::fail(audio::EngineError::InvalidArgument, "cancelled");
             const auto count = std::min<audio::FrameCount>(block, info.frames - position);
             const auto read = reader.read(scratch.data(), count);
-            if (read == 0)
+            if (const auto status = reader.readStatus(); !status) return status;
+            if (read == 0) {
+                if (info.frameCountIsEstimate && position > 0) break;
                 return audio::Result::fail(audio::EngineError::UnsupportedFormat, "truncated audio file");
+            }
             for (engine::ChannelCount ch = 0; ch < info.channels; ++ch) {
                 float* destination = buffer->writableChannel(ch) + position;
                 for (std::size_t frame = 0; frame < read; ++frame)
@@ -65,6 +71,7 @@ audio::Result loadSampleBuffer(const std::string& path,
             }
             position += read;
         }
+        buffer->trimFrames(engine::FrameCount(position));
         out = std::move(buffer);
         if (!ec) {
             const std::lock_guard lock(sourceMutex);

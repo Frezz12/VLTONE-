@@ -180,7 +180,13 @@ func (s *Server) createBugReport(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+var imageDecodeSlots = make(chan struct{}, 2)
+
 func sanitizeImage(body []byte) ([]byte, string, string, error) {
+	return sanitizeImageWithPixelLimit(body, 8_000_000)
+}
+
+func sanitizeImageWithPixelLimit(body []byte, maxPixels int64) ([]byte, string, string, error) {
 	contentType := http.DetectContentType(body)
 	if contentType != "image/jpeg" && contentType != "image/png" && contentType != "image/webp" {
 		return nil, "", "", fmt.Errorf("unsupported image type %s", contentType)
@@ -188,8 +194,15 @@ func sanitizeImage(body []byte) ([]byte, string, string, error) {
 	configuration, _, err := image.DecodeConfig(bytes.NewReader(body))
 	if err != nil || configuration.Width <= 0 || configuration.Height <= 0 ||
 		configuration.Width > 12000 || configuration.Height > 12000 ||
-		int64(configuration.Width)*int64(configuration.Height) > 40_000_000 {
+		int64(configuration.Width)*int64(configuration.Height) > maxPixels {
 		return nil, "", "", fmt.Errorf("invalid image dimensions")
+	}
+	// Bound concurrent decoder working sets as well as compressed input size.
+	select {
+	case imageDecodeSlots <- struct{}{}:
+		defer func() { <-imageDecodeSlots }()
+	default:
+		return nil, "", "", fmt.Errorf("image decoder busy; retry upload")
 	}
 	decoded, _, err := image.Decode(bytes.NewReader(body))
 	if err != nil {

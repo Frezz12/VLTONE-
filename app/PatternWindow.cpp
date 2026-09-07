@@ -5,6 +5,7 @@
 #include "FileTypes.hpp"
 #include "Icons.hpp"
 #include "PluginPickerMenu.hpp"
+#include "PianoRollWindow.hpp"
 #include "Theme.hpp"
 
 #include <QAction>
@@ -37,11 +38,16 @@
 #include <QStyle>
 #include <QTimer>
 #include <QToolButton>
+#include <QTemporaryDir>
+#include <QFile>
+#include <QScrollBar>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -52,8 +58,113 @@
 
 namespace {
 
-constexpr int kRowHeight = 54;
+constexpr int kRowHeight = 60;
+constexpr int kKnobSize = 34;
+constexpr int kSourceWidth = 150;
 constexpr int kMaxSketchNotes = 768;
+
+// Pattern rows are a scrolling list. Turning the wheel over a parameter must
+// scroll that list, never make an unnoticed mix edit.
+class PatternLevelKnob final : public ui::FaderWidget {
+public:
+    explicit PatternLevelKnob(QWidget* parent) : FaderWidget(Qt::Horizontal, parent) {
+        setCompactKnob(true);
+        setFixedSize(kKnobSize, kKnobSize);
+        setFocusPolicy(Qt::TabFocus);
+        setAccessibleName(QObject::tr("Volume"));
+    }
+protected:
+    void wheelEvent(QWheelEvent* event) override { event->ignore(); }
+    void paintEvent(QPaintEvent* event) override {
+        FaderWidget::paintEvent(event);
+        if (!hasFocus()) return;
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(th().accent, 1.0, Qt::DotLine));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 5, 5);
+    }
+    bool event(QEvent* event) override {
+        if (event->type() == QEvent::ShortcutOverride) {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            if (!(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
+                switch (key->key()) {
+                case Qt::Key_Left: case Qt::Key_Right: case Qt::Key_Up: case Qt::Key_Down:
+                case Qt::Key_Home: case Qt::Key_End: event->accept(); return true;
+                default: break;
+                }
+            }
+        }
+        return FaderWidget::event(event);
+    }
+    void contextMenuEvent(QContextMenuEvent* event) override {
+        QMenu menu(this);
+        auto* entry = menu.addAction(QObject::tr("Enter volume…"));
+        auto* reset = menu.addAction(QObject::tr("Reset to 0 dB"));
+        menu.addSeparator();
+        auto* automate = menu.addAction(QObject::tr("Create Automation Clip"));
+        const auto* chosen = menu.exec(event->globalPos());
+        if (chosen == automate) { emit automateRequested(); return; }
+        double next = 1.0;
+        if (chosen == entry) {
+            bool accepted = false;
+            const double db = QInputDialog::getDouble(this, QObject::tr("Volume"),
+                QObject::tr("Level (dB, −96 = silence):"),
+                gain() > 0.0 ? 20.0 * std::log10(gain()) : -96.0,
+                -96.0, 6.0206, 2, &accepted);
+            if (!accepted) return;
+            next = db <= -96.0 ? 0.0 : std::pow(10.0, db / 20.0);
+        } else if (chosen != reset) return;
+        setGain(next);
+        emit gainChanged(gain());
+        emit editFinished();
+    }
+    void keyPressEvent(QKeyEvent* event) override {
+        double position = ui::faderPositionFromGain(gain());
+        const double step = event->modifiers().testFlag(Qt::ShiftModifier) ? 0.005 : 0.02;
+        switch (event->key()) {
+        case Qt::Key_Up: case Qt::Key_Right: position += step; break;
+        case Qt::Key_Down: case Qt::Key_Left: position -= step; break;
+        case Qt::Key_Home: position = 0.0; break;
+        case Qt::Key_End: position = 1.0; break;
+        default: FaderWidget::keyPressEvent(event); return;
+        }
+        setGain(ui::gainFromFaderPosition(std::clamp(position, 0.0, 1.0)));
+        emit gainChanged(gain());
+        emit editFinished();
+        event->accept();
+    }
+};
+
+class PatternPanKnob final : public ui::PanKnob {
+public:
+    explicit PatternPanKnob(QWidget* parent) : PanKnob(parent) {
+        setFixedSize(kKnobSize, kKnobSize);
+        setAccessibleName(QObject::tr("Pan"));
+    }
+protected:
+    void wheelEvent(QWheelEvent* event) override { event->ignore(); }
+    void contextMenuEvent(QContextMenuEvent* event) override {
+        QMenu menu(this);
+        auto* entry = menu.addAction(QObject::tr("Enter pan…"));
+        auto* reset = menu.addAction(QObject::tr("Centre pan"));
+        menu.addSeparator();
+        auto* automate = menu.addAction(QObject::tr("Create Automation Clip"));
+        const auto* chosen = menu.exec(event->globalPos());
+        if (chosen == automate) { emit automateRequested(); return; }
+        double next = 0.0;
+        if (chosen == entry) {
+            bool accepted = false;
+            next = QInputDialog::getDouble(this, QObject::tr("Pan"),
+                QObject::tr("Pan (−100 left, 0 centre, 100 right):"),
+                pan() * 100.0, -100.0, 100.0, 1, &accepted) / 100.0;
+            if (!accepted) return;
+        } else if (chosen != reset) return;
+        setPan(next);
+        emit panChanged(pan());
+        emit editFinished();
+    }
+};
 
 /// The row background is a selection surface. Child controls keep their own
 /// gestures; only presses that land on the exposed grey surface reach this
@@ -134,10 +245,19 @@ public:
         : QAbstractButton(parent), m_controller(controller),
           m_trackId(std::move(trackId)) {
         setCursor(Qt::PointingHandCursor);
-        setMinimumWidth(180);
-        setFixedHeight(34);
+        setMinimumWidth(120);
+        setFixedHeight(40);
         setAccessibleName(QObject::tr("Open this source in the piano roll"));
         setToolTip(QObject::tr("Open piano roll"));
+    }
+
+    void setTimeRange(double start, double length, double barSeconds) {
+        if (m_rangeStart == start && m_rangeLength == length && m_barSeconds == barSeconds) return;
+        m_rangeStart = start;
+        m_rangeLength = length;
+        m_barSeconds = barSeconds;
+        m_cachedRevision = std::numeric_limits<std::uint64_t>::max();
+        update();
     }
 
 protected:
@@ -160,6 +280,15 @@ protected:
 
         const QRectF area = QRectF(rect()).adjusted(7, 5, -7, -5);
         const double tempo = m_controller->project().tempo;
+        p.save();
+        p.setClipRect(area);
+        double grid = m_barSeconds / 4.0;
+        while (grid / m_rangeLength * area.width() < 16.0) grid *= 2.0;
+        p.setPen(QPen(mixColors(t.well(), t.textSecondary, 0.18), 1.0));
+        for (double time = 0.0; time < m_rangeLength; time += grid) {
+            const double x = area.left() + time / m_rangeLength * area.width();
+            p.drawLine(QPointF(x, area.top()), QPointF(x, area.bottom()));
+        }
         ensureNoteGeometry(*track, area, tempo);
         if (m_cachedNoteCount == 0) {
             p.setPen(t.textSecondary);
@@ -168,7 +297,10 @@ protected:
             p.setFont(font);
             p.drawText(rect().adjusted(10, 0, -10, 0),
                        Qt::AlignLeft | Qt::AlignVCenter,
-                       QObject::tr("Click to draw MIDI"));
+                       QFontMetrics(font).elidedText(
+                           QObject::tr("Draw MIDI or drop a MIDI file"),
+                           Qt::ElideRight, width() - 20));
+            p.restore();
             return;
         }
 
@@ -176,6 +308,7 @@ protected:
         p.setBrush(mixColors(accent, t.textPrimary, 0.46));
         if (m_cachedUseLod) p.setRenderHint(QPainter::Antialiasing, false);
         p.drawPath(m_cachedNotes);
+        p.restore();
     }
 
 private:
@@ -194,12 +327,10 @@ private:
         m_cachedNotes = {};
         m_cachedNoteCount = 0;
 
-        double end = 0.0;
         int low = 127;
         int high = 0;
         for (const auto& clip : track.clips) {
             if (clip.kind != daw::ClipKind::Midi) continue;
-            end = std::max(end, clip.startSeconds + clip.durationSeconds);
             for (const auto& note : clip.notes) {
                 low = std::min(low, note.pitch);
                 high = std::max(high, note.pitch);
@@ -211,7 +342,6 @@ private:
             return;
         }
 
-        end = std::max(end, daw::beatsToSeconds(4.0, tempo));
         const int span = std::max(12, high - low + 1);
         const int base = low - (span - (high - low + 1)) / 2;
         const double rowH = area.height() / double(span);
@@ -228,12 +358,12 @@ private:
             if (clip.kind != daw::ClipKind::Midi) continue;
             for (const auto& note : clip.notes) {
                 if ((visited++ % stride) != 0) continue;
-                const double start = clip.startSeconds +
+                const double start = clip.startSeconds - clip.offsetSeconds +
                     daw::beatsToSeconds(note.startBeats, tempo);
                 const double duration = daw::beatsToSeconds(
                     note.lengthBeats, tempo);
-                const double x = area.left() + (start / end) * area.width();
-                const double w = std::max(2.0, duration / end * area.width());
+                const double x = area.left() + ((start - m_rangeStart) / m_rangeLength) * area.width();
+                const double w = std::max(2.0, duration / m_rangeLength * area.width());
                 const double y = area.bottom() -
                     double(note.pitch - base + 1) * rowH;
                 const QRectF noteRect(x, y, w, std::max(2.0, rowH * 0.8));
@@ -253,6 +383,9 @@ private:
         std::numeric_limits<std::uint64_t>::max();
     std::size_t m_cachedNoteCount = 0;
     double m_cachedTempo = -1.0;
+    double m_rangeStart = 0.0;
+    double m_rangeLength = 2.0;
+    double m_barSeconds = 2.0;
     bool m_cachedUseLod = false;
 };
 
@@ -279,8 +412,8 @@ public:
 
     SourceNameButton(QString text, QString instrumentName, QWidget* parent)
         : QAbstractButton(parent) {
-        setFixedWidth(150);
-        setFixedHeight(34);
+        setFixedWidth(kSourceWidth);
+        setFixedHeight(40);
         setCursor(Qt::PointingHandCursor);
         setFocusPolicy(Qt::StrongFocus);
         syncFromModel(std::move(text), std::move(instrumentName));
@@ -308,9 +441,12 @@ public:
 
     Action onOpen;
     Action onRename;
-    Action onReplace;
-    Action onDuplicate;
-    Action onRemove;
+    std::function<void(QMenu*)> populateMenu;
+    void setSourceColor(QColor color) {
+        if (m_color == color) return;
+        m_color = color;
+        update();
+    }
 
 protected:
     void paintEvent(QPaintEvent*) override {
@@ -320,44 +456,31 @@ protected:
         const QRectF panel = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
         QPainterPath shape;
         shape.addRoundedRect(panel, 7, 7);
-        QLinearGradient glass(0, panel.top(), 0, panel.bottom());
-        QColor top = mixColors(t.surfaceElevated, t.headerBackground, 0.30);
-        QColor bottom = mixColors(t.surface, t.headerBackground, 0.16);
-        if (isDown()) {
-            top = mixColors(top, t.accent, 0.16);
-            bottom = mixColors(bottom, t.accent, 0.12);
-        } else if (underMouse()) {
-            top = mixColors(top, t.accent, 0.09);
-            bottom = mixColors(bottom, t.accent, 0.06);
-        }
-        top.setAlphaF(t.dark ? 0.88 : 0.82);
-        bottom.setAlphaF(t.dark ? 0.78 : 0.74);
-        glass.setColorAt(0.0, top);
-        glass.setColorAt(1.0, bottom);
-        p.fillPath(shape, glass);
+        p.fillPath(shape, mixColors(t.surfaceElevated, t.accent,
+                                    isDown() ? 0.15 : underMouse() ? 0.07 : 0.0));
         p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(hasFocus() ? t.accent
-                                 : mixColors(t.separator(), t.textPrimary, 0.12),
-                      hasFocus() ? 1.8 : 1.0));
+        p.setPen(QPen(hasFocus() ? t.accent : t.separator(), hasFocus() ? 1.5 : 1.0));
         p.drawPath(shape);
-        p.save();
-        p.setClipPath(shape);
-        QColor sheen = t.textPrimary;
-        sheen.setAlpha(t.dark ? 22 : 38);
-        p.setPen(QPen(sheen, 1));
-        p.drawLine(QPointF(panel.left() + 7, panel.top() + 1),
-                   QPointF(panel.right() - 7, panel.top() + 1));
-        p.restore();
+        p.setPen(Qt::NoPen);
+        p.setBrush(m_color.isValid() ? m_color : t.accent);
+        p.drawRoundedRect(QRectF(8, 10, 3, height() - 20), 1.5, 1.5);
 
         QFont font = p.font();
-        font.setPixelSize(11);
+        font.setPixelSize(12);
         font.setWeight(QFont::DemiBold);
         p.setFont(font);
         p.setPen(t.textPrimary);
-        const QRect textRect = rect().adjusted(10, 0, -10, 0);
-        p.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter,
-                   QFontMetrics(font).elidedText(text(), Qt::ElideRight,
-                                                 textRect.width()));
+        const QRect nameRect(18, 5, width() - 28, 16);
+        p.drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
+                   QFontMetrics(font).elidedText(text(), Qt::ElideRight, nameRect.width()));
+        font.setPixelSize(10);
+        font.setWeight(QFont::Normal);
+        p.setFont(font);
+        p.setPen(t.textSecondary);
+        p.drawText(QRect(18, 22, width() - 28, 13), Qt::AlignLeft | Qt::AlignVCenter,
+            QFontMetrics(font).elidedText(m_instrumentName.isEmpty()
+                ? QObject::tr("Instrument") : m_instrumentName,
+                Qt::ElideRight, width() - 28));
     }
 
     void mouseReleaseEvent(QMouseEvent* event) override {
@@ -381,21 +504,8 @@ protected:
     void contextMenuEvent(QContextMenuEvent* event) override {
         m_openTimer.stop();
         QMenu menu(this);
-        QAction* open = menu.addAction(
-            m_instrumentName.isEmpty()
-                ? QObject::tr("Open Instrument")
-                : QObject::tr("Open %1").arg(m_instrumentName));
-        QAction* rename = menu.addAction(QObject::tr("Rename…"));
-        QAction* replace = menu.addAction(QObject::tr("Replace with Sample..."));
-        QAction* duplicate = menu.addAction(QObject::tr("Duplicate Source"));
-        menu.addSeparator();
-        QAction* remove = menu.addAction(QObject::tr("Remove Source"));
-        QAction* chosen = menu.exec(event->globalPos());
-        if (chosen == open && onOpen) onOpen();
-        else if (chosen == rename && onRename) onRename();
-        else if (chosen == replace && onReplace) onReplace();
-        else if (chosen == duplicate && onDuplicate) onDuplicate();
-        else if (chosen == remove && onRemove) onRemove();
+        if (populateMenu) populateMenu(&menu);
+        menu.exec(event->globalPos());
         event->accept();
     }
 
@@ -415,6 +525,7 @@ protected:
     }
 
 private:
+    QColor m_color;
     QString m_instrumentName;
     QTimer m_openTimer;
     bool m_modelSynced = false;
@@ -424,6 +535,7 @@ private:
 
 PatternWindow::PatternWindow(daw::EngineController* controller, QWidget* parent)
     : QDialog(parent, Qt::Widget), m_controller(controller) {
+    setObjectName(QStringLiteral("PatternWindow"));
     setWindowTitle(tr("Pattern"));
     setModal(false);
     setAttribute(Qt::WA_DeleteOnClose, false);
@@ -446,12 +558,13 @@ PatternWindow::PatternWindow(daw::EngineController* controller, QWidget* parent)
         label->setFixedWidth(width);
         columns->addWidget(label);
     };
+    addColumn(tr("VOL"), kKnobSize);
+    addColumn(tr("PAN"), kKnobSize);
     addColumn(tr("MIX"), 48);
-    addColumn(tr("SOURCE"), 150);
-    addColumn(tr("LEVEL"), 112);
-    addColumn(tr("PAN"), 30);
+    addColumn(tr("SOURCE"), kSourceWidth);
     auto* midi = new QLabel(tr("MIDI PATTERN"), columnHeader);
     columns->addWidget(midi, 1);
+    addColumn(QString(), 32);
     addColumn(QString(), 28);
     root->addWidget(columnHeader);
 
@@ -462,7 +575,7 @@ PatternWindow::PatternWindow(daw::EngineController* controller, QWidget* parent)
     m_rowsHost = new QWidget(scroll);
     m_rowsLayout = new QVBoxLayout(m_rowsHost);
     m_rowsLayout->setContentsMargins(0, 0, 0, 0);
-    m_rowsLayout->setSpacing(3);
+    m_rowsLayout->setSpacing(5);
     m_dropIndicator = new QWidget(m_rowsHost);
     m_dropIndicator->setObjectName(QStringLiteral("PatternDropIndicator"));
     m_dropIndicator->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -1034,17 +1147,15 @@ void PatternWindow::rebuildRows() {
         name->setObjectName(QStringLiteral("PatternSourceName"));
         name->onOpen = [this, id] { openInstrument(id); };
         name->onRename = [this, id] { renameSource(id); };
-        name->onReplace = [this, id] { chooseReplacementSample(id); };
-        name->onDuplicate = [this, id] { duplicateSource(id); };
-        name->onRemove = [this, id] { removeSource(id); };
+        name->setSourceColor(rgb(track->color));
+        name->populateMenu = [this, id](QMenu* menu) { populateSourceMenu(menu, id); };
         layout->addWidget(name);
 
-        auto* fader = new ui::FaderWidget(Qt::Horizontal, row);
+        auto* fader = new PatternLevelKnob(row);
         fader->setObjectName(QStringLiteral("PatternSourceLevel"));
         fader->setAutomatable(true);
         connect(fader, &ui::FaderWidget::automateRequested, this,
                 [this, id] { emit automateControlRequested(id, false); });
-        fader->setFixedWidth(112);
         fader->setGain(track->volume);
         fader->setToolTip(tr("Level  %1")
                               .arg(ui::formatGainDb(track->volume)));
@@ -1070,14 +1181,13 @@ void PatternWindow::rebuildRows() {
                     }
                     emit projectEdited();
                 });
-        layout->addWidget(fader);
+        layout->insertWidget(0, fader);
 
-        auto* pan = new ui::PanKnob(row);
+        auto* pan = new PatternPanKnob(row);
         pan->setObjectName(QStringLiteral("PatternSourcePan"));
         pan->setAutomatable(true);
         connect(pan, &ui::PanKnob::automateRequested, this,
                 [this, id] { emit automateControlRequested(id, true); });
-        pan->setFixedSize(30, 30);
         pan->setPan(track->pan);
         pan->setToolTip(tr("Pan"));
         auto panStart = std::make_shared<std::optional<float>>();
@@ -1100,13 +1210,26 @@ void PatternWindow::rebuildRows() {
                     }
                     emit projectEdited();
                 });
-        layout->addWidget(pan);
+        layout->insertWidget(1, pan);
 
         auto* sketch = new SourceSketch(m_controller, id, row);
         sketch->setObjectName(QStringLiteral("PatternSourceSketch"));
         connect(sketch, &QAbstractButton::clicked, this,
                 [this, id] { openRoll(id); });
         layout->addWidget(sketch, 1);
+
+        auto* rhythm = new QToolButton(row);
+        rhythm->setObjectName(QStringLiteral("PatternRhythm"));
+        rhythm->setFixedSize(32, 32);
+        rhythm->setIcon(icons::icon(icons::Glyph::GridDivision, th().textSecondary, 18));
+        rhythm->setToolTip(tr("Fill rhythm — replace this sound’s MIDI with evenly spaced notes"));
+        rhythm->setAccessibleName(tr("Fill rhythm"));
+        rhythm->setCursor(Qt::PointingHandCursor);
+        rhythm->setPopupMode(QToolButton::InstantPopup);
+        auto* rhythmMenu = new QMenu(rhythm);
+        populateRhythmMenu(rhythmMenu, id);
+        rhythm->setMenu(rhythmMenu);
+        layout->addWidget(rhythm);
 
         auto* remove = new ui::IconButton(icons::Glyph::Trash,
                                           tr("Remove source"), row);
@@ -1115,6 +1238,20 @@ void PatternWindow::rebuildRows() {
         connect(remove, &QAbstractButton::clicked, this,
                 [this, id] { removeSource(id); });
         layout->addWidget(remove);
+        QWidget::setTabOrder(fader, pan);
+        QWidget::setTabOrder(pan, mute);
+        QWidget::setTabOrder(mute, solo);
+        QWidget::setTabOrder(solo, name);
+        QWidget::setTabOrder(name, sketch);
+        QWidget::setTabOrder(sketch, rhythm);
+        QWidget::setTabOrder(rhythm, remove);
+        if (!m_rowWidgets.isEmpty()) {
+            // Continue from the previous row's final control, not from its
+            // source name (which was constructed before the two left knobs).
+            auto* previousLayout = m_rowWidgets.back()->layout();
+            auto* previous = previousLayout->itemAt(previousLayout->count() - 1)->widget();
+            QWidget::setTabOrder(previous, fader);
+        }
         m_rowWidgets.push_back(row);
         m_rowsLayout->addWidget(row);
     }
@@ -1128,9 +1265,21 @@ void PatternWindow::rebuildRows() {
     add->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     connect(add, &QAbstractButton::clicked, this,
             &PatternWindow::showInstrumentMenu);
-    m_rowsLayout->addWidget(add);
+    auto* footer = new QWidget(m_rowsHost);
+    auto* footerLayout = new QHBoxLayout(footer);
+    footerLayout->setContentsMargins(0, 7, 0, 0);
+    footerLayout->setSpacing(14);
+    add->setText(tr("Add sound"));
+    add->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+    footerLayout->addWidget(add);
+    auto* hint = new QLabel(tr("Drop audio to add a sound. Drop MIDI onto a sound to replace its notes."), footer);
+    hint->setObjectName(QStringLiteral("PatternDropHint"));
+    hint->setWordWrap(true);
+    footerLayout->addWidget(hint, 1);
+    m_rowsLayout->addWidget(footer);
     m_rowsLayout->addStretch(1);
     updateSelectionVisuals();
+    syncRowsFromModel();
     if (m_dropIndicator) {
         m_dropIndicator->hide();
         m_dropIndicator->raise();
@@ -1155,6 +1304,21 @@ bool PatternWindow::rowStructureMatches(const QStringList& ids) const {
 
 bool PatternWindow::syncRowsFromModel() {
     if (!m_controller) return m_rowWidgets.isEmpty();
+    const auto& project = m_controller->project();
+    const double barSeconds = daw::beatsToSeconds(
+        double(std::max(1, project.timeSigNumerator)) * 4.0 /
+            double(std::max(1, project.timeSigDenominator)), project.tempo);
+    double rangeStart = std::numeric_limits<double>::max();
+    double rangeEnd = 0.0;
+    if (const auto* pattern = project.findTrack(m_patternId.toStdString())) {
+        for (const auto& clip : pattern->clips) {
+            if (clip.kind != daw::ClipKind::Pattern) continue;
+            rangeStart = std::min(rangeStart, clip.startSeconds);
+            rangeEnd = std::max(rangeEnd, clip.startSeconds + clip.durationSeconds);
+        }
+    }
+    if (rangeStart == std::numeric_limits<double>::max()) rangeStart = 0.0;
+    const double rangeLength = std::max(barSeconds, rangeEnd - rangeStart);
     for (QWidget* row : std::as_const(m_rowWidgets)) {
         if (!row) return false;
         const QString id = row->property("trackId").toString();
@@ -1178,6 +1342,7 @@ bool PatternWindow::syncRowsFromModel() {
 
         row->setAccessibleName(
             tr("Pattern source %1").arg(QString::fromStdString(track->name)));
+        name->setSourceColor(rgb(track->color));
         name->syncFromModel(QString::fromStdString(track->name),
                             QString::fromStdString(track->instrument.name));
 
@@ -1203,6 +1368,7 @@ bool PatternWindow::syncRowsFromModel() {
         // Notes, timing, colour and tempo are read directly by SourceSketch at
         // paint time. A non-structural MIDI edit therefore schedules only this
         // bounded-LOD repaint and preserves every QObject in the row.
+        sketch->setTimeRange(rangeStart, rangeLength, barSeconds);
         sketch->update();
     }
     return true;
@@ -1421,6 +1587,174 @@ void PatternWindow::transposeSelectedSourcesBy(int semitones) {
     emit projectEdited();
 }
 
+void PatternWindow::populateRhythmMenu(QMenu* menu, const QString& trackId) {
+    auto* title = menu->addAction(tr("Replace MIDI with a steady rhythm"));
+    title->setEnabled(false);
+    for (const int divisions : {1, 2, 4, 8, 16, 32}) {
+        auto* action = menu->addAction(divisions == 1 ? tr("Every bar")
+            : tr("Every 1/%1 bar").arg(divisions));
+        action->setObjectName(QStringLiteral("pattern.fill.%1").arg(divisions));
+        connect(action, &QAction::triggered, this,
+                [this, trackId, divisions] { fillRhythm(trackId, divisions); });
+    }
+}
+
+void PatternWindow::populateSourceMenu(QMenu* menu, const QString& trackId) {
+    const auto* track = m_controller->project().findTrack(trackId.toStdString());
+    if (!track) return;
+    menu->addAction(tr("Open Instrument"), this, [this, trackId] { openInstrument(trackId); });
+    menu->addAction(tr("Open piano roll"), this, [this, trackId] { openRoll(trackId); });
+    auto* fill = menu->addMenu(tr("Fill rhythm"));
+    populateRhythmMenu(fill, trackId);
+    const std::string slotId = track->instrument.id;
+    if (m_controller->samplerInstance(track->id, slotId)) {
+        auto* cut = menu->addAction(tr("Cut Itself"));
+        cut->setObjectName(QStringLiteral("pattern.cutItself"));
+        cut->setCheckable(true);
+        cut->setChecked(m_controller->insertParameter(track->id, slotId, "cutitself") >= 0.5);
+        cut->setToolTip(tr("Each new note stops this Sampler’s previous voice."));
+        connect(cut, &QAction::triggered, this, [this, trackId, slotId](bool on) {
+            const auto id = trackId.toStdString();
+            const double before = m_controller->insertParameter(id, slotId, "cutitself");
+            m_controller->setInsertParameter(id, slotId, "cutitself", on ? 1.0 : 0.0);
+            m_controller->commitInsertParameterEdit(id, slotId, "cutitself", before,
+                                                     "Toggle Cut Itself");
+            emit projectEdited();
+        });
+    }
+    menu->addSeparator();
+    menu->addAction(tr("Rename…"), this, [this, trackId] { renameSource(trackId); });
+    menu->addAction(tr("Replace with Sample..."), this, [this, trackId] { chooseReplacementSample(trackId); });
+    menu->addAction(tr("Duplicate Source"), this, [this, trackId] { duplicateSource(trackId); });
+    menu->addSeparator();
+    menu->addAction(tr("Remove Source"), this, [this, trackId] { removeSource(trackId); });
+}
+
+namespace {
+double patternBarBeats(const daw::ProjectModel& project) {
+    return double(std::max(1, project.timeSigNumerator)) * 4.0 /
+           double(std::max(1, project.timeSigDenominator));
+}
+
+const daw::ClipModel* firstSourceMidi(const daw::TrackModel* track) {
+    if (track) for (const auto& clip : track->clips)
+        if (clip.kind == daw::ClipKind::Midi) return &clip;
+    return nullptr;
+}
+
+const daw::ClipModel* sourcePatternClip(const daw::TrackModel* pattern,
+                                        const daw::ClipModel* source) {
+    if (pattern) for (const auto& clip : pattern->clips)
+        if (clip.kind == daw::ClipKind::Pattern &&
+            (!source || clip.id == source->patternClipId)) return &clip;
+    return nullptr;
+}
+} // namespace
+
+void PatternWindow::fillRhythm(const QString& trackId, int divisionsPerBar) {
+    if (divisionsPerBar < 1 || divisionsPerBar > 32) return;
+    const auto& project = m_controller->project();
+    const auto* track = project.findTrack(trackId.toStdString());
+    if (!track || track->parentId != m_patternId.toStdString()) return;
+    const auto* clip = firstSourceMidi(track);
+    const auto* owner = sourcePatternClip(project.findTrack(m_patternId.toStdString()), clip);
+    const double bar = patternBarBeats(project);
+    const double length = clip ? daw::secondsToBeats(clip->durationSeconds, project.tempo)
+        : owner ? daw::secondsToBeats(owner->durationSeconds, project.tempo) : bar;
+    const double step = bar / divisionsPerBar;
+    const double count = std::ceil(length / step - 1e-9);
+    if (count <= 0.0 || count > 65536.0) return;
+    // A Sampler trigger uses its root key, so rhythm fill does not transpose
+    // the sample. Other instruments retain the source's current pitch.
+    int pitch = clip && !clip->notes.empty() ? clip->notes.front().pitch : 60;
+    if (m_controller->samplerInstance(track->id, track->instrument.id))
+        pitch = int(std::lround(m_controller->insertParameter(track->id,
+                                             track->instrument.id, "rootnote")));
+    std::vector<daw::NoteModel> notes;
+    notes.reserve(std::size_t(count));
+    for (int index = 0; index < int(count); ++index) {
+        daw::NoteModel note;
+        note.pitch = pitch;
+        note.startBeats = index * step;
+        note.lengthBeats = std::min({0.25, step * 0.5, length - note.startBeats});
+        note.velocity = 100;
+        notes.push_back(std::move(note));
+    }
+    replaceSourceNotes(trackId, std::move(notes), length, "Fill Pattern Rhythm");
+}
+
+bool PatternWindow::replaceSourceNotes(const QString& trackId,
+    std::vector<daw::NoteModel> notes, double lengthBeats, const std::string& label) {
+    const auto& project = m_controller->project();
+    const auto* track = project.findTrack(trackId.toStdString());
+    if (!track || track->parentId != m_patternId.toStdString() || notes.empty() ||
+        !std::isfinite(lengthBeats) || lengthBeats <= 0.0) return false;
+    const auto* source = firstSourceMidi(track);
+    const auto* owner = sourcePatternClip(project.findTrack(m_patternId.toStdString()), source);
+    const std::string id = track->id;
+    const double start = source ? source->startSeconds : owner ? owner->startSeconds : 0.0;
+    const double duration = std::max(daw::beatsToSeconds(lengthBeats, project.tempo),
+                                     source ? source->durationSeconds : 0.0);
+    const std::size_t undoStart = m_controller->undoDepth();
+    const std::string clipId = source ? source->id
+        : m_controller->addMidiClip(id, start, duration);
+    if (clipId.empty()) return false;
+    // Re-resolve after addMidiClip: it can allocate a Pattern owner and invalidate
+    // model pointers. Extending the owner keeps a long imported phrase audible.
+    track = project.findTrack(id);
+    source = firstSourceMidi(track);
+    owner = sourcePatternClip(project.findTrack(m_patternId.toStdString()), source);
+    std::vector<std::pair<std::string, std::string>> trims{{id, clipId}};
+    if (owner) trims.emplace_back(m_patternId.toStdString(), owner->id);
+    const auto ownerId = owner ? owner->id : std::string{};
+    const double ownerStart = owner ? owner->startSeconds : 0.0;
+    const double ownerOffset = owner ? owner->offsetSeconds : 0.0;
+    const double ownerLength = owner ? std::max(owner->durationSeconds,
+                                    start + duration - ownerStart) : 0.0;
+    m_controller->beginClipTrimEdit(trims);
+    m_controller->setClipTrim(id, clipId, start, 0.0, duration);
+    if (!ownerId.empty())
+        m_controller->setClipTrim(m_patternId.toStdString(), ownerId,
+                                  ownerStart, ownerOffset, ownerLength);
+    m_controller->endClipTrimEdit(label);
+    m_controller->setClipNotes(id, clipId, std::move(notes), label);
+    m_controller->collapseUndo(undoStart, label);
+    setSelectedSources({trackId}, trackId);
+    refresh();
+    emit projectEdited();
+    return true;
+}
+
+bool PatternWindow::applyMidiFile(const QString& trackId, const QString& path,
+                                   QString* error) {
+    daw::midifile::File file;
+    std::string parseError;
+    if (!daw::midifile::parse(path.toStdString(), file, parseError)) {
+        if (error) *error = QString::fromStdString(parseError);
+        return false;
+    }
+    if (file.notes.empty()) {
+        if (error) *error = tr("This MIDI file contains no notes.");
+        return false;
+    }
+    std::vector<daw::NoteModel> notes;
+    notes.reserve(file.notes.size());
+    // A sound is the explicit drop target. Merge format-1 note tracks into it;
+    // never create extra instrument lanes or adopt the file's tempo.
+    for (const auto& input : file.notes) {
+        daw::NoteModel note;
+        note.pitch = input.pitch;
+        note.startBeats = input.startBeats;
+        note.lengthBeats = input.lengthBeats;
+        note.velocity = input.velocity;
+        notes.push_back(std::move(note));
+    }
+    const double bar = patternBarBeats(m_controller->project());
+    return replaceSourceNotes(trackId, std::move(notes),
+        std::max(bar, std::ceil(file.lengthBeats / bar - 1e-9) * bar),
+        "Apply MIDI to Pattern Source");
+}
+
 void PatternWindow::openRoll(const QString& trackId) {
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
     if (!track) return;
@@ -1438,26 +1772,36 @@ void PatternWindow::openRoll(const QString& trackId) {
 
 void PatternWindow::dragEnterEvent(QDragEnterEvent* event) {
     if (!event->mimeData()->hasUrls()) return;
-    for (const QUrl& url : event->mimeData()->urls()) {
-        if (ui::isAudioFile(url.toLocalFile())) {
-            event->acceptProposedAction();
-            updateExternalDropFeedback(
-                mapToGlobal(event->position().toPoint()));
-            return;
-        }
-    }
+    const auto urls = event->mimeData()->urls();
+    const bool midi = urls.size() == 1 && urls.front().isLocalFile() &&
+                       ui::isMidiFile(urls.front().toLocalFile());
+    const bool audio = std::any_of(urls.begin(), urls.end(), [](const QUrl& url) {
+        return url.isLocalFile() && ui::isAudioFile(url.toLocalFile());
+    });
+    if (!midi && !audio) return;
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
+    const auto global = mapToGlobal(event->position().toPoint());
+    if (!midi || replacementRowAtGlobal(global) >= 0) updateExternalDropFeedback(global);
+    else clearExternalDropFeedback();
 }
 
 void PatternWindow::dragMoveEvent(QDragMoveEvent* event) {
-    if (!event->mimeData()->hasUrls()) return;
-    for (const QUrl& url : event->mimeData()->urls()) {
-        if (ui::isAudioFile(url.toLocalFile())) {
-            event->acceptProposedAction();
-            updateExternalDropFeedback(
-                mapToGlobal(event->position().toPoint()));
-            return;
-        }
+    const auto urls = event->mimeData()->urls();
+    const bool midi = urls.size() == 1 && urls.front().isLocalFile() &&
+                       ui::isMidiFile(urls.front().toLocalFile());
+    const bool audio = std::any_of(urls.begin(), urls.end(), [](const QUrl& url) {
+        return url.isLocalFile() && ui::isAudioFile(url.toLocalFile());
+    });
+    const auto global = mapToGlobal(event->position().toPoint());
+    if ((!midi && !audio) || (midi && replacementRowAtGlobal(global) < 0)) {
+        clearExternalDropFeedback();
+        event->ignore();
+        return;
     }
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
+    updateExternalDropFeedback(global);
 }
 
 void PatternWindow::dragLeaveEvent(QDragLeaveEvent* event) {
@@ -1466,6 +1810,23 @@ void PatternWindow::dragLeaveEvent(QDragLeaveEvent* event) {
 }
 
 void PatternWindow::dropEvent(QDropEvent* event) {
+    const auto urls = event->mimeData()->urls();
+    if (urls.size() == 1 && urls.front().isLocalFile() &&
+        ui::isMidiFile(urls.front().toLocalFile())) {
+        const int target = replacementRowAtGlobal(mapToGlobal(event->position().toPoint()));
+        const auto ids = childTrackIds();
+        clearExternalDropFeedback();
+        if (target < 0 || target >= ids.size()) { event->ignore(); return; }
+        QString error;
+        if (!applyMidiFile(ids[target], urls.front().toLocalFile(), &error)) {
+            QMessageBox::warning(this, tr("MIDI could not be applied"), error);
+            event->ignore();
+            return;
+        }
+        event->setDropAction(Qt::CopyAction);
+        event->accept();
+        return;
+    }
     QStringList files;
     for (const QUrl& url : event->mimeData()->urls()) {
         const QString path = url.toLocalFile();
@@ -1553,20 +1914,193 @@ bool PatternWindow::checkInteractionGesturesForTest() {
            fullRange && partialRange;
 }
 
+bool PatternWindow::checkEditingForTest() {
+    daw::EngineController controller;
+    if (!controller.initialize(48000, 512, false).isOk()) return false;
+    const auto sampler = controller.pluginManager().find(daw::plugins::Format::Internal, "daw.sampler");
+    if (!sampler) return false;
+    const std::string pattern = controller.addPattern("Pattern checks");
+    const std::string first = controller.addPatternInstrument(pattern, *sampler);
+    const std::string second = controller.addPatternInstrument(pattern, *sampler);
+    if (first.empty() || second.empty()) return false;
+    const auto qFirst = QString::fromStdString(first);
+    const auto qSecond = QString::fromStdString(second);
+    auto firstClip = [&]() { return firstSourceMidi(controller.project().findTrack(first)); };
+    const auto clipId = firstClip()->id;
+    const auto slotId = controller.project().findTrack(first)->instrument.id;
+    PatternWindow window(&controller);
+    window.setPattern(QString::fromStdString(pattern));
+    window.resize(640, 340);
+    window.show();
+    QApplication::processEvents();
+    bool ok = true;
+    const auto check = [&ok](bool condition, const char* message) {
+        if (!condition) std::fprintf(stderr, "pattern editing: %s\n", message);
+        ok &= condition;
+    };
+    check(window.checkInteractionGesturesForTest(), "stable rows and model sync");
+    auto* level = window.m_rowWidgets[0]->findChild<ui::FaderWidget*>("PatternSourceLevel");
+    auto* pan = window.m_rowWidgets[0]->findChild<ui::PanKnob*>("PatternSourcePan");
+    auto* name = window.m_rowWidgets[0]->findChild<QWidget*>("PatternSourceName");
+    auto* scroll = window.findChild<QScrollArea*>("PatternScroll");
+    check(level && pan && name && level->isCompactKnob() &&
+          level->geometry().right() < pan->geometry().left() &&
+          pan->geometry().right() < name->geometry().left() &&
+          scroll->horizontalScrollBar()->maximum() == 0, "round controls fit at the far left at 640 px");
+    const double gain = level->gain();
+    const double panValue = pan->pan();
+    const auto wheel = [](QWidget* target) {
+        const QPointF at(target->rect().center());
+        QWheelEvent event(at, target->mapToGlobal(at.toPoint()), {}, QPoint(0, 120),
+                          Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(target, &event);
+    };
+    wheel(level); wheel(pan);
+    check(level->gain() == gain && pan->pan() == panValue, "scrolling must not edit the mix");
+
+    QMenu sourceMenu;
+    window.populateSourceMenu(&sourceMenu, qFirst);
+    auto* cut = sourceMenu.findChild<QAction*>("pattern.cutItself");
+    check(cut && cut->isCheckable(), "Sampler Cut Itself action exists");
+    if (cut) {
+        const auto depth = controller.undoDepth();
+        cut->trigger();
+        check(controller.insertParameter(first, slotId, "cutitself") == 1.0 &&
+              controller.undoDepth() == depth + 1, "Cut Itself edits the actual Sampler with one undo");
+        controller.undo();
+        check(controller.insertParameter(first, slotId, "cutitself") == 0.0, "Cut Itself undo");
+    }
+    QMenu rhythm;
+    window.populateRhythmMenu(&rhythm, qFirst);
+    rhythm.findChild<QAction*>("pattern.fill.4")->trigger();
+    check(firstClip()->notes.size() == 4 && firstClip()->notes[3].startBeats == 3.0,
+          "quarter-bar action makes four on the floor");
+    const QString checkShot = qEnvironmentVariable("VLTONE_PATTERN_CHECK_SHOT");
+    if (!checkShot.isEmpty()) {
+        QApplication::processEvents();
+        window.grab().save(checkShot);
+    }
+    const auto quarters = firstClip()->notes;
+    const auto depth = controller.undoDepth();
+    rhythm.findChild<QAction*>("pattern.fill.8")->trigger();
+    check(firstClip()->notes.size() == 8 && firstClip()->notes[7].startBeats == 3.5 &&
+          controller.undoDepth() == depth + 1, "eighth-bar action is a single edit");
+    controller.undo();
+    check(firstClip()->notes == quarters, "fill undo preserves original notes and IDs");
+
+    QTemporaryDir dir;
+    const auto midiPath = dir.filePath("phrase.mid");
+    QFile file(midiPath);
+    if (!file.open(QIODevice::WriteOnly)) return false;
+    // Format 1: two note tracks, ending at beat 9. Both must land on this
+    // sound, and the Pattern owner must grow to make the last note audible.
+    file.write(QByteArray::fromHex(
+        "4d54686400000006000100020060"
+        "4d54726b0000000c00903c6460803c0000ff2f00"
+        "4d54726b0000000d86009043506080430000ff2f00"));
+    file.close();
+    const auto tracksBefore = controller.project().tracks.size();
+    const auto notesBefore = firstClip()->notes;
+    const double lengthBefore = firstClip()->durationSeconds;
+    const auto ownerBefore = *sourcePatternClip(controller.project().findTrack(pattern), firstClip());
+    const auto secondNotes = firstSourceMidi(controller.project().findTrack(second))->notes;
+    const auto importDepth = controller.undoDepth();
+    QMimeData mime;
+    mime.setUrls({QUrl::fromLocalFile(midiPath)});
+    const QPoint at = name->mapTo(&window, name->rect().center());
+    QDragEnterEvent enter(at, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&window, &enter);
+    QDropEvent drop(at, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&window, &drop);
+    check(drop.isAccepted() && firstClip()->notes.size() == 2 &&
+          firstClip()->notes.back().startBeats == 8.0 &&
+          firstClip()->notes.back().pitch == 67 &&
+          controller.undoDepth() == importDepth + 1 &&
+          daw::secondsToBeats(firstClip()->durationSeconds, controller.tempo()) == 12.0 &&
+          sourcePatternClip(controller.project().findTrack(pattern), firstClip())->durationSeconds >=
+              firstClip()->durationSeconds, "MIDI drop merges tracks and grows the audible Pattern in one undo");
+    check(controller.project().tracks.size() == tracksBefore &&
+          controller.project().findTrack(first)->instrument.id == slotId &&
+          firstSourceMidi(controller.project().findTrack(second))->notes == secondNotes,
+          "MIDI drop preserves instrument, siblings and track count");
+    const auto imported = firstClip()->notes;
+    controller.undo();
+    check(firstClip()->notes == notesBefore && firstClip()->durationSeconds == lengthBefore &&
+          sourcePatternClip(controller.project().findTrack(pattern), firstClip())->durationSeconds ==
+              ownerBefore.durationSeconds, "MIDI undo restores notes and both clip boundaries");
+    controller.redo();
+    check(firstClip()->notes == imported, "MIDI redo preserves imported IDs");
+    const auto afterImport = controller.undoDepth();
+    QDropEvent outside(QPointF(2, 2), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    window.dropEvent(&outside);
+    check(!outside.isAccepted() && controller.undoDepth() == afterImport,
+          "MIDI dropped outside a sound is ignored");
+    QString error;
+    check(!window.applyMidiFile(qFirst, dir.filePath("missing.mid"), &error) &&
+          !error.isEmpty() && controller.undoDepth() == afterImport, "invalid MIDI leaves the project intact");
+
+    controller.setTimeSignature(6, 8);
+    controller.beginClipTrimEdit(first, clipId);
+    controller.setClipTrim(first, clipId, 0.0, 0.0, daw::beatsToSeconds(3.0, controller.tempo()));
+    controller.endClipTrimEdit("Test meter");
+    window.fillRhythm(qFirst, 8);
+    check(firstClip()->notes.size() == 8 && firstClip()->notes.back().startBeats == 2.625,
+          "bar fractions respect 6/8 rather than assuming four quarter notes");
+
+    PianoRollWindow roll(&controller);
+    roll.setClip(qFirst, QString::fromStdString(clipId));
+    roll.show();
+    QApplication::processEvents();
+    auto* view = roll.findChild<PianoRollView*>();
+    check(view && view->ghostTracks() == QSet<QString>{qSecond}, "sibling ghost notes default on");
+    auto* ghostMenu = roll.findChild<QMenu*>("PianoRollGhostMenu");
+    QMetaObject::invokeMethod(ghostMenu, "aboutToShow", Qt::DirectConnection);
+    auto* automatic = ghostMenu->findChild<QAction*>("pianoRoll.autoPatternGhosts");
+    check(automatic && automatic->isChecked(), "automatic ghosts are discoverable in the menu");
+    if (automatic) {
+        automatic->trigger();
+        roll.refresh();
+        check(view->ghostTracks().isEmpty(), "explicit ghost opt-out survives refresh");
+        automatic->trigger();
+        check(view->ghostTracks().contains(qSecond), "automatic ghosts can be restored");
+    }
+    const auto third = controller.addPatternInstrument(pattern, *sampler);
+    roll.refresh();
+    check(view->ghostTracks().contains(QString::fromStdString(third)), "new Pattern sounds become ghosts automatically");
+    roll.setClip(qSecond, QString::fromStdString(firstSourceMidi(controller.project().findTrack(second))->id));
+    check(view->ghostTracks().contains(qFirst) && !view->ghostTracks().contains(qSecond),
+          "switching sounds swaps the active and ghost lanes");
+    const auto otherPattern = controller.addPattern("Other pattern");
+    const auto other = controller.addPatternInstrument(otherPattern, *sampler);
+    roll.setClip(QString::fromStdString(other), QString::fromStdString(
+        firstSourceMidi(controller.project().findTrack(other))->id));
+    check(view->ghostTracks().isEmpty(), "automatic ghosts never leak into another Pattern");
+    // A source whose MIDI was deleted still gets a correctly owned clip.
+    controller.removeClip(first, clipId);
+    const auto emptyDepth = controller.undoDepth();
+    window.fillRhythm(qFirst, 4);
+    check(firstClip() && !firstClip()->patternClipId.empty() &&
+          !firstClip()->notes.empty() && controller.undoDepth() == emptyDepth + 1,
+          "filling an empty source creates MIDI and its ownership in one undo");
+    controller.undo();
+    check(!firstClip(), "undo removes a MIDI clip created by fill");
+    return ok;
+}
+
 void PatternWindow::applyTheme() {
     const Theme& t = th();
     setStyleSheet(QString(R"(
-QDialog { background: %BG%; color: %TEXT%; }
+#PatternWindow { background: %BG%; color: %TEXT%; }
 #PatternColumnHeader { background: %BG%; }
 #PatternColumnHeader QLabel { color: %TEXT2%; font-size: 9px;
-                              font-weight: 700; letter-spacing: 0.5px; }
+                              font-weight: 500; letter-spacing: 0.3px; }
 #PatternScroll { background: %BG%; }
 #PatternSourceRow { background: %SURFACE%; border: 1px solid %SEP%;
                     border-radius: 8px; }
 #PatternSourceRow:hover { background: %HOVER%; border-color: %SECTION%; }
 #PatternSourceRow[selected="true"] { background: %SELECTED%;
     border-color: %ACCENT%; }
-#PatternSourceRow[primary="true"] { border-width: 2px; }
+#PatternSourceRow[primary="true"] { border-color: %ACCENT%; }
 #PatternSourceRow[dropTarget="true"] { background: %SELECTED%;
     border: 2px solid %ACCENT%; }
 #PatternDropIndicator { background: %ACCENT%; border-radius: 1px; }
@@ -1575,8 +2109,14 @@ QToolButton#PatternToolbarButton { color: %TEXT%; background: %WELL%;
 QToolButton#PatternToolbarButton:hover { background: %HOVER%;
     border-color: %ACCENT%; }
 QToolButton#PatternToolbarButton:disabled { color: %TEXT2%; background: %SURFACE%; }
-QToolButton#PatternAddInstrument { min-height: 32px; text-align: left;
-    background: %SURFACE%; border-style: dashed; }
+QToolButton#PatternAddInstrument { min-height: 28px; padding: 4px 10px;
+    color: %TEXT%; background: %WELL%; border: 1px solid %SEP%; border-radius: 7px; }
+QToolButton#PatternAddInstrument:hover { background: %HOVER%; border-color: %ACCENT%; }
+#PatternDropHint { color: %TEXT2%; font-size: 10px; }
+QToolButton#PatternRhythm { border: 1px solid transparent; border-radius: 6px; }
+QToolButton#PatternRhythm:hover, QToolButton#PatternRhythm:focus {
+    background: %HOVER%; border-color: %ACCENT%; }
+QToolButton#PatternRhythm::menu-indicator { image: none; }
 )")
         .replace("%BG%", t.background.name())
         .replace("%SURFACE%", t.surface.name())

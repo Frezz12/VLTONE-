@@ -54,7 +54,7 @@ bool writeSnapshot(const RecoverySnapshot& snapshot, const fs::path& journalFile
                    const fs::path& sessionDir) {
     const fs::path stateDir = sessionDir / ProjectSerializer::kStateDir;
     std::error_code ec;
-    if (!snapshot.pluginStates.empty()) {
+    if (!snapshot.pluginStates.empty() || !snapshot.sharedPluginStates.empty()) {
         fs::create_directories(stateDir, ec);
         if (ec) return false;
     }
@@ -65,10 +65,23 @@ bool writeSnapshot(const RecoverySnapshot& snapshot, const fs::path& journalFile
         currentFiles.insert(state.fileName);
     }
 
+    for (const auto& state : snapshot.sharedPluginStates) {
+        if (!state || !writeStateFile(stateDir, *state)) return false;
+        currentFiles.insert(state->fileName);
+    }
+    ProjectModel assembled;
+    const ProjectModel* document = &snapshot.project;
+    if (snapshot.fragmented) {
+        assembled = snapshot.project;
+        assembled.tracks.reserve(snapshot.trackParts.size());
+        for (const auto& track : snapshot.trackParts) assembled.tracks.push_back(*track);
+        document = &assembled;
+    }
+
     // Publish the manifest only after every state file it names is written. The
     // previous manifest and its files remain a valid generation if any write
     // above fails or the process dies halfway through.
-    if (!ProjectSerializer::saveDocument(snapshot.project,
+    if (!ProjectSerializer::saveDocument(*document,
                                          platform::pathToUtf8(journalFile),
                                          MediaPaths::Absolute)) {
         return false;
@@ -235,6 +248,11 @@ void RecoveryJournal::run(std::chrono::milliseconds debounce) {
             // written will not start writing because a caller waits on it, and
             // flush() must not deadlock on a full disk.
             m_written_ = generation;
+            // flush() can arrive while writeSnapshot runs outside the lock.
+            // Its force flag is satisfied by this generation unless a newer
+            // snapshot is pending. Leaving it set makes wait_until spin with
+            // the mutex held, preventing the flush waiter from waking up.
+            if (!m_pending) m_forceNow = false;
             // Refresh the session file too, so its journalUnixMs and statistics
             // describe the write that just happened rather than the previous
             // heartbeat. A crash straight after a flush must not leave a
@@ -255,7 +273,10 @@ void RecoveryJournal::run(std::chrono::milliseconds debounce) {
         // debounce lets a pending write through.
         auto deadline = lastHeartbeat + kHeartbeatInterval;
         if (m_pending) deadline = std::min(deadline, lastWrite + debounce);
-        m_wake.wait_until(lock, deadline, [this] { return m_stopping || m_forceNow; });
+        const auto observed = m_requested;
+        m_wake.wait_until(lock, deadline, [this, observed] {
+            return m_stopping || (m_forceNow && m_pending) || m_requested != observed;
+        });
     }
 
     // A pending edit at shutdown still gets written: stop() deletes the

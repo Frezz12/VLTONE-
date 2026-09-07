@@ -1,0 +1,55 @@
+{
+  "version": "0.1.9",
+  "summary_ru": "Обновление VLTONE с заморозкой дорожек, новым растяжением аудио, расширенным Pattern Editor, точным управлением параметрами и более устойчивым сохранённым входом. Обновлены сайт, инструкция и инструменты администрирования.",
+  "summary_en": "A VLTONE update with track freezing, new audio time stretching, an expanded Pattern Editor, precise parameter control and more resilient saved sign-in. The website, manual and administration tools have also been updated.",
+  "features_ru": [
+    "Freeze Track / Unfreeze Track для независимых аудио-, MIDI- и инструментальных дорожек, с отменой и сохранением в проекте.",
+    "Pattern Editor: Fill rhythm, замена нот перетаскиванием MIDI-файла, автоматические ghost notes и Cut Itself для Sampler.",
+    "Режимы растяжения Stretch, Loop, Vocal и Complex с сохранением положения аудиоклипов в долях при смене темпа.",
+    "Коллекция фонов стартовой страницы браузера, локальные изображения/GIF/видео и веб-видео как фон таймлайна.",
+    "Блокнот с форматированием заметок, отдельным окном и текстом по времени.",
+    "Восстановление сохранённого входа через системное хранилище и повтор сетевых запросов обновления сессии.",
+    "В админке: управление коллекцией фонов и расширенная история диагностических данных."
+  ],
+  "features_en": [
+    "Freeze Track / Unfreeze Track for independent audio, MIDI and instrument tracks, with undo and project persistence.",
+    "Pattern Editor: Fill rhythm, MIDI file drop replacement, automatic ghost notes and Sampler Cut Itself.",
+    "Stretch, Loop, Vocal and Complex profiles preserve audio clip positions in beats across tempo changes.",
+    "A browser start-page background collection, local image/GIF/video backgrounds and web video behind the timeline.",
+    "Notebook formatting, a separate window and timed text.",
+    "Saved sign-in recovery through the system vault and retryable session refresh requests.",
+    "Admin background collection management and expanded diagnostic history."
+  ],
+  "changes_ru": [
+    "Sampler и редактор аудиоклипа получили компактную компоновку с формой волны над вкладками Playback, Envelope и Processing.",
+    "Контекстная панель подстраивается под ширину окна и браузера; адаптивная сетка объединяет такты при отдалении.",
+    "Автоматизация создаётся через контекстное меню параметра или явный режим двойного щелчка, переключаемый Cmd/Ctrl+Shift+U.",
+    "Оптимизированы подготовка семплов, чтение PCM, обработка большого числа клипов и доставка кадров интерфейса.",
+    "Единое оформление VLTONE и типографика Inter в приложении, на сайте и в админке.",
+    "Инструкция на русском и английском дополнена сценариями заморозки, растяжения, Pattern Editor, точного ввода, фонов и сохранённого входа."
+  ],
+  "changes_en": [
+    "Sampler and audio-clip editors use a compact layout with the waveform above Playback, Envelope and Processing tabs.",
+    "The context panel adapts to window and browser width; the adaptive overview grid groups whole bars.",
+    "Create automation from the parameter context menu or an explicit double-click mode toggled with Cmd/Ctrl+Shift+U.",
+    "Optimized sample preparation, PCM reading, dense clip playback and UI frame delivery.",
+    "Consistent VLTONE branding and Inter typography across the application, website and admin.",
+    "Russian and English manuals now cover freezing, stretching, Pattern Editor workflows, precise entry, backgrounds and saved sign-in."
+  ],
+  "fixes_ru": [
+    "Прокрутка над числовыми полями инспектора и регуляторами Sampler/Pattern больше не меняет параметры случайно.",
+    "Улучшена устойчивость входа при временных сбоях сети, недоступном системном хранилище и потере ответа обновления сессии.",
+    "Исправлены отменённые переходы, всплывающие окна, восстановление после сетевых ошибок и закрытие вкладок встроенного браузера; используются системные proxy/VPN.",
+    "Улучшены сохранение, Undo/Redo и восстановление состояния растянутых и замороженных клипов.",
+    "Windows CI устанавливает недостающие зависимости Qt и запускает все зарегистрированные тесты без устаревшего фиксированного счётчика.",
+    "Обновлены загрузка файлов релиза в админке, обработка ошибок и отображение диагностических данных."
+  ],
+  "fixes_en": [
+    "Scrolling over inspector numeric fields and Sampler/Pattern controls no longer changes parameters accidentally.",
+    "Improved sign-in resilience during temporary network failures, vault unavailability and lost refresh responses.",
+    "Fixed cancelled navigation, popups, network-error recovery and tab teardown in the embedded browser; system proxy/VPN settings are used.",
+    "Improved save, undo/redo and recovery handling for stretched and frozen clips.",
+    "Windows CI installs missing Qt dependencies and runs all registered tests without an outdated fixed test count.",
+    "Updated admin release uploads, error handling and diagnostic data display."
+  ]
+}

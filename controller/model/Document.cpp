@@ -8,6 +8,36 @@
 
 namespace daw {
 
+void retimeClipComp(ClipModel& clip, double ratio) {
+    for (auto& take : clip.takes) take.clipOffsetSeconds *= ratio;
+    for (auto& segment : clip.comp) {
+        segment.startSeconds *= ratio;
+        segment.endSeconds *= ratio;
+    }
+}
+
+void retimeClipToTempo(ClipModel& clip, double ratio) {
+    clip.startSeconds *= ratio;
+    const bool stretch = clip.kind == ClipKind::Audio &&
+                         clip.sampleEdit.stretchMode != ClipStretchMode::Resample;
+    if (clip.kind == ClipKind::Midi || stretch) {
+        clip.durationSeconds *= ratio;
+        clip.fadeInSeconds *= ratio;
+        clip.fadeOutSeconds *= ratio;
+    }
+    if (stretch) {
+        clip.sampleEdit.stretchTime *= ratio;
+        retimeClipComp(clip, ratio);
+        // Analysis belongs to the heard clip. Its pitch is unchanged.
+        if (clip.musicalAnalysis.tempo.bpm > 0) {
+            clip.musicalAnalysis.tempo.bpm /= ratio;
+            for (auto& bpm : clip.musicalAnalysis.tempo.alternatives) bpm /= ratio;
+        }
+        clip.musicalAnalysis.analyzedDurationSeconds *= ratio;
+    }
+}
+
+
 std::string toString(AssetKind kind) {
     switch (kind) {
         case AssetKind::Audio: return "audio";
@@ -523,22 +553,22 @@ const TrackModel* ProjectModel::findTrack(const std::string& id) const {
 }
 
 size_t ProjectModel::indexOf(const std::string& id) const {
-    // `tracks` remains public data for serialization and batch editing. Size
-    // changes are detected immediately; reorder/id edits are detected by
-    // validating the indexed slot. A miss rebuilds as well, covering insertion
-    // into a vector whose allocation and size happened to be reused.
-    if (m_trackIndex.size() == tracks.size()) {
-        if (const auto found = m_trackIndex.find(id); found != m_trackIndex.end() &&
-            found->second < tracks.size() && tracks[found->second].id == id) {
-            return found->second;
-        }
+    if (id.empty()) return std::string::npos; // default route to Master
+    if (m_trackIndex.size() != tracks.size()) rebuildTrackIndex();
+    auto found = m_trackIndex.find(id);
+    if (found == m_trackIndex.end()) return std::string::npos;
+    // Public vector reorders retain IDs, so validate their indexed slot. Batch
+    // ID replacement must explicitly invalidate; a missing ID is never itself
+    // evidence of a structural change and must not rebuild the whole project.
+    if (found->second >= tracks.size() || tracks[found->second].id != id) {
+        rebuildTrackIndex();
+        found = m_trackIndex.find(id);
     }
-    rebuildTrackIndex();
-    const auto found = m_trackIndex.find(id);
     return found == m_trackIndex.end() ? std::string::npos : found->second;
 }
 
 void ProjectModel::rebuildTrackIndex() const {
+    invalidateStructure();
     m_trackIndex.clear();
     m_trackIndex.reserve(tracks.size());
     for (size_t i = 0; i < tracks.size(); ++i) {
@@ -582,6 +612,9 @@ std::string summingParent(const ProjectModel& project,
 }
 
 const std::vector<TrackRow>& visibleTracks(const ProjectModel& project) {
+    if (project.m_explicitStructureCache && project.m_visibleRowsValid &&
+        project.m_visibleTracksData == project.tracks.data() &&
+        project.m_visibleTracksSize == project.tracks.size()) return project.m_visibleRows;
     std::uint64_t signature = 1469598103934665603ull;
     const auto mix = [&signature](std::string_view value) {
         for (const unsigned char byte : value) {
@@ -591,7 +624,7 @@ const std::vector<TrackRow>& visibleTracks(const ProjectModel& project) {
         signature ^= 0xffu;
         signature *= 1099511628211ull;
     };
-    for (const TrackModel& track : project.tracks) {
+    if (!project.m_explicitStructureCache) for (const TrackModel& track : project.tracks) {
         mix(track.id);
         mix(track.parentId);
         signature ^= std::uint64_t(track.expanded);
@@ -599,7 +632,8 @@ const std::vector<TrackRow>& visibleTracks(const ProjectModel& project) {
         signature ^= std::uint64_t(track.automationExpanded);
         signature *= 1099511628211ull;
     }
-    if (signature == project.m_visibleRowsSignature &&
+    if (!project.m_explicitStructureCache && project.m_visibleRowsValid &&
+        signature == project.m_visibleRowsSignature &&
         project.m_visibleRows.size() <= project.tracks.size()) {
         return project.m_visibleRows;
     }
@@ -635,6 +669,9 @@ const std::vector<TrackRow>& visibleTracks(const ProjectModel& project) {
         rows.push_back({i, trackDepth(project, track.id)});
     }
     project.m_visibleRowsSignature = signature;
+    project.m_visibleRowsValid = true;
+    project.m_visibleTracksData = project.tracks.data();
+    project.m_visibleTracksSize = project.tracks.size();
     return rows;
 }
 

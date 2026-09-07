@@ -7,8 +7,54 @@
 #include <algorithm>
 #include <cmath>
 #include <vector>
+#include <array>
+#include <list>
+#include <unordered_map>
 
 namespace ui {
+namespace {
+struct GeometryKey {
+    std::uint64_t source;
+    std::array<double, 7> values;
+    bool reversed;
+    bool operator==(const GeometryKey&) const = default;
+};
+struct GeometryHash {
+    std::size_t operator()(const GeometryKey& key) const {
+        std::size_t hash = std::hash<std::uint64_t>{}(key.source);
+        const auto add = [&](std::size_t value) { hash ^= value + 0x9e3779b9 + (hash << 6) + (hash >> 2); };
+        for (double value : key.values) add(std::hash<double>{}(value));
+        add(key.reversed);
+        return hash;
+    }
+};
+struct GeometryCache {
+    struct Entry { GeometryKey key; QPainterPath path; std::size_t bytes; };
+    std::list<Entry> entries;
+    std::unordered_map<GeometryKey, std::list<Entry>::iterator, GeometryHash> index;
+    std::size_t bytes = 0;
+    static constexpr std::size_t budget = 16 * 1024 * 1024;
+    const QPainterPath* find(const GeometryKey& key) {
+        const auto found = index.find(key);
+        if (found == index.end()) return nullptr;
+        entries.splice(entries.begin(), entries, found->second);
+        return &found->second->path;
+    }
+    void insert(const GeometryKey& key, const QPainterPath& path) {
+        const std::size_t cost = sizeof(Entry) + path.elementCount() * sizeof(QPainterPath::Element);
+        if (cost > budget) return;
+        while (!entries.empty() && (entries.size() >= 256 || bytes + cost > budget)) {
+            bytes -= entries.back().bytes;
+            index.erase(entries.back().key);
+            entries.pop_back();
+        }
+        entries.push_front({key, path, cost});
+        index.emplace(key, entries.begin());
+        bytes += cost;
+    }
+};
+thread_local GeometryCache geometryCache;
+} // namespace
 
 void paintPeaks(QPainter& p, const daw::WaveformPeaks* peaks, const QRectF& area,
                 const PeakPaint& how) {
@@ -26,6 +72,23 @@ void paintPeaks(QPainter& p, const daw::WaveformPeaks* peaks, const QRectF& area
 
     if (!peaks || !peaks->isValid() || peaks->bucketCount() == 0) return;
     if (!(how.secondsPerPixel > 0.0)) return;
+
+    const int x0 = int(std::floor(left));
+    const int x1 = int(std::ceil(right));
+    const GeometryKey key{peaks->geometryId,
+        {how.sourceStartSeconds, how.secondsPerPixel, double(how.gain), area.height(),
+         x0 - area.left(), double(x1 - x0), peaks->durationSeconds}, how.reversed};
+    const auto draw = [&](const QPainterPath& path) {
+        p.save();
+        p.translate(area.topLeft());
+        p.setPen(Qt::NoPen);
+        p.setBrush(how.color);
+        p.drawPath(path);
+        p.restore();
+    };
+    if (key.source) {
+        if (const auto* cached = geometryCache.find(key)) { draw(*cached); return; }
+    }
 
     const double halfHeight = area.height() / 2.0 - 1.0;
 
@@ -46,10 +109,9 @@ void paintPeaks(QPainter& p, const daw::WaveformPeaks* peaks, const QRectF& area
     // extremes over them; when a bucket is wider than a pixel (zoomed in) we
     // linearly interpolate between neighbouring buckets, so the outline stays a
     // smooth continuous wave instead of stair-stepped blocks.
-    std::vector<QPointF> topEdge;
-    std::vector<QPointF> bottomEdge;
-    const int x0 = int(std::floor(left));
-    const int x1 = int(std::ceil(right));
+    thread_local std::vector<QPointF> topEdge;
+    thread_local std::vector<QPointF> bottomEdge;
+    topEdge.clear(); bottomEdge.clear();
     topEdge.reserve(size_t(std::max(0, x1 - x0 + 1)));
     bottomEdge.reserve(topEdge.capacity());
 
@@ -100,21 +162,21 @@ void paintPeaks(QPainter& p, const daw::WaveformPeaks* peaks, const QRectF& area
         const double g = std::clamp(double(how.gain), 0.0, 8.0);
         const double top = mid - std::clamp(hi * g, -1.0, 1.0) * halfHeight;
         const double bottom = mid - std::clamp(lo * g, -1.0, 1.0) * halfHeight;
-        topEdge.emplace_back(x, top);
-        bottomEdge.emplace_back(x, std::max(bottom, top));
+        topEdge.emplace_back(x - area.left(), top - area.top());
+        bottomEdge.emplace_back(x - area.left(), std::max(bottom, top) - area.top());
     }
     if (topEdge.size() < 2) return;
 
     // One closed shape: forward along the top edge, back along the bottom.
-    QPainterPath path;
+    thread_local QPainterPath path;
+    path.clear();
     path.moveTo(topEdge.front());
     for (size_t i = 1; i < topEdge.size(); ++i) path.lineTo(topEdge[i]);
     for (size_t i = bottomEdge.size(); i-- > 0;) path.lineTo(bottomEdge[i]);
     path.closeSubpath();
 
-    p.setPen(Qt::NoPen);
-    p.setBrush(how.color);
-    p.drawPath(path);
+    if (key.source) geometryCache.insert(key, path);
+    draw(path);
 }
 
 bool checkWaveformBaselineForTest() {
@@ -128,8 +190,35 @@ bool checkWaveformBaselineForTest() {
     how.color = Qt::white;
     paintPeaks(painter, nullptr, QRectF(0.0, 0.0, 24.0, 12.0), how);
     painter.end();
-    return qAlpha(image.pixel(12, 6)) > 0 &&
-           qAlpha(image.pixel(12, 2)) == 0;
+    if (!(qAlpha(image.pixel(12, 6)) > 0 && qAlpha(image.pixel(12, 2)) == 0)) return false;
+    daw::engine::SampleBuffer samples(1, 960, 48000.0);
+    for (std::size_t i = 0; i < samples.frames(); ++i)
+        samples.writableChannel(0)[i] = float(std::sin(double(i) * 0.19));
+    daw::WaveformPeaks peaks;
+    daw::buildPeaks(samples, peaks);
+    const auto id = peaks.geometryId;
+    if (!id) return false;
+    const auto render = [&](bool cached, double left, float gain, bool reverse) {
+        QImage result(144, 64, QImage::Format_ARGB32_Premultiplied);
+        result.fill(Qt::transparent);
+        QPainter paint(&result);
+        paint.setRenderHint(QPainter::Antialiasing);
+        peaks.geometryId = cached ? id : 0;
+        how.clipLeft = 0; how.clipRight = 144;
+        how.secondsPerPixel = 0.0003; how.gain = gain; how.reversed = reverse;
+        paintPeaks(paint, &peaks, QRectF(left, 3.25, 130, 54), how);
+        return result;
+    };
+    for (bool reversed : {false, true})
+        for (float gain : {0.5f, 1.0f, 2.0f})
+            for (double left : {1.25, 5.25, -4.5}) {
+                const auto reference = render(false, left, gain, reversed);
+                if (render(true, left, gain, reversed) != reference ||
+                    render(true, left, gain, reversed) != reference) return false;
+            }
+    daw::WaveformPeaks second;
+    daw::buildPeaks(samples, second);
+    return second.geometryId && second.geometryId != id;
 }
 
 } // namespace ui

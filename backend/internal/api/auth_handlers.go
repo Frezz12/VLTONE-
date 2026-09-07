@@ -1,8 +1,10 @@
 package api
 
 import (
+	"crypto/tls"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/mail"
 	"net/smtp"
@@ -281,7 +283,7 @@ func (s *Server) sendPasswordReset(to, link string) {
 		}
 		return
 	}
-	if err := s.sendPlainEmail(to, "VLT Studio password reset",
+	if err := s.sendPlainEmail(to, "VLTONE password reset",
 		"Open this link within 30 minutes to choose a new password:\r\n"+link+"\r\n"); err != nil {
 		log.Printf("send password reset: %v", err)
 	}
@@ -303,5 +305,44 @@ func (s *Server) sendPlainEmail(to, subject, content string) error {
 	}
 	body := "To: " + recipient.Address + "\r\nFrom: " + s.Config.SMTPFrom + "\r\n" +
 		"Subject: " + subject + "\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + content
-	return smtp.SendMail(hostPort, smtpAuth, from.Address, []string{recipient.Address}, []byte(body))
+	connection, err := net.DialTimeout("tcp", hostPort, 10*time.Second)
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
+		return err
+	}
+	client, err := smtp.NewClient(connection, s.Config.SMTPHost)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		if err := client.StartTLS(&tls.Config{ServerName: s.Config.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
+			return err
+		}
+	}
+	if smtpAuth != nil {
+		if err := client.Auth(smtpAuth); err != nil {
+			return err
+		}
+	}
+	if err := client.Mail(from.Address); err != nil {
+		return err
+	}
+	if err := client.Rcpt(recipient.Address); err != nil {
+		return err
+	}
+	writer, err := client.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := writer.Write([]byte(body)); err != nil {
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	return client.Quit()
 }

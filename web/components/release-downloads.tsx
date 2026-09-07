@@ -4,7 +4,7 @@ import type { ReleaseArtifact } from "@/lib/releases";
 import { Apple, Check, Clipboard, Download, Laptop, Monitor, X } from "lucide-react";
 import { useRef, useState } from "react";
 
-const quarantineCommand = 'sudo xattr -rd com.apple.quarantine "/Applications/VLT Studio Pro.app"';
+const quarantineCommand = 'sudo xattr -rd com.apple.quarantine "/Applications/VLTONE.app"';
 
 function readableBytes(value: number) {
   if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GiB`;

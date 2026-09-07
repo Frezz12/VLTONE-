@@ -1,8 +1,15 @@
 #include "Device/AudioDeviceManager.hpp"
 #include "platform/Clock.hpp"
 #include "platform/Log.hpp"
+#include "ScopedNoDenormals.hpp"
 
 #include <portaudio.h>
+#if defined(__APPLE__) && __has_include(<pa_mac_core.h>)
+#include <pa_mac_core.h>
+#include <CoreAudio/CoreAudio.h>
+#include <os/workgroup.h>
+#define DAW_HAVE_AUDIO_WORKGROUP 1
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -242,9 +249,9 @@ std::vector<SampleRate> supportedSampleRates(PaDeviceIndex index,
 // its signature matches PaStreamCallback exactly.
 int paTrampoline(const void* input, void* output, unsigned long frameCount,
                  const PaStreamCallbackTimeInfo* /*timeInfo*/,
-                 PaStreamCallbackFlags /*statusFlags*/, void* userData) {
+                 PaStreamCallbackFlags statusFlags, void* userData) {
     return static_cast<AudioDeviceManager*>(userData)
-        ->processStream(input, output, frameCount);
+        ->processStream(input, output, frameCount, statusFlags);
 }
 
 } // namespace
@@ -583,6 +590,7 @@ void AudioDeviceManager::closeStream() {
             // can wait forever after a USB/ASIO device disappears.
             Pa_AbortStream(stream);
         }
+        if (auto* callback = m_audioCallback.load()) callback->configureAudioWorkers({});
         Pa_CloseStream(stream);
         m_stream = nullptr;
     }
@@ -594,9 +602,11 @@ Result AudioDeviceManager::start() {
         return Result::fail(EngineError::DeviceError, "stream not open");
     }
     m_deviceState.store(AudioDeviceState::Starting);
+    if (auto* callback = m_audioCallback.load()) callback->configureAudioWorkers(workerConfiguration());
     const PaError err = Pa_StartStream(static_cast<PaStream*>(m_stream));
     m_diagLastStartResult.store(err);
     if (err != paNoError) {
+        if (auto* callback = m_audioCallback.load()) callback->configureAudioWorkers({});
         m_deviceState.store(AudioDeviceState::Failed);
         return Result::fail(EngineError::DeviceError,
                             std::string("Pa_StartStream: ") +
@@ -615,8 +625,36 @@ Result AudioDeviceManager::stop() {
         }
     }
     m_isRunning.store(false);
+    if (auto* callback = m_audioCallback.load()) callback->configureAudioWorkers({});
     m_deviceState.store(AudioDeviceState::Stopped);
     return Result::ok();
+}
+
+daw::rt::AudioWorkerConfig AudioDeviceManager::workerConfiguration() const {
+    daw::rt::AudioWorkerConfig config;
+    config.active = m_stream != nullptr;
+    config.sampleRate = sampleRate();
+    config.blockFrames = bufferSize();
+#if DAW_HAVE_AUDIO_WORKGROUP
+    if (__builtin_available(macOS 11.0, *)) {
+        const auto* device = Pa_GetDeviceInfo(m_outputDeviceIndex);
+        const auto* api = device ? Pa_GetHostApiInfo(device->hostApi) : nullptr;
+        if (m_stream && api && api->type == paCoreAudio) {
+            const AudioDeviceID native = PaMacCore_GetStreamOutputDevice(static_cast<PaStream*>(m_stream));
+            AudioObjectPropertyAddress address{kAudioDevicePropertyIOThreadOSWorkgroup,
+                                               kAudioObjectPropertyScopeGlobal,
+                                               kAudioObjectPropertyElementMain};
+            os_workgroup_t workgroup = nullptr;
+            UInt32 size = sizeof(workgroup);
+            if (AudioObjectGetPropertyData(native, &address, 0, nullptr, &size, &workgroup) == noErr && workgroup) {
+                config.workgroup = std::shared_ptr<void>(workgroup, [](void* object) {
+                    os_release(static_cast<os_workgroup_t>(object));
+                });
+            }
+        }
+    }
+#endif
+    return config;
 }
 
 Result AudioDeviceManager::shutdown() {
@@ -631,7 +669,21 @@ Result AudioDeviceManager::shutdown() {
 }
 
 int AudioDeviceManager::processStream(const void* input, void* output,
-                                      unsigned long frameCount) {
+                                      unsigned long frameCount, unsigned long statusFlags) {
+    const auto started = daw::rt::nowNanos();
+    struct Measure {
+        daw::rt::BlockMetrics& metrics;
+        std::uint64_t started;
+        std::uint32_t frames, flags;
+        double rate;
+        ~Measure() { metrics.record(daw::rt::nowNanos() - started, frames, rate, flags); }
+    } measure{m_callbackMetrics, started, std::uint32_t(frameCount),
+              std::uint32_t(statusFlags), sampleRate()};
+    const daw::rt::ScopedNoDenormals noDenormals;
+    constexpr PaStreamCallbackFlags flags[]{paInputUnderflow, paInputOverflow,
+                                           paOutputUnderflow, paOutputOverflow};
+    for (unsigned i = 0; i < 4; ++i)
+        if (statusFlags & flags[i]) m_xruns[i].fetch_add(1, std::memory_order_relaxed);
     m_diagCallbackCount.fetch_add(1, std::memory_order_relaxed);
     m_diagRenderCallCount.fetch_add(1, std::memory_order_relaxed);
     m_diagLastCallbackTimestamp.store(platform::nowNanos(),
@@ -956,7 +1008,11 @@ Result AudioDeviceManager::setBufferSize(BufferSize size) {
 }
 
 void AudioDeviceManager::setAudioCallback(IAudioCallback* callback) {
-    m_audioCallback.store(callback, std::memory_order_relaxed);
+    if (m_audioCallback.load(std::memory_order_acquire) == callback) return;
+    const bool restart = isRunning();
+    if (restart) (void)stop(); // Retire the previous owner's registration on its own workers.
+    m_audioCallback.store(callback, std::memory_order_release);
+    if (restart) (void)start();
 }
 
 void AudioDeviceManager::setDeviceNotification(

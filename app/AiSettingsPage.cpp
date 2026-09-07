@@ -26,7 +26,7 @@ AiSettingsPage::AiSettingsPage(QWidget* parent) : QWidget(parent) {
     auto* column = new QVBoxLayout(this);
     column->setSpacing(12);
 
-    auto* managedGroup = new QGroupBox(tr("Models provided by VLT"), this);
+    auto* managedGroup = new QGroupBox(tr("Models provided by VLTONE"), this);
     auto* managedColumn = new QVBoxLayout(managedGroup);
     auto* managedRow = new QHBoxLayout;
     auto* managedNote = new QLabel(

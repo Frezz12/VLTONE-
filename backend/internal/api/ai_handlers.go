@@ -76,7 +76,7 @@ func (s *Server) aiProxy(w http.ResponseWriter, r *http.Request) {
 	reserved := estimatedInput + maxOutput
 	reservation, err := s.Quota.Reserve(userFrom(r).ID, provider, modelName, reserved, time.Now().UTC())
 	if errors.Is(err, quota.ErrExhausted) {
-		writeError(w, r, http.StatusPaymentRequired, "ai_quota_exhausted", "Your monthly AI quota is exhausted. The rest of VLT Studio remains available.", nil)
+		writeError(w, r, http.StatusPaymentRequired, "ai_quota_exhausted", "Your monthly AI quota is exhausted. The rest of VLTONE remains available.", nil)
 		return
 	}
 	if errors.Is(err, quota.ErrGlobalExhausted) {
@@ -123,7 +123,11 @@ func (s *Server) aiProxy(w http.ResponseWriter, r *http.Request) {
 		upstream.Header.Set("x-api-key", key)
 		upstream.Header.Set("anthropic-version", "2023-06-01")
 	}
-	response, err := (&http.Client{Timeout: 4 * time.Minute}).Do(upstream)
+	client := s.AIHTTPClient
+	if client == nil {
+		client = defaultAIHTTPClient
+	}
+	response, err := client.Do(upstream)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return

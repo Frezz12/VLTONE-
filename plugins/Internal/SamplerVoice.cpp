@@ -15,11 +15,6 @@ constexpr double kPi = std::numbers::pi;
 /// tan() per voice per sub-block instead of one per sample.
 constexpr engine::FrameCount kModBlock = 32;
 
-/// The granular engine's grain length in output frames, and its hop. Hann at
-/// 50 % overlap sums to exactly one, so two grains reconstruct a continuous
-/// signal with no ripple.
-constexpr double kDefaultGrainLength = 2048.0;
-
 /// 0…1 knob → 20 Hz … 20 kHz, the range a filter knob is expected to sweep.
 double cutoffHz(double knob) noexcept {
     return 20.0 * std::pow(1000.0, std::clamp(knob, 0.0, 1.0));
@@ -44,6 +39,17 @@ double applyTension(double t, double tension) noexcept {
 }
 
 // ── Envelope ───────────────────────────────────────────────────────────────
+
+double Envelope::bend(double phase, double tension) noexcept {
+    phase = std::clamp(phase, 0.0, 1.0);
+    if (std::abs(tension) < 1e-4) return phase;
+    if (m_tension != tension) {
+        m_tension = tension;
+        m_curveK = -6.0 * tension;
+        m_curveScale = 1.0 / (1.0 - std::exp(m_curveK));
+    }
+    return (1.0 - std::exp(m_curveK * phase)) * m_curveScale;
+}
 
 void Envelope::noteOn() noexcept {
     m_stage = Stage::Delay;
@@ -82,7 +88,7 @@ double Envelope::advance(double dt, const EnvSettings& s) noexcept {
                 continue;
             case Stage::Attack:
                 if (s.attack > 0.0 && m_time < s.attack) {
-                    m_value = applyTension(m_time / s.attack, s.attackTension);
+                    m_value = bend(m_time / s.attack, s.attackTension);
                     return m_value;
                 }
                 m_time -= s.attack;
@@ -96,7 +102,7 @@ double Envelope::advance(double dt, const EnvSettings& s) noexcept {
             case Stage::Decay:
                 if (s.decay > 0.0 && m_time < s.decay) {
                     m_value = 1.0 - (1.0 - s.sustain) *
-                                        applyTension(m_time / s.decay, s.decayTension);
+                                        bend(m_time / s.decay, s.decayTension);
                     return m_value;
                 }
                 m_time -= s.decay;
@@ -108,7 +114,7 @@ double Envelope::advance(double dt, const EnvSettings& s) noexcept {
             case Stage::Release:
                 if (s.release > 0.0 && m_time < s.release) {
                     m_value = m_releaseFrom *
-                              (1.0 - applyTension(m_time / s.release, s.releaseTension));
+                              (1.0 - bend(m_time / s.release, s.releaseTension));
                     return m_value;
                 }
                 m_stage = Stage::Done;
@@ -125,7 +131,7 @@ double Envelope::advance(double dt, const EnvSettings& s) noexcept {
 // ── LFO ────────────────────────────────────────────────────────────────────
 
 double Lfo::advance(double dt, double rateHz, int shape, double delay, double attack,
-                    const double* globalPhase) noexcept {
+                    const double* globalPhase, engine::dsp::TimeStretch* stretcher) noexcept {
     m_time += dt;
     // A global LFO reads the instance's free-running phase, so every voice sees
     // the same sweep; a retriggered one owns its phase and starts at zero.
@@ -201,9 +207,8 @@ void Voice::start(int key, int channel, float velocity, float notePan,
     const Region region = regionFor(settings, sample);
     m_position = region.start;
     m_forward = true;
-    m_grainSource = region.start;
-    m_grainTimer = 0.0;
-    for (Grain& grain : m_grains) grain = Grain{};
+    m_resetStretch = true;
+    m_lastStretcher = nullptr;
 
     m_amp.noteOn();
     for (std::uint32_t t = 0; t < kModTargetCount; ++t) {
@@ -255,6 +260,11 @@ Voice::Region Voice::regionFor(const SamplerSettings& settings,
     // A loop shorter than a handful of frames is a mistake, not a request:
     // honouring it would turn the note into a click at the sample rate.
     if (region.loopEnd - region.loopStart < 16.0) region.loopMode = 0;
+    const double span = std::max(region.base - region.start, 1.0);
+    region.fadeInLength = settings.fadeIn > 0.0 ? settings.fadeIn * span : 0.0;
+    region.fadeOutLength = settings.fadeOut > 0.0 ? settings.fadeOut * span : 0.0;
+    region.fadeInInverse = 1.0 / std::max(region.fadeInLength, 1.0);
+    region.fadeOutInverse = 1.0 / std::max(region.fadeOutLength, 1.0);
     return region;
 }
 
@@ -265,10 +275,9 @@ float Voice::readSample(const engine::SampleBuffer& audio, engine::ChannelCount 
     const double clamped = std::clamp(position, 0.0, double(frames - 1));
     const std::int64_t i = std::int64_t(clamped);
     const float fraction = float(clamped - double(i));
-    const float* data = audio.channel(channel);
 
     const auto at = [&](std::int64_t index) -> float {
-        return data[std::clamp<std::int64_t>(index, 0, std::int64_t(frames) - 1)];
+        return audio.readSample(channel, engine::FrameCount(std::clamp<std::int64_t>(index, 0, std::int64_t(frames) - 1)));
     };
     const float y0 = at(i - 1);
     const float y1 = at(i);
@@ -285,17 +294,12 @@ float Voice::readSample(const engine::SampleBuffer& audio, engine::ChannelCount 
 double Voice::fadeGain(const SamplerSettings& settings, const Region& region,
                        double position) const noexcept {
     double gain = 1.0;
-    const double span = std::max(region.base - region.start, 1.0);
-    if (settings.fadeIn > 0.0) {
-        const double length = settings.fadeIn * span;
-        const double into = position - region.start;
-        if (into < length) gain *= std::clamp(into / std::max(length, 1.0), 0.0, 1.0);
-    }
-    if (settings.fadeOut > 0.0) {
-        const double length = settings.fadeOut * span;
-        const double left = region.end - position;
-        if (left < length) gain *= std::clamp(left / std::max(length, 1.0), 0.0, 1.0);
-    }
+    const double into = position - region.start;
+    if (region.fadeInLength > 0.0 && into < region.fadeInLength)
+        gain *= std::clamp(into * region.fadeInInverse, 0.0, 1.0);
+    const double left = region.end - position;
+    if (region.fadeOutLength > 0.0 && left < region.fadeOutLength)
+        gain *= std::clamp(left * region.fadeOutInverse, 0.0, 1.0);
     return gain;
 }
 
@@ -306,6 +310,10 @@ engine::FrameCount Voice::fillResampled(const SampleData& sample,
     const engine::SampleBuffer& audio = *sample.audio;
     const bool stereo = audio.channels() > 1;
     const double step = std::abs(rate);
+    if (engine::PcmReadScope::current()) {
+        audio.hintRead(engine::FrameCount(std::clamp(region.loopMode ? region.loopStart : region.start, 0., double(audio.frames()))));
+        audio.hintRead(engine::FrameCount(std::clamp(m_position - 8192., 0., double(audio.frames()))));
+    }
 
     for (engine::FrameCount i = 0; i < count; ++i) {
         const double fade = fadeGain(settings, region, m_position);
@@ -340,80 +348,43 @@ engine::FrameCount Voice::fillResampled(const SampleData& sample,
     return count;
 }
 
-engine::FrameCount Voice::fillGranular(const SampleData& sample,
-                                       const SamplerSettings& settings,
-                                       const Region& region, float* left, float* right,
-                                       engine::FrameCount count, double pitchRatio,
-                                       double timeRate, double grainLength) noexcept {
-    const engine::SampleBuffer& audio = *sample.audio;
-    const bool stereo = audio.channels() > 1;
-    const bool looping = region.loopMode != 0;
-    const double loopLength = region.loopEnd - region.loopStart;
-    grainLength = std::clamp(grainLength, 128.0, 8192.0);
-    const double grainHop = grainLength * 0.5;
-
-    // Both the playhead and each grain's read pointer stay inside the loop; a
-    // grain that walked past it would play material the loop excludes.
-    const auto wrap = [&](double position) {
-        if (!looping || loopLength <= 0.0) return position;
-        if (position < region.loopEnd) return position;
-        return region.loopStart +
-               std::fmod(position - region.loopStart, loopLength);
-    };
-
-    for (engine::FrameCount i = 0; i < count; ++i) {
-        if (m_grainTimer <= 0.0) {
-            Grain* slot = nullptr;
-            for (Grain& grain : m_grains) {
-                if (!grain.active) { slot = &grain; break; }
-            }
-            // No free slot means the hop and the grain length disagree, which
-            // cannot happen with a fixed 50 % overlap — but stealing the older
-            // grain keeps a rounding error from silencing the voice.
-            if (!slot) {
-                slot = &m_grains[0];
-                for (Grain& grain : m_grains) {
-                    if (grain.phase > slot->phase) slot = &grain;
-                }
-            }
-            slot->active = true;
-            slot->read = m_grainSource;
-            slot->phase = 0.0;
-            m_grainTimer += grainHop;
-        }
-
-        double sumLeft = 0.0;
-        double sumRight = 0.0;
-        for (Grain& grain : m_grains) {
-            if (!grain.active) continue;
-            const double window =
-                0.5 - 0.5 * std::cos(2.0 * kPi * grain.phase / grainLength);
-            sumLeft += window * readSample(audio, 0, grain.read);
-            if (stereo) sumRight += window * readSample(audio, 1, grain.read);
-            grain.read = wrap(grain.read + pitchRatio);
-            grain.phase += 1.0;
-            if (grain.phase >= grainLength) grain.active = false;
-        }
-
-        const double fade = fadeGain(settings, region, m_grainSource);
-        left[i] = float(sumLeft * fade);
-        right[i] = stereo ? float(sumRight * fade) : left[i];
-
-        m_grainTimer -= 1.0;
-        m_grainSource += timeRate;
-        if (looping) {
-            m_grainSource = wrap(m_grainSource);
-        } else if (m_grainSource >= region.end) {
-            return i + 1;
-        }
+engine::FrameCount Voice::fillStretched(const SampleData& sample,
+                                        const SamplerSettings& settings,
+                                        const Region& region, float* left, float* right,
+                                        engine::FrameCount count, double pitch,
+                                        double timeRate, engine::dsp::TimeStretch& stretcher) noexcept {
+    if (m_resetStretch || m_lastStretcher != &stretcher) {
+        stretcher.reset();
+        m_resetStretch = false;
+        m_lastStretcher = &stretcher;
     }
-    return count;
+    auto produced = count;
+    if (!region.loopMode) produced = engine::FrameCount(std::min<double>(count,
+        std::max(0.0, std::ceil((region.end - m_position) / timeRate))));
+    const engine::dsp::StretchSource source{sample.audio.get(), region.start, region.end,
+                                          region.loopStart, region.loopEnd, region.loopMode};
+    stretcher.render(source, m_position - region.start, 1.0 / settings.stretchTime,
+                     pitch, settings.formant, left, right, produced);
+    for (engine::FrameCount i = 0; i < produced; ++i) {
+        double position = m_position + i * timeRate;
+        const double length = region.loopEnd - region.loopStart;
+        if (region.loopMode && position >= region.loopEnd) {
+            if (region.loopMode == 2) {
+                const double phase = std::fmod(position - region.loopStart, (length - 1) * 2);
+                position = region.loopStart + std::min(phase, (length - 1) * 2 - phase);
+            } else position = region.loopStart + std::fmod(position - region.loopStart, length);
+        }
+        const float gain = float(fadeGain(settings, region, position));
+        left[i] *= gain; right[i] *= gain;
+    }
+    m_position += produced * timeRate;
+    return produced;
 }
 
 void Voice::render(const SampleData& sample, const SamplerSettings& settings,
                    float* const* out, engine::ChannelCount channels,
                    engine::FrameCount frames, double sampleRate, double tempo,
-                   const double* globalPhase) noexcept {
+                   const double* globalPhase, engine::dsp::TimeStretch* stretcher) noexcept {
     if (!m_active || !sample.audio || sample.audio->frames() == 0 || channels == 0) {
         return;
     }
@@ -478,21 +449,13 @@ void Voice::render(const SampleData& sample, const SamplerSettings& settings,
 
         // ── Source ──
         engine::FrameCount produced = 0;
-        if (settings.stretchMode != 0) {
-            const double pitchRatio =
-                rateScale * semitonesToRatio(semitones + settings.stretchPitch);
-            const double timeRate = rateScale / std::max(settings.stretchTime, 0.01);
-            double grainLength = kDefaultGrainLength;
-            switch (settings.stretchMode) {
-                case 1: grainLength = 384.0; break;    // transient priority
-                case 2: grainLength = 1024.0; break;   // loop/body priority
-                case 3: grainLength = 2048.0; break;   // periodic voice body
-                case 4: grainLength = 4096.0; break;   // dense/low-frequency phase
-                default: break;
-            }
-            produced = fillGranular(sample, settings, region, sourceLeft, sourceRight,
-                                    count, pitchRatio, timeRate, grainLength);
+        const bool spectral = settings.stretchMode != 0 && stretcher;
+        if (spectral) {
+            const double timeRate = rateScale / std::max(settings.stretchTime, 0.001);
+            produced = fillStretched(sample, settings, region, sourceLeft, sourceRight,
+                                     count, semitones + settings.stretchPitch, timeRate, *stretcher);
         } else {
+            m_resetStretch = true;
             produced = fillResampled(sample, settings, region, sourceLeft, sourceRight,
                                      count, rateScale * semitonesToRatio(semitones));
         }
@@ -509,7 +472,7 @@ void Voice::render(const SampleData& sample, const SamplerSettings& settings,
         // never a technical reason it could not run after a plain resample.
         // Gating it left a knob sitting there doing nothing in the mode the
         // sampler starts in, which reads as a broken control, not as a hint.
-        const bool shifting = std::abs(settings.formant) > 0.001;
+        const bool shifting = !spectral && std::abs(settings.formant) > 0.001;
         const double formantPole = std::exp(-2.0 * kPi * 1200.0 / sampleRate);
         const double formantTilt = std::tanh(settings.formant / 12.0);
 
