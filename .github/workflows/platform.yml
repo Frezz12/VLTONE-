@@ -84,10 +84,15 @@ jobs:
           done
           aws --endpoint-url "$COLLAB_OBJECT_ENDPOINT" s3api create-bucket \
             --bucket "$COLLAB_OBJECT_BUCKET"
+          # This pinned MinIO does not implement the S3 multipart-abort
+          # lifecycle action. Exercise its supported expiration rule here;
+          # retain the full policy for the production S3 provider.
+          jq '{Rules: [.Rules[] | select(has("Expiration"))]}' \
+            packaging/server/s3-lifecycle.example.json > "$RUNNER_TEMP/minio-lifecycle.json"
           aws --endpoint-url "$COLLAB_OBJECT_ENDPOINT" s3api \
             put-bucket-lifecycle-configuration \
             --bucket "$COLLAB_OBJECT_BUCKET" \
-            --lifecycle-configuration file://packaging/server/s3-lifecycle.example.json
+            --lifecycle-configuration "file://$RUNNER_TEMP/minio-lifecycle.json"
           aws --endpoint-url "$COLLAB_OBJECT_ENDPOINT" s3api \
             get-bucket-lifecycle-configuration \
             --bucket "$COLLAB_OBJECT_BUCKET" >/dev/null
