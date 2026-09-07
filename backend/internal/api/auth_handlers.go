@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/mail"
 	"net/smtp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -298,7 +299,7 @@ func (s *Server) sendPlainEmail(to, subject, content string) error {
 	if err != nil {
 		return fmt.Errorf("recipient: %w", err)
 	}
-	hostPort := fmt.Sprintf("%s:%d", s.Config.SMTPHost, s.Config.SMTPPort)
+	hostPort := net.JoinHostPort(s.Config.SMTPHost, strconv.Itoa(s.Config.SMTPPort))
 	var smtpAuth smtp.Auth
 	if s.Config.SMTPUsername != "" {
 		smtpAuth = smtp.PlainAuth("", s.Config.SMTPUsername, s.Config.SMTPPassword, s.Config.SMTPHost)
