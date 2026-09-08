@@ -138,7 +138,7 @@ void WebVideoBackground::request(const WebVideoSource& source) {
     page->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, false);
     page->settings()->setAttribute(QWebEngineSettings::FullScreenSupportEnabled, false);
     connect(page, &QWebEnginePage::permissionRequested, session,
-            [](QWebEnginePermission permission) { permission.deny(); });
+            [](const QWebEnginePermission& permission) { permission.deny(); });
     connect(page, &QWebEnginePage::renderProcessTerminated, session,
         [this, session](QWebEnginePage::RenderProcessTerminationStatus, int) {
             fail(session, tr("The background video player stopped. Open the page and try again."));

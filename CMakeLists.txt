@@ -40,6 +40,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(WIN32)
     add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
     if(MSVC)
+        # Release links use LTCG. Keep Ninja from running every test link at
+        # once and exhausting memory on the Windows Actions runner.
+        set_property(GLOBAL APPEND PROPERTY JOB_POOLS vlt_windows_link=2)
+        set(CMAKE_JOB_POOL_LINK vlt_windows_link)
         # Source files and every std::string path in the application are UTF-8.
         # Make that contract explicit instead of inheriting the machine's ACP.
         add_compile_options(/utf-8 /Zc:preprocessor)

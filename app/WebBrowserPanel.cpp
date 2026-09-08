@@ -840,7 +840,7 @@ void WebBrowserPanel::wireTab(Tab* tab) {
         }
     });
     connect(page, &QWebEnginePage::permissionRequested, this,
-            [](QWebEnginePermission permission) { permission.deny(); });
+            [](const QWebEnginePermission& permission) { permission.deny(); });
     connect(page, &QWebEnginePage::newWindowRequested, this,
             [this](QWebEngineNewWindowRequest& request) {
                 // Every "open in a new window" gesture the page can make —

@@ -2839,6 +2839,10 @@ export interface components {
             offsetSeconds: number;
             durationSeconds: number;
             tempo: {
+                algorithmVersion?: number;
+                calibrated?: boolean;
+                backend?: string;
+                reason?: string;
                 status: number;
                 bpm: number;
                 confidence: number;
@@ -2847,6 +2851,11 @@ export interface components {
                 variable: boolean;
             };
             key: {
+                algorithmVersion?: number;
+                calibrated?: boolean;
+                backend?: string;
+                reason?: string;
+                variable?: boolean;
                 status: number;
                 root: number;
                 scale: string;
@@ -4105,6 +4114,10 @@ export interface components {
                     offsetSeconds: number;
                     durationSeconds: number;
                     tempo: {
+                        algorithmVersion?: number;
+                        calibrated?: boolean;
+                        backend?: string;
+                        reason?: string;
                         status: number;
                         bpm: number;
                         confidence: number;
@@ -4113,6 +4126,11 @@ export interface components {
                         variable: boolean;
                     };
                     key: {
+                        algorithmVersion?: number;
+                        calibrated?: boolean;
+                        backend?: string;
+                        reason?: string;
+                        variable?: boolean;
                         status: number;
                         root: number;
                         scale: string;
