@@ -4850,6 +4850,11 @@ audio::Result EngineController::prepareProjectOpen(const std::string& packageDir
     prepared.path = packageDir; prepared.rate = rate;
     auto result = ProjectSerializer::load(prepared.document, packageDir);
     if (!result) return result;
+    std::string extension = platform::pathFromUtf8(packageDir).extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    if (extension == std::string(".") + ProjectSerializer::kTemplateExtension)
+        stripTemplateArrangement(prepared.document);
     std::unordered_set<std::string> paths;
     const auto samplerPath = [&](const InsertModel& slot) {
         if (slot.uid != plugins::sampler::SamplerInstance::uid()) return;
@@ -4892,6 +4897,69 @@ audio::Result EngineController::openPreparedProject(PreparedProject prepared) {
     if (std::abs(prepared.rate - m_sampleRate) > 0.01)
         return audio::Result::fail(audio::EngineError::Unknown, "The audio device changed. Please reopen the project.");
     return activateProject(std::move(prepared.document), prepared.path, {}, false, &prepared);
+}
+
+audio::Result EngineController::prepareTemplateAudioImport(
+    const TemplateAudioImportRequest& request, double rate,
+    PreparedTemplateAudioImport& output,
+    const std::function<bool()>& keepGoing) {
+    if (request.templatePath.empty() || request.audioPath.empty() ||
+        request.targetTrackId.empty()) {
+        return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                   "Quick Import is not configured");
+    }
+
+    PreparedTemplateAudioImport prepared;
+    auto result = prepareProjectOpen(request.templatePath, rate,
+                                     prepared.project, keepGoing);
+    if (!result) return result;
+    stripTemplateArrangement(prepared.project.document);
+    TrackModel* target =
+        prepared.project.document.findTrack(request.targetTrackId);
+    if (!target || target->kind != TrackKind::Audio) {
+        return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                   "The Quick Import audio track is missing");
+    }
+    prepared.cleanTemplate = prepared.project.document;
+
+    PreparedAudio audio;
+    result = prepareAudio(request.audioPath, rate, audio, keepGoing);
+    if (!result) return result;
+    if (!audio.source || audio.source->sampleRate() <= 0.0 ||
+        audio.source->frames() == 0) {
+        return audio::Result::fail(audio::EngineError::UnsupportedFormat,
+                                   "The audio file is empty or unreadable");
+    }
+
+    ClipModel clip;
+    clip.id = newUuid();
+    clip.name = platform::pathToUtf8(
+        platform::pathFromUtf8(request.audioPath).filename());
+    clip.kind = ClipKind::Audio;
+    clip.filePath = request.audioPath;
+    clip.startSeconds = 0.0;
+    clip.durationSeconds = double(audio.source->frames()) /
+                           audio.source->sampleRate();
+    clip.channels = int(audio.source->channels());
+    clip.color = target->color;
+    clip.musicalAnalysis = request.analysis;
+    prepared.clipId = clip.id;
+    prepared.targetTrackId = target->id;
+    target->clips.push_back(std::move(clip));
+    prepared.project.audio.push_back(std::move(audio));
+    if (keepGoing && !keepGoing())
+        return audio::Result::fail(audio::EngineError::Unknown, "Cancelled");
+    output = std::move(prepared);
+    return audio::Result::ok();
+}
+
+audio::Result EngineController::openPreparedTemplateAudioImport(
+    PreparedTemplateAudioImport prepared) {
+    const ProjectModel cleanTemplate = prepared.cleanTemplate;
+    audio::Result result = openPreparedProject(std::move(prepared.project));
+    if (!result) return result;
+    pushProjectSnapshotUndo(cleanTemplate, "Quick Import Audio");
+    return audio::Result::ok();
 }
 
 audio::Result EngineController::openProject(const std::string& packageDir) {
@@ -5739,6 +5807,14 @@ void EngineController::pushProjectSnapshotUndo(const ProjectModel& before,
         m_project = state;
         inheritAutomationLaneColors(m_project);
         m_deferredClipSync.clear();
+        m_engine.transport().setTempo(m_project.tempo);
+        m_engine.transport().setTimeSignature(m_project.timeSigNumerator,
+                                              m_project.timeSigDenominator);
+        m_engine.transport().setLoopRange(toSamples(m_project.loopStartSeconds),
+                                          toSamples(m_project.loopEndSeconds));
+        m_engine.transport().setLoopEnabled(
+            m_project.loopEnabled &&
+            m_project.loopEndSeconds > m_project.loopStartSeconds);
         rebuildGraph();
         updateTimelineDuration();
     };
@@ -6399,6 +6475,170 @@ std::string EngineController::addPatternSample(const std::string& patternId,
     addMidiClip(trackId, std::max(0.0, startSeconds));
     collapseUndo(undoStart, "Add Pattern Sample");
     return trackId;
+}
+
+audio::Result EngineController::createTracks(
+    const TrackCreationRequest& request, std::vector<std::string>& createdIds) {
+    createdIds.clear();
+    const auto fail = [](const std::string& message) {
+        return audio::Result::fail(audio::EngineError::InvalidArgument, message);
+    };
+    if (request.count == 0 || request.count > 64)
+        return fail("Choose between 1 and 64 tracks.");
+    switch (request.kind) {
+        case TrackKind::Audio: case TrackKind::Midi: case TrackKind::Instrument:
+        case TrackKind::Pattern: case TrackKind::Automation: case TrackKind::Bus:
+        case TrackKind::Aux: case TrackKind::Folder: break;
+        default: return fail("This track type cannot be created here.");
+    }
+    TrackModel prototype;
+    prototype.kind = request.kind;
+    if (request.kind == TrackKind::Automation) prototype.height = 64.0;
+    prototype.summing = request.kind == TrackKind::Folder && request.summing;
+    const bool audio = carriesAudio(prototype);
+    if (!audio && (!request.inserts.empty() || request.instrument))
+        return fail("This track type does not support plugins.");
+    if (request.instrument && request.kind != TrackKind::Midi &&
+        request.kind != TrackKind::Instrument)
+        return fail("Choose a MIDI track to add an instrument.");
+    if (request.inputChannelCount != 1 && request.inputChannelCount != 2)
+        return fail("Choose a mono input or a stereo pair.");
+    if (!request.outputBusId.empty()) {
+        const auto* destination = m_project.findTrack(request.outputBusId);
+        if (!audio || !destination || !carriesAudio(*destination))
+            return fail("The selected output is no longer available.");
+    }
+    // Shared commands currently carry parameter mirrors, not arbitrary native
+    // state chunks. Refuse before any mutation rather than publish defaults.
+    if (cloudProjectBound() && (!request.inserts.empty() || request.instrument))
+        return audio::Result::fail(audio::EngineError::NotSupported,
+            "Create empty tracks in a shared project, then add plugins to them.");
+
+    const auto source = std::make_shared<TrackCreationRequest>(request);
+    auto tracks = std::make_shared<std::vector<TrackModel>>();
+    tracks->reserve(request.count);
+    std::unordered_set<std::string> names;
+    for (const auto& track : m_project.tracks) names.insert(track.name);
+    const std::string base = request.name.empty()
+        ? (prototype.summing ? "Group" : defaultTrackName(request.kind))
+        : request.name;
+    std::uint32_t suffix = 1;
+    const auto freshSlot = [](const ChainSlotSnapshot& source) {
+        InsertModel model = source.model;
+        model.id = newUuid();
+        model.stateFile.clear(); model.rightStateFile.clear();
+        model.stateAsset = {}; model.rightStateAsset = {};
+        model.sidechainTrackId.clear();
+        model.windowOpen = false;
+        return model;
+    };
+    for (std::uint32_t index = 0; index < request.count; ++index) {
+        TrackModel track = prototype;
+        track.id = newUuid();
+        track.color = colorForNewTrack(prototype.summing ? TrackKind::Group : request.kind);
+        track.name = base;
+        if (request.count > 1 || request.name.empty() || names.contains(track.name)) {
+            do { track.name = base + " " + std::to_string(suffix++); }
+            while (names.contains(track.name));
+        }
+        names.insert(track.name);
+        if (audio) {
+            track.mono = request.mono;
+            track.outputBusId = request.outputBusId;
+            if (request.kind == TrackKind::Audio) {
+                track.inputEnabled = request.inputEnabled;
+                track.inputChannel = request.inputChannel;
+                track.inputChannelCount = request.inputChannelCount;
+            }
+            for (const auto& slot : request.inserts) {
+                if (!slot.model.isLoaded()) return fail("An insert has no plugin.");
+                track.inserts.push_back(freshSlot(slot));
+            }
+            if (request.instrument) {
+                if (!request.instrument->model.isLoaded()) return fail("No instrument is selected.");
+                track.instrument = freshSlot(*request.instrument);
+                if (track.instrument.uid == "daw.sampler")
+                    track.samplerFx.ownerInstrumentId = track.instrument.id;
+            }
+        }
+        if (request.kind == TrackKind::Pattern) {
+            ClipModel clip;
+            clip.id = newUuid(); clip.kind = ClipKind::Pattern;
+            clip.name = track.name; clip.color = track.color;
+            clip.durationSeconds = beatsToSeconds(
+                double(std::max(1, m_project.timeSigNumerator)) * 4.0 /
+                    double(std::max(1, m_project.timeSigDenominator)), m_project.tempo);
+            track.clips.push_back(std::move(clip));
+        }
+        tracks->push_back(std::move(track));
+    }
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        std::string anchor = m_project.tracks.empty() ? std::string() : m_project.tracks.back().id;
+        for (const auto& track : *tracks) {
+            if (!appendSharedTrack(batch, track, anchor)) return fail("These settings cannot be shared.");
+            anchor = track.id;
+        }
+        if (!sharedBatchApplies(m_project, batch) ||
+            submitSharedMutation(collab::CommandBody{std::move(batch)}, "Create Tracks") !=
+                collab::SharedMutationResult::Submitted)
+            return fail("The project did not accept the new tracks.");
+        for (const auto& track : *tracks) {
+            createdIds.push_back(track.id);
+            if (request.kind == TrackKind::Audio) {
+                setTrackInputChannel(track.id, track.inputChannel);
+                setTrackInputChannelCount(track.id, track.inputChannelCount);
+                setTrackInputEnabled(track.id, track.inputEnabled);
+            }
+        }
+        return audio::Result::ok();
+    }
+
+    const auto remove = [this, tracks] {
+        std::unordered_set<std::string> ids;
+        for (const auto& track : *tracks) ids.insert(track.id);
+        std::erase_if(m_project.tracks, [&](const TrackModel& track) { return ids.contains(track.id); });
+        rebuildGraph();
+    };
+    const auto apply = [this, tracks, source, remove]() -> audio::Result {
+        const engine::RealtimeEngine::RenderGate gate(m_engine);
+        m_project.tracks.insert(m_project.tracks.end(), tracks->begin(), tracks->end());
+        rebuildGraph();
+        const auto restore = [this](const std::string& trackId, const InsertModel& model,
+                                     const ChainSlotSnapshot& stored) {
+            auto* live = liveInsertSlot(trackId, model.id);
+            if (!live || !live->node || !live->node->instance()) return false;
+            if (!stored.state.empty() && !live->node->instance()->loadState(stored.state)) return false;
+            applyStoredParameters(*live->node, model.parameters);
+            if (model.channelMode == PluginChannelMode::DualMono) {
+                if (!live->rightNode || !live->rightNode->instance()) return false;
+                const auto& right = stored.rightState.empty() ? stored.state : stored.rightState;
+                if (!right.empty() && !live->rightNode->instance()->loadState(right)) return false;
+                applyStoredParameters(*live->rightNode,
+                    model.rightParameters.empty() ? model.parameters : model.rightParameters);
+            }
+            return true;
+        };
+        for (const auto& track : *tracks) {
+            bool ok = !source->instrument || restore(track.id, track.instrument, *source->instrument);
+            for (std::size_t i = 0; ok && i < track.inserts.size(); ++i)
+                ok = restore(track.id, track.inserts[i], source->inserts[i]);
+            if (!ok) {
+                remove();
+                return audio::Result::fail(audio::EngineError::PluginLoadFailed,
+                    "A plugin or its saved settings could not be loaded. No tracks were created.");
+            }
+        }
+        return audio::Result::ok();
+    };
+    const auto result = apply();
+    if (!result) return result;
+    std::size_t bytes = sizeof(TrackModel) * tracks->size();
+    for (const auto& slot : source->inserts) bytes += slot.state.size() + slot.rightState.size();
+    if (source->instrument) bytes += source->instrument->state.size() + source->instrument->rightState.size();
+    m_undo.push("Create Tracks", remove, [apply] { (void)apply(); }, bytes);
+    for (const auto& track : *tracks) createdIds.push_back(track.id);
+    return audio::Result::ok();
 }
 
 std::string EngineController::appendTrack(TrackModel model) {
@@ -8857,6 +9097,7 @@ void EngineController::setInsertParameter(const std::string& channelId,
     event.paramIndex = std::uint32_t(index);
     event.value = plainValue;
     node->pushEvent(event);
+    if (!m_liveDeviceAllowed) m_previewParameterEditsPending = true;
     // The editor half has to be told separately — see setParameterFromHost.
     node->instance()->setParameterFromHost(std::uint32_t(index), plainValue);
     logParameterWrite("knob", node->instance(), index, plainValue);
@@ -8918,6 +9159,7 @@ void EngineController::applyStoredParameters(
     plugins::PluginNode& node, const std::vector<InsertParameter>& values) {
     plugins::PluginInstance* instance = node.instance();
     if (!instance) return;
+    if (!m_liveDeviceAllowed && !values.empty()) m_previewParameterEditsPending = true;
     for (const InsertParameter& parameter : values) {
         const std::int32_t index = instance->parameterIndexForId(parameter.id);
         if (index < 0) continue;
@@ -9641,6 +9883,17 @@ void EngineController::clearSamplerSample(const std::string& channelId,
                     loadSamplerSampleSilently(channelId, slotId, previous);
                 },
                 [this, channelId, slotId] { clearSamplerSample(channelId, slotId); });
+}
+
+bool EngineController::pumpPreviewPluginEvents() {
+    if (!m_liveDeviceAllowed && m_previewParameterEditsPending) {
+        m_previewParameterEditsPending = false;
+        std::array<float, 256> left{}, right{};
+        float* channels[]{left.data(), right.data()};
+        const auto frames = engine::FrameCount(std::min<std::uint32_t>(256, m_bufferSize));
+        m_engine.renderBlock(engine::AudioBlock(channels, 2, frames), nullptr, 0, frames);
+    }
+    return pumpPluginEvents();
 }
 
 bool EngineController::pumpPluginEvents() {

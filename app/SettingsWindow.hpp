@@ -10,6 +10,8 @@ namespace daw { class EngineController; }
 
 class RecordingSettingsPage;
 class AudioSettingsPage;
+class QuickImportSettingsPage;
+class NotebookSettingsPage;
 class ShortcutManager;
 class QTabWidget;
 class QListWidget;
@@ -20,6 +22,10 @@ class QComboBox;
 class QLabel;
 class QShowEvent;
 class QCheckBox;
+class QSlider;
+class QRadioButton;
+class QFileSystemWatcher;
+class QWidget;
 
 /// The unified, non-modal settings window: one place for Audio, Themes and
 /// Keyboard Shortcuts, titled with the application name. Replaces the standalone
@@ -35,6 +41,7 @@ public:
     /// comment saying which was which had already gone stale twice.
     enum Tab {
         kAudioTab = 0,
+        kQuickImportTab,
         kTransportTab,
         kRecordingTab,
         kContextPanelTab,
@@ -57,6 +64,10 @@ public:
     /// transport's Layers button, and an open window has to follow.
     void reloadRecordingPage();
     bool checkAudioPageForTest() const;
+    void showQuickImportError(const QString& message);
+    /// Import and apply a .vlttheme delivered by a file picker, Finder or
+    /// Explorer. The operation owns a private copy before returning success.
+    void importThemeFile(const QString& path);
 
 signals:
     void transportPanelStyleChanged();
@@ -97,6 +108,12 @@ private:
     QWidget* buildLanguageTab();
     void refreshLanguages();
     void refreshFontStatus();
+    void refreshThemeLibrary();
+    void refreshThemeControls();
+    bool applyInstalledTheme(const QString& filePath, const QString& storageId);
+    void saveCurrentThemeToLibrary();
+    void exportCurrentTheme();
+    void applySelectedSavedTheme();
     void refreshShortcutEditors();
     /// Push the working palette to the app (live), persisting it as "custom".
     void applyEditTheme();
@@ -108,7 +125,13 @@ private:
     QTabWidget* m_tabs = nullptr;
     RecordingSettingsPage* m_recordingPage = nullptr;
     AudioSettingsPage* m_audioPage = nullptr;
+    QuickImportSettingsPage* m_quickImportPage = nullptr;
+    NotebookSettingsPage* m_notebookPage = nullptr;
     QListWidget* m_themeList = nullptr;
+    QListWidget* m_savedThemeList = nullptr;
+    QPushButton* m_applySavedTheme = nullptr;
+    QPushButton* m_exportSavedTheme = nullptr;
+    QFileSystemWatcher* m_themeLibraryWatcher = nullptr;
     QHash<QString, QKeySequenceEdit*> m_editors;   // command id → editor
 
     Theme m_editTheme;                             // the working custom palette
@@ -118,5 +141,30 @@ private:
     QPushButton* m_removeLanguage = nullptr;
     QLabel* m_fontStatus = nullptr;
     QPushButton* m_resetFont = nullptr;
+    QWidget* m_timelineFileRow = nullptr;
+    QWidget* m_timelineBlurRow = nullptr;
+    QComboBox* m_timelinePlacement = nullptr;
+    QSlider* m_timelineVisibility = nullptr;
+    QLabel* m_timelineVisibilityValue = nullptr;
+    QSlider* m_timelineBlur = nullptr;
+    QLabel* m_timelineBlurValue = nullptr;
+    QCheckBox* m_timelineAnimate = nullptr;
+    QLineEdit* m_headerBackgroundPath = nullptr;
+    QPushButton* m_clearHeaderBackground = nullptr;
+    QCheckBox* m_enableHeaderBackground = nullptr;
+    QWidget* m_headerFileRow = nullptr;
+    QWidget* m_headerBlurRow = nullptr;
+    QComboBox* m_headerPlacement = nullptr;
+    QSlider* m_headerVisibility = nullptr;
+    QLabel* m_headerVisibilityValue = nullptr;
+    QSlider* m_headerBlur = nullptr;
+    QLabel* m_headerBlurValue = nullptr;
+    QCheckBox* m_headerAnimate = nullptr;
+    QSlider* m_playheadWidth = nullptr;
+    QLabel* m_playheadWidthValue = nullptr;
+    QCheckBox* m_playheadTrail = nullptr;
+    QRadioButton* m_trackColourTint = nullptr;
+    QRadioButton* m_neutralTint = nullptr;
+    bool m_applyingInstalledTheme = false;
     QHash<QString, QPushButton*> m_swatches;       // field key → swatch button
 };

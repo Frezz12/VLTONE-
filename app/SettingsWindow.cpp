@@ -6,11 +6,13 @@
 #include "BrowserSettingsPage.hpp"
 #include "RecoverySettingsPage.hpp"
 #include "AudioSettingsPage.hpp"
+#include "QuickImportSettingsPage.hpp"
 #include "ContextPanelPage.hpp"
 #include "LocalizationManager.hpp"
 #include "NotebookSettingsPage.hpp"
 #include "ShortcutManager.hpp"
 #include "Theme.hpp"
+#include "ThemePackage.hpp"
 #include "TimelineBackgroundPrefs.hpp"
 #include "UiConstants.hpp"
 #include "RecordingSettingsPage.hpp"
@@ -22,8 +24,10 @@
 #include <QCoreApplication>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QDesktopServices>
 #include <QFile>
 #include <QFileDialog>
+#include <QFileSystemWatcher>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -31,26 +35,35 @@
 #include <QHeaderView>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QInputDialog>
 #include <QKeySequenceEdit>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QPointer>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QCheckBox>
 #include <QRadioButton>
 #include <QSlider>
 #include <QScrollArea>
 #include <QScreen>
+#include <QSettings>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTimer>
+#include <QThreadPool>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <atomic>
+#include <functional>
+#include <memory>
 #include <vector>
 
 namespace {
@@ -69,6 +82,7 @@ const std::vector<ColorField>& colorFields() {
         {"headerBackground", QT_TRANSLATE_NOOP("SettingsWindow", "Header"), &Theme::headerBackground},
         {"transportBackground", QT_TRANSLATE_NOOP("SettingsWindow", "Transport"), &Theme::transportBackground},
         {"toolbarBackground", QT_TRANSLATE_NOOP("SettingsWindow", "Toolbar"), &Theme::toolbarBackground},
+        {"pluginMenuBackground", QT_TRANSLATE_NOOP("SettingsWindow", "Plugin menu background"), &Theme::pluginMenuBackground},
         {"textPrimary", QT_TRANSLATE_NOOP("SettingsWindow", "Text"), &Theme::textPrimary},
         {"textSecondary", QT_TRANSLATE_NOOP("SettingsWindow", "Text (secondary)"), &Theme::textSecondary},
         {"accent", QT_TRANSLATE_NOOP("SettingsWindow", "Accent"), &Theme::accent},
@@ -133,6 +147,65 @@ QScrollArea* scrollablePage(QWidget* page) {
     scroll->setWidget(page);
     return scroll;
 }
+
+using ThemeTask =
+    std::function<ui::ThemePackageResult(const ui::ThemePackageProgress&)>;
+using ThemeTaskCompletion =
+    std::function<void(const ui::ThemePackageResult&)>;
+
+void runThemeTask(SettingsWindow* owner, const QString& label, ThemeTask task,
+                  ThemeTaskCompletion completion) {
+    auto* dialog = new QProgressDialog(label, QObject::tr("Cancel"), 0, 0,
+                                       owner);
+    dialog->setWindowTitle(QObject::tr("Theme"));
+    dialog->setWindowModality(Qt::WindowModal);
+    dialog->setMinimumDuration(0);
+    dialog->setAutoClose(false);
+    dialog->setAutoReset(false);
+    dialog->show();
+
+    auto cancelled = std::make_shared<std::atomic_bool>(false);
+    QObject::connect(dialog, &QProgressDialog::canceled, dialog,
+                     [cancelled] { cancelled->store(true); });
+    const QPointer<SettingsWindow> ownerGuard(owner);
+    const QPointer<QProgressDialog> dialogGuard(dialog);
+    QThreadPool::globalInstance()->start(
+        [ownerGuard, dialogGuard, cancelled, task = std::move(task),
+         completion = std::move(completion)]() mutable {
+            int lastPercent = -1;
+            const ui::ThemePackageProgress report =
+                [cancelled, dialogGuard, &lastPercent](qint64 completed,
+                                                       qint64 total) {
+                    if (cancelled->load()) return false;
+                    const int percent = total > 0
+                        ? int(std::clamp(
+                              double(completed) / double(total) * 100.0,
+                              0.0, 100.0))
+                        : 0;
+                    if (percent != lastPercent) {
+                        lastPercent = percent;
+                        QMetaObject::invokeMethod(
+                            qApp,
+                            [dialogGuard, percent] {
+                                if (!dialogGuard) return;
+                                dialogGuard->setRange(0, 100);
+                                dialogGuard->setValue(percent);
+                            },
+                            Qt::QueuedConnection);
+                    }
+                    return !cancelled->load();
+                };
+            const ui::ThemePackageResult result = task(report);
+            QMetaObject::invokeMethod(
+                qApp,
+                [ownerGuard, dialogGuard, completion = std::move(completion),
+                 result] {
+                    if (dialogGuard) dialogGuard->deleteLater();
+                    if (ownerGuard) completion(result);
+                },
+                Qt::QueuedConnection);
+        });
+}
 } // namespace
 
 SettingsWindow::SettingsWindow(daw::EngineController* controller,
@@ -153,6 +226,8 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     connect(m_audioPage, &AudioSettingsPage::cpuStatusBarVisibilityChanged,
             this, &SettingsWindow::cpuStatusBarVisibilityChanged);
     addPage(m_audioPage, tr("Audio"));
+    m_quickImportPage = new QuickImportSettingsPage(this);
+    addPage(m_quickImportPage, tr("Quick Import"));
     auto* transportPage = new TransportSettingsPage(m_controller, this);
     addPage(transportPage, tr("Transport"));
     connect(transportPage, &TransportSettingsPage::panelStyleChanged, this,
@@ -169,10 +244,10 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     connect(browserPage, &BrowserSettingsPage::changed, this,
             &SettingsWindow::browserSettingsChanged);
     addPage(browserPage, tr("Browser"));
-    auto* notebookPage = new NotebookSettingsPage(this);
-    connect(notebookPage, &NotebookSettingsPage::changed, this,
+    m_notebookPage = new NotebookSettingsPage(this);
+    connect(m_notebookPage, &NotebookSettingsPage::changed, this,
             &SettingsWindow::notebookSettingsChanged);
-    addPage(notebookPage, tr("Notebook"));
+    addPage(m_notebookPage, tr("Notebook"));
     auto* aiPage = new AiSettingsPage(this);
     connect(aiPage, &AiSettingsPage::changed, this,
             &SettingsWindow::aiSettingsChanged);
@@ -187,6 +262,20 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     addPage(buildThemeEditorTab(), tr("Theme Editor"));
     addPage(buildShortcutsTab(), tr("Keyboard Shortcuts"));
     addPage(buildInterfaceTab(), tr("Interface"));
+
+    const auto markThemeModified = [this] {
+        if (m_applyingInstalledTheme) return;
+        QSettings().remove(QStringLiteral("ui/activeThemePackage"));
+        refreshThemeLibrary();
+    };
+    connect(this, &SettingsWindow::themeBackgroundSettingsChanged, this,
+            markThemeModified);
+    connect(this, &SettingsWindow::notebookSettingsChanged, this,
+            markThemeModified);
+    connect(this, &SettingsWindow::selectionTintChanged, this,
+            markThemeModified);
+    connect(&ThemeManager::instance(), &ThemeManager::fontChanged, this,
+            markThemeModified);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
@@ -206,16 +295,26 @@ void SettingsWindow::refreshTimelineBackgroundSource() {
     m_timelineBackgroundPath->setText(display);
     m_timelineBackgroundPath->setToolTip(display);
     m_clearTimelineBackground->setEnabled(!display.isEmpty());
+    const QSignalBlocker blocker(m_enableTimelineBackground);
     m_enableTimelineBackground->setChecked(ui::timelinebackgroundprefs::enabled());
 }
 
 void SettingsWindow::showEvent(QShowEvent* event) {
     refreshTimelineBackgroundSource();
+    refreshThemeLibrary();
+    refreshThemeControls();
+    if (m_notebookPage) m_notebookPage->refresh();
+    if (m_quickImportPage) m_quickImportPage->refresh();
     QDialog::showEvent(event);
     constrainToScreen();
     // Native frame margins become reliable only after the first show. Clamp a
     // second time so a window manager cannot leave the title bar off-screen.
     QTimer::singleShot(0, this, &SettingsWindow::constrainToScreen);
+}
+
+void SettingsWindow::showQuickImportError(const QString& message) {
+    showTab(kQuickImportTab);
+    if (m_quickImportPage) m_quickImportPage->showConfigurationError(message);
 }
 
 void SettingsWindow::constrainToScreen() {
@@ -449,7 +548,8 @@ void SettingsWindow::refreshLanguages() {
 QWidget* SettingsWindow::buildThemesTab() {
     auto* page = new QWidget;
     auto* col = new QVBoxLayout(page);
-    col->addWidget(new QLabel(tr("Choose a colour theme — it applies immediately.")));
+    col->addWidget(new QLabel(
+        tr("Choose a built-in palette, or apply a complete saved theme.")));
 
     m_themeList = new QListWidget(page);
     {
@@ -469,23 +569,100 @@ QWidget* SettingsWindow::buildThemesTab() {
         }
     }
     connect(m_themeList, &QListWidget::currentItemChanged, this,
-            [](QListWidgetItem* cur, QListWidgetItem*) {
-                if (cur)
+            [this](QListWidgetItem* cur, QListWidgetItem*) {
+                if (cur) {
+                    QSettings().remove(QStringLiteral("ui/activeThemePackage"));
                     ThemeManager::instance().setThemeId(
                         cur->data(Qt::UserRole).toString());
+                    refreshThemeLibrary();
+                }
             });
     // Keep the selection in step if the theme changes elsewhere (e.g. undo of a
     // future settings action, or another surface switching it).
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, [this] {
         const QString id = ThemeManager::instance().themeId();
+        bool found = false;
         for (int i = 0; i < m_themeList->count(); ++i) {
             if (m_themeList->item(i)->data(Qt::UserRole).toString() == id) {
                 QSignalBlocker block(m_themeList);
                 m_themeList->setCurrentRow(i);
+                found = true;
                 break;
             }
         }
+        if (!found) {
+            QSignalBlocker block(m_themeList);
+            m_themeList->setCurrentRow(-1);
+        }
     });
+
+    col->addWidget(new QLabel(tr("Built-in palettes")));
+    col->addWidget(m_themeList, 1);
+
+    auto* libraryGroup = new QGroupBox(tr("Saved Themes"), page);
+    auto* libraryColumn = new QVBoxLayout(libraryGroup);
+    auto* libraryHint = new QLabel(
+        tr("A .vlttheme file keeps the palette, backgrounds and fonts together. "
+           "Imported resources are copied into VLTONE so the original file can "
+           "be deleted."),
+        libraryGroup);
+    libraryHint->setWordWrap(true);
+    libraryColumn->addWidget(libraryHint);
+
+    m_savedThemeList = new QListWidget(libraryGroup);
+    m_savedThemeList->setAccessibleName(tr("Saved themes"));
+    m_savedThemeList->setMinimumHeight(110);
+    libraryColumn->addWidget(m_savedThemeList);
+
+    auto* saveTheme = new QPushButton(tr("Save Theme…"), libraryGroup);
+    auto* importTheme = new QPushButton(tr("Import…"), libraryGroup);
+    m_applySavedTheme = new QPushButton(tr("Apply"), libraryGroup);
+    m_exportSavedTheme = new QPushButton(tr("Export Current…"), libraryGroup);
+    auto* openThemesFolder = new QPushButton(tr("Open Themes Folder"), libraryGroup);
+    m_applySavedTheme->setEnabled(false);
+    auto* primaryLibraryButtons = new QHBoxLayout;
+    primaryLibraryButtons->addWidget(saveTheme);
+    primaryLibraryButtons->addWidget(importTheme);
+    primaryLibraryButtons->addWidget(m_applySavedTheme);
+    primaryLibraryButtons->addStretch(1);
+    libraryColumn->addLayout(primaryLibraryButtons);
+    auto* secondaryLibraryButtons = new QHBoxLayout;
+    secondaryLibraryButtons->addWidget(m_exportSavedTheme);
+    secondaryLibraryButtons->addWidget(openThemesFolder);
+    secondaryLibraryButtons->addStretch(1);
+    libraryColumn->addLayout(secondaryLibraryButtons);
+    col->addWidget(libraryGroup);
+
+    connect(saveTheme, &QPushButton::clicked, this,
+            &SettingsWindow::saveCurrentThemeToLibrary);
+    connect(importTheme, &QPushButton::clicked, this, [this] {
+        const QString path = QFileDialog::getOpenFileName(
+            this, tr("Import Theme"), QString(),
+            tr("VLTONE Theme (*.vlttheme);;Legacy Theme (*.json *.dawtheme.json);;All Files (*)"));
+        if (!path.isEmpty()) importThemeFile(path);
+    });
+    connect(m_applySavedTheme, &QPushButton::clicked, this,
+            &SettingsWindow::applySelectedSavedTheme);
+    connect(m_exportSavedTheme, &QPushButton::clicked, this,
+            &SettingsWindow::exportCurrentTheme);
+    connect(m_savedThemeList, &QListWidget::itemActivated, this,
+            [this](QListWidgetItem*) { applySelectedSavedTheme(); });
+    connect(m_savedThemeList, &QListWidget::currentItemChanged, this,
+            [this](QListWidgetItem* current) {
+                m_applySavedTheme->setEnabled(current != nullptr);
+            });
+    connect(openThemesFolder, &QPushButton::clicked, this, [] {
+        QDir().mkpath(ui::ThemePackage::libraryDirectory());
+        QDesktopServices::openUrl(
+            QUrl::fromLocalFile(ui::ThemePackage::libraryDirectory()));
+    });
+
+    QDir().mkpath(ui::ThemePackage::libraryDirectory());
+    m_themeLibraryWatcher = new QFileSystemWatcher(this);
+    m_themeLibraryWatcher->addPath(ui::ThemePackage::libraryDirectory());
+    connect(m_themeLibraryWatcher, &QFileSystemWatcher::directoryChanged, this,
+            [this] { refreshThemeLibrary(); });
+    refreshThemeLibrary();
 
     auto* fontGroup = new QGroupBox(tr("Interface Font"), page);
     auto* fontColumn = new QVBoxLayout(fontGroup);
@@ -536,8 +713,6 @@ QWidget* SettingsWindow::buildThemesTab() {
             &SettingsWindow::refreshFontStatus);
     refreshFontStatus();
 
-    col->addWidget(m_themeList, 1);
-
     auto* backgroundGroup = new QGroupBox(tr("Timeline Background"), page);
     auto* backgroundColumn = new QVBoxLayout(backgroundGroup);
     auto* backgroundHint = new QLabel(
@@ -560,6 +735,7 @@ QWidget* SettingsWindow::buildThemesTab() {
     auto* backgroundForm = new QFormLayout;
     backgroundForm->setSpacing(8);
     auto* fileRow = new QWidget(backgroundGroup);
+    m_timelineFileRow = fileRow;
     auto* fileLayout = new QHBoxLayout(fileRow);
     fileLayout->setContentsMargins(0, 0, 0, 0);
     fileLayout->setSpacing(6);
@@ -578,6 +754,7 @@ QWidget* SettingsWindow::buildThemesTab() {
     backgroundForm->addRow(tr("Media"), fileRow);
 
     auto* timelinePlacement = new QComboBox(backgroundGroup);
+    m_timelinePlacement = timelinePlacement;
     using BackgroundPlacement = ui::timelinebackgroundprefs::Placement;
     timelinePlacement->addItem(tr("Fill frame (crop to fit)"),
                                int(BackgroundPlacement::Fill));
@@ -659,21 +836,27 @@ QWidget* SettingsWindow::buildThemesTab() {
     auto* visibility = addPercentSlider(
         tr("Visibility"), ui::timelinebackgroundprefs::visibility(),
         tr("Timeline background visibility"));
+    m_timelineVisibility = visibility;
+    m_timelineVisibilityValue =
+        visibility->parentWidget()->findChild<QLabel*>();
     connect(visibility, &QSlider::valueChanged, this, [this](int value) {
         ui::timelinebackgroundprefs::setVisibility(value);
         emit themeBackgroundSettingsChanged();
     });
 
     auto* blurRow = new QWidget(backgroundGroup);
+    m_timelineBlurRow = blurRow;
     auto* blurLayout = new QHBoxLayout(blurRow);
     blurLayout->setContentsMargins(0, 0, 0, 0);
     blurLayout->setSpacing(8);
     auto* blur = new QSlider(Qt::Horizontal, blurRow);
+    m_timelineBlur = blur;
     blur->setRange(0, 32);
     blur->setValue(ui::timelinebackgroundprefs::blurRadius());
     blur->setAccessibleName(tr("Timeline background blur"));
     auto* blurValue = new QLabel(
         tr("%1 px").arg(ui::timelinebackgroundprefs::blurRadius()), blurRow);
+    m_timelineBlurValue = blurValue;
     blurValue->setMinimumWidth(52);
     blurValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     blurLayout->addWidget(blur, 1);
@@ -693,6 +876,7 @@ QWidget* SettingsWindow::buildThemesTab() {
 
     auto* animateBackground = new QCheckBox(
         tr("Play GIF and video backgrounds"), backgroundGroup);
+    m_timelineAnimate = animateBackground;
     animateBackground->setChecked(
         ui::timelinebackgroundprefs::animatedBackgroundsEnabled());
     animateBackground->setToolTip(
@@ -734,6 +918,7 @@ QWidget* SettingsWindow::buildThemesTab() {
 
     auto* enableHeaderBackground = new QCheckBox(
         tr("Enable custom header background"), headerBackgroundGroup);
+    m_enableHeaderBackground = enableHeaderBackground;
     enableHeaderBackground->setChecked(ui::headerbackgroundprefs::enabled());
     enableHeaderBackground->setAccessibleName(
         tr("Custom header background enabled"));
@@ -742,16 +927,19 @@ QWidget* SettingsWindow::buildThemesTab() {
     auto* headerBackgroundForm = new QFormLayout;
     headerBackgroundForm->setSpacing(8);
     auto* headerFileRow = new QWidget(headerBackgroundGroup);
+    m_headerFileRow = headerFileRow;
     auto* headerFileLayout = new QHBoxLayout(headerFileRow);
     headerFileLayout->setContentsMargins(0, 0, 0, 0);
     headerFileLayout->setSpacing(6);
     auto* headerPath = new QLineEdit(headerFileRow);
+    m_headerBackgroundPath = headerPath;
     headerPath->setReadOnly(true);
     headerPath->setPlaceholderText(tr("Theme colour only"));
     headerPath->setAccessibleName(tr("Header background file"));
     auto* chooseHeaderBackground = new QPushButton(tr("Choose..."), headerFileRow);
     chooseHeaderBackground->setAccessibleName(tr("Choose header background"));
     auto* clearHeaderBackground = new QPushButton(tr("Clear"), headerFileRow);
+    m_clearHeaderBackground = clearHeaderBackground;
     headerFileLayout->addWidget(headerPath, 1);
     headerFileLayout->addWidget(chooseHeaderBackground);
     headerFileLayout->addWidget(clearHeaderBackground);
@@ -791,6 +979,7 @@ QWidget* SettingsWindow::buildThemesTab() {
             });
 
     auto* headerPlacement = new QComboBox(headerBackgroundGroup);
+    m_headerPlacement = headerPlacement;
     headerPlacement->addItem(tr("Fill frame (crop to fit)"),
                              int(BackgroundPlacement::Fill));
     headerPlacement->addItem(tr("Stretch to frame"),
@@ -841,6 +1030,9 @@ QWidget* SettingsWindow::buildThemesTab() {
     auto* headerVisibility = addHeaderPercentSlider(
         tr("Visibility"), ui::headerbackgroundprefs::visibility(),
         tr("Header background visibility"));
+    m_headerVisibility = headerVisibility;
+    m_headerVisibilityValue =
+        headerVisibility->parentWidget()->findChild<QLabel*>();
     connect(headerVisibility, &QSlider::valueChanged, this,
             [this](int value) {
                 ui::headerbackgroundprefs::setVisibility(value);
@@ -848,16 +1040,19 @@ QWidget* SettingsWindow::buildThemesTab() {
             });
 
     auto* headerBlurRow = new QWidget(headerBackgroundGroup);
+    m_headerBlurRow = headerBlurRow;
     auto* headerBlurLayout = new QHBoxLayout(headerBlurRow);
     headerBlurLayout->setContentsMargins(0, 0, 0, 0);
     headerBlurLayout->setSpacing(8);
     auto* headerBlur = new QSlider(Qt::Horizontal, headerBlurRow);
+    m_headerBlur = headerBlur;
     headerBlur->setRange(0, 32);
     headerBlur->setValue(ui::headerbackgroundprefs::blurRadius());
     headerBlur->setAccessibleName(tr("Header background blur"));
     auto* headerBlurValue = new QLabel(
         tr("%1 px").arg(ui::headerbackgroundprefs::blurRadius()),
         headerBlurRow);
+    m_headerBlurValue = headerBlurValue;
     headerBlurValue->setMinimumWidth(52);
     headerBlurValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     headerBlurLayout->addWidget(headerBlur, 1);
@@ -877,6 +1072,7 @@ QWidget* SettingsWindow::buildThemesTab() {
 
     auto* animateHeaderBackground = new QCheckBox(
         tr("Play GIF and video backgrounds"), headerBackgroundGroup);
+    m_headerAnimate = animateHeaderBackground;
     animateHeaderBackground->setChecked(
         ui::headerbackgroundprefs::animatedBackgroundsEnabled());
     animateHeaderBackground->setToolTip(
@@ -917,6 +1113,7 @@ QWidget* SettingsWindow::buildThemesTab() {
     auto* widthRow = new QHBoxLayout;
     auto* widthLabel = new QLabel(tr("Line thickness"), headGroup);
     auto* widthSlider = new QSlider(Qt::Horizontal, headGroup);
+    m_playheadWidth = widthSlider;
     // Tenths of a pixel: the default is 1.6, and whole steps would take that
     // choice away.
     widthSlider->setRange(int(std::lround(ui::kPlayheadWidthMin * 10.0)),
@@ -926,6 +1123,7 @@ QWidget* SettingsWindow::buildThemesTab() {
     widthSlider->setValue(int(std::lround(ui::playheadWidth() * 10.0)));
     widthSlider->setAccessibleName(tr("Playhead line thickness in pixels"));
     auto* widthValue = new QLabel(headGroup);
+    m_playheadWidthValue = widthValue;
     widthValue->setMinimumWidth(48);
     widthValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     const auto showWidth = [widthValue](double pixels) {
@@ -939,6 +1137,7 @@ QWidget* SettingsWindow::buildThemesTab() {
 
     auto* trail = new QCheckBox(tr("Leave a glowing trail while it moves"),
                                 headGroup);
+    m_playheadTrail = trail;
     trail->setChecked(ui::playheadTrail());
     trail->setAccessibleName(tr("Playhead motion trail"));
     headCol->addWidget(trail);
@@ -953,6 +1152,8 @@ QWidget* SettingsWindow::buildThemesTab() {
     auto* byColour = new QRadioButton(tr("Tint with the track's own colour"),
                                       tintGroup);
     auto* neutral = new QRadioButton(tr("Tint with a neutral wash"), tintGroup);
+    m_trackColourTint = byColour;
+    m_neutralTint = neutral;
     (ui::selectionTint() == ui::SelectionTint::Neutral ? neutral : byColour)
         ->setChecked(true);
     const auto storeTint = [this](ui::SelectionTint tint) {
@@ -1008,6 +1209,277 @@ void SettingsWindow::refreshFontStatus() {
             tr("Default font: %1").arg(manager.defaultFontFamily()));
     }
     m_resetFont->setEnabled(manager.hasCustomFont());
+}
+
+void SettingsWindow::refreshThemeLibrary() {
+    if (!m_savedThemeList) return;
+    const QString selectedPath = m_savedThemeList->currentItem()
+        ? m_savedThemeList->currentItem()->data(Qt::UserRole).toString()
+        : QString();
+    const QString activePackage =
+        QSettings().value(QStringLiteral("ui/activeThemePackage")).toString();
+    const QVector<ui::ThemeLibraryEntry> entries =
+        ui::ThemePackage::libraryEntries();
+    QHash<QString, int> nameCounts;
+    for (const auto& entry : entries) ++nameCounts[entry.name.toCaseFolded()];
+
+    QSignalBlocker blocker(m_savedThemeList);
+    m_savedThemeList->clear();
+    int selectedRow = -1;
+    for (const ui::ThemeLibraryEntry& entry : entries) {
+        QString label = entry.name;
+        if (nameCounts.value(entry.name.toCaseFolded()) > 1)
+            label += QStringLiteral(" · %1").arg(entry.packageId.left(8));
+        auto* item = new QListWidgetItem(label, m_savedThemeList);
+        item->setData(Qt::UserRole, entry.filePath);
+        item->setData(Qt::UserRole + 1, entry.packageId);
+        item->setToolTip(QDir::toNativeSeparators(entry.filePath));
+        if ((!selectedPath.isEmpty() && entry.filePath == selectedPath) ||
+            (selectedPath.isEmpty() && entry.packageId == activePackage))
+            selectedRow = m_savedThemeList->count() - 1;
+    }
+    m_savedThemeList->setCurrentRow(selectedRow);
+    if (m_applySavedTheme)
+        m_applySavedTheme->setEnabled(selectedRow >= 0);
+}
+
+void SettingsWindow::refreshThemeControls() {
+    refreshTimelineBackgroundSource();
+    refreshFontStatus();
+
+    const auto setCheck = [](QCheckBox* box, bool checked) {
+        if (!box) return;
+        const QSignalBlocker blocker(box);
+        box->setChecked(checked);
+    };
+    const auto setSlider = [](QSlider* slider, int value) {
+        if (!slider) return;
+        const QSignalBlocker blocker(slider);
+        slider->setValue(value);
+    };
+    const auto setCombo = [](QComboBox* combo, int value) {
+        if (!combo) return;
+        const QSignalBlocker blocker(combo);
+        const int index = combo->findData(value);
+        combo->setCurrentIndex(index >= 0 ? index : 0);
+    };
+
+    setCheck(m_enableTimelineBackground,
+             ui::timelinebackgroundprefs::enabled());
+    setCombo(m_timelinePlacement,
+             int(ui::timelinebackgroundprefs::placement()));
+    setSlider(m_timelineVisibility,
+              ui::timelinebackgroundprefs::visibility());
+    setSlider(m_timelineBlur, ui::timelinebackgroundprefs::blurRadius());
+    setCheck(m_timelineAnimate,
+             ui::timelinebackgroundprefs::animatedBackgroundsEnabled());
+    if (m_timelineVisibilityValue)
+        m_timelineVisibilityValue->setText(
+            QStringLiteral("%1%").arg(ui::timelinebackgroundprefs::visibility()));
+    if (m_timelineBlurValue)
+        m_timelineBlurValue->setText(
+            tr("%1 px").arg(ui::timelinebackgroundprefs::blurRadius()));
+    const bool timelineEnabled = ui::timelinebackgroundprefs::enabled();
+    for (QWidget* widget : QList<QWidget*>{
+             m_timelineFileRow, m_timelinePlacement, m_timelineVisibility,
+             m_timelineBlurRow, m_timelineAnimate})
+        if (widget) widget->setEnabled(timelineEnabled);
+
+    const QString headerPath = ui::headerbackgroundprefs::path();
+    if (m_headerBackgroundPath) {
+        m_headerBackgroundPath->setText(QDir::toNativeSeparators(headerPath));
+        m_headerBackgroundPath->setToolTip(headerPath);
+    }
+    if (m_clearHeaderBackground)
+        m_clearHeaderBackground->setEnabled(!headerPath.isEmpty());
+    setCheck(m_enableHeaderBackground, ui::headerbackgroundprefs::enabled());
+    setCombo(m_headerPlacement, int(ui::headerbackgroundprefs::placement()));
+    setSlider(m_headerVisibility, ui::headerbackgroundprefs::visibility());
+    setSlider(m_headerBlur, ui::headerbackgroundprefs::blurRadius());
+    setCheck(m_headerAnimate,
+             ui::headerbackgroundprefs::animatedBackgroundsEnabled());
+    if (m_headerVisibilityValue)
+        m_headerVisibilityValue->setText(
+            QStringLiteral("%1%").arg(ui::headerbackgroundprefs::visibility()));
+    if (m_headerBlurValue)
+        m_headerBlurValue->setText(
+            tr("%1 px").arg(ui::headerbackgroundprefs::blurRadius()));
+    const bool headerEnabled = ui::headerbackgroundprefs::enabled();
+    for (QWidget* widget : QList<QWidget*>{
+             m_headerFileRow, m_headerPlacement, m_headerVisibility,
+             m_headerBlurRow, m_headerAnimate})
+        if (widget) widget->setEnabled(headerEnabled);
+
+    setSlider(m_playheadWidth,
+              int(std::lround(ui::playheadWidth() * 10.0)));
+    setCheck(m_playheadTrail, ui::playheadTrail());
+    if (m_playheadWidthValue)
+        m_playheadWidthValue->setText(
+            tr("%1 px").arg(ui::playheadWidth(), 0, 'f', 1));
+    if (m_trackColourTint && m_neutralTint) {
+        const QSignalBlocker trackBlocker(m_trackColourTint);
+        const QSignalBlocker neutralBlocker(m_neutralTint);
+        const bool neutral =
+            ui::selectionTint() == ui::SelectionTint::Neutral;
+        m_trackColourTint->setChecked(!neutral);
+        m_neutralTint->setChecked(neutral);
+    }
+}
+
+bool SettingsWindow::applyInstalledTheme(const QString& filePath,
+                                         const QString& storageId) {
+    m_applyingInstalledTheme = true;
+    const ui::ThemePackageResult result =
+        ui::ThemePackage::apply(filePath, storageId);
+    if (!result.ok) {
+        m_applyingInstalledTheme = false;
+        QMessageBox::warning(this, tr("Theme could not be applied"), result.error);
+        return false;
+    }
+    m_editTheme = ThemeManager::instance().theme();
+    if (m_themeNameEdit) m_themeNameEdit->setText(m_editTheme.name);
+    refreshSwatches();
+    refreshThemeControls();
+    if (m_notebookPage) m_notebookPage->refresh();
+    refreshThemeLibrary();
+    emit themeBackgroundSettingsChanged();
+    emit notebookSettingsChanged();
+    emit selectionTintChanged();
+    m_applyingInstalledTheme = false;
+    return true;
+}
+
+void SettingsWindow::saveCurrentThemeToLibrary() {
+    bool accepted = false;
+    const QString initial = ThemeManager::instance().theme().name.isEmpty()
+        ? tr("Custom Theme") : ThemeManager::instance().theme().name;
+    const QString name = QInputDialog::getText(
+        this, tr("Save Theme"), tr("Theme name"), QLineEdit::Normal,
+        initial, &accepted).trimmed();
+    if (!accepted || name.isEmpty()) return;
+
+    ui::ThemePackageSnapshot snapshot;
+    QString error;
+    if (!ui::ThemePackage::captureCurrent(name, snapshot, &error)) {
+        QMessageBox::warning(this, tr("Theme could not be saved"), error);
+        return;
+    }
+    runThemeTask(
+        this, tr("Saving theme…"),
+        [snapshot](const ui::ThemePackageProgress& progress) {
+            return ui::ThemePackage::saveToLibrary(snapshot, progress);
+        },
+        [this](const ui::ThemePackageResult& result) {
+            if (result.cancelled) return;
+            if (!result.ok) {
+                QMessageBox::warning(this, tr("Theme could not be saved"),
+                                     result.error);
+                return;
+            }
+            QSettings().setValue(
+                QStringLiteral("ui/activeThemePackage"),
+                result.manifest.value(QStringLiteral("packageId")).toString());
+            refreshThemeLibrary();
+            QMessageBox::information(this, tr("Theme Saved"),
+                                     tr("The theme is now in your VLTONE library."));
+        });
+}
+
+void SettingsWindow::exportCurrentTheme() {
+    const QString baseName = ThemeManager::instance().theme().name.isEmpty()
+        ? tr("Custom Theme") : ThemeManager::instance().theme().name;
+    QString path = QFileDialog::getSaveFileName(
+        this, tr("Export Theme"), baseName + QStringLiteral(".vlttheme"),
+        tr("VLTONE Theme (*.vlttheme)"));
+    if (path.isEmpty()) return;
+    if (!path.endsWith(QStringLiteral(".vlttheme"), Qt::CaseInsensitive))
+        path += QStringLiteral(".vlttheme");
+
+    ui::ThemePackageSnapshot snapshot;
+    QString error;
+    if (!ui::ThemePackage::captureCurrent(baseName, snapshot, &error)) {
+        QMessageBox::warning(this, tr("Theme could not be exported"), error);
+        return;
+    }
+    runThemeTask(
+        this, tr("Exporting theme…"),
+        [snapshot, path](const ui::ThemePackageProgress& progress) {
+            return ui::ThemePackage::write(snapshot, path, progress);
+        },
+        [this](const ui::ThemePackageResult& result) {
+            if (result.cancelled) return;
+            if (!result.ok) {
+                QMessageBox::warning(this, tr("Theme could not be exported"),
+                                     result.error);
+                return;
+            }
+            QMessageBox::information(
+                this, tr("Theme Exported"),
+                tr("The .vlttheme file includes the theme's media and fonts."));
+        });
+}
+
+void SettingsWindow::applySelectedSavedTheme() {
+    if (!m_savedThemeList || !m_savedThemeList->currentItem()) return;
+    const QString path =
+        m_savedThemeList->currentItem()->data(Qt::UserRole).toString();
+    runThemeTask(
+        this, tr("Preparing theme…"),
+        [path](const ui::ThemePackageProgress& progress) {
+            return ui::ThemePackage::install(path, progress);
+        },
+        [this](const ui::ThemePackageResult& result) {
+            if (result.cancelled) return;
+            if (!result.ok) {
+                QMessageBox::warning(this, tr("Theme could not be applied"),
+                                     result.error);
+                return;
+            }
+            applyInstalledTheme(result.filePath, result.storageId);
+        });
+}
+
+void SettingsWindow::importThemeFile(const QString& path) {
+    const QFileInfo info(path);
+    if (info.suffix().compare(QStringLiteral("json"),
+                              Qt::CaseInsensitive) == 0) {
+        QFile file(path);
+        const QJsonDocument document = file.open(QIODevice::ReadOnly)
+            ? QJsonDocument::fromJson(file.readAll()) : QJsonDocument();
+        if (!document.isObject()) {
+            QMessageBox::warning(this, tr("Import failed"),
+                                 tr("%1 is not a valid legacy theme file.")
+                                     .arg(QDir::toNativeSeparators(path)));
+            return;
+        }
+        m_editTheme = ThemeManager::fromJson(
+            document.object(), ThemeManager::instance().theme());
+        ThemeManager::instance().applyCustomTheme(m_editTheme, true);
+        QSettings().remove(QStringLiteral("ui/activeThemePackage"));
+        if (m_themeNameEdit) m_themeNameEdit->setText(m_editTheme.name);
+        refreshSwatches();
+        refreshThemeLibrary();
+        return;
+    }
+
+    runThemeTask(
+        this, tr("Importing theme…"),
+        [path](const ui::ThemePackageProgress& progress) {
+            return ui::ThemePackage::install(path, progress);
+        },
+        [this](const ui::ThemePackageResult& result) {
+            if (result.cancelled) return;
+            if (!result.ok) {
+                QMessageBox::warning(this, tr("Import failed"), result.error);
+                return;
+            }
+            if (applyInstalledTheme(result.filePath, result.storageId)) {
+                QMessageBox::information(
+                    this, tr("Theme Imported"),
+                    tr("The theme and its resources are now stored inside VLTONE. "
+                       "You can delete the original .vlttheme file."));
+            }
+        });
 }
 
 QWidget* SettingsWindow::buildThemeEditorTab() {
@@ -1082,39 +1554,15 @@ QWidget* SettingsWindow::buildThemeEditorTab() {
     });
     auto* exportBtn = new QPushButton(tr("Export…"));
     connect(exportBtn, &QPushButton::clicked, this, [this] {
-        const QString path = QFileDialog::getSaveFileName(
-            this, tr("Export Theme"),
-            m_editTheme.name + ".dawtheme.json",
-            tr("VLTONE Theme (*.json *.dawtheme.json)"));
-        if (path.isEmpty()) return;
-        QFile file(path);
-        if (!file.open(QIODevice::WriteOnly)) {
-            QMessageBox::warning(this, tr("Export failed"),
-                                 tr("Could not write %1").arg(path));
-            return;
-        }
-        file.write(QJsonDocument(ThemeManager::toJson(m_editTheme))
-                       .toJson(QJsonDocument::Indented));
+        applyEditTheme();
+        exportCurrentTheme();
     });
     auto* importBtn = new QPushButton(tr("Import…"));
     connect(importBtn, &QPushButton::clicked, this, [this] {
         const QString path = QFileDialog::getOpenFileName(
             this, tr("Import Theme"), QString(),
-            tr("VLTONE Theme (*.json *.dawtheme.json);;All Files (*)"));
-        if (path.isEmpty()) return;
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly)) return;
-        const auto doc = QJsonDocument::fromJson(file.readAll());
-        if (!doc.isObject()) {
-            QMessageBox::warning(this, tr("Import failed"),
-                                 tr("%1 is not a valid theme file").arg(path));
-            return;
-        }
-        m_editTheme = ThemeManager::fromJson(doc.object(),
-                                             ThemeManager::instance().theme());
-        if (m_themeNameEdit) m_themeNameEdit->setText(m_editTheme.name);
-        refreshSwatches();
-        applyEditTheme();
+            tr("VLTONE Theme (*.vlttheme);;Legacy Theme (*.json *.dawtheme.json);;All Files (*)"));
+        if (!path.isEmpty()) importThemeFile(path);
     });
 
     auto* actions = new QHBoxLayout;
@@ -1130,6 +1578,8 @@ QWidget* SettingsWindow::buildThemeEditorTab() {
 
 void SettingsWindow::applyEditTheme() {
     ThemeManager::instance().applyCustomTheme(m_editTheme, /*persist=*/true);
+    QSettings().remove(QStringLiteral("ui/activeThemePackage"));
+    refreshThemeLibrary();
     refreshSwatches();
     // Keep the preset list from highlighting a stale row now that "custom" won.
     if (m_themeList) {

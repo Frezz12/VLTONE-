@@ -135,13 +135,14 @@ struct PluginProcessInfo {
     bool offline = false;
 };
 
-/// What the format says after a successful process call. Only an explicit
+/// What the format says after a process call. Only an explicit
 /// format contract may return Sleep/Tail; output silence by itself is not
 /// permission for a host to stop calling an arbitrary plugin.
 enum class PluginProcessDisposition : std::uint8_t {
     Continue,
     Tail,
     Sleep,
+    Error,
 };
 
 /// Plugin → host, during `process`. Implementations must not block.

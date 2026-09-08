@@ -172,8 +172,13 @@ void Service::beginRestore() {
     const auto saved = securestorage::readSession(interaction);
     if (saved.unavailable) {
         m_credentialLock.reset();
+#if defined(Q_OS_MACOS)
+        emit errorOccurred(QStringLiteral("secure_storage_locked"),
+            tr("Saved sign-in could not be read. Check access to the application data folder and try again."));
+#else
         emit errorOccurred(QStringLiteral("secure_storage_locked"),
             tr("Saved sign-in is locked by the operating system. Choose Restore saved sign-in to allow access without entering your account password again."));
+#endif
         return;
     }
     const QJsonDocument stored = QJsonDocument::fromJson(saved.value);
@@ -199,7 +204,7 @@ void Service::beginRestore() {
         if (!securestorage::write(envelope, interaction) || securestorage::read() != envelope) {
             m_credentialLock.reset();
             emit errorOccurred(QStringLiteral("secure_storage_failed"),
-                               tr("The operating-system credential vault could not save this session."));
+                               tr("Saved sign-in could not be saved on this device."));
             return;
         }
     }
@@ -382,7 +387,7 @@ bool Service::persistCredentials(const QJsonObject& response, bool explicitSignI
     const QByteArray envelope = QJsonDocument(stored).toJson(QJsonDocument::Compact);
     if (!securestorage::write(envelope, interaction) || securestorage::read() != envelope) {
         emit errorOccurred(QStringLiteral("secure_storage_failed"),
-                           tr("The operating-system credential vault could not save this session."));
+                           tr("Saved sign-in could not be saved on this device."));
         return false;
     }
     return true;
@@ -430,7 +435,7 @@ bool Service::acceptOffline(const QJsonObject& credentials, QString* reason) {
     updated.insert(QStringLiteral("last_observed_time"),
                    QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
     if (!securestorage::write(QJsonDocument(updated).toJson(QJsonDocument::Compact))) {
-        *reason = tr("The operating-system credential vault could not update the offline clock guard.");
+        *reason = tr("The offline access timestamp could not be saved on this device.");
         m_authenticated = false;
         m_refreshTimer->stop();
         return false;
@@ -467,7 +472,13 @@ void Service::logout() {
 }
 
 void Service::finishLogout() {
-    securestorage::clear(securestorage::Interaction::Allow);
+    if (!securestorage::clear(securestorage::Interaction::Allow)) {
+        m_credentialLock.reset();
+        setBusy(false);
+        emit errorOccurred(QStringLiteral("secure_storage_failed"),
+                           tr("Saved sign-in could not be removed from this device. Try signing out again."));
+        return;
+    }
     m_refreshTimer->stop();
     m_accessToken.clear(); m_refreshToken.clear(); m_reporterToken.clear();
     m_offlineEntitlement.clear(); m_publicKey.clear(); m_snapshot = {};

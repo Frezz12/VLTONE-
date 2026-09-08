@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "algorithmVersion": 2,
+  "beat": {
+    "checkpoint": "CPJKU/beat_this final0",
+    "sourceSha256": "8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331",
+    "file": "beat-this-final0.onnx",
+    "sampleRate": 22050,
+    "fft": 1024,
+    "hop": 441,
+    "melBins": 128,
+    "chunkFrames": 1500,
+    "borderFrames": 6,
+    "downmix": "mean"
+  },
+  "key": {
+    "checkpoint": "deezer/skey@918b83d273568d5041569bb8068843d19a335726",
+    "sourceSha256": "78dfd0ad4fa9434bf7cec70a25934b7c575bda9c80e994700140770ad3a5ead4",
+    "file": "skey.onnx",
+    "sampleRate": 22050,
+    "minimumSeconds": 3,
+    "windowSeconds": 15,
+    "keyMap": [
+      "A Major",
+      "Bb Major",
+      "B Major",
+      "C Major",
+      "C# Major",
+      "D Major",
+      "D# Major",
+      "E Major",
+      "F Major",
+      "F# Major",
+      "G Major",
+      "G# Major",
+      "B minor",
+      "C minor",
+      "C# minor",
+      "D minor",
+      "D# minor",
+      "E minor",
+      "F minor",
+      "F# minor",
+      "G minor",
+      "G# minor",
+      "A minor",
+      "Bb minor"
+    ],
+    "secondSoftmax": false
+  },
+  "sha256": {
+    "mel-filterbank.bin": "57cf87a6ccce2c80898823c13ce260ec5a43b957c0671cfd9233d269f8dc14f2",
+    "beat-this-final0.onnx": "6c548b4e7fda871629273513c1a4969e278e53ff115bff3ffee89620d70c9563",
+    "skey.onnx": "8dff2d101032a6ab4ab37f39e64c8c30428a2bbacbd679171bfa0f78075a3976"
+  },
+  "exportParity": [
+    {
+      "task": "key",
+      "seconds": 3,
+      "maxError": 1.2684613466262817e-06,
+      "sameClass": true
+    },
+    {
+      "task": "key",
+      "seconds": 6,
+      "maxError": 3.993511199951172e-06,
+      "sameClass": true
+    },
+    {
+      "task": "key",
+      "seconds": 10,
+      "maxError": 1.5079975128173828e-05,
+      "sameClass": true
+    },
+    {
+      "task": "key",
+      "seconds": 15,
+      "maxError": 4.410743713378906e-06,
+      "sameClass": true
+    },
+    {
+      "task": "key",
+      "seconds": 31,
+      "maxError": 1.9669532775878906e-06,
+      "sameClass": true
+    },
+    {
+      "task": "beat",
+      "frames": 100,
+      "maxError": 7.867813110351562e-06
+    },
+    {
+      "task": "beat",
+      "frames": 777,
+      "maxError": 9.059906005859375e-06
+    },
+    {
+      "task": "beat",
+      "frames": 1500,
+      "maxError": 1.049041748046875e-05
+    }
+  ]
+}

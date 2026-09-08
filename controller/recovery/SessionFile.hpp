@@ -44,6 +44,9 @@ inline constexpr const char* kJournalFile = "project.json";
 /// Parsed here rather than there so the watchdog, which cannot link
 /// daw_controller, reads it exactly the way the DAW does.
 inline constexpr const char* kCrashFile = "crash.txt";
+/// Owned by the watchdog, so a healthy journal worker cannot overwrite its
+/// verdict while the UI thread is stuck.
+inline constexpr const char* kWatchdogFile = "watchdog.json";
 inline constexpr const char* kSessionFormat = "daw-session";
 inline constexpr int kSessionVersion = 1;
 
@@ -103,6 +106,11 @@ struct SessionInfo {
     /// Monotonically increasing. A frozen counter on a live process is a hang.
     std::uint64_t heartbeat = 0;
     std::int64_t heartbeatUnixMs = 0;
+    /// Older sessions only have the journal-worker heartbeat above. New
+    /// sessions separately acknowledge execution on the UI thread.
+    bool uiHeartbeatTracked = false;
+    std::uint64_t uiHeartbeat = 0;
+    std::int64_t uiHeartbeatUnixMs = 0;
     std::int64_t journalUnixMs = 0;   ///< when project.json was last written
     HealthStats stats;
     Outcome outcome = Outcome::Running;
@@ -185,7 +193,7 @@ inline HealthStats statsFromJson(const nlohmann::json& j) {
 }
 
 inline nlohmann::json sessionToJson(const SessionInfo& info) {
-    return nlohmann::json{
+    nlohmann::json result{
         {"format", kSessionFormat},
         {"version", kSessionVersion},
         {"pid", info.pid},
@@ -200,6 +208,11 @@ inline nlohmann::json sessionToJson(const SessionInfo& info) {
         {"outcome", toString(info.outcome)},
         {"crashReason", info.crashReason},
     };
+    if (info.uiHeartbeatTracked) {
+        result["uiHeartbeat"] = info.uiHeartbeat;
+        result["uiHeartbeatUnixMs"] = info.uiHeartbeatUnixMs;
+    }
+    return result;
 }
 
 /// Replace a small JSON file without ever leaving a partial one in its place.
@@ -243,6 +256,20 @@ inline bool writeSession(const SessionInfo& info) {
         platform::pathFromUtf8(info.directory) / kSessionFile);
 }
 
+inline nlohmann::json readWatchdogReport(const std::string& directory) {
+    std::ifstream input(platform::pathFromUtf8(directory) / kWatchdogFile);
+    if (!input) return nlohmann::json::object();
+    try {
+        nlohmann::json report;
+        input >> report;
+        return report.is_object() ? report : nlohmann::json::object();
+    } catch (const std::exception&) { return nlohmann::json::object(); }
+}
+
+inline std::uint64_t responsiveHeartbeat(const SessionInfo& info) {
+    return info.uiHeartbeatTracked ? info.uiHeartbeat : info.heartbeat;
+}
+
 inline bool readSession(const std::string& directory, SessionInfo& out) {
     namespace fs = std::filesystem;
     std::ifstream is(platform::pathFromUtf8(directory) / kSessionFile);
@@ -267,10 +294,29 @@ inline bool readSession(const std::string& directory, SessionInfo& out) {
     out.projectName = root.value("projectName", std::string());
     out.heartbeat = root.value("heartbeat", std::uint64_t{0});
     out.heartbeatUnixMs = root.value("heartbeatUnixMs", std::int64_t{0});
+    out.uiHeartbeatTracked = root.contains("uiHeartbeat") && root["uiHeartbeat"].is_number_unsigned();
+    if (out.uiHeartbeatTracked) {
+        out.uiHeartbeat = root.value("uiHeartbeat", std::uint64_t{0});
+        out.uiHeartbeatUnixMs = root.value("uiHeartbeatUnixMs", std::int64_t{0});
+    }
     out.journalUnixMs = root.value("journalUnixMs", std::int64_t{0});
     if (root.contains("stats")) out.stats = statsFromJson(root.at("stats"));
     out.outcome = outcomeFromString(root.value("outcome", std::string()));
     out.crashReason = root.value("crashReason", std::string());
+    // Keep the guard's independent verdict only while it describes this
+    // session and this UI stall. A newer UI pulse invalidates a transient hang.
+    const auto watchdog = readWatchdogReport(directory);
+    try {
+        if (watchdog.value("startedUnixMs", std::int64_t{-1}) == out.startedUnixMs) {
+            const auto outcome = outcomeFromString(watchdog.value("outcome", std::string()));
+            const bool samePulse = watchdog.value("uiHeartbeatTracked", false) == out.uiHeartbeatTracked &&
+                watchdog.value("observedHeartbeat", std::uint64_t{0}) == responsiveHeartbeat(out);
+            if (outcome == Outcome::Crashed || (outcome == Outcome::Hung && samePulse)) {
+                out.outcome = outcome;
+                out.crashReason = watchdog.value("reason", out.crashReason);
+            }
+        }
+    } catch (const std::exception&) { /* an incomplete/corrupt sidecar is optional */ }
     return true;
 }
 

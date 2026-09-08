@@ -20,6 +20,7 @@
 
 #include <QApplication>
 #include <QContextMenuEvent>
+#include <QCursor>
 #include <QDateTime>
 #include <QDragEnterEvent>
 #include <QDragLeaveEvent>
@@ -51,6 +52,8 @@
 #include <QSettings>
 #include <QShowEvent>
 #include <QHideEvent>
+#include <QHelpEvent>
+#include <QToolTip>
 #include <QTimer>
 #include <QWheelEvent>
 
@@ -97,6 +100,65 @@ constexpr int kClipVerticalInset = 2;
 /// stays immediately above an open mixer instead of disappearing behind it.
 constexpr int kTimelineScrollExtent = 12;
 constexpr int kTimelineScrollUnitsPerSecond = 1000;
+
+bool tempoAnalysisConfident(const daw::ClipTempoAnalysisModel& tempo) {
+    return daw::analysis::highConfidence(tempo);
+}
+
+bool keyAnalysisConfident(const daw::ClipKeyAnalysisModel& key) {
+    return daw::analysis::highConfidence(key);
+}
+
+QString clipTempoBadge(const daw::ClipModel& clip) {
+    const auto& tempo = clip.musicalAnalysis.tempo;
+    if (tempo.status == daw::MusicalAnalysisStatus::Unavailable || tempo.bpm <= 0.0)
+        return {};
+    const QString number = QString::number(daw::analysis::roundedBpm(tempo.bpm));
+    return QStringLiteral("%1 BPM%2")
+        .arg(number, tempoAnalysisConfident(tempo) ? QString() : QStringLiteral(" ?"));
+}
+
+QString clipKeyBadge(const daw::ClipModel& clip) {
+    const auto& measured = clip.musicalAnalysis.key;
+    if (measured.status == daw::MusicalAnalysisStatus::Unavailable ||
+        measured.root < 0) return {};
+    daw::analysis::KeyEstimate key;
+    key.root = measured.root;
+    key.scale = measured.scale;
+    const QString name = QString::fromStdString(daw::analysis::keyDisplayName(key));
+    const QString camelot = QString::fromStdString(
+        daw::analysis::camelotName(key.root, key.scale));
+    if (name.isEmpty()) return {};
+    return QStringLiteral("%1%2%3")
+        .arg(name, camelot.isEmpty() ? QString() : QStringLiteral(" · ") + camelot,
+             keyAnalysisConfident(measured) ? QString() : QStringLiteral(" ?"));
+}
+
+QString clipAnalysisToolTip(const daw::ClipModel& clip) {
+    QStringList lines;
+    const auto& tempo = clip.musicalAnalysis.tempo;
+    if (tempo.status != daw::MusicalAnalysisStatus::Unavailable && tempo.bpm > 0.0) {
+        lines << QObject::tr("Tempo: %1 BPM · %2")
+                     .arg(daw::analysis::roundedBpm(tempo.bpm))
+                     .arg(tempoAnalysisConfident(tempo) ? QObject::tr("confident") : QObject::tr("ambiguous"));
+        if (tempo.variable) lines << QObject::tr("Variable tempo");
+    }
+    const auto& key = clip.musicalAnalysis.key;
+    if (key.status != daw::MusicalAnalysisStatus::Unavailable && key.root >= 0) {
+        daw::analysis::KeyEstimate estimate;
+        estimate.root = key.root;
+        estimate.scale = key.scale;
+        lines << QObject::tr("Key: %1 · %2")
+                     .arg(QString::fromStdString(daw::analysis::keyDisplayName(estimate)))
+                     .arg(keyAnalysisConfident(key) ? QObject::tr("confident") : QObject::tr("ambiguous"));
+        if (key.alternateRoot >= 0) {
+            estimate.root = key.alternateRoot; estimate.scale = key.alternateScale;
+            lines << QObject::tr("Alternative: %1").arg(QString::fromStdString(daw::analysis::keyDisplayName(estimate)));
+        }
+        if (key.variable) lines << QObject::tr("Variable key");
+    }
+    return lines.join(QLatin1Char('\n'));
+}
 
 /// Arrangement tools use the same unmistakable cursor vocabulary as the piano
 /// roll. A dark halo under the light vector icon keeps it legible over both a
@@ -1379,13 +1441,30 @@ double TimelineWidget::zoomFocusSeconds() const {
     return m_controller->presentationPositionSeconds();
 }
 
-void TimelineWidget::zoomBy(double factor) {
+void TimelineWidget::zoomBy(double factor, std::optional<double> pointerX) {
     if (!std::isfinite(factor) || factor <= 0.0) return;
     const double next = std::clamp(m_pixelsPerSecond * factor, 4.0, 1200.0);
     if (next == m_pixelsPerSecond) return;
-    const double focus = zoomFocusSeconds();
+
+    double focus = 0.0;
+    double anchorX = width() * 0.5;
+    if (m_zoomFocusEnabled) {
+        focus = zoomFocusSeconds();
+    } else {
+        if (!pointerX) {
+            const int liveX = mapFromGlobal(QCursor::pos()).x();
+            if (liveX >= 0 && liveX <= width()) pointerX = liveX;
+        }
+        if (pointerX && std::isfinite(*pointerX))
+            anchorX = std::clamp(*pointerX, 0.0, double(width()));
+        // Capture the project time before changing scale. Keeping it under the
+        // same screen x makes wheel and pinch zoom feel attached to the hand.
+        focus = m_scrollSeconds + anchorX / m_pixelsPerSecond;
+    }
     m_pixelsPerSecond = next;
-    setHorizontalScroll(focus - visibleSeconds() * 0.5);
+    setHorizontalScroll(
+        focus - (m_zoomFocusEnabled ? visibleSeconds() * 0.5
+                                    : anchorX / m_pixelsPerSecond));
     scheduleNavigationSync();
     update(rect());
 }
@@ -2983,9 +3062,48 @@ void TimelineWidget::drawLanes(QPainter& p) {
             p.setFont(f);
             p.setPen(clip.muted ? QColor(220, 222, 226, 175)
                                 : QColor(255, 255, 255, 220));
-            const QRectF nameRect = caption.adjusted(clip.muted ? 20 : 6, 0, -4, 0);
-            p.drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
-                       QString::fromStdString(clip.name));
+            QString tempoBadge = clipTempoBadge(clip);
+            QString keyBadge = clipKeyBadge(clip);
+            const QFontMetrics fm(f);
+            const auto badgeWidth = [&fm](const QString& text) {
+                return text.isEmpty() ? 0 : fm.horizontalAdvance(text) + 10;
+            };
+            int tempoWidth = badgeWidth(tempoBadge);
+            int keyWidth = badgeWidth(keyBadge);
+            const int badgeGap = !tempoBadge.isEmpty() && !keyBadge.isEmpty() ? 4 : 0;
+            const double nameLeft = caption.left() + (clip.muted ? 20.0 : 6.0);
+            const double available = caption.right() - nameLeft - 4.0;
+            if (tempoWidth + keyWidth + badgeGap + 38 > available) {
+                tempoBadge.clear();
+                tempoWidth = 0;
+            }
+            if (keyWidth + 38 > available) {
+                keyBadge.clear();
+                keyWidth = 0;
+            }
+            double badgeX = caption.right() - 4.0 - tempoWidth - keyWidth -
+                            ((!tempoBadge.isEmpty() && !keyBadge.isEmpty()) ? 4.0 : 0.0);
+            const QRectF nameRect(nameLeft, caption.top(),
+                                  std::max(0.0, badgeX - nameLeft - 3.0),
+                                  caption.height());
+            const QString clipName = QString::fromStdString(clip.name);
+            const QString shownName = fm.elidedText(
+                clipName, Qt::ElideRight, std::max(0, int(nameRect.width())));
+            p.drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter, shownName);
+
+            const auto drawBadge = [&](const QString& text, int width) {
+                if (text.isEmpty() || width <= 0) return;
+                const QRectF badge(badgeX, caption.top() + 1.0, width,
+                                   caption.height() - 2.0);
+                p.setPen(QPen(QColor(255, 255, 255, 65), 0.7));
+                p.setBrush(QColor(12, 14, 18, 145));
+                p.drawRoundedRect(badge, 3.0, 3.0);
+                p.setPen(QColor(255, 255, 255, 225));
+                p.drawText(badge, Qt::AlignCenter, text);
+                badgeX += width + 4.0;
+            };
+            drawBadge(keyBadge, keyWidth);
+            drawBadge(tempoBadge, tempoWidth);
             if (clip.muted) {
                 const QPointF centre(r.left() + 10.0, caption.center().y());
                 p.setBrush(Qt::NoBrush);
@@ -3007,16 +3125,14 @@ void TimelineWidget::drawLanes(QPainter& p) {
                 }
             }
             if (channels > 0) {
-                const QFontMetrics fm(f);
-                const double nameW =
-                    fm.horizontalAdvance(QString::fromStdString(clip.name));
+                const double nameW = fm.horizontalAdvance(shownName);
                 double dotX = nameRect.left() + nameW + 8.0;
                 const double dotY = caption.center().y();
                 const int dots = channels >= 2 ? 2 : 1;
                 p.setPen(Qt::NoPen);
                 p.setBrush(QColor(255, 255, 255, 200));
                 for (int d = 0; d < dots; ++d) {
-                    if (dotX + 3.0 > r.right() - 3.0) break;
+                    if (dotX + 3.0 > nameRect.right()) break;
                     p.drawEllipse(QPointF(dotX, dotY), 2.0, 2.0);
                     dotX += 6.0;
                 }
@@ -6488,13 +6604,29 @@ bool TimelineWidget::event(QEvent* e) {
             return true;
         }
     }
+    if (e->type() == QEvent::ToolTip) {
+        auto* help = static_cast<QHelpEvent*>(e);
+        ClipHit hit;
+        if (hitTestClip(help->pos(), hit)) {
+            if (const daw::ClipModel* clip = findClipModel(hit.trackId, hit.clipId)) {
+                const QString tip = clipAnalysisToolTip(*clip);
+                if (!tip.isEmpty()) {
+                    QToolTip::showText(help->globalPos(), tip, this);
+                    return true;
+                }
+            }
+        }
+        QToolTip::hideText();
+        e->ignore();
+        return true;
+    }
 
-    // Native pinch uses the same selection/playhead focus as the toolbar,
-    // keyboard shortcuts and Ctrl+wheel.
+    // Native pinch uses the same selectable focus policy as every other zoom
+    // input, while pointer mode keeps the gesture's exact screen anchor.
     if (e->type() == QEvent::NativeGesture) {
         auto* g = static_cast<QNativeGestureEvent*>(e);
         if (g->gestureType() == Qt::ZoomNativeGesture) {
-            zoomBy(1.0 + g->value());
+            zoomBy(1.0 + g->value(), g->position().x());
             g->accept();
             return true;
         }
@@ -6539,7 +6671,7 @@ void TimelineWidget::wheelEvent(QWheelEvent* ev) {
     ui::perf::Scope timing("timeline.wheel.ms");
     if (ev->phase() == Qt::ScrollBegin) m_wheelScrollRemainder = 0.0;
     if (ev->modifiers() & Qt::ControlModifier) {
-        zoomBy(ui::wheelZoomFactor(*ev));
+        zoomBy(ui::wheelZoomFactor(*ev), ev->position().x());
     } else if (ev->modifiers() & Qt::ShiftModifier) {
         // Some platforms already transpose Shift+wheel onto X.
         const QPointF delta = ui::scrollPixels(*ev);

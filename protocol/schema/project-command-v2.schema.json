@@ -433,11 +433,15 @@
           "additionalProperties": false,
           "required": ["status", "bpm", "confidence", "stability", "alternatives", "variable"],
           "properties": {
+            "algorithmVersion": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+            "calibrated": { "type": "boolean" },
+            "backend": { "type": "string", "maxLength": 128 },
+            "reason": { "type": "string", "maxLength": 512 },
             "status": { "type": "integer", "minimum": 0, "maximum": 2 },
-            "bpm": { "type": "number", "minimum": 0, "maximum": 300 },
+            "bpm": { "type": "number", "minimum": 0, "maximum": 1000000 },
             "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
             "stability": { "type": "number", "minimum": 0, "maximum": 1 },
-            "alternatives": { "type": "array", "maxItems": 3, "items": { "type": "number", "exclusiveMinimum": 0, "maximum": 300 } },
+            "alternatives": { "type": "array", "maxItems": 3, "items": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000000 } },
             "variable": { "type": "boolean" }
           }
         },
@@ -446,6 +450,11 @@
           "additionalProperties": false,
           "required": ["status", "root", "scale", "confidence", "alternateRoot", "alternateScale", "tuningCents"],
           "properties": {
+            "algorithmVersion": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+            "calibrated": { "type": "boolean" },
+            "backend": { "type": "string", "maxLength": 128 },
+            "reason": { "type": "string", "maxLength": 512 },
+            "variable": { "type": "boolean" },
             "status": { "type": "integer", "minimum": 0, "maximum": 2 },
             "root": { "type": "integer", "minimum": -1, "maximum": 11 },
             "scale": { "type": "string", "maxLength": 128 },

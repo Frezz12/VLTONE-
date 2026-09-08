@@ -24,6 +24,8 @@ void setAnimatedBackgroundsEnabled(bool enabled);
 QStringList customFontFiles();
 bool addCustomFontFile(const QString& path);
 void removeCustomFontFile(const QString& path);
+/// Replace the notebook font set atomically after a portable theme import.
+void setCustomFontFiles(const QStringList& paths);
 
 bool visible();
 void setVisible(bool visible);

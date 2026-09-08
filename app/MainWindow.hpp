@@ -152,6 +152,9 @@ public:
     /// A `.vltt` package is routed to the new-project-from-template flow, so an
     /// operating-system double-click can never make Save overwrite a template.
     bool openProjectPath(const QString& path);
+    /// Route a path delivered by argv, Finder or Explorer to project/template
+    /// opening, portable theme import, or the configured Quick Import flow.
+    bool openExternalPath(const QString& path);
 
     /// Engage record without starting a take: the transport button lights and
     /// the context panel switches to the recording options. Public so a
@@ -520,6 +523,7 @@ private slots:
     void onDuplicateSelectedTrack();
     void onRemoveSelectedTrack();
     void onImportAudio();
+    void onQuickImportAudio();
     void onExport();
     void onBounceInPlace();
     void onOfflineRender();
@@ -806,6 +810,7 @@ private:
     void initializeBlankProject();
     QString chooseProjectTemplate();
     bool createProjectFromTemplatePath(const QString& packageDir);
+    bool quickImportAudioPath(const QString& path);
     void addProjectTemplateTracks(const QString& packageDir);
 
     daw::EngineController m_controller;

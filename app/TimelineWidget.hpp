@@ -140,8 +140,15 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
     void setWaveformScale(double scale);
     double waveformScale() const { return m_waveformScale; }
 
-    /// Centre zoom on the selected clip span, or the playhead without a selection.
-    void zoomBy(double factor);
+    /// Choose the zoom anchor. Off keeps the time beneath the pointer in place;
+    /// on centres selected clips, falling back to the playhead.
+    void setZoomFocusEnabled(bool enabled) { m_zoomFocusEnabled = enabled; }
+    bool zoomFocusEnabled() const { return m_zoomFocusEnabled; }
+    /// `pointerX` is supplied by wheel/pinch input. Toolbar and keyboard zoom
+    /// use the live pointer when it is horizontally over the arrangement, and
+    /// the viewport centre otherwise.
+    void zoomBy(double factor,
+                std::optional<double> pointerX = std::nullopt);
     void zoomToFit();
 
     /// True when at least one clip is selected in the arrangement.
@@ -742,6 +749,7 @@ private:
     QScrollBar* m_horizontalScrollBar = nullptr;
     QScrollBar* m_verticalScrollBar = nullptr;
     bool m_followPlayhead = false;
+    bool m_zoomFocusEnabled = false;
     /// Preserve subpixel motion, including on a zoomed-out timeline. Remember
     /// the entire painted footprint so a shrinking/disabled trail is erased.
     std::optional<double> m_lastPlayheadX;

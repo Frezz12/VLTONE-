@@ -210,6 +210,12 @@ std::string executableDirectory() {
 
 } // namespace
 
+bool samePluginProduct(const PluginDescriptor& a, const PluginDescriptor& b) {
+    // Do not merge distinct same-format shell components with identical names.
+    if (a.format == b.format) return a.uid == b.uid;
+    return productKey(a) == productKey(b);
+}
+
 std::vector<PluginDescriptor> preferredPluginVariants(
     std::vector<PluginDescriptor> descriptors, Format preferredFormat) {
     struct Product {

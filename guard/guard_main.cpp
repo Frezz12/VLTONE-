@@ -30,11 +30,13 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <dbghelp.h>
 #else
 #include <poll.h>
 #include <unistd.h>
@@ -70,13 +72,18 @@ void appendHealth(const fs::path& logFile, const SessionInfo& info) {
     nlohmann::json line = statsToJson(info.stats);
     line["unixMs"] = info.heartbeatUnixMs;
     line["heartbeat"] = info.heartbeat;
+    if (info.uiHeartbeatTracked) {
+        line["uiHeartbeat"] = info.uiHeartbeat;
+        line["uiHeartbeatUnixMs"] = info.uiHeartbeatUnixMs;
+    }
     os << line.dump() << '\n';
 }
 
 /// Record how the session ended, without disturbing anything else the file
 /// holds — it is re-read first so a verdict never overwrites a heartbeat or a
 /// crash reason the dying process managed to write.
-void recordOutcome(const std::string& directory, Outcome outcome) {
+void recordOutcome(const std::string& directory, Outcome outcome,
+                   std::optional<std::uint32_t> exitCode = {}) {
     SessionInfo info;
     if (!readSession(directory, info)) return;
     // The crash handler may have left a marker naming the signal and the plugin
@@ -87,23 +94,57 @@ void recordOutcome(const std::string& directory, Outcome outcome) {
         reason = parseCrashMarker(daw::platform::pathToUtf8(
             daw::platform::pathFromUtf8(directory) / kCrashFile));
     }
-    if (info.outcome == outcome && info.crashReason == reason) return;
+    if (reason.empty() && (outcome == Outcome::Hung ||
+        (outcome == Outcome::Crashed && info.outcome == Outcome::Hung)))
+        reason = "application_hung";
+    auto report = readWatchdogReport(directory);
+    report["startedUnixMs"] = info.startedUnixMs;
+    report["outcome"] = toString(outcome);
+    report["observedHeartbeat"] = responsiveHeartbeat(info);
+    report["uiHeartbeatTracked"] = info.uiHeartbeatTracked;
+    report["recordedAtUnixMs"] = nowUnixMs();
+    report["reason"] = reason;
+    if (exitCode) report["processExitCode"] = *exitCode;
+    const auto sidecar = daw::platform::pathFromUtf8(directory) / kWatchdogFile;
+    if (outcome == Outcome::Running) {
+        std::error_code ignored;
+        fs::remove(sidecar, ignored);
+    } else {
+        writeJsonAtomically(report, sidecar);
+    }
     info.outcome = outcome;
-    if (!reason.empty()) info.crashReason = reason;
+    info.crashReason = reason;
     writeSession(info);
 }
 
-/// True when the parent is gone. Blocks up to `millis` waiting for that, so the
-/// caller's loop is driven by the parent's death rather than by a timer.
-bool waitForParentDeath(int millis, std::int64_t pid) {
+/// Keep the Windows process object alive until its exit status has been read.
+/// Re-opening it on every tick loses the status when the last handle closes.
+class ParentMonitor {
+public:
+    explicit ParentMonitor(std::int64_t pid) {
 #if defined(_WIN32)
-    HANDLE handle = ::OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
-    if (!handle) return true;   // already gone
-    const DWORD waited = ::WaitForSingleObject(handle, static_cast<DWORD>(millis));
-    ::CloseHandle(handle);
-    return waited == WAIT_OBJECT_0;
+        m_handle = ::OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                                 FALSE, static_cast<DWORD>(pid));
+        if (!m_handle) m_handle = ::OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
+        m_missing = !m_handle && ::GetLastError() == ERROR_INVALID_PARAMETER;
 #else
-    (void)pid;
+        (void)pid;
+#endif
+    }
+    ~ParentMonitor() {
+#if defined(_WIN32)
+        if (m_handle) ::CloseHandle(m_handle);
+#endif
+    }
+    std::optional<std::uint32_t> exitCode() const { return m_exitCode; }
+    bool wait(int millis) {
+#if defined(_WIN32)
+        if (!m_handle) { ::Sleep(DWORD(millis)); return m_missing; }
+        if (::WaitForSingleObject(m_handle, DWORD(millis)) != WAIT_OBJECT_0) return false;
+        DWORD code = 0;
+        if (::GetExitCodeProcess(m_handle, &code)) m_exitCode = code;
+        return true;
+#else
     pollfd descriptor{};
     descriptor.fd = kParentPipeFd;
     // POLLIN, even though nothing is ever written: macOS does not report
@@ -116,6 +157,46 @@ bool waitForParentDeath(int millis, std::int64_t pid) {
     if (ready < 0) return false;                 // EINTR: try again
     if (ready == 0) return false;                // timed out, parent still there
     return (descriptor.revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) != 0;
+#endif
+    }
+private:
+    std::optional<std::uint32_t> m_exitCode;
+#if defined(_WIN32)
+    HANDLE m_handle = nullptr;
+    bool m_missing = false;
+#endif
+};
+
+void captureHangDump(const std::string& directory, std::int64_t pid) {
+#if defined(_WIN32)
+    // Snapshot from the healthy watchdog while the target still exists. No
+    // plugin APIs or full-memory capture; the local file contains thread stacks.
+    const auto path = daw::platform::pathFromUtf8(directory) / L"hang.dmp";
+    HANDLE process = ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+                                   FALSE, DWORD(pid));
+    DWORD error = process ? ERROR_SUCCESS : ::GetLastError();
+    bool written = false;
+    if (process) {
+        HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+            nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) {
+            written = ::MiniDumpWriteDump(process, DWORD(pid), file,
+                MINIDUMP_TYPE(MiniDumpNormal | MiniDumpWithThreadInfo | MiniDumpIgnoreInaccessibleMemory),
+                nullptr, nullptr, nullptr) != FALSE;
+            if (!written) error = ::GetLastError();
+            ::FlushFileBuffers(file);
+            ::CloseHandle(file);
+        } else error = ::GetLastError();
+        ::CloseHandle(process);
+    }
+    if (!written) { std::error_code ignored; fs::remove(path, ignored); }
+    auto report = readWatchdogReport(directory);
+    report["hangDumpWritten"] = written;
+    report["hangDumpError"] = error;
+    if (written) report["hangDumpFile"] = "hang.dmp";
+    writeJsonAtomically(report, daw::platform::pathFromUtf8(directory) / kWatchdogFile);
+#else
+    (void)directory; (void)pid;
 #endif
 }
 
@@ -149,9 +230,10 @@ int guardMain(const std::vector<std::string>& arguments) {
     std::uint64_t lastHeartbeat = 0;
     int secondsSinceHeartbeat = 0;
     bool reportedHang = false;
+    ParentMonitor parent(parentPid);
 
     for (;;) {
-        const bool parentGone = waitForParentDeath(kPollMillis, parentPid);
+        const bool parentGone = parent.wait(kPollMillis);
 
         std::error_code ec;
         // The session directory disappearing IS the clean-shutdown signal: the
@@ -165,7 +247,7 @@ int guardMain(const std::vector<std::string>& arguments) {
             // The pipe closed but the directory is still here — the DAW died
             // without tidying up. That is the whole verdict; recovery on the
             // next launch does the rest.
-            if (readable) recordOutcome(sessionDir, Outcome::Crashed);
+            if (readable) recordOutcome(sessionDir, Outcome::Crashed, parent.exitCode());
             return 0;
         }
 
@@ -175,8 +257,9 @@ int guardMain(const std::vector<std::string>& arguments) {
 
         // A heartbeat that stops advancing on a process that is still alive is
         // a freeze — the one failure no in-process handler can ever catch.
-        if (info.heartbeat != lastHeartbeat) {
-            lastHeartbeat = info.heartbeat;
+        const auto heartbeat = responsiveHeartbeat(info);
+        if (heartbeat != lastHeartbeat) {
+            lastHeartbeat = heartbeat;
             secondsSinceHeartbeat = 0;
             if (reportedHang) {
                 // It came back. Say so, rather than leaving a stale verdict
@@ -187,6 +270,7 @@ int guardMain(const std::vector<std::string>& arguments) {
         } else if (++secondsSinceHeartbeat >= hangSeconds && !reportedHang) {
             recordOutcome(sessionDir, Outcome::Hung);
             reportedHang = true;
+            captureHangDump(sessionDir, parentPid);
         }
     }
 }

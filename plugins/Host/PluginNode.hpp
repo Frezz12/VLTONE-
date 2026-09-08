@@ -50,6 +50,8 @@ public:
     void suspend() override;
     void resume() override;
     void process(const engine::ProcessContext& context) override;
+    engine::Status serviceOffline() override;
+    engine::Status offlineStatus() const noexcept override;
 
     // ── Control thread ──
 
@@ -223,6 +225,7 @@ private:
     std::atomic<bool> m_reloadRequested{false};
     std::atomic<bool> m_mainThreadWorkPending{false};
     std::atomic<bool> m_ready{false};
+    std::atomic<bool> m_processFailed{false};
     /// Ramps 1 → 0 when bypass engages and back when it lifts, so the switch
     /// is a short crossfade instead of a discontinuity.
     float m_wet = 1.0f;

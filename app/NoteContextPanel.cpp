@@ -493,9 +493,13 @@ QRect NoteContextPanel::targetGeometry() const {
 
     int limitLeft = 12;
     int limitRight = std::max(12, host->width() - 12);
+    int anchorCentreX = 0;
+    const bool followAnchor =
+        m_follow && m_anchorProvider && m_anchorProvider(anchorCentreX);
     int boundsLeft = 0;
     int boundsRight = 0;
-    if (m_boundsProvider && m_boundsProvider(boundsLeft, boundsRight)) {
+    if (followAnchor && m_boundsProvider &&
+        m_boundsProvider(boundsLeft, boundsRight)) {
         limitLeft = std::clamp(boundsLeft, 0, host->width());
         limitRight = std::clamp(boundsRight, limitLeft, host->width());
     }
@@ -505,8 +509,7 @@ QRect NoteContextPanel::targetGeometry() const {
     const int width = std::min(available, contentWidth + 2 * (kShadow + kEndPadding));
     const int rightmost = std::max(limitLeft, limitRight - width);
     int left = limitLeft + (available - width) / 2;
-    int anchorCentreX = 0;
-    if (m_follow && m_anchorProvider && m_anchorProvider(anchorCentreX)) {
+    if (followAnchor) {
         left = std::clamp(anchorCentreX - width / 2, limitLeft, rightmost);
     }
     return QRect(left, top, width, height);

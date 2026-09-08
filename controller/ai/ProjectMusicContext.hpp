@@ -83,6 +83,11 @@ struct AudioClipAnalysisSummary {
     std::string trackId;
     std::string clipId;
     int algorithmVersion = 0;
+    int tempoAlgorithmVersion = 0;
+    int keyAlgorithmVersion = 0;
+    bool tempoCalibrated = false;
+    bool keyCalibrated = false;
+    bool variableKey = false;
 
     std::string tempoStatus;
     double bpm = 0.0;

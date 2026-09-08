@@ -630,10 +630,13 @@ QWidget* ContextPanel::buildAudioClip() {
             const auto& measured = c->musicalAnalysis;
             if (measured.tempo.status != daw::MusicalAnalysisStatus::Unavailable &&
                 measured.tempo.bpm > 0.0) {
-                parts << QObject::tr("%1 BPM").arg(measured.tempo.bpm, 0, 'f', 1);
-                details << QObject::tr("Tempo confidence: %1%")
-                               .arg(int(std::lround(measured.tempo.confidence * 100.0)));
+                parts << QObject::tr("%1 BPM").arg(daw::analysis::roundedBpm(measured.tempo.bpm));
+                details << QObject::tr("Tempo: %1").arg(
+                    daw::analysis::highConfidence(measured.tempo)
+                        ? QObject::tr("confident") : QObject::tr("ambiguous"));
             }
+            else if (measured.tempo.algorithmVersion > 0)
+                parts << QObject::tr("BPM · not determined");
             if (measured.key.status != daw::MusicalAnalysisStatus::Unavailable &&
                 measured.key.root >= 0) {
                 daw::analysis::KeyEstimate key;
@@ -644,9 +647,12 @@ QWidget* ContextPanel::buildAudioClip() {
                 const QString camelot = QString::fromStdString(
                     daw::analysis::camelotName(key.root, key.scale));
                 parts << QObject::tr("%1 · %2").arg(name, camelot);
-                details << QObject::tr("Key confidence: %1%")
-                               .arg(int(std::lround(measured.key.confidence * 100.0)));
+                details << QObject::tr("Key: %1").arg(
+                    daw::analysis::highConfidence(measured.key)
+                        ? QObject::tr("confident") : QObject::tr("ambiguous"));
             }
+            else if (measured.key.algorithmVersion > 0)
+                parts << QObject::tr("Key · not determined");
             analysisText->setText(parts.join(QStringLiteral("   ")));
             analysisText->setToolTip(details.join(QLatin1Char('\n')));
             ui::contextAvailable(analysisGroup, !parts.isEmpty());
@@ -2317,14 +2323,15 @@ QRect ContextPanel::targetGeometry() const {
     // strip's own top edge, which is what makes the two read as one surface.
     const int height = kRowHeight + 2 * kPadding + kShadow;
 
-    // Non-clip contexts and pinned mode use the middle of the available area.
-    // The plate belongs over the arrangement — that is what it talks about —
-    // so its travel is bounded by the arrangement's own edges rather than by
-    // the window's. Without a provider it may use the whole strip.
+    // The stable home is the middle of the transport/header above this strip.
+    // Only an enabled clip-follow context adopts the arrangement's narrower
+    // bounds; tracks, recording and pinned mode stay under the header centre.
     int limitLeft = 12;
     int limitRight = std::max(12, host->width() - 12);
+    const bool followClip = followsClipSelection();
     int boundsLeft = 0, boundsRight = 0;
-    if (m_boundsProvider && m_boundsProvider(boundsLeft, boundsRight)) {
+    if (followClip && m_boundsProvider &&
+        m_boundsProvider(boundsLeft, boundsRight)) {
         limitLeft = std::clamp(boundsLeft, 0, host->width());
         limitRight = std::clamp(boundsRight, limitLeft, host->width());
     }
@@ -2338,7 +2345,7 @@ QRect ContextPanel::targetGeometry() const {
 
     int left = limitLeft + (available - width) / 2;
     int anchorCentreX = 0;
-    if (followsClipSelection() && m_anchorProvider && m_anchorProvider(anchorCentreX)) {
+    if (followClip && m_anchorProvider && m_anchorProvider(anchorCentreX)) {
         // Above the selection, but never past the arrangement: a clip at the
         // far right pulls the plate to that edge and no further, so it stays
         // whole and never drifts over the track headers.

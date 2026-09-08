@@ -528,6 +528,14 @@ void commandWireRoundTrip() {
 
 #ifdef DAW_PROJECT_COMMAND_SCHEMA
     const json schema = readJson(DAW_PROJECT_COMMAND_SCHEMA);
+    const auto& musicSchema = schema["$defs"]["musicalAnalysis"]["properties"];
+    check(musicSchema["tempo"]["properties"].contains("algorithmVersion") &&
+              musicSchema["tempo"]["properties"]["bpm"]["maximum"] == 1000000 &&
+              musicSchema["key"]["properties"].contains("calibrated") &&
+              musicSchema["key"]["properties"].contains("variable") &&
+              musicSchema["tempo"]["required"].size() == 6 &&
+              musicSchema["key"]["required"].size() == 7,
+          "wire schema accepts analysis provenance without requiring new fields in old commands");
     const auto& required = schema.at("required");
     const auto hasRequired = [&](const char* key) {
         return std::find(required.begin(), required.end(), key) != required.end();
@@ -2647,6 +2655,31 @@ void commandV2Contracts() {
                 SetClipMusicalAnalysis{audioTrackId, audioClipId, analysis})
                   .changed(),
           "clip musical analysis is deterministic shared data");
+    {
+        analysis.tempo.algorithmVersion = 2;
+        analysis.tempo.calibrated = true;
+        analysis.tempo.backend = "beat-this+grid";
+        analysis.key.algorithmVersion = 1;
+        auto encoded = projectCommandToJson(command("analysis-versions",
+            SetClipMusicalAnalysis{audioTrackId, audioClipId, analysis}));
+        auto decoded = projectCommandFromJson(encoded);
+        const auto* fields = decoded ? std::get_if<SetClipMusicalAnalysis>(&decoded->body) : nullptr;
+        check(fields && fields->analysis.tempo.algorithmVersion == 2 &&
+              fields->analysis.key.algorithmVersion == 1 && fields->analysis.tempo.calibrated,
+              "analysis wire preserves independent versions and calibration");
+        auto& saved = encoded["payload"]["analysis"];
+        for (const char* field : {"algorithmVersion", "calibrated", "backend", "reason"}) {
+            saved["tempo"].erase(field); saved["key"].erase(field);
+        }
+        saved["key"].erase("variable");
+        decoded = projectCommandFromJson(encoded);
+        fields = decoded ? std::get_if<SetClipMusicalAnalysis>(&decoded->body) : nullptr;
+        check(fields && fields->analysis.tempo.algorithmVersion == 1 &&
+              fields->analysis.key.algorithmVersion == 1 && !fields->analysis.tempo.calibrated,
+              "legacy analysis wire reads without promoting old confidence");
+        saved["tempo"]["unexpected"] = true;
+        check(!projectCommandFromJson(encoded), "unknown analysis wire fields are still rejected");
+    }
     check(apply("v2-sampler-levels",
                 SetSamplerFxLevels{instrumentTrackId,
                                    instrument.instrument.id, 1.25, -0.2})

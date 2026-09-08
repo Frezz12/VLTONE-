@@ -1390,6 +1390,7 @@ void PatternWindow::showInstrumentMenu() {
             }
             emit projectEdited();
             refresh();
+            ui::rememberRecentPlugin(descriptor);
             const auto* track = m_controller->project().findTrack(id);
             if (track && !track->instrument.id.empty())
                 emit openPluginEditorRequested(

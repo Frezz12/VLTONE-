@@ -334,19 +334,46 @@ json musicalAnalysisToJson(const ClipMusicalAnalysisModel& analysis) {
         {"version", analysis.algorithmVersion},
         {"offsetSeconds", analysis.analyzedOffsetSeconds},
         {"durationSeconds", analysis.analyzedDurationSeconds},
-        {"tempo", json{{"status", int(analysis.tempo.status)},
+        {"tempo", json{{"algorithmVersion", analysis.tempo.algorithmVersion},
+                       {"calibrated", analysis.tempo.calibrated},
+                       {"backend", analysis.tempo.backend},
+                       {"reason", analysis.tempo.reason},
+                       {"status", int(analysis.tempo.status)},
                        {"bpm", analysis.tempo.bpm},
                        {"confidence", analysis.tempo.confidence},
                        {"stability", analysis.tempo.stability},
                        {"alternatives", analysis.tempo.alternatives},
                        {"variable", analysis.tempo.variable}}},
-        {"key", json{{"status", int(analysis.key.status)},
+        {"key", json{{"algorithmVersion", analysis.key.algorithmVersion},
+                       {"calibrated", analysis.key.calibrated},
+                       {"backend", analysis.key.backend},
+                       {"reason", analysis.key.reason},
+                       {"status", int(analysis.key.status)},
+                     {"variable", analysis.key.variable},
                      {"root", analysis.key.root},
                      {"scale", analysis.key.scale},
                      {"confidence", analysis.key.confidence},
                      {"alternateRoot", analysis.key.alternateRoot},
                      {"alternateScale", analysis.key.alternateScale},
                      {"tuningCents", analysis.key.tuningCents}}}};
+}
+
+bool analysisExtensions(const json& value, bool isKey) {
+    if (!value.is_object()) return false;
+    for (const char* field : {"algorithmVersion", "calibrated", "backend", "reason", "variable"}) {
+        if (!value.contains(field)) continue;
+        const auto& v = value.at(field);
+        if (std::string_view(field) == "algorithmVersion" && !v.is_number_integer()) return false;
+        if ((std::string_view(field) == "calibrated" || std::string_view(field) == "variable") && !v.is_boolean()) return false;
+        if ((std::string_view(field) == "backend" || std::string_view(field) == "reason") && !v.is_string()) return false;
+    }
+    auto required = value;
+    for (const char* field : {"algorithmVersion", "calibrated", "backend", "reason"}) required.erase(field);
+    if (isKey) {
+        required.erase("variable");
+        return hasExactKeys(required, {"status", "root", "scale", "confidence", "alternateRoot", "alternateScale", "tuningCents"});
+    }
+    return hasExactKeys(required, {"status", "bpm", "confidence", "stability", "alternatives", "variable"});
 }
 
 bool musicalAnalysisFromJson(const json& value,
@@ -360,8 +387,7 @@ bool musicalAnalysisFromJson(const json& value,
     }
     const json& tempo = value.at("tempo");
     const json& key = value.at("key");
-    if (!hasExactKeys(tempo, {"status", "bpm", "confidence", "stability",
-                              "alternatives", "variable"}) ||
+    if (!analysisExtensions(tempo, false) ||
         !tempo.at("status").is_number_integer() ||
         !tempo.at("bpm").is_number() ||
         !tempo.at("confidence").is_number() ||
@@ -369,9 +395,7 @@ bool musicalAnalysisFromJson(const json& value,
         !tempo.at("alternatives").is_array() ||
         tempo.at("alternatives").size() > 3 ||
         !tempo.at("variable").is_boolean() ||
-        !hasExactKeys(key, {"status", "root", "scale", "confidence",
-                            "alternateRoot", "alternateScale",
-                            "tuningCents"}) ||
+        !analysisExtensions(key, true) ||
         !key.at("status").is_number_integer() ||
         !key.at("root").is_number_integer() ||
         !key.at("scale").is_string() ||
@@ -388,6 +412,10 @@ bool musicalAnalysisFromJson(const json& value,
     analysis.analyzedOffsetSeconds = value.at("offsetSeconds").get<double>();
     analysis.analyzedDurationSeconds =
         value.at("durationSeconds").get<double>();
+    analysis.tempo.algorithmVersion = tempo.value("algorithmVersion", analysis.algorithmVersion);
+    analysis.tempo.calibrated = tempo.value("calibrated", false);
+    analysis.tempo.backend = tempo.value("backend", std::string());
+    analysis.tempo.reason = tempo.value("reason", std::string());
     analysis.tempo.status =
         static_cast<MusicalAnalysisStatus>(tempo.at("status").get<int>());
     analysis.tempo.bpm = tempo.at("bpm").get<double>();
@@ -396,8 +424,13 @@ bool musicalAnalysisFromJson(const json& value,
     analysis.tempo.alternatives =
         tempo.at("alternatives").get<std::vector<double>>();
     analysis.tempo.variable = tempo.at("variable").get<bool>();
+    analysis.key.algorithmVersion = key.value("algorithmVersion", analysis.algorithmVersion);
+    analysis.key.calibrated = key.value("calibrated", false);
+    analysis.key.backend = key.value("backend", std::string());
+    analysis.key.reason = key.value("reason", std::string());
     analysis.key.status =
         static_cast<MusicalAnalysisStatus>(key.at("status").get<int>());
+    analysis.key.variable = key.value("variable", false);
     analysis.key.root = key.at("root").get<int>();
     analysis.key.scale = key.at("scale").get<std::string>();
     analysis.key.confidence = key.at("confidence").get<double>();

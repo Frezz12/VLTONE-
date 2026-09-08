@@ -129,7 +129,7 @@ ContextPanelPage::ContextPanelPage(QWidget* parent) : QWidget(parent) {
               QStringLiteral("plugins/menuGrouping"),
               {{tr("Manufacturer"), QStringLiteral("vendor")},
                {tr("Kind of plugin"), QStringLiteral("category")}},
-              QStringLiteral("vendor"));
+              QStringLiteral("category"));
 
     QList<QPair<QString, QString>> formatChoices;
     auto addFormatChoice = [&formatChoices](daw::plugins::Format format,

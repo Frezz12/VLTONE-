@@ -1,0 +1,13 @@
+torch==2.8.0
+torchaudio==2.8.0
+onnx==1.19.0
+onnxruntime==1.22.0
+nnAudio==0.3.3
+einops==0.8.1
+rotary-embedding-torch==0.8.9
+soxr==0.5.0.post1
+soundfile==0.13.1
+scipy==1.16.1
+beat-this==1.1.0
+numpy==2.5.3
+tqdm==4.67.1

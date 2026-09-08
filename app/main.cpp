@@ -1,5 +1,6 @@
 #include "UiPerformanceChecks.hpp"
 #include "MainWindow.hpp"
+#include "CreateTracksDialog.hpp"
 #include "PatternWindow.hpp"
 #include "SamplerPanel.hpp"
 #include "InternalEditorFrame.hpp"
@@ -38,6 +39,7 @@
 #include "BrowserPrefs.hpp"
 #include "LocalizationManager.hpp"
 #include "NotebookPrefs.hpp"
+#include "QuickImportPrefs.hpp"
 #include "TimelineBackgroundPrefs.hpp"
 #include "ThemeMediaBackground.hpp"
 #include "WaveformPaint.hpp"
@@ -49,8 +51,10 @@
 #include "GlassPanel.hpp"
 #include "Controls.hpp"
 #include "PluginQuickAdder.hpp"
+#include "PluginPickerMenu.hpp"
 #include "ProjectDialogs.hpp"
 #include "Theme.hpp"
+#include "ThemePackage.hpp"
 #include "Typography.hpp"
 
 #include <QApplication>
@@ -65,6 +69,8 @@
 #include <QEventLoop>
 #include <QFileOpenEvent>
 #include <QFileInfo>
+#include <QDateTime>
+#include <QHash>
 #include <QTemporaryDir>
 #include <QWidget>
 #include <QMouseEvent>
@@ -122,8 +128,9 @@ class ProjectOpenFilter : public QObject {
 public:
     using Handler = std::function<void(const QString&)>;
 
-    void setHandler(Handler handler) {
+    void setHandler(Handler handler, const QStringList& commandLinePaths = {}) {
         m_handler = std::move(handler);
+        m_pending.append(commandLinePaths);
         const QStringList pending = std::move(m_pending);
         m_pending.clear();
         for (const QString& path : pending) deliver(path);
@@ -140,14 +147,45 @@ public:
         return true;
     }
 
+    static bool checkDeduplicationForTest() {
+        ProjectOpenFilter filter;
+        int deliveries = 0;
+        const QString path = QDir(QDir::tempPath()).filePath(
+            QString::fromUtf8("VLTONE-быстрый-импорт.wav"));
+        filter.setHandler([&deliveries](const QString&) { ++deliveries; },
+                          {path, QDir::cleanPath(path)});
+        QFileOpenEvent duplicate(path);
+        filter.eventFilter(nullptr, &duplicate);
+        return deliveries == 1;
+    }
+
 private:
+    static QString identity(const QString& path) {
+        const QFileInfo info(path);
+        QString key = info.canonicalFilePath();
+        if (key.isEmpty()) key = QDir::cleanPath(info.absoluteFilePath());
+#if defined(Q_OS_WIN)
+        key = key.toCaseFolded();
+#endif
+        return key;
+    }
+
     void deliver(const QString& path) {
-        if (m_handler) m_handler(path);
-        else m_pending.push_back(path);
+        if (!m_handler) {
+            m_pending.push_back(path);
+            return;
+        }
+        const QString key = identity(path);
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        const auto previous = m_recent.constFind(key);
+        if (previous != m_recent.cend() && now - previous.value() < 1500) return;
+        m_recent.insert(key, now);
+        m_handler(path);
     }
 
     Handler m_handler;
     QStringList m_pending;
+    QHash<QString, qint64> m_recent;
 };
 
 namespace {
@@ -238,6 +276,8 @@ int main(int argc, char** argv) {
     /// The other half of --crashtest: recovers what the fault left behind and
     /// reports what came back.
     bool recovercheck = false;
+    bool trackCreationCheck = false;
+    bool pluginPickerCheck = false;
     const char* screenshotPath = nullptr;
     const char* themeId = nullptr;
     const char* languageLocale = nullptr;
@@ -248,6 +288,8 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--samplercheck") == 0) samplerCheck = true;
         else if (std::strcmp(argv[i], "--patterncheck") == 0) patternCheck = true;
         else if (std::strcmp(argv[i], "--editorcheck") == 0) editorCheck = true;
+        else if (std::strcmp(argv[i], "--trackcreationcheck") == 0) trackCreationCheck = true;
+        else if (std::strcmp(argv[i], "--pluginpickercheck") == 0) pluginPickerCheck = true;
         else if (std::strcmp(argv[i], "--collaboration-selftest") == 0)
             collaborationSelftest = true;
         else if (std::strcmp(argv[i], "--update-selftest") == 0)
@@ -285,7 +327,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    const bool headless = samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
+    const bool headless = pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
                           crashtest || recovercheck;
     if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) {
         QByteArray chromiumFlags;
@@ -450,6 +492,21 @@ int main(int argc, char** argv) {
     if (themeId)
         ThemeManager::instance().setThemeId(QString::fromUtf8(themeId),
                                             /*persist=*/false);
+    if (trackCreationCheck) {
+        daw::EngineController controller;
+        if (!controller.initialize(48000, 256, false)) return 66;
+        return CreateTracksDialog::checkForTest(controller,
+            screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString()) ? 0 : 66;
+    }
+    if (pluginPickerCheck || selftest) {
+        QString error;
+        if (!ui::checkPluginPickerForTest(&error,
+                pluginPickerCheck && screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString())) {
+            std::fprintf(stderr, "plugin picker check failed: %s\n", error.toUtf8().constData());
+            return 67;
+        }
+        if (pluginPickerCheck) return PluginQuickAdder::checkInteractionForTest() ? 0 : 67;
+    }
     if (editorCheck) return InternalEditorFrame::checkPlacementForTest() && PatternWindow::checkEditingForTest() ? 0 : 18;
     if (samplerCheck) return SamplerPanel::checkLayoutForTest() ? 0 : 19;
     if (patternCheck) return PatternWindow::checkEditingForTest() ? 0 : 19;
@@ -466,6 +523,16 @@ int main(int argc, char** argv) {
                          notebookError.toUtf8().constData());
             return 61;
         }
+        QString quickImportError;
+        if (!ui::quickimport::checkPreferencesForTest(&quickImportError)) {
+            std::fprintf(stderr, "quick import preferences check failed: %s\n",
+                         quickImportError.toUtf8().constData());
+            return 62;
+        }
+        if (!ProjectOpenFilter::checkDeduplicationForTest()) {
+            std::fprintf(stderr, "external file routing deduplication failed\n");
+            return 63;
+        }
         QString timelineBackgroundError;
         if (!ui::timelinebackgroundprefs::checkPreferencesForTest(
                 &timelineBackgroundError)) {
@@ -473,6 +540,12 @@ int main(int argc, char** argv) {
                          "timeline background preferences check failed: %s\n",
                          timelineBackgroundError.toUtf8().constData());
             return 62;
+        }
+        QString themePackageError;
+        if (!ui::ThemePackage::checkForTest(&themePackageError)) {
+            std::fprintf(stderr, "portable theme check failed: %s\n",
+                         themePackageError.toUtf8().constData());
+            return 65;
         }
         QString mediaBackgroundError;
         if (!ui::checkThemeMediaBackgroundForTest(&mediaBackgroundError)) {
@@ -923,12 +996,9 @@ int main(int argc, char** argv) {
     }
 
     projectOpenFilter.setHandler(
-        [&window](const QString& path) { window.openProjectPath(path); });
-    if (!headless && !projectArgument.isEmpty()) {
-        QTimer::singleShot(0, &window, [&window, projectArgument] {
-            window.openProjectPath(projectArgument);
-        });
-    }
+        [&window](const QString& path) { window.openExternalPath(path); },
+        !headless && !projectArgument.isEmpty()
+            ? QStringList{projectArgument} : QStringList{});
 
     // DAW_SHOT_PLUGIN_EDITOR names a scanned plugin (substring match): it is
     // loaded onto the first track and its editor opened. The only way to check

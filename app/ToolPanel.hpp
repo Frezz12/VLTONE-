@@ -7,12 +7,12 @@
 
 namespace icons { enum class Glyph; }
 namespace ui { class IconButton; }
+class QToolButton;
 
 /// A toolbar strip under the transport bar, divided into zones that line up
-/// with the columns below it (inspector | tracks | timeline). Each zone holds
-/// small icon buttons: the inspector toggle and an add-track button in their
-/// own columns, and the playback switches (Restart / From clip) over the
-/// timeline — the big territory used for actual arrangement work.
+/// with the columns below it (inspector | tracks | timeline). Arrangement
+/// actions are built here because this object owns their state and signals,
+/// then moved into the ruler above the track headers.
 ///
 /// The context panel floats in the middle of this strip, directly under the
 /// transport's position/tempo readout, so it isn't part of the zone layout —
@@ -22,17 +22,21 @@ class ToolPanel : public QWidget {
 public:
     explicit ToolPanel(QWidget* parent = nullptr);
 
+    /// Move the track actions into the ruler above the track headers. The
+    /// strip keeps an empty track-width zone so its other columns stay aligned.
+    QWidget* takeTrackActions();
+
     void setRestartMode(bool on);
     void setPlayFromClip(bool on);
     void setFollowPlayhead(bool on);
+    void setZoomFocusEnabled(bool on);
     /// Kept for the shell's benefit; the toggle itself is in the header drawer.
     void setInspectorVisible(bool visible);
     /// Sync the left zone width with the inspector column (collapsed/expanded).
     void setInspectorZoneWidth(int width);
     /// The same for the browser column, which can also be resized.
     void setBrowserZoneWidth(int width);
-    /// Keep the playback/automation zone aligned with the resizable track
-    /// header column below it.
+    /// Keep the empty track alignment zone synced with the resizable header.
     void setTrackZoneWidth(int width);
     void setBrowserVisible(bool visible);
     /// Move the browser's zone to whichever end the panel is on, so the strip
@@ -58,6 +62,7 @@ signals:
     void restartModeToggled(bool on);
     void playFromClipToggled(bool on);
     void followPlayheadToggled(bool on);
+    void zoomFocusToggled(bool on);
     /// Display-only scale for audio waveforms in arrangement clips.
     void waveformScaleChanged(double scale);
     /// Global reveal/collapse for automation lanes. Checked is the active
@@ -65,11 +70,7 @@ signals:
     void automationVisibilityToggled(bool visible);
     /// The user clicked the creation-mode button.
     void automationCreationModeToggled(bool enabled);
-    void addTrackRequested();
-    /// Right-click on the "+": the full list of track kinds, folders included.
-    /// A plain click still makes the audio track that is wanted nine times in
-    /// ten; this is where the tenth lives.
-    void addTrackMenuRequested(const QPoint& globalPos);
+    void createTracksRequested();
 
 protected:
     bool event(QEvent*) override;
@@ -88,9 +89,12 @@ private:
     ui::IconButton* m_restart = nullptr;
     ui::IconButton* m_playFromClip = nullptr;
     ui::IconButton* m_followPlayhead = nullptr;
+    ui::IconButton* m_zoomFocus = nullptr;
     ui::IconButton* m_waveformScale = nullptr;
     ui::IconButton* m_createAutomation = nullptr;
     ui::IconButton* m_showAutomation = nullptr;
+    QWidget* m_trackActions = nullptr;
+    ui::IconButton* m_createTrack = nullptr;
     QWidget* m_inspectorZone = nullptr;
     QWidget* m_browserZone = nullptr;
     QWidget* m_browserSeparator = nullptr;

@@ -1,0 +1,174 @@
+{
+  "new": {
+    "files": 127,
+    "failed": 0,
+    "medianSeconds": 0.37477175,
+    "tempo": {
+      "labeled": 121,
+      "correctPrimary": 31,
+      "primaryAccuracy": 0.256198347107438,
+      "confidentCount": 0,
+      "confidentCoverage": 0.0,
+      "confidentAccuracy": null,
+      "confident95Interval": [
+        0,
+        1
+      ],
+      "availableCoverage": 0.9669421487603306,
+      "meanAbsoluteBpmError": 56.71950166018596,
+      "halfTempoErrors": 22,
+      "doubleTempoErrors": 21,
+      "correctAlternativeOnly": 39
+    },
+    "key": {
+      "labeled": 67,
+      "correctPrimary": 34,
+      "primaryAccuracy": 0.5074626865671642,
+      "confidentCount": 0,
+      "confidentCoverage": 0.0,
+      "confidentAccuracy": null,
+      "confident95Interval": [
+        0,
+        1
+      ],
+      "availableCoverage": 0.9402985074626866,
+      "notTonalExamples": 59,
+      "falseKeyPrimary": 41,
+      "confidentFalseKey": 0,
+      "correctAlternativeOnly": 10
+    }
+  },
+  "baseline": {
+    "files": 127,
+    "failed": 0,
+    "medianSeconds": 0.065485041,
+    "tempo": {
+      "labeled": 121,
+      "correctPrimary": 35,
+      "primaryAccuracy": 0.2892561983471074,
+      "confidentCount": 89,
+      "confidentCoverage": 0.7355371900826446,
+      "confidentAccuracy": 0.34831460674157305,
+      "confident95Interval": [
+        0.2574733314684021,
+        0.45170875931848653
+      ],
+      "availableCoverage": 0.9669421487603306,
+      "meanAbsoluteBpmError": 27.499682170940172,
+      "halfTempoErrors": 6,
+      "doubleTempoErrors": 10,
+      "correctAlternativeOnly": 13
+    },
+    "key": {
+      "labeled": 67,
+      "correctPrimary": 30,
+      "primaryAccuracy": 0.44776119402985076,
+      "confidentCount": 26,
+      "confidentCoverage": 0.3880597014925373,
+      "confidentAccuracy": 0.6923076923076923,
+      "confident95Interval": [
+        0.5001138848576876,
+        0.8349887906020732
+      ],
+      "availableCoverage": 1.0,
+      "notTonalExamples": 59,
+      "falseKeyPrimary": 59,
+      "confidentFalseKey": 10,
+      "correctAlternativeOnly": 12
+    }
+  },
+  "equalCoverage": {
+    "tempo": {
+      "baseline": {
+        "0.1": {
+          "count": 13,
+          "precision": 0.5384615384615384
+        },
+        "0.25": {
+          "count": 31,
+          "precision": 0.5483870967741935
+        },
+        "0.5": {
+          "count": 61,
+          "precision": 0.4098360655737705
+        },
+        "0.75": {
+          "count": 91,
+          "precision": 0.3516483516483517
+        },
+        "1": {
+          "count": 121,
+          "precision": 0.2892561983471074
+        }
+      },
+      "new": {
+        "0.1": {
+          "count": 13,
+          "precision": 0.6153846153846154
+        },
+        "0.25": {
+          "count": 31,
+          "precision": 0.45161290322580644
+        },
+        "0.5": {
+          "count": 61,
+          "precision": 0.39344262295081966
+        },
+        "0.75": {
+          "count": 91,
+          "precision": 0.31868131868131866
+        },
+        "1": {
+          "count": 121,
+          "precision": 0.256198347107438
+        }
+      }
+    },
+    "key": {
+      "baseline": {
+        "0.1": {
+          "count": 7,
+          "precision": 0.8571428571428571
+        },
+        "0.25": {
+          "count": 17,
+          "precision": 0.7647058823529411
+        },
+        "0.5": {
+          "count": 34,
+          "precision": 0.5588235294117647
+        },
+        "0.75": {
+          "count": 51,
+          "precision": 0.49019607843137253
+        },
+        "1": {
+          "count": 67,
+          "precision": 0.44776119402985076
+        }
+      },
+      "new": {
+        "0.1": {
+          "count": 7,
+          "precision": 0.8571428571428571
+        },
+        "0.25": {
+          "count": 17,
+          "precision": 0.7647058823529411
+        },
+        "0.5": {
+          "count": 34,
+          "precision": 0.6176470588235294
+        },
+        "0.75": {
+          "count": 51,
+          "precision": 0.5490196078431373
+        },
+        "1": {
+          "count": 67,
+          "precision": 0.5074626865671642
+        }
+      }
+    }
+  }
+}

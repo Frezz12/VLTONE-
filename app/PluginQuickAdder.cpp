@@ -2,6 +2,7 @@
 
 #include "EngineController.hpp"
 #include "PluginFormatPreference.hpp"
+#include "PluginPickerMenu.hpp"
 #include "Theme.hpp"
 
 #include <QApplication>
@@ -555,12 +556,7 @@ void PluginQuickAdder::toggleFavorite(const Entry& entry) {
 
 void PluginQuickAdder::rememberRecent(
     const daw::plugins::PluginDescriptor& descriptor) {
-    QStringList saved = QSettings().value("contextPanel/pluginRecent").toStringList();
-    const QString uid = uidOf(descriptor);
-    saved.removeAll(uid);
-    saved.prepend(uid);
-    while (saved.size() > 5) saved.removeLast();
-    QSettings().setValue("contextPanel/pluginRecent", saved);
+    ui::rememberRecentPlugin(descriptor);
 }
 
 void PluginQuickAdder::insertCurrent(bool openEditor, bool keepOpen) {

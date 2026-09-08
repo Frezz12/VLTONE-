@@ -23,6 +23,10 @@ std::vector<plugins::PluginDescriptor> preferredPluginVariants(
     std::vector<plugins::PluginDescriptor> descriptors,
     plugins::Format preferredFormat);
 
+/// The same product identity used for format de-duplication in the picker.
+bool samePluginProduct(const plugins::PluginDescriptor& a,
+                       const plugins::PluginDescriptor& b);
+
 /// Search paths, the scan, the cache and the blacklist.
 ///
 /// Framework-agnostic, like the rest of `controller/`: the scan runs on a plain

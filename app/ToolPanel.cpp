@@ -12,6 +12,8 @@
 #include <QPainter>
 #include <QResizeEvent>
 #include <QSignalBlocker>
+#include <QSizePolicy>
+#include <QToolButton>
 
 #include <algorithm>
 #include <cmath>
@@ -163,19 +165,20 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     auto* tz = new QHBoxLayout(m_trackZone);
     tz->setContentsMargins(2, 0, 2, 0);
     tz->setSpacing(2);
-    auto* addTrack = new ui::IconButton(
-        icons::Glyph::Plus,
-        tr("Add an audio track — right-click for MIDI, instrument, bus and "
-           "folder tracks"),
-        m_trackZone);
-    addTrack->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(addTrack, &QAbstractButton::clicked, this,
-            &ToolPanel::addTrackRequested);
-    connect(addTrack, &QWidget::customContextMenuRequested, this,
-            [this, addTrack](const QPoint& pos) {
-                emit addTrackMenuRequested(addTrack->mapToGlobal(pos));
-            });
-    tz->addWidget(addTrack);
+    m_trackActions = new QWidget(m_trackZone);
+    m_trackActions->setObjectName(QStringLiteral("TrackRulerActions"));
+    m_trackActions->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    auto* actions = new QHBoxLayout(m_trackActions);
+    actions->setContentsMargins(0, 0, 0, 0);
+    actions->setSpacing(1);
+
+    m_createTrack = new ui::IconButton(icons::Glyph::Plus, tr("Create tracks…"), m_trackActions);
+    m_createTrack->setObjectName(QStringLiteral("TrackCreateButton"));
+    m_createTrack->setFixedSize(22, 22);
+    m_createTrack->setFocusPolicy(Qt::StrongFocus);
+    m_createTrack->setAccessibleName(tr("Create tracks"));
+    connect(m_createTrack, &QAbstractButton::clicked, this, &ToolPanel::createTracksRequested);
+    actions->addWidget(m_createTrack);
 
     // The two playback switches live here, next to the add-track button and
     // directly above the header column's own M and S chips — *not* over the
@@ -184,14 +187,14 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     // because a plate is parked on it is not a switch.
     m_restart = new ui::IconButton(
         icons::Glyph::Restart,
-        tr("Restart: Space starts from the anchored spot"), m_trackZone);
+        tr("Restart: Space starts from the anchored spot"), m_trackActions);
     m_restart->setCheckable(true);
     connect(m_restart, &QAbstractButton::toggled, this,
             &ToolPanel::restartModeToggled);
 
     m_playFromClip = new ui::IconButton(
         icons::Glyph::ClipLoop,
-        tr("From clip: Space plays the selected clip over and over"), m_trackZone);
+        tr("From clip: Space plays the selected clip over and over"), m_trackActions);
     m_playFromClip->setCheckable(true);
     connect(m_playFromClip, &QAbstractButton::toggled, this,
             &ToolPanel::playFromClipToggled);
@@ -199,7 +202,7 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     m_createAutomation = new ui::IconButton(
         icons::Glyph::AutomationCreate,
         tr("Create automation: click to enable, then double-click a parameter"),
-        m_trackZone);
+        m_trackActions);
     m_createAutomation->setObjectName(QStringLiteral("AutomationCreateMode"));
     m_createAutomation->setCheckable(true);
     m_createAutomation->setAccessibleName(tr("Create automation clips"));
@@ -208,7 +211,7 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
 
     m_showAutomation = new ui::IconButton(
         icons::Glyph::Automation,
-        tr("Show or hide automation lanes for all tracks"), m_trackZone);
+        tr("Show or hide automation lanes for all tracks"), m_trackActions);
     m_showAutomation->setCheckable(true);
     m_showAutomation->setAccessibleName(
         tr("Show or hide automation lanes for all tracks"));
@@ -218,18 +221,32 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     m_followPlayhead = new ui::IconButton(
         icons::Glyph::SkipEnd,
         tr("Follow the playhead — P centres it; press again to navigate freely"),
-        m_trackZone);
+        m_trackActions);
     m_followPlayhead->setObjectName(QStringLiteral("FollowPlayheadButton"));
     m_followPlayhead->setCheckable(true);
     m_followPlayhead->setAccessibleName(tr("Follow the playhead"));
     connect(m_followPlayhead, &QAbstractButton::toggled, this,
             &ToolPanel::followPlayheadToggled);
 
-    tz->addWidget(m_restart);
-    tz->addWidget(m_playFromClip);
-    tz->addWidget(m_createAutomation);
-    tz->addWidget(m_showAutomation);
-    tz->addWidget(m_followPlayhead);
+    m_zoomFocus = new ui::IconButton(
+        icons::Glyph::Crosshair,
+        tr("Zoom focus: selected clips, otherwise the playhead; turn off to zoom under the pointer"),
+        m_trackActions);
+    m_zoomFocus->setObjectName(QStringLiteral("ZoomFocusButton"));
+    m_zoomFocus->setCheckable(true);
+    m_zoomFocus->setAccessibleName(
+        tr("Centre zoom on selected clips or the playhead"));
+    connect(m_zoomFocus, &QAbstractButton::toggled, this,
+            &ToolPanel::zoomFocusToggled);
+
+    for (ui::IconButton* button : {m_restart, m_playFromClip,
+                                   m_createAutomation, m_showAutomation,
+                                   m_followPlayhead, m_zoomFocus}) {
+        button->setButtonSize(22, 22);
+        actions->addWidget(button);
+    }
+    actions->addStretch(1);
+    tz->addWidget(m_trackActions);
     tz->addStretch(1);
     m_trackZone->setFixedWidth(ui::kTrackHeaderWidth);
     row->addWidget(m_trackZone);
@@ -260,6 +277,15 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     applyTheme();
 }
 
+QWidget* ToolPanel::takeTrackActions() {
+    if (!m_trackActions) return nullptr;
+    if (m_trackZone && m_trackZone->layout())
+        m_trackZone->layout()->removeWidget(m_trackActions);
+    QWidget* actions = m_trackActions;
+    actions->setParent(nullptr);
+    return actions;
+}
+
 void ToolPanel::setRestartMode(bool on) {
     if (m_restart && m_restart->isChecked() != on) m_restart->setChecked(on);
 }
@@ -273,6 +299,12 @@ void ToolPanel::setFollowPlayhead(bool on) {
     if (!m_followPlayhead || m_followPlayhead->isChecked() == on) return;
     QSignalBlocker blocker(m_followPlayhead);
     m_followPlayhead->setChecked(on);
+}
+
+void ToolPanel::setZoomFocusEnabled(bool on) {
+    if (!m_zoomFocus || m_zoomFocus->isChecked() == on) return;
+    QSignalBlocker blocker(m_zoomFocus);
+    m_zoomFocus->setChecked(on);
 }
 
 void ToolPanel::setAutomationVisible(bool visible) {
@@ -442,6 +474,7 @@ void ToolPanel::applyTheme() {
         m_followPlayhead->setIcon(
             icons::svgIcon(QStringLiteral("signpost.svg"), t.textPrimary, 18));
     }
+    if (m_zoomFocus) m_zoomFocus->setActiveColor(t.cursor);
     setStyleSheet(QString(
         "#ToolPanel { background: %1; border-bottom: 1px solid %2; }")
                       .arg(t.headerBackground.name(), t.sectionDivider().name()));

@@ -22,7 +22,10 @@ bool webUrl(const QUrl& url) {
 QString literal(const QString& value) {
     return QString::fromUtf8(QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact)).mid(1).chopped(1);
 }
-struct FrameEntry { QWebEngineFrame frame; QList<int> path; };
+struct FrameEntry {
+    std::optional<QWebEngineFrame> frame;
+    QList<int> path;
+};
 void collectFrames(QWebEngineFrame frame, QList<int> path, QList<FrameEntry>& entries) {
     if (!frame.isValid() || entries.size() >= 64 || path.size() > 16) return;
     entries.append({frame, path});
@@ -90,7 +93,8 @@ void discoverWebVideos(QWebEnginePage* page, QObject* context,
     const QUrl pageUrl = page->url();
     const QString pageTitle = page->title();
     for (auto entry : frames) {
-        entry.frame.runJavaScript(QStringLiteral(R"JS(
+        if (!entry.frame) return;
+        entry.frame->runJavaScript(QStringLiteral(R"JS(
 (() => Array.from(document.querySelectorAll('video')).slice(0,64).map((v,i) => {
  const r=v.getBoundingClientRect();
  if (!v.__vltVideoToken) v.__vltVideoToken='vlt-'+Math.random().toString(36).slice(2);
@@ -106,14 +110,14 @@ void discoverWebVideos(QWebEnginePage* page, QObject* context,
                 // the derived destructor runs; even querying page/view URLs
                 // from that callback can recreate a page inside its teardown.
                 if (!value.isValid() || !guard || !pageGuard) return;
-                if (entry.frame.isValid() && pageGuard->url() == pageUrl) {
+                if (entry.frame && entry.frame->isValid() && pageGuard->url() == pageUrl) {
                     for (const auto& item : value.toList()) {
                         const auto map = item.toMap();
                         WebVideoSource source;
                         source.pageUrl = pageUrl;
-                        source.frameUrl = entry.frame.url();
+                        source.frameUrl = entry.frame->url();
                         source.framePath = entry.path;
-                        source.frame = entry.frame;
+                        source.frame = *entry.frame;
                         source.elementId = map.value("id").toString();
                         source.mediaUrl = map.value("src").toString();
                         source.token = map.value("token").toString();

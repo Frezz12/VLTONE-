@@ -3,6 +3,7 @@
 #include "Common/Types.hpp"
 #include "DSP/Simd.hpp"
 #include "Graph/Node.hpp"
+#include "Graph/AudioGraph.hpp"
 
 #include <algorithm>
 #include <string>
@@ -35,6 +36,13 @@ public:
     std::string_view name() const noexcept override { return m_name; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
 
+    /// Control thread, after final offline graph preparation. Delay the
+    /// captured copy only: the tap remains a leaf and cannot alter the mix.
+    void setCaptureDelay(FrameCount samples) {
+        m_captureDelaySamples = samples;
+        m_captureDelay.prepare(m_channels, samples, m_capacity);
+    }
+
     void prepare(const PrepareInfo& info) override {
         m_channels = info.channels;
         m_capacity = info.maxBlockSize;
@@ -44,11 +52,13 @@ public:
             m_pointers[channel] = m_storage.data() + std::size_t(channel) * m_capacity;
         }
         m_frames = 0;
+        m_captureDelay.prepare(m_channels, m_captureDelaySamples, m_capacity);
     }
 
     void reset() override {
         std::fill(m_storage.begin(), m_storage.end(), 0.0f);
         m_frames = 0;
+        m_captureDelay.reset();
     }
 
     void process(const ProcessContext& context) override {
@@ -59,6 +69,7 @@ public:
         // node with several producers presents them as separate input blocks.
         AudioBlock capture(m_pointers.data(), m_channels, context.frames);
         dsp::sumInto(capture, context.inputs);
+        if (m_captureDelaySamples) m_captureDelay.process(capture, capture, context.frames);
         m_frames = context.frames;
 
         // The node's own output buffer is never read by anyone — nothing
@@ -84,6 +95,8 @@ private:
     ChannelCount m_channels = 0;
     FrameCount m_capacity = 0;
     FrameCount m_frames = 0;
+    FrameCount m_captureDelaySamples = 0;
+    EdgeDelay m_captureDelay;
 };
 
 } // namespace daw::engine

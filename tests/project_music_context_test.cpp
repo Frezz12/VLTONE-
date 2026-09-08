@@ -79,6 +79,10 @@ int main() {
     beat.startSeconds = 2.0;
     beat.durationSeconds = 2.0;
     beat.musicalAnalysis.algorithmVersion = 3;
+    beat.musicalAnalysis.tempo.algorithmVersion = 2;
+    beat.musicalAnalysis.tempo.calibrated = true;
+    beat.musicalAnalysis.key.algorithmVersion = 1;
+    beat.musicalAnalysis.key.variable = true;
     beat.musicalAnalysis.tempo.status =
         daw::MusicalAnalysisStatus::Available;
     beat.musicalAnalysis.tempo.bpm = 126.0;
@@ -159,6 +163,11 @@ int main() {
 
     check(context.audioClips.size() == 1 &&
               context.audioClips.front().algorithmVersion == 3 &&
+              context.audioClips.front().tempoAlgorithmVersion == 2 &&
+              context.audioClips.front().keyAlgorithmVersion == 1 &&
+              context.audioClips.front().tempoCalibrated &&
+              !context.audioClips.front().keyCalibrated &&
+              context.audioClips.front().variableKey &&
               context.audioClips.front().tempoStatus == "available" &&
               near(context.audioClips.front().bpm, 126.0) &&
               context.audioClips.front().keyStatus == "ambiguous" &&
@@ -171,6 +180,11 @@ int main() {
               json["globalKey"]["source"] == "project" &&
               json["tracks"][0]["activity"]["polyphony"]["max"] == 3 &&
               json["audioClips"][0]["tempo"]["bpm"] == 126.0 &&
+              json["audioClips"][0]["tempo"]["algorithmVersion"] == 2 &&
+              json["audioClips"][0]["tempo"]["calibrated"] == true &&
+              json["audioClips"][0]["key"]["algorithmVersion"] == 1 &&
+              json["audioClips"][0]["key"]["calibrated"] == false &&
+              json["audioClips"][0]["key"]["variable"] == true &&
               json["chords"][0]["chordToneNames"] ==
                   nlohmann::json::array({"C", "E", "G"}),
           "the compact JSON form is ready for an AI tool result");

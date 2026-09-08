@@ -51,6 +51,20 @@ else()
     target_compile_options(daw_vst3_pluginterfaces PRIVATE -w)
 endif()
 
+# ── RtMidi (macOS CoreMIDI error handling) ──
+if(APPLE)
+    # RtMidi 6's CoreMIDI helper throws through throw(), terminating the host
+    # before its RtMidiError handler can run. Always link the corrected copy on
+    # macOS, including packaged builds; a readiness probe cannot fix that ABI.
+    add_library(daw_rtmidi STATIC rtmidi/RtMidi.cpp)
+    add_library(RtMidi::rtmidi ALIAS daw_rtmidi)
+    target_include_directories(daw_rtmidi SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(daw_rtmidi PRIVATE __MACOSX_CORE__)
+    target_link_libraries(daw_rtmidi PUBLIC
+        "-framework CoreMIDI" "-framework CoreAudio" "-framework CoreFoundation")
+    target_compile_options(daw_rtmidi PRIVATE -Wno-deprecated-declarations)
+endif()
+
 # ── nlohmann/json ──
 # Not vendored: it ships with vcpkg on Windows and Homebrew on macOS. Wrapped in
 # one target because three separate places now need it — the project format, the

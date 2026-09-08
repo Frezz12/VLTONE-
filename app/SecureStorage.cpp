@@ -5,7 +5,15 @@
 #include <wincred.h>
 #elif defined(Q_OS_MACOS)
 #include <Security/Security.h>
+#include <QDir>
+#include <QFile>
+#include <QStandardPaths>
+#include <QUuid>
+#include <cerrno>
+#include <fcntl.h>
 #include <mutex>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 namespace account::securestorage {
@@ -58,6 +66,87 @@ bool clearNamed(const QString& name, Interaction) {
 
 #elif defined(Q_OS_MACOS)
 namespace {
+// The account session intentionally uses a local, unencrypted file on macOS.
+// Never consult the old Keychain slot, including after logout or a missing file.
+// Named AI keys below retain their existing vault backend.
+class FileDescriptor {
+public:
+    explicit FileDescriptor(int value) : value(value) {}
+    ~FileDescriptor() { if (value >= 0) ::close(value); }
+    FileDescriptor(const FileDescriptor&) = delete;
+    FileDescriptor& operator=(const FileDescriptor&) = delete;
+    const int value;
+};
+
+int sessionDirectory(bool create) {
+    const QString root = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (root.isEmpty()) { errno = EACCES; return -1; }
+    if (create && !QDir().mkpath(root)) { errno = EACCES; return -1; }
+    const auto path = QFile::encodeName(QDir(root).filePath(QStringLiteral("credentials")));
+    if (create && ::mkdir(path.constData(), 0700) != 0 && errno != EEXIST) return -1;
+    FileDescriptor directory(::open(path.constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+    if (directory.value < 0) return -1;
+    struct stat info{};
+    if (::fstat(directory.value, &info) != 0 || info.st_uid != ::geteuid() ||
+        ::fchmod(directory.value, 0700) != 0) {
+        errno = EACCES;
+        return -1;
+    }
+    return ::fcntl(directory.value, F_DUPFD_CLOEXEC, 0);
+}
+
+constexpr auto kSessionFile = "desktop-session.json";
+constexpr qint64 kMaxSessionBytes = 1024 * 1024;
+
+QByteArray readLocalSession() {
+    readUnavailable = false;
+    FileDescriptor directory(sessionDirectory(false));
+    if (directory.value < 0) { readUnavailable = errno != ENOENT; return {}; }
+    FileDescriptor descriptor(::openat(directory.value, kSessionFile,
+        O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC));
+    if (descriptor.value < 0) { readUnavailable = errno != ENOENT; return {}; }
+    struct stat info{};
+    if (::fstat(descriptor.value, &info) != 0 || !S_ISREG(info.st_mode) ||
+        info.st_uid != ::geteuid() || info.st_nlink != 1 ||
+        info.st_size <= 0 || info.st_size > kMaxSessionBytes ||
+        ::fchmod(descriptor.value, 0600) != 0) {
+        readUnavailable = true;
+        return {};
+    }
+    QFile file;
+    if (!file.open(descriptor.value, QIODevice::ReadOnly)) { readUnavailable = true; return {}; }
+    const auto value = file.read(kMaxSessionBytes + 1);
+    readUnavailable = file.error() != QFileDevice::NoError || value.size() != info.st_size;
+    return readUnavailable ? QByteArray{} : value;
+}
+
+bool writeLocalSession(const QByteArray& value) {
+    if (value.isEmpty() || value.size() > kMaxSessionBytes) return false;
+    FileDescriptor directory(sessionDirectory(true));
+    if (directory.value < 0) return false;
+    const auto temporary = QByteArray(".session-") + QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
+    FileDescriptor descriptor(::openat(directory.value, temporary.constData(),
+        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
+    if (descriptor.value < 0) return false;
+    QFile file;
+    // Sync the complete replacement before publishing it. A failed write must
+    // leave the previous refresh token (and retry request ID) intact.
+    const bool saved = ::fchmod(descriptor.value, 0600) == 0 &&
+        file.open(descriptor.value, QIODevice::WriteOnly) &&
+        file.write(value) == value.size() && file.flush() &&
+        ::fsync(descriptor.value) == 0 &&
+        ::renameat(directory.value, temporary.constData(), directory.value, kSessionFile) == 0;
+    if (!saved) ::unlinkat(directory.value, temporary.constData(), 0);
+    return saved && ::fsync(directory.value) == 0;
+}
+
+bool clearLocalSession() {
+    FileDescriptor directory(sessionDirectory(false));
+    if (directory.value < 0) return errno == ENOENT;
+    if (::unlinkat(directory.value, kSessionFile, 0) != 0) return errno == ENOENT;
+    return ::fsync(directory.value) == 0;
+}
+
 // These records live in the legacy login keychain. The per-query Data
 // Protection authentication flags do not suppress its access dialogs.
 // Scope the legacy process-wide flag to each synchronous operation and
@@ -108,6 +197,7 @@ CFMutableDictionaryRef baseQuery(const QString& name) {
 }
 
 bool writeNamed(const QString& name, const QByteArray& value, Interaction interaction) {
+    if (name == kAccountSlot) return writeLocalSession(value);
     if (value.isEmpty()) return false;
     KeychainInteractionScope scope(interaction);
     if (!scope.ready()) return false;
@@ -151,6 +241,7 @@ bool writeNamed(const QString& name, const QByteArray& value, Interaction intera
 }
 
 QByteArray readNamed(const QString& name, Interaction interaction) {
+    if (name == kAccountSlot) return readLocalSession();
     readUnavailable = false;
     KeychainInteractionScope scope(interaction);
     if (!scope.ready()) { readUnavailable = true; return {}; }
@@ -173,6 +264,7 @@ QByteArray readNamed(const QString& name, Interaction interaction) {
 }
 
 bool clearNamed(const QString& name, Interaction interaction) {
+    if (name == kAccountSlot) return clearLocalSession();
     KeychainInteractionScope scope(interaction);
     if (!scope.ready()) return false;
     CFMutableDictionaryRef query = baseQuery(name);

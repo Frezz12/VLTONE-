@@ -19,6 +19,7 @@ enum class DetectionStatus : std::uint8_t {
 };
 
 struct TempoEstimate {
+    int algorithmVersion = 2;
     DetectionStatus status = DetectionStatus::Unavailable;
     double bpm = 0.0;
     double confidence = 0.0;
@@ -26,14 +27,16 @@ struct TempoEstimate {
     std::vector<double> alternatives;
     bool variable = false;
     std::string reason;
+    std::string backend = "dsp";
+    bool calibrated = false;
+    /// Uncalibrated evidence, retained for reproducible offline calibration.
+    double evidence = 0.0;
 
-    bool highConfidence() const noexcept {
-        return status == DetectionStatus::Available && confidence >= 0.82 &&
-               stability >= 0.85 && !variable;
-    }
+    bool highConfidence() const noexcept;
 };
 
 struct KeyEstimate {
+    int algorithmVersion = 2;
     DetectionStatus status = DetectionStatus::Unavailable;
     int root = -1;                 // pitch class, C = 0
     std::string scale;             // "major", "natural_minor", or empty
@@ -42,14 +45,19 @@ struct KeyEstimate {
     std::string alternateScale;
     double tuningCents = 0.0;
     std::string reason;
+    std::string backend = "hpcp";
+    bool calibrated = false;
+    bool variable = false;
+    double evidence = 0.0;
+    /// Canonical C-based order: 12 major classes followed by 12 minor classes.
+    std::vector<double> profileScores;
+    std::vector<double> neuralScores;
 
-    bool highConfidence() const noexcept {
-        return status == DetectionStatus::Available && confidence >= 0.75;
-    }
+    bool highConfidence() const noexcept;
 };
 
 struct MusicalAnalysisResult {
-    static constexpr int kAlgorithmVersion = 1;
+    static constexpr int kAlgorithmVersion = 2;
     int algorithmVersion = kAlgorithmVersion;
     TempoEstimate tempo;
     KeyEstimate key;
@@ -66,8 +74,10 @@ struct MusicalAnalysisRequest {
     /// changing the source samples we inspect.
     double stretchTime = 1.0;
     double pitchShiftSemitones = 0.0;
-    /// Optional weak prior, used only when a token agrees with audio evidence.
+    /// Kept for source compatibility. Version 2 never uses filename hints.
     std::string fileNameHint;
+    /// Deterministic DSP-only execution for diagnostics and fallback testing.
+    bool useNeuralModels = true;
 };
 
 /// Return false from progress to cancel. Progress is 0...1 and the phase is a
@@ -92,6 +102,16 @@ audio::Result analyzeAudioSamples(const float* interleaved,
 std::string pitchClassName(int root);
 std::string keyDisplayName(const KeyEstimate& key);
 std::string camelotName(int root, const std::string& scale);
+
+/// Shared confidence policy for stored clip results and every application path.
+bool highConfidence(const ClipTempoAnalysisModel& tempo) noexcept;
+bool highConfidence(const ClipKeyAnalysisModel& key) noexcept;
+
+/// The one rounding policy for every detected-tempo display and application.
+/// Returns 0 for non-finite, non-positive or unrepresentable input.
+int roundedBpm(double bpm) noexcept;
+/// Rounded, unique candidates that can be applied to the project (1...999).
+std::vector<int> applicableTempos(const TempoEstimate& tempo);
 
 ClipMusicalAnalysisModel toClipAnalysisModel(
     const MusicalAnalysisResult& result,

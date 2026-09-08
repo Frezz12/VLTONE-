@@ -374,13 +374,24 @@ int main() {
                   std::fabs(latest.tracks[1].pan - (-0.4f + 0.001f * 199)) < 1e-5f,
               "the newest edit is what landed on disk");
 
-        // The heartbeat the watchdog reads must actually advance.
+        // The journal worker stays alive without claiming that the UI does.
         daw::recovery::SessionInfo first;
         daw::recovery::readSession(session.string(), first);
         std::this_thread::sleep_for(std::chrono::milliseconds(1200));
         daw::recovery::SessionInfo second;
         daw::recovery::readSession(session.string(), second);
         check(second.heartbeat > first.heartbeat, "the heartbeat advances");
+        check(first.uiHeartbeatTracked && second.uiHeartbeatTracked &&
+              second.uiHeartbeat == first.uiHeartbeat,
+              "worker heartbeats cannot impersonate UI activity");
+        journal.noteUiActivity();
+        journal.requestWrite(ctrl.project());
+        journal.flush();
+        daw::recovery::SessionInfo uiUpdated;
+        daw::recovery::readSession(session.string(), uiUpdated);
+        check(uiUpdated.uiHeartbeat == second.uiHeartbeat + 1 &&
+              uiUpdated.uiHeartbeatUnixMs >= second.uiHeartbeatUnixMs,
+              "only the UI acknowledgement advances its heartbeat");
         check(second.projectPath == (dir / "song.vlt").string(),
               "the session records where the project lives");
 
@@ -1198,6 +1209,56 @@ int main() {
         fs::remove_all(session);
         ::close(parentEnd);
         reapedWithin(guardPid, 5000);
+#else
+        (void)guardPid; (void)parentEnd;
+#endif
+    }
+
+    // Reproduce the September 8 report: the journal keeps ticking while its
+    // UI caller never returns. A worker heartbeat must not hide this hang, and
+    // its session writes must not erase the watchdog's independent verdict.
+    {
+        const fs::path root = dir / "guard-ui-hang";
+        daw::recovery::RecoveryJournal journal;
+        check(journal.start(root.string(), "ui-hang-test", std::chrono::milliseconds(10)),
+              "UI-hang journal starts");
+        journal.noteUiActivity();
+        journal.requestWrite(ctrl.project()); journal.flush();
+        const auto session = journal.sessionDir();
+        daw::recovery::SessionInfo initial;
+        daw::recovery::readSession(session, initial);
+        int parentEnd = -1;
+        const auto guardPid = daw::ScanProcess::spawnDetached(
+            DAW_GUARD_PATH, {"--session", session, "--pid", std::to_string(initial.pid), "--hang-seconds", "2"},
+            &parentEnd);
+        bool sawHang = false;
+        for (int i = 0; i < 70 && !sawHang; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            daw::recovery::SessionInfo after;
+            if (daw::recovery::readSession(session, after))
+                sawHang = after.outcome == daw::recovery::Outcome::Hung &&
+                    after.heartbeat > initial.heartbeat && after.uiHeartbeat == initial.uiHeartbeat;
+        }
+        check(sawHang, "a real journal worker does not hide its frozen UI caller");
+        journal.requestWrite(ctrl.project()); journal.flush();
+        daw::recovery::SessionInfo afterWrite;
+        check(daw::recovery::readSession(session, afterWrite) &&
+              afterWrite.outcome == daw::recovery::Outcome::Hung,
+              "journal writes cannot erase the independent hang verdict");
+        bool recovered = false;
+        for (int i = 0; i < 40 && !recovered; ++i) {
+            journal.noteUiActivity();
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            daw::recovery::SessionInfo after;
+            recovered = daw::recovery::readSession(session, after) &&
+                after.outcome == daw::recovery::Outcome::Running &&
+                !fs::exists(daw::platform::pathFromUtf8(session) / daw::recovery::kWatchdogFile);
+        }
+        check(recovered, "resumed UI clears the hang while the worker continues normally");
+        journal.stop();
+#if !defined(_WIN32)
+        if (parentEnd >= 0) ::close(parentEnd);
+        check(reapedWithin(guardPid, 5000), "UI-hang guard exits cleanly");
 #else
         (void)guardPid; (void)parentEnd;
 #endif

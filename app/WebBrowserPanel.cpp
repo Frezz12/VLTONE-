@@ -492,9 +492,9 @@ void WebBrowserPanel::chooseBackgroundVideo() {
     ui::discoverWebVideos(target->page(), this, [this, target, url](const QList<ui::WebVideoSource>& videos) {
         if (!target || view() != target || target->url() != url) return;
         const auto request = [this, target, url](ui::WebVideoSource source) {
-            if (!target || target->url() != url || !source.frame.isValid()) return;
+            if (!target || target->url() != url || !source.frame || !source.frame->isValid()) return;
             const QPointer<WebBrowserPanel> guard(this);
-            source.frame.runJavaScript(QStringLiteral("(()=>{const v=%1;return v? v.currentTime : -1})()")
+            source.frame->runJavaScript(QStringLiteral("(()=>{const v=%1;return v? v.currentTime : -1})()")
                 .arg(ui::webVideoLookupScript(source)), QWebEngineScript::ApplicationWorld,
                 [guard, target, url, source](const QVariant& value) mutable {
                     if (!guard || !target || target->url() != url || !value.isValid() || value.toDouble() < 0) return;

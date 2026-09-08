@@ -63,25 +63,24 @@ public:
     /// Rebuild from scratch — used when the tool profiles change.
     void rebuild();
 
-    /// Re-centre the plate after the arrangement resizes.
+    /// Re-centre the plate after the header or arrangement resizes.
     void relayout();
 
     /// Where the plate should sit, asked rather than pushed.
     ///
     /// Fills `centreX` — in this widget's parent's coordinates — and returns
     /// true when the selected clips have a horizontal extent. Asked only for
-    /// clip contexts; tracks and recording return to the middle of the
-    /// available strip even if the timeline still remembers a clip selection.
+    /// clip contexts; tracks and recording return under the transport/header
+    /// centre even if the timeline still remembers a clip selection.
     ///
     /// A callback rather than a setter on purpose: the plate recomputes its
     /// geometry from inside a selection change, and a value pushed afterwards
     /// would arrive one step too late.
     void setAnchorProvider(std::function<bool(int&)> provider);
 
-    /// The stretch of the strip the plate may occupy, in the strip's own
-    /// coordinates: the arrangement's own left and right edges. Without it the
-    /// plate is free to sit over the track headers, the browser or the
-    /// inspector — none of which it says anything about.
+    /// The stretch a clip-following plate may occupy, in the strip's own
+    /// coordinates: the arrangement's left and right edges. Stable non-clip
+    /// contexts deliberately use the complete transport/header width.
     void setBoundsProvider(std::function<bool(int&, int&)> provider);
 
     /// Re-read the anchor and slide if it moved. Called from the UI tick, so

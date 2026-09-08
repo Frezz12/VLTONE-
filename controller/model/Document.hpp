@@ -375,6 +375,10 @@ enum class MusicalAnalysisStatus : uint8_t {
 /// clip rather than the source file: two trims of one WAV can contain different
 /// sections and a pitch/stretch edit changes the answer of only one instance.
 struct ClipTempoAnalysisModel {
+    int algorithmVersion = 0;
+    bool calibrated = false;
+    std::string backend;
+    std::string reason;
     MusicalAnalysisStatus status = MusicalAnalysisStatus::Unavailable;
     double bpm = 0.0;
     double confidence = 0.0;
@@ -384,6 +388,11 @@ struct ClipTempoAnalysisModel {
 };
 
 struct ClipKeyAnalysisModel {
+    int algorithmVersion = 0;
+    bool calibrated = false;
+    std::string backend;
+    std::string reason;
+    bool variable = false;
     MusicalAnalysisStatus status = MusicalAnalysisStatus::Unavailable;
     int root = -1;
     std::string scale;

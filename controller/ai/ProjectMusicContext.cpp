@@ -229,6 +229,11 @@ AudioClipAnalysisSummary audioAnalysis(const TrackModel& track,
     out.trackId = track.id;
     out.clipId = clip.id;
     out.algorithmVersion = stored.algorithmVersion;
+    out.tempoAlgorithmVersion = stored.tempo.algorithmVersion;
+    out.keyAlgorithmVersion = stored.key.algorithmVersion;
+    out.tempoCalibrated = stored.tempo.calibrated;
+    out.keyCalibrated = stored.key.calibrated;
+    out.variableKey = stored.key.variable;
     out.tempoStatus = analysisStatus(stored.tempo.status);
     out.bpm = stored.tempo.bpm;
     out.tempoConfidence = stored.tempo.confidence;
@@ -507,7 +512,10 @@ nlohmann::json ProjectMusicContext::toJson() const {
 
     json audioJson = json::array();
     for (const AudioClipAnalysisSummary& clip : audioClips) {
-        json key{{"status", clip.keyStatus},
+        json key{{"algorithmVersion", clip.keyAlgorithmVersion},
+                 {"calibrated", clip.keyCalibrated},
+                 {"variable", clip.variableKey},
+                 {"status", clip.keyStatus},
                  {"root", clip.keyRoot},
                  {"rootName", clip.keyRootName},
                  {"scale", clip.keyScale},
@@ -521,7 +529,9 @@ nlohmann::json ProjectMusicContext::toJson() const {
                  {"clipId", clip.clipId},
                  {"algorithmVersion", clip.algorithmVersion},
                  {"tempo",
-                  {{"status", clip.tempoStatus},
+                  {{"algorithmVersion", clip.tempoAlgorithmVersion},
+                   {"calibrated", clip.tempoCalibrated},
+                   {"status", clip.tempoStatus},
                    {"bpm", clip.bpm},
                    {"confidence", clip.tempoConfidence},
                    {"stability", clip.tempoStability},

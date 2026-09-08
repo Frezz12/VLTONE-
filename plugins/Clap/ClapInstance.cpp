@@ -456,8 +456,10 @@ bool ClapInstance::activate(const PluginProcessInfo& info) {
         readParameters();
     }
     if (m_render && m_render->set) {
-        (void)m_render->set(m_plugin, info.offline ? CLAP_RENDER_OFFLINE
-                                                   : CLAP_RENDER_REALTIME);
+        if (info.offline && m_render->has_hard_realtime_requirement &&
+            m_render->has_hard_realtime_requirement(m_plugin)) return false;
+        if (!m_render->set(m_plugin, info.offline ? CLAP_RENDER_OFFLINE
+                                                 : CLAP_RENDER_REALTIME)) return false;
     }
     if (!m_plugin->activate(m_plugin, info.sampleRate, 1, info.maxBlockSize)) {
         return false;
@@ -954,7 +956,7 @@ PluginProcessDisposition ClapInstance::process(
     const clap_process_status status = m_plugin->process(m_plugin, &process);
     if (status == CLAP_PROCESS_ERROR) {
         silence();
-        return PluginProcessDisposition::Continue;
+        return PluginProcessDisposition::Error;
     }
     if (status == CLAP_PROCESS_SLEEP) return PluginProcessDisposition::Sleep;
     if (status == CLAP_PROCESS_TAIL) {

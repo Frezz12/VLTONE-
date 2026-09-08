@@ -835,6 +835,29 @@ func validateTakePropertyValue(body map[string]json.RawMessage, property string)
 	}
 }
 
+func validateAnalysisMetadata(body map[string]json.RawMessage) error {
+	if _, exists := body["algorithmVersion"]; exists {
+		if _, err := payloadInteger(body, "algorithmVersion", 0, 1000000); err != nil {
+			return err
+		}
+	}
+	for _, name := range []string{"calibrated", "variable"} {
+		if _, exists := body[name]; exists {
+			if _, err := payloadBool(body, name); err != nil {
+				return err
+			}
+		}
+	}
+	for name, limit := range map[string]int{"backend": 128, "reason": 512} {
+		if _, exists := body[name]; exists {
+			if _, err := payloadString(body, name, limit, true); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func validateMusicalAnalysis(raw json.RawMessage) error {
 	body, err := commandPayloadObject(raw)
 	if err != nil {
@@ -858,14 +881,18 @@ func validateMusicalAnalysis(raw json.RawMessage) error {
 		return invalidf("command payload tempo analysis must be an object")
 	}
 	if err := exactPayloadKeys(tempo,
-		[]string{"status", "bpm", "confidence", "stability", "alternatives", "variable"}, nil); err != nil {
+		[]string{"status", "bpm", "confidence", "stability", "alternatives", "variable"},
+		[]string{"algorithmVersion", "calibrated", "backend", "reason"}); err != nil {
+		return err
+	}
+	if err := validateAnalysisMetadata(tempo); err != nil {
 		return err
 	}
 	if _, err := payloadInteger(tempo, "status", 0, 2); err != nil {
 		return err
 	}
 	for name, bounds := range map[string][2]float64{
-		"bpm": {0, 300}, "confidence": {0, 1}, "stability": {0, 1},
+		"bpm": {0, 1000000}, "confidence": {0, 1}, "stability": {0, 1},
 	} {
 		if _, err := payloadNumber(tempo, name, bounds[0], bounds[1], false); err != nil {
 			return err
@@ -878,7 +905,7 @@ func validateMusicalAnalysis(raw json.RawMessage) error {
 	}
 	for _, alternative := range alternatives {
 		candidate := map[string]json.RawMessage{"value": alternative}
-		if _, err := payloadNumber(candidate, "value", 0, 300, true); err != nil {
+		if _, err := payloadNumber(candidate, "value", 0, 1000000, true); err != nil {
 			return err
 		}
 	}
@@ -890,7 +917,11 @@ func validateMusicalAnalysis(raw json.RawMessage) error {
 		return invalidf("command payload key analysis must be an object")
 	}
 	if err := exactPayloadKeys(key,
-		[]string{"status", "root", "scale", "confidence", "alternateRoot", "alternateScale", "tuningCents"}, nil); err != nil {
+		[]string{"status", "root", "scale", "confidence", "alternateRoot", "alternateScale", "tuningCents"},
+		[]string{"algorithmVersion", "calibrated", "backend", "reason", "variable"}); err != nil {
+		return err
+	}
+	if err := validateAnalysisMetadata(key); err != nil {
 		return err
 	}
 	if _, err := payloadInteger(key, "status", 0, 2); err != nil {

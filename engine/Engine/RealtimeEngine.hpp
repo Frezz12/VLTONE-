@@ -13,6 +13,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <string>
 
 namespace daw::engine {
 
@@ -66,9 +67,10 @@ public:
     ~RealtimeEngine();
 
     /// Control thread. Sizes buffers and re-prepares every node, so it parks
-    /// the renderer for the duration.
+    /// the renderer for the duration. Offline mode is for an isolated engine;
+    /// it settles plugin preparation and PDC before output windows are chosen.
     Status prepare(SampleRate sampleRate, FrameCount maxBlockSize,
-                   ChannelCount channels = 2);
+                   ChannelCount channels = 2, bool offline = false);
 
     SampleRate sampleRate() const noexcept { return m_prepareInfo.sampleRate; }
     FrameCount maxBlockSize() const noexcept { return m_prepareInfo.maxBlockSize; }
@@ -114,6 +116,8 @@ public:
                          FrameCount blockSize,
                          const std::function<bool(const AudioBlock&, FrameCount)>& sink,
                          OfflineOptions options = {});
+    /// Control-thread diagnostic for the last failed preparation/pass.
+    const std::string& offlineError() const noexcept { return m_offlineError; }
 
     /// Master output level of the last block (0…1), for the UI.
     float masterPeakLeft() const noexcept { return m_masterPeakL.load(std::memory_order_relaxed); }
@@ -156,6 +160,10 @@ public:
     }
 
 private:
+    Status prepareOfflineGraph();
+    Status offlineFailure(const CompiledGraph::CompiledNode& node,
+                          EngineError error, SamplePos position);
+    std::string m_offlineError;
     struct SpectrumFilterState {
         double x1 = 0.0;
         double x2 = 0.0;

@@ -108,6 +108,7 @@ list(REMOVE_DUPLICATES VLT_PUBLIC_NONCONST_METHODS)
 # These are observational despite legacy non-const platform/engine APIs.
 # Every exception is validated below so this list cannot silently go stale.
 set(VLT_PROVEN_NONCONST_GETTERS
+    hasCloudProjectBinding
     enumerateOutputDevices
     enumerateInputDevices
     currentOutputDeviceUid

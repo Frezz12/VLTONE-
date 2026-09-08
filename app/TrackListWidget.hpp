@@ -17,6 +17,7 @@
 
 namespace daw { class EngineController; struct TrackModel; }
 class QVBoxLayout;
+class QHBoxLayout;
 class QLabel;
 class QAbstractButton;
 namespace ui { class LevelMeter; class FaderWidget; class PanKnob;
@@ -39,6 +40,10 @@ class TrackListWidget : public QWidget {
 public:
     explicit TrackListWidget(daw::EngineController* controller,
                              QWidget* parent = nullptr);
+
+    /// Put the arrangement actions into the ruler. The ruler owns the widget
+    /// afterwards and keeps the project-wide M/S controls pinned on the right.
+    void setRulerActions(QWidget* actions);
 
     void rebuild();
     void refreshMeters();
@@ -292,11 +297,12 @@ private:
 
     QWidget* m_viewport = nullptr;    // clips the rows; fixed height
     QWidget* m_rowsHost = nullptr;    // holds every row; moved to scroll
+    QWidget* m_ruler = nullptr;
+    QHBoxLayout* m_rulerRow = nullptr;
     int m_scrollY = 0;
     double m_wheelScrollRemainder = 0.0;
     QVBoxLayout* m_rowsLayout = nullptr;
-    /// Over the column, where the "TRACKS" caption used to be: clear-all-mutes
-    /// and clear-all-solos, lit while there is anything to clear.
+    /// Project-wide mute and solo clearing, pinned to the ruler's right edge.
     ui::MsrButton* m_clearMutes = nullptr;
     ui::MsrButton* m_clearSolos = nullptr;
     QWidget* m_indicator = nullptr;   // DropIndicator, raised above the rows

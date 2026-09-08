@@ -1,0 +1,211 @@
+{
+  "algorithmVersion": 2,
+  "modelSha256": {
+    "mel-filterbank.bin": "57cf87a6ccce2c80898823c13ce260ec5a43b957c0671cfd9233d269f8dc14f2",
+    "beat-this-final0.onnx": "6c548b4e7fda871629273513c1a4969e278e53ff115bff3ffee89620d70c9563",
+    "skey.onnx": "8dff2d101032a6ab4ab37f39e64c8c30428a2bbacbd679171bfa0f78075a3976"
+  },
+  "sources": {
+    ".cache/audio-analysis/fit-v3.jsonl": "1d0ca1fe2336e26c9090fab5d14fd302c087232a4bf4833579a79a372ca2ec28",
+    ".cache/audio-analysis/calibration-hybrid-final.jsonl": "353ab7a2d039038ecb15f5839d2cbc9ec135f3fea15825020263fdccdb29fe2e",
+    ".cache/audio-analysis/calibration-dsp-final.jsonl": "f70e234871c1aac7444ed9e2cceed2dec43ddda76e227686fc661f9c95597035"
+  },
+  "backends": {
+    "tempo:beat-this+grid": {
+      "validated": false,
+      "knots": [
+        [
+          0,
+          0
+        ],
+        [
+          0.3399929689556891,
+          0.4
+        ],
+        [
+          0.49214558192300806,
+          0.7777777777777778
+        ]
+      ],
+      "bins": [
+        {
+          "minimumEvidence": 0.3399929689556891,
+          "correct": 8,
+          "count": 20,
+          "interval95": [
+            0.21880396741419272,
+            0.613422057684794
+          ]
+        },
+        {
+          "minimumEvidence": 0.49214558192300806,
+          "correct": 28,
+          "count": 36,
+          "interval95": [
+            0.6191498017214091,
+            0.882838070251604
+          ]
+        }
+      ],
+      "calibrationCount": 56
+    },
+    "tempo:dsp": {
+      "validated": false,
+      "knots": [
+        [
+          0,
+          0
+        ],
+        [
+          0.2712119925649503,
+          0.325
+        ],
+        [
+          0.4793938593676076,
+          0.56
+        ]
+      ],
+      "bins": [
+        {
+          "minimumEvidence": 0.2712119925649503,
+          "correct": 13,
+          "count": 40,
+          "interval95": [
+            0.20084316962661725,
+            0.4798254191110201
+          ]
+        },
+        {
+          "minimumEvidence": 0.4793938593676076,
+          "correct": 14,
+          "count": 25,
+          "interval95": [
+            0.37067017019564436,
+            0.7333462505299744
+          ]
+        }
+      ],
+      "calibrationCount": 65
+    },
+    "key:hpcp": {
+      "validated": false,
+      "knots": [
+        [
+          0,
+          0
+        ],
+        [
+          0.16674946018920117,
+          0.22807017543859648
+        ]
+      ],
+      "bins": [
+        {
+          "minimumEvidence": 0.16674946018920117,
+          "correct": 13,
+          "count": 57,
+          "interval95": [
+            0.13841760968495653,
+            0.3520625880744711
+          ]
+        }
+      ],
+      "calibrationCount": 57
+    },
+    "key:skey+hpcp": {
+      "validated": false,
+      "knots": [
+        [
+          0,
+          0
+        ],
+        [
+          0.26753638946321634,
+          0.2
+        ],
+        [
+          0.45071772125604553,
+          0.41935483870967744
+        ]
+      ],
+      "bins": [
+        {
+          "minimumEvidence": 0.26753638946321634,
+          "correct": 4,
+          "count": 20,
+          "interval95": [
+            0.0806563532712,
+            0.41602172202575993
+          ]
+        },
+        {
+          "minimumEvidence": 0.45071772125604553,
+          "correct": 13,
+          "count": 31,
+          "interval95": [
+            0.26415303073549257,
+            0.5923403564797902
+          ]
+        }
+      ],
+      "calibrationCount": 51
+    }
+  },
+  "keyModelWeight": 0.35,
+  "releaseValidated": false,
+  "fusionFitExamples": 58,
+  "validation": {
+    "tempo:beat-this+grid": {
+      "passed": false,
+      "confidentCount": 0,
+      "confidentCorrect": 0,
+      "confidentPrecision": null,
+      "coverage": 0.0,
+      "interval95": [
+        0,
+        1
+      ],
+      "target": 0.98,
+      "minimumTestCount": 20
+    },
+    "tempo:dsp": {
+      "passed": false,
+      "confidentCount": 0,
+      "confidentCorrect": 0,
+      "confidentPrecision": null,
+      "coverage": 0.0,
+      "interval95": [
+        0,
+        1
+      ],
+      "target": 0.98,
+      "minimumTestCount": 20
+    },
+    "key:hpcp": {
+      "passed": false,
+      "confidentCount": 0,
+      "confidentCorrect": 0,
+      "confidentPrecision": null,
+      "coverage": 0.0,
+      "interval95": [
+        0,
+        1
+      ],
+      "target": 0.95,
+      "minimumTestCount": 20
+    },
+    "key:skey+hpcp": {
+      "passed": false,
+      "confidentCount": 0,
+      "confidentCorrect": 0,
+      "confidentPrecision": null,
+      "coverage": 0.0,
+      "interval95": [
+        0,
+        1
+      ],
+      "target": 0.95,
+      "minimumTestCount": 20
+    }
+  }
+}

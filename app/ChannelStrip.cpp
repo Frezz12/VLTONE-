@@ -754,9 +754,13 @@ QWidget* ChannelStrip::buildSlotRow(QToolButton* slot, const QString& channel,
                                 : m_controller->replaceInsert(
                                       channel.toStdString(), slotId.toStdString(), d);
                         if (!loaded) reportPluginFailure(d);
+                        else ui::rememberRecentPlugin(d);
                         emit edited();
                         emit structureChanged();
-                    });
+                    }, {channel, slotId, [this] {
+                        emit edited();
+                        emit structureChanged();
+                    }});
                 // A modal exec() would let the queued rebuild delete this
                 // button and menu while their mouse-release stack is suspended.
                 menu->setAttribute(Qt::WA_DeleteOnClose);
@@ -1046,6 +1050,7 @@ QWidget* ChannelStrip::buildInserts() {
                         return;
                     }
                     emit editorRequested(channel, QString::fromStdString(id));
+                    ui::rememberRecentPlugin(descriptor);
                     emit edited();
                     emit structureChanged();
                 }));
@@ -1182,6 +1187,7 @@ QMenu* ChannelStrip::buildChainMenu(QWidget* parent) {
                 return;
             }
             emit editorRequested(channel, QString::fromStdString(id));
+            ui::rememberRecentPlugin(descriptor);
             emit edited();
             emit structureChanged();
         });
@@ -1353,9 +1359,13 @@ QMenu* ChannelStrip::buildInsertMenu(QWidget* parent, const QString& insertId,
             if (!m_controller->replaceInsert(channel.toStdString(),
                                              insertId.toStdString(), descriptor))
                 reportPluginFailure(descriptor);
+            else ui::rememberRecentPlugin(descriptor);
             emit edited();
             emit structureChanged();
-        });
+        }, {channel, insertId, [this] {
+            emit edited();
+            emit structureChanged();
+        }});
     replace->setTitle(tr("Replace with"));
     menu->addMenu(replace);
 
@@ -1434,9 +1444,13 @@ QWidget* ChannelStrip::buildInstrument() {
                             if (!m_controller->setTrackInstrumentPlugin(
                                     trackId.toStdString(), d))
                                 reportPluginFailure(d);
+                            else ui::rememberRecentPlugin(d);
                             emit edited();
                             emit structureChanged();
-                        });
+                        }, {trackId, instrumentId, [this] {
+                            emit edited();
+                            emit structureChanged();
+                        }});
                     replace->setTitle(tr("Replace with"));
                     menu->addMenu(replace);
                     menu->addSeparator();
@@ -1471,6 +1485,7 @@ QWidget* ChannelStrip::buildInstrument() {
                 }
                 const auto* track =
                     m_controller->project().findTrack(trackId.toStdString());
+                ui::rememberRecentPlugin(descriptor);
                 if (track && !track->instrument.id.empty())
                     emit editorRequested(
                         trackId, QString::fromStdString(track->instrument.id));

@@ -14,6 +14,7 @@ target_compile_features(daw_controller PUBLIC cxx_std_23)
 # daw_json is discovered once in third_party/.
 target_link_libraries(daw_controller PUBLIC
     daw_engine daw_core daw_pluginhost daw_json)
+include(${CMAKE_SOURCE_DIR}/cmake/AudioAnalysis.cmake)
 if(DAW_ENFORCE_COLLABORATION_RELEASE_GATES)
     target_compile_definitions(daw_controller PRIVATE
         DAW_ENFORCE_COLLABORATION_RELEASE_GATES=1)

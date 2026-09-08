@@ -74,6 +74,7 @@ public:
     }
 
 private:
+    bool openEditorInPool(void* parentHandle, PluginEditorHost* host);
     void readParameters();
     void readBuses();
     void refreshLatency();

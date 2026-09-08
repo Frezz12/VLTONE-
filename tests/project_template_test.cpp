@@ -292,6 +292,87 @@ int main() {
               badIds.empty(),
           "failed import does not partially mutate the project");
 
+    // Quick Import prepares the complete replacement document before touching
+    // the active controller, then exposes the clip and project analysis as one
+    // undoable operation.
+    const daw::ProjectModel beforeQuickImport = destination.project();
+    daw::EngineController::TemplateAudioImportRequest quickRequest;
+    quickRequest.templatePath = package.string();
+    quickRequest.audioPath = clipOnlyAudio.string();
+    quickRequest.targetTrackId = storedKick ? storedKick->id : std::string{};
+    quickRequest.analysis.algorithmVersion = 2;
+    quickRequest.analysis.tempo.algorithmVersion = 2;
+    quickRequest.analysis.key.algorithmVersion = 2;
+    quickRequest.analysis.tempo.calibrated = true;
+    quickRequest.analysis.key.calibrated = true;
+    quickRequest.analysis.tempo.status = daw::MusicalAnalysisStatus::Available;
+    quickRequest.analysis.tempo.bpm = 127.86;
+    quickRequest.analysis.tempo.confidence = 0.99;
+    quickRequest.analysis.tempo.stability = 0.96;
+    quickRequest.analysis.key.status = daw::MusicalAnalysisStatus::Available;
+    quickRequest.analysis.key.root = 0;
+    quickRequest.analysis.key.scale = "major";
+    quickRequest.analysis.key.confidence = 0.99;
+    daw::EngineController::PreparedTemplateAudioImport preparedQuick;
+    check(daw::EngineController::prepareTemplateAudioImport(
+              quickRequest, 48000.0, preparedQuick).isOk(),
+          "Quick Import prepares a valid template, target and audio file");
+    check(destination.project().tracks.size() == beforeQuickImport.tracks.size() &&
+              destination.project().name == beforeQuickImport.name,
+          "Quick Import preparation does not mutate the active project");
+    const std::string quickTarget = preparedQuick.targetTrackId;
+    const std::string quickClip = preparedQuick.clipId;
+    check(destination.openPreparedTemplateAudioImport(std::move(preparedQuick)).isOk(),
+          "prepared Quick Import activates atomically");
+    const daw::TrackModel* quickTrack = destination.project().findTrack(quickTarget);
+    check(quickTrack && quickTrack->clips.size() == 1 &&
+              quickTrack->clips.front().id == quickClip &&
+              quickTrack->clips.front().startSeconds == 0.0 &&
+              quickTrack->clips.front().filePath == clipOnlyAudio.string() &&
+              quickTrack->clips.front().musicalAnalysis.tempo.bpm == 127.86,
+          "Quick Import inserts one analyzed clip at project start");
+    check(destination.project().tempo == 132.0 &&
+              destination.project().keyRoot == 9 &&
+              destination.project().scale == "minor",
+          "Quick Import opens the clip before changing project analysis");
+    destination.setTempo(128.0);
+    destination.setProjectKey(0, "major");
+    destination.collapseUndo(0, "Quick Import Audio");
+    check(destination.project().tempo == 128.0 &&
+              destination.project().keyRoot == 0 &&
+              destination.project().scale == "major" &&
+              destination.undoDepth() == 1,
+          "the confirmed Quick Import choice updates project tempo and key");
+    destination.undo();
+    quickTrack = destination.project().findTrack(quickTarget);
+    check(quickTrack && quickTrack->clips.empty() &&
+              destination.project().tempo == 132.0 &&
+              destination.project().keyRoot == 9,
+          "one undo restores the clean template project");
+    destination.redo();
+    quickTrack = destination.project().findTrack(quickTarget);
+    check(quickTrack && quickTrack->clips.size() == 1 &&
+              destination.project().tempo == 128.0 &&
+              destination.project().keyRoot == 0 &&
+              destination.project().scale == "major",
+          "one redo restores the Quick Import clip and analysis changes");
+
+    const daw::ProjectModel beforeInvalidQuick = destination.project();
+    quickRequest.targetTrackId = "missing-audio-track";
+    daw::EngineController::PreparedTemplateAudioImport invalidQuick;
+    check(!daw::EngineController::prepareTemplateAudioImport(
+               quickRequest, 48000.0, invalidQuick).isOk(),
+          "Quick Import rejects a missing target track");
+    check(destination.project().tempo == beforeInvalidQuick.tempo &&
+              destination.project().tracks.size() ==
+                  beforeInvalidQuick.tracks.size(),
+          "a failed Quick Import leaves the active project unchanged");
+
+    quickRequest.targetTrackId = storedKick ? storedKick->id : std::string{};
+    check(!daw::EngineController::prepareTemplateAudioImport(
+               quickRequest, 48000.0, invalidQuick, [] { return false; }).isOk(),
+          "cancelling Quick Import aborts before activation");
+
     const fs::path corrupt = root / "Corrupt.vltt";
     fs::create_directories(corrupt, ec);
     {

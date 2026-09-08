@@ -30,6 +30,7 @@ void check(bool ok, const char* message) {
 QByteArray vault;
 bool writable = true;
 bool readable = true;
+bool removable = true;
 int required = 0;
 int errors = 0;
 int successes = 0;
@@ -99,7 +100,7 @@ ReadResult readSession(Interaction interaction) {
     if (interaction == Interaction::Allow) readable = true;
     return {read(), !readable};
 }
-bool clear(Interaction) { vault.clear(); return true; }
+bool clear(Interaction) { if (!removable) return false; vault.clear(); return true; }
 }
 QJsonObject PlatformDiagnostics::hardwareSnapshot() { return {}; }
 namespace ui::aiprefs {
@@ -312,6 +313,23 @@ int main(int argc, char** argv) {
         QElapsedTimer timer; timer.start();
         while(timer.elapsed() < 600) { QCoreApplication::processEvents(); QThread::msleep(1); }
         check(!service.authenticated() && vault.isEmpty(), "logout cancels pending restore and cannot sign back in later");
+    }
+    {
+        vault = valid; response = session(11, now + 3600); status = 200;
+        account::Service service; observe(service);
+        service.beginRestore();
+        waitFor([&] { return service.authenticated(); });
+        int logouts = 0;
+        QObject::connect(&service, &account::Service::logoutFinished, [&] { ++logouts; });
+        removable = false;
+        const int beforeErrors = errors;
+        service.logout();
+        waitFor([&] { return errors > beforeErrors; });
+        check(logouts == 0 && !vault.isEmpty(), "failed local deletion cannot report successful sign-out");
+        removable = true;
+        service.logout();
+        waitFor([&] { return logouts == 1; });
+        check(vault.isEmpty() && !service.authenticated(), "retry removes credentials and finishes sign-out");
     }
     std::puts("account_restore_test: PASS");
 }

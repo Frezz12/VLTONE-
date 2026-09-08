@@ -134,6 +134,17 @@ void removeCustomFontFile(const QString& path) {
     QSettings().setValue(key("customFonts"), files);
 }
 
+void setCustomFontFiles(const QStringList& paths) {
+    QStringList normalized;
+    for (const QString& candidate : paths) {
+        const QString path = normalizedExistingFile(candidate);
+        if (!path.isEmpty() && isSupportedFont(path) &&
+            !normalized.contains(path, Qt::CaseInsensitive))
+            normalized.push_back(path);
+    }
+    QSettings().setValue(key("customFonts"), normalized);
+}
+
 bool visible() { return QSettings().value(key("visible"), false).toBool(); }
 
 void setVisible(bool on) { QSettings().setValue(key("visible"), on); }

@@ -13,6 +13,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QVBoxLayout>
 
@@ -95,14 +96,15 @@ NotebookSettingsPage::NotebookSettingsPage(QWidget* parent) : QWidget(parent) {
                 emit changed();
             });
 
-    auto* animate = new QCheckBox(tr("Play animated GIF and video backgrounds"),
-                                  this);
-    animate->setChecked(ui::notebookprefs::animatedBackgroundsEnabled());
-    connect(animate, &QCheckBox::toggled, this, [](bool enabled) {
+    m_animate = new QCheckBox(tr("Play animated GIF and video backgrounds"),
+                             this);
+    m_animate->setChecked(ui::notebookprefs::animatedBackgroundsEnabled());
+    connect(m_animate, &QCheckBox::toggled, this, [](bool enabled) {
         ui::notebookprefs::setAnimatedBackgroundsEnabled(enabled);
     });
-    connect(animate, &QCheckBox::toggled, this, &NotebookSettingsPage::changed);
-    form->addRow(QString(), animate);
+    connect(m_animate, &QCheckBox::toggled, this,
+            &NotebookSettingsPage::changed);
+    form->addRow(QString(), m_animate);
     column->addLayout(form);
 
     column->addWidget(ui::separatorLine(Qt::Horizontal, 0, this));
@@ -150,6 +152,16 @@ NotebookSettingsPage::NotebookSettingsPage(QWidget* parent) : QWidget(parent) {
     });
 
     column->addStretch(1);
+    refreshBackground();
+    refreshFonts();
+}
+
+void NotebookSettingsPage::refresh() {
+    const QSignalBlocker visibilityBlocker(m_visibility);
+    const QSignalBlocker animateBlocker(m_animate);
+    m_visibility->setValue(ui::notebookprefs::backgroundVisibility());
+    m_visibilityValue->setText(QStringLiteral("%1%").arg(m_visibility->value()));
+    m_animate->setChecked(ui::notebookprefs::animatedBackgroundsEnabled());
     refreshBackground();
     refreshFonts();
 }

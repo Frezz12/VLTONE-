@@ -31,6 +31,9 @@ enum class EngineError : std::uint8_t {
     NotCompiled,
     BlockTooLarge,
     OutOfCapacity,
+    ProcessorUnavailable,
+    ProcessingFailed,
+    RenderConfigurationChanged,
 };
 
 constexpr std::string_view describe(EngineError error) noexcept {
@@ -42,6 +45,9 @@ constexpr std::string_view describe(EngineError error) noexcept {
         case EngineError::NotCompiled:     return "graph has not been compiled";
         case EngineError::BlockTooLarge:   return "block size exceeds the prepared maximum";
         case EngineError::OutOfCapacity:   return "out of preallocated capacity";
+        case EngineError::ProcessorUnavailable: return "audio processor could not be activated for export";
+        case EngineError::ProcessingFailed: return "audio processor failed while rendering";
+        case EngineError::RenderConfigurationChanged: return "audio processor requested reconfiguration during export";
     }
     return "unknown error";
 }

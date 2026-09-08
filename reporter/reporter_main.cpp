@@ -285,14 +285,29 @@ private:
             QDir(m_recovery).filePath(QStringLiteral("health.jsonl")), 2 * 1024 * 1024);
         const QByteArray session = limitedFile(
             QDir(m_recovery).filePath(QStringLiteral("session.json")), 512 * 1024);
+        const QByteArray watchdogBytes = limitedFile(
+            QDir(m_recovery).filePath(QStringLiteral("watchdog.json")), 64 * 1024);
         const QByteArray structuredLog = limitedFile(
             QDir(m_recovery).filePath(QStringLiteral("app.log")), 2 * 1024 * 1024);
         const QByteArray reporterLog = limitedFile(
             QDir(m_outbox).filePath(QStringLiteral("reporter.log")), 512 * 1024);
         const QString redactedMarker = redactedText(marker);
         const QJsonObject rawSession = QJsonDocument::fromJson(session).object();
+        const QJsonObject rawWatchdog = QJsonDocument::fromJson(watchdogBytes).object();
+        QJsonObject watchdog;
+        if (rawWatchdog.value(QStringLiteral("startedUnixMs")).isDouble() &&
+            rawWatchdog.value(QStringLiteral("startedUnixMs")) == rawSession.value(QStringLiteral("startedUnixMs"))) {
+            for (const auto* key : {"startedUnixMs", "outcome", "observedHeartbeat", "uiHeartbeatTracked",
+                    "recordedAtUnixMs", "reason", "processExitCode", "hangDumpWritten", "hangDumpError"}) {
+                const QString name = QString::fromLatin1(key);
+                if (rawWatchdog.contains(name)) watchdog.insert(name, rawWatchdog.value(name));
+            }
+            if (rawWatchdog.value(QStringLiteral("hangDumpFile")).toString() == QLatin1String("hang.dmp"))
+                watchdog.insert(QStringLiteral("hangDumpFile"), QStringLiteral("hang.dmp"));
+        }
         const QJsonObject rawStats = rawSession.value(QStringLiteral("stats")).toObject();
-        QString lastPlugin = markerField(marker, QByteArrayLiteral("plugin"));
+        const QString activePlugin = markerField(marker, QByteArrayLiteral("plugin"));
+        QString lastPlugin = activePlugin;
         if (lastPlugin.isEmpty()) lastPlugin = markerField(marker, QByteArrayLiteral("last_plugin"));
         if (lastPlugin.isEmpty()) lastPlugin = redactedText(
             rawStats.value(QStringLiteral("lastPlugin")).toString().toUtf8()).left(160);
@@ -301,13 +316,27 @@ private:
         const QString exception = markerField(marker, QByteArrayLiteral("exception"));
         QString reason = redactedText(
             rawSession.value(QStringLiteral("crashReason")).toString().toUtf8()).left(512);
+        if (reason == QLatin1String("application_hung") && (!signal.isEmpty() || !exception.isEmpty())) reason.clear();
         if (reason.isEmpty() && !signal.isEmpty())
-            reason = lastPlugin.isEmpty()
+            // last_plugin is historical context, not a call active at the fault.
+            reason = activePlugin.isEmpty()
                 ? QStringLiteral("crashed (%1)").arg(signal.section(' ', 0, 0))
-                : QStringLiteral("crashed in %1 (%2)").arg(lastPlugin, signal.section(' ', 0, 0));
+                : QStringLiteral("crashed in %1 (%2)").arg(activePlugin, signal.section(' ', 0, 0));
         if (reason.isEmpty() && !exception.isEmpty()) reason = exception;
         if (reason.isEmpty() && rawSession.value(QStringLiteral("outcome")).toString() == QLatin1String("hung"))
             reason = QStringLiteral("application_hung");
+        const auto watchedPulse = rawSession.value(watchdog.value(QStringLiteral("uiHeartbeatTracked")).toBool()
+            ? QStringLiteral("uiHeartbeat") : QStringLiteral("heartbeat"));
+        const bool samePulse = !watchedPulse.isUndefined() &&
+            watchedPulse == watchdog.value(QStringLiteral("observedHeartbeat"));
+        if (reason.isEmpty() && ((watchdog.value(QStringLiteral("outcome")).toString() == QLatin1String("hung") && samePulse) ||
+            (watchdog.value(QStringLiteral("outcome")).toString() == QLatin1String("crashed") &&
+             watchdog.value(QStringLiteral("reason")).toString() == QLatin1String("application_hung"))))
+            reason = QStringLiteral("application_hung");
+        const qint64 exitCode = watchdog.value(QStringLiteral("processExitCode")).toInteger(-1);
+        if (reason.isEmpty() && exitCode >= 0 && exitCode <= 0xffffffffLL)
+            reason = QStringLiteral("process_terminated_unexpectedly (exit code 0x%1)")
+                .arg(quint64(exitCode), 8, 16, QLatin1Char('0'));
         if (reason.isEmpty()) reason = QStringLiteral("process_terminated_unexpectedly");
         const QJsonObject safeStats{
             {QStringLiteral("processCpu"), rawStats.value(QStringLiteral("processCpu"))},
@@ -331,6 +360,8 @@ private:
             {QStringLiteral("startedUnixMs"), rawSession.value(QStringLiteral("startedUnixMs"))},
             {QStringLiteral("heartbeat"), rawSession.value(QStringLiteral("heartbeat"))},
             {QStringLiteral("heartbeatUnixMs"), rawSession.value(QStringLiteral("heartbeatUnixMs"))},
+            {QStringLiteral("uiHeartbeat"), rawSession.value(QStringLiteral("uiHeartbeat"))},
+            {QStringLiteral("uiHeartbeatUnixMs"), rawSession.value(QStringLiteral("uiHeartbeatUnixMs"))},
             {QStringLiteral("journalUnixMs"), rawSession.value(QStringLiteral("journalUnixMs"))},
             {QStringLiteral("stats"), safeStats},
             {QStringLiteral("outcome"), rawSession.value(QStringLiteral("outcome"))},
@@ -366,6 +397,8 @@ private:
         appendSection("metadata", QJsonDocument(metadata).toJson(QJsonDocument::Indented));
         appendSection("crash marker", redactedMarker.toUtf8());
         appendSection("session", QJsonDocument(safeSession).toJson(QJsonDocument::Indented));
+        if (!watchdog.isEmpty()) appendSection("watchdog",
+            redactedText(QJsonDocument(watchdog).toJson(QJsonDocument::Indented)).toUtf8());
         appendSection("health", redactedText(health).toUtf8());
         appendSection("application", redactedText(structuredLog).toUtf8());
         appendSection("reporter", redactedText(reporterLog).toUtf8());

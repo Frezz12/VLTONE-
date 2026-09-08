@@ -274,6 +274,7 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
     // permanently bakes in the descriptor/default latency of zero.
     for (auto& entry : compiled->nodes) {
         if (entry.node->isPreparedFor(info)) continue;
+        entry.node->invalidatePrepare();
         entry.node->prepare(info);
         entry.node->markPrepared(info);
     }

@@ -1,0 +1,22 @@
+      detected 129.2 BPM conf 0.802, key C major conf 0.988
+PASS  combined analysis succeeds
+PASS  steady beat is detected at the primary metrical level
+PASS  steady beat returns a tempo result
+PASS  C-major progression is identified
+      transformed 46.1 BPM, key B minor
+PASS  playback stretch is reflected in detected BPM
+PASS  pitch shift is reflected in detected key
+      range 72 -> 71.8 BPM (0.874)
+      range 92 -> 92.3 BPM (0.864)
+      range 110 -> 110.0 BPM (0.854)
+      range 140 -> 139.7 BPM (0.802)
+      range 174 -> 172.3 BPM (0.802)
+PASS  tempo detector covers slow through fast beat loops
+      key D major -> D major (0.988)
+      key F# major -> F# major (0.988)
+      key C minor -> C minor (0.977)
+      key F minor -> F minor (0.974)
+PASS  key detector covers transposed major and minor loops
+PASS  silence does not invent a tempo
+PASS  silence does not invent a key
+PASS  BPM and key analysis survives project serialization

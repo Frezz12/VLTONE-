@@ -130,6 +130,7 @@ audio::Result EngineController::renderProject(
             scratch.m_project.masterVolume = 1.f; scratch.m_project.masterPan = 0.f;
             scratch.m_project.invalidateTrackIndex();
         }
+        scratch.applyRenderSelection(spec);
         scratch.m_sourceSamples = m_sourceSamples;
         if (std::abs(rate - m_sampleRate) <= 0.01) {
             scratch.m_samples = m_samples;
@@ -148,7 +149,7 @@ audio::Result EngineController::renderProject(
         std::unordered_map<std::string, const std::vector<std::uint8_t>*> states;
         for (const auto& state : snapshot.pluginStates) states[state.fileName] = &state.bytes;
         const auto restoreSlot = [&](const std::string& channelId, const InsertModel& slot) {
-            if (!preparing()) return;
+            if (!preparing() || slot.bypassed || slot.mix == 0.f) return;
             InsertSlot* live = scratch.liveInsertSlot(channelId, slot.id);
             if (!live) return;
             const auto restoreNode = [&](const std::shared_ptr<plugins::PluginNode>& node,
@@ -162,6 +163,7 @@ audio::Result EngineController::renderProject(
                 if (auto* sampler = dynamic_cast<plugins::sampler::SamplerInstance*>(node->instance());
                     sampler && !sampler->samplePath().empty() && !sampler->rawSample())
                     throw std::runtime_error("cannot load render sampler source: " + sampler->samplePath());
+                node->discardPendingEvents();
                 scratch.applyStoredParameters(*node, parameters);
                 node->invalidatePrepare();
             };
@@ -189,75 +191,7 @@ audio::Result EngineController::renderProject(
     }
 }
 
-audio::Result EngineController::renderProjectPass(
-    const rendering::Spec& spec,
-    const std::function<bool(const rendering::Progress&)>& onProgress,
-    rendering::Report& out) {
-    out = rendering::Report{};
-
-    if (!spec.writeMixdown && spec.stemChannelIds.empty()) {
-        return audio::Result::fail(audio::EngineError::InvalidArgument,
-                                   "nothing selected to render");
-    }
-    if (spec.outputDir.empty()) {
-        return audio::Result::fail(audio::EngineError::InvalidArgument,
-                                   "no output folder");
-    }
-    std::error_code dirError;
-    const fs::path outputDir = platform::pathFromUtf8(spec.outputDir);
-    fs::create_directories(outputDir, dirError);
-    if (!fs::is_directory(outputDir)) {
-        return audio::Result::fail(audio::EngineError::FileWriteError,
-                                   "cannot write to " + spec.outputDir);
-    }
-
-    // A render is the one place where "one tick late" is not good enough, and a
-    // rolling transport would fight the render gate for the whole pass.
-    stop();
-    flushDeferredClipSync();
-    flushSamplerPrecompute();
-    updateTimelineDuration();
-
-    // ── Range, in seconds, resolved before anything is reconfigured ──
-    double startSeconds = 0.0;
-    double endSeconds = 0.0;
-    switch (spec.range) {
-        case rendering::Range::WholeProject:
-            endSeconds = durationSeconds();
-            break;
-        case rendering::Range::CycleRegion:
-            startSeconds = loopStartSeconds();
-            endSeconds = loopEndSeconds();
-            break;
-        case rendering::Range::Custom:
-            startSeconds = spec.customStartSeconds;
-            endSeconds = spec.customEndSeconds;
-            break;
-    }
-    startSeconds = std::max(0.0, startSeconds);
-    if (endSeconds <= startSeconds) {
-        return audio::Result::fail(audio::EngineError::InvalidArgument,
-                                   "the render range is empty");
-    }
-
-    const double targetRate =
-        spec.sampleRate > 0.0 ? spec.sampleRate : m_sampleRate;
-    const engine::ChannelCount fileChannels =
-        spec.channels == rendering::Channels::Mono ? 1 : 2;
-    if (!audio::platform::isWriteSpecSupported(spec.file, fileChannels,
-                                               targetRate)) {
-        return audio::Result::fail(
-            audio::EngineError::UnsupportedFormat,
-            "this build cannot write that format at " +
-                std::to_string(int(targetRate)) + " Hz");
-    }
-
-    // This controller belongs exclusively to the offline job. Its temporary
-    // bypass/solo/tap configuration is discarded with it, so restoration never
-    // rebuilds or overwrites the live session on an error path.
-    UndoStack::Suspend quiet(m_undo);
-    m_renderingPass = true;
-
+void EngineController::applyRenderSelection(const rendering::Spec& spec) {
     // ── Bypass ──
     auto bypassSlots = [](std::vector<InsertModel>& slots) {
         for (InsertModel& slot : slots) {
@@ -362,6 +296,77 @@ audio::Result EngineController::renderProjectPass(
         }
     }
 
+}
+
+audio::Result EngineController::renderProjectPass(
+    const rendering::Spec& spec,
+    const std::function<bool(const rendering::Progress&)>& onProgress,
+    rendering::Report& out) {
+    out = rendering::Report{};
+
+    if (!spec.writeMixdown && spec.stemChannelIds.empty()) {
+        return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                   "nothing selected to render");
+    }
+    if (spec.outputDir.empty()) {
+        return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                   "no output folder");
+    }
+    std::error_code dirError;
+    const fs::path outputDir = platform::pathFromUtf8(spec.outputDir);
+    fs::create_directories(outputDir, dirError);
+    if (!fs::is_directory(outputDir)) {
+        return audio::Result::fail(audio::EngineError::FileWriteError,
+                                   "cannot write to " + spec.outputDir);
+    }
+
+    // A render is the one place where "one tick late" is not good enough, and a
+    // rolling transport would fight the render gate for the whole pass.
+    stop();
+    flushDeferredClipSync();
+    flushSamplerPrecompute();
+    updateTimelineDuration();
+
+    // ── Range, in seconds, resolved before anything is reconfigured ──
+    double startSeconds = 0.0;
+    double endSeconds = 0.0;
+    switch (spec.range) {
+        case rendering::Range::WholeProject:
+            endSeconds = durationSeconds();
+            break;
+        case rendering::Range::CycleRegion:
+            startSeconds = loopStartSeconds();
+            endSeconds = loopEndSeconds();
+            break;
+        case rendering::Range::Custom:
+            startSeconds = spec.customStartSeconds;
+            endSeconds = spec.customEndSeconds;
+            break;
+    }
+    startSeconds = std::max(0.0, startSeconds);
+    if (endSeconds <= startSeconds) {
+        return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                   "the render range is empty");
+    }
+
+    const double targetRate =
+        spec.sampleRate > 0.0 ? spec.sampleRate : m_sampleRate;
+    const engine::ChannelCount fileChannels =
+        spec.channels == rendering::Channels::Mono ? 1 : 2;
+    if (!audio::platform::isWriteSpecSupported(spec.file, fileChannels,
+                                               targetRate)) {
+        return audio::Result::fail(
+            audio::EngineError::UnsupportedFormat,
+            "this build cannot write that format at " +
+                std::to_string(int(targetRate)) + " Hz");
+    }
+
+    // This controller belongs exclusively to the offline job. Its temporary
+    // bypass/solo/tap configuration is discarded with it, so restoration never
+    // rebuilds or overwrites the live session on an error path.
+    UndoStack::Suspend quiet(m_undo);
+    m_renderingPass = true;
+
     // ── Sample rate ──
     if (std::abs(targetRate - m_sampleRate) > 0.01) {
         applyRenderSampleRate(targetRate);
@@ -391,6 +396,34 @@ audio::Result EngineController::renderProjectPass(
     syncAllTrackGains();
     flushDeferredClipSync();
 
+    // Prepare in the final processing mode before reading any latency. The
+    // isolated controller never opens a device; all later compiles stay offline.
+    if (const auto ready = m_engine.prepare(m_sampleRate, m_bufferSize, 2, true); !ready)
+        return audio::Result::fail(audio::EngineError::Unknown,
+            m_engine.offlineError().empty() ? std::string(engine::describe(ready.error()))
+                                           : m_engine.offlineError());
+    const auto graph = m_engine.compiledGraph();
+    const auto requireSlot = [&](const std::string& channelId, const InsertModel& model) {
+        if (!model.isLoaded() || model.bypassed || model.mix == 0.f) return;
+        auto* slot = liveInsertSlot(channelId, model.id);
+        if (!slot || !slot->node || !slot->node->isReady() ||
+            (model.channelMode == PluginChannelMode::DualMono &&
+             (!slot->rightNode || !slot->rightNode->isReady())))
+            throw std::runtime_error("cannot prepare export plugin: " + model.name +
+                                     " (channel " + channelId + ", slot " + model.id + ")");
+    };
+    for (const auto& track : m_project.tracks) {
+        if (!carriesAudio(track) || track.freeze.active()) continue;
+        if (trackAccepts(track.kind, ClipKind::Midi)) requireSlot(track.id, track.instrument);
+        for (const auto& slot : track.inserts) requireSlot(track.id, slot);
+        if (track.samplerFx.isOwnedBy(track.instrument))
+            for (const auto& slot : track.samplerFx.inserts) requireSlot(track.id, slot);
+        for (const auto& clip : track.clips)
+            if (clip.kind == ClipKind::Audio)
+                for (const auto& slot : clip.inserts) requireSlot(track.id, slot);
+    }
+    for (const auto& slot : m_project.masterInserts) requireSlot(kMasterChannelId, slot);
+
     // ── Files ──
     const engine::SamplePos from = toSamples(startSeconds);
     const engine::SamplePos rangeEnd = toSamples(endSeconds);
@@ -407,7 +440,22 @@ audio::Result EngineController::renderProjectPass(
     // the front is what keeps the file aligned with the timeline; without it a
     // lookahead limiter on the master shifts the whole render late by its own
     // latency and truncates the end by the same amount.
-    const auto latency = engine::SamplePos(m_engine.latencySamples());
+    engine::FrameCount captureLatency = graph->totalLatency;
+    std::unordered_map<engine::TapNode*, engine::FrameCount> tapLatencies;
+    for (const auto& [channelId, tap] : m_renderTaps) {
+        const auto entry = std::find_if(graph->nodes.begin(), graph->nodes.end(),
+            [&](const auto& node) { return node.node == tap.get(); });
+        if (entry == graph->nodes.end())
+            throw std::runtime_error("cannot capture export channel: " + channelId);
+        tapLatencies.emplace(tap.get(), entry->latency);
+        captureLatency = std::max(captureLatency, entry->latency);
+    }
+    for (const auto& [tap, ownLatency] : tapLatencies)
+        tap->setCaptureDelay(captureLatency - ownLatency);
+    engine::EdgeDelay masterCaptureDelay;
+    const auto extraMasterDelay = captureLatency - graph->totalLatency;
+    if (extraMasterDelay) masterCaptureDelay.prepare(2, extraMasterDelay, m_bufferSize);
+    const auto latency = engine::SamplePos(captureLatency);
 
     // Pre-roll runs the arrangement ahead of the range and throws that audio
     // away, so a range starting mid-project opens with the reverb that was
@@ -515,6 +563,7 @@ audio::Result EngineController::renderProjectPass(
     auto renderStatus = m_engine.renderOffline(
         renderStart, renderEnd, m_bufferSize,
         [&](const engine::AudioBlock& block, engine::FrameCount frames) {
+            if (extraMasterDelay) masterCaptureDelay.process(block, block, frames);
             const float* master[2] = {block.data(0), block.data(1)};
 
             // The pre-roll and the latency flush leave the graph first. They
@@ -560,6 +609,14 @@ audio::Result EngineController::renderProjectPass(
                         peak = std::max(peak, std::fabs(master[channel][frame]));
                     }
                 }
+                // Stems can remain audible while the master is muted or
+                // cancels them. All capture points share this time origin.
+                for (const auto& sink : sinks) {
+                    if (!sink.tap) continue;
+                    for (engine::ChannelCount channel = 0; channel < sink.tap->capturedChannels(); ++channel)
+                        for (engine::FrameCount frame = 0; frame < frames; ++frame)
+                            peak = std::max(peak, std::fabs(sink.tap->captured()[channel][frame]));
+                }
                 quietFor = peak < silenceThreshold ? quietFor + frames : 0;
                 if (quietFor >= holdSamples) return false;
             }
@@ -596,7 +653,8 @@ audio::Result EngineController::renderProjectPass(
         if (!ioStatus) return ioStatus;
         return audio::Result::fail(
             audio::EngineError::Unknown,
-            std::string(engine::describe(renderStatus.error())));
+            m_engine.offlineError().empty() ? std::string(engine::describe(renderStatus.error()))
+                                           : m_engine.offlineError());
     }
 
     for (Sink& sink : sinks) {

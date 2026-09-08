@@ -1,150 +1,97 @@
 #include "AudioMusicalAnalysis.hpp"
-
-#include <algorithm>
-#include <cmath>
+#include "analysis_v1/AudioMusicalAnalysis.hpp"
+#include <nlohmann/json.hpp>
+#include <chrono>
+#include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
 #include <sstream>
-#include <string>
-#include <vector>
 
-namespace analysis = daw::analysis;
-
+using nlohmann::json;
 namespace {
-
-struct Item {
-    std::string path;
-    double bpm = 0.0;
-    int root = -1;
-    std::string scale;
-};
-
-std::vector<std::string> splitTabs(const std::string& line) {
-    std::vector<std::string> fields;
-    std::stringstream stream(line);
-    std::string field;
-    while (std::getline(stream, field, '\t')) fields.push_back(field);
-    return fields;
+std::vector<std::string> split(const std::string& line) {
+    std::vector<std::string> out;
+    std::size_t first = 0;
+    for (;;) {
+        auto next = line.find('\t', first);
+        out.push_back(line.substr(first, next == std::string::npos ? next : next - first));
+        if (next == std::string::npos) return out;
+        first = next + 1;
+    }
 }
-
-bool tempoMatches(double detected, double expected) {
-    return detected > 0.0 && expected > 0.0 &&
-           std::abs(detected - expected) / expected <= 0.01;
+template<class Result> json prediction(const Result& r) {
+    return {{"bpm", r.tempo.bpm}, {"tempoStatus", int(r.tempo.status)},
+        {"tempoConfidence", r.tempo.confidence}, {"tempoHigh", r.tempo.highConfidence()},
+        {"tempoStability", r.tempo.stability}, {"tempoVariable", r.tempo.variable},
+        {"tempoAlternatives", r.tempo.alternatives}, {"root", r.key.root}, {"scale", r.key.scale},
+        {"keyStatus", int(r.key.status)}, {"keyConfidence", r.key.confidence},
+        {"keyHigh", r.key.highConfidence()}, {"alternateRoot", r.key.alternateRoot},
+        {"alternateScale", r.key.alternateScale}, {"tuningCents", r.key.tuningCents}};
 }
-
-bool metricalMatch(double detected, double expected) {
-    return tempoMatches(detected, expected) ||
-           tempoMatches(detected * 0.5, expected) ||
-           tempoMatches(detected * 2.0, expected);
 }
-
-} // namespace
-
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        std::cerr
-            << "usage: audio_analysis_bench manifest.tsv\n\n"
-               "TSV columns: path, bpm (0 if unknown), root (C=0, -1 if "
-               "unknown), scale (major or natural_minor). A header is optional.\n";
+    if (argc < 2) {
+        std::cerr << "audio_analysis_bench manifest.tsv [--backend legacy|hybrid|dsp] [--split fit|calibration|test] [--output results.jsonl]\n";
         return 2;
     }
-    std::ifstream input(argv[1]);
-    if (!input) {
-        std::cerr << "cannot open manifest: " << argv[1] << '\n';
-        return 2;
+    std::string backend = "hybrid", selection, output;
+    for (int i = 2; i < argc; i += 2) {
+        if (i + 1 == argc) return 2;
+        std::string opt = argv[i];
+        if (opt == "--backend") backend = argv[i + 1];
+        else if (opt == "--split") selection = argv[i + 1];
+        else if (opt == "--output") output = argv[i + 1];
+        else return 2;
     }
-
-    std::vector<Item> items;
+    if (backend != "legacy" && backend != "hybrid" && backend != "dsp") return 2;
+    std::ifstream in(argv[1]);
+    std::ofstream file;
+    if (!output.empty()) file.open(output);
+    if (!in || (!output.empty() && !file)) return 2;
+    std::ostream& out = output.empty() ? std::cout : file;
     std::string line;
-    int lineNumber = 0;
-    while (std::getline(input, line)) {
-        ++lineNumber;
+    int count = 0, failed = 0;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.empty() || line[0] == '#') continue;
-        const auto fields = splitTabs(line);
-        if (fields.size() < 4) {
-            std::cerr << "line " << lineNumber << ": expected four TSV fields\n";
-            return 2;
-        }
+        const auto f = split(line);
+        if (f[0] == "path") continue;
+        if (f.size() < 4) return 2;
+        if (!selection.empty() && (f.size() < 6 || f[5] != selection)) continue;
+        json row;
         try {
-            Item item{fields[0], std::stod(fields[1]), std::stoi(fields[2]),
-                      fields[3]};
-            items.push_back(std::move(item));
-        } catch (...) {
-            if (items.empty() && lineNumber == 1) continue; // optional header
-            std::cerr << "line " << lineNumber << ": invalid BPM/root\n";
-            return 2;
+            row = {{"path", f[0]}, {"expectedBpm", std::stod(f[1])}, {"expectedRoot", std::stoi(f[2])},
+                   {"expectedScale", f[3]}, {"group", f.size() > 4 ? f[4] : f[0]},
+                   {"split", f.size() > 5 ? f[5] : "unspecified"}, {"backend", backend},
+                   {"keyAbsent", f.size() > 7 && f[7] == "1"}};
+        } catch (...) { std::cerr << "invalid manifest row\n"; return 2; }
+        std::filesystem::path path(f[0]);
+        if (path.is_relative()) path = std::filesystem::path(argv[1]).parent_path() / path;
+        const auto started = std::chrono::steady_clock::now();
+        if (backend == "legacy") {
+            daw::analysis_v1::MusicalAnalysisRequest req;
+            // Freeze old behavior, including its original filename hint.
+            req.fileNameHint = path.filename().string();
+            daw::analysis_v1::MusicalAnalysisResult r;
+            const auto status = daw::analysis_v1::analyzeAudioFile(path.string(), req, r);
+            row.update(prediction(r));
+            row["error"] = status ? "" : status.message();
+        } else {
+            daw::analysis::MusicalAnalysisRequest req;
+            req.useNeuralModels = backend == "hybrid";
+            daw::analysis::MusicalAnalysisResult r;
+            const auto status = daw::analysis::analyzeAudioFile(path.string(), req, r);
+            row.update(prediction(r));
+            row.update({{"tempoEvidence", r.tempo.evidence}, {"keyEvidence", r.key.evidence},
+                {"tempoBackend", r.tempo.backend}, {"keyBackend", r.key.backend},
+                {"keyVariable", r.key.variable}, {"profileScores", r.key.profileScores},
+                {"neuralScores", r.key.neuralScores}, {"error", status ? "" : status.message()}});
         }
+        row["seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        out << row.dump() << std::endl;
+        ++count;
+        if (row["error"] != "") ++failed;
+        std::cerr << count << " " << path.filename().string() << " " << row["bpm"] << " " << row["root"] << " " << row["scale"] << '\n';
     }
-    if (items.empty()) {
-        std::cerr << "manifest contains no examples\n";
-        return 2;
-    }
-
-    int analyzed = 0, failed = 0;
-    int tempoKnown = 0, tempoExact = 0, tempoMetrical = 0;
-    int tempoHigh = 0, tempoHighExact = 0;
-    int keyKnown = 0, keyExact = 0, keyHigh = 0, keyHighExact = 0;
-    std::cout << "file\texpected_bpm\tdetected_bpm\ttempo_conf\texpected_key"
-                 "\tdetected_key\tkey_conf\n";
-    for (const Item& item : items) {
-        analysis::MusicalAnalysisRequest request;
-        request.fileNameHint = item.path;
-        analysis::MusicalAnalysisResult result;
-        const auto status = analysis::analyzeAudioFile(item.path, request, result);
-        if (!status) {
-            ++failed;
-            std::cerr << item.path << ": " << status.message() << '\n';
-            continue;
-        }
-        ++analyzed;
-        bool bpmExact = false;
-        if (item.bpm > 0.0) {
-            ++tempoKnown;
-            bpmExact = tempoMatches(result.tempo.bpm, item.bpm);
-            tempoExact += bpmExact;
-            bool usable = metricalMatch(result.tempo.bpm, item.bpm);
-            for (double alternative : result.tempo.alternatives)
-                usable = usable || tempoMatches(alternative, item.bpm);
-            tempoMetrical += usable;
-            if (result.tempo.highConfidence()) {
-                ++tempoHigh;
-                tempoHighExact += bpmExact;
-            }
-        }
-        bool exactKey = false;
-        if (item.root >= 0) {
-            ++keyKnown;
-            exactKey = result.key.root == item.root &&
-                       result.key.scale == item.scale;
-            keyExact += exactKey;
-            if (result.key.highConfidence()) {
-                ++keyHigh;
-                keyHighExact += exactKey;
-            }
-        }
-        const std::string expectedKey = item.root < 0
-            ? "-" : analysis::pitchClassName(item.root) + " " + item.scale;
-        std::cout << item.path << '\t' << std::fixed << std::setprecision(1)
-                  << item.bpm << '\t' << result.tempo.bpm << '\t'
-                  << std::setprecision(3) << result.tempo.confidence << '\t'
-                  << expectedKey << '\t' << analysis::keyDisplayName(result.key)
-                  << '\t' << result.key.confidence << '\n';
-    }
-
-    const auto percent = [](int correct, int total) {
-        return total ? 100.0 * correct / total : 0.0;
-    };
-    std::cout << "\nAnalyzed " << analyzed << ", failed " << failed << '\n'
-              << "Tempo exact (1%): " << tempoExact << '/' << tempoKnown << " ("
-              << std::setprecision(1) << percent(tempoExact, tempoKnown) << "%)\n"
-              << "Tempo incl. half/double or alternative: " << tempoMetrical << '/'
-              << tempoKnown << " (" << percent(tempoMetrical, tempoKnown) << "%)\n"
-              << "High-confidence tempo precision: " << tempoHighExact << '/'
-              << tempoHigh << " (" << percent(tempoHighExact, tempoHigh) << "%)\n"
-              << "Key exact: " << keyExact << '/' << keyKnown << " ("
-              << percent(keyExact, keyKnown) << "%)\n"
-              << "High-confidence key precision: " << keyHighExact << '/'
-              << keyHigh << " (" << percent(keyHighExact, keyHigh) << "%)\n";
-    return failed == int(items.size()) ? 1 : 0;
+    return count == 0 || failed ? 1 : 0;
 }

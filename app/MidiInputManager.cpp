@@ -177,10 +177,9 @@ void MidiInputManager::refreshPorts() {
     // Every RtMidi entry point drags in CoreMIDI's one-time XPC handshake with
     // the system MIDIServer, and a wedged server makes that handshake block
     // forever -- on the GUI thread that is a frozen application, splash screen
-    // and all. It also cannot be caught: RtMidi 6.0.0 declares its CoreMIDI
-    // client helper throw() while throwing RtMidiError from it, so an error
-    // reaches std::terminate rather than the catch below. Wait for the probe
-    // thread instead; the one-second scan only polls its result.
+    // and all. The probe only guards that initial handshake: a later client
+    // creation can still fail. Our patched macOS RtMidi lets that error reach
+    // the catch below instead of terminating inside its former throw() helper.
     if (!coreMidiReady()) return;
 #endif
 

@@ -42,7 +42,9 @@ legacy VST1/VST2, CLAP and
 AU plugins and the
 built-in sampler, browse and audition sample folders, choose the audio device,
 export a mixdown, and save/open portable `.vlt` projects — with undo/redo and
-themes.
+themes. Complete appearance setups can be saved as portable `.vlttheme` files;
+their local images, videos, GIFs and custom fonts are embedded for transfer to
+another computer. See [the format description](docs/THEME_FORMAT.md).
 
 The integrated Web browser (right edge, `Alt+W`) uses a persistent, tabbed
 Qt WebEngine profile. Audio downloaded there can be imported at the playhead on

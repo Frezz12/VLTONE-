@@ -104,6 +104,9 @@ inline constexpr int kDefaultGridIndex = 5;
 /// QSettings key for the Space play/pause behaviour, an int matching
 /// EngineController::PlaybackMode.
 inline constexpr const char* kPlaybackModeSetting = "transport/playMode";
+/// Horizontal zoom anchor: false keeps the time under the pointer fixed;
+/// true centres selected clips, falling back to the playhead.
+inline constexpr const char* kZoomFocusSetting = "timeline/zoomFocus";
 /// Appearance of the top readout: "neon" (default) or "plain".
 inline constexpr const char* kTransportPanelStyleSetting = "transport/panelStyle";
 /// Optional audio file used for the metronome. Empty selects the built-in

@@ -26,6 +26,7 @@
 #include <QLabel>
 #include <QLineF>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QLinearGradient>
 #include <QMenu>
 #include <QProgressDialog>
@@ -370,21 +371,22 @@ TrackListWidget::TrackListWidget(daw::EngineController* controller,
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    auto* ruler = new QWidget(this);
-    ruler->setObjectName("TrackListRuler");
-    ruler->setFixedHeight(ui::kRulerHeight);
-    auto* rulerRow = new QHBoxLayout(ruler);
-    rulerRow->setContentsMargins(11, 0, 11, 0);
-    rulerRow->setSpacing(7);
-    // Where the word "TRACKS" used to be: the two chips that lift a mute or a
-    // solo anywhere in the project. They are the same chips the rows carry —
-    // and they light for the same reason, because *something* down the list is
-    // in that state. A label saying "tracks" over a column of tracks was the
-    // least useful thing that could occupy this corner.
+    m_ruler = new QWidget(this);
+    m_ruler->setObjectName("TrackListRuler");
+    m_ruler->setFixedHeight(ui::kRulerHeight);
+    m_rulerRow = new QHBoxLayout(m_ruler);
+    m_rulerRow->setContentsMargins(6, 0, 6, 0);
+    // Seven header actions plus the global M/S chips still fit at the
+    // resizable column's 220 px minimum without clipping either end.
+    m_rulerRow->setSpacing(2);
     m_clearMutes = new ui::MsrButton("M", Theme::mute(),
-                                     tr("Unmute every track"), ruler);
+                                     tr("Unmute every track"), m_ruler);
     m_clearSolos = new ui::MsrButton("S", Theme::solo(),
-                                     tr("Clear every solo"), ruler);
+                                     tr("Clear every solo"), m_ruler);
+    m_clearMutes->setObjectName(QStringLiteral("ClearAllMutesButton"));
+    m_clearSolos->setObjectName(QStringLiteral("ClearAllSolosButton"));
+    m_clearMutes->setAccessibleName(tr("Unmute every track"));
+    m_clearSolos->setAccessibleName(tr("Clear every solo"));
     // They light like the row chips do, but they are not a state of their own:
     // whatever the click leaves the project in, `refreshGlobalChips` puts the
     // lamp back in step with it.
@@ -396,17 +398,14 @@ TrackListWidget::TrackListWidget(daw::EngineController* controller,
     });
     connect(m_clearSolos, &QAbstractButton::clicked, this, [this] {
         m_controller->clearAllSolos();
+        syncTrackValues();
         refreshGlobalChips();
         emit tracksChanged();
     });
 
-    auto* hint = new QLabel(tr("ARRANGEMENT"), ruler);
-    hint->setObjectName("TrackListHint");
-    rulerRow->addWidget(m_clearMutes);
-    rulerRow->addWidget(m_clearSolos);
-    rulerRow->addStretch(1);
-    rulerRow->addWidget(hint);
-    outer->addWidget(ruler);
+    m_rulerRow->addWidget(m_clearMutes);
+    m_rulerRow->addWidget(m_clearSolos);
+    outer->addWidget(m_ruler);
 
     // The rows live on a host widget inside a fixed-height viewport rather than
     // in the column's own layout: a project with thirty tracks has to *scroll*,
@@ -431,6 +430,13 @@ TrackListWidget::TrackListWidget(daw::EngineController* controller,
     applyTheme();
 }
 
+void TrackListWidget::setRulerActions(QWidget* actions) {
+    if (!actions || !m_ruler || !m_rulerRow) return;
+    actions->setParent(m_ruler);
+    actions->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_rulerRow->insertWidget(0, actions, 1);
+}
+
 void TrackListWidget::applyTheme() {
     const Theme& t = th();
     setStyleSheet(QString(R"(
@@ -443,8 +449,6 @@ void TrackListWidget::applyTheme() {
 #TrackHeaders QLabel { color: %TEXT2%; font-size: 9px; }
 #TrackListTitle { color: %TEXT%; font-size: 10px; font-weight: 700;
                   letter-spacing: 0.8px; }
-#TrackListHint { color: %TEXT2%; font-size: 8px; font-weight: 600;
-                 letter-spacing: 0.5px; }
 #FolderCount { color: %TEXT2%; font-size: 9px; font-weight: 600; }
 )")
         .replace("%BG%", mixColors(t.background, t.surface, 0.18).name())
@@ -1394,13 +1398,22 @@ bool TrackListWidget::checkButtonPaintForTest(QString* error) {
     c = controller.project().findTrack(third.toStdString());
     if (!a || !b || !c || a->soloed || !b->soloed || !c->soloed)
         return fail(QStringLiteral("solo paint escaped the crossed rows"));
-    controller.setTrackSoloed(second.toStdString(), false);
-    controller.setTrackSoloed(third.toStdString(), false);
+    auto* clearSolos =
+        list.findChild<QAbstractButton*>(QStringLiteral("ClearAllSolosButton"));
+    if (!clearSolos || !clearSolos->isChecked())
+        return fail(QStringLiteral("global solo reset did not reflect active solos"));
+    clearSolos->click();
     a = controller.project().findTrack(first.toStdString());
     b = controller.project().findTrack(second.toStdString());
     c = controller.project().findTrack(third.toStdString());
+    const auto* secondSolo =
+        list.rowChipForTest(second, QStringLiteral("S"));
+    const auto* thirdSolo =
+        list.rowChipForTest(third, QStringLiteral("S"));
     if (!a || !b || !c || a->muted || b->muted || c->muted ||
-        a->soloed || b->soloed || c->soloed) {
+        a->soloed || b->soloed || c->soloed || clearSolos->isChecked() ||
+        !secondSolo || !thirdSolo || secondSolo->isChecked() ||
+        thirdSolo->isChecked()) {
         return fail(QStringLiteral("track paint fixture did not reset"));
     }
     return true;

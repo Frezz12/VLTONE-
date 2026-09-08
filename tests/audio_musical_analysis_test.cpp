@@ -7,6 +7,8 @@
 #include <chrono>
 #include <filesystem>
 #include <numbers>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
@@ -75,7 +77,7 @@ int main() {
                     analysis::keyDisplayName(result.key).c_str(),
                     result.key.confidence);
         check(bool(status), "combined analysis succeeds");
-        check(std::abs(result.tempo.bpm - 128.0) < 2.0,
+        check(std::abs(result.tempo.bpm - 128.0) < 0.1,
               "steady beat is detected at the primary metrical level");
         check(result.tempo.status != analysis::DetectionStatus::Unavailable,
               "steady beat returns a tempo result");
@@ -109,7 +111,8 @@ int main() {
             std::printf("      range %.0f -> %.1f BPM (%.3f)\n", expected,
                         result.tempo.bpm, result.tempo.confidence);
             coveredRange = coveredRange &&
-                std::abs(result.tempo.bpm - expected) < 2.5;
+                analysis::roundedBpm(result.tempo.bpm) == int(expected) &&
+                std::abs(result.tempo.bpm - expected) < 0.1;
         }
         check(coveredRange, "tempo detector covers slow through fast beat loops");
     }
@@ -147,6 +150,22 @@ int main() {
               "silence does not invent a key");
     }
     {
+        auto first = musicalBeat(120, 0, false, 20);
+        auto second = musicalBeat(150, 6, false, 20);
+        first.insert(first.end(), second.begin(), second.end());
+        analysis::MusicalAnalysisRequest request;
+        request.useNeuralModels = false;
+        request.detectKey = false;
+        analysis::MusicalAnalysisResult result;
+        analysis::analyzeAudioSamples(first.data(), first.size(), 1, rate, request, result);
+        check(result.tempo.variable && !result.tempo.highConfidence(),
+              "a real tempo change is distinguished from half/double ambiguity");
+        request.detectTempo = false; request.detectKey = true;
+        analysis::analyzeAudioSamples(first.data(), first.size(), 1, rate, request, result);
+        check(result.key.variable && !result.key.highConfidence(),
+              "multiple sustained tonal centers are marked ambiguous");
+    }
+    {
         daw::ProjectModel project;
         daw::TrackModel track;
         track.id = "analysis-track";
@@ -155,7 +174,10 @@ int main() {
         clip.id = "analysis-clip";
         clip.kind = daw::ClipKind::Audio;
         clip.filePath = "/tmp/analysis-fixture.wav";
-        clip.musicalAnalysis.algorithmVersion = 1;
+        clip.musicalAnalysis.algorithmVersion = 2;
+        clip.musicalAnalysis.tempo.algorithmVersion = 2;
+        clip.musicalAnalysis.tempo.backend = "dsp";
+        clip.musicalAnalysis.key.algorithmVersion = 1;
         clip.musicalAnalysis.analyzedOffsetSeconds = 1.25;
         clip.musicalAnalysis.analyzedDurationSeconds = 8.0;
         clip.musicalAnalysis.tempo.status = daw::MusicalAnalysisStatus::Available;
@@ -183,12 +205,33 @@ int main() {
         const daw::ClipModel* restored = nullptr;
         if (opened && !loaded.tracks.empty() && !loaded.tracks[0].clips.empty())
             restored = &loaded.tracks[0].clips[0];
-        check(restored && restored->musicalAnalysis.algorithmVersion == 1 &&
+        check(restored && restored->musicalAnalysis.algorithmVersion == 2 &&
+                  restored->musicalAnalysis.tempo.algorithmVersion == 2 &&
+                  restored->musicalAnalysis.key.algorithmVersion == 1 &&
+                  !restored->musicalAnalysis.tempo.calibrated &&
                   std::abs(restored->musicalAnalysis.tempo.bpm - 127.8) < 1e-9 &&
                   restored->musicalAnalysis.tempo.alternatives.size() == 2 &&
                   restored->musicalAnalysis.key.root == 3 &&
                   restored->musicalAnalysis.key.scale == "natural_minor",
               "BPM and key analysis survives project serialization");
+        if (opened) {
+            nlohmann::json old;
+            { std::ifstream stream(document); stream >> old; }
+            auto& item = old["tracks"][0]["clips"][0]["musicalAnalysis"];
+            item["version"] = 1;
+            for (const char* field : {"algorithmVersion", "calibrated", "backend", "reason"}) {
+                item["tempo"].erase(field); item["key"].erase(field);
+            }
+            item["key"].erase("variable");
+            { std::ofstream stream(document); stream << old; }
+            daw::ProjectModel legacy;
+            check(daw::ProjectSerializer::loadDocument(legacy, document.string(), "").isOk() &&
+                  legacy.tracks[0].clips[0].musicalAnalysis.tempo.algorithmVersion == 1 &&
+                  legacy.tracks[0].clips[0].musicalAnalysis.key.algorithmVersion == 1 &&
+                  legacy.tracks[0].clips[0].musicalAnalysis.tempo.bpm == 127.8 &&
+                  !legacy.tracks[0].clips[0].musicalAnalysis.tempo.calibrated,
+                  "old projects retain their values and per-field legacy provenance");
+        }
         std::error_code cleanupError;
         fs::remove_all(folder, cleanupError);
     }

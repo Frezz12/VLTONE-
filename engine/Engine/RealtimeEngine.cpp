@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <numbers>
+#include <stdexcept>
 #include <thread>
 
 namespace daw::engine {
@@ -27,7 +28,7 @@ RealtimeEngine::RealtimeEngine(unsigned threadCount) : m_processor(threadCount) 
 RealtimeEngine::~RealtimeEngine() = default;
 
 Status RealtimeEngine::prepare(SampleRate sampleRate, FrameCount maxBlockSize,
-                               ChannelCount channels) {
+                               ChannelCount channels, bool offline) {
     if (maxBlockSize == 0 || maxBlockSize > kMaxBlockSize) {
         return fail(EngineError::BlockTooLarge);
     }
@@ -42,6 +43,7 @@ Status RealtimeEngine::prepare(SampleRate sampleRate, FrameCount maxBlockSize,
     m_prepareInfo.sampleRate = sampleRate;
     m_prepareInfo.maxBlockSize = maxBlockSize;
     m_prepareInfo.channels = channels;
+    m_prepareInfo.offline = offline;
     m_transport.setSampleRate(sampleRate);
     prepareMasterSpectrum(sampleRate);
 
@@ -50,7 +52,8 @@ Status RealtimeEngine::prepare(SampleRate sampleRate, FrameCount maxBlockSize,
     for (ChannelCount ch = 0; ch < channels; ++ch) {
         m_offlinePointers[ch] = m_offlineStorage.data() + std::size_t(ch) * maxBlockSize;
     }
-    return commitGraph();
+    m_offlineError.clear();
+    return offline ? prepareOfflineGraph() : commitGraph();
 }
 
 double RealtimeEngine::SpectrumBandFilter::process(float input,
@@ -274,6 +277,46 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
     m_rendering.store(false);
 }
 
+Status RealtimeEngine::offlineFailure(const CompiledGraph::CompiledNode& entry,
+                                      EngineError error, SamplePos position) {
+    m_offlineError = std::string(describe(error)) + ": " +
+        std::string(entry.node->name()) + " (node " + std::to_string(entry.id) +
+        ", sample " + std::to_string(position) + ")";
+    return fail(error);
+}
+
+Status RealtimeEngine::prepareOfflineGraph() {
+    PrepareInfo info = m_prepareInfo;
+    info.offline = true;
+    auto snapshot = m_processor.graph();
+    // Activation and deferred main-thread work can change latency or layout.
+    // Stabilise before any file window is computed, with a bounded restart
+    // budget so a broken plugin cannot hang preparation forever.
+    for (unsigned attempt = 0; attempt < 8; ++attempt) {
+        if (!snapshot || m_graph.isDirty() ||
+            std::any_of(snapshot->nodes.begin(), snapshot->nodes.end(),
+                [&](const auto& entry) { return !entry.node->isPreparedFor(info); })) {
+            auto compiled = m_graph.compile(info, snapshot.get());
+            if (!compiled) return fail(compiled.error());
+            snapshot = *compiled;
+            m_processor.setGraph(snapshot);
+        }
+        bool stable = true;
+        for (const auto& entry : snapshot->nodes) {
+            if (const auto status = entry.node->serviceOffline(); !status)
+                return offlineFailure(entry, status.error(), 0);
+            stable &= entry.node->isPreparedFor(info);
+        }
+        if (!stable) continue;
+        for (const auto& entry : snapshot->nodes)
+            if (const auto status = entry.node->offlineStatus(); !status)
+                return offlineFailure(entry, status.error(), 0);
+        return {};
+    }
+    m_offlineError = "audio processor did not finish preparing for export";
+    return fail(EngineError::RenderConfigurationChanged);
+}
+
 Status RealtimeEngine::renderOffline(
     SamplePos startSample, SamplePos endSample, FrameCount blockSize,
     const std::function<bool(const AudioBlock&, FrameCount)>& sink,
@@ -282,85 +325,79 @@ Status RealtimeEngine::renderOffline(
     if (endSample <= startSample) return fail(EngineError::InvalidArgument);
     const FrameCount block = std::min(blockSize, m_prepareInfo.maxBlockSize);
     if (block == 0) return fail(EngineError::BlockTooLarge);
-
-    // The compiled graph contains mutable per-pass scratch and the nodes own
-    // mutable DSP/plugin state. Park live rendering for the complete pass and
-    // serialize analysis/export callers; sharing either concurrently corrupts
-    // dependency counters, delay lines and plugin state.
     if (m_offlineActive) return fail(EngineError::NotCompiled);
+    const auto original = m_processor.graph();
+    if (!original) return fail(EngineError::NotCompiled);
     struct OfflineScope {
         bool& active;
         explicit OfflineScope(bool& flag) : active(flag) { active = true; }
         ~OfflineScope() { active = false; }
     } offlineScope(m_offlineActive);
+    m_offlineError.clear();
 
-    const auto snapshot = m_processor.graph();
-    if (!snapshot) return fail(EngineError::NotCompiled);
-
-    // Activate hosted plugins in their format's offline mode for this pass and
-    // restore realtime configuration before the gate reopens. Other nodes see
-    // the same prepare data apart from the mode bit.
     PrepareInfo offlineInfo = m_prepareInfo;
     offlineInfo.offline = true;
-
-    const auto resetDelayState = [&] {
-        for (const auto& delay : snapshot->delays) delay->reset();
-        for (const auto& delay : snapshot->midiDelays) delay->reset();
+    const auto clearDelays = [](const CompiledGraph& graph) {
+        for (const auto& delay : graph.delays) delay->reset();
+        for (const auto& delay : graph.midiDelays) delay->reset();
     };
-
-    // A render is a fresh pass: reset every node so ramps start at their target
-    // and filters start silent. Audio and MIDI compensation queues are one piece
-    // of that state; retaining either would leak the live pass into the export.
-
+    const auto restore = [&] {
+        // A live engine needs a newly compiled realtime graph, not just nodes
+        // switched back underneath the offline delay lines. An isolated
+        // controller remains offline for its whole lifetime.
+        if (!m_prepareInfo.offline) {
+            auto compiled = m_graph.compile(m_prepareInfo);
+            if (!compiled) throw std::runtime_error(std::string(describe(compiled.error())));
+            m_processor.setGraph(*compiled);
+        }
+        if (const auto graph = m_processor.graph()) clearDelays(*graph);
+    };
     AudioBlock output(m_offlinePointers.data(), m_prepareInfo.channels, block);
-    const auto restoreRealtime = [&] {
-        for (const auto& entry : snapshot->nodes) {
-            if (!entry.node->isPreparedFor(m_prepareInfo)) {
-                entry.node->prepare(m_prepareInfo);
-                entry.node->markPrepared(m_prepareInfo);
-            }
-        }
-        // The final partial block can leave events and samples pending beyond the
-        // export range. They belong to that offline pass and must not surface in
-        // the first live block after the render gate reopens.
-        resetDelayState();
-    };
-
-    // Offline runs on the same graph and the same scheduler — the only thing
-    // that changes is that nothing has to finish inside a block period, so the
-    // pool is free to use every core.
+    Status result;
     try {
-        for (const auto& entry : snapshot->nodes) {
-            if (!entry.node->isPreparedFor(offlineInfo)) {
-                entry.node->invalidatePrepare();
-                entry.node->prepare(offlineInfo);
-                entry.node->markPrepared(offlineInfo);
-            }
-        }
-
-        for (const auto& entry : snapshot->nodes) entry.node->reset();
-        resetDelayState();
-        for (SamplePos position = startSample; position < endSample; position += block) {
-            const FrameCount frames =
-                FrameCount(std::min<SamplePos>(block, endSample - position));
-            // Same derivation as the live path, from the same transport state, so
-            // a tempo-synced plugin bounces exactly what it played.
-            const TransportInfo transport = m_transport.infoAt(position);
-            const bool playing = position < options.sourcesEndSample;
-            if (!m_processor.process(output, frames, position, playing,
-                                     /*offline=*/true, transport)) {
-                for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
-                    dsp::clear(output.channel(ch).first(frames));
+        // Also clears a previous pass's failure before retrying this engine.
+        for (const auto& entry : original->nodes) entry.node->reset();
+        result = prepareOfflineGraph();
+        if (result) {
+            const auto snapshot = m_processor.graph();
+            for (const auto& entry : snapshot->nodes) entry.node->reset();
+            clearDelays(*snapshot);
+            const auto service = [&](SamplePos position) -> Status {
+                for (const auto& entry : snapshot->nodes) {
+                    if (const auto status = entry.node->serviceOffline(); !status)
+                        return offlineFailure(entry, status.error(), position);
+                    if (!entry.node->isPreparedFor(offlineInfo))
+                        return offlineFailure(entry, EngineError::RenderConfigurationChanged, position);
+                    if (const auto status = entry.node->offlineStatus(); !status)
+                        return offlineFailure(entry, status.error(), position);
                 }
+                return {};
+            };
+            result = service(startSample);
+            for (SamplePos position = startSample; result && position < endSample;) {
+                FrameCount frames = FrameCount(std::min<SamplePos>(block, endSample - position));
+                // Split the last source block exactly at the requested end;
+                // a long clip must not feed another partial block into a tail.
+                if (position < options.sourcesEndSample)
+                    frames = FrameCount(std::min<SamplePos>(frames, options.sourcesEndSample - position));
+                const TransportInfo transport = m_transport.infoAt(position);
+                result = m_processor.process(output, frames, position,
+                    position < options.sourcesEndSample, true, transport);
+                if (!result) break;
+                // Workers are finished. Both error inspection and format
+                // main-thread callbacks happen here, before a sink can write
+                // this block; nothing is added to the realtime device path.
+                result = service(position);
+                if (!result || !sink(output, frames)) break;
+                position += frames;
             }
-            if (!sink(output, frames)) break;
         }
     } catch (...) {
-        try { restoreRealtime(); } catch (...) { m_processor.setGraph({}); }
+        try { restore(); } catch (...) { m_processor.setGraph({}); }
         throw;
     }
-    try { restoreRealtime(); } catch (...) { m_processor.setGraph({}); throw; }
-    return {};
+    try { restore(); } catch (...) { m_processor.setGraph({}); throw; }
+    return result;
 }
 
 } // namespace daw::engine

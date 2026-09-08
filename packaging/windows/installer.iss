@@ -69,6 +69,10 @@ Root: HKLM; Subkey: "Software\Classes\.vlt"; ValueType: string; ValueName: ""; V
 Root: HKLM; Subkey: "Software\Classes\VLTStudioPro.Project"; ValueType: string; ValueName: ""; ValueData: "VLTONE Project"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\VLTStudioPro.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\VLTONE.exe,0"
 Root: HKLM; Subkey: "Software\Classes\VLTStudioPro.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\VLTONE.exe"" ""%1"""
+Root: HKLM; Subkey: "Software\Classes\.vlttheme"; ValueType: string; ValueName: ""; ValueData: "VLTONE.Theme"; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\Classes\VLTONE.Theme"; ValueType: string; ValueName: ""; ValueData: "VLTONE Theme"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\VLTONE.Theme\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\VLTONE.exe,0"
+Root: HKLM; Subkey: "Software\Classes\VLTONE.Theme\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\VLTONE.exe"" ""%1"""
 
 [Run]
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ Runtime..."; Flags: runhidden waituntilterminated

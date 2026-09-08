@@ -24,10 +24,30 @@ else()
         ${DAW_QT_COMPONENTS})
 endif()
 find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
-find_package(RtMidi CONFIG REQUIRED)
+if(NOT APPLE)
+    find_package(RtMidi CONFIG REQUIRED)
+endif()
 qt_standard_project_setup()   # enables AUTOMOC / AUTOUIC / AUTORCC
 
 if(DAW_BUILD_TESTS)
+    qt_add_executable(theme_package_test
+        ../tests/theme_package_test.cpp
+        ThemePackage.cpp ThemePackage.hpp Theme.cpp Theme.hpp Typography.cpp
+        NotebookPrefs.cpp NotebookPrefs.hpp TimelineBackgroundPrefs.cpp
+        TimelineBackgroundPrefs.hpp UiConstants.cpp UiConstants.hpp)
+    target_include_directories(theme_package_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(theme_package_test PRIVATE
+        Qt6::Widgets Qt6::WebEngineCore)
+    add_test(NAME theme_package_test COMMAND theme_package_test)
+    set_tests_properties(theme_package_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+    if(WIN32)
+        set_tests_properties(theme_package_test PROPERTIES
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+
     qt_add_executable(browser_navigation_test
         ../tests/browser_navigation_test.cpp
         WebBrowserPanel.cpp WebBrowserPanel.hpp BrowserBackgroundDialog.cpp BrowserBackgroundDialog.hpp
@@ -176,6 +196,13 @@ target_link_libraries(daw PRIVATE daw_controller Qt6::Widgets Qt6::Network
                                   Qt6::SerialPort Qt6::Svg
                                   OpenSSL::Crypto RtMidi::rtmidi)
 if(DAW_BUILD_TESTS)
+    add_test(NAME track_creation_ui_test COMMAND $<TARGET_FILE:daw> --trackcreationcheck)
+    add_test(NAME plugin_picker_ui_test COMMAND $<TARGET_FILE:daw> --pluginpickercheck)
+    set_tests_properties(plugin_picker_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+    set_tests_properties(track_creation_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 30)
     add_test(NAME collaboration_client_selftest
              COMMAND $<TARGET_FILE:daw> --collaboration-selftest)
     set_tests_properties(collaboration_client_selftest PROPERTIES
@@ -185,7 +212,7 @@ if(DAW_BUILD_TESTS)
         # CTest does not inherit the Qt SDK's bin directory on clean Windows
         # runners. Without this, the loader opens an invisible error dialog for
         # a missing Qt6Core.dll and the headless test appears to time out.
-        set_tests_properties(collaboration_client_selftest PROPERTIES
+        set_tests_properties(collaboration_client_selftest track_creation_ui_test plugin_picker_ui_test PROPERTIES
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
@@ -253,6 +280,8 @@ install(FILES "${CMAKE_SOURCE_DIR}/third_party/signalsmith/signalsmith-linear/LI
 install(FILES "${CMAKE_SOURCE_DIR}/fonts/OFL.txt"
         DESTINATION "${VLTONE_FONT_LICENSE_DIR}")
 
+daw_install_audio_analysis(daw)
+
 install(TARGETS daw
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION bin)
@@ -282,9 +311,24 @@ qt6_deploy_runtime_dependencies(
     DEPLOY_TOOL_OPTIONS --include-plugins qoffscreen
 )")
     else()
+        set(DAW_QT_DEPLOY_OPTIONS)
+        if(APPLE)
+            # Homebrew installs this automatically discovered input plugin in
+            # a separate prefix, outside the linked Qt modules' search paths.
+            find_package(Qt6VirtualKeyboard QUIET)
+            if(TARGET Qt6::VirtualKeyboard)
+                get_target_property(vlt_keyboard_binary Qt6::VirtualKeyboard IMPORTED_LOCATION_RELEASE)
+                if(vlt_keyboard_binary)
+                    get_filename_component(vlt_keyboard_version_dir "${vlt_keyboard_binary}" DIRECTORY)
+                    get_filename_component(vlt_keyboard_library_dir "${vlt_keyboard_version_dir}/../../.." REALPATH)
+                    list(APPEND DAW_QT_DEPLOY_OPTIONS "-libpath=${vlt_keyboard_library_dir}")
+                endif()
+            endif()
+        endif()
         qt_generate_deploy_app_script(
             TARGET daw
             OUTPUT_SCRIPT DAW_DEPLOY_SCRIPT
+            DEPLOY_TOOL_OPTIONS ${DAW_QT_DEPLOY_OPTIONS}
             NO_UNSUPPORTED_PLATFORM_ERROR)
     endif()
     install(SCRIPT ${DAW_DEPLOY_SCRIPT})

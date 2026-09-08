@@ -25,15 +25,34 @@ target_link_libraries(audio_musical_analysis_test PRIVATE daw_controller)
 
 add_test(NAME audio_musical_analysis_test COMMAND audio_musical_analysis_test)
 set_tests_properties(audio_musical_analysis_test PROPERTIES
-    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+    FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT"
+    ENVIRONMENT "VLT_AUDIO_ANALYSIS_MODELS=${CMAKE_SOURCE_DIR}/models/audio-analysis" TIMEOUT 180)
+
+add_executable(audio_analysis_contract_test audio_analysis_contract_test.cpp)
+target_link_libraries(audio_analysis_contract_test PRIVATE daw_controller)
+target_compile_definitions(audio_analysis_contract_test PRIVATE DAW_ANALYSIS_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/data/audio-analysis"
+    DAW_TEST_NEURAL=$<BOOL:${DAW_ENABLE_NEURAL_ANALYSIS}>)
+add_test(NAME audio_analysis_contract_test COMMAND audio_analysis_contract_test)
+set_tests_properties(audio_analysis_contract_test PROPERTIES TIMEOUT 120
+    ENVIRONMENT "VLT_AUDIO_ANALYSIS_MODELS=${CMAKE_SOURCE_DIR}/models/audio-analysis")
+add_test(NAME audio_analysis_fallback_test COMMAND audio_musical_analysis_test)
+set_tests_properties(audio_analysis_fallback_test PROPERTIES TIMEOUT 180
+    ENVIRONMENT "VLT_AUDIO_ANALYSIS_MODELS=${CMAKE_BINARY_DIR}/missing-analysis-models")
 
 # Corpus evaluator for licensed/local datasets. Kept out of the default build:
 # it is a quality/calibration instrument, not a deterministic unit test.
-add_executable(audio_analysis_bench EXCLUDE_FROM_ALL audio_analysis_bench.cpp)
+add_executable(audio_analysis_bench EXCLUDE_FROM_ALL audio_analysis_bench.cpp analysis_v1/AudioMusicalAnalysis.cpp)
 target_link_libraries(audio_analysis_bench PRIVATE daw_controller)
 
-# Manual hardware smoke — built but NOT registered as a ctest, since it opens a
-# real audio device. Run ./bin/device_smoke by hand.
+# CoreMIDI constructor failures must remain catchable, without hardware.
+if(APPLE)
+    add_executable(rtmidi_failure_test rtmidi_failure_test.cpp)
+    target_link_libraries(rtmidi_failure_test PRIVATE RtMidi::rtmidi)
+    add_test(NAME rtmidi_failure_test COMMAND rtmidi_failure_test)
+    set_tests_properties(rtmidi_failure_test PROPERTIES TIMEOUT 10)
+endif()
+
+# Manual hardware smoke — NOT a ctest, since it opens a real audio device.
 add_executable(device_smoke device_smoke.cpp)
 target_link_libraries(device_smoke PRIVATE daw_controller)
 
@@ -286,6 +305,12 @@ set_tests_properties(composition_eval PROPERTIES
 add_executable(plugin_probe EXCLUDE_FROM_ALL plugin_probe.cpp)
 target_link_libraries(plugin_probe PRIVATE daw_pluginhost)
 
+if(APPLE)
+    add_executable(plugin_lifetime_probe EXCLUDE_FROM_ALL plugin_lifetime_probe.mm)
+    target_link_libraries(plugin_lifetime_probe PRIVATE daw_pluginhost "-framework AppKit")
+    target_compile_options(plugin_lifetime_probe PRIVATE -fobjc-arc)
+endif()
+
 # The same idea one layer up: a real plugin in a real slot, through the
 # controller — does the slot end up with a live instance, and does that survive
 # a Replace. Also hand-run only.
@@ -350,6 +375,21 @@ if(DAW_ENABLE_CLAP)
         PRIVATE DAW_TEST_CLAP_PATH="${DAW_TEST_CLAP_PATH}")
     add_dependencies(plugin_host_test daw_test_clap)
 
+    add_executable(render_integrity_test render_integrity_test.cpp)
+    target_link_libraries(render_integrity_test PRIVATE daw_controller)
+    target_compile_definitions(render_integrity_test PRIVATE
+        DAW_TEST_CLAP_PATH="${DAW_TEST_CLAP_PATH}"
+        DAW_TEST_RENDER_CLAP_PATH="$<TARGET_FILE:daw_test_render_clap>")
+    add_dependencies(render_integrity_test daw_test_clap daw_test_render_clap)
+    add_test(NAME render_integrity_test COMMAND render_integrity_test)
+    set_tests_properties(render_integrity_test PROPERTIES TIMEOUT 60)
+
+    add_executable(track_creation_test track_creation_test.cpp)
+    target_link_libraries(track_creation_test PRIVATE daw_controller)
+    target_compile_definitions(track_creation_test PRIVATE DAW_TEST_CLAP_PATH="${DAW_TEST_CLAP_PATH}")
+    add_dependencies(track_creation_test daw_test_clap)
+    add_test(NAME track_creation_test COMMAND track_creation_test)
+
     add_test(NAME plugin_host_test COMMAND plugin_host_test)
     set_tests_properties(plugin_host_test PROPERTIES
         FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
@@ -411,6 +451,12 @@ endif()
 # Phase-8: AU hosting. The fixture is macOS itself — Apple's own units in
 # /System/Library/Components — so nothing has to be built or installed.
 if(DAW_ENABLE_AU)
+    add_executable(au_editor_lifetime_test au_editor_lifetime_test.mm)
+    target_link_libraries(au_editor_lifetime_test PRIVATE daw_pluginhost)
+    target_compile_options(au_editor_lifetime_test PRIVATE -fno-objc-arc)
+    add_test(NAME au_editor_lifetime_test COMMAND au_editor_lifetime_test)
+    set_tests_properties(au_editor_lifetime_test PROPERTIES TIMEOUT 10)
+
     add_executable(plugin_au_test plugin_au_test.cpp)
     target_link_libraries(plugin_au_test PRIVATE daw_pluginhost)
     add_test(NAME plugin_au_test COMMAND plugin_au_test)

@@ -131,6 +131,8 @@ bool RecoveryJournal::start(const std::string& root, std::string appVersion,
     m_session.pid = currentProcessId();
     m_session.appVersion = std::move(appVersion);
     m_session.startedUnixMs = nowUnixMs();
+    m_session.uiHeartbeatTracked = true;
+    m_session.uiHeartbeatUnixMs = m_session.startedUnixMs;
 
     // pid plus start time: two DAWs running at once get separate directories,
     // and a recycled pid cannot collide with an old session either.
@@ -199,6 +201,13 @@ void RecoveryJournal::setStats(HealthStats stats) {
     m_session.stats = std::move(stats);
 }
 
+void RecoveryJournal::noteUiActivity() {
+    if (!m_running.load()) return;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    ++m_session.uiHeartbeat;
+    m_session.uiHeartbeatUnixMs = nowUnixMs();
+}
+
 void RecoveryJournal::flush() {
     if (!m_running.load()) return;
     std::unique_lock<std::mutex> lock(m_mutex);
@@ -261,7 +270,8 @@ void RecoveryJournal::run(std::chrono::milliseconds debounce) {
             m_written.notify_all();
         }
 
-        // ── the heartbeat the guard watches ──
+        // The worker's heartbeat is diagnostic only. The guard prefers the
+        // independently acknowledged UI heartbeat in new sessions.
         if (now - lastHeartbeat >= kHeartbeatInterval) {
             ++m_session.heartbeat;
             m_session.heartbeatUnixMs = nowUnixMs();

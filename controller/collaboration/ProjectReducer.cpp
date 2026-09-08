@@ -454,7 +454,16 @@ bool validSampleEdit(const ClipSampleEditModel& value) {
 
 bool musicalAnalysisEqual(const ClipMusicalAnalysisModel& a,
                           const ClipMusicalAnalysisModel& b) {
-    return a.algorithmVersion == b.algorithmVersion &&
+    return a.tempo.algorithmVersion == b.tempo.algorithmVersion &&
+           a.tempo.calibrated == b.tempo.calibrated &&
+           a.tempo.backend == b.tempo.backend &&
+           a.tempo.reason == b.tempo.reason &&
+           a.key.algorithmVersion == b.key.algorithmVersion &&
+           a.key.calibrated == b.key.calibrated &&
+           a.key.backend == b.key.backend &&
+           a.key.reason == b.key.reason &&
+           a.key.variable == b.key.variable &&
+           a.algorithmVersion == b.algorithmVersion &&
            a.analyzedOffsetSeconds == b.analyzedOffsetSeconds &&
            a.analyzedDurationSeconds == b.analyzedDurationSeconds &&
            a.tempo.status == b.tempo.status && a.tempo.bpm == b.tempo.bpm &&
@@ -478,13 +487,17 @@ bool validMusicalAnalysis(const ClipMusicalAnalysisModel& value) {
     const int tempoStatus = static_cast<int>(value.tempo.status);
     const int keyStatus = static_cast<int>(value.key.status);
     if (value.algorithmVersion < 0 || value.algorithmVersion > 1000000 ||
+        value.tempo.algorithmVersion < 0 || value.tempo.algorithmVersion > 1000000 ||
+        value.tempo.backend.size() > 128 || value.tempo.reason.size() > 512 ||
+        value.key.algorithmVersion < 0 || value.key.algorithmVersion > 1000000 ||
+        value.key.backend.size() > 128 || value.key.reason.size() > 512 ||
         !finiteRange(value.analyzedOffsetSeconds, 0.0, 1.0e12) ||
         !finiteRange(value.analyzedDurationSeconds, 0.0, 1.0e12) ||
         tempoStatus < int(MusicalAnalysisStatus::Unavailable) ||
         tempoStatus > int(MusicalAnalysisStatus::Available) ||
         keyStatus < int(MusicalAnalysisStatus::Unavailable) ||
         keyStatus > int(MusicalAnalysisStatus::Available) ||
-        !finiteRange(value.tempo.bpm, 0.0, 300.0) ||
+        !finiteRange(value.tempo.bpm, 0.0, 1.0e6) ||
         !finiteRange(value.tempo.confidence, 0.0, 1.0) ||
         !finiteRange(value.tempo.stability, 0.0, 1.0) ||
         value.tempo.alternatives.size() > 3 || value.key.root < -1 ||
@@ -498,7 +511,7 @@ bool validMusicalAnalysis(const ClipMusicalAnalysisModel& value) {
     return std::all_of(value.tempo.alternatives.begin(),
                        value.tempo.alternatives.end(), [](double bpm) {
                            return std::isfinite(bpm) && bpm > 0.0 &&
-                                  bpm <= 300.0;
+                                  bpm <= 1.0e6;
                        });
 }
 

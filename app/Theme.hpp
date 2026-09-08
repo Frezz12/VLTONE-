@@ -35,6 +35,7 @@ struct Theme {
     QColor transportBackground;
     QColor headerBackground;   // the transport/header bar's own colour
     QColor toolbarBackground;
+    QColor pluginMenuBackground = QColor(48, 48, 48, 242);
 
     // Fixed, theme-independent signal colours (mute / solo / record), so the
     // meaning of a lit button never depends on the palette.
@@ -101,6 +102,9 @@ public:
     bool hasCustomFont() const { return m_fontId >= 0; }
     QString customFontFamily() const { return m_fontFamily; }
     QString customFontFileName() const { return m_fontFileName; }
+    /// Private copied font data used by portable theme export. Empty when the
+    /// interface is using the bundled default.
+    QString customFontPath() const;
     QString defaultFontFamily() const { return m_defaultFont.family(); }
 
     /// Filesystem-isolated import/reset check used by --selftest.

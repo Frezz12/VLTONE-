@@ -35,6 +35,11 @@ PluginNode::~PluginNode() {
 }
 
 void PluginNode::prepare(const engine::PrepareInfo& info) {
+    m_processFailed.store(false, std::memory_order_relaxed);
+    // These requests are satisfied by this activation. New requests arriving
+    // during it remain pending, except latency which is read below.
+    m_restartRequested.store(false, std::memory_order_release);
+    m_latencyChanged.store(false, std::memory_order_release);
     m_maxBlockSize = info.maxBlockSize;
     m_arenaChannels = info.channels;
     m_pluginSleeping = false;
@@ -99,6 +104,7 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
         m_dryDelaySamples = latency;
         m_dryDelayPosition = 0;
         m_dryDelayStorage.assign(std::size_t(info.channels) * latency, 0.0f);
+        m_latencyChanged.store(false, std::memory_order_release);
     } else {
         m_latency.store(0, std::memory_order_relaxed);
         m_dryDelaySamples = 0;
@@ -108,7 +114,10 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
 }
 
 void PluginNode::reset() {
-    if (m_instance) m_instance->reset();
+    m_processFailed.store(false, std::memory_order_relaxed);
+    // A bypassed insert may have declined activation. CLAP reset requires an
+    // active instance even though that slot contributes only the dry signal.
+    if (m_instance && m_instance->isActive()) m_instance->reset();
     m_heldMidiOutput.fill(0);
     m_heldMidiOutputCount = 0;
     const bool bypassed = m_bypassed.load(std::memory_order_relaxed);
@@ -122,6 +131,26 @@ void PluginNode::reset() {
     m_sleepTransportValid = false;
     std::fill(m_dryDelayStorage.begin(), m_dryDelayStorage.end(), 0.0f);
     m_dryDelayPosition = 0;
+}
+
+engine::Status PluginNode::offlineStatus() const noexcept {
+    if (isBypassed() || m_mix.load(std::memory_order_relaxed) == 0.f) return {};
+    if (!m_instance || !isReady()) return engine::fail(engine::EngineError::ProcessorUnavailable);
+    if (m_processFailed.load(std::memory_order_relaxed))
+        return engine::fail(engine::EngineError::ProcessingFailed);
+    return {};
+}
+
+engine::Status PluginNode::serviceOffline() {
+    if (!m_instance || isBypassed() || m_mix.load(std::memory_order_relaxed) == 0.f) return {};
+    beginMainThreadPump();
+    m_instance->pumpMainThread();
+    if (takeReloadRequested())
+        return engine::fail(engine::EngineError::RenderConfigurationChanged);
+    const bool latencyChanged = takeLatencyChanged();
+    const bool restartRequested = takeRestartRequested();
+    if (latencyChanged || restartRequested) invalidatePrepare();
+    return {};
 }
 
 void PluginNode::suspend() {
@@ -584,6 +613,7 @@ void PluginNode::process(const engine::ProcessContext& context) {
             return;
         }
         if (!m_instance->wakeProcessing()) {
+            m_processFailed.store(true, std::memory_order_relaxed);
             // A failed format transition cannot be repaired in the callback.
             // Define audio and preserve MIDI rather than invoking process while
             // the format says the instance is stopped.
@@ -908,6 +938,11 @@ void PluginNode::process(const engine::ProcessContext& context) {
     const PluginProcessDisposition disposition =
         m_instance->process(processContext);
     m_currentMidiOutput = nullptr;
+    if (disposition == PluginProcessDisposition::Error) {
+        m_processFailed.store(true, std::memory_order_relaxed);
+        for (engine::ChannelCount ch = 0; ch < outChannels; ++ch)
+            dsp::clear(context.output.channel(ch).first(frames));
+    }
     if (bypassed) m_bypassProcessorReset = false;
 
     // A plugin with fewer output channels than the arena leaves the rest

@@ -1,6 +1,7 @@
 #include "UiPerformance.hpp"
 #include "AudioImportPreparation.hpp"
 #include "MainWindow.hpp"
+#include "CreateTracksDialog.hpp"
 #include <QContextMenuEvent>
 #include "CompLayout.hpp"
 #include "BrowserPrefs.hpp"
@@ -69,6 +70,7 @@
 #include "ProjectDialogs.hpp"
 #include "collaboration/SharedProjectSnapshot.hpp"
 #include "ProjectTemplates.hpp"
+#include "QuickImportPrefs.hpp"
 #include "RecoveryPrefs.hpp"
 #include "RecoverySupport.hpp"
 #include "plugins/ScanProcess.hpp"
@@ -648,54 +650,61 @@ bool runMusicalAnalysis(QWidget* parent, const QString& path,
 class AudioAnalysisResultDialog final : public QDialog {
     Q_DECLARE_TR_FUNCTIONS(AudioAnalysisResultDialog)
 public:
+    enum class Mode { Review, Import, QuickImport };
+
     AudioAnalysisResultDialog(
         const daw::analysis::MusicalAnalysisResult& result,
         const daw::analysis::MusicalAnalysisRequest& request,
-        double currentTempo, bool importing, bool autoApplyTempo,
+        double currentTempo, Mode mode, bool autoApplyTempo,
         QWidget* parent)
-        : QDialog(parent) {
-        setWindowTitle(tr("Audio analysis result"));
+        : QDialog(parent), m_quickImport(mode == Mode::QuickImport) {
+        setWindowTitle(m_quickImport ? tr("Quick Import analysis")
+                                     : tr("Audio analysis result"));
         setModal(true);
         setMinimumWidth(390);
         auto* column = new QVBoxLayout(this);
         column->setContentsMargins(20, 18, 20, 18);
         column->setSpacing(11);
 
-        auto* heading = new QLabel(tr("Analysis complete"), this);
+        auto* heading = new QLabel(
+            m_quickImport ? tr("Apply detected values to the project")
+                          : tr("Analysis complete"),
+            this);
         heading->setStyleSheet(QStringLiteral("font-size: 14px; font-weight: 700;"));
         column->addWidget(heading);
 
         if (request.detectTempo &&
             result.tempo.status != daw::analysis::DetectionStatus::Unavailable) {
             auto* tempoTitle = new QLabel(
-                tr("Detected tempo · %1% confidence")
-                    .arg(int(std::lround(result.tempo.confidence * 100.0))), this);
+                tr("Detected tempo · %1")
+                    .arg(result.tempo.highConfidence() ? tr("confident") : tr("ambiguous")), this);
             column->addWidget(tempoTitle);
             m_tempo = new QComboBox(this);
-            std::vector<double> candidates{result.tempo.bpm};
-            candidates.insert(candidates.end(), result.tempo.alternatives.begin(),
-                              result.tempo.alternatives.end());
-            for (double bpm : candidates) {
-                if (bpm <= 0.0) continue;
-                bool duplicate = false;
-                for (int i = 0; i < m_tempo->count(); ++i)
-                    duplicate = duplicate ||
-                        std::abs(m_tempo->itemData(i).toDouble() - bpm) < 0.2;
-                if (!duplicate)
-                    m_tempo->addItem(tr("%1 BPM").arg(bpm, 0, 'f', 1), bpm);
-            }
+            for (int bpm : daw::analysis::applicableTempos(result.tempo))
+                m_tempo->addItem(tr("%1 BPM").arg(bpm), bpm);
             column->addWidget(m_tempo);
-            m_applyTempo = new QCheckBox(
-                tr("Set project tempo (currently %1 BPM)")
-                    .arg(currentTempo, 0, 'f', 1), this);
-            m_applyTempo->setChecked(autoApplyTempo && m_tempo->count() > 0);
-            column->addWidget(m_applyTempo);
+            if (m_quickImport) {
+                auto* chooseTempo = new QLabel(
+                    tr("Choose the BPM to use for this project."), this);
+                chooseTempo->setWordWrap(true);
+                chooseTempo->setStyleSheet(
+                    QStringLiteral("color: palette(mid);"));
+                column->addWidget(chooseTempo);
+            } else {
+                m_applyTempo = new QCheckBox(
+                    tr("Set project tempo (currently %1 BPM)")
+                        .arg(daw::analysis::roundedBpm(currentTempo)), this);
+                m_applyTempo->setChecked(
+                    autoApplyTempo && result.tempo.highConfidence() &&
+                    m_tempo->count() > 0);
+                column->addWidget(m_applyTempo);
+            }
             if (!result.tempo.highConfidence()) {
                 auto* ambiguity = new QLabel(
                     result.tempo.variable
                         ? tr("The tempo changes across this clip. Nothing will be "
                              "applied unless you choose it.")
-                        : tr("The meter is ambiguous. Check the BPM before applying it."),
+                        : tr("Check the proposed BPM before applying it."),
                     this);
                 ambiguity->setWordWrap(true);
                 ambiguity->setStyleSheet(QStringLiteral("color: palette(mid);"));
@@ -713,41 +722,62 @@ public:
                 daw::analysis::keyDisplayName(result.key));
             const QString camelot = QString::fromStdString(
                 daw::analysis::camelotName(result.key.root, result.key.scale));
+            m_keyRoot = result.key.root;
+            m_keyScale = result.key.scale;
             auto* keyLabel = new QLabel(
-                tr("Key · %1 · Camelot %2 · %3% confidence")
-                    .arg(key, camelot)
-                    .arg(int(std::lround(result.key.confidence * 100.0))), this);
+                tr("Key · %1 · Camelot %2 · %3")
+                    .arg(key, camelot, result.key.highConfidence() ? tr("confident") : tr("ambiguous")), this);
             keyLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
             column->addWidget(keyLabel);
+            if (result.key.alternateRoot >= 0) {
+                daw::analysis::KeyEstimate alternative;
+                alternative.root = result.key.alternateRoot;
+                alternative.scale = result.key.alternateScale;
+                column->addWidget(new QLabel(tr("Alternative: %1").arg(
+                    QString::fromStdString(daw::analysis::keyDisplayName(alternative))), this));
+            }
+            if (result.key.variable)
+                column->addWidget(new QLabel(tr("The tonal center changes across this clip."), this));
         } else if (request.detectKey) {
             column->addWidget(new QLabel(tr("Key · not enough tonal information"),
                                          this));
         }
 
+        const bool canCancel = mode != Mode::Review;
         auto* buttons = new QDialogButtonBox(
-            importing ? QDialogButtonBox::Ok | QDialogButtonBox::Cancel
-                      : QDialogButtonBox::Ok,
-            this);
+            canCancel ? QDialogButtonBox::Ok | QDialogButtonBox::Cancel
+                      : QDialogButtonBox::Ok, this);
         if (auto* ok = buttons->button(QDialogButtonBox::Ok))
-            ok->setText(importing ? tr("Import") : tr("Done"));
+            ok->setText(m_quickImport ? tr("Apply")
+                        : mode == Mode::Import ? tr("Import") : tr("Done"));
         if (auto* cancel = buttons->button(QDialogButtonBox::Cancel))
-            cancel->setText(tr("Keep File Only"));
+            cancel->setText(m_quickImport ? tr("Keep without applying")
+                                          : tr("Keep File Only"));
         connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
         connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
         column->addWidget(buttons);
     }
 
     bool appliesTempo() const {
-        return m_applyTempo && m_applyTempo->isChecked() && m_tempo &&
-               m_tempo->currentIndex() >= 0;
+        return m_tempo && m_tempo->currentIndex() >= 0 &&
+               (m_quickImport || (m_applyTempo && m_applyTempo->isChecked()));
     }
     double selectedTempo() const {
         return m_tempo ? m_tempo->currentData().toDouble() : 0.0;
     }
+    bool appliesKey() const {
+        return m_quickImport && m_keyRoot >= 0 && m_keyRoot < 12 &&
+               !m_keyScale.empty();
+    }
+    int keyRoot() const { return m_keyRoot; }
+    const std::string& keyScale() const { return m_keyScale; }
 
 private:
     QComboBox* m_tempo = nullptr;
     QCheckBox* m_applyTempo = nullptr;
+    bool m_quickImport = false;
+    int m_keyRoot = -1;
+    std::string m_keyScale;
 };
 
 #ifdef DAW_ENABLE_COLLABORATION
@@ -4784,10 +4814,8 @@ bool MainWindow::checkKnobAutomationForTest() {
     }
 
     // Alt/Option alone neither arms the toolbar nor creates automation.
-    auto* createMode = m_toolPanel
-                           ? m_toolPanel->findChild<QAbstractButton*>(
-                                 QStringLiteral("AutomationCreateMode"))
-                           : nullptr;
+    auto* createMode = findChild<QAbstractButton*>(
+        QStringLiteral("AutomationCreateMode"));
     if (!createMode) {
         std::fprintf(stderr, "the automation creation button is missing\n");
         editor->close();
@@ -6062,6 +6090,7 @@ bool MainWindow::checkTrackRowHeightsForTest() {
 bool MainWindow::checkTimelinePanForTest() {
     if (!m_timeline) return false;
     const bool savedFollow = m_timeline->followsPlayhead();
+    const bool savedZoomFocus = m_timeline->zoomFocusEnabled();
     const double savedPosition = m_controller.positionSeconds();
     m_timeline->setFollowPlayhead(false);
     m_controller.seekSeconds(0.0);
@@ -6097,20 +6126,86 @@ bool MainWindow::checkTimelinePanForTest() {
     const bool centred = m_timeline->horizontalScrollForTest() < manualScroll;
     const bool scrollbarsPresent = m_timeline->hasNavigationControlsForTest();
 
+    // Pointer mode preserves the exact project time under the pointer. Focus
+    // mode deliberately changes that mapping and puts the playhead at centre.
+    m_timeline->clearClipSelection();
+    const double pointerX = m_timeline->width() * 0.72;
+    m_timeline->setZoomFocusEnabled(false);
+    const double timeUnderPointer =
+        m_timeline->horizontalScrollForTest() +
+        pointerX / m_timeline->pixelsPerSecondForTest();
+    m_timeline->zoomBy(1.2, pointerX);
+    const double timeUnderPointerAfter =
+        m_timeline->horizontalScrollForTest() +
+        pointerX / m_timeline->pixelsPerSecondForTest();
+    const bool pointerAnchored =
+        std::abs(timeUnderPointerAfter - timeUnderPointer) < 1.0e-8;
+
+    const double playheadFocus =
+        m_timeline->horizontalScrollForTest() +
+        m_timeline->width() /
+            (2.0 * m_timeline->pixelsPerSecondForTest());
+    m_controller.seekSeconds(playheadFocus);
+    m_timeline->setZoomFocusEnabled(true);
+    m_timeline->zoomBy(1.1, pointerX);
+    const double focusedPlayheadX =
+        (m_controller.presentationPositionSeconds() -
+         m_timeline->horizontalScrollForTest()) *
+        m_timeline->pixelsPerSecondForTest();
+    const bool playheadCentred =
+        // The 12 px vertical scrollbar is outside the timeline viewport.
+        std::abs(focusedPlayheadX - m_timeline->width() * 0.5) <= 8.0;
+
+    // A selected clip outranks the playhead in focus mode. Pick the latest
+    // clip in the deterministic self-test project so the zero-time boundary
+    // cannot prevent it from reaching the middle.
+    const daw::TrackModel* focusTrack = nullptr;
+    const daw::ClipModel* focusClip = nullptr;
+    double clipFocus = -1.0;
+    for (const auto& track : m_controller.project().tracks) {
+        for (const auto& clip : track.clips) {
+            const double centre = clip.startSeconds +
+                m_controller.clipDisplayDuration(clip) * 0.5;
+            if (centre > clipFocus) {
+                clipFocus = centre;
+                focusTrack = &track;
+                focusClip = &clip;
+            }
+        }
+    }
+    bool clipCentred = true;
+    if (focusTrack && focusClip && clipFocus > 0.0) {
+        m_timeline->selectClips({{
+            QString::fromStdString(focusTrack->id),
+            QString::fromStdString(focusClip->id)}});
+        m_controller.seekSeconds(0.0);
+        m_timeline->zoomBy(1.1, pointerX);
+        const double focusedClipX =
+            (clipFocus - m_timeline->horizontalScrollForTest()) *
+            m_timeline->pixelsPerSecondForTest();
+        clipCentred =
+            std::abs(focusedClipX - m_timeline->width() * 0.5) <= 8.0;
+    }
+
     m_timeline->setFollowPlayhead(false);
     m_controller.seekSeconds(savedPosition);
+    m_timeline->setZoomFocusEnabled(savedZoomFocus);
     m_timeline->setFollowPlayhead(savedFollow);
 
     if (!timeMoved || !rowsMoved || !independent || !centred ||
-        !scrollbarsPresent) {
+        !scrollbarsPresent || !pointerAnchored || !playheadCentred ||
+        !clipCentred) {
         std::fprintf(stderr,
                      "timeline navigation failed (time %d, tracks %d, "
-                     "independent %d, centred %d, scrollbars %d)\n",
+                     "independent %d, centred %d, scrollbars %d, "
+                     "pointer zoom %d, focused zoom %d, clip zoom %d)\n",
                      int(timeMoved), int(rowsMoved), int(independent),
-                     int(centred), int(scrollbarsPresent));
+                     int(centred), int(scrollbarsPresent), int(pointerAnchored),
+                     int(playheadCentred), int(clipCentred));
     }
     return timeMoved && rowsMoved && independent && centred &&
-           scrollbarsPresent;
+           scrollbarsPresent && pointerAnchored && playheadCentred &&
+           clipCentred;
 }
 
 bool MainWindow::checkTimelineClipGesturesForTest() {
@@ -7699,6 +7794,7 @@ bool MainWindow::flushRecoveryForTest() {
 }
 
 void MainWindow::sampleForRecovery() {
+    m_journal.noteUiActivity();
     if (m_controller.offlineRenderInProgress()) return;
     if (!m_journal.running()) return;
     // Opaque plugin saveState calls must remain on the plugin/UI thread, and a
@@ -7742,6 +7838,8 @@ void MainWindow::sampleForRecovery() {
     stats.dspLoad = m_controller.dspLoad();
     m_recoveryDspPeak = std::max(m_recoveryDspPeak, stats.dspLoad);
     stats.dspLoadPeak = m_recoveryDspPeak;
+    const auto xruns = m_controller.audioXruns();
+    stats.xruns = xruns[0] + xruns[1] + xruns[2] + xruns[3];
     const QJsonObject process = PlatformDiagnostics::processSample();
     stats.processCpu = process.value(QStringLiteral("process_cpu")).toDouble();
     stats.systemCpu = process.value(QStringLiteral("system_cpu")).toDouble();
@@ -8140,7 +8238,17 @@ void MainWindow::buildLayout() {
     m_arrangementHost = host;
 
     m_trackList = new TrackListWidget(&m_controller, m_arrangementHost);
+    if (m_toolPanel)
+        m_trackList->setRulerActions(m_toolPanel->takeTrackActions());
     m_timeline = new TimelineWidget(&m_controller, m_arrangementHost);
+    const bool zoomFocus =
+        QSettings().value(QLatin1String(ui::kZoomFocusSetting), false).toBool();
+    m_timeline->setZoomFocusEnabled(zoomFocus);
+    m_toolPanel->setZoomFocusEnabled(zoomFocus);
+    connect(m_toolPanel, &ToolPanel::zoomFocusToggled, this, [this](bool on) {
+        m_timeline->setZoomFocusEnabled(on);
+        QSettings().setValue(QLatin1String(ui::kZoomFocusSetting), on);
+    });
     m_webVideoBackground = new ui::WebVideoBackground(this);
     connect(m_webVideoBackground, &ui::WebVideoBackground::frameReady,
             m_timeline, &TimelineWidget::setWebBackgroundFrame);
@@ -8344,17 +8452,12 @@ void MainWindow::buildLayout() {
             });
     connect(m_toolPanel, &ToolPanel::waveformScaleChanged, m_timeline,
             &TimelineWidget::setWaveformScale);
-    connect(m_toolPanel, &ToolPanel::addTrackRequested, this,
-            &MainWindow::onAddAudioTrack);
-    connect(m_toolPanel, &ToolPanel::addTrackMenuRequested, this,
-            [this](const QPoint& globalPos) {
-                QMenu menu(this);
-                const auto kinds = ui::addTrackKindItems(menu);
-                QAction* chosen = menu.exec(globalPos);
-                const auto spec = kinds.constFind(chosen);
-                if (spec == kinds.constEnd()) return;
-                spec->create(m_controller);
+    connect(m_toolPanel, &ToolPanel::createTracksRequested, this,
+            [this] {
+                CreateTracksDialog dialog(m_controller, this);
+                if (dialog.exec() != QDialog::Accepted || dialog.createdTrackIds().empty()) return;
                 syncViews();
+                selectTrackFromHeader(QString::fromStdString(dialog.createdTrackIds().front()));
                 markDirty();
             });
     connect(m_transport, &TransportBar::timeFormatChanged, this, [this] {
@@ -9779,6 +9882,8 @@ void MainWindow::buildMenus() {
     connect(addCommand(file, "file.import", tr("&Import Audio…"), kFile,
                        QKeySequence(tr("Ctrl+Shift+I"))),
             &QAction::triggered, this, &MainWindow::onImportAudio);
+    connect(addCommand(file, "file.quickImport", tr("&Quick Import Audio…"), kFile),
+            &QAction::triggered, this, &MainWindow::onQuickImportAudio);
     connect(addCommand(file, "file.export", tr("&Render / Export…"), kFile,
                        QKeySequence(tr("Ctrl+E"))),
             &QAction::triggered, this, &MainWindow::onExport);
@@ -14358,7 +14463,8 @@ void MainWindow::analyzeAudioClip(const QString& trackId, const QString& clipId,
                                         model, "Analyze Audio Clip");
 
     AudioAnalysisResultDialog resultDialog(
-        analysis, request, m_controller.tempo(), /*importing=*/false,
+        analysis, request, m_controller.tempo(),
+        AudioAnalysisResultDialog::Mode::Review,
         /*autoApplyTempo=*/false, this);
     const bool resultAccepted = resultDialog.exec() == QDialog::Accepted;
     if (resultAccepted && resultDialog.appliesTempo())
@@ -14428,7 +14534,8 @@ void MainWindow::showNextDownloadedAudioPrompt() {
         } else {
             analysisModel = daw::analysis::toClipAnalysisModel(analysis, request);
             AudioAnalysisResultDialog resultDialog(
-                analysis, request, m_controller.tempo(), /*importing=*/true,
+                analysis, request, m_controller.tempo(),
+                AudioAnalysisResultDialog::Mode::Import,
                 detectTempo && analysis.tempo.highConfidence(), this);
             if (resultDialog.exec() != QDialog::Accepted) {
                 choice = DownloadedAudioDialog::Choice::None;
@@ -15138,6 +15245,155 @@ void MainWindow::onImportAudio() {
     markDirty();
 }
 
+void MainWindow::onQuickImportAudio() {
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("Quick Import Audio"), QString(), ui::audioNameFilter());
+    if (!path.isEmpty()) quickImportAudioPath(path);
+}
+
+bool MainWindow::quickImportAudioPath(const QString& sourcePath) {
+    if (m_projectFileJob) return false;
+    const QString path = absoluteCleanPath(sourcePath);
+    if (!ui::isAudioFile(path)) {
+        QMessageBox::warning(this, tr("Quick Import Failed"),
+                             tr("VLTONE cannot import this file as audio:\n%1")
+                                 .arg(QDir::toNativeSeparators(path)));
+        return false;
+    }
+
+    const ui::quickimport::Preferences preferences = ui::quickimport::load();
+    QString configurationError;
+    if (!ui::quickimport::validate(preferences, &configurationError)) {
+        openSettings(SettingsWindow::kQuickImportTab);
+        if (m_settingsWindow)
+            m_settingsWindow->showQuickImportError(configurationError);
+        return false;
+    }
+
+#ifdef DAW_ENABLE_COLLABORATION
+    if (!prepareCloudRecordingForProjectTransition()) return false;
+#endif
+    if (!maybeSaveChanges()) return false;
+    const QScopedValueRollback<bool> fileJob(m_projectFileJob, true);
+
+    daw::analysis::MusicalAnalysisResult analysisResult;
+    daw::ClipMusicalAnalysisModel clipAnalysis;
+    bool analysisFailed = false;
+    daw::analysis::MusicalAnalysisRequest analysisRequest;
+    analysisRequest.detectTempo = preferences.detectTempo;
+    analysisRequest.detectKey = preferences.detectKey;
+    analysisRequest.fileNameHint = QFileInfo(path).fileName().toStdString();
+    if (preferences.detectTempo || preferences.detectKey) {
+        QString analysisError;
+        bool cancelled = false;
+        if (!runMusicalAnalysis(this, path, analysisRequest, analysisResult,
+                                analysisError, cancelled)) {
+            if (cancelled) return false;
+            analysisFailed = true;
+        } else {
+            clipAnalysis = daw::analysis::toClipAnalysisModel(
+                analysisResult, analysisRequest);
+        }
+    }
+
+    daw::EngineController::TemplateAudioImportRequest request;
+    request.templatePath = preferences.templatePath.toStdString();
+    request.audioPath = path.toStdString();
+    request.targetTrackId = preferences.trackId.toStdString();
+    request.analysis = clipAnalysis;
+
+    struct PreparedImport {
+        daw::EngineController::PreparedTemplateAudioImport import;
+        audio::Result result = audio::Result::fail(audio::EngineError::Unknown,
+                                                    "Quick Import interrupted");
+    };
+    audio::Result result = audio::Result::fail(audio::EngineError::Unknown,
+                                                "Quick Import interrupted");
+    QString targetId;
+    QString clipId;
+    try {
+        auto prepared = ui::prepareInBackground<PreparedImport>(
+            this, tr("Preparing Quick Import…"),
+            [request = std::move(request), rate = m_controller.sampleRate()]
+            (const auto& keepGoing) {
+                PreparedImport prepared;
+                prepared.result =
+                    daw::EngineController::prepareTemplateAudioImport(
+                        request, rate, prepared.import, keepGoing);
+                return prepared;
+            });
+        if (!prepared) return false;
+        result = prepared->result;
+        if (result) {
+            targetId = QString::fromStdString(prepared->import.targetTrackId);
+            clipId = QString::fromStdString(prepared->import.clipId);
+            result = m_controller.openPreparedTemplateAudioImport(
+                std::move(prepared->import));
+        }
+    } catch (const std::exception& error) {
+        result = audio::Result::fail(audio::EngineError::Unknown, error.what());
+    }
+    if (!result) {
+        QMessageBox::warning(
+            this, tr("Quick Import Failed"),
+            tr("The new project was not created.\n\n%1\n\n"
+               "The current project has not been changed.")
+                .arg(QString::fromStdString(result.message())));
+        return false;
+    }
+
+#ifdef DAW_ENABLE_COLLABORATION
+    clearCloudProjectBinding(/*cancelPublication=*/true);
+#endif
+    m_projectPath.clear();
+    m_selectedTrackId.clear();
+    m_dirty = false;
+    m_journal.setProjectPath({}, {});
+    m_journalStale = true;
+    m_transport->syncTempo();
+    syncViews();
+    selectTrackFromHeader(targetId);
+    if (m_timeline) m_timeline->selectClips({ui::ClipSel{targetId, clipId}});
+    markDirty({targetId});
+
+    raise();
+    activateWindow();
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+
+    if (!analysisFailed &&
+        (preferences.detectTempo || preferences.detectKey)) {
+        AudioAnalysisResultDialog resultDialog(
+            analysisResult, analysisRequest, m_controller.tempo(),
+            AudioAnalysisResultDialog::Mode::QuickImport,
+            /*autoApplyTempo=*/false, this);
+        if (resultDialog.exec() == QDialog::Accepted) {
+            if (resultDialog.appliesTempo())
+                m_controller.setTempo(resultDialog.selectedTempo());
+            if (resultDialog.appliesKey())
+                m_controller.setProjectKey(resultDialog.keyRoot(),
+                                           resultDialog.keyScale());
+            // Opening the template cleared history and installed the import as
+            // its first entry. Fold the chosen musical values into that same
+            // action so one undo still restores the clean template.
+            m_controller.collapseUndo(0, "Quick Import Audio");
+            m_transport->syncTempo();
+            syncViews();
+            selectTrackFromHeader(targetId);
+            if (m_timeline)
+                m_timeline->selectClips({ui::ClipSel{targetId, clipId}});
+            markDirty({targetId});
+        }
+    }
+
+    statusBar()->showMessage(
+        analysisFailed
+            ? tr("Audio imported. The requested analysis could not be completed.")
+            : tr("Quick Import created a new project from “%1”.")
+                  .arg(ui::projecttemplates::displayName(preferences.templatePath)),
+        5000);
+    return true;
+}
+
 bool MainWindow::checkExportDialogForTest() {
     ExportDialog dialog(m_controller, &m_selection, this, m_projectPath);
     return dialog.checkForTest();
@@ -15566,6 +15822,35 @@ void MainWindow::onOpenProject() {
     ui::ProjectOpenDialog dialog(ui::recentProjectPaths(), this);
     if (dialog.exec() == QDialog::Accepted)
         openProjectPath(dialog.selectedPath());
+}
+
+bool MainWindow::openExternalPath(const QString& sourcePath) {
+    const QString path = absoluteCleanPath(sourcePath);
+    if (ui::isAudioFile(path)) return quickImportAudioPath(path);
+
+    const QFileInfo info(path);
+    const QString suffix = info.suffix().toLower();
+    if (suffix == QLatin1String("vlttheme")) {
+        openSettings(SettingsWindow::kThemesTab);
+        m_settingsWindow->importThemeFile(path);
+        return true;
+    }
+    const QString parentSuffix = QFileInfo(info.absolutePath()).suffix().toLower();
+    if (suffix == QLatin1String(daw::ProjectSerializer::kExtension) ||
+        suffix == QLatin1String(daw::ProjectSerializer::kTemplateExtension) ||
+        parentSuffix == QLatin1String(daw::ProjectSerializer::kExtension) ||
+        parentSuffix == QLatin1String(daw::ProjectSerializer::kTemplateExtension) ||
+        info.fileName().compare(
+            QString::fromLatin1(daw::ProjectSerializer::kProjectFile),
+            Qt::CaseInsensitive) == 0) {
+        return openProjectPath(path);
+    }
+
+    QMessageBox::warning(
+        this, tr("Unsupported File"),
+        tr("VLTONE cannot open this file type:\n%1")
+            .arg(QDir::toNativeSeparators(path)));
+    return false;
 }
 
 bool MainWindow::openProjectPath(const QString& path) {

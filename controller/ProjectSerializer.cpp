@@ -364,6 +364,10 @@ json musicalAnalysisToJson(const ClipMusicalAnalysisModel& analysis) {
         {"offsetSeconds", analysis.analyzedOffsetSeconds},
         {"durationSeconds", analysis.analyzedDurationSeconds},
         {"tempo", {
+            {"algorithmVersion", analysis.tempo.algorithmVersion},
+            {"calibrated", analysis.tempo.calibrated},
+            {"backend", analysis.tempo.backend},
+            {"reason", analysis.tempo.reason},
             {"status", int(analysis.tempo.status)},
             {"bpm", analysis.tempo.bpm},
             {"confidence", analysis.tempo.confidence},
@@ -372,7 +376,12 @@ json musicalAnalysisToJson(const ClipMusicalAnalysisModel& analysis) {
             {"variable", analysis.tempo.variable},
         }},
         {"key", {
+            {"algorithmVersion", analysis.key.algorithmVersion},
+            {"calibrated", analysis.key.calibrated},
+            {"backend", analysis.key.backend},
+            {"reason", analysis.key.reason},
             {"status", int(analysis.key.status)},
+            {"variable", analysis.key.variable},
             {"root", analysis.key.root},
             {"scale", analysis.key.scale},
             {"confidence", analysis.key.confidence},
@@ -392,9 +401,13 @@ ClipMusicalAnalysisModel musicalAnalysisFromJson(const json& j) {
         std::max(0.0, j.value("durationSeconds", 0.0));
     if (j.contains("tempo") && j.at("tempo").is_object()) {
         const auto& tempo = j.at("tempo");
+        analysis.tempo.algorithmVersion = std::clamp(tempo.value("algorithmVersion", analysis.algorithmVersion), 0, 1000000);
+        analysis.tempo.calibrated = tempo.value("calibrated", false);
+        analysis.tempo.backend = tempo.value("backend", std::string());
+        analysis.tempo.reason = tempo.value("reason", std::string());
         analysis.tempo.status = MusicalAnalysisStatus(std::clamp(
             tempo.value("status", 0), 0, 2));
-        analysis.tempo.bpm = std::clamp(tempo.value("bpm", 0.0), 0.0, 300.0);
+        analysis.tempo.bpm = std::clamp(tempo.value("bpm", 0.0), 0.0, 1.0e6);
         analysis.tempo.confidence =
             std::clamp(tempo.value("confidence", 0.0), 0.0, 1.0);
         analysis.tempo.stability =
@@ -403,7 +416,7 @@ ClipMusicalAnalysisModel musicalAnalysisFromJson(const json& j) {
         if (tempo.contains("alternatives") && tempo.at("alternatives").is_array()) {
             for (const auto& value : tempo.at("alternatives")) {
                 if (!value.is_number()) continue;
-                const double bpm = std::clamp(value.get<double>(), 0.0, 300.0);
+                const double bpm = std::clamp(value.get<double>(), 0.0, 1.0e6);
                 if (bpm > 0.0 && analysis.tempo.alternatives.size() < 3)
                     analysis.tempo.alternatives.push_back(bpm);
             }
@@ -411,8 +424,13 @@ ClipMusicalAnalysisModel musicalAnalysisFromJson(const json& j) {
     }
     if (j.contains("key") && j.at("key").is_object()) {
         const auto& key = j.at("key");
+        analysis.key.algorithmVersion = std::clamp(key.value("algorithmVersion", analysis.algorithmVersion), 0, 1000000);
+        analysis.key.calibrated = key.value("calibrated", false);
+        analysis.key.backend = key.value("backend", std::string());
+        analysis.key.reason = key.value("reason", std::string());
         analysis.key.status = MusicalAnalysisStatus(std::clamp(
             key.value("status", 0), 0, 2));
+        analysis.key.variable = key.value("variable", false);
         analysis.key.root = std::clamp(key.value("root", -1), -1, 11);
         analysis.key.scale = key.value("scale", std::string());
         analysis.key.confidence =

@@ -71,6 +71,10 @@ public:
 
     void setStats(HealthStats stats);
 
+    /// Called by the UI timer before potentially blocking plugin/file work.
+    /// Disk writes and worker wakeups must never count as UI responsiveness.
+    void noteUiActivity();
+
     /// Block until everything requested so far is on disk, bypassing the
     /// debounce. For tests, and for the moment before a deliberate crash.
     void flush();

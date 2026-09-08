@@ -123,6 +123,7 @@ public:
     const collab::SharedMutationSink* sharedMutationSink() const noexcept {
         return m_sharedMutationSink;
     }
+    bool hasCloudProjectBinding() { return cloudProjectBound(); }
     /// Asset-producing cloud actions remain local-only requests until the app
     /// returns a verified immutable AssetRef through completeSharedAssetMutation.
     void attachSharedAssetMutationSink(
@@ -615,6 +616,24 @@ public:
         bool empty() const { return inserts.empty() && !hasSettings; }
     };
 
+    /// One prepared rack is copied to independent new channels. Creation is
+    /// atomic and undoable as a group, including each plugin's opaque state.
+    struct TrackCreationRequest {
+        TrackKind kind = TrackKind::Audio;
+        bool summing = false;
+        std::uint32_t count = 1;
+        std::string name;
+        bool mono = false;
+        bool inputEnabled = false;
+        std::uint32_t inputChannel = 0;
+        std::uint32_t inputChannelCount = 2;
+        std::string outputBusId;
+        std::vector<ChainSlotSnapshot> inserts;
+        std::optional<ChainSlotSnapshot> instrument;
+    };
+    audio::Result createTracks(const TrackCreationRequest& request,
+                               std::vector<std::string>& createdIds);
+
     /// Render selected arrangement material and insert the generated audio as
     /// one undoable local edit. Files are staged before the document changes.
     audio::Result bounceInPlace(
@@ -830,6 +849,10 @@ public:
     /// delay compensation follows). Returns true when the UI should redraw.
     /// Control thread, from the UI's existing periodic tick.
     bool pumpPluginEvents();
+    /// Device-free editor drafts only: deliver pending host parameter edits
+    /// through one silent block, then service plugin callbacks. Never renders
+    /// on the control thread when initialized with a live audio device.
+    bool pumpPreviewPluginEvents();
     /// Deterministic performance-test hook: counts full live-instance sweeps,
     /// not the O(1) no-work checks.
     std::uint64_t pluginEventScanCountForTest() const noexcept {
@@ -905,6 +928,18 @@ public:
         std::vector<PreparedAudio> audio;
         std::vector<std::string> failedPaths;
     };
+    struct TemplateAudioImportRequest {
+        std::string templatePath;
+        std::string audioPath;
+        std::string targetTrackId;
+        ClipMusicalAnalysisModel analysis;
+    };
+    struct PreparedTemplateAudioImport {
+        PreparedProject project;
+        ProjectModel cleanTemplate;
+        std::string targetTrackId;
+        std::string clipId;
+    };
     /// Pure file/sample work: no access to the controller or live document.
     static audio::Result prepareAudio(const std::string& path, double rate,
                                       PreparedAudio& output,
@@ -912,6 +947,15 @@ public:
     /// Short control-thread publication; false if the engine rate changed.
     bool adoptPreparedAudio(PreparedAudio audio);
     bool hasPreparedAudio(const std::string& path) const;
+    /// Build the complete Quick Import document off the live controller. The
+    /// target, audio decode and clip are all valid before activation begins.
+    static audio::Result prepareTemplateAudioImport(
+        const TemplateAudioImportRequest& request, double rate,
+        PreparedTemplateAudioImport& output,
+        const std::function<bool()>& keepGoing = {});
+    /// Atomically activate a prepared import and install its one-step undo.
+    audio::Result openPreparedTemplateAudioImport(
+        PreparedTemplateAudioImport prepared);
 
     // ── Clips ──
     /// Create an audio track named after `trackName` (or the file), import the
@@ -2044,7 +2088,8 @@ private:
     std::function<bool()> m_sampleLoadContinue;
     audio::Result renderProjectPass(const rendering::Spec& spec,
         const std::function<bool(const rendering::Progress&)>& onProgress,
-        rendering::Report& out);
+                                   rendering::Report& out);
+    void applyRenderSelection(const rendering::Spec& spec);
     /// Move the whole session to another sample rate, dropping the decoded-clip
     /// caches that were converted for the old one. Used by a render that writes
     /// at a rate the project does not run at, in both directions.
@@ -2161,6 +2206,7 @@ private:
         plugins::PluginMainThreadWork::generation();
     std::uint32_t m_pluginCompatibilitySweepTicks = 0;
     std::uint64_t m_pluginEventScanCount = 0;
+    bool m_previewParameterEditsPending = false;
     /// Wait for every built-in sampler's latest background bake. Playback and
     /// offline/export paths call this before consuming the graph so a GUI-tick
     /// race can never render the previous generation.

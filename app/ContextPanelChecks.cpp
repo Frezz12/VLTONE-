@@ -7,11 +7,15 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QEventLoop>
+#include <QSettings>
 #include <QTimer>
 
 #include <cstdio>
 
 bool ContextPanel::checkAdaptiveLayoutForTest() {
+    // The check owns an isolated headless preference store. Start from the
+    // moving mode so prior user settings cannot make geometry assertions vary.
+    QSettings().setValue(QStringLiteral("contextPanel/followSelection"), true);
     ui::ClipSel audio;
     ui::ClipSel midi;
     for (const auto& track : m_controller->project().tracks) {
@@ -99,8 +103,9 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
         QTimer::singleShot(380, &loop, &QEventLoop::quit);
         loop.exec();
     };
-    const auto centred = [&] {
-        return fits() && std::abs(2 * panel.x() + panel.width() - left - right) <= 1;
+    const auto centredInHeader = [&] {
+        return panel.x() >= 12 && panel.x() + panel.width() <= strip.width() - 12 &&
+               std::abs(2 * panel.x() + panel.width() - strip.width()) <= 1;
     };
     // Keep returning the previous clip's position, as a timeline with its own
     // selection can do. The current panel context must outrank that stale span.
@@ -111,7 +116,7 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     panel.followSelection();
     selection.setTracks({audio.trackId});
     settle();
-    if (!check(centred(), "clip-to-track selection interrupts drift and returns to the available centre")) return false;
+    if (!check(centredInHeader(), "clip-to-track selection interrupts drift and returns under the header centre")) return false;
     const QRect trackGeometry = panel.geometry();
     anchor = left;
     panel.followSelection();
@@ -122,16 +127,25 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
         if (id == audio.trackId) continue;
         selection.setTracks({audio.trackId, id});
         settle();
-        if (!check(centred(), "multiple selected tracks stay centred")) return false;
+        if (!check(centredInHeader(), "multiple selected tracks stay under the header centre")) return false;
         break;
     }
     selection.setClips({audio});
     panel.setRecordEngaged(true);
     settle();
-    if (!check(centred(), "recording stays centred even with an underlying selected clip")) return false;
+    if (!check(centredInHeader(), "recording stays under the header centre even with an underlying selected clip")) return false;
     panel.setRecordEngaged(false);
     settle();
     if (!check(fits() && panel.x() == left, "returning to clip tools restores following")) return false;
+
+    QSettings().setValue(QStringLiteral("contextPanel/followSelection"), false);
+    panel.reloadFollowSetting();
+    settle();
+    if (!check(centredInHeader(), "pinned clip context stays under the header centre")) return false;
+    QSettings().setValue(QStringLiteral("contextPanel/followSelection"), true);
+    panel.reloadFollowSetting();
+    settle();
+    if (!check(fits() && panel.x() == left, "re-enabled clip following restores its anchor")) return false;
 
     left = right - 180;
     panel.relayout();
@@ -149,15 +163,17 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     left = right - 140;
     panel.relayout();
     { QEventLoop loop; QTimer::singleShot(380, &loop, &QEventLoop::quit); loop.exec(); }
-    if (!check(fits(), "interrupted swap cannot restore obsolete wider geometry")) return false;
+    if (!check(centredInHeader(), "interrupted swap returns a track context under the header centre")) return false;
     if (!midi.clipId.isEmpty()) {
         selection.setClips({midi});
         panel.relayout();
+        settle();
         if (!check(fits(), "MIDI context fits the same limits")) return false;
     }
     panel.setRecordEngaged(true);
     panel.relayout();
-    if (!check(fits(), "recording context fits the same limits")) return false;
+    settle();
+    if (!check(centredInHeader(), "recording context stays under the header centre")) return false;
     panel.setPanelEnabled(false);
     { QEventLoop loop; QTimer::singleShot(380, &loop, &QEventLoop::quit); loop.exec(); }
     return check(wave->isVisible(), "waveform returns when context panel closes");

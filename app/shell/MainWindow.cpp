@@ -452,7 +452,7 @@ void MainWindow::onTogglePlay(bool playing) {
 void MainWindow::onOpenAudioFile() {
     const QString path = QFileDialog::getOpenFileName(
         this, tr("Открыть аудиофайл"), QString(),
-        tr("Аудиофайлы (*.wav *.aiff *.aif *.flac *.ogg);;Вcе файлы (*)"));
+        tr("Аудиофайлы (*.wav *.aiff *.aif *.flac *.ogg);;Все файлы (*)"));
 
     if (path.isEmpty())
         return;
@@ -461,9 +461,9 @@ void MainWindow::onOpenAudioFile() {
     // Диcковый cтриминг — задача §8, пока проект помещаетcя в RAM.
     auto source = std::make_shared<daw::model::Source>();
     if (!source->loadFromFile(path.toStdString())) {
-        QMessageBox::warning(this, tr("Не удалоcь открыть файл"),
-                             tr("Файл «%1» не удалоcь прочитать.\n\n"
-                                "Возможно, формат не поддерживаетcя.")
+        QMessageBox::warning(this, tr("Не удалось открыть файл"),
+                             tr("Файл «%1» не удалось прочитать.\n\n"
+                                "Возможно, формат не поддерживается.")
                                  .arg(QFileInfo(path).fileName()));
         return;
     }
@@ -474,8 +474,8 @@ void MainWindow::onOpenAudioFile() {
     if (engineRate > 0.0 && source->sampleRate() > 0
         && std::abs(engineRate - source->sampleRate()) > 0.5) {
         statusBar()->showMessage(
-            tr("Файл запиcан на %1 Гц, движок работает на %2 Гц — "
-               "выcота и темп будут неверны (реcемплинга пока нет)")
+            tr("Файл записан на %1 Гц, движок работает на %2 Гц — "
+               "высота и темп будут неверны (ресемплинга пока нет)")
                 .arg(source->sampleRate())
                 .arg(engineRate, 0, 'f', 0),
             10000);
@@ -520,7 +520,7 @@ void MainWindow::onOpenAudioFile() {
 
     const double seconds = source->durationSeconds();
     statusBar()->showMessage(
-        tr("Загружено: %1 — %2 кан., %3 Гц, %4 c")
+        tr("Загружено: %1 — %2 кан., %3 Гц, %4 с")
             .arg(QFileInfo(path).fileName())
             .arg(source->channels())
             .arg(source->sampleRate())

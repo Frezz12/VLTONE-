@@ -326,6 +326,37 @@ public:
                 const bool shifting = std::abs(clip.formant) > 0.001;
                 const double formantTilt = std::tanh(clip.formant / 12.0);
 
+                // The controller supplies source bounds for ordinary clips too.
+                // At integral positions with no rate/edit transform, cubic
+                // interpolation is exactly the source sample. Read contiguous
+                // pinned spans instead of four cache lookups per output sample.
+                if (step == 1.0 && timeRatio == 1.0 && !tape && !looping &&
+                    !shifting && sourceBegin == std::floor(sourceBegin)) {
+                    const double first = sourceBegin + double(clipRelStart);
+                    const auto usable = FrameCount(std::clamp(
+                        std::ceil(sourceEnd) - first, 0.0, double(count)));
+                    for (ChannelCount ch = 0; ch < channels; ++ch) {
+                        const auto sourceChannel = std::min<ChannelCount>(
+                            ch, clip.audio->channels() - 1);
+                        const float gain = channelGain(ch);
+                        float* destination = context.output.data(ch) + destinationOffset;
+                        for (FrameCount done = 0; done < usable;) {
+                            const auto part = clip.audio->readSpan(
+                                sourceChannel, FrameCount(first) + done, usable - done);
+                            if (part.empty()) break;
+                            if (!fading) {
+                                dsp::addScaled({destination + done, part.size()}, part, gain);
+                            } else {
+                                for (std::size_t i = 0; i < part.size(); ++i)
+                                    destination[done + i] += part[i] * gain *
+                                        fadeAt(clipRelStart + done + SamplePos(i));
+                            }
+                            done += FrameCount(part.size());
+                        }
+                    }
+                    return;
+                }
+
                 auto wrap = [&](double position) {
                     if (!looping) return position;
                     const double length = loopEnd - loopBegin;

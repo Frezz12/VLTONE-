@@ -1,0 +1,174 @@
+{
+  "new": {
+    "files": 40,
+    "failed": 0,
+    "medianSeconds": 30.378551875,
+    "tempo": {
+      "labeled": 40,
+      "correctPrimary": 7,
+      "primaryAccuracy": 0.175,
+      "confidentCount": 0,
+      "confidentCoverage": 0.0,
+      "confidentAccuracy": null,
+      "confident95Interval": [
+        0,
+        1
+      ],
+      "availableCoverage": 1.0,
+      "meanAbsoluteBpmError": 18.28539926679601,
+      "halfTempoErrors": 5,
+      "doubleTempoErrors": 1,
+      "correctAlternativeOnly": 2
+    },
+    "key": {
+      "labeled": 40,
+      "correctPrimary": 23,
+      "primaryAccuracy": 0.575,
+      "confidentCount": 0,
+      "confidentCoverage": 0.0,
+      "confidentAccuracy": null,
+      "confident95Interval": [
+        0,
+        1
+      ],
+      "availableCoverage": 0.95,
+      "notTonalExamples": 0,
+      "falseKeyPrimary": 0,
+      "confidentFalseKey": 0,
+      "correctAlternativeOnly": 4
+    }
+  },
+  "baseline": {
+    "files": 40,
+    "failed": 0,
+    "medianSeconds": 2.6190137085,
+    "tempo": {
+      "labeled": 40,
+      "correctPrimary": 8,
+      "primaryAccuracy": 0.2,
+      "confidentCount": 21,
+      "confidentCoverage": 0.525,
+      "confidentAccuracy": 0.2857142857142857,
+      "confident95Interval": [
+        0.13813675745628204,
+        0.49956773822837586
+      ],
+      "availableCoverage": 1.0,
+      "meanAbsoluteBpmError": 25.607499999999998,
+      "halfTempoErrors": 7,
+      "doubleTempoErrors": 1,
+      "correctAlternativeOnly": 2
+    },
+    "key": {
+      "labeled": 40,
+      "correctPrimary": 15,
+      "primaryAccuracy": 0.375,
+      "confidentCount": 11,
+      "confidentCoverage": 0.275,
+      "confidentAccuracy": 0.45454545454545453,
+      "confident95Interval": [
+        0.21270957543988045,
+        0.7199122443100118
+      ],
+      "availableCoverage": 1.0,
+      "notTonalExamples": 0,
+      "falseKeyPrimary": 0,
+      "confidentFalseKey": 0,
+      "correctAlternativeOnly": 5
+    }
+  },
+  "equalCoverage": {
+    "tempo": {
+      "baseline": {
+        "0.1": {
+          "count": 4,
+          "precision": 0.25
+        },
+        "0.25": {
+          "count": 10,
+          "precision": 0.2
+        },
+        "0.5": {
+          "count": 20,
+          "precision": 0.25
+        },
+        "0.75": {
+          "count": 30,
+          "precision": 0.2
+        },
+        "1": {
+          "count": 40,
+          "precision": 0.2
+        }
+      },
+      "new": {
+        "0.1": {
+          "count": 4,
+          "precision": 0.25
+        },
+        "0.25": {
+          "count": 10,
+          "precision": 0.2
+        },
+        "0.5": {
+          "count": 20,
+          "precision": 0.15
+        },
+        "0.75": {
+          "count": 30,
+          "precision": 0.16666666666666666
+        },
+        "1": {
+          "count": 40,
+          "precision": 0.175
+        }
+      }
+    },
+    "key": {
+      "baseline": {
+        "0.1": {
+          "count": 4,
+          "precision": 0.75
+        },
+        "0.25": {
+          "count": 10,
+          "precision": 0.5
+        },
+        "0.5": {
+          "count": 20,
+          "precision": 0.5
+        },
+        "0.75": {
+          "count": 30,
+          "precision": 0.43333333333333335
+        },
+        "1": {
+          "count": 40,
+          "precision": 0.375
+        }
+      },
+      "new": {
+        "0.1": {
+          "count": 4,
+          "precision": 1.0
+        },
+        "0.25": {
+          "count": 10,
+          "precision": 0.6
+        },
+        "0.5": {
+          "count": 20,
+          "precision": 0.65
+        },
+        "0.75": {
+          "count": 30,
+          "precision": 0.7
+        },
+        "1": {
+          "count": 40,
+          "precision": 0.575
+        }
+      }
+    }
+  }
+}

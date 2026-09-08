@@ -8,6 +8,9 @@ daw_add_windows_metadata(daw_guard "daw_guard.exe" "daw_guard"
                          "VLTONE recovery watchdog")
 
 target_link_libraries(daw_guard PRIVATE daw_json)
+if(WIN32)
+    target_link_libraries(daw_guard PRIVATE Dbghelp)
+endif()
 # Only for recovery/SessionFile.hpp, which is header-only precisely so this
 # target does not have to link daw_controller to speak the protocol.
 target_include_directories(daw_guard PRIVATE

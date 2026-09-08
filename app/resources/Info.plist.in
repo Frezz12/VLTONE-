@@ -74,6 +74,36 @@
             <key>LSHandlerRank</key>
             <string>Owner</string>
         </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>VLTONE Theme</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleTypeIconFile</key>
+            <string>daw.icns</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>vlttheme</string>
+            </array>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.vltstudio.pro.vlttheme</string>
+            </array>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Audio File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.audio</string>
+            </array>
+        </dict>
     </array>
     <key>UTExportedTypeDeclarations</key>
     <array>
@@ -109,6 +139,25 @@
                 <array>
                     <string>vltt</string>
                 </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.vltstudio.pro.vlttheme</string>
+            <key>UTTypeDescription</key>
+            <string>VLTONE Theme</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>vlttheme</string>
+                </array>
+                <key>public.mime-type</key>
+                <string>application/x-vltone-theme</string>
             </dict>
         </dict>
     </array>

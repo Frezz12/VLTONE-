@@ -128,7 +128,7 @@ int main() {
         check(started == 2, "stopped transport admits two workers and cancels queued destruction");
         release.set_value(); pool.cancelAndWait(a); pool.cancelAndWait(b);
     }
-    for (double rate : {48000., 96000.}) for (unsigned frames : {32u, 256u, 512u}) {
+    for (double rate : {48000., 96000.}) for (unsigned frames : {8u, 16u, 32u, 256u, 512u}) {
         AudioGraph graph; const auto sink = graph.addNode(std::make_unique<SumNode>()); graph.setSink(sink);
         for (int i = 0; i < 64; ++i) {
             auto previous = graph.addNode(std::make_unique<Source>());
@@ -150,6 +150,55 @@ int main() {
               "fused, unfused and serial graph outputs agree at 48/96k and small/large buffers");
         processor.configureAudioWorkers({true, rate, frames, {}});
         processor.configureAudioWorkers({});
+    }
+    {
+        bool correct = true;
+        for (unsigned channels : {1u, 2u}) for (unsigned frames : {8u, 16u, 32u, 256u})
+            for (bool fading : {false, true}) {
+                auto sample = std::make_shared<SampleBuffer>(channels, 262144, 48000);
+                for (unsigned ch = 0; ch < channels; ++ch)
+                    for (unsigned i = 0; i < sample->frames(); ++i)
+                        sample->writableChannel(ch)[i] = float(int((i + ch * 17) % 127) - 63) / 128.f;
+                auto player = std::make_shared<ClipPlayerNode>();
+                auto clips = std::make_shared<ClipPlayerNode::ClipList>();
+                ClipPlacement clip;
+                clip.audio = sample;
+                clip.startSample = 17;
+                clip.lengthSamples = 64;
+                clip.sourceStartFrame = 4092; // Cross a pinned page boundary.
+                clip.sourceEndFrame = 4147.25; // Last integral frame remains audible.
+                clip.gain = .5f;
+                clip.pan = .25f;
+                clip.fadeInSamples = fading ? 7 : 0;
+                clip.fadeOutSamples = fading ? 11 : 0;
+                clips->push_back(clip);
+                player->setClips(clips);
+                AudioGraph graph;
+                const auto id = graph.adoptNode(player); graph.setSink(id);
+                const auto compiled = graph.compile({48000, frames, 2});
+                if (!compiled) { correct = false; continue; }
+                GraphProcessor processor(1); processor.setGraph(*compiled);
+                player->preparePlayback(0);
+                Output realtime(frames), offline(frames);
+                for (SamplePos position = 0; position < 100; position += frames) {
+                    correct &= bool(processor.process(realtime.block(), frames, position, true));
+                    correct &= bool(processor.processSerial(offline.block(), frames, position, true, true));
+                    correct &= realtime.l == offline.l && realtime.r == offline.r;
+                    for (unsigned ch = 0; ch < 2; ++ch) for (unsigned i = 0; i < frames; ++i) {
+                        const auto relative = position + i - clip.startSample;
+                        float expected = 0;
+                        if (relative >= 0 && relative < 64 && 4092 + relative < clip.sourceEndFrame) {
+                            const auto sourceCh = std::min(ch, channels - 1);
+                            const float gain = ch == 0 ? .375f : .5f;
+                            const float fade = fading ? float(std::clamp(std::min(
+                                double(relative) / 7, double(64 - relative) / 11), 0., 1.)) : 1.f;
+                            expected = sample->channel(sourceCh)[4092 + relative] * gain * fade;
+                        }
+                        correct &= std::abs(realtime.block().data(ch)[i] - expected) < 1e-7f;
+                    }
+                }
+            }
+        check(correct, "ordinary bounded clips preserve page crossings, trim ends, fades, pan and mono at 8/16/32/256 frames");
     }
     {
         ClipPlayerNode player;

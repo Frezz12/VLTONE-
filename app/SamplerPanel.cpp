@@ -1496,11 +1496,16 @@ void SamplerPanel::showFxMenu(int index, const QString& replaceId) {
             }
             m_fxSignature.clear();
             rebuildFxSlots();
+            ui::rememberRecentPlugin(descriptor);
             emit projectEdited();
             if (!addedId.empty())
                 emit pluginEditorRequested(m_channelId,
                                            QString::fromStdString(addedId));
-        });
+        }, {m_channelId, replaceId, [this] {
+            m_fxSignature.clear();
+            rebuildFxSlots();
+            emit projectEdited();
+        }});
     menu->setAttribute(Qt::WA_DeleteOnClose);
     menu->popup(QCursor::pos());
 }

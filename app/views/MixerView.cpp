@@ -49,7 +49,7 @@ MixerView::MixerView(QWidget* parent)
     root->addLayout(stripLayout_);
     root->addStretch(1);
 
-    placeholder_ = new QLabel(tr("Откройте аудиофайл — появится полоcа микшера"), this);
+    placeholder_ = new QLabel(tr("Откройте аудиофайл — появится полоса микшера"), this);
     placeholder_->setStyleSheet(QStringLiteral("color: #6a6f76;"));
     stripLayout_->addWidget(placeholder_);
 }
@@ -60,7 +60,7 @@ void MixerView::setSession(std::shared_ptr<daw::model::Session> session)
     clearStrips();
 
     if (!session_ || session_->trackCount() == 0) {
-        placeholder_ = new QLabel(tr("Откройте аудиофайл — появится полоcа микшера"), this);
+        placeholder_ = new QLabel(tr("Откройте аудиофайл — появится полоса микшера"), this);
         placeholder_->setStyleSheet(QStringLiteral("color: #6a6f76;"));
         stripLayout_->addWidget(placeholder_);
         return;
@@ -123,7 +123,7 @@ QWidget* MixerView::buildStrip(int trackIndex, const daw::model::Track& track)
     solo->setCheckable(true);
     solo->setChecked(track.isSoloed());
     solo->setFixedSize(34, 24);
-    solo->setToolTip(tr("Соло — звучат только cолирующие дорожки"));
+    solo->setToolTip(tr("Соло — звучат только солирующие дорожки"));
     solo->setStyleSheet(QStringLiteral(
         "QPushButton { border: 1px solid #3a3d42; border-radius: 3px; color: #b0b4ba; }"
         "QPushButton:checked { background: #c0a83a; color: #201c00; border-color: #c0a83a; }"));
@@ -136,7 +136,7 @@ QWidget* MixerView::buildStrip(int trackIndex, const daw::model::Track& track)
     auto* fader = new QSlider(Qt::Vertical, strip);
     fader->setRange(kMinDb, kMaxDb);
     fader->setValue(linearToDb(track.gain()));
-    fader->setToolTip(tr("Громкоcть дорожки"));
+    fader->setToolTip(tr("Громкость дорожки"));
     col->addWidget(fader, 1, Qt::AlignHCenter);
 
     auto* dbLabel = new QLabel(dbText(fader->value()), strip);

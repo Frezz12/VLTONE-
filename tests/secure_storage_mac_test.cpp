@@ -1,6 +1,12 @@
 // Compile the real vault implementation against a fake Security API. No test
 // operation can read, modify, unlock, or display a dialog for a user's keychain.
 #include <Security/Security.h>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QProcess>
+#include <QStandardPaths>
+#include <QTemporaryDir>
 #include <cstdio>
 #include <cstdlib>
 
@@ -11,6 +17,11 @@ void check(bool condition, const char* message) {
         std::exit(1);
     }
 }
+QString localDataDirectory;
+struct TestStandardPaths {
+    static constexpr auto AppLocalDataLocation = QStandardPaths::AppLocalDataLocation;
+    static QString writableLocation(QStandardPaths::StandardLocation) { return localDataDirectory; }
+};
 Boolean interactionAllowed = true;
 bool expectInteractive = false;
 OSStatus getPolicyStatus = errSecSuccess;
@@ -84,7 +95,9 @@ OSStatus fakeDelete(CFDictionaryRef query) {
 #define SecItemAdd fakeAdd
 #define SecItemDelete fakeDelete
 #define SecAccessCreate fakeCreateAccess
+#define QStandardPaths TestStandardPaths
 #include "../app/SecureStorage.cpp"
+#undef QStandardPaths
 #undef SecKeychainGetUserInteractionAllowed
 #undef SecKeychainSetUserInteractionAllowed
 #undef SecItemCopyMatching
@@ -93,65 +106,131 @@ OSStatus fakeDelete(CFDictionaryRef query) {
 #undef SecItemDelete
 #undef SecAccessCreate
 
-int main() {
+// Exercise the unchanged AI-key vault separately from the local account slot.
+namespace {
+QByteArray vaultRead() { return account::securestorage::readNamed("ai-test"); }
+account::securestorage::ReadResult vaultReadSession(account::securestorage::Interaction mode = account::securestorage::Interaction::Disallow) {
+    auto value = account::securestorage::readNamed("ai-test", mode);
+    return {value, account::securestorage::readUnavailable};
+}
+bool vaultWrite(const QByteArray& value, account::securestorage::Interaction mode = account::securestorage::Interaction::Disallow) {
+    return account::securestorage::writeNamed("ai-test", value, mode);
+}
+bool vaultClear(account::securestorage::Interaction mode = account::securestorage::Interaction::Disallow) {
+    return account::securestorage::clearNamed("ai-test", mode);
+}
+}
+
+int main(int argc, char** argv) {
+    QCoreApplication app(argc, argv);
     using namespace account::securestorage;
-    check(read() == QByteArray("test"), "authorized startup restores credentials");
+    if (app.arguments().size() == 3 && app.arguments().at(1) == "--read-local") {
+        localDataDirectory = app.arguments().at(2);
+        check(read() == QByteArray("rotated-session"), "fresh process restores the saved session");
+        check(vaultCalls == 0 && policyChanges == 0, "restart never accesses Keychain");
+        return 0;
+    }
+    QTemporaryDir storage;
+    check(storage.isValid(), "isolated local credential directory");
+    localDataDirectory = storage.path();
+    const QString directory = storage.filePath("credentials");
+    const QString path = directory + "/desktop-session.json";
+    check(read().isEmpty() && !readSession().unavailable, "missing local session requires first sign-in");
+    check(clear(), "logout without a local session succeeds");
+    check(write("first-session", Interaction::Allow), "explicit login saves locally");
+    check(write("rotated-session"), "refresh replaces local session");
+    check(readSession(Interaction::Allow).value == "rotated-session", "explicit restore reads locally");
+    struct stat info{};
+    check(::stat(QFile::encodeName(path).constData(), &info) == 0 && (info.st_mode & 0777) == 0600,
+          "session is readable and writable only by its owner");
+    check(::stat(QFile::encodeName(directory).constData(), &info) == 0 && (info.st_mode & 0777) == 0700,
+          "credential directory is private");
+    QProcess restarted;
+    restarted.start(QCoreApplication::applicationFilePath(), {"--read-local", storage.path()});
+    check(restarted.waitForFinished(10000) && restarted.exitStatus() == QProcess::NormalExit && restarted.exitCode() == 0,
+          "credentials survive a process restart");
+    check(!write({}) && !write(QByteArray(1024 * 1024 + 1, 'x')) && read() == "rotated-session",
+          "invalid replacement leaves previous credential intact");
+    check(QDir(directory).entryList(QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot).size() == 1,
+          "successful writes leave no temporary credential files");
+    check(clear(Interaction::Allow) && !QFile::exists(path) && read().isEmpty() && !readSession().unavailable,
+          "logout removes the file and never resurrects the old Keychain session");
+    check(QDir().mkdir(path), "simulate failed atomic replacement");
+    check(!write("failed") && readSession().unavailable && !clear(), "storage errors are reported");
+    check(QDir(directory).entryList(QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty(),
+          "failed writes remove temporary credentials");
+    check(QDir().rmdir(path), "remove blocked destination");
+    QFile outside(storage.filePath("outside"));
+    check(outside.open(QIODevice::WriteOnly) && outside.write("unrelated") == 9, "create symlink target");
+    outside.close();
+    check(QFile::link(outside.fileName(), path), "simulate symlink session");
+    check(readSession().unavailable, "session reads do not follow symlinks");
+    check(write("replacement") && read() == "replacement", "atomic writes replace symlinks without following them");
+    check(outside.open(QIODevice::ReadOnly) && outside.readAll() == "unrelated", "symlink target remains untouched");
+    outside.close();
+    check(clear() && QDir().rmdir(directory), "remove private session directory");
+    check(QFile::link(storage.path(), directory), "simulate symlink credential directory");
+    check(!write("denied") && readSession().unavailable && !clear(), "symlink directories are rejected");
+    check(QFile::remove(directory), "remove directory symlink");
+    check(vaultCalls == 0 && policyChanges == 0, "all account operations bypass Keychain even when interaction is allowed");
+
+    check(vaultRead() == QByteArray("test"), "authorized startup restores credentials");
     check(interactionAllowed, "read restores the previous policy");
 
     readStatus = errSecInteractionNotAllowed;
-    check(readSession().unavailable, "locked vault is distinguished from missing sign-in without UI");
+    check(vaultReadSession().unavailable, "locked vault is distinguished from missing sign-in without UI");
     check(interactionAllowed, "denied read restores the previous policy");
     readStatus = errSecItemNotFound;
     check(readNamed(QStringLiteral("ai-test")).isEmpty(), "missing API key returns empty");
-    check(!readSession().unavailable, "missing session is not a vault access failure");
+    check(!vaultReadSession().unavailable, "missing session is not a vault access failure");
 
-    check(write(QByteArray("test")), "background token refresh writes silently");
+    check(vaultWrite(QByteArray("test")), "background token refresh writes silently");
     updateStatus = errSecItemNotFound;
-    check(write(QByteArray("test")), "new credential is added silently");
+    check(vaultWrite(QByteArray("test")), "new credential is added silently");
     check(adds == 1 && interactionAllowed, "add restores policy");
     updateStatus = errSecInteractionNotAllowed;
-    check(!write(QByteArray("test")) && adds == 1,
+    check(!vaultWrite(QByteArray("test")) && adds == 1,
           "inaccessible credential must not be replaced or downgraded");
 
     updateStatus = errSecSuccess;
     expectInteractive = true;
     readStatus = errSecSuccess;
-    check(readSession(Interaction::Allow).value == QByteArray("test"), "explicit restore may unlock the existing credential");
+    check(vaultReadSession(Interaction::Allow).value == QByteArray("test"), "explicit restore may unlock the existing credential");
     expectAccess = true;
-    check(write(QByteArray("test"), Interaction::Allow), "explicit sign-in may request authorization");
+    check(vaultWrite(QByteArray("test"), Interaction::Allow), "explicit sign-in may request authorization");
     updateStatus = errSecItemNotFound;
-    check(write(QByteArray("test"), Interaction::Allow), "new login trusts the current app");
+    check(vaultWrite(QByteArray("test"), Interaction::Allow), "new login trusts the current app");
     updateStatus = errSecSuccess;
     accessStatus = errSecNotAvailable;
     const int beforeAccessFailure = vaultCalls;
-    check(!write(QByteArray("test"), Interaction::Allow), "ACL creation failure is reported");
+    check(!vaultWrite(QByteArray("test"), Interaction::Allow), "ACL creation failure is reported");
     check(vaultCalls == beforeAccessFailure, "failed ACL creation must not modify credentials");
     accessStatus = errSecSuccess;
     check(interactionAllowed, "explicit sign-in preserves policy");
-    check(clear(Interaction::Allow), "explicit logout may authorize deletion");
+    check(vaultClear(Interaction::Allow), "explicit logout may authorize deletion");
     expectInteractive = false;
-    check(clear(), "cleanup does not open dialogs");
+    check(vaultClear(), "cleanup does not open dialogs");
     deleteStatus = errSecInteractionNotAllowed;
-    check(!clear(), "denied deletion is reported");
+    check(!vaultClear(), "denied deletion is reported");
     check(interactionAllowed, "failed deletion restores policy");
 
     interactionAllowed = false;
     const int changes = policyChanges;
     readStatus = errSecSuccess;
-    check(read() == QByteArray("test"), "read works with an existing noninteractive policy");
-    check(write(QByteArray("test"), Interaction::Allow), "explicit write respects an existing noninteractive policy");
+    check(vaultRead() == QByteArray("test"), "read works with an existing noninteractive policy");
+    check(vaultWrite(QByteArray("test"), Interaction::Allow), "explicit write respects an existing noninteractive policy");
     check(!interactionAllowed && policyChanges == changes, "do not enable UI disabled by another component");
     expectAccess = false;
 
     interactionAllowed = true;
     int calls = vaultCalls;
     getPolicyStatus = errSecNotAvailable;
-    check(read().isEmpty(), "policy lookup failure fails closed");
-    check(!write(QByteArray("test")) && !clear(), "mutations fail closed too");
+    check(vaultRead().isEmpty(), "policy lookup failure fails closed");
+    check(!vaultWrite(QByteArray("test")) && !vaultClear(), "mutations fail closed too");
     check(vaultCalls == calls && interactionAllowed, "no vault access if policy cannot be read");
     getPolicyStatus = errSecSuccess;
     setPolicyStatus = errSecNotAvailable;
-    check(read().isEmpty() && !write(QByteArray("test")) && !clear(), "policy change failure fails closed");
+    check(vaultRead().isEmpty() && !vaultWrite(QByteArray("test")) && !vaultClear(), "policy change failure fails closed");
     check(vaultCalls == calls && interactionAllowed, "no vault access if UI cannot be disabled");
     std::puts("secure_storage_mac_test: PASS");
 }

@@ -13,13 +13,28 @@ namespace plugins { struct PluginDescriptor; }
 
 namespace ui {
 
-/// A menu of scanned plugins, grouped by vendor, filtered to instruments or to
+/// Optional target of a replacement picker. Empty targets are add-only.
+/// IDs are resolved at activation time, never pointers into a mutable chain.
+struct PluginPickerTarget {
+    QString channelId;
+    QString slotId;
+    std::function<void()> onChanged;
+};
+
+/// Shared with the context-panel finder; call only after a successful load.
+void rememberRecentPlugin(const daw::plugins::PluginDescriptor& descriptor);
+
+bool checkPluginPickerForTest(QString* error = nullptr,
+                              const QString& screenshotPath = {});
+
+/// A compact menu of scanned plugins, grouped by category/vendor, filtered to instruments or to
 /// effects. Shared by the insert slots and the instrument slot so the two can
 /// never present different lists. This eager form is for callers which are
 /// already responding to a click and will show the returned menu immediately.
 QMenu* buildPluginMenu(QWidget* parent, daw::EngineController* controller,
                        bool instruments,
-                       std::function<void(const daw::plugins::PluginDescriptor&)> onPick);
+                       std::function<void(const daw::plugins::PluginDescriptor&)> onPick,
+                       PluginPickerTarget target = {});
 
 /// A lightweight menu suitable for QToolButton::setMenu(). Its QAction tree is
 /// populated only while the popup is opening and discarded after it closes.

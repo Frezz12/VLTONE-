@@ -1,0 +1,37 @@
+{
+  "runDate": "2026-09-08",
+  "platform": "macOS arm64",
+  "build": "RelWithDebInfo",
+  "runtime": "ONNX Runtime 1.22.0 CPU",
+  "tempoKeyInferenceFrozenBeforeHeldOut": true,
+  "postEvaluationChanges": "Metadata propagation, protocol schema, package locations, calibration rejection tests and below-first-knot probability consistency. All shipped calibrations remain unvalidated, so the knot correction did not change evaluated predictions.",
+  "sourceSha256": {
+    "controller/AudioMusicalAnalysis.cpp": "3178d89f604925e5991b090abd527c1be963be2a4a594298042e0e42d8304e1a",
+    "controller/analysis/TempoDetection.cpp": "3ba15e34268df19b19bad905d70d421cb21fc94aaa44b2fc9cd96dc48b6cbfb1",
+    "controller/analysis/KeyDetection.cpp": "3407125887bdf3123bbd86263c9334f228e6e97f4292cac0b4b976dfcaaf2fe0",
+    "controller/analysis/NeuralModels.cpp": "60009987eae31a2bf06d0a95386c24e02a40d25581f6f0055aacbb2a78ecbcfc",
+    "tests/analysis_v1/AudioMusicalAnalysis.cpp": "473a2d4c86c47317089e921db3c3bc8ab1272b1d8e90ff18f0bf72749be04c21",
+    "controller/analysis/Calibration.cpp": "da7685a0b72e6cdc7eba7ed2082526dd9e2f27c66ca740af98166279c33edd6d",
+    "protocol/schema/project-command-v2.schema.json": "2c05fee03f0426d4a2728e5d124e43ff0a6e494b2b57992ca70853d163ec5fe7",
+    "backend/internal/collab/payload_validation.go": "b5917b51976b2249b0ccfe86e3f4d63434d7f5e1a90bba5d64333d746c6438d9"
+  },
+  "modelSha256": {
+    "mel-filterbank.bin": "57cf87a6ccce2c80898823c13ce260ec5a43b957c0671cfd9233d269f8dc14f2",
+    "beat-this-final0.onnx": "6c548b4e7fda871629273513c1a4969e278e53ff115bff3ffee89620d70c9563",
+    "skey.onnx": "8dff2d101032a6ab4ab37f39e64c8c30428a2bbacbd679171bfa0f78075a3976"
+  },
+  "frozenCalibrationSha256": "b21a298529f2da3ce2af46a7dde090cfcccb4552e2e8929a3fc935f8b25a753d",
+  "rawPredictionSha256": {
+    "giantsteps-hybrid.jsonl": "4115d12fb5cee44dec2d100508ae5a9ba44fafa30bb233c9029a5a9284212754",
+    "giantsteps-legacy.jsonl": "a14a503ac20cdf42b2bb45882cb80f9547f1e5c81f725a21edfde9abf3884f9e",
+    "regression-hybrid.jsonl": "0759ab6571ce101c137c4a9b92dcefcd1a3af531ee5cd138deeff4be96475393",
+    "regression-legacy.jsonl": "48d5d56e30e9b5d01119b1ebd8851f7411117a22e5a411f45acd1ae87fa22187",
+    "test-dsp.jsonl": "244ae3388e5b5a3116b1eabf3c94d501f383ff4660444b32a2412c8d0d09a402",
+    "test-hybrid.jsonl": "b04288eecfbef05ac4366141bd9584ca71f62452afd965b083e7fc07bfca503d",
+    "test-legacy.jsonl": "1b9226037aef0c485eb7620663795b0242379e34597405fb196aae9394f1cf28"
+  },
+  "manifestSha256": {
+    "fsld-v2.tsv": "a580a5138470bdccfb7ebb22fb338991a196b3c1433ac052f147196a5b6f6300",
+    "giantsteps-v2.tsv": "dddcd088aeb8d475bf862defba9e02d0c43006443c31f55f41e0ef6eefb3ae52"
+  }
+}

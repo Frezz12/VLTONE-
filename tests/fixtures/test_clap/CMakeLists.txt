@@ -36,3 +36,10 @@ else()
     set(DAW_TEST_CLAP_PATH "$<TARGET_FILE:daw_test_clap>")
 endif()
 set(DAW_TEST_CLAP_PATH "${DAW_TEST_CLAP_PATH}" PARENT_SCOPE)
+
+add_library(daw_test_render_clap MODULE TestRenderClapPlugin.cpp)
+target_link_libraries(daw_test_render_clap PRIVATE daw_clap_headers)
+target_compile_features(daw_test_render_clap PRIVATE cxx_std_23)
+set_target_properties(daw_test_render_clap PROPERTIES
+    PREFIX "" SUFFIX ".clap" OUTPUT_NAME "DawTestRender"
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins_test)

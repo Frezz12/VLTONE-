@@ -29,6 +29,23 @@ namespace audio {
 
 namespace {
 
+std::string streamError(const char* operation, PaError error) {
+    std::string message = std::string(operation) + ": " + Pa_GetErrorText(error);
+    if (error == paUnanticipatedHostError) {
+        // Capture the native driver's reason before another PortAudio call
+        // replaces it. The generic error alone cannot diagnose a failed open.
+        if (const auto* host = Pa_GetLastHostErrorInfo()) {
+            message += " (host API " + std::to_string(host->hostApiType) +
+                       ", code " + std::to_string(host->errorCode);
+            if (host->errorText && *host->errorText)
+                message += ": " + std::string(host->errorText);
+            message += ")";
+        }
+    }
+    DAW_LOG_ERROR("[Device] %s", message.c_str());
+    return message;
+}
+
 // Copy a std::string into a fixed char buffer, always NUL-terminated.
 void copyName(char* dest, size_t cap, const std::string& src) {
     if (cap == 0) return;
@@ -566,8 +583,7 @@ Result AudioDeviceManager::openStream() {
     if (err != paNoError) {
         m_diagLastStartResult.store(err);
         return Result::fail(EngineError::DeviceError,
-                            std::string("Pa_OpenStream: ") +
-                                Pa_GetErrorText(err));
+                            streamError("Pa_OpenStream", err));
     }
     m_stream = stream;
 
@@ -606,11 +622,10 @@ Result AudioDeviceManager::start() {
     const PaError err = Pa_StartStream(static_cast<PaStream*>(m_stream));
     m_diagLastStartResult.store(err);
     if (err != paNoError) {
+        const auto message = streamError("Pa_StartStream", err);
         if (auto* callback = m_audioCallback.load()) callback->configureAudioWorkers({});
         m_deviceState.store(AudioDeviceState::Failed);
-        return Result::fail(EngineError::DeviceError,
-                            std::string("Pa_StartStream: ") +
-                                Pa_GetErrorText(err));
+        return Result::fail(EngineError::DeviceError, message);
     }
     m_isRunning.store(true);
     m_deviceState.store(AudioDeviceState::Running);

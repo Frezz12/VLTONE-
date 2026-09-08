@@ -2,7 +2,7 @@
 #
 # Build VLTONE.app and wrap it in macOS PKG and DMG installers.
 #
-#   packaging/macos/build-pkg.sh [version]
+#   packaging/macos/build-pkg.sh [version] [channel label]
 #
 # Produces  build-pkg/stage-vlt/VLTONE.app — the self-contained bundle,
 #           build-pkg/VLTONE-<version>.pkg — Installer package, and
@@ -34,8 +34,13 @@ IDENTIFIER="com.vltstudio.pro"
 # The project's own version, not the `cmake_minimum_required` line above it.
 VERSION="${1:-$(sed -n 's/^[[:space:]]*VERSION[[:space:]]*\([0-9][0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt" | head -1)}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid or missing project version: $VERSION" >&2; exit 1; }
-PKG="$BUILD/$ARTIFACT_NAME-$VERSION.pkg"
-DMG="$BUILD/$ARTIFACT_NAME-$VERSION.dmg"
+CHANNEL="${2:-}"
+[[ -z "$CHANNEL" || "$CHANNEL" =~ ^[A-Za-z0-9]+([.\ -][A-Za-z0-9]+)*$ ]] || { echo "Invalid release channel: $CHANNEL" >&2; exit 1; }
+ARTIFACT_CHANNEL="${CHANNEL// /-}"
+ARTIFACT_VERSION="$VERSION${ARTIFACT_CHANNEL:+-$ARTIFACT_CHANNEL}"
+DISPLAY_VERSION="$VERSION${CHANNEL:+ $CHANNEL}"
+PKG="$BUILD/$ARTIFACT_NAME-$ARTIFACT_VERSION.pkg"
+DMG="$BUILD/$ARTIFACT_NAME-$ARTIFACT_VERSION.dmg"
 # A distributable build must use the hosted account platform. Local developer
 # builds keep CMake's localhost default; CI/release automation may override
 # this value without changing source.
@@ -46,6 +51,7 @@ cmake -S "$ROOT" -B "$BUILD" -G Ninja \
     -DDAW_BUILD_APP=ON -DDAW_PACKAGE=ON -DDAW_BUILD_TESTS=OFF \
     -DDAW_ENABLE_COLLABORATION=ON \
     -DDAW_ENFORCE_COLLABORATION_RELEASE_GATES=ON \
+    -DVLTONE_RELEASE_CHANNEL="$CHANNEL" \
     -DVLT_DEFAULT_API_ORIGIN="$API_ORIGIN" \
     -DCMAKE_BUILD_TYPE=Release
 
@@ -199,7 +205,7 @@ DIST="$BUILD/distribution.xml"
 cat > "$DIST" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>$APP_NAME $VERSION</title>
+    <title>$APP_NAME $DISPLAY_VERSION</title>
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
     <!-- Spelled out: without it `installer -target CurrentUserHomeDirectory`
          reports success and writes nothing at all. This app goes to
@@ -231,7 +237,7 @@ mkdir -p "$DMG_ROOT"
 ditto "$STAGE/$APP_BUNDLE" "$DMG_ROOT/$APP_BUNDLE"
 ln -s /Applications "$DMG_ROOT/Applications"
 rm -f "$DMG"
-hdiutil create -volname "$APP_NAME $VERSION" \
+hdiutil create -volname "$APP_NAME $DISPLAY_VERSION" \
     -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG" >/dev/null
 hdiutil verify "$DMG" >/dev/null
 rm -rf "$DMG_ROOT"

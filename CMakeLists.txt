@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(VLTONE
-    VERSION 0.1.9
+    VERSION 0.2.0
     DESCRIPTION "VLTONE digital audio workstation"
     LANGUAGES CXX)
 
@@ -21,9 +21,16 @@ if(NOT DAW_VCPKG_VERSION STREQUAL PROJECT_VERSION)
         "Version mismatch: CMake=${PROJECT_VERSION}, vcpkg.json=${DAW_VCPKG_VERSION}")
 endif()
 
+set(VLTONE_RELEASE_CHANNEL "" CACHE STRING
+    "Optional prerelease channel shown after the numeric application version")
+set(VLTONE_DISPLAY_VERSION "${PROJECT_VERSION}")
+if(NOT VLTONE_RELEASE_CHANNEL STREQUAL "")
+    string(APPEND VLTONE_DISPLAY_VERSION " ${VLTONE_RELEASE_CHANNEL}")
+endif()
+
 add_compile_definitions(
     VLTONE_NAME="VLTONE"
-    VLTONE_VERSION="${PROJECT_VERSION}")
+    VLTONE_VERSION="${VLTONE_DISPLAY_VERSION}")
 
 # ── Global C++ settings ──
 set(CMAKE_CXX_STANDARD 23)

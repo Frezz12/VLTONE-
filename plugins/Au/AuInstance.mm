@@ -447,6 +447,15 @@ bool AuInstance::hasEditor() const noexcept {
 }
 
 bool AuInstance::openEditor(void* parentHandle, PluginEditorHost* host) {
+    // Cocoa setup can leave the view in autoreleased temporary collections.
+    // Drain those while our retained view and its AudioUnit are both alive.
+    // A pool created later in closeEditor cannot drain the caller's older pool.
+    @autoreleasepool {
+        return openEditorInPool(parentHandle, host);
+    }
+}
+
+bool AuInstance::openEditorInPool(void* parentHandle, PluginEditorHost* host) {
     if (m_editorView) return true;
     if (!m_unit || !parentHandle) return false;
 
@@ -533,34 +542,22 @@ bool AuInstance::openEditor(void* parentHandle, PluginEditorHost* host) {
 
 void AuInstance::closeEditor() {
     if (!m_editorView) return;
-    // Inside a pool of its own, and this is not tidiness.
-    //
-    // An AU's Cocoa view keeps a timer on the main run loop that reads the
-    // unit it is showing. The view is supposed to stop that timer when it is
-    // deallocated — but ARC's release here only *queues* the deallocation if
-    // anything on the way out autoreleases the view, and the enclosing pool
-    // may not drain until well after the caller has gone on to dispose the
-    // AudioUnit. The timer then fires against freed memory. That is not a
-    // theoretical window: it reproduces on the first plugin whose view uses
-    // one, and it lands as "memory corruption of free block" somewhere else
-    // entirely, minutes later.
-    //
-    // Draining here makes the view's dealloc — and the timer it invalidates —
-    // happen before this function returns, while the unit is still alive to be
-    // read one last time.
+    // Drain releases queued by removal before the AudioUnit is disposed. The
+    // corresponding pool in openEditor already drained its setup temporaries;
+    // this pool alone cannot bound the lifetime of those older references.
     @autoreleasepool {
-        NSView* view = (__bridge_transfer NSView*)m_editorView;
-        id factory = (__bridge_transfer id)m_editorFactory;
-        m_editorView = nullptr;
+        // Without precise lifetime ARC can release this otherwise unused local
+        // before the view. Keep the factory through the view's entire drain.
+        __attribute__((objc_precise_lifetime)) id factory =
+            (__bridge_transfer id)m_editorFactory;
         m_editorFactory = nullptr;
         m_editorHost = nullptr;
-        [view removeFromSuperview];
-        // The view goes first and the factory second, explicitly. ARC destroys
-        // locals in reverse order of declaration, which would have released the
-        // factory — and with it whatever its bundle owns — while the view it
-        // built was still alive and about to run its own dealloc.
-        view = nil;
-        factory = nil;
+        @autoreleasepool {
+            NSView* view = (__bridge_transfer NSView*)m_editorView;
+            m_editorView = nullptr;
+            [view removeFromSuperview];
+        }
+        (void)factory;
     }
 }
 
@@ -785,7 +782,8 @@ PluginProcessDisposition AuInstance::process(
 
     AudioUnitRenderActionFlags flags =
         context.offline ? kAudioOfflineUnitRenderAction_Render : 0;
-    if (AudioUnitRender(m_unit, &flags, &timeStamp, 0, context.frames, list) != noErr) {
+    const bool failed = AudioUnitRender(m_unit, &flags, &timeStamp, 0, context.frames, list) != noErr;
+    if (failed) {
         silence();
     } else if ((flags & kAudioUnitRenderAction_OutputIsSilence) != 0) {
         // The unit is telling us it produced silence, and Core Audio is explicit
@@ -810,7 +808,7 @@ PluginProcessDisposition AuInstance::process(
     m_wasPlaying = m_blockPlaying;
     // OutputIsSilence describes only this render call. Audio Unit exposes no
     // plugin-to-host wake request that would make skipping future calls safe.
-    return PluginProcessDisposition::Continue;
+    return failed ? PluginProcessDisposition::Error : PluginProcessDisposition::Continue;
 }
 
 } // namespace daw::plugins

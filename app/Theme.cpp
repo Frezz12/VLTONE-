@@ -256,6 +256,7 @@ QJsonObject ThemeManager::toJson(const Theme& t) {
     o["transportBackground"] = colorToStr(t.transportBackground);
     o["headerBackground"] = colorToStr(t.headerBackground);
     o["toolbarBackground"] = colorToStr(t.toolbarBackground);
+    o["pluginMenuBackground"] = colorToStr(t.pluginMenuBackground);
     return o;
 }
 
@@ -282,6 +283,7 @@ Theme ThemeManager::fromJson(const QJsonObject& o, const Theme& base) {
     t.transportBackground = col("transportBackground", base.transportBackground);
     t.headerBackground = col("headerBackground", base.transportBackground);
     t.toolbarBackground = col("toolbarBackground", base.toolbarBackground);
+    t.pluginMenuBackground = col("pluginMenuBackground", base.pluginMenuBackground);
     return t;
 }
 
@@ -321,6 +323,12 @@ QString ThemeManager::fontDataPath() const {
         root = QStandardPaths::writableLocation(
             QStandardPaths::AppLocalDataLocation);
     return QDir(root).filePath(QStringLiteral("Fonts/custom-font.data"));
+}
+
+QString ThemeManager::customFontPath() const {
+    return hasCustomFont() && QFileInfo::exists(fontDataPath())
+               ? fontDataPath()
+               : QString();
 }
 
 void ThemeManager::loadStoredFont() {

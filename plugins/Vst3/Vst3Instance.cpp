@@ -1060,7 +1060,7 @@ PluginProcessDisposition Vst3Instance::process(
 
     if (m_processor->process(data) != kResultOk) {
         silence();
-        return PluginProcessDisposition::Continue;
+        return PluginProcessDisposition::Error;
     }
 
     // ── What the plugin said about its own output ──

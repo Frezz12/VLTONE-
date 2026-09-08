@@ -1,0 +1,230 @@
+{
+  "primaryImprovedBoth": true,
+  "baseline": {
+    "files": 127,
+    "failed": 0,
+    "medianSeconds": 0.065485041,
+    "tempo": {
+      "labeled": 121,
+      "correctPrimary": 35,
+      "primaryAccuracy": 0.2892561983471074,
+      "confidentCount": 89,
+      "confidentCoverage": 0.7355371900826446,
+      "confidentAccuracy": 0.34831460674157305,
+      "confident95Interval": [
+        0.2574733314684021,
+        0.45170875931848653
+      ],
+      "availableCoverage": 0.9669421487603306,
+      "meanAbsoluteBpmError": 27.499682170940172,
+      "halfTempoErrors": 6,
+      "doubleTempoErrors": 10,
+      "correctAlternativeOnly": 13
+    },
+    "key": {
+      "labeled": 67,
+      "correctPrimary": 30,
+      "primaryAccuracy": 0.44776119402985076,
+      "confidentCount": 26,
+      "confidentCoverage": 0.3880597014925373,
+      "confidentAccuracy": 0.6923076923076923,
+      "confident95Interval": [
+        0.5001138848576876,
+        0.8349887906020732
+      ],
+      "availableCoverage": 1.0,
+      "notTonalExamples": 59,
+      "falseKeyPrimary": 59,
+      "confidentFalseKey": 10,
+      "correctAlternativeOnly": 12
+    }
+  },
+  "new": {
+    "files": 127,
+    "failed": 0,
+    "medianSeconds": 1.195689083,
+    "tempo": {
+      "labeled": 121,
+      "correctPrimary": 48,
+      "primaryAccuracy": 0.39669421487603307,
+      "confidentCount": 0,
+      "confidentCoverage": 0.0,
+      "confidentAccuracy": null,
+      "confident95Interval": [
+        0,
+        1
+      ],
+      "availableCoverage": 0.9669421487603306,
+      "meanAbsoluteBpmError": 45.32134656755382,
+      "halfTempoErrors": 19,
+      "doubleTempoErrors": 16,
+      "correctAlternativeOnly": 21
+    },
+    "key": {
+      "labeled": 67,
+      "correctPrimary": 37,
+      "primaryAccuracy": 0.5522388059701493,
+      "confidentCount": 0,
+      "confidentCoverage": 0.0,
+      "confidentAccuracy": null,
+      "confident95Interval": [
+        0,
+        1
+      ],
+      "availableCoverage": 0.9402985074626866,
+      "notTonalExamples": 59,
+      "falseKeyPrimary": 41,
+      "confidentFalseKey": 0,
+      "correctAlternativeOnly": 10
+    }
+  },
+  "equalCoverage": {
+    "tempo": {
+      "baseline": {
+        "0.1": {
+          "count": 13,
+          "precision": 0.5384615384615384
+        },
+        "0.25": {
+          "count": 31,
+          "precision": 0.5483870967741935
+        },
+        "0.5": {
+          "count": 61,
+          "precision": 0.4098360655737705
+        },
+        "0.75": {
+          "count": 91,
+          "precision": 0.3516483516483517
+        },
+        "1": {
+          "count": 121,
+          "precision": 0.2892561983471074
+        }
+      },
+      "new": {
+        "0.1": {
+          "count": 13,
+          "precision": 0.8461538461538461
+        },
+        "0.25": {
+          "count": 31,
+          "precision": 0.7419354838709677
+        },
+        "0.5": {
+          "count": 61,
+          "precision": 0.5409836065573771
+        },
+        "0.75": {
+          "count": 91,
+          "precision": 0.4835164835164835
+        },
+        "1": {
+          "count": 121,
+          "precision": 0.39669421487603307
+        }
+      }
+    },
+    "key": {
+      "baseline": {
+        "0.1": {
+          "count": 7,
+          "precision": 0.8571428571428571
+        },
+        "0.25": {
+          "count": 17,
+          "precision": 0.7647058823529411
+        },
+        "0.5": {
+          "count": 34,
+          "precision": 0.5588235294117647
+        },
+        "0.75": {
+          "count": 51,
+          "precision": 0.49019607843137253
+        },
+        "1": {
+          "count": 67,
+          "precision": 0.44776119402985076
+        }
+      },
+      "new": {
+        "0.1": {
+          "count": 7,
+          "precision": 0.7142857142857143
+        },
+        "0.25": {
+          "count": 17,
+          "precision": 0.8235294117647058
+        },
+        "0.5": {
+          "count": 34,
+          "precision": 0.7058823529411765
+        },
+        "0.75": {
+          "count": 51,
+          "precision": 0.6078431372549019
+        },
+        "1": {
+          "count": 67,
+          "precision": 0.5522388059701493
+        }
+      }
+    }
+  },
+  "confidenceGate": {
+    "tempo:beat-this+grid": {
+      "passed": false,
+      "confidentCount": 0,
+      "confidentCorrect": 0,
+      "confidentPrecision": null,
+      "coverage": 0.0,
+      "interval95": [
+        0,
+        1
+      ],
+      "target": 0.98,
+      "minimumTestCount": 20
+    },
+    "tempo:dsp": {
+      "passed": false,
+      "confidentCount": 0,
+      "confidentCorrect": 0,
+      "confidentPrecision": null,
+      "coverage": 0.0,
+      "interval95": [
+        0,
+        1
+      ],
+      "target": 0.98,
+      "minimumTestCount": 20
+    },
+    "key:hpcp": {
+      "passed": false,
+      "confidentCount": 0,
+      "confidentCorrect": 0,
+      "confidentPrecision": null,
+      "coverage": 0.0,
+      "interval95": [
+        0,
+        1
+      ],
+      "target": 0.95,
+      "minimumTestCount": 20
+    },
+    "key:skey+hpcp": {
+      "passed": false,
+      "confidentCount": 0,
+      "confidentCorrect": 0,
+      "confidentPrecision": null,
+      "coverage": 0.0,
+      "interval95": [
+        0,
+        1
+      ],
+      "target": 0.95,
+      "minimumTestCount": 20
+    }
+  },
+  "releasePassed": false
+}

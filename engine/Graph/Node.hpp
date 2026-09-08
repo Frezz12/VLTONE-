@@ -117,6 +117,13 @@ public:
     /// first `process`.
     virtual void prepare(const PrepareInfo&) {}
     virtual void reset() {}
+    /// Offline control thread, between completed blocks only. A callback may
+    /// invalidate preparation; the pass must then stop rather than use stale
+    /// routing/latency. During preparation the engine can compile it again.
+    virtual Status serviceOffline() { return {}; }
+    /// Queried after preparation and after a complete offline block. The live
+    /// callback's fallback audio is not evidence of a successful export.
+    virtual Status offlineStatus() const noexcept { return {}; }
     /// Control thread: warm immutable source data before play/locate. Must not
     /// mutate live DSP state; the published graph may still be processing.
     virtual void preparePlayback(SamplePos) {}
