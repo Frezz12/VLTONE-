@@ -11946,9 +11946,10 @@ bool MainWindow::checkPluginAutoOpenForTest() {
             if (!menu) return nullptr;
             for (QAction* action : menu->actions()) {
                 if (QAction* nested = findSampler(action->menu())) return nested;
+                // Products now own format/version submenus. Trigger the
+                // actual load action, not the parent bearing the product name.
                 if (action->isEnabled() &&
-                    action->text().contains(QStringLiteral("Sampler"),
-                                            Qt::CaseInsensitive)) {
+                    action->property("pluginUid").toString() == QLatin1String("daw.sampler")) {
                     return action;
                 }
             }
@@ -11974,6 +11975,7 @@ bool MainWindow::checkPluginAutoOpenForTest() {
     QApplication::processEvents();
     QAction* pick = findSampler(instrumentMenu);
     if (!pick) {
+        std::fprintf(stderr, "plugin auto-open: sampler action missing\n");
         instrumentMenu->close();
         QApplication::processEvents();
         return false;
@@ -11987,7 +11989,13 @@ bool MainWindow::checkPluginAutoOpenForTest() {
         instrumentMenu->actions().isEmpty() &&
         requestedChannel == QString::fromStdString(track) &&
         requestedSlot == QString::fromStdString(loaded->instrument.id);
-    if (!autoOpened) return false;
+    if (!autoOpened) {
+        std::fprintf(stderr, "plugin auto-open: loaded=%d, cleared=%d, channel=%d, slot=%d\n",
+                     loaded && loaded->instrument.isLoaded(), instrumentMenu->actions().isEmpty(),
+                     requestedChannel == QString::fromStdString(track),
+                     loaded && requestedSlot == QString::fromStdString(loaded->instrument.id));
+        return false;
+    }
 
     // The bypass buttons are hover actions, so exercise their event filter
     // directly: a sweep over two inserts changes both and folds history once.
