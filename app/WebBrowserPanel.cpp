@@ -7,6 +7,7 @@
 #include "Icons.hpp"
 #include "Theme.hpp"
 #include "WebPrefs.hpp"
+#include "WebPermissionPolicy.hpp"
 
 #include <QAction>
 #include <QApplication>
@@ -46,7 +47,6 @@
 #include <QWebEngineLoadingInfo>
 #include <QWebEngineNewWindowRequest>
 #include <QWebEnginePage>
-#include <QWebEnginePermission>
 #include <QWebEngineProfile>
 #include <QWebEngineSettings>
 #include <QWebEngineScript>
@@ -839,8 +839,7 @@ void WebBrowserPanel::wireTab(Tab* tab) {
             emit statusMessage(tr("The web page process stopped (%1). Reload the tab to try again.").arg(code));
         }
     });
-    connect(page, &QWebEnginePage::permissionRequested, this,
-            [](const QWebEnginePermission& permission) { permission.deny(); });
+    denyWebPagePermissions(page, this);
     connect(page, &QWebEnginePage::newWindowRequested, this,
             [this](QWebEngineNewWindowRequest& request) {
                 // Every "open in a new window" gesture the page can make —

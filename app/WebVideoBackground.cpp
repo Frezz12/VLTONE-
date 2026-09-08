@@ -8,7 +8,7 @@
 #include <QPointer>
 #include <QVariant>
 #include <QWebEnginePage>
-#include <QWebEnginePermission>
+#include "WebPermissionPolicy.hpp"
 #include <QWebEngineProfile>
 #include <QWebEngineScript>
 #include <QWebEngineSettings>
@@ -137,8 +137,7 @@ void WebVideoBackground::request(const WebVideoSource& source) {
     page->settings()->setAttribute(QWebEngineSettings::JavascriptCanOpenWindows, false);
     page->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, false);
     page->settings()->setAttribute(QWebEngineSettings::FullScreenSupportEnabled, false);
-    connect(page, &QWebEnginePage::permissionRequested, session,
-            [](const QWebEnginePermission& permission) { permission.deny(); });
+    denyWebPagePermissions(page, session);
     connect(page, &QWebEnginePage::renderProcessTerminated, session,
         [this, session](QWebEnginePage::RenderProcessTerminationStatus, int) {
             fail(session, tr("The background video player stopped. Open the page and try again."));

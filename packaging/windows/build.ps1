@@ -223,6 +223,8 @@ Invoke-Checked cmake --preset windows-vcpkg -B $BuildDirectory `
     "-DDAW_ENFORCE_COLLABORATION_RELEASE_GATES=ON" `
     "-DVLT_DEFAULT_API_ORIGIN=$ApiOrigin" `
     "-DCMAKE_SYSTEM_VERSION=$WindowsSdkVersion"
+# Catch Qt binary/header incompatibilities before compiling the full engine.
+Invoke-Checked cmake --build $BuildDirectory --config $Configuration --target web_permission_link_check
 Invoke-Checked cmake --build $BuildDirectory --config $Configuration --parallel
 
 if (-not $SkipTests) {

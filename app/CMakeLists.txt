@@ -29,6 +29,11 @@ if(NOT APPLE)
 endif()
 qt_standard_project_setup()   # enables AUTOMOC / AUTOUIC / AUTORCC
 
+add_executable(web_permission_link_check EXCLUDE_FROM_ALL
+    ../tests/web_permission_link_check.cpp WebPermissionPolicy.hpp)
+target_include_directories(web_permission_link_check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(web_permission_link_check PRIVATE Qt6::Widgets Qt6::WebEngineWidgets)
+
 if(DAW_BUILD_TESTS)
     qt_add_executable(theme_package_test
         ../tests/theme_package_test.cpp
