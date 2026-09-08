@@ -180,9 +180,22 @@ audio::Result EngineController::renderProject(
         for (const auto& slot : scratch.m_project.masterInserts)
             restoreSlot(kMasterChannelId, slot);
         if (cancelled) { out.cancelled = true; return audio::Result::ok(); }
-        const auto result = scratch.renderProjectPass(spec, onProgress, out);
-        if (cancelled) { out.cancelled = true; return audio::Result::ok(); }
-        return result;
+        // Some processors discover their final latency/layout only after
+        // processing audio or restored parameter events. Keep the same clone
+        // so that discovery survives, but discard the entire partial pass and
+        // recompute PDC, capture windows and stems before starting over.
+        for (unsigned attempt = 0; attempt < 8; ++attempt) {
+            if (!preparing()) { out.cancelled = true; return audio::Result::ok(); }
+            bool restartRequired = false;
+            const auto result = scratch.renderProjectPass(spec, onProgress, out, restartRequired);
+            if (cancelled) { out.cancelled = true; return audio::Result::ok(); }
+            if (!restartRequired) return result;
+            if (attempt == 7)
+                return audio::Result::fail(audio::EngineError::Unknown,
+                    "audio processor keeps changing configuration after 8 export attempts: " +
+                    scratch.m_engine.offlineError());
+        }
+        return audio::Result::fail(audio::EngineError::Unknown, "export preparation failed");
     } catch (const std::exception& error) {
         if (cancelled) { out.cancelled = true; return audio::Result::ok(); }
         return audio::Result::fail(audio::EngineError::Unknown, error.what());
@@ -301,7 +314,8 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec) {
 audio::Result EngineController::renderProjectPass(
     const rendering::Spec& spec,
     const std::function<bool(const rendering::Progress&)>& onProgress,
-    rendering::Report& out) {
+    rendering::Report& out, bool& restartRequired) {
+    restartRequired = false;
     out = rendering::Report{};
 
     if (!spec.writeMixdown && spec.stemChannelIds.empty()) {
@@ -376,6 +390,7 @@ audio::Result EngineController::renderProjectPass(
     m_renderTapsPreFader = spec.stemsPreFader;
     m_renderTapsAtSource = spec.stemsAtSource;
     std::vector<std::string> stems;
+    m_renderTaps.clear();
     for (const std::string& channelId : spec.stemChannelIds) {
         if (!m_channels.contains(channelId)) continue;   // deleted since
         if (m_renderTaps.contains(channelId)) continue;  // named twice
@@ -651,6 +666,8 @@ audio::Result EngineController::renderProjectPass(
             return audio::Result::ok();
         }
         if (!ioStatus) return ioStatus;
+        restartRequired = !renderStatus &&
+            renderStatus.error() == engine::EngineError::RenderRestartRequired;
         return audio::Result::fail(
             audio::EngineError::Unknown,
             m_engine.offlineError().empty() ? std::string(engine::describe(renderStatus.error()))

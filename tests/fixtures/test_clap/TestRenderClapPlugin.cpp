@@ -21,6 +21,8 @@ const clap_plugin_descriptor_t descriptors[]{
     {CLAP_VERSION_INIT, "review.mode", "Offline mode refusal", "Review", "", "", "", "1", "", features},
     {CLAP_VERSION_INIT, "review.hardware", "Hard realtime requirement", "Review", "", "", "", "1", "", features},
     {CLAP_VERSION_INIT, "review.unstable", "Repeated preparation restart", "Review", "", "", "", "1", "", features},
+    {CLAP_VERSION_INIT, "review.audio-latency", "Latency discovered from audio", "Review", "", "", "", "1", "", features},
+    {CLAP_VERSION_INIT, "review.once-restart", "One deferred restart", "Review", "", "", "", "1", "", features},
 };
 constexpr unsigned descriptorCount = sizeof(descriptors) / sizeof(descriptors[0]);
 unsigned instances[descriptorCount]{};
@@ -62,7 +64,7 @@ bool activate(const clap_plugin_t* p, double, uint32_t, uint32_t) {
     auto& self = Instance::get(p);
     if (self.kind == 1 && self.offline) return false;
     self.active = true;
-    self.latency = self.offline && (self.kind == 0 || (self.kind == 6 && self.configured)) ? 24 : 0;
+    self.latency = self.offline && (self.kind == 0 || ((self.kind == 6 || self.kind == 11) && self.configured)) ? 24 : 0;
     if (self.offline && self.kind == 6 && !self.configured) self.host->request_callback(self.host);
     if (self.offline && self.kind == 10) self.host->request_restart(self.host);
     self.ring.assign(2 * self.latency, 0.f);
@@ -90,6 +92,11 @@ clap_process_status process(const clap_plugin_t* p, const clap_process_t* block)
     if (self.kind == 2 && self.offline && (number / 64) % 2) return CLAP_PROCESS_ERROR;
     if (self.kind == 3 && number == 0) self.host->request_callback(self.host);
     if (self.kind == 7 && self.offline && number == 16) self.host->request_restart(self.host);
+    if (self.offline && !self.configured &&
+        ((self.kind == 11 && number == 1) || (self.kind == 12 && number == 16))) {
+        self.configured = true;
+        self.host->request_restart(self.host);
+    }
     // Model deferred setup: the requested main-thread turn enables full level.
     const float gain = self.kind == 1 ? 0.5f
                      : self.kind == 3 && !self.callbackDone && number > 0 ? 0.25f : 1.f;

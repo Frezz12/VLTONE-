@@ -427,6 +427,10 @@ public:
         if (id == kGainId) m_gain = gainFromNormalized(value);
         else if (id == kOffsetId) m_offset = offsetFromNormalized(value);
         else return kInvalidArgument;
+        if (m_handler) {
+            if (const char* flags = std::getenv("DAW_TEST_VST3_RESTART_FLAGS"))
+                m_handler->restartComponent(std::atoi(flags));
+        }
         return kResultOk;
     }
 

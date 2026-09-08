@@ -145,6 +145,41 @@ int main() try {
         std::cout << "PASS " << uid << " matches unprocessed parallel reference\n";
     }
 
+    // Real requests arriving after process() need a complete replacement pass,
+    // with new PDC and file windows. Test multiple buffers, a partial custom
+    // range and stems; a dropped block, stale delay or append would be audible.
+    for (unsigned block : {8u, 64u, 512u, 2048u}) {
+        for (const auto* uid : {"review.audio-latency", "review.once-restart"}) {
+            daw::EngineController c;
+            require(bool(c.initialize(48000, block, false)), "initialize deferred restart");
+            const auto a = track(c, source, "Effect");
+            const auto b = track(c, source, "Parallel");
+            auto spec = specFor(temp.path / (std::string(uid) + std::to_string(block)));
+            spec.range = daw::rendering::Range::Custom;
+            spec.customStartSeconds = 0.013;
+            spec.customEndSeconds = 0.9813;
+            spec.preRollSeconds = 0.01;
+            const auto reference = render(c, spec);
+            spec.outputDir = (fs::path(spec.outputDir) / "actual").string();
+            require(!c.addInsert(a, plugin(DAW_TEST_RENDER_CLAP_PATH, uid)).empty(), "create deferred restart fixture");
+            spec.stemChannelIds = {a, b};
+            daw::rendering::Report report;
+            const auto status = c.renderProject(spec, {}, report);
+            require(bool(status) && report.files.size() == 3, "restart export: " + status.message());
+            const auto mix = decode(report.files[0]);
+            require(difference(mix, reference) < 1e-6, "restart preserves every mix sample");
+            auto sum = decode(report.files[1]);
+            const auto other = decode(report.files[2]);
+            require(sum.frames == other.frames, "restart stems agree on length");
+            for (std::size_t i = 0; i < sum.interleaved.size(); ++i)
+                sum.interleaved[i] += other.interleaved[i];
+            require(difference(sum, reference) < 1e-6, "restart preserves stem alignment");
+            require(std::distance(fs::directory_iterator(spec.outputDir), fs::directory_iterator{}) == 3,
+                    "restart cleans temporary files");
+            std::cout << "PASS " << uid << " retries with accurate PDC at block " << block << '\n';
+        }
+    }
+
     // A successful file is impossible after DSP/configuration failure. The
     // same live controller can immediately retry with an explicit FX bypass.
     for (const auto* uid : {"review.activation", "review.process", "review.clone", "review.dual",
@@ -166,6 +201,9 @@ int main() try {
         const auto failed = c.renderProject(spec, {}, report);
         require(!failed && report.files.empty() && !report.cancelled, std::string(uid) + " must fail explicitly");
         require(!failed.message().empty(), "failure has a diagnostic");
+        if (std::string(uid) == "review.restart")
+            require(failed.message().find("after 8 export attempts") != std::string::npos,
+                    "a permanently unstable processor exhausts the bounded retry budget");
         require(std::distance(fs::directory_iterator(spec.outputDir), fs::directory_iterator{}) == 1,
                 "no published or partial output after failure");
         { std::ifstream file(previous); std::string text; file >> text;
@@ -175,6 +213,32 @@ int main() try {
         const auto dry = render(c, spec);
         require(difference(dry, decode(source.string())) < 1e-6, "explicit bypass exports the dry source");
         std::cout << "PASS " << uid << " rejects corrupt export and permits bypass retry\n";
+    }
+
+    // Cancellation in a replacement pass must not publish a partial file or
+    // turn into another retry. Preserve an existing user export as well.
+    {
+        daw::EngineController c;
+        require(bool(c.initialize(48000, 64, false)), "initialize restart cancellation");
+        const auto a = track(c, source, "Cancel");
+        require(!c.addInsert(a, plugin(DAW_TEST_RENDER_CLAP_PATH, "review.audio-latency")).empty(),
+                "create cancellation fixture");
+        auto spec = specFor(temp.path / "cancel-restart");
+        fs::create_directories(spec.outputDir);
+        const auto previous = fs::path(spec.outputDir) / "mixdown.wav";
+        { std::ofstream file(previous); file << "previous-export"; }
+        unsigned passes = 0;
+        daw::rendering::Report report;
+        const auto status = c.renderProject(spec, [&](const auto& progress) {
+            if (progress.stage == daw::rendering::Progress::Stage::Rendering) return ++passes < 2;
+            return true;
+        }, report);
+        require(bool(status) && report.cancelled && report.files.empty() && passes == 2,
+                "cancel the replacement pass");
+        require(std::distance(fs::directory_iterator(spec.outputDir), fs::directory_iterator{}) == 1,
+                "cancelled replacement leaves no temporary output");
+        { std::ifstream file(previous); std::string text; file >> text;
+          require(text == "previous-export", "cancel preserves previous export"); }
     }
 
     // Different track latency plus additional master latency. Custom windows,

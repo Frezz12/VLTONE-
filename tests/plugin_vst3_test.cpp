@@ -461,6 +461,68 @@ int main() {
         }
     }
 
+    // restartComponent includes metadata and parameter refreshes. Repeated
+    // notifications between real offline blocks must neither abort the pass
+    // nor reset the plugin's 64-sample delay line.
+    for (unsigned block : {8u, 64u, 512u, 2048u}) {
+        for (int flags : {int(Steinberg::Vst::kParamTitlesChanged),
+                          int(Steinberg::Vst::kParamValuesChanged),
+                          int(Steinberg::Vst::kIoTitlesChanged),
+                          int(Steinberg::Vst::kMidiCCAssignmentChanged)}) {
+            engine::RealtimeEngine engine(2);
+            check(bool(engine.prepare(48000, block, 2, true)), "prepare notification export");
+            auto node = std::make_shared<PluginNode>(descriptor.name, factory.create(descriptor));
+            const auto id = engine.graph().adoptNode(node);
+            const auto source = engine.graph().addNode(std::make_unique<engine::SourceNode>(
+                "constant", [](void*, const engine::AudioBlock& audio, engine::FrameCount frames,
+                               engine::SamplePos) {
+                    for (unsigned ch = 0; ch < audio.numChannels(); ++ch)
+                        std::fill_n(audio.data(ch), frames, 1.0f);
+                }, nullptr));
+            check(bool(engine.graph().connect(source, id)), "connect notification source");
+            engine.graph().setSink(id);
+            check(bool(engine.commitGraph()), "compile notification export");
+            // Offset plus a delayed constant reveals unwanted DSP resets.
+            node->instance()->setParameterFromHost(1, 0.25);
+            PluginEvent value;
+            value.kind = PluginEvent::Kind::ParamValue;
+            value.paramIndex = 1; value.value = 0.25;
+            node->pushEvent(value);
+            std::size_t received = 0;
+            const unsigned totalFrames = std::max(block * 4, 256u);
+            const auto result = engine.renderOffline(0, totalFrames, block,
+                [&](const auto& audio, auto frames) {
+                    bool correct = true;
+                    // The sink sends the notification after block one was
+                    // serviced. Block two services it; block three receives
+                    // the new controller values without resetting the delay.
+                    const float offset = flags == int(Steinberg::Vst::kParamValuesChanged) &&
+                        received >= 2 * block ? 0.5f : 0.25f;
+                    for (unsigned i = 0; i < frames; ++i)
+                        correct &= std::abs(audio.data(0)[i] - offset -
+                            (received + i < kPluginLatency ? 0.0f : 1.0f)) < 1e-6f;
+                    check(correct, "metadata notification preserves DSP output");
+                    received += frames;
+                    const auto text = std::to_string(flags);
+#if defined(_WIN32)
+                    ::_putenv_s("DAW_TEST_VST3_RESTART_FLAGS", text.c_str());
+#else
+                    ::setenv("DAW_TEST_VST3_RESTART_FLAGS", text.c_str(), 1);
+#endif
+                    node->instance()->setParameterFromHost(1,
+                        flags == int(Steinberg::Vst::kParamValuesChanged) ? 0.5 : 0.25);
+#if defined(_WIN32)
+                    ::_putenv_s("DAW_TEST_VST3_RESTART_FLAGS", "");
+#else
+                    ::unsetenv("DAW_TEST_VST3_RESTART_FLAGS");
+#endif
+                    return true;
+                });
+            check(bool(result) && received == totalFrames,
+                  "repeated VST3 cache notifications complete offline export at every buffer size");
+        }
+    }
+
     // ── A real VST3 instrument event bus ──
     {
         const std::vector<PluginDescriptor> all = factory.inspect(pluginPath);

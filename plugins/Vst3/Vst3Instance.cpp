@@ -664,6 +664,34 @@ void Vst3Instance::pumpMainThread() {
     // bus tables here would race the audio thread.
 }
 
+bool Vst3Instance::serviceOfflineRestart() {
+    // restartComponent also carries cache/UI notifications. They do not imply
+    // a DSP restart. This path runs only between offline blocks, unlike the
+    // realtime main-thread pump, so conversion tables can be refreshed safely.
+    constexpr int32 structural = kReloadComponent | kIoChanged |
+        kLatencyChanged | kPrefetchableSupportChanged;
+    const int32 flags = m_restartFlags.fetch_and(structural, std::memory_order_acq_rel);
+    if (flags & structural) {
+        m_restartFlags.fetch_or(flags, std::memory_order_release);
+        return true; // activate() consumes the full request
+    }
+    if (flags & kParamTitlesChanged) {
+        readParameters();
+        const auto capacity = std::max<std::size_t>(m_parameters.size(), 32);
+        m_inputChanges->reserve(capacity);
+        m_outputChanges->reserve(capacity);
+    }
+    if (flags & (kMidiCCAssignmentChanged | kParamTitlesChanged)) readMidiMappings();
+    if (flags & kParamValuesChanged) {
+        captureControllerValuesForProcessor();
+        if (auto* listener = m_listener.load(std::memory_order_acquire)) {
+            for (std::uint32_t i = 0; i < m_pendingParameterValues.size(); ++i)
+                listener->onParameterChanged(i, toPlain(i, m_pendingParameterValues[i]));
+        }
+    }
+    return false;
+}
+
 // ── State ──────────────────────────────────────────────────────────────────
 
 bool Vst3Instance::saveState(std::vector<std::uint8_t>& out) const {

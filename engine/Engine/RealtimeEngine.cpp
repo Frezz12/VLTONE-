@@ -367,7 +367,7 @@ Status RealtimeEngine::renderOffline(
                     if (const auto status = entry.node->serviceOffline(); !status)
                         return offlineFailure(entry, status.error(), position);
                     if (!entry.node->isPreparedFor(offlineInfo))
-                        return offlineFailure(entry, EngineError::RenderConfigurationChanged, position);
+                        return offlineFailure(entry, EngineError::RenderRestartRequired, position);
                     if (const auto status = entry.node->offlineStatus(); !status)
                         return offlineFailure(entry, status.error(), position);
                 }

@@ -72,6 +72,7 @@ public:
 
     void setParameterFromHost(std::uint32_t index, double plainValue) override;
     void pumpMainThread() override;
+    bool serviceOfflineRestart() override;
 
     bool hasEditor() const noexcept override;
     bool openEditor(void* parentHandle, PluginEditorHost* host) override;

@@ -129,6 +129,11 @@ public:
     /// tends to freeze. Cheap when there is nothing to do.
     virtual void pumpMainThread() {}
 
+    /// Called after an offline block, with all process workers stopped, when
+    /// the listener requested a restart. Formats may service non-structural
+    /// notifications here without resetting DSP. True requires a new pass.
+    virtual bool serviceOfflineRestart() { return true; }
+
     // ── Editor, control thread only ──
 
     /// False when the plugin ships no GUI of its own; the host then falls back

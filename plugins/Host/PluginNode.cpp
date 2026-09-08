@@ -149,7 +149,8 @@ engine::Status PluginNode::serviceOffline() {
         return engine::fail(engine::EngineError::RenderConfigurationChanged);
     const bool latencyChanged = takeLatencyChanged();
     const bool restartRequested = takeRestartRequested();
-    if (latencyChanged || restartRequested) invalidatePrepare();
+    const bool needsPrepare = restartRequested && m_instance->serviceOfflineRestart();
+    if (latencyChanged || needsPrepare) invalidatePrepare();
     return {};
 }
 

@@ -2088,7 +2088,7 @@ private:
     std::function<bool()> m_sampleLoadContinue;
     audio::Result renderProjectPass(const rendering::Spec& spec,
         const std::function<bool(const rendering::Progress&)>& onProgress,
-                                   rendering::Report& out);
+                                   rendering::Report& out, bool& restartRequired);
     void applyRenderSelection(const rendering::Spec& spec);
     /// Move the whole session to another sample rate, dropping the decoded-clip
     /// caches that were converted for the old one. Used by a render that writes
