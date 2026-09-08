@@ -40,6 +40,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(WIN32)
     add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
     if(MSVC)
+        # Some legacy VST2 DSP paths use large stack frames during offline
+        # rendering. std::thread workers inherit this executable reserve.
+        add_link_options("$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:/STACK:8388608>")
+
         # Release links use LTCG. Keep Ninja from running every test link at
         # once and exhausting memory on the Windows Actions runner.
         set_property(GLOBAL APPEND PROPERTY JOB_POOLS vlt_windows_link=2)
