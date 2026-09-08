@@ -42,4 +42,5 @@ target_link_libraries(daw_test_render_clap PRIVATE daw_clap_headers)
 target_compile_features(daw_test_render_clap PRIVATE cxx_std_23)
 set_target_properties(daw_test_render_clap PROPERTIES
     PREFIX "" SUFFIX ".clap" OUTPUT_NAME "DawTestRender"
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins_test)
+    # Keep fault-injection effects out of the scanner's gain/synth directory.
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins_render_test)

@@ -121,10 +121,10 @@ struct Listener final : PluginListener {
 int main() {
     {
         const PluginDescriptor& descriptor = EqualizerInstance::staticDescriptor();
-        check(descriptor.uid == "daw.equalizer" && descriptor.name == "VLT Equalizer" &&
+        check(descriptor.uid == "daw.equalizer" && descriptor.name == "VLTONE Equalizer" &&
                   !descriptor.isInstrument && descriptor.mainInputChannels == 2 &&
                   descriptor.mainOutputChannels == 2,
-              "VLT Equalizer has a stable built-in effect descriptor");
+              "VLTONE Equalizer has a stable built-in effect descriptor");
         check(std::ranges::any_of(builtinPlugins(), [](const PluginDescriptor& item) {
                   return item.uid == "daw.equalizer";
               }), "the internal factory publishes VLT Equalizer");
