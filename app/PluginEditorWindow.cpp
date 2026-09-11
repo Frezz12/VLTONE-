@@ -3,6 +3,7 @@
 #include "Controls.hpp"
 #include "EqualizerPanel.hpp"
 #include "GraphitPanel.hpp"
+#include "ModulationPanel.hpp"
 #include "GravityPanel.hpp"
 #include "InternalEditorFrame.hpp"
 #include "EngineController.hpp"
@@ -140,6 +141,7 @@ void PluginEditorWindow::initializeEditor() {
 }
 
 void PluginEditorWindow::prepareNativeHostHierarchy() {
+    if (!requiresNativeSurface()) return;
     // Headless tests intentionally have no real native-window hierarchy. A
     // forced one changes their focus/shortcut routing without exercising any
     // vendor editor, so leave those platform plugins as ordinary widgets.
@@ -148,20 +150,38 @@ void PluginEditorWindow::prepareNativeHostHierarchy() {
         platform == QLatin1String("minimal")) {
         return;
     }
-    // `m_content` is the eventual parent of the vendor surface. Mark every
-    // parent through the workspace host before any one of them is shown. Qt's
-    // native-child contract relies on this for correct clipping, z-order and
-    // hit testing. In particular, do not let the first plugin become a lone
-    // NSView/HWND punched through an otherwise alien-widget hierarchy.
+    // `m_content` is the eventual parent of the vendor surface. Mark only the
+    // chain inside its InternalEditorFrame. The frame deliberately carries
+    // WA_DontCreateNativeAncestors: promoting the workspace host or its central
+    // children would leave permanent native siblings around the Quick surface
+    // after this editor is destroyed.
     //
     // The attribute itself matters beyond creating the handle: QWidget::raise()
     // only reorders the *native* view of a widget that carries it, and the
     // frame around this editor has to be able to come to the front of the
     // workspace once a foreign view lives inside it.
+    QWidget* nativeOverlay = nullptr;
     for (QWidget* widget = m_content; widget && !widget->isWindow();
          widget = widget->parentWidget()) {
         widget->setAttribute(Qt::WA_NativeWindow);
+        if (widget->property("dawInternalEditor").toBool()) {
+            nativeOverlay = widget;
+            break;
+        }
     }
+    // A foreign NSView/HWND cannot be copied into the Qt Quick scene. Keep the
+    // whole frameless editor as one native child above that scene instead. It
+    // remains clipped to and positioned inside the DAW workspace; only its
+    // pixels bypass scene recording while the timeline stays on the GPU.
+    if (nativeOverlay) {
+        nativeOverlay->setProperty("vlt.nativeOverlay", true);
+        nativeOverlay->raise();
+    }
+}
+
+bool PluginEditorWindow::requiresNativeSurface() const {
+    const auto* plugin = instance();
+    return plugin && plugin->hasEditor();
 }
 
 void PluginEditorWindow::scheduleEditorInitialization(int delayMs) {
@@ -377,6 +397,7 @@ void PluginEditorWindow::rebuildEditorContent() {
 
     if (hasNativeEditor) {
         m_container = new QWidget(m_content);
+        m_container->setProperty("vlt.foreignSurface", true);
         m_container->setAttribute(Qt::WA_NativeWindow);
         // A plugin may report a very large natural size. Do not let that size
         // hint force the top-level window to the desktop dimensions: the host
@@ -420,6 +441,21 @@ void PluginEditorWindow::rebuildEditorContent() {
         // owns the 39 px plugin header above it.
         setMinimumSize(820, 559);
         m_fallbackContentSize = QSize(1040, 680);
+        resize(m_fallbackContentSize);
+    } else if (trustedInternal && daw::plugins::modulation::isModulationUid(descriptorUid) &&
+               dynamic_cast<daw::plugins::modulation::ModulationInstance*>(plugin)) {
+        auto* modulation = static_cast<daw::plugins::modulation::ModulationInstance*>(plugin);
+        auto* panel = new ModulationPanel(m_controller, m_channelId, m_insertId,
+                                          modulation->kind(), this);
+        m_generic = panel;
+        connect(panel, &ModulationPanel::projectEdited, this, &PluginEditorWindow::projectEdited);
+        connect(panel, &ModulationPanel::automationRequested, this,
+                [this](const QString& id) { emit automationRequested(m_channelId, m_insertId, id); });
+        m_contentRow->insertWidget(0, panel, 1);
+        emit builtInPanelReady(panel, QString::fromStdString(descriptorUid).mid(4));
+        const bool doubler = modulation->kind() == daw::plugins::modulation::Kind::Doubler;
+        setMinimumSize(440, doubler ? 499 : 539);
+        m_fallbackContentSize = QSize(560, doubler ? 559 : 579);
         resize(m_fallbackContentSize);
     } else if (trustedInternal && descriptorUid == "daw.graphit" &&
                dynamic_cast<daw::plugins::graphit::GraphitInstance*>(plugin)) {
@@ -1214,7 +1250,7 @@ void PluginEditorWindow::buildGenericEditor() {
         const QString parameterId = QString::fromStdString(parameter.id);
         const std::string parameterKey = parameter.id;
         auto* name = new QLabel(QString::fromStdString(parameter.name), rows);
-        auto* slider = new QSlider(Qt::Horizontal, rows);
+        auto* slider = new ui::GlassSlider(Qt::Horizontal, rows);
         slider->setRange(0, kSliderSteps);
         auto* value = new QLabel(rows);
         value->setObjectName(QStringLiteral("PluginHint"));

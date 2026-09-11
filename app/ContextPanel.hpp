@@ -77,6 +77,8 @@ public:
     /// geometry from inside a selection change, and a value pushed afterwards
     /// would arrive one step too late.
     void setAnchorProvider(std::function<bool(int&)> provider);
+    /// Stable resting centre used when the panel is not following a clip.
+    void setHomeAnchorProvider(std::function<bool(int&)> provider);
 
     /// The stretch a clip-following plate may occupy, in the strip's own
     /// coordinates: the arrangement's left and right edges. Stable non-clip
@@ -156,8 +158,6 @@ private:
 
     Context resolve() const;
     bool followsClipSelection() const;
-    QColor accentFor(Context context) const;
-
     QWidget* buildContent(Context context);
     QWidget* buildAudioClip();
     QWidget* buildAudioClipMulti();
@@ -185,7 +185,7 @@ private:
     void driftTo(const QRect& target);
     void layoutSelf();
     /// Clip both animated rows to the painted plate, not to the larger widget
-    /// rect that also contains its shadow and top flare.
+    /// rect that also contains its stable outer gutter and top flare.
     void updateContentMasks();
 
     /// Whether a tool is switched on for this context in the user's profile.
@@ -223,6 +223,7 @@ private:
     /// is the default: the plate rides above the selected clip along the strip.
     bool m_follow = true;
     std::function<bool(int&)> m_anchorProvider;
+    std::function<bool(int&)> m_homeAnchorProvider;
     std::function<bool(int&, int&)> m_boundsProvider;
     /// The position-only slide, kept separate from the content swap: the two can
     /// overlap (pick a clip far to the right) and must not fight over geometry.

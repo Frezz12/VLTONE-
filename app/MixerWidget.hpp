@@ -27,6 +27,7 @@ public:
 
     void rebuild();
     void refreshMeters();
+    void syncMeterTimer();
     void refreshAutomationValues();
     /// Re-read every strip's values from the document — the cheap counterpart
     /// to `rebuild`, for when a level or a flag was changed somewhere else.

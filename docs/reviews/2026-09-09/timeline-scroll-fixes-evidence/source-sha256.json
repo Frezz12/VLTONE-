@@ -1,0 +1,32 @@
+{
+  "head": "773be5c38cec5429de1f12991ca2fac703f657f0",
+  "note": "Final working-tree sources, including pre-existing edits in shared files; not a clean commit.",
+  "sha256": {
+    "app/CMakeLists.txt": "beb49f11f445315109c221c10b70eb7e95d5387b91e4d6263201cade09cc388d",
+    "app/MainWindow.cpp": "37af65ef6821a27bd47c1a6ee6bb837cccac4e29cfab025eec894ae55edfb7e9",
+    "app/MixerWidget.cpp": "50facbf67f1496b858e608967c9b3c8137a374cdfb998a48b83a216b486175f9",
+    "app/MixerWidget.hpp": "4ba987489aecd5de6ae634da8f203553ae3f573ee8fa84c58a98771ca45cee0c",
+    "app/TimelineWidget.cpp": "0f639cb8fad6284425090626b6e6deb4dcfb6e603b2c98a25e920290bf419566",
+    "app/TimelineWidget.hpp": "ea0269afae3993dfb340ceacb7bb07ec03cc8cf212c5bb36e6451e81e421d0ea",
+    "app/UiFrameClock.cpp": "7375dceb44d7c1c2682b673fb4323677219f43edac463e464682a657f50e2538",
+    "app/UiPerformance.cpp": "315e2efd4d5a66dc8cd38895b3e76887d9ab5b1248eb4a0f649cb5640abdda17",
+    "app/UiPerformanceChecks.cpp": "e4de28296d7cabfdbdf520857c706a932a17f14d470d9852572c7c69a6a6bc73",
+    "app/UiPerformanceChecks.hpp": "9104a0bee2985ffe0d4e2abe5435d0ad7326c5cb9f856d0b2d7f3291407f7a0f",
+    "app/WaveformPaint.cpp": "c108be0060a4ca0f5c44f3171357a01aae101b57a532345b7976b63a8c58ce96",
+    "app/WaveformPaint.hpp": "f6c100f1b4dc466bd1135690c986ad013acd7fe3737e0756a8ed9b27899f38c1",
+    "app/main.cpp": "fde65a3cbca92bc57dc966b8c7c28652394aead2746b4b3e081b7785d457e982",
+    "controller/EngineController.cpp": "ef13c723d805002c8c72eeec8ca75b08ecebdf2c519ca42e08f5aa9e37534674",
+    "controller/EngineController.hpp": "58abece8990cd3f943c14cd0a6ba4f640c476af737b256a73676f1ce5b5c655c",
+    "controller/WaveformCache.cpp": "19a0f05a1d3c3809b0b7335c8e55f1b769c05dc294bad5589759826b16b4d285",
+    "controller/WaveformCache.hpp": "b6f901b6fe2ad5271fd2e60ee0fd07435166a503c9d6c4db8589525c92869a81",
+    "core/Recording/RecordingEngine.cpp": "68e1ef44eda1140f490666a0681b33bd57999aff1d8f296e906fe6848b358c0f",
+    "core/Recording/RecordingEngine.hpp": "54266ddf49ff50e5b3db99edca0babcbb3ee579ac6b819047da6f2a1259ddcea",
+    "engine/Graph/GraphProcessor.cpp": "22439615bfb0c2276f43cae861be0153bed92eccb2936a90a3c3a78863efd10e",
+    "tests/CMakeLists.txt": "7e7a4fe83ebd718981887331aaebf0876c73a19082d3de60b4572ea3c9c39960",
+    "tests/controller_test.cpp": "08fa1dd4583042a8f0a8dec9b6680f5737bcb199411f0254b6a5929d64935ffa",
+    "tests/engine_graph_test.cpp": "838d900d70f817c6b591c2514f5f9c6ca48f8e9910a23e7b0922d0f45459afc9",
+    "tests/recording_preview_test.cpp": "a8d825e1769c1dbb40ad71870da8f97d2426b0c876e6d11b2aced6e7dfd4f77a",
+    "tests/waveform_paint_test.cpp": "6316bdbf618a63a1314509d6ed3c27fc6ce6b36627095d6f5eff33c389cd3807",
+    "tests/ui_frame_clock_test.cpp": "c52d90b68a6479ac5999054ba2b0c8a813b5d23f832de14591d6e5d51573e48a"
+  }
+}

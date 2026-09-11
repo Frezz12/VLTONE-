@@ -1,0 +1,6 @@
+COMMAND: ['/private/tmp/vlt-review-scroll-audio-bench', '--tracks', '64', '--frames', '512', '--blocks', '400', '--rounds', '1', '--clips', '--heavy', '--paced', '--realtime-workers']
+tracks=64 nodes=385 fused_tasks=193 workers=8 rate=48000 frames=512 EQ=1
+clips=1 paced=1 serial=0 realtime_workers=7 caller_realtime=1 (no device workgroup) budget_ms=10.6667
+round,fusion,mean_ms,p95_ms,p99_ms,p99_9_ms,max_ms,over_budget,cpu_ms_per_block,pcm_misses
+0,0,1.0515,1.7922,1.8995,2.3328,2.3328,0,4.4358,0
+0,1,1.1179,1.8449,1.8820,2.2807,2.2807,0,4.6875,0

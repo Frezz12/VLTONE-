@@ -1,0 +1,13 @@
+{
+  "controller/EngineController.cpp": "192955070b17180f34d3245e98ac4b6f2015a5cd3692e624c16a54adef60271f",
+  "controller/EngineController.hpp": "58abece8990cd3f943c14cd0a6ba4f640c476af737b256a73676f1ce5b5c655c",
+  "controller/EngineControllerRender.cpp": "7ed7c0c4a50de5570e328d07c9ecd30a4f56add31b3dfbfe238202db289ff0bf",
+  "controller/model/Document.hpp": "cf4849b589c93d58ec9ddcafcbab592ce97b14ca19b435774480d74e4b178e93",
+  "core/Device/AudioDeviceManager.cpp": "0b93e8e04c71cbe0fa35e3f3b80b13ed4a50b2941bea7309c29176ae177e634a",
+  "core/Recording/RecordingEngine.cpp": "68e1ef44eda1140f490666a0681b33bd57999aff1d8f296e906fe6848b358c0f",
+  "engine/Engine/RealtimeEngine.cpp": "63d86569d25ee1ff8b1bd7e98380c00837e5000709d609526043e9b65b8f6191",
+  "app/MainWindow.cpp": "56c7a8bc3972d943fc1093aecb703cbe6d5f3ddece357775f9cbf02963e5017b",
+  "app/AudioSettingsPage.cpp": "dc4711f27de198601ff39d601b24aee85700ae9af8aa2c385f54c25d3769341c",
+  "app/ChannelStrip.cpp": "c16675d87389386b0def8ec626f84259fdbbb6f3ff92f6e1bd652950cfd3f8e2",
+  "app/CreateTracksDialog.cpp": "8738197aa73f0555d2712e9c0f8a7323b4c7ff6fea99cb9ed0529b6c709e429c"
+}

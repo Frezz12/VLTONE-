@@ -75,7 +75,7 @@ NotebookSettingsPage::NotebookSettingsPage(QWidget* parent) : QWidget(parent) {
     auto* visibilityLayout = new QHBoxLayout(visibilityRow);
     visibilityLayout->setContentsMargins(0, 0, 0, 0);
     visibilityLayout->setSpacing(8);
-    m_visibility = new QSlider(Qt::Horizontal, visibilityRow);
+    m_visibility = new ui::GlassSlider(Qt::Horizontal, visibilityRow);
     m_visibility->setRange(0, 100);
     m_visibility->setValue(ui::notebookprefs::backgroundVisibility());
     m_visibility->setAccessibleName(tr("Background visibility"));

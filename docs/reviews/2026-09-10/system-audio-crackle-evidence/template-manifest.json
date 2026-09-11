@@ -1,0 +1,14 @@
+{
+  "template_project_sha256": "0b2a0bc30c6906cf18469509fc8ad4ae4eacceb9ed7e8911f71853fab3cd01e9",
+  "track_count": 14,
+  "insert_count": 34,
+  "saved_monitors": [
+    {
+      "name": "LEAD 2",
+      "monitor": true,
+      "inputEnabled": false,
+      "inputChannel": 0,
+      "inputRoutingVersion": null
+    }
+  ]
+}

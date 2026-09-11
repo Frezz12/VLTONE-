@@ -24,6 +24,11 @@ struct PluginPickerTarget {
 /// Shared with the context-panel finder; call only after a successful load.
 void rememberRecentPlugin(const daw::plugins::PluginDescriptor& descriptor);
 
+/// Prepare immutable grouping/search data after a scan, while the startup or
+/// scanner progress UI is already active. Opening a picker then only creates
+/// its small first-level QAction set.
+void preparePluginPickerMenus(daw::EngineController* controller);
+
 bool checkPluginPickerForTest(QString* error = nullptr,
                               const QString& screenshotPath = {});
 

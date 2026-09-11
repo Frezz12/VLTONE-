@@ -348,6 +348,10 @@ void EqualizerGraph::resizeEvent(QResizeEvent* event) {
 
 void EqualizerGraph::paintEvent(QPaintEvent*) {
     QPainter painter(this);
+    paintScene(painter, QRegion(rect()));
+}
+
+void EqualizerGraph::paintScene(QPainter& painter, const QRegion&) {
     painter.setRenderHint(QPainter::Antialiasing);
     const Theme& theme = th();
     const QRectF plot = plotRect();

@@ -68,6 +68,9 @@ const WaveformPeaks* WaveformCache::storeDecoded(
 }
 
 namespace { std::atomic<std::uint64_t> nextWaveformGeometryId{1}; }
+std::uint64_t allocateWaveformGeometryId() noexcept {
+    return nextWaveformGeometryId.fetch_add(1, std::memory_order_relaxed);
+}
 
 template<class Read>
 void buildPeaksImpl(std::size_t frames, std::size_t channelCount, double sampleRate,
@@ -151,7 +154,7 @@ void buildPeaksImpl(std::size_t frames, std::size_t channelCount, double sampleR
         previousMax = &out.levels.back().maxima;
         previousRate = out.levels.back().bucketsPerSecond;
     }
-    out.geometryId = nextWaveformGeometryId.fetch_add(1, std::memory_order_relaxed);
+    out.geometryId = allocateWaveformGeometryId();
 }
 
 void buildPeaks(const audio::platform::DecodedAudio& decoded, WaveformPeaks& out) {

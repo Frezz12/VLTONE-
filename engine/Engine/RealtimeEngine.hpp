@@ -138,6 +138,12 @@ public:
     float dspLoad() const noexcept { return m_dspLoad.load(std::memory_order_relaxed); }
     rt::BlockMetrics& graphMetrics() noexcept { return m_graphMetrics; }
     std::uint64_t gatedBlocks() const noexcept { return m_gatedBlocks.load(std::memory_order_relaxed); }
+    enum class BlockResult { Complete, Gated, Failed };
+    int lastRenderError() const noexcept { return m_lastRenderError.load(); } // -1 = no error
+    SamplePos lastBlockPosition() const noexcept { return m_lastBlockPosition; } // audio thread only
+    FrameCount lastBlockLatency() const noexcept { return m_processor.lastBlockLatencySamples(); }
+    BlockResult lastBlockResult() const noexcept { return m_lastBlockResult.load(std::memory_order_relaxed); }
+    std::uint64_t failedBlocks() const noexcept { return m_failedBlocks.load(std::memory_order_relaxed); }
     void setProfiling(bool enabled) noexcept { m_processor.setProfiling(enabled); }
     bool popProfile(unsigned worker, rt::ProfileEvent& event) noexcept {
         return m_processor.popProfile(worker, event);
@@ -203,6 +209,10 @@ private:
     std::atomic<float> m_dspLoad{0.0f};
     rt::BlockMetrics m_graphMetrics;
     std::atomic<std::uint64_t> m_gatedBlocks{0};
+    std::atomic<std::uint64_t> m_failedBlocks{0};
+    std::atomic<int> m_lastRenderError{-1};
+    SamplePos m_lastBlockPosition = 0;
+    std::atomic<BlockResult> m_lastBlockResult{BlockResult::Complete};
 
     // RenderGate handshake. Both sides are seq_cst on purpose: the control
     // thread stores `gateRequested` then loads `rendering`, the audio thread

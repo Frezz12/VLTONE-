@@ -36,14 +36,14 @@
 
 namespace {
 
-// The island's proportions. It lives inside the 42-pixel tool strip, so every
-// number here is chosen to add up to that: shadow + padding + row + padding +
-// shadow. Controls are icon-sized; nothing here gets a caption.
+// The island's proportions. It lives inside the 42-pixel tool strip. The outer
+// gutter preserves its flare, clipping and animation envelope even though the
+// attached panel no longer paints a drop shadow.
 constexpr int kRowHeight = 20;    // every control on the island is this tall
 constexpr int kButton = 22;       // square icon buttons
 constexpr int kPadding = 7;       // plate edge → controls, top and bottom
 constexpr int kEndPadding = 14;  // extra breathing room at the rounded ends
-constexpr int kShadow = 9;        // room for the shadow and the top flare
+constexpr int kShadow = 9;        // stable outer gutter and top flare
 
 constexpr double kMinDb = -60.0;
 
@@ -240,6 +240,9 @@ ContextPanel::ContextPanel(daw::EngineController* controller,
     m_follow = followSelectionEnabled();
     setAccentColor(th().accent);
     setShadowMargin(kShadow);
+    setShadowVisible(false);
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+            [this] { setAccentColor(th().accent); });
     // Hangs off the top of the tool strip and flares into it, rather than
     // floating in the middle of it as a separate object.
     setTopAttached(true);
@@ -329,34 +332,6 @@ bool ContextPanel::followsClipSelection() const {
             return true;
         default:
             return false;
-    }
-}
-
-QColor ContextPanel::accentFor(Context context) const {
-    switch (context) {
-        case Context::Recording:
-            return Theme::record();
-        case Context::AudioClip:
-        case Context::AudioClipMulti:
-            return Theme::audioAccent();
-        case Context::AutomationClip:
-        case Context::AutomationClipMulti:
-        case Context::MidiClip:
-        case Context::MidiClipMulti:
-        case Context::PatternClip:
-        case Context::PatternClipMulti: {
-            if (!m_selection->clips().isEmpty()) {
-                const auto* track = m_controller->project().findTrack(
-                    m_selection->clips().first().trackId.toStdString());
-                if (track) return colorFromRgb(track->color);
-            }
-            return th().accent;
-        }
-        case Context::Track:
-        case Context::TrackMulti:
-            return th().accent;
-        default:
-            return th().accent;
     }
 }
 
@@ -2267,14 +2242,9 @@ void ContextPanel::transitionTo(QWidget* next, Context context) {
         group->addAnimation(spring);
     }
 
-    // The accent slides between the context colours instead of cutting.
-    auto* tint = new QVariantAnimation(this);
-    tint->setDuration(kSpringMs);
-    tint->setStartValue(accentColor());
-    tint->setEndValue(accentFor(m_context));
-    connect(tint, &QVariantAnimation::valueChanged, this,
-            [this](const QVariant& v) { setAccentColor(v.value<QColor>()); });
-    group->addAnimation(tint);
+    // The plate belongs to the application theme, regardless of whether its
+    // row currently edits audio, MIDI, a track or recording options.
+    setAccentColor(th().accent);
 
     connect(group, &QAbstractAnimation::finished, this, [this, wasVisible] {
         setBackdropFrozen(false);
@@ -2319,13 +2289,13 @@ QRect ContextPanel::targetGeometry() const {
 
     // The island is only as wide as its controls need and always as tall as the
     // strip it sits in.
-    // Height is the plate plus the shadow below it; the top is flush with the
-    // strip's own top edge, which is what makes the two read as one surface.
+    // Height includes the stable lower animation gutter; the top is flush with
+    // the strip's own edge, which makes the two read as one surface.
     const int height = kRowHeight + 2 * kPadding + kShadow;
 
-    // The stable home is the middle of the transport/header above this strip.
+    // The stable home is the centre of the transport readout above this strip.
     // Only an enabled clip-follow context adopts the arrangement's narrower
-    // bounds; tracks, recording and pinned mode stay under the header centre.
+    // bounds; tracks, recording and pinned mode stay under that readout.
     int limitLeft = 12;
     int limitRight = std::max(12, host->width() - 12);
     const bool followClip = followsClipSelection();
@@ -2344,6 +2314,11 @@ QRect ContextPanel::targetGeometry() const {
     const int rightmost = std::max(limitLeft, limitRight - width);
 
     int left = limitLeft + (available - width) / 2;
+    int homeCentreX = 0;
+    if (!followClip && m_homeAnchorProvider &&
+        m_homeAnchorProvider(homeCentreX)) {
+        left = std::clamp(homeCentreX - width / 2, limitLeft, rightmost);
+    }
     int anchorCentreX = 0;
     if (followClip && m_anchorProvider && m_anchorProvider(anchorCentreX)) {
         // Above the selection, but never past the arrangement: a clip at the
@@ -2370,7 +2345,7 @@ void ContextPanel::updateContentMasks() {
     const auto clipRow = [this](QWidget* row) {
         if (!row) return;
         // Children are normally clipped only to ContextPanel::rect(), which
-        // includes the shadow gutter. Translating the actual glass outline
+        // includes the outer gutter. Translating the actual glass outline
         // into row coordinates makes controls appear from *inside* the plate
         // and disappear at its rim during both halves of the swap.
         const QPainterPath inRow = plateShape().translated(-row->pos());
@@ -2399,6 +2374,12 @@ void ContextPanel::relayout() {
 
 void ContextPanel::setAnchorProvider(std::function<bool(int&)> provider) {
     m_anchorProvider = std::move(provider);
+}
+
+void ContextPanel::setHomeAnchorProvider(
+    std::function<bool(int&)> provider) {
+    m_homeAnchorProvider = std::move(provider);
+    relayout();
 }
 
 void ContextPanel::setBoundsProvider(std::function<bool(int&, int&)> provider) {

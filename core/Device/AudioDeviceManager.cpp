@@ -1,4 +1,5 @@
 #include "Device/AudioDeviceManager.hpp"
+#include "Device/NativeDeviceIds.hpp"
 #include "platform/Clock.hpp"
 #include "platform/Log.hpp"
 #include "ScopedNoDenormals.hpp"
@@ -265,10 +266,13 @@ std::vector<SampleRate> supportedSampleRates(PaDeviceIndex index,
 // The PortAudio C callback. Trampolines into the owning manager. Kept free so
 // its signature matches PaStreamCallback exactly.
 int paTrampoline(const void* input, void* output, unsigned long frameCount,
-                 const PaStreamCallbackTimeInfo* /*timeInfo*/,
+                 const PaStreamCallbackTimeInfo* timeInfo,
                  PaStreamCallbackFlags statusFlags, void* userData) {
     return static_cast<AudioDeviceManager*>(userData)
-        ->processStream(input, output, frameCount, statusFlags);
+        ->processStream(input, output, frameCount, statusFlags,
+                        timeInfo ? timeInfo->currentTime : 0,
+                        timeInfo ? timeInfo->outputBufferDacTime : 0, timeInfo != nullptr,
+                        timeInfo ? timeInfo->inputBufferAdcTime : 0);
 }
 
 } // namespace
@@ -286,6 +290,7 @@ Result AudioDeviceManager::ensurePortAudio() {
                                 Pa_GetErrorText(err));
     }
     m_paInitialized = true;
+    m_nativeDeviceUids = nativeDeviceIds();
     return Result::ok();
 }
 
@@ -307,7 +312,7 @@ Result AudioDeviceManager::initialize(SampleRate sampleRate,
 
 Result AudioDeviceManager::adoptConfiguration(
     const AudioDeviceConfig& config) {
-    if (config.sampleRate < kMinSampleRate || config.sampleRate > kMaxSampleRate)
+    if (!std::isfinite(config.sampleRate) || config.sampleRate < kMinSampleRate || config.sampleRate > kMaxSampleRate)
         return Result::fail(EngineError::InvalidArgument, "invalid sample rate");
     if (config.bufferSize == 0 || config.bufferSize > 8192)
         return Result::fail(EngineError::InvalidArgument, "invalid buffer size");
@@ -374,7 +379,7 @@ Result AudioDeviceManager::adoptConfiguration(
             inputSelectors = config.inputChannelSelectors;
             if (inputSelectors.empty()) {
                 for (int channel = 0;
-                     channel < std::min(2, inDi->maxInputChannels); ++channel) {
+                     channel < std::min(32, inDi->maxInputChannels); ++channel) {
                     inputSelectors.push_back(channel);
                 }
             }
@@ -465,17 +470,22 @@ Result AudioDeviceManager::applyConfiguration(
             AudioDeviceConfig fallback = previous;
             fallback.outputDeviceUid.clear();
             fallback.inputDeviceUid.clear();
-            fallback.inputEnabled = false;
+            fallback.inputEnabled = previous.inputEnabled;
             fallback.inputChannelSelectors.clear();
             fallback.outputChannelSelectors.clear();
             auto recovered = adoptConfiguration(fallback);
             if (recovered) recovered = openStream();
+            if (!recovered && fallback.inputEnabled) {
+                fallback.inputEnabled = false;
+                recovered = adoptConfiguration(fallback);
+                if (recovered) recovered = openStream();
+            }
             if (recovered && wasRunning) recovered = start();
             if (recovered) {
                 return Result::fail(
                     failure.error(), failure.message() +
                         "; the previous device is unavailable, using the "
-                        "system default output");
+                        "system defaults; check the current input selection");
             }
             m_deviceState.store(AudioDeviceState::Failed);
             return Result::fail(
@@ -538,7 +548,7 @@ Result AudioDeviceManager::openStream() {
             m_inputChannels = isAsioDevice(inDi) &&
                                       !m_inputChannelSelectors.empty()
                 ? static_cast<ChannelCount>(m_inputChannelSelectors.size())
-                : static_cast<ChannelCount>(std::min(2, inDi->maxInputChannels));
+                : static_cast<ChannelCount>(std::min(32, inDi->maxInputChannels));
             inParams.device = m_inputDeviceIndex;
             inParams.channelCount = static_cast<int>(m_inputChannels);
             inParams.sampleFormat = paFloat32 | paNonInterleaved;
@@ -586,8 +596,26 @@ Result AudioDeviceManager::openStream() {
                             streamError("Pa_OpenStream", err));
     }
     m_stream = stream;
+#if defined(__APPLE__)
+    if (const auto* api = Pa_GetHostApiInfo(outDi->hostApi); api && api->type == paCoreAudio) {
+        const auto outUid = nativeStreamDeviceId(stream, false);
+        const auto inUid = haveInput ? nativeStreamDeviceId(stream, true) : std::string{};
+        if ((deviceUID(m_outputDeviceIndex).starts_with("coreaudio:") && outUid != deviceUID(m_outputDeviceIndex)) ||
+            (haveInput && deviceUID(m_inputDeviceIndex).starts_with("coreaudio:") && inUid != deviceUID(m_inputDeviceIndex))) {
+            closeStream();
+            return Result::fail(EngineError::DeviceNotFound, "Audio devices changed during configuration; refresh the device list");
+        }
+    }
+#endif
+    (void)Pa_SetStreamFinishedCallback(stream, [](void* data) {
+        static_cast<AudioDeviceManager*>(data)->streamFinished();
+    });
 
+    m_outputLatencySeconds = 0;
+    m_inputLatencySeconds = 0;
     if (const PaStreamInfo* si = Pa_GetStreamInfo(stream)) {
+        m_inputLatencySeconds = std::isfinite(si->inputLatency) ? std::max(0., si->inputLatency) : 0.;
+        m_outputLatencySeconds = std::isfinite(si->outputLatency) ? std::max(0., si->outputLatency) : 0.;
         m_sampleRate.store(si->sampleRate);
         m_diagDeviceSampleRate = si->sampleRate;
     }
@@ -606,9 +634,9 @@ void AudioDeviceManager::closeStream() {
             // can wait forever after a USB/ASIO device disappears.
             Pa_AbortStream(stream);
         }
-        if (auto* callback = m_audioCallback.load()) callback->configureAudioWorkers({});
         Pa_CloseStream(stream);
         m_stream = nullptr;
+        if (auto* callback = m_audioCallback.load()) callback->configureAudioWorkers({});
     }
     m_isRunning.store(false);
 }
@@ -619,6 +647,9 @@ Result AudioDeviceManager::start() {
     }
     m_deviceState.store(AudioDeviceState::Starting);
     if (auto* callback = m_audioCallback.load()) callback->configureAudioWorkers(workerConfiguration());
+    m_startedNs = daw::rt::nowNanos();
+    m_streamFinished.store(false);
+    m_streamFrameCursor = 0;
     const PaError err = Pa_StartStream(static_cast<PaStream*>(m_stream));
     m_diagLastStartResult.store(err);
     if (err != paNoError) {
@@ -632,17 +663,59 @@ Result AudioDeviceManager::start() {
     return Result::ok();
 }
 
+bool AudioDeviceManager::isRunning() const {
+    return m_stream && m_isRunning.load() && !m_streamFinished.load() &&
+        Pa_IsStreamActive(static_cast<PaStream*>(m_stream)) == 1 && !callbackStalled();
+}
+
+bool AudioDeviceManager::devicesAvailable() const {
+    return nativeDeviceAlive(m_outputDeviceIndex, m_stream, false) &&
+        (!m_inputEnabled || nativeDeviceAlive(m_inputDeviceIndex, m_stream, true));
+}
+
+bool AudioDeviceManager::callbackStalled() const {
+    if (!m_isRunning.load()) return false;
+    const auto last = std::max(m_startedNs, m_diagLastCallbackTimestamp.load());
+    return last && daw::rt::nowNanos() - last > 2'000'000'000ull;
+}
+
+bool AudioDeviceManager::matchesConfiguration(const AudioDeviceConfig& config) const {
+    if (!m_stream || !std::isfinite(config.sampleRate) ||
+        std::abs(config.sampleRate - sampleRate()) > 0.01 || config.bufferSize != bufferSize() ||
+        config.inputEnabled != m_inputEnabled) return false;
+    const auto output = config.outputDeviceUid.empty() ? Pa_GetDefaultOutputDevice()
+        : resolveDeviceIndex(config.outputDeviceUid, false);
+    const auto input = !config.inputEnabled ? -1 : config.inputDeviceUid.empty()
+        ? Pa_GetDefaultInputDevice() : resolveDeviceIndex(config.inputDeviceUid, true);
+    if (output != m_outputDeviceIndex || input != m_inputDeviceIndex) return false;
+    const auto* device = Pa_GetDeviceInfo(output);
+    if (!isAsioDevice(device)) return true;
+    auto ins = config.inputChannelSelectors, outs = config.outputChannelSelectors;
+    if (outs.empty() && device) for (int i = 0; i < std::min(2, device->maxOutputChannels); ++i) outs.push_back(i);
+    if (ins.empty() && input >= 0) if (const auto* d = Pa_GetDeviceInfo(input))
+        for (int i = 0; i < std::min(32, d->maxInputChannels); ++i) ins.push_back(i);
+    return ins == m_inputChannelSelectors && outs == m_outputChannelSelectors;
+}
+
+Result AudioDeviceManager::refreshDevices() {
+    closeStream();
+    if (m_paInitialized) Pa_Terminate();
+    m_paInitialized = false;
+    return ensurePortAudio();
+}
+
 Result AudioDeviceManager::stop() {
-    if (m_stream) {
-        auto* stream = static_cast<PaStream*>(m_stream);
-        if (Pa_IsStreamActive(stream) == 1) {
-            Pa_StopStream(stream);
-        }
-    }
+    PaError error = paNoError;
+    if (m_stream && Pa_IsStreamActive(static_cast<PaStream*>(m_stream)) == 1)
+        error = Pa_AbortStream(static_cast<PaStream*>(m_stream));
+    // If abort fails, close retires the callback before worker registrations
+    // or their owner can change. Never detach workers under an active pass.
+    if (error != paNoError) closeStream();
     m_isRunning.store(false);
     if (auto* callback = m_audioCallback.load()) callback->configureAudioWorkers({});
     m_deviceState.store(AudioDeviceState::Stopped);
-    return Result::ok();
+    return error == paNoError ? Result::ok()
+        : Result::fail(EngineError::DeviceError, streamError("Pa_AbortStream", error));
 }
 
 daw::rt::AudioWorkerConfig AudioDeviceManager::workerConfiguration() const {
@@ -662,6 +735,7 @@ daw::rt::AudioWorkerConfig AudioDeviceManager::workerConfiguration() const {
             os_workgroup_t workgroup = nullptr;
             UInt32 size = sizeof(workgroup);
             if (AudioObjectGetPropertyData(native, &address, 0, nullptr, &size, &workgroup) == noErr && workgroup) {
+                config.maxParallelThreads = os_workgroup_max_parallel_threads(workgroup, nullptr);
                 config.workgroup = std::shared_ptr<void>(workgroup, [](void* object) {
                     os_release(static_cast<os_workgroup_t>(object));
                 });
@@ -684,7 +758,11 @@ Result AudioDeviceManager::shutdown() {
 }
 
 int AudioDeviceManager::processStream(const void* input, void* output,
-                                      unsigned long frameCount, unsigned long statusFlags) {
+                                      unsigned long frameCount, unsigned long statusFlags,
+                                      double deviceCurrentTime, double deviceOutputTime,
+                                      bool hasDeviceTime, double deviceInputTime) {
+    const auto callbackNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
     const auto started = daw::rt::nowNanos();
     struct Measure {
         daw::rt::BlockMetrics& metrics;
@@ -700,8 +778,7 @@ int AudioDeviceManager::processStream(const void* input, void* output,
     for (unsigned i = 0; i < 4; ++i)
         if (statusFlags & flags[i]) m_xruns[i].fetch_add(1, std::memory_order_relaxed);
     m_diagCallbackCount.fetch_add(1, std::memory_order_relaxed);
-    m_diagRenderCallCount.fetch_add(1, std::memory_order_relaxed);
-    m_diagLastCallbackTimestamp.store(platform::nowNanos(),
+    m_diagLastCallbackTimestamp.store(std::uint64_t(callbackNs),
                                       std::memory_order_relaxed);
     m_diagCallbackFrameCount.store(static_cast<uint32_t>(frameCount),
                                    std::memory_order_relaxed);
@@ -732,6 +809,16 @@ int AudioDeviceManager::processStream(const void* input, void* output,
         m_diagInputChannels.store(m_inputChannels, std::memory_order_relaxed);
     }
 
+    {
+        for (unsigned ch = inBuffer ? std::min<unsigned>(m_inputChannels, 2) : 0; ch < 2; ++ch) {
+            m_diagInputPeak[ch].store(0, std::memory_order_relaxed);
+            m_diagInputRMS[ch].store(0, std::memory_order_relaxed);
+        }
+        if (!inBuffer) m_diagInputChannels.store(0, std::memory_order_relaxed);
+    }
+    m_diagLastRenderStatus.store(-1, std::memory_order_relaxed);
+    const auto framePosition = m_streamFrameCursor;
+    m_streamFrameCursor += frames;
     if (!output) return paContinue;
     auto** out = static_cast<float**>(output);
     m_outputWrapper.setNonOwning(out, m_outputChannels, frames);
@@ -742,17 +829,34 @@ int AudioDeviceManager::processStream(const void* input, void* output,
     if (!cb || !cb->writesCompleteOutput()) m_outputWrapper.clear(frames);
 
     if (cb) {
+        m_diagRenderCallCount.fetch_add(1, std::memory_order_relaxed);
         AudioCallbackContext ctx;
         ctx.outputBuffer = &m_outputWrapper;
         ctx.inputBuffer = inBuffer;
         ctx.numFrames = frames;
         ctx.sampleRate = m_sampleRate.load(std::memory_order_relaxed);
-        ctx.sampleTime = 0;
+        ctx.sampleTime = framePosition;
         ctx.isRealtime = true;
+        const double deviceDelay = deviceOutputTime - deviceCurrentTime;
+        const bool validDeviceTime = hasDeviceTime && std::isfinite(deviceDelay) &&
+            deviceOutputTime > 0 && deviceDelay >= 0 && deviceDelay < 10.;
+        ctx.outputTimeNs = callbackNs + std::int64_t(1e9 *
+            (validDeviceTime ? deviceDelay : m_outputLatencySeconds));
+        ctx.outputTimeIsDeviceTimestamp = validDeviceTime;
+        const double inputAge = deviceCurrentTime - deviceInputTime;
+        const bool validInputTime = hasDeviceTime && std::isfinite(inputAge) &&
+            deviceInputTime > 0 && inputAge >= 0 && inputAge < 10.;
+        ctx.inputTimeNs = callbackNs - std::int64_t(1e9 *
+            (validInputTime ? inputAge : m_inputLatencySeconds));
+        ctx.inputTimeIsDeviceTimestamp = validInputTime;
+        m_diagInputUsesDeviceTime.store(validInputTime, std::memory_order_relaxed);
+        ctx.statusFlags = std::uint32_t(statusFlags);
         cb->onAudioCallback(ctx);
+        m_diagLastRenderStatus.store(int(ctx.renderStatus), std::memory_order_relaxed);
+        if (ctx.renderStatus == AudioCallbackContext::RenderStatus::Failed)
+            m_diagRenderFailCount.fetch_add(1, std::memory_order_relaxed);
     }
 
-    m_diagLastRenderStatus.store(0, std::memory_order_relaxed);
     return paContinue;
 }
 
@@ -843,17 +947,25 @@ Result AudioDeviceManager::showControlPanel(const std::string& uid,
 
 // ── Device enumeration ─────────────────────────────────────────────────────
 
-int AudioDeviceManager::resolveDeviceIndex(const std::string& uid,
-                                           bool wantInput) const {
+std::string AudioDeviceManager::deviceUID(int index) const {
+    if (index >= 0 && size_t(index) < m_nativeDeviceUids.size() && !m_nativeDeviceUids[index].empty()) return m_nativeDeviceUids[index];
+    return makeUID(Pa_GetDeviceInfo(index));
+}
+
+int AudioDeviceManager::resolveDeviceIndex(const std::string& uid, bool wantInput) const {
     const int count = Pa_GetDeviceCount();
+    int native = -1, legacy = -1;
+    bool nativeAmbiguous = false, legacyAmbiguous = false;
     for (int i = 0; i < count; ++i) {
-        const PaDeviceInfo* di = Pa_GetDeviceInfo(i);
-        if (!di) continue;
-        if (wantInput && di->maxInputChannels <= 0) continue;
-        if (!wantInput && di->maxOutputChannels <= 0) continue;
-        if (makeUID(di) == uid) return i;
+        const auto* di = Pa_GetDeviceInfo(i);
+        if (!di || (wantInput ? di->maxInputChannels : di->maxOutputChannels) <= 0) continue;
+        if (deviceUID(i) == uid) { if (native >= 0) nativeAmbiguous = true; native = i; }
+        if (makeUID(di) == uid) { if (legacy >= 0) legacyAmbiguous = true; legacy = i; }
     }
-    return -1;
+    // Legacy preferences migrate only when the display-name match is unique.
+    // Two equally named devices require a fresh explicit selection.
+    if (native >= 0) return nativeAmbiguous ? -1 : native;
+    return legacyAmbiguous ? -1 : legacy;
 }
 
 std::vector<DeviceInfo> AudioDeviceManager::enumerateInputDevices() {
@@ -865,7 +977,7 @@ std::vector<DeviceInfo> AudioDeviceManager::enumerateInputDevices() {
         const PaDeviceInfo* di = Pa_GetDeviceInfo(i);
         if (!di || di->maxInputChannels <= 0) continue;
         DeviceInfo info;
-        info.uid = makeUID(di);
+        info.uid = deviceUID(i);
         info.name = di->name ? di->name : "";
         info.manufacturer = hostApiName(di->hostApi);
         info.hostApi = info.manufacturer;
@@ -894,7 +1006,7 @@ std::vector<DeviceInfo> AudioDeviceManager::enumerateOutputDevices() {
         const PaDeviceInfo* di = Pa_GetDeviceInfo(i);
         if (!di || di->maxOutputChannels <= 0) continue;
         DeviceInfo info;
-        info.uid = makeUID(di);
+        info.uid = deviceUID(i);
         info.name = di->name ? di->name : "";
         info.manufacturer = hostApiName(di->hostApi);
         info.hostApi = info.manufacturer;
@@ -916,7 +1028,7 @@ DeviceInfo AudioDeviceManager::getCurrentInputDevice() const {
     DeviceInfo info;
     if (m_inputDeviceIndex < 0) return info;
     if (const PaDeviceInfo* di = Pa_GetDeviceInfo(m_inputDeviceIndex)) {
-        info.uid = makeUID(di);
+        info.uid = deviceUID(m_inputDeviceIndex);
         info.name = di->name ? di->name : "";
         info.manufacturer = hostApiName(di->hostApi);
         info.hostApi = info.manufacturer;
@@ -944,7 +1056,7 @@ DeviceInfo AudioDeviceManager::getCurrentOutputDevice() const {
     DeviceInfo info;
     if (m_outputDeviceIndex < 0) return info;
     if (const PaDeviceInfo* di = Pa_GetDeviceInfo(m_outputDeviceIndex)) {
-        info.uid = makeUID(di);
+        info.uid = deviceUID(m_outputDeviceIndex);
         info.name = di->name ? di->name : "";
         info.manufacturer = hostApiName(di->hostApi);
         info.hostApi = info.manufacturer;
@@ -972,13 +1084,13 @@ void AudioDeviceManager::captureCurrentDeviceInfo() {
     if (const PaDeviceInfo* outDi = Pa_GetDeviceInfo(m_outputDeviceIndex)) {
         copyName(m_diagOutputDeviceName, sizeof(m_diagOutputDeviceName),
                  outDi->name ? outDi->name : "");
-        m_outputDeviceUID = makeUID(outDi);
+        m_outputDeviceUID = deviceUID(m_outputDeviceIndex);
     }
     if (m_inputDeviceIndex >= 0) {
         if (const PaDeviceInfo* inDi = Pa_GetDeviceInfo(m_inputDeviceIndex)) {
             copyName(m_diagInputDeviceName, sizeof(m_diagInputDeviceName),
                      inDi->name ? inDi->name : "");
-            m_inputDeviceUID = makeUID(inDi);
+            m_inputDeviceUID = deviceUID(m_inputDeviceIndex);
             m_diagDeviceInputChannels =
                 static_cast<uint32_t>(inDi->maxInputChannels);
         }
@@ -1022,12 +1134,16 @@ Result AudioDeviceManager::setBufferSize(BufferSize size) {
     return applyConfiguration(config);
 }
 
-void AudioDeviceManager::setAudioCallback(IAudioCallback* callback) {
-    if (m_audioCallback.load(std::memory_order_acquire) == callback) return;
-    const bool restart = isRunning();
-    if (restart) (void)stop(); // Retire the previous owner's registration on its own workers.
+Result AudioDeviceManager::setAudioCallback(IAudioCallback* callback) {
+    if (m_audioCallback.load(std::memory_order_acquire) == callback) return Result::ok();
+    // Ownership changes are a control transaction. Attaching a callback never
+    // starts a stream; the caller starts only after its graph is prepared.
+    if (m_isRunning.load()) {
+        const auto stopped = stop();
+        if (!stopped) return stopped;
+    }
     m_audioCallback.store(callback, std::memory_order_release);
-    if (restart) (void)start();
+    return Result::ok();
 }
 
 void AudioDeviceManager::setDeviceNotification(

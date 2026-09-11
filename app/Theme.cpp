@@ -17,6 +17,8 @@
 #include <QTemporaryDir>
 #include <QWidget>
 
+#include <cmath>
+
 namespace {
 
 /// Build a theme from 0-255 component tuples — keeps the preset table compact.
@@ -57,7 +59,7 @@ QColor Theme::well() const {
     // dark palette, and *down* towards grey on a light one rather than up
     // towards white. Brightening it on a light theme turned every meter, groove
     // and knob arc into white-on-white.
-    return mixColors(background, QColor(0, 0, 0), dark ? 0.35 : 0.10);
+    return mixColors(background, QColor(0, 0, 0), dark ? 0.35 : 0.07);
 }
 
 QColor Theme::separator() const {
@@ -101,41 +103,6 @@ ThemeManager::ThemeManager() {
         m_defaultFont = app->font();
 
     m_presets = {
-        make("logic", "Logic Graphite", true,
-             QColor(24, 26, 27), QColor(36, 37, 38), QColor(48, 50, 51),
-             QColor(230, 232, 230), QColor(146, 150, 153),
-             QColor(51, 158, 184), QColor(77, 186, 209),
-             QColor(77, 184, 179), QColor(184, 190, 198),
-             QColor(46, 47, 48), QColor(71, 73, 74),
-             QColor(51, 158, 184, 72),
-             QColor(17, 18, 19), QColor(31, 32, 33)),
-        // Logic's *light* face: pale, faintly cool greys with near-black text,
-        // the chrome a shade darker than the workspace rather than a shade
-        // lighter. The trap with a light DAW palette is going white — the
-        // arrangement has to stay a grey the clips can sit on top of, or every
-        // clip reads as a hole punched in the page.
-        make("logic-light", "Logic Light", false,
-             QColor(203, 204, 206), QColor(226, 227, 229), QColor(238, 239, 241),
-             QColor(29, 30, 32), QColor(107, 110, 115),
-             QColor(31, 122, 150), QColor(45, 150, 181),
-             QColor(46, 110, 128), QColor(46, 52, 59),
-             QColor(185, 186, 189), QColor(151, 154, 158),
-             QColor(31, 122, 150, 56),
-             QColor(213, 214, 217), QColor(222, 223, 226)),
-        // Neither a dark room nor a sheet of paper: the mid-grey a hardware
-        // console is moulded in. Light palettes in this application had only
-        // near-white surfaces, where every well, groove and shadow had almost
-        // no room left to recede into. Starting the surfaces two shades down
-        // gives the whole depth vocabulary somewhere to go in both directions.
-        make("graphite", "Graphite Grey", false,
-             QColor(158, 160, 163), QColor(182, 184, 188),
-             QColor(200, 202, 206),
-             QColor(24, 26, 29), QColor(78, 82, 88),
-             QColor(38, 110, 134), QColor(54, 138, 164),
-             QColor(44, 86, 102), QColor(30, 36, 44),
-             QColor(140, 142, 146), QColor(112, 114, 118),
-             QColor(38, 110, 134, 64),
-             QColor(146, 148, 152), QColor(152, 154, 158)),
         make("dark", "Dark", true,
              grey(20), grey(31), grey(38),
              grey(242), grey(153),
@@ -143,60 +110,27 @@ ThemeManager::ThemeManager() {
              QColor(128, 191, 255), QColor(184, 190, 198),
              grey(51), grey(77), QColor(74, 143, 217, 77),
              grey(13), grey(26)),
+        // Clean cool neutrals give panels a visible hierarchy without turning
+        // the workspace into a flat grey sheet. Saturated blue carries active
+        // state; the warm playhead remains easy to find in a dense project.
         make("light", "Light", false,
-             grey(242), grey(230), grey(217),
-             grey(20), grey(102),
-             QColor(74, 143, 217), QColor(102, 166, 230),
-             QColor(51, 115, 204), QColor(110, 118, 128),
-             grey(204), grey(179), QColor(74, 143, 217, 51),
-             grey(235), grey(237)),
-        make("midnight", "Midnight", true,
-             QColor(8, 10, 15), QColor(15, 20, 31), QColor(23, 28, 41),
-             QColor(217, 230, 242), QColor(115, 128, 153),
-             QColor(64, 140, 255), QColor(102, 166, 255),
-             QColor(77, 153, 255), QColor(184, 190, 198),
-             QColor(31, 36, 51), QColor(51, 56, 77),
-             QColor(64, 140, 255, 77),
-             QColor(5, 8, 13), QColor(13, 15, 26)),
-        make("carbon", "Carbon", true,
-             grey(15), grey(26), grey(36),
-             grey(235), grey(140),
-             QColor(230, 128, 51), QColor(255, 153, 77),
-             QColor(255, 166, 77), QColor(184, 190, 198),
-             grey(41), grey(61), QColor(230, 128, 51, 77),
-             grey(10), grey(20)),
-        make("dracula", "Dracula", true,
-             QColor(36, 36, 46), QColor(41, 41, 56), QColor(51, 51, 71),
-             QColor(242, 242, 242), QColor(153, 153, 179),
-             QColor(217, 102, 204), QColor(242, 128, 230),
-             QColor(204, 128, 255), QColor(184, 190, 198),
-             QColor(56, 56, 71), QColor(77, 77, 97),
-             QColor(217, 102, 204, 77),
-             QColor(26, 26, 36), QColor(36, 36, 46)),
-        make("solarized-dark", "Solarized Dark", true,
-             QColor(0, 43, 54), QColor(10, 54, 66), QColor(18, 69, 82),
-             QColor(237, 232, 214), QColor(140, 161, 168),
-             QColor(38, 140, 209), QColor(64, 166, 235),
-             QColor(89, 191, 217), QColor(184, 190, 198),
-             QColor(18, 61, 74), QColor(31, 77, 89),
-             QColor(38, 140, 209, 77),
-             QColor(0, 36, 46), QColor(8, 48, 59)),
+             QColor(244, 247, 250), QColor(250, 252, 253), QColor(255, 255, 255),
+             QColor(24, 34, 45), QColor(84, 101, 118),
+             QColor(22, 127, 211), QColor(56, 152, 232),
+             QColor(35, 109, 181), QColor(214, 72, 72),
+             QColor(213, 222, 231), QColor(174, 190, 205),
+             QColor(22, 127, 211, 54),
+             QColor(230, 237, 243), QColor(242, 246, 249)),
+        // Solarized warmth stays recognisable, with stronger ink and distinct
+        // teal waveform/orange playhead accents for faster visual parsing.
         make("solarized-light", "Solarized Light", false,
-             QColor(253, 245, 227), QColor(245, 237, 219), QColor(237, 227, 207),
-             QColor(102, 122, 130), QColor(140, 161, 168),
-             QColor(38, 140, 209), QColor(64, 166, 235),
-             QColor(38, 140, 209), QColor(110, 118, 128),
-             QColor(224, 214, 194), QColor(209, 196, 176),
-             QColor(38, 140, 209, 51),
-             QColor(247, 240, 222), QColor(250, 242, 224)),
-        make("nord", "Nord", true,
-             QColor(33, 41, 51), QColor(41, 48, 61), QColor(51, 59, 74),
-             QColor(217, 222, 232), QColor(133, 143, 158),
-             QColor(102, 153, 204), QColor(128, 179, 230),
-             QColor(128, 179, 230), QColor(184, 190, 198),
-             QColor(56, 64, 77), QColor(71, 79, 94),
-             QColor(102, 153, 204, 77),
-             QColor(28, 36, 46), QColor(38, 46, 56)),
+             QColor(253, 246, 227), QColor(249, 241, 221), QColor(255, 250, 237),
+             QColor(48, 75, 84), QColor(82, 103, 111),
+             QColor(22, 139, 210), QColor(59, 164, 230),
+             QColor(28, 154, 145), QColor(214, 93, 46),
+             QColor(222, 211, 184), QColor(190, 171, 131),
+             QColor(22, 139, 210, 56),
+             QColor(242, 232, 208), QColor(248, 239, 220)),
         make("gruvbox", "Gruvbox", true,
              QColor(41, 38, 33), QColor(51, 46, 41), QColor(64, 59, 51),
              QColor(240, 232, 209), QColor(168, 153, 122),
@@ -214,16 +148,24 @@ ThemeManager::ThemeManager() {
         if (!p.headerBackground.isValid()) p.headerBackground = p.transportBackground;
 
     QSettings settings;
-    const QString saved = settings.value("ui/themeId", "logic").toString();
+    const QString saved = settings.value("ui/themeId", "dark").toString();
     m_theme = m_presets.first();
+    bool matchedPreset = false;
     for (const auto& p : m_presets) {
-        if (p.id == saved) m_theme = p;
+        if (p.id == saved) {
+            m_theme = p;
+            matchedPreset = true;
+        }
     }
     // A user-authored palette is stored inline and restored on launch.
     if (saved == "custom") {
         const QString json = settings.value("ui/customTheme").toString();
         const auto doc = QJsonDocument::fromJson(json.toUtf8());
         if (doc.isObject()) m_theme = fromJson(doc.object(), m_presets.first());
+    } else if (!matchedPreset) {
+        // Retired built-in IDs migrate once to the default instead of leaving
+        // a stale value that can never be selected in Settings.
+        settings.setValue("ui/themeId", QStringLiteral("dark"));
     }
     loadStoredFont();
 }
@@ -565,6 +507,19 @@ QString ThemeManager::styleSheet() const {
             .arg(col.red()).arg(col.green()).arg(col.blue())
             .arg(QString::number(col.alphaF(), 'f', 3));
     };
+    const auto relativeLuminance = [](const QColor& colour) {
+        const auto channel = [](double value) {
+            return value <= 0.04045
+                       ? value / 12.92
+                       : std::pow((value + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * channel(colour.redF()) +
+               0.7152 * channel(colour.greenF()) +
+               0.0722 * channel(colour.blueF());
+    };
+    const QColor accentText = relativeLuminance(t.accent) > 0.179
+                                  ? QColor(18, 18, 20)
+                                  : QColor(250, 250, 252);
 
     // Deliberately flat: thin 1px borders, 6px radii, no bevels or gradients —
     // the "3D" Fusion look is what we are getting away from.
@@ -650,6 +605,15 @@ QPushButton:hover { background: %ELEV_HOVER%; }
 QPushButton:pressed { background: %ACCENT_SOFT%; }
 QPushButton:checked { background: %ACCENT%; color: white; border-color: %ACCENT%; }
 QPushButton:disabled { color: %TEXT2%; }
+QPushButton[accentAction="true"] {
+    background: %ACCENT%; color: %ACCENT_TEXT%; border-color: %ACCENT%;
+    font-weight: 600;
+}
+QPushButton[accentAction="true"]:hover { background: %ACCENT_HL%; }
+QPushButton[accentAction="true"]:pressed { background: %ACCENT_DARK%; }
+QPushButton[accentAction="true"]:disabled {
+    background: %ELEV%; color: %TEXT2%; border-color: %SEP%;
+}
 
 QToolButton { background: transparent; border: none; border-radius: 6px; padding: 3px; font-weight: 500; }
 QToolButton:hover { background: %HOVER%; }
@@ -665,25 +629,27 @@ QGroupBox { border: 1px solid %SEP%; border-radius: 8px; margin-top: 14px; paddi
 QGroupBox::title { subcontrol-origin: margin; left: 10px; color: %TEXT2%; font-weight: 600; }
 
 QLabel[role="section"] { color: %TEXT2%; font-size: 10px; font-weight: 600; }
+QLabel[role="pageTitle"] { font-size: 18px; font-weight: 600; }
+QLabel[role="secondary"] { color: %TEXT2%; }
 
-/* One thick track with a round glass handle riding inside it — the same look
-   `ui::paintSlider` paints by hand for the faders, so a plain QSlider in the
-   settings or a generic plugin editor is not a different control. The handle is
-   10px in a 14px groove: 2px of track shows all the way round it. */
+/* Fallback for third-party/plain QSliders. Application-owned sliders use
+   ui::GlassSlider and the same proportions: a quiet 4px rail under an 18px
+   translucent handle. Negative margins let the pane float over the rail. */
 QSlider { outline: none; }
 QSlider::groove:horizontal {
-    height: 14px; background: %WELL%; border: none; border-radius: 7px;
+    height: 4px; background: %WELL%; border: none; border-radius: 2px;
 }
 QSlider::sub-page:horizontal {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                                 stop:0 %ACCENT_DARK%, stop:1 %ACCENT%);
-    border-radius: 7px;
+    border-radius: 2px;
 }
-QSlider::add-page:horizontal { background: %WELL%; border-radius: 7px; }
+QSlider::add-page:horizontal { background: %WELL%; border-radius: 2px; }
 QSlider::handle:horizontal {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 %GLASS_HI%, stop:1 %GLASS_LO%);
-    width: 10px; margin: 2px; border-radius: 5px; border: none;
+    width: 18px; margin: -7px; border-radius: 9px;
+    border: 1px solid %GLASS_LIT%;
 }
 QSlider::handle:horizontal:hover, QSlider::handle:horizontal:pressed {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -691,18 +657,19 @@ QSlider::handle:horizontal:hover, QSlider::handle:horizontal:pressed {
 }
 QSlider::groove:horizontal:focus { border: 1px solid %ACCENT%; }
 QSlider::groove:vertical {
-    width: 14px; background: %WELL%; border: none; border-radius: 7px;
+    width: 4px; background: %WELL%; border: none; border-radius: 2px;
 }
 QSlider::add-page:vertical {
     background: qlineargradient(x1:0, y1:1, x2:0, y2:0,
                                 stop:0 %ACCENT_DARK%, stop:1 %ACCENT%);
-    border-radius: 7px;
+    border-radius: 2px;
 }
-QSlider::sub-page:vertical { background: %WELL%; border-radius: 7px; }
+QSlider::sub-page:vertical { background: %WELL%; border-radius: 2px; }
 QSlider::handle:vertical {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 %GLASS_HI%, stop:1 %GLASS_LO%);
-    height: 10px; margin: 2px; border-radius: 5px; border: none;
+    height: 18px; margin: -7px; border-radius: 9px;
+    border: 1px solid %GLASS_LIT%;
 }
 QSlider::handle:vertical:hover, QSlider::handle:vertical:pressed {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -716,6 +683,7 @@ QSlider::groove:vertical:focus { border: 1px solid %ACCENT%; }
         .replace("%SURFACE%", c(t.surface))
         .replace("%ELEV_HOVER%", c(mixColors(t.surfaceElevated, t.textPrimary, 0.10)))
         .replace("%ELEV%", c(t.surfaceElevated))
+        .replace("%ACCENT_TEXT%", c(accentText))
         .replace("%TOOLBAR%", c(t.toolbarBackground))
         .replace("%SEP%", c(t.separator()))
         .replace("%SECTION%", c(t.sectionDivider()))

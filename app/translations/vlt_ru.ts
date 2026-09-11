@@ -970,12 +970,20 @@ Anything changed since — by the assistant or by you — is undone as well. One
         <translation>Анализ завершен</translation>
     </message>
     <message>
-        <source>Detected tempo · %1% confidence</source>
-        <translation>Обнаруженный темп · %1% уверенности</translation>
-    </message>
-    <message>
         <source>%1 BPM</source>
         <translation>%1 BPM</translation>
+    </message>
+    <message>
+        <source>Detected BPM</source>
+        <translation>Определённый BPM</translation>
+    </message>
+    <message>
+        <source>Show all BPM options (%1)</source>
+        <translation>Показать все варианты BPM (%1)</translation>
+    </message>
+    <message>
+        <source>Show all detected BPM options</source>
+        <translation>Показать все определённые варианты BPM</translation>
     </message>
     <message>
         <source>Set project tempo (currently %1 BPM)</source>
@@ -986,16 +994,8 @@ Anything changed since — by the assistant or by you — is undone as well. One
         <translation>Темп меняется в этом клипе. Ничего не будет применено, если вы этого не выберете.</translation>
     </message>
     <message>
-        <source>The meter is ambiguous. Check the BPM before applying it.</source>
-        <translation>Измерение неоднозначно. Проверьте BPM перед применением.</translation>
-    </message>
-    <message>
         <source>BPM · not enough rhythmic information</source>
         <translation>BPM · недостаточно ритмической информации</translation>
-    </message>
-    <message>
-        <source>Key · %1 · Camelot %2 · %3% confidence</source>
-        <translation>Тональность · %1 · Camelot %2 · %3% уверенности</translation>
     </message>
     <message>
         <source>Key · not enough tonal information</source>
@@ -1013,13 +1013,34 @@ Anything changed since — by the assistant or by you — is undone as well. One
         <source>Keep File Only</source>
         <translation>Сохранить только файл</translation>
     </message>
-    <message><source>Detected tempo · %1</source><translation>Темп · %1</translation></message>
-    <message><source>confident</source><translation>уверенно</translation></message>
-    <message><source>ambiguous</source><translation>неоднозначно</translation></message>
-    <message><source>Check the proposed BPM before applying it.</source><translation>Проверьте предложенный BPM перед применением.</translation></message>
-    <message><source>Key · %1 · Camelot %2 · %3</source><translation>Тональность · %1 · Camelot %2 · %3</translation></message>
-    <message><source>Alternative: %1</source><translation>Альтернатива: %1</translation></message>
-    <message><source>The tonal center changes across this clip.</source><translation>Тональность меняется в разных частях клипа.</translation></message>
+    <message>
+        <source>Detected tempo · %1</source>
+        <translation>Темп · %1</translation>
+    </message>
+    <message>
+        <source>confident</source>
+        <translation>уверенно</translation>
+    </message>
+    <message>
+        <source>ambiguous</source>
+        <translation>неоднозначно</translation>
+    </message>
+    <message>
+        <source>Check the proposed BPM before applying it.</source>
+        <translation>Проверьте предложенный BPM перед применением.</translation>
+    </message>
+    <message>
+        <source>Key · %1 · Camelot %2 · %3</source>
+        <translation>Тональность · %1 · Camelot %2 · %3</translation>
+    </message>
+    <message>
+        <source>Alternative: %1</source>
+        <translation>Альтернатива: %1</translation>
+    </message>
+    <message>
+        <source>The tonal center changes across this clip.</source>
+        <translation>Тональность меняется в разных частях клипа.</translation>
+    </message>
 </context>
 <context>
     <name>AudioSettingsPage</name>
@@ -1132,12 +1153,12 @@ Anything changed since — by the assistant or by you — is undone as well. One
         <translation>Выберите устройство вывода.</translation>
     </message>
     <message>
-        <source>Could not apply this configuration. The previous audio device is still active.</source>
-        <translation>Не удалось применить эту конфигурацию. Предыдущее аудиоустройство по-прежнему активно.</translation>
-    </message>
-    <message>
         <source>Show audio CPU load in the bottom status bar</source>
         <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Could not apply this configuration. The controls show the current audio settings.</source>
+        <translation>Не удалось применить конфигурацию. Здесь показаны фактические текущие настройки аудио.</translation>
     </message>
 </context>
 <context>
@@ -1157,6 +1178,10 @@ Anything changed since — by the assistant or by you — is undone as well. One
     <message>
         <source>Move Automation Point</source>
         <translation>Переместить точку автоматизации</translation>
+    </message>
+    <message>
+        <source>Add Automation Point</source>
+        <translation>Добавить точку автоматизации</translation>
     </message>
     <message>
         <source>Curve Automation</source>
@@ -1214,8 +1239,8 @@ Anything changed since — by the assistant or by you — is undone as well. One
 <context>
     <name>AutomationEditorWindow</name>
     <message>
-        <source>Click to add · drag to move · Shift-point: time only · Shift-empty: select · double-click: reset · Alt-segment: curve</source>
-        <translation>Нажмите, чтобы добавить · перетащите, чтобы переместить · Shift+точка: только время · Shift+пусто: выделить · двойной клик: сброс · Alt+сегмент: кривая</translation>
+        <source>Click to add · Shift-click: add on curve · drag to move · Shift-drag: time/range · double-click: reset · Alt-segment: curve</source>
+        <translation>Клик: добавить · Shift+клик: добавить на кривой · перетаскивание: переместить · Shift+перетаскивание: время/диапазон · двойной клик: сброс · Alt+сегмент: изгиб</translation>
     </message>
     <message>
         <source>Automates</source>
@@ -1636,6 +1661,53 @@ Will be skipped: %3</source>
     <message>
         <source>Audio processed before the selection to restore effect tails. A shorter warm-up renders faster but may change long reverb or delay tails.</source>
         <translation>Обработка аудио перед выделением для восстановления хвостов эффектов. Короткий прогрев ускоряет рендер, но может изменить длинные хвосты реверберации и задержки.</translation>
+    </message>
+</context>
+<context>
+    <name>BrowserBackgroundDialog</name>
+    <message>
+        <source>Browser background collection</source>
+        <translation>Коллекция фонов браузера</translation>
+    </message>
+    <message>
+        <source>Choose an image for the start page. Your selected background is saved on this computer and works offline.</source>
+        <translation>Выберите изображение для стартовой страницы. Выбранный фон сохраняется на компьютере и работает без интернета.</translation>
+    </message>
+    <message>
+        <source>Available browser backgrounds</source>
+        <translation>Доступные фоны браузера</translation>
+    </message>
+    <message>
+        <source>Use background</source>
+        <translation>Установить фон</translation>
+    </message>
+    <message>
+        <source>Refresh collection</source>
+        <translation>Обновить коллекцию</translation>
+    </message>
+    <message>
+        <source>Loading collection…</source>
+        <translation>Загрузка коллекции…</translation>
+    </message>
+    <message>
+        <source>The collection is unavailable. Check your connection or VPN and try again. Previously downloaded backgrounds are still available.</source>
+        <translation>Коллекция недоступна. Проверьте подключение или VPN и повторите попытку. Ранее загруженные фоны по-прежнему доступны.</translation>
+    </message>
+    <message>
+        <source>No backgrounds have been published yet.</source>
+        <translation>Пока не опубликовано ни одного фона.</translation>
+    </message>
+    <message>
+        <source>Select a background and click Use background.</source>
+        <translation>Выберите изображение и нажмите «Установить фон».</translation>
+    </message>
+    <message>
+        <source>Downloading background…</source>
+        <translation>Скачивание фона…</translation>
+    </message>
+    <message>
+        <source>The background could not be downloaded or saved. Your current background has not changed. Try again.</source>
+        <translation>Не удалось скачать или сохранить изображение. Текущий фон не изменён. Попробуйте ещё раз.</translation>
     </message>
 </context>
 <context>
@@ -2345,37 +2417,6 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     </message>
 </context>
 <context>
-    <name>CollaborationCommandBridge</name>
-    <message>
-        <source>This cloud project is read-only until the live session is writable.</source>
-        <translation>Облачный проект доступен только для чтения, пока активная сессия не станет доступной для записи.</translation>
-    </message>
-    <message>
-        <source>Wait for cloud undo to finish before making another edit.</source>
-        <translation>Дождитесь завершения облачной отмены перед следующим изменением.</translation>
-    </message>
-    <message>
-        <source>The cloud edit could not be submitted. No local change was made.</source>
-        <translation>Не удалось отправить облачное изменение. Локальных изменений не внесено.</translation>
-    </message>
-    <message>
-        <source>Cloud undo is unavailable until the live session is writable.</source>
-        <translation>Облачная отмена недоступна, пока активная сессия не станет доступной для записи.</translation>
-    </message>
-    <message>
-        <source>Wait for pending cloud edits to synchronize before using undo.</source>
-        <translation>Перед отменой дождитесь синхронизации ожидающих облачных изменений.</translation>
-    </message>
-    <message>
-        <source>Cloud undo could not be submitted. The history entry was kept.</source>
-        <translation>Не удалось отправить облачную отмену. Запись в истории сохранена.</translation>
-    </message>
-    <message>
-        <source>The prepared cloud edit no longer matches the writable session.</source>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
     <name>ContextPanel</name>
     <message>
         <source>Track colour</source>
@@ -2941,6 +2982,213 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     </message>
 </context>
 <context>
+    <name>CreateTracksDialog</name>
+    <message>
+        <source>Create tracks</source>
+        <translation>Создать треки</translation>
+    </message>
+    <message>
+        <source>Set up once. Apply to every new track.</source>
+        <translation>Общие настройки для всех новых треков.</translation>
+    </message>
+    <message>
+        <source>Audio</source>
+        <translation>Аудио</translation>
+    </message>
+    <message>
+        <source>MIDI / Instrument</source>
+        <translation>MIDI / Инструмент</translation>
+    </message>
+    <message>
+        <source>Pattern</source>
+        <translation>Паттерн</translation>
+    </message>
+    <message>
+        <source>Automation</source>
+        <translation>Автоматизация</translation>
+    </message>
+    <message>
+        <source>Bus</source>
+        <translation>Шина</translation>
+    </message>
+    <message>
+        <source>Send</source>
+        <translation>Возврат</translation>
+    </message>
+    <message>
+        <source>Folder</source>
+        <translation>Папка</translation>
+    </message>
+    <message>
+        <source>Summing folder</source>
+        <translation>Суммирующая папка</translation>
+    </message>
+    <message>
+        <source>Track type</source>
+        <translation>Тип трека</translation>
+    </message>
+    <message>
+        <source>Quantity</source>
+        <translation>Количество</translation>
+    </message>
+    <message>
+        <source>Stereo</source>
+        <translation>Стерео</translation>
+    </message>
+    <message>
+        <source>Mono</source>
+        <translation>Моно</translation>
+    </message>
+    <message>
+        <source>Channels</source>
+        <translation>Каналы</translation>
+    </message>
+    <message>
+        <source>Name</source>
+        <translation>Название</translation>
+    </message>
+    <message>
+        <source>Master</source>
+        <translation>Мастер</translation>
+    </message>
+    <message>
+        <source>Output</source>
+        <translation>Выход</translation>
+    </message>
+    <message>
+        <source>Audio input</source>
+        <translation>Аудиовход</translation>
+    </message>
+    <message>
+        <source>Inserts</source>
+        <translation>Инсерты</translation>
+    </message>
+    <message>
+        <source>Add slot</source>
+        <translation>Добавить слот</translation>
+    </message>
+    <message>
+        <source>Open a plugin to edit it. Its settings will be copied to every track.</source>
+        <translation>Нажмите на плагин, чтобы настроить его. Эти настройки получит каждый трек.</translation>
+    </message>
+    <message>
+        <source>Create</source>
+        <translation>Создать</translation>
+    </message>
+    <message>
+        <source>The plugin preview could not be initialized.</source>
+        <translation>Не удалось подготовить цепочку плагинов.</translation>
+    </message>
+    <message>
+        <source>Automatic naming</source>
+        <translation>Автоматическое название</translation>
+    </message>
+    <message>
+        <source>An organizational track, without an audio channel or inserts.</source>
+        <translation>Организационный трек без аудиоканала и инсертов.</translation>
+    </message>
+    <message>
+        <source>In a shared project, add plugins after creating the tracks.</source>
+        <translation>В совместном проекте плагины добавляются после создания треков.</translation>
+    </message>
+    <message>
+        <source>No input</source>
+        <translation>Без входа</translation>
+    </message>
+    <message>
+        <source>Input %1</source>
+        <translation>Вход %1</translation>
+    </message>
+    <message>
+        <source>Input %1–%2</source>
+        <translation>Вход %1–%2</translation>
+    </message>
+    <message>
+        <source>Open %1</source>
+        <translation>Открыть %1</translation>
+    </message>
+    <message>
+        <source>Choose instrument…</source>
+        <translation>Выбрать инструмент…</translation>
+    </message>
+    <message>
+        <source>Add plugin…</source>
+        <translation>Добавить плагин…</translation>
+    </message>
+    <message>
+        <source>Instrument: %1</source>
+        <translation>Инструмент: %1</translation>
+    </message>
+    <message>
+        <source>Insert %1: %2</source>
+        <translation>Инсерт %1: %2</translation>
+    </message>
+    <message>
+        <source>Enable plugin</source>
+        <translation>Включить плагин</translation>
+    </message>
+    <message>
+        <source>Enable %1</source>
+        <translation>Включить %1</translation>
+    </message>
+    <message>
+        <source>Slot options</source>
+        <translation>Настройки слота</translation>
+    </message>
+    <message>
+        <source>Replace plugin…</source>
+        <translation>Заменить плагин…</translation>
+    </message>
+    <message>
+        <source>Move up</source>
+        <translation>Выше</translation>
+    </message>
+    <message>
+        <source>Move down</source>
+        <translation>Ниже</translation>
+    </message>
+    <message>
+        <source>Remove</source>
+        <translation>Удалить</translation>
+    </message>
+    <message>
+        <source>Instrument</source>
+        <translation>Инструмент</translation>
+    </message>
+    <message>
+        <source>Could not load %1. Choose another plugin or rescan plugins.</source>
+        <translation>Не удалось загрузить %1. Выберите другой плагин или повторите сканирование.</translation>
+    </message>
+    <message>
+        <source>This plugin is not available.</source>
+        <translation>Этот плагин недоступен.</translation>
+    </message>
+    <message>
+        <source>Tracks: %1</source>
+        <translation>Треков: %1</translation>
+    </message>
+    <message>
+        <source>Inserts per track: %1</source>
+        <translation>Инсертов на трек: %1</translation>
+    </message>
+    <message>
+        <source>Create tracks (%1)</source>
+        <translation>Создать треки (%1)</translation>
+    </message>
+    <message>
+        <source>Could not save the settings for %1. The tracks have not been created.</source>
+        <translation>Не удалось сохранить настройки %1. Треки не созданы.</translation>
+    </message>
+    <message>
+        <source>Creating tracks…</source>
+        <translation>Создание треков…</translation>
+    </message>
+    <message>
+        <source>Tracks could not be created: %1</source>
+        <translation>Не удалось создать треки: %1</translation>
+    </message>
+</context>
+<context>
     <name>DownloadedAudioDialog</name>
     <message>
         <source>Import downloaded audio</source>
@@ -3427,40 +3675,126 @@ The plugin is still listed from an earlier scan but its module no longer offers 
 </context>
 <context>
     <name>ExportDialog</name>
-    <message><source>Choose the sound, range and track details.</source><translation>Настройте звук, диапазон и информацию о треке.</translation></message>
-    <message><source>Range start</source><translation>Начало диапазона</translation></message>
-    <message><source>Range end</source><translation>Конец диапазона</translation></message>
-    <message><source>Tail length</source><translation>Длина хвоста</translation></message>
-    <message><source>Silence threshold</source><translation>Порог тишины</translation></message>
-    <message><source>Maximum tail length</source><translation>Максимальная длина хвоста</translation></message>
-    <message><source>Render progress</source><translation>Прогресс рендера</translation></message>
-    <message><source>Render your track</source><translation>Рендер трека</translation></message>
-    <message><source>The final sound. Ready to share.</source><translation>Последний штрих перед публикацией.</translation></message>
-    <message><source>Track details</source><translation>Информация о треке</translation></message>
-    <message><source>Add cover</source><translation>Добавить обложку</translation></message>
-    <message><source>+ Add cover</source><translation>+ Обложка</translation></message>
-    <message><source>Choose track cover</source><translation>Выбрать обложку трека</translation></message>
-    <message><source>Replace cover</source><translation>Заменить обложку</translation></message>
-    <message><source>Remove cover</source><translation>Удалить обложку</translation></message>
-    <message><source>Album</source><translation>Альбом</translation></message>
-    <message><source>Cover images (*.jpg *.jpeg *.png)</source><translation>Обложки (*.jpg *.jpeg *.png)</translation></message>
-    <message><source>Could not load cover</source><translation>Не удалось загрузить обложку</translation></message>
-    <message><source>Choose a valid PNG or JPEG image up to 10 MB and 8000 × 8000 pixels.</source><translation>Выберите изображение PNG или JPEG размером до 10 МБ и 8000 × 8000 пикселей.</translation></message>
-    <message><source>Range &amp; tail</source><translation>Диапазон и хвост</translation></message>
-    <message><source>Open folder after render</source><translation>Открыть папку после рендера</translation></message>
-    <message><source>Open folder</source><translation>Открыть папку</translation></message>
-    <message><source> + effect tail</source><translation> + хвост эффектов</translation></message>
-    <message><source>Choose MP3 to embed a cover.</source><translation>Выберите MP3, чтобы добавить обложку.</translation></message>
-    <message><source>Cover embedded in MP3
-%1</source><translation>Обложка внутри MP3
-%1</translation></message>
-    <message><source>PNG or JPEG
-Up to 10 MB</source><translation>PNG или JPEG
-До 10 МБ</translation></message>
-    <message><source>Could not open folder: %1</source><translation>Не удалось открыть папку: %1</translation></message>
-    <message><source>Render complete — %1</source><translation>Рендер завершён — %1</translation></message>
-    <message><source>Cancel</source><translation>Отмена</translation></message>
-    <message><source>Close</source><translation>Закрыть</translation></message>
+    <message>
+        <source>Choose the sound, range and track details.</source>
+        <translation>Настройте звук, диапазон и информацию о треке.</translation>
+    </message>
+    <message>
+        <source>Range start</source>
+        <translation>Начало диапазона</translation>
+    </message>
+    <message>
+        <source>Range end</source>
+        <translation>Конец диапазона</translation>
+    </message>
+    <message>
+        <source>Tail length</source>
+        <translation>Длина хвоста</translation>
+    </message>
+    <message>
+        <source>Silence threshold</source>
+        <translation>Порог тишины</translation>
+    </message>
+    <message>
+        <source>Maximum tail length</source>
+        <translation>Максимальная длина хвоста</translation>
+    </message>
+    <message>
+        <source>Render progress</source>
+        <translation>Прогресс рендера</translation>
+    </message>
+    <message>
+        <source>Render your track</source>
+        <translation>Рендер трека</translation>
+    </message>
+    <message>
+        <source>Track details</source>
+        <translation>Информация о треке</translation>
+    </message>
+    <message>
+        <source>Add cover</source>
+        <translation>Добавить обложку</translation>
+    </message>
+    <message>
+        <source>+ Add cover</source>
+        <translation>+ Обложка</translation>
+    </message>
+    <message>
+        <source>Choose track cover</source>
+        <translation>Выбрать обложку трека</translation>
+    </message>
+    <message>
+        <source>Replace cover</source>
+        <translation>Заменить обложку</translation>
+    </message>
+    <message>
+        <source>Remove cover</source>
+        <translation>Удалить обложку</translation>
+    </message>
+    <message>
+        <source>Album</source>
+        <translation>Альбом</translation>
+    </message>
+    <message>
+        <source>Cover images (*.jpg *.jpeg *.png)</source>
+        <translation>Обложки (*.jpg *.jpeg *.png)</translation>
+    </message>
+    <message>
+        <source>Could not load cover</source>
+        <translation>Не удалось загрузить обложку</translation>
+    </message>
+    <message>
+        <source>Choose a valid PNG or JPEG image up to 10 MB and 8000 × 8000 pixels.</source>
+        <translation>Выберите изображение PNG или JPEG размером до 10 МБ и 8000 × 8000 пикселей.</translation>
+    </message>
+    <message>
+        <source>Range &amp; tail</source>
+        <translation>Диапазон и хвост</translation>
+    </message>
+    <message>
+        <source>Open folder after render</source>
+        <translation>Открыть папку после рендера</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>Открыть папку</translation>
+    </message>
+    <message>
+        <source> + effect tail</source>
+        <translation> + хвост эффектов</translation>
+    </message>
+    <message>
+        <source>Choose MP3 to embed a cover.</source>
+        <translation>Выберите MP3, чтобы добавить обложку.</translation>
+    </message>
+    <message>
+        <source>Cover embedded in MP3
+%1</source>
+        <translation>Обложка внутри MP3
+%1</translation>
+    </message>
+    <message>
+        <source>PNG or JPEG
+Up to 10 MB</source>
+        <translation>PNG или JPEG
+До 10 МБ</translation>
+    </message>
+    <message>
+        <source>Could not open folder: %1</source>
+        <translation>Не удалось открыть папку: %1</translation>
+    </message>
+    <message>
+        <source>Render complete — %1</source>
+        <translation>Рендер завершён — %1</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Закрыть</translation>
+    </message>
     <message>
         <source>WAV</source>
         <translation>WAV</translation>
@@ -3560,10 +3894,6 @@ Up to 10 MB</source><translation>PNG или JPEG
     <message>
         <source>None</source>
         <translation>Ничего</translation>
-    </message>
-    <message>
-        <source>Range</source>
-        <translation>Диапазон</translation>
     </message>
     <message>
         <source>Whole project</source>
@@ -3809,6 +4139,10 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Невозможно прочитать этот файл</translation>
     </message>
     <message>
+        <source>Cannot read this MIDI file</source>
+        <translation>Невозможно прочитать этот MIDI-файл</translation>
+    </message>
+    <message>
         <source>Cannot read %1</source>
         <translation>Невозможно прочитать %1</translation>
     </message>
@@ -3871,6 +4205,18 @@ Up to 10 MB</source><translation>PNG или JPEG
     <message>
         <source>Long file — press play to hear it</source>
         <translation>Длинный файл — нажмите воспроизведение, чтобы прослушать</translation>
+    </message>
+    <message>
+        <source>Reading MIDI…</source>
+        <translation>Чтение MIDI…</translation>
+    </message>
+    <message>
+        <source>This MIDI file contains no notes</source>
+        <translation>В этом MIDI-файле нет нот</translation>
+    </message>
+    <message>
+        <source>MIDI · %1 notes · %2 tracks · %3 beats</source>
+        <translation>MIDI · нот: %1 · дорожек: %2 · долей: %3</translation>
     </message>
     <message>
         <source>Reading…</source>
@@ -4534,10 +4880,6 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Аудиоклип</translation>
     </message>
     <message>
-        <source>Stretch tool</source>
-        <translation>Инструмент растягивания</translation>
-    </message>
-    <message>
         <source>Select the Stretch tool, then drag an audio clip horizontally.</source>
         <translation>Выберите инструмент растягивания, затем потяните аудиоклип по горизонтали.</translation>
     </message>
@@ -4753,6 +5095,18 @@ Up to 10 MB</source><translation>PNG или JPEG
 <context>
     <name>InternalEditorFrame</name>
     <message>
+        <source>Detach editor</source>
+        <translation>Отделить редактор</translation>
+    </message>
+    <message>
+        <source>Return editor to workspace</source>
+        <translation>Вернуть редактор в рабочую область</translation>
+    </message>
+    <message>
+        <source>Move this editor to its own window, or return it to the workspace.</source>
+        <translation>Перенести редактор в отдельное окно или вернуть его в рабочую область.</translation>
+    </message>
+    <message>
         <source>Editor</source>
         <translation>Редактор</translation>
     </message>
@@ -4963,6 +5317,14 @@ Up to 10 MB</source><translation>PNG или JPEG
 <context>
     <name>MainWindow</name>
     <message>
+        <source>Startup template “%1” is unavailable; opened an empty project</source>
+        <translation>Загрузочный шаблон «%1» недоступен; открыт пустой проект</translation>
+    </message>
+    <message>
+        <source>Opened startup template “%1”</source>
+        <translation>Открыт загрузочный шаблон «%1»</translation>
+    </message>
+    <message>
         <source>Follow &amp;Playhead</source>
         <translation>Следовать за &amp;курсором</translation>
     </message>
@@ -5033,6 +5395,10 @@ Up to 10 MB</source><translation>PNG или JPEG
     <message>
         <source>Transport</source>
         <translation>Транспорт</translation>
+    </message>
+    <message>
+        <source>Notebook</source>
+        <translation type="unfinished">Блокнот</translation>
     </message>
     <message>
         <source>View</source>
@@ -5619,26 +5985,6 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Рендеринг завершен</translation>
     </message>
     <message>
-        <source>New Project from Template</source>
-        <translation>Новый проект по шаблону</translation>
-    </message>
-    <message>
-        <source>Choose a saved template. The new project will be independent of the template file.</source>
-        <translation>Выберите сохраненный шаблон. Новый проект будет независим от файла шаблона.</translation>
-    </message>
-    <message>
-        <source>Project templates</source>
-        <translation>Шаблоны проектов</translation>
-    </message>
-    <message>
-        <source>No templates have been saved yet. Use File → Save as Template… to create one.</source>
-        <translation>Шаблоны еще не сохранены. Используйте Файл → Сохранить как шаблон… для создания.</translation>
-    </message>
-    <message>
-        <source>Create</source>
-        <translation>Создать</translation>
-    </message>
-    <message>
         <source>Creating project from template…</source>
         <translation>Создание проекта по шаблону…</translation>
     </message>
@@ -5675,14 +6021,6 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Сохранено %1</translation>
     </message>
     <message>
-        <source>Save as Template</source>
-        <translation>Сохранить как шаблон</translation>
-    </message>
-    <message>
-        <source>Template name:</source>
-        <translation>Имя шаблона:</translation>
-    </message>
-    <message>
         <source>Invalid Template Name</source>
         <translation>Недопустимое имя шаблона</translation>
     </message>
@@ -5703,8 +6041,24 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Сохранение шаблона…</translation>
     </message>
     <message>
+        <source>Adding template artwork…</source>
+        <translation>Добавление оформления шаблона…</translation>
+    </message>
+    <message>
         <source>Save Template Failed</source>
         <translation>Не удалось сохранить шаблон</translation>
+    </message>
+    <message>
+        <source>Template Artwork Failed</source>
+        <translation>Не удалось добавить оформление шаблона</translation>
+    </message>
+    <message>
+        <source>The template was saved, but its artwork could not be added.
+
+%1</source>
+        <translation>Шаблон сохранён, но добавить его оформление не удалось.
+
+%1</translation>
     </message>
     <message>
         <source>Saved template “%1”</source>
@@ -6355,8 +6709,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Не удалось создать локальную копию</translation>
     </message>
     <message>
-        <source>The selected destination is not a VLTONE project package.</source>
-        <translation>Выбранное расположение не является пакетом проекта VLTONE.</translation>
+        <source>The selected destination is not a VLTONE project folder.</source>
+        <translation>Выбранное расположение не является папкой проекта VLTONE.</translation>
     </message>
     <message>
         <source>Cloud Project Changed</source>
@@ -6543,8 +6897,8 @@ Up to 10 MB</source><translation>PNG или JPEG
         <translation>Проект не сохранён</translation>
     </message>
     <message>
-        <source>VLTONE could not confirm a clean local project package. Save the project and try again.</source>
-        <translation>VLTONE не смогла подтвердить целостность локального пакета проекта без несохранённых изменений. Сохраните проект и повторите попытку.</translation>
+        <source>VLTONE could not confirm a clean local project folder. Save the project and try again.</source>
+        <translation>VLTONE не смогла подтвердить целостность локальной папки проекта без несохранённых изменений. Сохраните проект и повторите попытку.</translation>
     </message>
     <message>
         <source>Capturing built-in plugin state…</source>
@@ -6970,10 +7324,6 @@ Check free disk space and folder permissions, then try again.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>CPU %1%</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <source>Audio CPU load: %1 percent</source>
         <translation type="unfinished"></translation>
     </message>
@@ -6998,8 +7348,12 @@ Check free disk space and folder permissions, then try again.</source>
 
 %1
 
-Make sure the package still contains a matching .vlt manifest and its Content folder.</source>
-        <translation type="unfinished"></translation>
+Make sure the project folder still contains a matching .vlt manifest and its Content folder.</source>
+        <translation>Не удалось открыть проект VLTONE.
+
+%1
+
+Убедитесь, что папка проекта содержит соответствующий файл .vlt и папку Content.</translation>
     </message>
     <message>
         <source>Uploading recorded audio… %1/%2</source>
@@ -7132,6 +7486,86 @@ Make sure the package still contains a matching .vlt manifest and its Content fo
     <message>
         <source>Saving project…</source>
         <translation>Сохранение проекта…</translation>
+    </message>
+    <message>
+        <source>GPU workspace unavailable: %1. Using compatibility rendering.</source>
+        <translation>GPU-рендер недоступен: %1. Включён режим совместимости.</translation>
+    </message>
+    <message>
+        <source>Audio device unavailable: %1</source>
+        <translation>Аудиоустройство недоступно: %1</translation>
+    </message>
+    <message>
+        <source>Audio recovered: %1</source>
+        <translation>Аудио восстановлено: %1</translation>
+    </message>
+    <message>
+        <source>Audio device reconnected</source>
+        <translation>Аудиоустройство подключено повторно</translation>
+    </message>
+    <message>
+        <source>Recording interrupted</source>
+        <translation>Запись прерывалась</translation>
+    </message>
+    <message>
+        <source>This take contains missing audio or an incomplete file. Available audio has been retained at the paths below. Check it before continuing.
+
+%1</source>
+        <translation>В этом дубле есть пропуски звука или ошибка записи файла. Доступная часть записи сохранена по указанным ниже путям. Проверьте дубль перед продолжением.
+
+%1</translation>
+    </message>
+    <message>
+        <source>&amp;Quick Import Audio…</source>
+        <translation>&amp;Быстрый импорт аудио…</translation>
+    </message>
+    <message>
+        <source>Quick Import Audio</source>
+        <translation>Быстрый импорт аудио</translation>
+    </message>
+    <message>
+        <source>Quick Import Failed</source>
+        <translation>Быстрый импорт не выполнен</translation>
+    </message>
+    <message>
+        <source>VLTONE cannot import this file as audio:
+%1</source>
+        <translation>VLTONE не может импортировать этот файл как аудио:
+%1</translation>
+    </message>
+    <message>
+        <source>Preparing Quick Import…</source>
+        <translation>Подготовка быстрого импорта…</translation>
+    </message>
+    <message>
+        <source>The new project was not created.
+
+%1
+
+The current project has not been changed.</source>
+        <translation>Новый проект не создан.
+
+%1
+
+Текущий проект не изменён.</translation>
+    </message>
+    <message>
+        <source>Audio imported. The requested analysis could not be completed.</source>
+        <translation>Аудио импортировано. Не удалось выполнить выбранный анализ.</translation>
+    </message>
+    <message>
+        <source>Quick Import created a new project from “%1”.</source>
+        <translation>Быстрый импорт создал новый проект из шаблона «%1».</translation>
+    </message>
+    <message>
+        <source>Unsupported File</source>
+        <translation>Файл не поддерживается</translation>
+    </message>
+    <message>
+        <source>VLTONE cannot open this file type:
+%1</source>
+        <translation>VLTONE не может открыть файл этого типа:
+%1</translation>
     </message>
 </context>
 <context>
@@ -7358,10 +7792,6 @@ Make sure the package still contains a matching .vlt manifest and its Content fo
         <translation>БЛОКНОТ</translation>
     </message>
     <message>
-        <source>Saved locally</source>
-        <translation>Сохранено локально</translation>
-    </message>
-    <message>
         <source>Notebook save status</source>
         <translation>Статус сохранения блокнота</translation>
     </message>
@@ -7446,6 +7876,10 @@ Make sure the package still contains a matching .vlt manifest and its Content fo
         <translation>Очистить форматирование</translation>
     </message>
     <message>
+        <source>Timings are saved with the project</source>
+        <translation>Временные привязки сохранены в проекте</translation>
+    </message>
+    <message>
         <source>Notebook editor</source>
         <translation>Редактор блокнота</translation>
     </message>
@@ -7478,10 +7912,6 @@ Make sure the package still contains a matching .vlt manifest and its Content fo
         <translation>Сохранение…</translation>
     </message>
     <message>
-        <source>Could not save</source>
-        <translation>Не удалось сохранить</translation>
-    </message>
-    <message>
         <source>Background could not be played</source>
         <translation>Не удалось воспроизвести фон</translation>
     </message>
@@ -7490,32 +7920,12 @@ Make sure the package still contains a matching .vlt manifest and its Content fo
         <translation>Воспроизвести анимацию фона</translation>
     </message>
     <message>
-        <source>Edit timed text</source>
-        <translation>Редактировать синхронный текст</translation>
-    </message>
-    <message>
         <source>Show timed text on the timeline</source>
         <translation>Показывать синхронный текст на таймлайне</translation>
     </message>
     <message>
         <source>TIMED TEXT</source>
         <translation>СИНХРОННЫЙ ТЕКСТ</translation>
-    </message>
-    <message>
-        <source>Place the caret in a notebook line, then stamp it at the current playhead position. You can edit both time and text below.</source>
-        <translation>Поставьте курсор в строку блокнота и привяжите её к текущей позиции воспроизведения. Ниже можно изменить время и текст.</translation>
-    </message>
-    <message>
-        <source>Stamp selected line at playhead</source>
-        <translation>Привязать строку к позиции</translation>
-    </message>
-    <message>
-        <source>Stamp selected notebook line at playhead</source>
-        <translation>Привязать выбранную строку блокнота к позиции воспроизведения</translation>
-    </message>
-    <message>
-        <source>Add the selected notebook line at the current project time</source>
-        <translation>Добавить выбранную строку блокнота в текущее время проекта</translation>
     </message>
     <message>
         <source>Time</source>
@@ -7532,10 +7942,6 @@ Make sure the package still contains a matching .vlt manifest and its Content fo
     <message>
         <source>Double-click a time or line to edit it</source>
         <translation>Дважды щёлкните время или строку для редактирования</translation>
-    </message>
-    <message>
-        <source>Set to playhead</source>
-        <translation>Взять текущую позицию</translation>
     </message>
     <message>
         <source>Set selected line time to playhead</source>
@@ -7562,10 +7968,6 @@ Make sure the package still contains a matching .vlt manifest and its Content fo
         <translation>По умолчанию используется шрифт индикатора позиции транспорта</translation>
     </message>
     <message>
-        <source>Timings are saved locally</source>
-        <translation>Тайминги сохранены локально</translation>
-    </message>
-    <message>
         <source>Timed text save status</source>
         <translation>Состояние сохранения синхронного текста</translation>
     </message>
@@ -7578,20 +7980,8 @@ Make sure the package still contains a matching .vlt manifest and its Content fo
         <translation>Строка синхронного текста не может быть пустой.</translation>
     </message>
     <message>
-        <source>Could not save timed text.</source>
-        <translation>Не удалось сохранить синхронный текст.</translation>
-    </message>
-    <message>
-        <source>Place the caret in a non-empty notebook line first.</source>
-        <translation>Сначала поставьте курсор в непустую строку блокнота.</translation>
-    </message>
-    <message>
         <source>Transport display (default)</source>
         <translation>Индикатор транспорта (по умолчанию)</translation>
-    </message>
-    <message>
-        <source>Close timed text editor</source>
-        <translation>Закрыть редактор синхронного текста</translation>
     </message>
     <message>
         <source>Hide timed text from the timeline</source>
@@ -7608,6 +7998,10 @@ Make sure the package still contains a matching .vlt manifest and its Content fo
     <message>
         <source>Close notebook</source>
         <translation>Закрыть блокнот</translation>
+    </message>
+    <message>
+        <source>Saved in project</source>
+        <translation>Сохранено в проекте</translation>
     </message>
     <message>
         <source>Notes</source>
@@ -7759,7 +8153,7 @@ Clip: %2</source>
     </message>
     <message>
         <source>This plugin is not available.</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Этот плагин недоступен.</translation>
     </message>
     <message>
         <source>Load preset</source>
@@ -7823,10 +8217,6 @@ Clip: %2</source>
     <message>
         <source>SOURCE</source>
         <translation>ИСТОЧНИК</translation>
-    </message>
-    <message>
-        <source>LEVEL</source>
-        <translation>УРОВЕНЬ</translation>
     </message>
     <message>
         <source>PAN</source>
@@ -9240,6 +9630,10 @@ Clip: %2</source>
         <source>Utility</source>
         <translation>Утилита</translation>
     </message>
+    <message>
+        <source>Manufacturers</source>
+        <translation>Производители</translation>
+    </message>
 </context>
 <context>
     <name>PluginQuickAdder</name>
@@ -9311,16 +9705,8 @@ Clip: %2</source>
         <translation>%1 BPM</translation>
     </message>
     <message>
-        <source>Tempo confidence: %1%</source>
-        <translation>Уверенность в темпе: %1%</translation>
-    </message>
-    <message>
         <source>%1 · %2</source>
         <translation>%1 · %2</translation>
-    </message>
-    <message>
-        <source>Key confidence: %1%</source>
-        <translation>Уверенность в тональности: %1%</translation>
     </message>
     <message>
         <source>Create Automation Clip</source>
@@ -9431,10 +9817,6 @@ Clip: %2</source>
         <translation>Открыть редактор нот</translation>
     </message>
     <message>
-        <source>Click to draw MIDI</source>
-        <translation>Нажмите, чтобы нарисовать MIDI</translation>
-    </message>
-    <message>
         <source>Open %1</source>
         <translation>Открыть %1</translation>
     </message>
@@ -9447,22 +9829,6 @@ Clip: %2</source>
         <translation>Инструмент</translation>
     </message>
     <message>
-        <source>Open Instrument</source>
-        <translation>Открыть инструмент</translation>
-    </message>
-    <message>
-        <source>Rename…</source>
-        <translation>Переименовать…</translation>
-    </message>
-    <message>
-        <source>Duplicate Source</source>
-        <translation>Дублировать источник</translation>
-    </message>
-    <message>
-        <source>Remove Source</source>
-        <translation>Удалить источник</translation>
-    </message>
-    <message>
         <source>Straight</source>
         <translation>Прямой</translation>
     </message>
@@ -9473,6 +9839,10 @@ Clip: %2</source>
     <message>
         <source>Dotted</source>
         <translation>С точкой</translation>
+    </message>
+    <message>
+        <source>Drag vertically to adjust. Hold Shift for fine control. Double click to reset.</source>
+        <translation type="unfinished">Тяните вверх или вниз. Shift — точная настройка. Двойной щелчок — сброс.</translation>
     </message>
     <message>
         <source> beats</source>
@@ -9519,20 +9889,8 @@ Clip: %2</source>
         <translation>Поиск плагинов…</translation>
     </message>
     <message>
-        <source>No plugins found — scan in Settings ▸ Plugin Manager</source>
-        <translation>Плагины не найдены — проверьте в Настройки ▸ Менеджер плагинов</translation>
-    </message>
-    <message>
-        <source>Search plugins…</source>
-        <translation>Поиск плагинов…</translation>
-    </message>
-    <message>
         <source>Plugin search</source>
         <translation>Поиск плагинов</translation>
-    </message>
-    <message>
-        <source>%1  (%2)</source>
-        <translation>%1 (%2)</translation>
     </message>
     <message>
         <source>Nothing matches</source>
@@ -9635,10 +9993,6 @@ Clip: %2</source>
         <translation>Без названия</translation>
     </message>
     <message>
-        <source>Replace with Sample...</source>
-        <translation>Заменить сэмплом…</translation>
-    </message>
-    <message>
         <source>Cloud Recording Preserved</source>
         <translation>Облачная запись сохранена</translation>
     </message>
@@ -9722,17 +10076,138 @@ This session also contains a finished cloud recording awaiting upload. Restore a
         <source>Draw MIDI or drop a MIDI file</source>
         <translation>Нарисуйте ноты или перетащите MIDI</translation>
     </message>
-    <message><source>Tempo: %1</source><translation>Темп: %1</translation></message>
-    <message><source>Key: %1</source><translation>Тональность: %1</translation></message>
-    <message><source>confident</source><translation>уверенно</translation></message>
-    <message><source>ambiguous</source><translation>неоднозначно</translation></message>
-    <message><source>BPM · not determined</source><translation>BPM · не определён</translation></message>
-    <message><source>Key · not determined</source><translation>Тональность · не определена</translation></message>
-    <message><source>Tempo: %1 BPM · %2</source><translation>Темп: %1 BPM · %2</translation></message>
-    <message><source>Key: %1 · %2</source><translation>Тональность: %1 · %2</translation></message>
-    <message><source>Variable tempo</source><translation>Переменный темп</translation></message>
-    <message><source>Variable key</source><translation>Тональность меняется</translation></message>
-    <message><source>Alternative: %1</source><translation>Альтернатива: %1</translation></message>
+    <message>
+        <source>Tempo: %1</source>
+        <translation>Темп: %1</translation>
+    </message>
+    <message>
+        <source>Key: %1</source>
+        <translation>Тональность: %1</translation>
+    </message>
+    <message>
+        <source>confident</source>
+        <translation>уверенно</translation>
+    </message>
+    <message>
+        <source>ambiguous</source>
+        <translation>неоднозначно</translation>
+    </message>
+    <message>
+        <source>BPM · not determined</source>
+        <translation>BPM · не определён</translation>
+    </message>
+    <message>
+        <source>Key · not determined</source>
+        <translation>Тональность · не определена</translation>
+    </message>
+    <message>
+        <source>Tempo: %1 BPM · %2</source>
+        <translation>Темп: %1 BPM · %2</translation>
+    </message>
+    <message>
+        <source>Key: %1 · %2</source>
+        <translation>Тональность: %1 · %2</translation>
+    </message>
+    <message>
+        <source>Variable tempo</source>
+        <translation>Переменный темп</translation>
+    </message>
+    <message>
+        <source>Variable key</source>
+        <translation>Тональность меняется</translation>
+    </message>
+    <message>
+        <source>Alternative: %1</source>
+        <translation>Альтернатива: %1</translation>
+    </message>
+    <message>
+        <source>Untitled Track</source>
+        <translation>Дорожка без названия</translation>
+    </message>
+    <message>
+        <source>The template package is unavailable.</source>
+        <translation>Пакет шаблона недоступен.</translation>
+    </message>
+    <message>
+        <source>Choose a supported photo, GIF or video file.</source>
+        <translation>Выберите поддерживаемую фотографию, GIF или видео.</translation>
+    </message>
+    <message>
+        <source>The template artwork folder could not be created.</source>
+        <translation>Не удалось создать папку оформления шаблона.</translation>
+    </message>
+    <message>
+        <source>The selected media could not be copied into the template.</source>
+        <translation>Не удалось скопировать выбранный медиафайл в шаблон.</translation>
+    </message>
+    <message>
+        <source>Only saved VLTONE templates can be deleted here.</source>
+        <translation>Здесь можно удалять только сохранённые шаблоны VLTONE.</translation>
+    </message>
+    <message>
+        <source>The template could not be deleted.</source>
+        <translation>Не удалось удалить шаблон.</translation>
+    </message>
+    <message>
+        <source>Choose a project template for Quick Import.</source>
+        <translation>Выберите шаблон проекта для быстрого импорта.</translation>
+    </message>
+    <message>
+        <source>The selected Quick Import template is not a VLTONE template.</source>
+        <translation>Выбранный файл для быстрого импорта не является шаблоном VLTONE.</translation>
+    </message>
+    <message>
+        <source>The selected template could not be read: %1</source>
+        <translation>Не удалось прочитать выбранный шаблон: %1</translation>
+    </message>
+    <message>
+        <source>Choose an audio track for Quick Import.</source>
+        <translation>Выберите аудиодорожку для быстрого импорта.</translation>
+    </message>
+    <message>
+        <source>The selected audio track no longer exists in this template.</source>
+        <translation>Выбранной аудиодорожки больше нет в этом шаблоне.</translation>
+    </message>
+    <message>
+        <source>Theme</source>
+        <translation>Тема</translation>
+    </message>
+    <message>
+        <source>No Plug-in</source>
+        <translation>Без плагина</translation>
+    </message>
+    <message>
+        <source>Search</source>
+        <translation>Поиск</translation>
+    </message>
+    <message>
+        <source>Recent</source>
+        <translation>Недавние</translation>
+    </message>
+    <message>
+        <source>No recent plugins</source>
+        <translation>Нет недавних плагинов</translation>
+    </message>
+    <message>
+        <source>No installed variants</source>
+        <translation>Нет установленных версий</translation>
+    </message>
+    <message>
+        <source>No plugins found</source>
+        <translation>Плагины не найдены</translation>
+    </message>
+    <message>
+        <source>Scan in Settings ▸ Plugin Manager</source>
+        <translation>Запустите сканирование: Настройки ▸ Менеджер плагинов</translation>
+    </message>
+    <message>
+        <source>Plugin channel mode</source>
+        <translation>Режим каналов плагина</translation>
+    </message>
+    <message>
+        <source>This plugin cannot use the selected channel mode</source>
+        <translation>Этот плагин не поддерживает выбранный режим каналов</translation>
+    </message>
 </context>
 <context>
     <name>QuantizeDialog</name>
@@ -9815,6 +10290,57 @@ This session also contains a finished cloud recording awaiting upload. Restore a
     <message>
         <source>Groove velocity</source>
         <translation>Скорость грува</translation>
+    </message>
+</context>
+<context>
+    <name>QuickImportSettingsPage</name>
+    <message>
+        <source>Drop an audio file on the VLTONE icon to create a new project from the chosen template and place the file on this track.</source>
+        <translation>Перетащите аудиофайл на значок VLTONE, чтобы создать новый проект из выбранного шаблона и поместить файл на эту дорожку.</translation>
+    </message>
+    <message>
+        <source>Quick Import project template</source>
+        <translation>Шаблон проекта для быстрого импорта</translation>
+    </message>
+    <message>
+        <source>Quick Import audio track</source>
+        <translation>Аудиодорожка для быстрого импорта</translation>
+    </message>
+    <message>
+        <source>Detect BPM</source>
+        <translation>Определять BPM</translation>
+    </message>
+    <message>
+        <source>Detect key</source>
+        <translation>Определять тональность</translation>
+    </message>
+    <message>
+        <source>Project template:</source>
+        <translation>Шаблон проекта:</translation>
+    </message>
+    <message>
+        <source>Audio track:</source>
+        <translation>Аудиодорожка:</translation>
+    </message>
+    <message>
+        <source>Quick Import configuration issue</source>
+        <translation>Проблема настройки быстрого импорта</translation>
+    </message>
+    <message>
+        <source>Choose a template…</source>
+        <translation>Выберите шаблон…</translation>
+    </message>
+    <message>
+        <source>Missing: %1</source>
+        <translation>Не найден: %1</translation>
+    </message>
+    <message>
+        <source>Choose an audio track…</source>
+        <translation>Выберите аудиодорожку…</translation>
+    </message>
+    <message>
+        <source>This template could not be read: %1</source>
+        <translation>Не удалось прочитать этот шаблон: %1</translation>
     </message>
 </context>
 <context>
@@ -10067,14 +10593,6 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
 <context>
     <name>SamplerPanel</name>
     <message>
-        <source>SAMPLER FX</source>
-        <translation>FX с сэмплера</translation>
-    </message>
-    <message>
-        <source>CLIP FX</source>
-        <translation>FX клипа</translation>
-    </message>
-    <message>
         <source>Bypass all Sampler effects</source>
         <translation>Отключить все эффекты сэмплера</translation>
     </message>
@@ -10163,18 +10681,6 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Удалить</translation>
     </message>
     <message>
-        <source>Volume Envelope is shown for layout parity with Sampler, but timeline clips use their own Start/End and fade geometry.</source>
-        <translation>Огибающая громкости показана для единообразия с сэмплером, но клипы на таймлайне используют собственные границы начала и конца, а также фейды.</translation>
-    </message>
-    <message>
-        <source>Unavailable in timeline Clip context</source>
-        <translation>Недоступно в контексте клипа на временной шкале</translation>
-    </message>
-    <message>
-        <source>KEYBOARD</source>
-        <translation>КЛАВИАТУРА</translation>
-    </message>
-    <message>
         <source>Show root-note assignment and keyboard audition</source>
         <translation>Показать назначение корневой ноты и прослушивание на клавиатуре</translation>
     </message>
@@ -10199,20 +10705,12 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Атака</translation>
     </message>
     <message>
-        <source>A Tens</source>
-        <translation>А Тенс</translation>
-    </message>
-    <message>
         <source>Hold</source>
         <translation>Удержание</translation>
     </message>
     <message>
         <source>Decay</source>
         <translation>Затухание</translation>
-    </message>
-    <message>
-        <source>D Tens</source>
-        <translation>Д Тенс</translation>
     </message>
     <message>
         <source>Sustain</source>
@@ -10223,36 +10721,12 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Релиз</translation>
     </message>
     <message>
-        <source>R Tens</source>
-        <translation>Р Тенс</translation>
-    </message>
-    <message>
-        <source>VOLUME ENVELOPE</source>
-        <translation>Огибающая громкости</translation>
-    </message>
-    <message>
-        <source>VOLUME ENVELOPE · DISABLED IN CLIP</source>
-        <translation>Огибающая громкости · ОТКЛЮЧЕНО В КЛИПЕ</translation>
-    </message>
-    <message>
-        <source>PLAYBACK</source>
-        <translation>ВОСПРОИЗВЕНИЕ</translation>
-    </message>
-    <message>
-        <source>PROCESSING</source>
-        <translation>ОБРАБОТКА</translation>
-    </message>
-    <message>
         <source>CUT ITSELF</source>
         <translation>Обрывать</translation>
     </message>
     <message>
         <source>A new trigger immediately stops every older voice in this Sampler.</source>
         <translation>Новый триггер немедленно останавливает все ранее звучавшие голоса этого сэмплера.</translation>
-    </message>
-    <message>
-        <source>CUT ITSELF is note-triggered and is unavailable for a timeline clip.</source>
-        <translation>ОБРЫВАТЬ срабатывает по ноте и недоступен для клипа на временной шкале.</translation>
     </message>
     <message>
         <source>Start</source>
@@ -10287,32 +10761,12 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Пинг-понг</translation>
     </message>
     <message>
-        <source>L Start</source>
-        <translation>Начало слева</translation>
-    </message>
-    <message>
-        <source>L End</source>
-        <translation>Конец слева</translation>
-    </message>
-    <message>
         <source>Tune</source>
         <translation>Строй</translation>
     </message>
     <message>
         <source>Range</source>
         <translation>Диапазон</translation>
-    </message>
-    <message>
-        <source>MIDI key tracking is unavailable for a timeline clip.</source>
-        <translation>Отслеживание MIDI-нот недоступно для клипа на временной шкале.</translation>
-    </message>
-    <message>
-        <source>MIDI pitch range is unavailable for a timeline clip.</source>
-        <translation>Диапазон высоты тона MIDI недоступен для клипа на временной шкале.</translation>
-    </message>
-    <message>
-        <source>STRETCH</source>
-        <translation>РАСТЯГИВАНИЕ</translation>
     </message>
     <message>
         <source>Resample</source>
@@ -10359,10 +10813,6 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Диск</translation>
     </message>
     <message>
-        <source>Timeline clips already stream from their referenced media file.</source>
-        <translation>Клипы на временной шкале уже потоково передают данные из связанного медиафайла.</translation>
-    </message>
-    <message>
         <source>Mod X</source>
         <translation>Мод X</translation>
     </message>
@@ -10371,40 +10821,8 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Мод Y</translation>
     </message>
     <message>
-        <source>Sampler modulation routing is unavailable for a timeline clip.</source>
-        <translation>Маршрутизация модуляции сэмплера недоступна для клипа на временной шкале.</translation>
-    </message>
-    <message>
         <source>Boost</source>
         <translation>Усиление</translation>
-    </message>
-    <message>
-        <source>EQ Lo</source>
-        <translation>Эквалайзер Низкие</translation>
-    </message>
-    <message>
-        <source>EQ Mid</source>
-        <translation>Эквалайзер Средние</translation>
-    </message>
-    <message>
-        <source>EQ Hi</source>
-        <translation>Эквалайзер ВЧ</translation>
-    </message>
-    <message>
-        <source>RM Mix</source>
-        <translation>Смесь RM</translation>
-    </message>
-    <message>
-        <source>RM Freq</source>
-        <translation>Частота RM</translation>
-    </message>
-    <message>
-        <source>Cut</source>
-        <translation>Срез</translation>
-    </message>
-    <message>
-        <source>Res</source>
-        <translation>Резонанс</translation>
     </message>
     <message>
         <source>Reverb</source>
@@ -10455,10 +10873,6 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Сменить L/R</translation>
     </message>
     <message>
-        <source>SAMPLE TOOLS</source>
-        <translation>ИНСТРУМЕНТЫ ОБРАБОТКИ СЭМПЛОВ</translation>
-    </message>
-    <message>
         <source>Click to show the sample in the file manager</source>
         <translation>Нажмите, чтобы показать сэмпл в файловом менеджере</translation>
     </message>
@@ -10473,10 +10887,6 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     <message>
         <source>Clear</source>
         <translation>Очистить</translation>
-    </message>
-    <message>
-        <source>SAMPLE WAVEFORM</source>
-        <translation>ФОРМА ВОЛНЫ СЭМПЛА</translation>
     </message>
     <message>
         <source>No sample</source>
@@ -10816,6 +11226,30 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
 <context>
     <name>SettingsWindow</name>
     <message>
+        <source>Startup</source>
+        <translation>Запуск</translation>
+    </message>
+    <message>
+        <source>Default project at launch</source>
+        <translation>Проект по умолчанию при запуске</translation>
+    </message>
+    <message>
+        <source>Project opened at launch:</source>
+        <translation>Проект при запуске:</translation>
+    </message>
+    <message>
+        <source>Empty project</source>
+        <translation>Пустой проект</translation>
+    </message>
+    <message>
+        <source>Missing: %1</source>
+        <translation>Не найден: %1</translation>
+    </message>
+    <message>
+        <source>Applies only when VLTONE starts normally. Opening a project, restoring work after a crash, and File &gt; New Project take priority over this template.</source>
+        <translation>Применяется только при обычном запуске VLTONE. Открытие проекта, восстановление работы после сбоя и команда «Файл &gt; Новый проект» имеют приоритет над этим шаблоном.</translation>
+    </message>
+    <message>
         <source>Settings — %1</source>
         <translation>Настройки — %1</translation>
     </message>
@@ -10976,8 +11410,28 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Текущий язык: %1. При следующем запуске: %2.</translation>
     </message>
     <message>
-        <source>Choose a colour theme — it applies immediately.</source>
-        <translation>Выберите цветовую схему — изменения применяются немедленно.</translation>
+        <source>Restart VLTONE</source>
+        <translation>Перезапустить VLTONE</translation>
+    </message>
+    <message>
+        <source>Restart VLTONE to apply rendering mode</source>
+        <translation>Перезапустить VLTONE для применения режима рендера</translation>
+    </message>
+    <message>
+        <source>Restart VLTONE and reopen the current project</source>
+        <translation>Перезапустить VLTONE и снова открыть текущий проект</translation>
+    </message>
+    <message>
+        <source>Editing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Include clips when duplicating tracks and folders</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>When off, Duplicate keeps the track hierarchy, instruments, plugins, mixer settings and routing, but creates empty lanes.</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
         <source>Selected tracks</source>
@@ -10992,8 +11446,16 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Оттенок с нейтральным заливом</translation>
     </message>
     <message>
-        <source>Design your own palette — changes apply live. Export it to share, or import a theme file.</source>
-        <translation>Создайте собственную палитру — изменения применяются в реальном времени. Экспортируйте, чтобы поделиться, или импортируйте файл темы.</translation>
+        <source>Create your theme</source>
+        <translation>Создайте свою тему</translation>
+    </message>
+    <message>
+        <source>Start with a familiar palette, then make it yours. The preview updates as you choose colours, and accepted changes appear throughout VLTONE immediately.</source>
+        <translation>Начните со знакомой палитры и настройте её под себя. Предпросмотр обновляется при выборе цветов, а принятые изменения сразу появляются во всём VLTONE.</translation>
+    </message>
+    <message>
+        <source>Theme details</source>
+        <translation>Параметры темы</translation>
     </message>
     <message>
         <source>Name</source>
@@ -11001,19 +11463,95 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     </message>
     <message>
         <source>Custom</source>
-        <translation>Пользовательский</translation>
+        <translation>Своя тема</translation>
     </message>
     <message>
-        <source>Pick a colour</source>
-        <translation>Выбрать цвет</translation>
+        <source>My studio theme</source>
+        <translation>Тема моей студии</translation>
+    </message>
+    <message>
+        <source>My Theme</source>
+        <translation>Моя тема</translation>
+    </message>
+    <message>
+        <source>Starting palette</source>
+        <translation>Начальная палитра</translation>
+    </message>
+    <message>
+        <source>Use palette</source>
+        <translation>Использовать палитру</translation>
+    </message>
+    <message>
+        <source>Replace the colours below with this palette</source>
+        <translation>Заменить цвета ниже на эту палитру</translation>
+    </message>
+    <message>
+        <source>Start from</source>
+        <translation>Основа</translation>
+    </message>
+    <message>
+        <source>Your current appearance is already loaded. A starter palette replaces only the colours; your theme name stays the same.</source>
+        <translation>Текущее оформление уже загружено. Начальная палитра заменит только цвета, а название темы останется прежним.</translation>
+    </message>
+    <message>
+        <source>Live preview</source>
+        <translation>Живой предпросмотр</translation>
+    </message>
+    <message>
+        <source>Live theme preview</source>
+        <translation>Живой предпросмотр темы</translation>
+    </message>
+    <message>
+        <source>A miniature arrangement that updates with the selected colours.</source>
+        <translation>Миниатюра аранжировки, которая обновляется вместе с выбранными цветами.</translation>
+    </message>
+    <message>
+        <source>Check surfaces, text, clips, grid lines and the playhead together.</source>
+        <translation>Оцените вместе поверхности, текст, клипы, линии сетки и курсор воспроизведения.</translation>
+    </message>
+    <message>
+        <source>● Applied live</source>
+        <translation>● Применяется сразу</translation>
+    </message>
+    <message>
+        <source>Theme changes are applied live</source>
+        <translation>Изменения темы применяются сразу</translation>
+    </message>
+    <message>
+        <source>Surfaces</source>
+        <translation>Поверхности</translation>
+    </message>
+    <message>
+        <source>Window, panels and toolbars.</source>
+        <translation>Окно, панели и панели инструментов.</translation>
+    </message>
+    <message>
+        <source>Primary and supporting labels.</source>
+        <translation>Основные и вспомогательные надписи.</translation>
+    </message>
+    <message>
+        <source>Accent &amp; selection</source>
+        <translation>Акцент и выделение</translation>
+    </message>
+    <message>
+        <source>Actions, highlights and selected content.</source>
+        <translation>Действия, акценты и выбранное содержимое.</translation>
+    </message>
+    <message>
+        <source>Timeline</source>
+        <translation>Таймлайн</translation>
+    </message>
+    <message>
+        <source>Waveforms, playhead and grid lines.</source>
+        <translation>Волноформы, курсор воспроизведения и линии сетки.</translation>
+    </message>
+    <message>
+        <source>Choose %1 colour</source>
+        <translation>Выбрать цвет «%1»</translation>
     </message>
     <message>
         <source>Choose colour</source>
         <translation>Выбор цвета</translation>
-    </message>
-    <message>
-        <source>Start From Active Theme</source>
-        <translation>Начать с активной темы</translation>
     </message>
     <message>
         <source>Export…</source>
@@ -11024,14 +11562,6 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Экспорт темы</translation>
     </message>
     <message>
-        <source>VLTONE Theme (*.json *.dawtheme.json)</source>
-        <translation>Тема VLTONE (*.json *.dawtheme.json)</translation>
-    </message>
-    <message>
-        <source>Could not write %1</source>
-        <translation>Не удалось записать %1</translation>
-    </message>
-    <message>
         <source>Import…</source>
         <translation>Импорт…</translation>
     </message>
@@ -11040,12 +11570,44 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Импорт темы</translation>
     </message>
     <message>
-        <source>VLTONE Theme (*.json *.dawtheme.json);;All Files (*)</source>
-        <translation>Тема VLTONE (*.json *.dawtheme.json);;Все файлы (*)</translation>
+        <source>Save to Library</source>
+        <translation>Сохранить в библиотеку</translation>
     </message>
     <message>
-        <source>%1 is not a valid theme file</source>
-        <translation>%1 не является действительным файлом темы</translation>
+        <source>Save this theme so it can be applied again later</source>
+        <translation>Сохранить тему, чтобы к ней можно было вернуться позже</translation>
+    </message>
+    <message>
+        <source>Current colour %1</source>
+        <translation>Текущий цвет: %1</translation>
+    </message>
+    <message>
+        <source>%1 · %2%</source>
+        <translation>%1 · %2%</translation>
+    </message>
+    <message>
+        <source>✓ Text contrast looks good — weakest pairing is %1:1.</source>
+        <translation>✓ Контраст текста достаточный — минимальное значение %1:1.</translation>
+    </message>
+    <message>
+        <source>⚠ Low text contrast — weakest pairing is %1:1. Aim for 4.5:1 or higher.</source>
+        <translation>⚠ Низкий контраст текста — минимальное значение %1:1. Рекомендуется 4,5:1 или выше.</translation>
+    </message>
+    <message>
+        <source>Tracks</source>
+        <translation>Дорожки</translation>
+    </message>
+    <message>
+        <source>Drums</source>
+        <translation>Ударные</translation>
+    </message>
+    <message>
+        <source>Bass</source>
+        <translation>Бас</translation>
+    </message>
+    <message>
+        <source>Synth</source>
+        <translation>Синт</translation>
     </message>
     <message>
         <source>Click a shortcut field and press the new keys. If a key is already used you&apos;ll be asked before reassigning it. Shortcuts follow the physical key, so they work in every keyboard layout. The same binding is shown as Command on macOS and Ctrl on Windows/Linux.</source>
@@ -11250,16 +11812,8 @@ Reassign it to &quot;%3&quot;?</source>
         <translation>Фон таймлайна</translation>
     </message>
     <message>
-        <source>Choose a local photo, animated GIF or video for the arrangement grid. The file stays on this computer and is not saved in the project.</source>
-        <translation>Выберите локальную фотографию, анимированный GIF или видео для фона сетки аранжировки. Файл останется на этом компьютере и не будет сохранён в проекте.</translation>
-    </message>
-    <message>
         <source>Theme colour only</source>
         <translation>Только цвет темы</translation>
-    </message>
-    <message>
-        <source>Timeline background file</source>
-        <translation>Файл фона таймлайна</translation>
     </message>
     <message>
         <source>Choose…</source>
@@ -11426,7 +11980,7 @@ Reassign it to &quot;%3&quot;?</source>
         <translation> FPS</translation>
     </message>
     <message>
-        <source>Applies immediately to the application's visual updates. Unlimited removes the application limit; the actual rate depends on your display and system. Third-party plugin windows control their own refresh rate.</source>
+        <source>Applies immediately to the application&apos;s visual updates. Unlimited removes the application limit; the actual rate depends on your display and system. Third-party plugin windows control their own refresh rate.</source>
         <translation>Применяется сразу к визуальным обновлениям приложения. Режим «Без ограничения» снимает программный лимит; фактическая частота зависит от монитора и системы. Сторонние плагины управляют частотой своих окон самостоятельно.</translation>
     </message>
     <message>
@@ -11436,6 +11990,162 @@ Reassign it to &quot;%3&quot;?</source>
     <message>
         <source>Timeline background source</source>
         <translation>Источник фона таймлайна</translation>
+    </message>
+    <message>
+        <source>Graphics quality</source>
+        <translation>Качество графики</translation>
+    </message>
+    <message>
+        <source>GPU rendering (experimental)</source>
+        <translation>GPU-рендеринг (экспериментальный)</translation>
+    </message>
+    <message>
+        <source>Takes effect after restarting VLTONE. Accelerates the workspace, editors and media. Turn this off to use compatibility rendering.</source>
+        <translation>Применяется после перезапуска VLTONE. Ускоряет рабочую область, редакторы и медиа. Отключите для использования режима совместимости.</translation>
+    </message>
+    <message>
+        <source>Quality</source>
+        <translation>Качество</translation>
+    </message>
+    <message>
+        <source>Auto</source>
+        <translation>Авто</translation>
+    </message>
+    <message>
+        <source>Maximum</source>
+        <translation>Максимальное</translation>
+    </message>
+    <message>
+        <source>Medium</source>
+        <translation>Среднее</translation>
+    </message>
+    <message>
+        <source>Low</source>
+        <translation>Низкое</translation>
+    </message>
+    <message>
+        <source>Controls decorative backgrounds only. Maximum keeps full resolution; Medium uses 75% resolution and up to 30 FPS; Low uses 50% and up to 15 FPS. Auto adapts to graphics load. Text, notes, waveforms and editing stay sharp. Your blur setting is independent of graphics quality.</source>
+        <translation>Влияет только на декоративный фон. Максимальное качество сохраняет полное разрешение; среднее использует 75% разрешения и до 30 кадров/с; низкое — 50% и до 15 кадров/с. Авто подстраивается под графическую нагрузку. Текст, ноты и волны остаются чёткими. Размытие настраивается отдельно.</translation>
+    </message>
+    <message>
+        <source>Quick Import</source>
+        <translation>Быстрый импорт</translation>
+    </message>
+    <message>
+        <source>Choose a built-in palette, or apply a complete saved theme.</source>
+        <translation>Выберите встроенную палитру или примените сохранённую тему целиком.</translation>
+    </message>
+    <message>
+        <source>Built-in palettes</source>
+        <translation>Встроенные палитры</translation>
+    </message>
+    <message>
+        <source>Saved Themes</source>
+        <translation>Сохранённые темы</translation>
+    </message>
+    <message>
+        <source>A .vlttheme file keeps the palette, backgrounds and fonts together. Imported resources are copied into VLTONE so the original file can be deleted.</source>
+        <translation>Файл .vlttheme хранит палитру, фоны и шрифты вместе. Импортированные ресурсы копируются в VLTONE, поэтому исходный файл можно удалить.</translation>
+    </message>
+    <message>
+        <source>Saved themes</source>
+        <translation>Сохранённые темы</translation>
+    </message>
+    <message>
+        <source>Save Theme…</source>
+        <translation>Сохранить тему…</translation>
+    </message>
+    <message>
+        <source>Apply</source>
+        <translation>Применить</translation>
+    </message>
+    <message>
+        <source>Export Current…</source>
+        <translation>Экспортировать текущую…</translation>
+    </message>
+    <message>
+        <source>Open Themes Folder</source>
+        <translation>Открыть папку тем</translation>
+    </message>
+    <message>
+        <source>VLTONE Theme (*.vlttheme);;Legacy Theme (*.json *.dawtheme.json);;All Files (*)</source>
+        <translation>Тема VLTONE (*.vlttheme);;Старая тема (*.json *.dawtheme.json);;Все файлы (*)</translation>
+    </message>
+    <message>
+        <source>Theme could not be applied</source>
+        <translation>Не удалось применить тему</translation>
+    </message>
+    <message>
+        <source>Custom Theme</source>
+        <translation>Пользовательская тема</translation>
+    </message>
+    <message>
+        <source>Save Theme</source>
+        <translation>Сохранение темы</translation>
+    </message>
+    <message>
+        <source>Theme name</source>
+        <translation>Название темы</translation>
+    </message>
+    <message>
+        <source>Theme could not be saved</source>
+        <translation>Не удалось сохранить тему</translation>
+    </message>
+    <message>
+        <source>Saving theme…</source>
+        <translation>Сохранение темы…</translation>
+    </message>
+    <message>
+        <source>Theme Saved</source>
+        <translation>Тема сохранена</translation>
+    </message>
+    <message>
+        <source>The theme is now in your VLTONE library.</source>
+        <translation>Тема добавлена в вашу библиотеку VLTONE.</translation>
+    </message>
+    <message>
+        <source>VLTONE Theme (*.vlttheme)</source>
+        <translation>Тема VLTONE (*.vlttheme)</translation>
+    </message>
+    <message>
+        <source>Theme could not be exported</source>
+        <translation>Не удалось экспортировать тему</translation>
+    </message>
+    <message>
+        <source>Exporting theme…</source>
+        <translation>Экспорт темы…</translation>
+    </message>
+    <message>
+        <source>Theme Exported</source>
+        <translation>Тема экспортирована</translation>
+    </message>
+    <message>
+        <source>The .vlttheme file includes the theme&apos;s media and fonts.</source>
+        <translation>Файл .vlttheme содержит медиафайлы и шрифты темы.</translation>
+    </message>
+    <message>
+        <source>Preparing theme…</source>
+        <translation>Подготовка темы…</translation>
+    </message>
+    <message>
+        <source>Importing theme…</source>
+        <translation>Импорт темы…</translation>
+    </message>
+    <message>
+        <source>Theme Imported</source>
+        <translation>Тема импортирована</translation>
+    </message>
+    <message>
+        <source>The theme and its resources are now stored inside VLTONE. You can delete the original .vlttheme file.</source>
+        <translation>Тема и её ресурсы сохранены внутри VLTONE. Исходный файл .vlttheme можно удалить.</translation>
+    </message>
+    <message>
+        <source>%1 is not a valid legacy theme file.</source>
+        <translation>%1 не является корректным файлом старой темы.</translation>
+    </message>
+    <message>
+        <source>Plugin menu background</source>
+        <translation>Фон меню плагинов</translation>
     </message>
 </context>
 <context>
@@ -11644,6 +12354,173 @@ Reassign it to &quot;%3&quot;?</source>
     <message>
         <source>Could not save the font in the application data folder. Check free disk space and folder permissions.</source>
         <translation>Не удалось сохранить шрифт в папке данных приложения. Проверьте свободное место и права доступа.</translation>
+    </message>
+</context>
+<context>
+    <name>ThemePackage</name>
+    <message>
+        <source>The file is not a VLTONE theme.</source>
+        <translation>Этот файл не является темой VLTONE.</translation>
+    </message>
+    <message>
+        <source>This theme uses an unsupported format version.</source>
+        <translation>Эта тема использует неподдерживаемую версию формата.</translation>
+    </message>
+    <message>
+        <source>The theme manifest is missing or damaged.</source>
+        <translation>Манифест темы отсутствует или повреждён.</translation>
+    </message>
+    <message>
+        <source>The theme manifest is not valid JSON.</source>
+        <translation>Манифест темы содержит недопустимый JSON.</translation>
+    </message>
+    <message>
+        <source>The theme manifest contains invalid fields.</source>
+        <translation>Манифест темы содержит недопустимые поля.</translation>
+    </message>
+    <message>
+        <source>The theme resource list is damaged.</source>
+        <translation>Список ресурсов темы повреждён.</translation>
+    </message>
+    <message>
+        <source>The theme resource list contains invalid data.</source>
+        <translation>Список ресурсов темы содержит недопустимые данные.</translation>
+    </message>
+    <message>
+        <source>Could not open resource: %1</source>
+        <translation>Не удалось открыть ресурс: %1</translation>
+    </message>
+    <message>
+        <source>Could not read resource: %1</source>
+        <translation>Не удалось прочитать ресурс: %1</translation>
+    </message>
+    <message>
+        <source>The theme ended before a resource was complete.</source>
+        <translation>Файл темы закончился до завершения ресурса.</translation>
+    </message>
+    <message>
+        <source>Could not write a theme resource.</source>
+        <translation>Не удалось записать ресурс темы.</translation>
+    </message>
+    <message>
+        <source>Custom Theme</source>
+        <translation>Пользовательская тема</translation>
+    </message>
+    <message>
+        <source>A theme resource is missing: %1</source>
+        <translation>Не найден ресурс темы: %1</translation>
+    </message>
+    <message>
+        <source>The active interface font file is missing.</source>
+        <translation>Не найден файл активного шрифта интерфейса.</translation>
+    </message>
+    <message>
+        <source>Enter a name for the theme.</source>
+        <translation>Введите название темы.</translation>
+    </message>
+    <message>
+        <source>The theme contains too many resources.</source>
+        <translation>В теме слишком много ресурсов.</translation>
+    </message>
+    <message>
+        <source>The theme resources are too large.</source>
+        <translation>Ресурсы темы слишком велики.</translation>
+    </message>
+    <message>
+        <source>The theme manifest is too large.</source>
+        <translation>Манифест темы слишком велик.</translation>
+    </message>
+    <message>
+        <source>Could not create %1</source>
+        <translation>Не удалось создать %1</translation>
+    </message>
+    <message>
+        <source>Could not write the theme manifest.</source>
+        <translation>Не удалось записать манифест темы.</translation>
+    </message>
+    <message>
+        <source>Could not write a theme resource header.</source>
+        <translation>Не удалось записать заголовок ресурса темы.</translation>
+    </message>
+    <message>
+        <source>A theme resource changed while the theme was being saved.</source>
+        <translation>Ресурс темы изменился во время сохранения темы.</translation>
+    </message>
+    <message>
+        <source>Could not finish writing %1</source>
+        <translation>Не удалось завершить запись %1</translation>
+    </message>
+    <message>
+        <source>Could not open %1</source>
+        <translation>Не удалось открыть %1</translation>
+    </message>
+    <message>
+        <source>The selected theme file does not exist.</source>
+        <translation>Выбранный файл темы не существует.</translation>
+    </message>
+    <message>
+        <source>Could not create the theme resource folder.</source>
+        <translation>Не удалось создать папку ресурсов темы.</translation>
+    </message>
+    <message>
+        <source>Could not reopen the installed theme.</source>
+        <translation>Не удалось повторно открыть установленную тему.</translation>
+    </message>
+    <message>
+        <source>A theme resource header is damaged.</source>
+        <translation>Заголовок ресурса темы повреждён.</translation>
+    </message>
+    <message>
+        <source>A theme resource header is incomplete.</source>
+        <translation>Заголовок ресурса темы неполный.</translation>
+    </message>
+    <message>
+        <source>A theme resource does not match its manifest.</source>
+        <translation>Ресурс темы не соответствует манифесту.</translation>
+    </message>
+    <message>
+        <source>Could not extract a theme resource.</source>
+        <translation>Не удалось извлечь ресурс темы.</translation>
+    </message>
+    <message>
+        <source>A theme resource failed verification.</source>
+        <translation>Ресурс темы не прошёл проверку.</translation>
+    </message>
+    <message>
+        <source>The theme contains unexpected trailing data.</source>
+        <translation>Файл темы содержит неожиданные данные в конце.</translation>
+    </message>
+    <message>
+        <source>Could not finish installing theme resources.</source>
+        <translation>Не удалось завершить установку ресурсов темы.</translation>
+    </message>
+    <message>
+        <source>Could not copy the theme into the library.</source>
+        <translation>Не удалось скопировать тему в библиотеку.</translation>
+    </message>
+    <message>
+        <source>The theme file changed while it was being installed.</source>
+        <translation>Файл темы изменился во время установки.</translation>
+    </message>
+    <message>
+        <source>Could not finish installing the theme.</source>
+        <translation>Не удалось завершить установку темы.</translation>
+    </message>
+    <message>
+        <source>The installed theme identifier is invalid.</source>
+        <translation>Недопустимый идентификатор установленной темы.</translation>
+    </message>
+    <message>
+        <source>An installed theme resource is missing.</source>
+        <translation>Не найден ресурс установленной темы.</translation>
+    </message>
+    <message>
+        <source>The theme contains an unsupported background file.</source>
+        <translation>Тема содержит неподдерживаемый файл фона.</translation>
+    </message>
+    <message>
+        <source>The theme contains an unsupported notebook font.</source>
+        <translation>Тема содержит неподдерживаемый шрифт блокнота.</translation>
     </message>
 </context>
 <context>
@@ -12009,32 +12886,12 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
 <context>
     <name>ToolPanel</name>
     <message>
-        <source>Create</source>
-        <translation>Создать</translation>
-    </message>
-    <message>
-        <source>Create a track</source>
-        <translation>Создать дорожку</translation>
-    </message>
-    <message>
         <source>Follow the playhead — P centres it; press again to navigate freely</source>
         <translation>Следовать за курсором — P центрирует его; повторное нажатие включает свободную навигацию</translation>
     </message>
     <message>
         <source>Follow the playhead</source>
         <translation>Следовать за курсором</translation>
-    </message>
-    <message>
-        <source>Zoom focus: selected clips, otherwise the playhead; turn off to zoom under the pointer</source>
-        <translation>Фокус масштаба: выделенные клипы, иначе курсор; выключите, чтобы масштабировать под указателем</translation>
-    </message>
-    <message>
-        <source>Centre zoom on selected clips or the playhead</source>
-        <translation>Центрировать масштаб по выделенным клипам или курсору</translation>
-    </message>
-    <message>
-        <source>Add an audio track — right-click for MIDI, instrument, bus and folder tracks</source>
-        <translation>Добавить аудиодорожку — щелкните правой кнопкой мыши для MIDI, инструмента, шины и папки</translation>
     </message>
     <message>
         <source>Restart: Space starts from the anchored spot</source>
@@ -12056,6 +12913,38 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <source>Show or hide automation lanes for all tracks</source>
         <translation>Показать или скрыть дорожки автоматизации для всех дорожек</translation>
     </message>
+    <message>
+        <source>Track height: drag the icon up or down; double-click resets</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Timeline zoom: drag the icon left or right; double-click resets</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Create tracks…</source>
+        <translation>Создать треки…</translation>
+    </message>
+    <message>
+        <source>Create tracks</source>
+        <translation>Создать треки</translation>
+    </message>
+    <message>
+        <source>Timeline track height</source>
+        <translation>Высота дорожек таймлайна</translation>
+    </message>
+    <message>
+        <source>Timeline horizontal zoom</source>
+        <translation>Горизонтальный масштаб таймлайна</translation>
+    </message>
+    <message>
+        <source>Tracks %1 px</source>
+        <translation>Дорожки: %1 пкс</translation>
+    </message>
+    <message>
+        <source>Zoom %1×</source>
+        <translation>Масштаб: %1×</translation>
+    </message>
 </context>
 <context>
     <name>TrackListWidget</name>
@@ -12076,56 +12965,12 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <translation>Заморозка дорожки…</translation>
     </message>
     <message>
-        <source>Freeze is available in local projects</source>
-        <translation>Заморозка доступна в локальных проектах</translation>
-    </message>
-    <message>
-        <source>Only audio and MIDI source tracks can be frozen</source>
-        <translation>Можно заморозить аудиодорожку или MIDI-дорожку</translation>
-    </message>
-    <message>
-        <source>Disable recording and monitoring before freezing</source>
-        <translation>Перед заморозкой отключите запись и мониторинг</translation>
-    </message>
-    <message>
-        <source>Tracks with an external sidechain cannot be frozen independently</source>
-        <translation>Нельзя независимо заморозить дорожку с внешним сайдчейном</translation>
-    </message>
-    <message>
-        <source>Linked clips and external clip routing cannot be frozen independently</source>
-        <translation>Связанные клипы и внешняя маршрутизация не позволяют независимо заморозить дорожку</translation>
-    </message>
-    <message>
-        <source>The track has no audio or MIDI clips</source>
-        <translation>На дорожке нет аудио- или MIDI-клипов</translation>
-    </message>
-    <message>
-        <source>The track receives audio from another track</source>
-        <translation>Дорожка получает аудио с другой дорожки</translation>
-    </message>
-    <message>
-        <source>The track receives a send</source>
-        <translation>Дорожка получает сигнал посыла</translation>
-    </message>
-    <message>
-        <source>The track receives externally routed clips</source>
-        <translation>Дорожка получает сигнал клипов через внешнюю маршрутизацию</translation>
-    </message>
-    <message>
-        <source>Disable external plugin automation before freezing</source>
-        <translation>Перед заморозкой отключите внешнюю автоматизацию плагинов</translation>
-    </message>
-    <message>
         <source>Unmute every track</source>
         <translation>Размутить все дорожки</translation>
     </message>
     <message>
         <source>Clear every solo</source>
         <translation>Снять со всех дорожек соло</translation>
-    </message>
-    <message>
-        <source>ARRANGEMENT</source>
-        <translation>РАЗМЕЩЕНИЕ</translation>
     </message>
     <message>
         <source>Collapse folder</source>
@@ -12216,6 +13061,10 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <translation>Дублировать паттерн</translation>
     </message>
     <message>
+        <source>Duplicate Folder</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>Duplicate Track</source>
         <translation>Дублировать дорожку</translation>
     </message>
@@ -12282,6 +13131,10 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
     <message>
         <source>Delete Track</source>
         <translation>Удалить дорожку</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation type="unfinished">Отмена</translation>
     </message>
     <message>
         <source>Folder Colour</source>
@@ -12567,18 +13420,6 @@ Z…M and Q…P, two octaves from C%1  ·  [ and ] shift the octave</source>
         <translation>Стиль верхней панели</translation>
     </message>
     <message>
-        <source>Neon</source>
-        <translation>Неоновый</translation>
-    </message>
-    <message>
-        <source>Plain</source>
-        <translation>Простой</translation>
-    </message>
-    <message>
-        <source>Neon: colored glow. Plain: black recesses with white text and no glow.</source>
-        <translation>Неоновый — цветное свечение. Простой — чёрные углубления с белым текстом, без свечения.</translation>
-    </message>
-    <message>
         <source>Resume — continue from the playhead</source>
         <translation>Возобновить — продолжить с курсора воспроизведения</translation>
     </message>
@@ -12619,6 +13460,18 @@ Z…M and Q…P, two octaves from C%1  ·  [ and ] shift the octave</source>
         <translation>Не удалось декодировать выбранный аудиофайл.</translation>
     </message>
     <message>
+        <source>Accent</source>
+        <translation>Акцентный</translation>
+    </message>
+    <message>
+        <source>Monochrome</source>
+        <translation>Монохромный</translation>
+    </message>
+    <message>
+        <source>Accent: a restrained project-color tint. Monochrome: neutral controls with no glow.</source>
+        <translation>Акцентный — сдержанный оттенок цвета проекта. Монохромный — нейтральные элементы без свечения.</translation>
+    </message>
+    <message>
         <source>Resume: each Space press toggles play and continues from the current position.
 Restart: when playback is paused, Space jumps back to the position where the current run started and plays from there.</source>
         <translation type="unfinished"></translation>
@@ -12626,6 +13479,8 @@ Restart: when playback is paused, Space jumps back to the position where the cur
 </context>
 <context>
     <name>UndoCommands</name>
+    <message><source>Change Modulation Parameter</source><translation>Изменить параметр модуляции</translation></message>
+    <message><source>Apply Modulation Preset</source><translation>Применить пресет модуляции</translation></message>
     <message>
         <source>Add Tracks from Template</source>
         <translation>Добавить дорожки по шаблону</translation>
@@ -12669,6 +13524,10 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message>
         <source>Duplicate Track</source>
         <translation>Дублировать дорожку</translation>
+    </message>
+    <message>
+        <source>Duplicate Folder</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
         <source>Relink Pattern Clip</source>
@@ -13004,10 +13863,6 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <translation>Перезагрузить страницу</translation>
     </message>
     <message>
-        <source>The page could not be loaded: %1</source>
-        <translation>Не удалось загрузить страницу: %1</translation>
-    </message>
-    <message>
         <source>Start</source>
         <translation>Начать</translation>
     </message>
@@ -13272,54 +14127,6 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <translation>Не удалось прочитать загруженный аудиофайл: %1</translation>
     </message>
     <message>
-        <source>Use video as timeline background</source>
-        <translation>На фон таймлайна</translation>
-    </message>
-    <message>
-        <source>Enable background sound</source>
-        <translation>Включить звук фона</translation>
-    </message>
-    <message>
-        <source>Mute background sound</source>
-        <translation>Выключить звук фона</translation>
-    </message>
-    <message>
-        <source>Remove video background</source>
-        <translation>Убрать видео с фона</translation>
-    </message>
-    <message>
-        <source>Open background video page</source>
-        <translation>Открыть страницу фонового видео</translation>
-    </message>
-    <message>
-        <source>Loading video…</source>
-        <translation>Загрузка видео…</translation>
-    </message>
-    <message>
-        <source>Timeline background</source>
-        <translation>Фон таймлайна</translation>
-    </message>
-    <message>
-        <source>Video unavailable</source>
-        <translation>Видео недоступно</translation>
-    </message>
-    <message>
-        <source>No video found on this page</source>
-        <translation>На этой странице нет видео</translation>
-    </message>
-    <message>
-        <source>%1. %2%3</source>
-        <translation>%1. %2%3</translation>
-    </message>
-    <message>
-        <source>Video</source>
-        <translation>Видео</translation>
-    </message>
-    <message>
-        <source> (playing)</source>
-        <translation> (воспроизводится)</translation>
-    </message>
-    <message>
         <source>Could not load %1: %2 (%3). Check your connection and system proxy.</source>
         <translation>Не удалось загрузить %1: %2 (%3). Проверьте подключение и системный прокси.</translation>
     </message>
@@ -13398,20 +14205,8 @@ Restart: when playback is paused, Space jumps back to the position where the cur
 <context>
     <name>collab::CloudProjectInviteDialog</name>
     <message>
-        <source>Close</source>
-        <translation>Закрыть</translation>
-    </message>
-    <message>
         <source>Cancel</source>
         <translation>Отмена</translation>
-    </message>
-    <message>
-        <source>One-time invitation token copied.</source>
-        <translation>Одноразовый токен приглашения скопирован.</translation>
-    </message>
-    <message>
-        <source>Loading…</source>
-        <translation>Загрузка…</translation>
     </message>
     <message>
         <source>Editor</source>
@@ -13420,18 +14215,6 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message>
         <source>Viewer</source>
         <translation>Наблюдатель</translation>
-    </message>
-    <message>
-        <source>unknown expiry</source>
-        <translation>срок действия неизвестен</translation>
-    </message>
-    <message>
-        <source>%1 — expires %2</source>
-        <translation>%1 — истекает %2</translation>
-    </message>
-    <message>
-        <source>No active invitations</source>
-        <translation>Нет активных приглашений</translation>
     </message>
     <message>
         <source>Invite People</source>
@@ -13498,14 +14281,6 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <translation>Не удалось отозвать приглашение.</translation>
     </message>
     <message>
-        <source>Invitation code copied.</source>
-        <translation>Код приглашения скопирован.</translation>
-    </message>
-    <message>
-        <source>Invitation link copied.</source>
-        <translation>Ссылка приглашения скопирована.</translation>
-    </message>
-    <message>
         <source>Invitation code</source>
         <translation>Код приглашения</translation>
     </message>
@@ -13527,77 +14302,33 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     </message>
 </context>
 <context>
-    <name>collab::CloudSessionLifecycleController</name>
+    <name>collab::CollaborationCommandBridge</name>
     <message>
-        <source>The collaboration request could not be started.</source>
-        <translation>Не удалось запустить запрос совместной работы.</translation>
+        <source>This cloud project is read-only until the live session is writable.</source>
+        <translation type="unfinished">Облачный проект доступен только для чтения, пока активная сессия не станет доступной для записи.</translation>
     </message>
     <message>
-        <source>The server returned an inconsistent session response. Reopen the cloud project before trying again.</source>
-        <translation>Сервер вернул некорректный ответ о сессии. Перед повторной попыткой откройте облачный проект заново.</translation>
+        <source>Wait for cloud undo to finish before making another edit.</source>
+        <translation type="unfinished">Дождитесь завершения облачной отмены перед следующим изменением.</translation>
     </message>
     <message>
-        <source>Session created. Connecting…</source>
-        <translation>Сессия создана. Подключение…</translation>
+        <source>The cloud edit could not be submitted. No local change was made.</source>
+        <translation type="unfinished">Не удалось отправить облачное изменение. Локальных изменений не внесено.</translation>
     </message>
     <message>
-        <source>The server returned an inconsistent leave response. Reopen the cloud project before trying again.</source>
-        <translation>Сервер вернул некорректный ответ о выходе. Перед повторной попыткой откройте облачный проект заново.</translation>
+        <source>Cloud undo is unavailable until the live session is writable.</source>
+        <translation type="unfinished">Облачная отмена недоступна, пока активная сессия не станет доступной для записи.</translation>
     </message>
     <message>
-        <source>You left the collaboration session.</source>
-        <translation>Вы вышли из совместной сессии.</translation>
+        <source>Wait for pending cloud edits to synchronize before using undo.</source>
+        <translation type="unfinished">Перед отменой дождитесь синхронизации ожидающих облачных изменений.</translation>
     </message>
     <message>
-        <source>The server returned an inconsistent end-session response. Reopen the cloud project before trying again.</source>
-        <translation>Сервер вернул некорректный ответ о завершении сессии. Перед повторной попыткой откройте облачный проект заново.</translation>
+        <source>Cloud undo could not be submitted. The history entry was kept.</source>
+        <translation type="unfinished">Не удалось отправить облачную отмену. Запись в истории сохранена.</translation>
     </message>
     <message>
-        <source>Ending session and saving the final project snapshot…</source>
-        <translation>Завершение сессии и сохранение финального снимка проекта…</translation>
-    </message>
-    <message>
-        <source>This cloud project is archived or read-only. Open an active project to start a session.</source>
-        <translation>Этот облачный проект архивирован или доступен только для чтения. Чтобы начать сессию, откройте активный проект.</translation>
-    </message>
-    <message>
-        <source>Could not start the collaboration session.</source>
-        <translation>Не удалось начать совместную сессию.</translation>
-    </message>
-    <message>
-        <source>Could not request the end of this session.</source>
-        <translation>Не удалось запросить завершение этой сессии.</translation>
-    </message>
-    <message>
-        <source>Could not leave the collaboration session.</source>
-        <translation>Не удалось выйти из совместной сессии.</translation>
-    </message>
-    <message>
-        <source>Could not verify whether a collaboration session is active.</source>
-        <translation>Не удалось проверить, активна ли совместная сессия.</translation>
-    </message>
-    <message>
-        <source>Collaboration session ended.</source>
-        <translation>Совместная сессия завершена.</translation>
-    </message>
-    <message>
-        <source>The session uses an unsupported collaboration protocol.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>The server returned an inconsistent activation response.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Session started.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Every participant must be ready or explicitly remain a viewer.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Could not activate the collaboration session.</source>
+        <source>The prepared cloud edit no longer matches the writable session.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -13808,6 +14539,22 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message>
         <source>Add Send Track</source>
         <translation>Добавить Send-дорожку</translation>
+    </message>
+    <message>
+        <source>Auto</source>
+        <translation type="unfinished">Авто</translation>
+    </message>
+    <message>
+        <source>Mono</source>
+        <translation type="unfinished">Моно</translation>
+    </message>
+    <message>
+        <source>Stereo</source>
+        <translation type="unfinished">Стерео</translation>
+    </message>
+    <message>
+        <source>Dual Mono</source>
+        <translation type="unfinished">Двойной моно</translation>
     </message>
 </context>
 <context>
@@ -14102,8 +14849,8 @@ Double-click to rename</source>
         <translation>Сохранение проекта</translation>
     </message>
     <message>
-        <source>Set the project details and choose where its portable VLTONE package will be saved.</source>
-        <translation>Укажите данные проекта и выберите папку для переносимого пакета VLTONE.</translation>
+        <source>Set the project details and choose where its portable VLTONE project folder will be saved.</source>
+        <translation>Укажите данные проекта и выберите, где сохранить переносимую папку проекта VLTONE.</translation>
     </message>
     <message>
         <source>Choose Image…</source>
@@ -14150,8 +14897,8 @@ Double-click to rename</source>
         <translation>Сохранить в</translation>
     </message>
     <message>
-        <source>Project package</source>
-        <translation>Пакет проекта</translation>
+        <source>Project folder</source>
+        <translation>Папка проекта</translation>
     </message>
     <message>
         <source>Final project path</source>
@@ -14175,6 +14922,152 @@ Double-click to rename</source>
     </message>
 </context>
 <context>
+    <name>ui::ProjectTemplateOpenDialog</name>
+    <message>
+        <source>Template artwork preview</source>
+        <translation>Предпросмотр оформления шаблона</translation>
+    </message>
+    <message>
+        <source>Standard template artwork</source>
+        <translation>Стандартное оформление шаблона</translation>
+    </message>
+    <message>
+        <source>Video</source>
+        <translation>Видео</translation>
+    </message>
+    <message>
+        <source>Animated GIF</source>
+        <translation>Анимированный GIF</translation>
+    </message>
+    <message>
+        <source>Image</source>
+        <translation>Изображение</translation>
+    </message>
+    <message>
+        <source>New Project from Template</source>
+        <translation>Новый проект по шаблону</translation>
+    </message>
+    <message>
+        <source>Choose a project template</source>
+        <translation>Выберите шаблон проекта</translation>
+    </message>
+    <message>
+        <source>Preview your saved setups. A new project remains independent of its template.</source>
+        <translation>Просмотрите сохранённые наборы. Новый проект не зависит от исходного шаблона.</translation>
+    </message>
+    <message>
+        <source>Project templates</source>
+        <translation>Шаблоны проектов</translation>
+    </message>
+    <message>
+        <source>No templates yet
+
+Use File → Save as Template… to create one.</source>
+        <translation>Шаблонов пока нет
+
+Используйте «Файл → Сохранить как шаблон…», чтобы создать первый.</translation>
+    </message>
+    <message>
+        <source>Create Project</source>
+        <translation>Создать проект</translation>
+    </message>
+    <message>
+        <source>Create project from selected template</source>
+        <translation>Создать проект из выбранного шаблона</translation>
+    </message>
+    <message>
+        <source>Delete Template</source>
+        <translation>Удалить шаблон</translation>
+    </message>
+    <message>
+        <source>Delete selected template</source>
+        <translation>Удалить выбранный шаблон</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Select a template</source>
+        <translation>Выберите шаблон</translation>
+    </message>
+    <message>
+        <source>Delete “%1”? This cannot be undone.</source>
+        <translation>Удалить «%1»? Это действие нельзя отменить.</translation>
+    </message>
+    <message>
+        <source>Delete</source>
+        <translation>Удалить</translation>
+    </message>
+    <message>
+        <source>Delete Template Failed</source>
+        <translation>Не удалось удалить шаблон</translation>
+    </message>
+</context>
+<context>
+    <name>ui::ProjectTemplateSaveDialog</name>
+    <message>
+        <source>Enter a template name.</source>
+        <translation>Введите название шаблона.</translation>
+    </message>
+    <message>
+        <source>The name cannot contain &lt; &gt; : &quot; / \ | ? * or end with a dot.</source>
+        <translation>Название не может содержать &lt; &gt; : &quot; / \ | ? * или заканчиваться точкой.</translation>
+    </message>
+    <message>
+        <source>Save as Template</source>
+        <translation>Сохранить как шаблон</translation>
+    </message>
+    <message>
+        <source>Create a project template</source>
+        <translation>Создание шаблона проекта</translation>
+    </message>
+    <message>
+        <source>Save the current tracks and routing with artwork that makes the template easy to recognise.</source>
+        <translation>Сохраните текущие дорожки и маршрутизацию и добавьте оформление, по которому шаблон легко узнать.</translation>
+    </message>
+    <message>
+        <source>Choose Photo, GIF or Video…</source>
+        <translation>Выбрать фото, GIF или видео…</translation>
+    </message>
+    <message>
+        <source>Choose template artwork</source>
+        <translation>Выбрать оформление шаблона</translation>
+    </message>
+    <message>
+        <source>Remove</source>
+        <translation>Убрать</translation>
+    </message>
+    <message>
+        <source>Remove template artwork</source>
+        <translation>Убрать оформление шаблона</translation>
+    </message>
+    <message>
+        <source>Template name</source>
+        <translation>Название шаблона</translation>
+    </message>
+    <message>
+        <source>Template package location</source>
+        <translation>Расположение пакета шаблона</translation>
+    </message>
+    <message>
+        <source>Saved in the VLTONE template library</source>
+        <translation>Будет сохранён в библиотеке шаблонов VLTONE</translation>
+    </message>
+    <message>
+        <source>Save Template</source>
+        <translation>Сохранить шаблон</translation>
+    </message>
+    <message>
+        <source>Choose Template Artwork</source>
+        <translation>Выбор оформления шаблона</translation>
+    </message>
+    <message>
+        <source>Photos, GIFs and Videos (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.mp4 *.m4v *.webm *.ogv *.mov *.mkv *.avi);;All Files (*)</source>
+        <translation>Фото, GIF и видео (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.mp4 *.m4v *.webm *.ogv *.mov *.mkv *.avi);;Все файлы (*)</translation>
+    </message>
+</context>
+<context>
     <name>ui::PromptService</name>
     <message>
         <source>this server has no prompt library yet</source>
@@ -14189,451 +15082,153 @@ Double-click to rename</source>
         <translation>полученная библиотека подсказок не является JSON</translation>
     </message>
 </context>
-<context>
-    <name>ui::WebVideoBackground</name>
-    <message>
-        <source>This video cannot be used as a timeline background.</source>
-        <translation>Это видео нельзя использовать как фон таймлайна.</translation>
-    </message>
-    <message>
-        <source>The background video player stopped. Open the page and try again.</source>
-        <translation>Фоновый видеоплеер остановился. Откройте страницу и попробуйте снова.</translation>
-    </message>
-    <message>
-        <source>Could not load the video page. Check your connection or open the page to sign in.</source>
-        <translation>Не удалось загрузить страницу видео. Проверьте соединение или откройте страницу для входа.</translation>
-    </message>
-    <message>
-        <source>This player could not start the background video. Open the page and try another video.</source>
-        <translation>Плеер не смог запустить фоновое видео. Откройте страницу и попробуйте другое видео.</translation>
-    </message>
-    <message>
-        <source>No playable video was found. Open the page to sign in or select the video again.</source>
-        <translation>Не найдено видео для воспроизведения. Откройте страницу для входа или выберите видео снова.</translation>
-    </message>
-</context>
-<context>
-    <name>BrowserBackgroundDialog</name>
-    <message>
-        <source>Browser background collection</source>
-        <translation>Коллекция фонов браузера</translation>
-    </message>
-    <message>
-        <source>Choose an image for the start page. Your selected background is saved on this computer and works offline.</source>
-        <translation>Выберите изображение для стартовой страницы. Выбранный фон сохраняется на компьютере и работает без интернета.</translation>
-    </message>
-    <message>
-        <source>Available browser backgrounds</source>
-        <translation>Доступные фоны браузера</translation>
-    </message>
-    <message>
-        <source>Use background</source>
-        <translation>Установить фон</translation>
-    </message>
-    <message>
-        <source>Refresh collection</source>
-        <translation>Обновить коллекцию</translation>
-    </message>
-    <message>
-        <source>Loading collection…</source>
-        <translation>Загрузка коллекции…</translation>
-    </message>
-    <message>
-        <source>The collection is unavailable. Check your connection or VPN and try again. Previously downloaded backgrounds are still available.</source>
-        <translation>Коллекция недоступна. Проверьте подключение или VPN и повторите попытку. Ранее загруженные фоны по-прежнему доступны.</translation>
-    </message>
-    <message>
-        <source>No backgrounds have been published yet.</source>
-        <translation>Пока не опубликовано ни одного фона.</translation>
-    </message>
-    <message>
-        <source>Select a background and click Use background.</source>
-        <translation>Выберите изображение и нажмите «Установить фон».</translation>
-    </message>
-    <message>
-        <source>Downloading background…</source>
-        <translation>Скачивание фона…</translation>
-    </message>
-    <message>
-        <source>The background could not be downloaded or saved. Your current background has not changed. Try again.</source>
-        <translation>Не удалось скачать или сохранить изображение. Текущий фон не изменён. Попробуйте ещё раз.</translation>
-    </message>
-</context>
-<context>
-    <name>MainWindow</name>
-    <message><source>&amp;Quick Import Audio…</source><translation>&amp;Быстрый импорт аудио…</translation></message>
-    <message><source>Quick Import Audio</source><translation>Быстрый импорт аудио</translation></message>
-    <message><source>Quick Import Failed</source><translation>Быстрый импорт не выполнен</translation></message>
-    <message><source>VLTONE cannot import this file as audio:
-%1</source><translation>VLTONE не может импортировать этот файл как аудио:
-%1</translation></message>
-    <message><source>Preparing Quick Import…</source><translation>Подготовка быстрого импорта…</translation></message>
-    <message><source>The new project was not created.
-
-%1
-
-The current project has not been changed.</source><translation>Новый проект не создан.
-
-%1
-
-Текущий проект не изменён.</translation></message>
-    <message><source>Audio imported. The requested analysis could not be completed.</source><translation>Аудио импортировано. Не удалось выполнить выбранный анализ.</translation></message>
-    <message><source>Quick Import created a new project from “%1”.</source><translation>Быстрый импорт создал новый проект из шаблона «%1».</translation></message>
-    <message><source>Unsupported File</source><translation>Файл не поддерживается</translation></message>
-    <message><source>VLTONE cannot open this file type:
-%1</source><translation>VLTONE не может открыть файл этого типа:
-%1</translation></message>
-</context>
-<context>
-    <name>SettingsWindow</name>
-    <message><source>Quick Import</source><translation>Быстрый импорт</translation></message>
-</context>
-<context>
-    <name>QuickImportSettingsPage</name>
-    <message><source>Drop an audio file on the VLTONE icon to create a new project from the chosen template and place the file on this track.</source><translation>Перетащите аудиофайл на значок VLTONE, чтобы создать новый проект из выбранного шаблона и поместить файл на эту дорожку.</translation></message>
-    <message><source>Quick Import project template</source><translation>Шаблон проекта для быстрого импорта</translation></message>
-    <message><source>Quick Import audio track</source><translation>Аудиодорожка для быстрого импорта</translation></message>
-    <message><source>Detect BPM</source><translation>Определять BPM</translation></message>
-    <message><source>Detect key</source><translation>Определять тональность</translation></message>
-    <message><source>Project template:</source><translation>Шаблон проекта:</translation></message>
-    <message><source>Audio track:</source><translation>Аудиодорожка:</translation></message>
-    <message><source>Quick Import configuration issue</source><translation>Проблема настройки быстрого импорта</translation></message>
-    <message><source>Choose a template…</source><translation>Выберите шаблон…</translation></message>
-    <message><source>Missing: %1</source><translation>Не найден: %1</translation></message>
-    <message><source>Choose an audio track…</source><translation>Выберите аудиодорожку…</translation></message>
-    <message><source>This template could not be read: %1</source><translation>Не удалось прочитать этот шаблон: %1</translation></message>
-</context>
-<context>
-    <name>QObject</name>
-    <message><source>Untitled Track</source><translation>Дорожка без названия</translation></message>
-    <message><source>Choose a project template for Quick Import.</source><translation>Выберите шаблон проекта для быстрого импорта.</translation></message>
-    <message><source>The selected Quick Import template is not a VLTONE template.</source><translation>Выбранный файл для быстрого импорта не является шаблоном VLTONE.</translation></message>
-    <message><source>The selected template could not be read: %1</source><translation>Не удалось прочитать выбранный шаблон: %1</translation></message>
-    <message><source>Choose an audio track for Quick Import.</source><translation>Выберите аудиодорожку для быстрого импорта.</translation></message>
-    <message><source>The selected audio track no longer exists in this template.</source><translation>Выбранной аудиодорожки больше нет в этом шаблоне.</translation></message>
-    <message><source>Tempo: %1 BPM — confidence %2%, stability %3%</source><translation>Темп: %1 BPM — уверенность %2%, стабильность %3%</translation></message>
-    <message><source>Tempo was not applied automatically.</source><translation>Темп не применён автоматически.</translation></message>
-    <message><source>Key: %1 — confidence %2%</source><translation>Тональность: %1 — уверенность %2%</translation></message>
-    <message><source>Key was not applied automatically.</source><translation>Тональность не применена автоматически.</translation></message>
-</context>
-<context>
-    <name>ThemePackage</name>
-    <message><source>The file is not a VLTONE theme.</source><translation>Этот файл не является темой VLTONE.</translation></message>
-    <message><source>This theme uses an unsupported format version.</source><translation>Эта тема использует неподдерживаемую версию формата.</translation></message>
-    <message><source>The theme manifest is missing or damaged.</source><translation>Манифест темы отсутствует или повреждён.</translation></message>
-    <message><source>The theme manifest is not valid JSON.</source><translation>Манифест темы содержит недопустимый JSON.</translation></message>
-    <message><source>The theme manifest contains invalid fields.</source><translation>Манифест темы содержит недопустимые поля.</translation></message>
-    <message><source>The theme resource list is damaged.</source><translation>Список ресурсов темы повреждён.</translation></message>
-    <message><source>The theme resource list contains invalid data.</source><translation>Список ресурсов темы содержит недопустимые данные.</translation></message>
-    <message><source>Could not open resource: %1</source><translation>Не удалось открыть ресурс: %1</translation></message>
-    <message><source>Could not read resource: %1</source><translation>Не удалось прочитать ресурс: %1</translation></message>
-    <message><source>The theme ended before a resource was complete.</source><translation>Файл темы закончился до завершения ресурса.</translation></message>
-    <message><source>Could not write a theme resource.</source><translation>Не удалось записать ресурс темы.</translation></message>
-    <message><source>The active browser video cannot be embedded. Choose a local video for the timeline background before saving this theme.</source><translation>Активное видео из браузера нельзя встроить. Перед сохранением темы выберите локальное видео для фона таймлайна.</translation></message>
-    <message><source>Custom Theme</source><translation>Пользовательская тема</translation></message>
-    <message><source>A theme resource is missing: %1</source><translation>Не найден ресурс темы: %1</translation></message>
-    <message><source>The active interface font file is missing.</source><translation>Не найден файл активного шрифта интерфейса.</translation></message>
-    <message><source>Enter a name for the theme.</source><translation>Введите название темы.</translation></message>
-    <message><source>The theme contains too many resources.</source><translation>В теме слишком много ресурсов.</translation></message>
-    <message><source>The theme resources are too large.</source><translation>Ресурсы темы слишком велики.</translation></message>
-    <message><source>The theme manifest is too large.</source><translation>Манифест темы слишком велик.</translation></message>
-    <message><source>Could not create %1</source><translation>Не удалось создать %1</translation></message>
-    <message><source>Could not write the theme manifest.</source><translation>Не удалось записать манифест темы.</translation></message>
-    <message><source>Could not write a theme resource header.</source><translation>Не удалось записать заголовок ресурса темы.</translation></message>
-    <message><source>A theme resource changed while the theme was being saved.</source><translation>Ресурс темы изменился во время сохранения темы.</translation></message>
-    <message><source>Could not finish writing %1</source><translation>Не удалось завершить запись %1</translation></message>
-    <message><source>Could not add the theme to the library.</source><translation>Не удалось добавить тему в библиотеку.</translation></message>
-    <message><source>Could not open %1</source><translation>Не удалось открыть %1</translation></message>
-    <message><source>The selected theme file does not exist.</source><translation>Выбранный файл темы не существует.</translation></message>
-    <message><source>Could not create the theme resource folder.</source><translation>Не удалось создать папку ресурсов темы.</translation></message>
-    <message><source>Could not reopen the installed theme.</source><translation>Не удалось повторно открыть установленную тему.</translation></message>
-    <message><source>A theme resource header is damaged.</source><translation>Заголовок ресурса темы повреждён.</translation></message>
-    <message><source>A theme resource header is incomplete.</source><translation>Заголовок ресурса темы неполный.</translation></message>
-    <message><source>A theme resource does not match its manifest.</source><translation>Ресурс темы не соответствует манифесту.</translation></message>
-    <message><source>Could not extract a theme resource.</source><translation>Не удалось извлечь ресурс темы.</translation></message>
-    <message><source>A theme resource failed verification.</source><translation>Ресурс темы не прошёл проверку.</translation></message>
-    <message><source>The theme contains unexpected trailing data.</source><translation>Файл темы содержит неожиданные данные в конце.</translation></message>
-    <message><source>Could not finish installing theme resources.</source><translation>Не удалось завершить установку ресурсов темы.</translation></message>
-    <message><source>Could not copy the theme into the library.</source><translation>Не удалось скопировать тему в библиотеку.</translation></message>
-    <message><source>The theme file changed while it was being installed.</source><translation>Файл темы изменился во время установки.</translation></message>
-    <message><source>Could not finish installing the theme.</source><translation>Не удалось завершить установку темы.</translation></message>
-    <message><source>The installed theme identifier is invalid.</source><translation>Недопустимый идентификатор установленной темы.</translation></message>
-    <message><source>An installed theme resource is missing.</source><translation>Не найден ресурс установленной темы.</translation></message>
-    <message><source>The theme contains an unsupported background file.</source><translation>Тема содержит неподдерживаемый файл фона.</translation></message>
-    <message><source>The theme contains an unsupported notebook font.</source><translation>Тема содержит неподдерживаемый шрифт блокнота.</translation></message>
-</context>
-<context>
-    <name>SettingsWindow</name>
-    <message><source>Choose a built-in palette, or apply a complete saved theme.</source><translation>Выберите встроенную палитру или примените сохранённую тему целиком.</translation></message>
-    <message><source>Built-in palettes</source><translation>Встроенные палитры</translation></message>
-    <message><source>Saved Themes</source><translation>Сохранённые темы</translation></message>
-    <message><source>A .vlttheme file keeps the palette, backgrounds and fonts together. Imported resources are copied into VLTONE so the original file can be deleted.</source><translation>Файл .vlttheme хранит палитру, фоны и шрифты вместе. Импортированные ресурсы копируются в VLTONE, поэтому исходный файл можно удалить.</translation></message>
-    <message><source>Saved themes</source><translation>Сохранённые темы</translation></message>
-    <message><source>Save Theme…</source><translation>Сохранить тему…</translation></message>
-    <message><source>Apply</source><translation>Применить</translation></message>
-    <message><source>Export Current…</source><translation>Экспортировать текущую…</translation></message>
-    <message><source>Open Themes Folder</source><translation>Открыть папку тем</translation></message>
-    <message><source>VLTONE Theme (*.vlttheme);;Legacy Theme (*.json *.dawtheme.json);;All Files (*)</source><translation>Тема VLTONE (*.vlttheme);;Старая тема (*.json *.dawtheme.json);;Все файлы (*)</translation></message>
-    <message><source>Theme could not be applied</source><translation>Не удалось применить тему</translation></message>
-    <message><source>Custom Theme</source><translation>Пользовательская тема</translation></message>
-    <message><source>Save Theme</source><translation>Сохранение темы</translation></message>
-    <message><source>Theme name</source><translation>Название темы</translation></message>
-    <message><source>Theme could not be saved</source><translation>Не удалось сохранить тему</translation></message>
-    <message><source>Saving theme…</source><translation>Сохранение темы…</translation></message>
-    <message><source>Theme Saved</source><translation>Тема сохранена</translation></message>
-    <message><source>The theme is now in your VLTONE library.</source><translation>Тема добавлена в вашу библиотеку VLTONE.</translation></message>
-    <message><source>VLTONE Theme (*.vlttheme)</source><translation>Тема VLTONE (*.vlttheme)</translation></message>
-    <message><source>Theme could not be exported</source><translation>Не удалось экспортировать тему</translation></message>
-    <message><source>Exporting theme…</source><translation>Экспорт темы…</translation></message>
-    <message><source>Theme Exported</source><translation>Тема экспортирована</translation></message>
-    <message><source>The .vlttheme file includes the theme&apos;s media and fonts.</source><translation>Файл .vlttheme содержит медиафайлы и шрифты темы.</translation></message>
-    <message><source>Preparing theme…</source><translation>Подготовка темы…</translation></message>
-    <message><source>Importing theme…</source><translation>Импорт темы…</translation></message>
-    <message><source>Theme Imported</source><translation>Тема импортирована</translation></message>
-    <message><source>The theme and its resources are now stored inside VLTONE. You can delete the original .vlttheme file.</source><translation>Тема и её ресурсы сохранены внутри VLTONE. Исходный файл .vlttheme можно удалить.</translation></message>
-    <message><source>%1 is not a valid legacy theme file.</source><translation>%1 не является корректным файлом старой темы.</translation></message>
-</context>
-<context>
-    <name>QObject</name>
-    <message><source>Theme</source><translation>Тема</translation></message>
-</context>
 
 <context>
-    <name>CreateTracksDialog</name>
+    <name>ModulationPanel</name>
+    <message><source>Signal level %1 dBFS</source><translation>Уровень сигнала %1 dBFS</translation></message>
     <message>
-        <source>Create tracks</source>
-        <translation>Создать треки</translation>
+        <source>Width</source>
+        <translation>Ширина</translation>
     </message>
     <message>
-        <source>Set up once. Apply to every new track.</source>
-        <translation>Общие настройки для всех новых треков.</translation>
+        <source>Humanize</source>
+        <translation>Живость</translation>
     </message>
     <message>
-        <source>Audio</source>
-        <translation>Аудио</translation>
+        <source>Softness</source>
+        <translation>Мягкость</translation>
     </message>
     <message>
-        <source>MIDI / Instrument</source>
-        <translation>MIDI / Инструмент</translation>
+        <source>Rate</source>
+        <translation>Скорость</translation>
     </message>
     <message>
-        <source>Pattern</source>
-        <translation>Паттерн</translation>
+        <source>Depth</source>
+        <translation>Глубина</translation>
     </message>
     <message>
-        <source>Automation</source>
-        <translation>Автоматизация</translation>
-    </message>
-    <message>
-        <source>Bus</source>
-        <translation>Шина</translation>
-    </message>
-    <message>
-        <source>Send</source>
-        <translation>Возврат</translation>
-    </message>
-    <message>
-        <source>Folder</source>
-        <translation>Папка</translation>
-    </message>
-    <message>
-        <source>Summing folder</source>
-        <translation>Суммирующая папка</translation>
-    </message>
-    <message>
-        <source>Track type</source>
-        <translation>Тип трека</translation>
-    </message>
-    <message>
-        <source>Quantity</source>
+        <source>Amount</source>
         <translation>Количество</translation>
     </message>
     <message>
-        <source>Stereo</source>
-        <translation>Стерео</translation>
+        <source>Modulation visualization</source>
+        <translation>Визуализация модуляции</translation>
     </message>
     <message>
-        <source>Mono</source>
-        <translation>Моно</translation>
+        <source>Vocal width</source>
+        <translation>Ширина вокала</translation>
     </message>
     <message>
-        <source>Channels</source>
-        <translation>Каналы</translation>
+        <source>Motion</source>
+        <translation>Движение</translation>
     </message>
     <message>
-        <source>Name</source>
-        <translation>Название</translation>
+        <source>Previous preset</source>
+        <translation>Предыдущий пресет</translation>
     </message>
     <message>
-        <source>Master</source>
-        <translation>Мастер</translation>
+        <source>Next preset</source>
+        <translation>Следующий пресет</translation>
     </message>
     <message>
-        <source>Output</source>
-        <translation>Выход</translation>
+        <source>Preset browser</source>
+        <translation>Выбор пресета</translation>
     </message>
     <message>
-        <source>Audio input</source>
-        <translation>Аудиовход</translation>
+        <source>Stereo output is required for widening</source>
+        <translation>Для расширения нужен стереовыход</translation>
     </message>
     <message>
-        <source>Inserts</source>
-        <translation>Инсерты</translation>
+        <source>%1 Hz</source>
+        <translation>%1 Гц</translation>
     </message>
     <message>
-        <source>Add slot</source>
-        <translation>Добавить слот</translation>
+        <source> Hz</source>
+        <translation> Гц</translation>
     </message>
     <message>
-        <source>Open a plugin to edit it. Its settings will be copied to every track.</source>
-        <translation>Нажмите на плагин, чтобы настроить его. Эти настройки получит каждый трек.</translation>
+        <source>%1%</source>
+        <translation>%1%</translation>
     </message>
     <message>
-        <source>Create</source>
-        <translation>Создать</translation>
+        <source>Custom</source>
+        <translation>Свой</translation>
     </message>
     <message>
-        <source>The plugin preview could not be initialized.</source>
-        <translation>Не удалось подготовить цепочку плагинов.</translation>
+        <source>Width %1%   ·   Correlation %2</source>
+        <translation>Ширина %1%   ·   Корреляция %2</translation>
     </message>
     <message>
-        <source>Automatic naming</source>
-        <translation>Автоматическое название</translation>
+        <source>Soft modulation</source>
+        <translation>Мягкая модуляция</translation>
     </message>
     <message>
-        <source>An organizational track, without an audio channel or inserts.</source>
-        <translation>Организационный трек без аудиоканала и инсертов.</translation>
+        <source>Save preset</source>
+        <translation>Сохранить пресет</translation>
     </message>
     <message>
-        <source>In a shared project, add plugins after creating the tracks.</source>
-        <translation>В совместном проекте плагины добавляются после создания треков.</translation>
+        <source>Preset name:</source>
+        <translation>Название пресета:</translation>
     </message>
     <message>
-        <source>No input</source>
-        <translation>Без входа</translation>
+        <source>Invalid name</source>
+        <translation>Недопустимое название</translation>
     </message>
     <message>
-        <source>Input %1</source>
-        <translation>Вход %1</translation>
+        <source>Choose a unique name of 1–48 characters.</source>
+        <translation>Введите уникальное название длиной от 1 до 48 символов.</translation>
     </message>
     <message>
-        <source>Input %1–%2</source>
-        <translation>Вход %1–%2</translation>
+        <source>Replace preset</source>
+        <translation>Заменить пресет</translation>
     </message>
     <message>
-        <source>Open %1</source>
-        <translation>Открыть %1</translation>
+        <source>Replace “%1”?</source>
+        <translation>Заменить «%1»?</translation>
     </message>
     <message>
-        <source>Choose instrument…</source>
-        <translation>Выбрать инструмент…</translation>
+        <source>Preset library full</source>
+        <translation>Библиотека пресетов заполнена</translation>
     </message>
     <message>
-        <source>Add plugin…</source>
-        <translation>Добавить плагин…</translation>
+        <source>Up to 128 user presets are supported.</source>
+        <translation>Можно сохранить до 128 пользовательских пресетов.</translation>
     </message>
     <message>
-        <source>Instrument: %1</source>
-        <translation>Инструмент: %1</translation>
+        <source>Rename preset</source>
+        <translation>Переименовать пресет</translation>
     </message>
     <message>
-        <source>Insert %1: %2</source>
-        <translation>Инсерт %1: %2</translation>
+        <source>Delete preset</source>
+        <translation>Удалить пресет</translation>
     </message>
     <message>
-        <source>Enable plugin</source>
-        <translation>Включить плагин</translation>
+        <source>Delete “%1”? The current sound is kept.</source>
+        <translation>Удалить «%1»? Текущее звучание сохранится.</translation>
     </message>
     <message>
-        <source>Enable %1</source>
-        <translation>Включить %1</translation>
+        <source>Factory presets</source>
+        <translation>Заводские пресеты</translation>
     </message>
     <message>
-        <source>Slot options</source>
-        <translation>Настройки слота</translation>
+        <source>User presets</source>
+        <translation>Пользовательские пресеты</translation>
     </message>
     <message>
-        <source>Replace plugin…</source>
-        <translation>Заменить плагин…</translation>
+        <source>Save preset…</source>
+        <translation>Сохранить пресет…</translation>
     </message>
     <message>
-        <source>Move up</source>
-        <translation>Выше</translation>
+        <source>Rename preset…</source>
+        <translation>Переименовать пресет…</translation>
     </message>
     <message>
-        <source>Move down</source>
-        <translation>Ниже</translation>
+        <source>Delete preset…</source>
+        <translation>Удалить пресет…</translation>
     </message>
     <message>
-        <source>Remove</source>
-        <translation>Удалить</translation>
+        <source>Reduce motion</source>
+        <translation>Уменьшить движение</translation>
     </message>
-    <message>
-        <source>Instrument</source>
-        <translation>Инструмент</translation>
-    </message>
-    <message>
-        <source>Could not load %1. Choose another plugin or rescan plugins.</source>
-        <translation>Не удалось загрузить %1. Выберите другой плагин или повторите сканирование.</translation>
-    </message>
-    <message>
-        <source>This plugin is not available.</source>
-        <translation>Этот плагин недоступен.</translation>
-    </message>
-    <message>
-        <source>Tracks: %1</source>
-        <translation>Треков: %1</translation>
-    </message>
-    <message>
-        <source>Inserts per track: %1</source>
-        <translation>Инсертов на трек: %1</translation>
-    </message>
-    <message>
-        <source>Create tracks (%1)</source>
-        <translation>Создать треки (%1)</translation>
-    </message>
-    <message>
-        <source>Could not save the settings for %1. The tracks have not been created.</source>
-        <translation>Не удалось сохранить настройки %1. Треки не созданы.</translation>
-    </message>
-    <message>
-        <source>Creating tracks…</source>
-        <translation>Создание треков…</translation>
-    </message>
-    <message>
-        <source>Tracks could not be created: %1</source>
-        <translation>Не удалось создать треки: %1</translation>
-    </message>
-</context>
-<context>
-    <name>ToolPanel</name>
-    <message>
-        <source>Create tracks…</source>
-        <translation>Создать треки…</translation>
-    </message>
-    <message>
-        <source>Create tracks</source>
-        <translation>Создать треки</translation>
-    </message>
-</context>
-<context>
-    <name>QObject</name>
-    <message><source>No Plug-in</source><translation>Без плагина</translation></message>
-    <message><source>Search</source><translation>Поиск</translation></message>
-    <message><source>Recent</source><translation>Недавние</translation></message>
-    <message><source>No recent plugins</source><translation>Нет недавних плагинов</translation></message>
-    <message><source>No installed variants</source><translation>Нет установленных версий</translation></message>
-    <message><source>No plugins found</source><translation>Плагины не найдены</translation></message>
-    <message><source>Scan in Settings ▸ Plugin Manager</source><translation>Запустите сканирование: Настройки ▸ Менеджер плагинов</translation></message>
-    <message><source>Plugin channel mode</source><translation>Режим каналов плагина</translation></message>
-    <message><source>This plugin cannot use the selected channel mode</source><translation>Этот плагин не поддерживает выбранный режим каналов</translation></message>
-    <message><source>Auto</source><translation>Авто</translation></message>
-    <message><source>Mono</source><translation>Моно</translation></message>
-    <message><source>Stereo</source><translation>Стерео</translation></message>
-    <message><source>Dual Mono</source><translation>Двойное моно</translation></message>
-</context>
-<context>
-    <name>SettingsWindow</name>
-    <message><source>Plugin menu background</source><translation>Фон меню плагинов</translation></message>
 </context>
 </TS>

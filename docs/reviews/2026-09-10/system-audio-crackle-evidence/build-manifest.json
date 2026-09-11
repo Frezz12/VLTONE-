@@ -1,0 +1,27 @@
+{
+  "platform": "macOS 26.5.1 / Apple M1",
+  "qt": "6.11.2",
+  "regression_tests": {
+    "passed": 4,
+    "failed": 0
+  },
+  "package_native_metal_selftest_exit": 0,
+  "signature": "ad-hoc; codesign --verify --deep --strict passed",
+  "binaries": [
+    {
+      "path": "build/bin/VLTONE",
+      "sha256": "13d3e915b4eb633e1d04eebe6e2d387e06504280f9d0688250a49f3889203319",
+      "size": 31235192
+    },
+    {
+      "path": "build-pkg/bin/VLTONE.app/Contents/MacOS/VLTONE",
+      "sha256": "2e353b0dceb2d89b744913dd7ff2e3a2668f9603adf6de6564932d7179f205cc",
+      "size": 29248760
+    },
+    {
+      "path": "build-gpu-test-stage/VLTONE.app/Contents/MacOS/VLTONE",
+      "sha256": "8910599ccf9f0bf9e2a5c612c8b7d0ccaad7fb2fc23c7e96bfa3aed925879ca3",
+      "size": 29096864
+    }
+  ]
+}

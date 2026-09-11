@@ -1,4 +1,5 @@
 #include "AutomationEditorWindow.hpp"
+#include "graphics/SceneRecordingTag.hpp"
 #include <QtMath>
 
 #include "Controls.hpp"
@@ -523,11 +524,17 @@ QRegion AutomationCurveView::overlayRegion() const {
 }
 
 void AutomationCurveView::paintEvent(QPaintEvent*) {
+    QPainter p(this);
+    paintScene(p, QRegion(rect()));
+}
+
+void AutomationCurveView::paintScene(QPainter& p, const QRegion&) {
+    const bool gpu = ui::graphics::isSceneRecording(p);
     const qreal dpr = devicePixelRatioF();
     const QSize pixels(qCeil(width() * dpr), qCeil(height() * dpr));
     const auto revision = m_controller ? m_controller->projectRevision() : 0;
-    if (!m_staticValid || m_staticFont != font() || m_staticFrame.size() != pixels ||
-        m_staticFrame.devicePixelRatioF() != dpr || m_staticRevision != revision) {
+    if (!gpu && (!m_staticValid || m_staticFont != font() || m_staticFrame.size() != pixels ||
+        m_staticFrame.devicePixelRatioF() != dpr || m_staticRevision != revision)) {
         if (m_staticFrame.size() != pixels) m_staticFrame = QPixmap(pixels);
         m_staticFrame.setDevicePixelRatio(dpr);
         QPainter cache(&m_staticFrame);
@@ -535,8 +542,15 @@ void AutomationCurveView::paintEvent(QPaintEvent*) {
         paintStatic(cache);
         m_staticValid = true; m_staticRevision = revision; m_staticFont = font();
     }
-    QPainter p(this);
-    p.drawPixmap(0, 0, m_staticFrame);
+    if (gpu) {
+        m_staticFrame = {}; // A later compatibility fallback must repaint its pixmap.
+        if (!m_staticValid || m_staticFont != font() || m_gpuStaticSize != size() ||
+            m_gpuStaticDpr != dpr || m_staticRevision != revision) m_gpuStatic.clear();
+        m_gpuStatic.paint(p, 0, size(), {}, [this](QPainter& cached) { paintStatic(cached); });
+        m_gpuStaticSize = size(); m_gpuStaticDpr = dpr;
+        m_staticValid = true; m_staticRevision = revision; m_staticFont = font();
+    }
+    else p.drawPixmap(0, 0, m_staticFrame);
     const auto* c = clip();
     if (!c || !m_controller) return;
     const Theme& t = th();
@@ -592,11 +606,14 @@ void AutomationCurveView::mousePressEvent(QMouseEvent* ev) {
     at::Points points = curve();
     const int hit = pointAt(pos);
 
-    // Shift on empty space drags out the range the generators act on. A point
-    // gets the more local meaning: lock its value and move it only in time.
-    if ((ev->modifiers() & Qt::ShiftModifier) && hit < 0) {
+    // Shift on empty space starts a possible range gesture. If the pointer is
+    // released without meaningful travel it becomes a timing anchor on the
+    // existing curve; a drag still selects the range generators act on.
+    if ((ev->modifiers() & Qt::ShiftModifier) && hit < 0 &&
+        plot().contains(pos)) {
         m_banding = true;
         m_bandAnchor = xToBeats(pos.x());
+        m_bandPressPosition = pos;
         m_hasSelection = true;
         m_selectFrom = m_selectTo = m_bandAnchor;
         emit selectionChanged();
@@ -728,12 +745,27 @@ void AutomationCurveView::mouseMoveEvent(QMouseEvent* ev) {
     ui::FrameWidget::update(oldOverlay.united(overlayRegion()));
 }
 
-void AutomationCurveView::mouseReleaseEvent(QMouseEvent*) {
+void AutomationCurveView::mouseReleaseEvent(QMouseEvent* ev) {
     if (m_banding) {
         m_banding = false;
-        // A band with no width is a click on the background, which means "never
-        // mind" rather than "select an instant".
-        if (std::abs(m_selectTo - m_selectFrom) < 1e-6) clearSelection();
+        constexpr double kBandHysteresis = 5.0;
+        const bool shiftClick =
+            QLineF(m_bandPressPosition, ev->position()).length() <
+            kBandHysteresis;
+        if (shiftClick) {
+            m_hasSelection = false;
+            const daw::ClipModel* c = clip();
+            if (c) {
+                at::Points points = curve();
+                const double beats = snap(m_bandAnchor);
+                points.push_back(daw::automationPointOnCurve(
+                    points, beats, c->automation.defaultValue));
+                daw::normalizeAutomation(points);
+                beginGesture();
+                pushLive(points);
+                commit(tr("Add Automation Point"));
+            }
+        }
         emit selectionChanged();
         update();
         return;
@@ -895,8 +927,8 @@ AutomationEditorWindow::AutomationEditorWindow(daw::EngineController* controller
     m_hint = new QLabel(this);
     m_hint->setObjectName(QStringLiteral("PluginHint"));
     m_hint->setContentsMargins(12, 4, 12, 6);
-    m_hint->setText(tr("Click to add · drag to move · Shift-point: time only · "
-                       "Shift-empty: select · double-click: reset · Alt-segment: curve"));
+    m_hint->setText(tr("Click to add · Shift-click: add on curve · drag to move · "
+                       "Shift-drag: time/range · double-click: reset · Alt-segment: curve"));
     outer->addWidget(m_hint);
 
     connect(m_view, &AutomationCurveView::edited, this, [this] {
@@ -1261,13 +1293,13 @@ void AutomationEditorWindow::showLfoDialog() {
                           "AutomationEditorWindow", choice.label),
                       choice.beats);
     rate->setCurrentIndex(4);
-    auto* depth = new QSlider(Qt::Horizontal, &dialog);
+    auto* depth = new ui::GlassSlider(Qt::Horizontal, &dialog);
     depth->setRange(0, 100);
     depth->setValue(100);
-    auto* centre = new QSlider(Qt::Horizontal, &dialog);
+    auto* centre = new ui::GlassSlider(Qt::Horizontal, &dialog);
     centre->setRange(0, 100);
     centre->setValue(50);
-    auto* phase = new QSlider(Qt::Horizontal, &dialog);
+    auto* phase = new ui::GlassSlider(Qt::Horizontal, &dialog);
     phase->setRange(0, 100);
     phase->setValue(0);
 

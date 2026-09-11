@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Common/Types.hpp"
+#include "AudioPresentationClock.hpp"
 #include "Job/BackgroundExecutor.hpp"
 
 #include <atomic>
@@ -18,16 +19,20 @@ enum class TransportState : std::uint8_t { Stopped, Playing, Paused, Recording }
 class Transport {
 public:
     void setSampleRate(SampleRate rate) noexcept {
+        // prepare() also runs for a replacement device with the same rate.
+        // Its old DAC history must not survive that stream restart.
+        m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel);
         m_sampleRate.store(rate, std::memory_order_relaxed);
     }
     SampleRate sampleRate() const noexcept {
         return m_sampleRate.load(std::memory_order_relaxed);
     }
 
-    void play() noexcept { m_backgroundLease.setPlaying(true); m_state.store(TransportState::Playing, std::memory_order_release); }
-    void pause() noexcept { m_backgroundLease.setPlaying(false); m_state.store(TransportState::Paused, std::memory_order_release); }
-    void stop() noexcept { m_backgroundLease.setPlaying(false); m_state.store(TransportState::Stopped, std::memory_order_release); }
+    void play() noexcept { m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel); m_backgroundLease.setPlaying(true); m_state.store(TransportState::Playing, std::memory_order_release); }
+    void pause() noexcept { m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel); m_backgroundLease.setPlaying(false); m_state.store(TransportState::Paused, std::memory_order_release); }
+    void stop() noexcept { m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel); m_backgroundLease.setPlaying(false); m_state.store(TransportState::Stopped, std::memory_order_release); }
     void startRecording() noexcept {
+        m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel);
         m_backgroundLease.setPlaying(true);
         m_state.store(TransportState::Recording, std::memory_order_release);
     }
@@ -42,6 +47,7 @@ public:
     bool isRecording() const noexcept { return state() == TransportState::Recording; }
 
     void seek(SamplePos position) noexcept {
+        m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel);
         m_position.store(position < 0 ? 0 : position, std::memory_order_release);
     }
     void seekSeconds(double seconds) noexcept {
@@ -60,52 +66,28 @@ public:
         return rate > 0.0 ? double(position()) / rate : 0.0;
     }
 
-    /// Display-only position interpolated inside the current audio block.
-    ///
-    /// The sample-accurate transport still advances once per callback. UI
-    /// cursors use this clock so changing the device buffer changes latency,
-    /// not animation cadence. It is published by the single audio thread and
-    /// never feeds playback, edits, loop decisions, or recording placement.
+    // Audio thread only. The device maps its DAC clock into steady-clock time.
+    // Engine-only/offline callers leave this unset and retain an estimate.
+    void setPresentationTiming(std::int64_t outputNs, PresentationClockSource source) noexcept {
+        m_outputTimeNs = outputNs;
+        m_outputFrameOffset = 0;
+        m_clockSource = source;
+        m_outputGeneration = presentationGeneration();
+    }
+    std::uint64_t presentationGeneration() const noexcept {
+        return m_presentationGeneration.load(std::memory_order_acquire);
+    }
+    bool presentationSnapshot(std::int64_t atNs, AudioPresentationSnapshot& snapshot) const noexcept {
+        // Fixed reader-local storage: no locks, allocations or retry loops
+        // when a GUI/render read collides with the audio writer.
+        thread_local std::array<AudioPresentationReader, 4> readers;
+        auto& reader = readers[m_presentationClock.identity() % readers.size()];
+        return isPlaying() && reader.readAt(m_presentationClock, atNs, presentationGeneration(), snapshot);
+    }
     double presentationPositionSeconds() const noexcept {
-        const SampleRate rate = sampleRate();
-        if (rate <= 0.0 || !isPlaying()) return positionSeconds();
-
-        SamplePos start = 0;
-        SamplePos expectedEnd = 0;
-        FrameCount frames = 0;
-        std::int64_t startedNs = 0;
-        for (;;) {
-            const std::uint64_t before =
-                m_presentationSequence.load(std::memory_order_acquire);
-            if (before & 1u) continue;
-            start = m_presentationBlockStart.load(std::memory_order_relaxed);
-            expectedEnd =
-                m_presentationBlockEnd.load(std::memory_order_relaxed);
-            frames = m_presentationBlockFrames.load(std::memory_order_relaxed);
-            startedNs =
-                m_presentationBlockStartedNs.load(std::memory_order_relaxed);
-            const std::uint64_t after =
-                m_presentationSequence.load(std::memory_order_acquire);
-            if (before == after) break;
-        }
-
-        // No callback has started yet, or a control-thread seek superseded the
-        // published block. In both cases the authoritative position is the
-        // only honest value until the next block arrives.
-        if (frames == 0 || startedNs <= 0 || position() != expectedEnd)
-            return positionSeconds();
-
-        const auto now = std::chrono::steady_clock::now().time_since_epoch();
-        const auto nowNs =
-            std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-        const double elapsedFrames =
-            std::max(0.0, double(nowNs - startedNs) * 1.0e-9 * rate);
-        // Never invent progress beyond the block the device has actually
-        // requested. Normally a newer callback replaces this snapshot first;
-        // the clamp only protects a stalled or disconnected device.
-        const double within =
-            std::min(elapsedFrames, double(frames));
-        return (double(start) + within) / rate;
+        const auto now = PresentationFrameTime::now();
+        AudioPresentationSnapshot snapshot;
+        return presentationSnapshot(now, snapshot) ? snapshot.secondsAt(now) : positionSeconds();
     }
 
     void setDuration(SamplePos samples) noexcept {
@@ -176,14 +158,17 @@ public:
     }
 
     void setLoopEnabled(bool enabled) noexcept {
-        m_loopEnabled.store(enabled, std::memory_order_relaxed);
+        if (m_loopEnabled.exchange(enabled, std::memory_order_relaxed) != enabled)
+            m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel);
     }
     bool isLoopEnabled() const noexcept {
         return m_loopEnabled.load(std::memory_order_relaxed);
     }
     void setLoopRange(SamplePos start, SamplePos end) noexcept {
+        const bool changed = loopStart() != start || loopEnd() != end;
         m_loopStart.store(start, std::memory_order_relaxed);
         m_loopEnd.store(end, std::memory_order_relaxed);
+        if (changed) m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel);
     }
     SamplePos loopStart() const noexcept {
         return m_loopStart.load(std::memory_order_relaxed);
@@ -196,29 +181,38 @@ public:
     /// never auto-stops at the end of the arrangement — it keeps running
     /// forward through empty space, so Space is the only thing that pauses it.
     /// Returns the position the block that just rendered started at.
-    SamplePos advance(FrameCount frames) noexcept {
+    SamplePos advance(FrameCount frames, bool deferPresentation = false) noexcept {
         const SamplePos start = position();
         SamplePos next = start + SamplePos(frames);
 
         if (isLoopEnabled()) {
             const SamplePos end = loopEnd();
             const SamplePos begin = loopStart();
-            if (end > begin && next >= end) next = begin + (next - end);
+            if (end > begin && next >= end) next = begin + (next - begin) % (end - begin);
         }
-        const auto now = std::chrono::steady_clock::now().time_since_epoch();
-        const auto nowNs =
-            std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-        // One writer (the audio thread), read through the sequence in
-        // presentationPositionSeconds so a GUI tick never combines fields from
-        // adjacent blocks.
-        m_presentationSequence.fetch_add(1, std::memory_order_relaxed);
-        m_presentationBlockStart.store(start, std::memory_order_relaxed);
-        m_presentationBlockEnd.store(next, std::memory_order_relaxed);
-        m_presentationBlockFrames.store(frames, std::memory_order_relaxed);
-        m_presentationBlockStartedNs.store(nowNs, std::memory_order_relaxed);
+        const double rate = sampleRate();
+        const auto timestamp = m_outputTimeNs > 0 && rate > 0
+            ? m_outputTimeNs + std::int64_t(double(m_outputFrameOffset) * 1e9 / rate)
+            : presentationNowNs();
+        m_pendingPresentation = {start, frames, rate, timestamp,
+            m_outputTimeNs > 0 ? m_outputGeneration : presentationGeneration(),
+            loopStart(), loopEnd(), isLoopEnabled(),
+            m_outputTimeNs > 0 ? m_clockSource : PresentationClockSource::RenderEstimate};
+        if (!deferPresentation) finishPresentationBlock(0);
+        m_outputFrameOffset += frames;
         m_position.store(next, std::memory_order_release);
-        m_presentationSequence.fetch_add(1, std::memory_order_release);
         return start;
+    }
+
+    // Audio thread, after output has been rendered. A timeline sample emerges
+    // from a delayed graph later than this device block's first output sample.
+    // Move the DAC timestamp forward exactly once; consumers never subtract
+    // either graph or device latency from the timeline position again.
+    void finishPresentationBlock(FrameCount graphLatencyFrames) noexcept {
+        auto snapshot = m_pendingPresentation;
+        if (snapshot.sampleRate > 0 && snapshot.source != PresentationClockSource::RenderEstimate)
+            snapshot.outputTimeNs += std::int64_t(double(graphLatencyFrames) * 1e9 / snapshot.sampleRate);
+        m_presentationClock.publish(snapshot);
     }
 
 private:
@@ -233,11 +227,14 @@ private:
     std::atomic<int> m_timeSigNumerator{4};
     std::atomic<int> m_timeSigDenominator{4};
     std::atomic<bool> m_loopEnabled{false};
-    std::atomic<std::uint64_t> m_presentationSequence{0};
-    std::atomic<SamplePos> m_presentationBlockStart{0};
-    std::atomic<SamplePos> m_presentationBlockEnd{0};
-    std::atomic<FrameCount> m_presentationBlockFrames{0};
-    std::atomic<std::int64_t> m_presentationBlockStartedNs{0};
+    std::atomic<std::uint64_t> m_presentationGeneration{0};
+    AudioPresentationClock m_presentationClock;
+    AudioPresentationSnapshot m_pendingPresentation; // audio-thread-owned
+    std::int64_t m_outputTimeNs = 0; // audio-thread-owned
+    std::uint64_t m_outputFrameOffset = 0;
+    std::uint64_t m_outputGeneration = 0;
+    PresentationClockSource m_clockSource = PresentationClockSource::RenderEstimate;
+
 };
 
 } // namespace daw::engine

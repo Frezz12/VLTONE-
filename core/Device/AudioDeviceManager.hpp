@@ -90,9 +90,17 @@ public:
     Result start();
     Result stop();
 
-    bool isRunning() const { return m_isRunning.load(); }
+    bool isRunning() const;
+    bool callbackStalled() const;
+    bool devicesAvailable() const; // control-thread health poll, not per-frame UI
+    bool hasStream() const { return m_stream != nullptr; }
+    bool matchesConfiguration(const AudioDeviceConfig& config) const;
+    Result refreshDevices(); // control thread, after capture has been finalized
+    void streamFinished() noexcept { m_streamFinished.store(true); }
     bool isInitialized() const { return m_isInitialized.load(); }
-    AudioDeviceState deviceState() const { return m_deviceState.load(); }
+    AudioDeviceState deviceState() const {
+        return m_isRunning.load() && !isRunning() ? AudioDeviceState::Failed : m_deviceState.load();
+    }
 
     SampleRate sampleRate() const { return m_sampleRate.load(std::memory_order_relaxed); }
     BufferSize bufferSize() const { return m_bufferSize.load(std::memory_order_relaxed); }
@@ -136,13 +144,15 @@ public:
     Result showControlPanel(const std::string& uid,
                             void* nativeWindow = nullptr);
 
-    void setAudioCallback(IAudioCallback* callback);
+    Result setAudioCallback(IAudioCallback* callback);
     void setDeviceNotification(IAudioDeviceNotification* notification);
 
     // Invoked from the PortAudio C callback trampoline (see the .cpp). Public
     // only so that trampoline can reach it; not part of the intended API.
     int processStream(const void* input, void* output,
-                      unsigned long frameCount, unsigned long statusFlags = 0);
+                      unsigned long frameCount, unsigned long statusFlags = 0,
+                      double deviceCurrentTime = 0, double deviceOutputTime = 0,
+                      bool hasDeviceTime = false, double deviceInputTime = 0);
 
     daw::rt::BlockMetrics& callbackMetrics() noexcept { return m_callbackMetrics; }
     struct Xruns { std::uint64_t inputUnderflow, inputOverflow, outputUnderflow, outputOverflow; };
@@ -151,6 +161,8 @@ public:
     }
 
 private:
+    std::vector<std::string> m_nativeDeviceUids;
+    std::string deviceUID(int index) const;
     Result ensurePortAudio();
     Result openStream();
     void closeStream();
@@ -175,10 +187,15 @@ private:
 
     std::atomic<bool> m_isInitialized{false};
     std::atomic<bool> m_isRunning{false};
+    std::atomic<bool> m_streamFinished{false};
+    std::uint64_t m_startedNs = 0;
     std::atomic<AudioDeviceState> m_deviceState{AudioDeviceState::Created};
 
     std::atomic<SampleRate> m_sampleRate{kDefaultSampleRate};
     std::atomic<BufferSize> m_bufferSize{kDefaultBufferSize};
+    double m_inputLatencySeconds = 0;
+    std::uint64_t m_streamFrameCursor = 0; // callback-owned, reset while stopped
+    double m_outputLatencySeconds = 0; // set with the stream stopped
     ChannelCount m_inputChannels = 0;
     ChannelCount m_outputChannels = 2;
 
@@ -195,6 +212,7 @@ private:
     std::atomic<std::uint64_t> m_xruns[4]{};
     std::atomic<float> m_diagInputRMS[2] = {0.0f, 0.0f};
     std::atomic<float> m_diagInputPeak[2] = {0.0f, 0.0f};
+    std::atomic<bool> m_diagInputUsesDeviceTime{false};
     std::atomic<int> m_diagLastRenderStatus{-1};
     std::atomic<uint32_t> m_diagInputChannels{0};
     std::atomic<uint64_t> m_diagCallbackCount{0};
@@ -221,6 +239,7 @@ public:
         if (ch >= 2) return 0.0f;
         return m_diagInputPeak[ch].load(std::memory_order_relaxed);
     }
+    bool diagInputUsesDeviceTime() const { return m_diagInputUsesDeviceTime.load(); }
     int diagLastRenderStatus() const {
         return m_diagLastRenderStatus.load(std::memory_order_relaxed);
     }

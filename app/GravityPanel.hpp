@@ -1,4 +1,5 @@
 #pragma once
+#include "graphics/ScenePaintSource.hpp"
 #include "UiFrameClock.hpp"
 
 #include "Internal/GravityInstance.hpp"
@@ -29,7 +30,7 @@ class Knob;
 namespace daw { class EngineController; }
 
 /// The functional particle field and Pitch/Size XY attractor.
-class GravityField final : public ui::FrameWidget {
+class GravityField final : public ui::FrameWidget , public ui::graphics::ScenePaintSource {
 public:
     explicit GravityField(QWidget* parent = nullptr);
 
@@ -46,6 +47,7 @@ public:
 
 protected:
     void paintEvent(QPaintEvent*) override;
+    void paintScene(QPainter&, const QRegion&) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;

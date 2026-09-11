@@ -1,0 +1,20 @@
+{
+  "app/graphics/SceneItem.cpp": "2efbe5e277440adb258dac22607fff8b9636704f0a6feebacc9d6a15e5ab0c01",
+  "app/graphics/SceneRecorder.cpp": "fe97504f8c2d5088e71d9d0da097d13812bf5b15c827127a43cf1ce4a5e6e1f2",
+  "app/graphics/SceneSnapshot.hpp": "bb90ed2dd8cdbf8bcf5877196d2e1ba4fc68928cda37881fe10946f07e1aef0f",
+  "app/graphics/WorkspaceSurface.cpp": "1cfdb9824802545bd0b397966021f5f9383a3001e6cca05cb484e0d41939ff7d",
+  "app/graphics/WorkspaceSurface.hpp": "f8b96c51c7aa64b2184bb0c141d4b28c185c2bc77a45be2713456d1c39c71335",
+  "app/graphics/GpuTiming.cpp": "be44d7d03bdedf3adcd3c111649f19c54308e77a6356d2b9c9b9377d78fa21e5",
+  "app/graphics/GpuTiming.hpp": "65b638d7b7ca9b57d5d68a1e92988f13d564c487d1ef1f866d81b804253da69d",
+  "app/UiFrameClock.cpp": "f97886cb23ee77c5a0837cfdff438cadbb1c841aee745acb06764147a700884b",
+  "app/UiFrameClock.hpp": "fca5ff7a752b8e0bc4d8643d8165836fdd8dbfdd957bc8d72f566b6fa888e88c",
+  "app/UiPerformanceChecks.cpp": "cfb24cc188a4f9818f190975b532cb8a7595264f761a7e274c59532b8a00409c",
+  "app/UiPerformanceChecks.hpp": "2c649c3ad309ca5f1550691fc55abad4166f5b2662431fa06321497568a929a0",
+  "app/UiPerformance.cpp": "f8a224c54149e3d5e642b3740cdab03504ffd8bccec942e1aef7405f3bb789ee",
+  "app/UiPerformance.hpp": "c629e603ab2add8e4caa84b447630a753b3296ff258759752ead5137cd5fac83",
+  "app/MainWindow.hpp": "3be38f0e92d23da95ef7280026f07641e063a2b430533d17871eacf4d328c367",
+  "app/main.cpp": "d2ae35244542a467dd778f0d437546e1c139270696b75d1b02cf1a8ab4027943",
+  "app/CMakeLists.txt": "c5a424624a866082ba779727e14f73af0c6a8b5650eb006985e65719971b94cd",
+  "tests/gpu_scene_test.cpp": "12d1cfb86c48c20ed71b3e8bdc01ad7a6b20acf9c1fe112576d28363ca0e6358",
+  "tests/ui_frame_clock_test.cpp": "256c26732a8263c359c0ccc207d87aedf47207b265dcfcfbafaefe471116aba5"
+}

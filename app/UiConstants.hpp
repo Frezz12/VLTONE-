@@ -43,11 +43,16 @@ inline constexpr int kMinTimelineWidth = 180;
 inline constexpr int kTransportHeight = 80;
 inline constexpr int kBottomBarHeight = 28;
 
-/// The application family with tabular figures for position/BPM displays.
-/// Timed notebook text uses the same family by default so it feels like part
-/// of the instrument instead of a separate subtitle widget.
+/// A platform monospace face for the main transport counter. Fixed-width
+/// figures keep the readout from shifting while playback advances.
 QFont transportDisplayFont(int pixelSize,
                            QFont::Weight weight = QFont::DemiBold);
+
+/// The bundled application face for compact transport values and selectors.
+/// This deliberately ignores a platform widget fallback: the controls must
+/// use the same Inter family shipped in /fonts on every machine.
+QFont transportControlFont(int pixelSize,
+                           QFont::Weight weight = QFont::Medium);
 
 /// The on-screen lane height for a track, clamped to the resizable range. A
 /// zero/unset stored height falls back to the default. Both the timeline lanes
@@ -104,10 +109,8 @@ inline constexpr int kDefaultGridIndex = 5;
 /// QSettings key for the Space play/pause behaviour, an int matching
 /// EngineController::PlaybackMode.
 inline constexpr const char* kPlaybackModeSetting = "transport/playMode";
-/// Horizontal zoom anchor: false keeps the time under the pointer fixed;
-/// true centres selected clips, falling back to the playhead.
-inline constexpr const char* kZoomFocusSetting = "timeline/zoomFocus";
-/// Appearance of the top readout: "neon" (default) or "plain".
+/// Appearance of the top readout: "neon" (accent, default) or "plain"
+/// (monochrome). The stored ids stay stable for existing preferences.
 inline constexpr const char* kTransportPanelStyleSetting = "transport/panelStyle";
 /// Optional audio file used for the metronome. Empty selects the built-in
 /// muted knock.
@@ -128,6 +131,15 @@ inline constexpr const char* kCpuStatusBarVisibleSetting =
 inline constexpr const char* kCpuStatusMeterModeSetting = "ui/cpuStatusMeterMode";
 /// User-chosen width of the track-header column.
 inline constexpr const char* kTrackHeaderWidthSetting = "ui/trackHeaderWidth";
+
+/// Whether Duplicate Track/Folder also copies the arrangement clips carried by
+/// the duplicated tracks. The default is deliberately false: duplicating a
+/// channel is primarily a way to reuse its instrument, plugins and routing
+/// without also repeating the arrangement by accident.
+inline constexpr const char* kDuplicateTrackClipsSetting =
+    "editing/duplicateTrackClips";
+bool duplicateTrackClips();
+void setDuplicateTrackClips(bool enabled);
 
 /// How a selected track header and lane are tinted. Two answers, because they
 /// serve different eyes: the track's own colour says *which* track at a glance,

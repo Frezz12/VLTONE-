@@ -14,6 +14,7 @@
 #include <QSettings>
 #include <QStringList>
 #include <QTextEdit>
+#include <QTimer>
 #include <QWidget>
 
 #include <algorithm>
@@ -199,6 +200,16 @@ bool isTextEntry(QWidget* widget) {
     }
     return false;
 }
+
+bool isPluginPickerPopup(QWidget* widget) {
+    for (QWidget* current = widget; current; current = current->parentWidget()) {
+        if (current->objectName() == QLatin1String("PluginPickerMenu") ||
+            current->property("pluginPickerLazy").toBool()) {
+            return true;
+        }
+    }
+    return false;
+}
 } // namespace
 
 int ui::physicalUsKey(const QKeyEvent* event) {
@@ -376,9 +387,12 @@ bool ShortcutManager::checkRemoteMetadata(QString* error) const {
 }
 
 bool ShortcutManager::isSuppressed(const QKeySequence& seq) const {
-    return m_suppressed && seq.count() == 1 &&
-           seq[0].keyboardModifiers() == Qt::NoModifier &&
-           m_suppressed(seq[0].key());
+    if (seq.count() != 1 ||
+        seq[0].keyboardModifiers() != Qt::NoModifier) {
+        return false;
+    }
+    return m_textEntrySuppressesBareKeys ||
+           (m_suppressed && m_suppressed(seq[0].key()));
 }
 
 QList<QKeySequence> ShortcutManager::boundKeys(const Command& command) const {
@@ -410,6 +424,17 @@ void ShortcutManager::setKeySuppressor(std::function<bool(int)> suppressed) {
     m_suppressed = std::move(suppressed);
     applySuppression();
     emit changed();
+}
+
+void ShortcutManager::refreshTextEntrySuppression() {
+    m_textEntryRefreshPending = false;
+    QWidget* focus = QApplication::focusWidget();
+    QWidget* popup = QApplication::activePopupWidget();
+    const bool suppress = isTextEntry(focus) || isPluginPickerPopup(popup) ||
+                          isPluginPickerPopup(focus);
+    if (m_textEntrySuppressesBareKeys == suppress) return;
+    m_textEntrySuppressesBareKeys = suppress;
+    applySuppression();
 }
 
 QKeySequence ShortcutManager::shortcut(const QString& id) const {
@@ -586,6 +611,22 @@ bool ShortcutManager::triggerPhysicalShortcut(QObject* watched,
 }
 
 bool ShortcutManager::eventFilter(QObject* watched, QEvent* event) {
+    switch (event->type()) {
+        case QEvent::FocusIn:
+        case QEvent::FocusOut:
+        case QEvent::Show:
+        case QEvent::Hide:
+            // Focus and activePopupWidget settle after the current event. One
+            // queued refresh folds submenu transitions into a single update.
+            if (!m_textEntryRefreshPending) {
+                m_textEntryRefreshPending = true;
+                QTimer::singleShot(0, this,
+                                   &ShortcutManager::refreshTextEntrySuppression);
+            }
+            break;
+        default:
+            break;
+    }
     if (event->type() == QEvent::KeyPress) {
         if (triggerPhysicalShortcut(watched, static_cast<QKeyEvent*>(event)))
             return true;

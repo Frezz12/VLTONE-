@@ -1,0 +1,13 @@
+Test project /Users/nikolay/Documents/code/VLTONE/VLTONE-/build
+    Start  8: controller_test
+1/4 Test  #8: controller_test ....................   Passed    4.45 sec
+    Start 24: engine_graph_test
+2/4 Test #24: engine_graph_test ..................   Passed    3.26 sec
+    Start 51: audio_monitoring_regression_test
+3/4 Test #51: audio_monitoring_regression_test ...   Passed    6.45 sec
+    Start 52: audio_device_recovery_test
+4/4 Test #52: audio_device_recovery_test .........   Passed    2.24 sec
+
+100% tests passed out of 4
+
+Total Test time (real) =  16.41 sec

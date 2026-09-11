@@ -4,6 +4,7 @@ namespace ui::perf {
 bool enabled();
 void sample(const char* name, double value);
 void flush();
+void reset(); // diagnostic harness: exclude loading/warmup from measured frames
 class Scope {
 public:
     explicit Scope(const char* name) : m_name(enabled() ? name : nullptr) {

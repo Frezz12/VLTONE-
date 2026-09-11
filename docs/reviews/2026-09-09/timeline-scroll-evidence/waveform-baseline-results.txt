@@ -1,0 +1,4 @@
+dpr=1 mode=stationary-cached median=43.287 p95=48.011 max=199.158 ms
+dpr=1 mode=horizontal-pan median=44.313 p95=53.212 max=133.336 ms
+dpr=2 mode=stationary-cached median=111.447 p95=128.329 max=249.954 ms
+dpr=2 mode=horizontal-pan median=117.502 p95=159.538 max=247.627 ms

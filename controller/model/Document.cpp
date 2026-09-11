@@ -519,6 +519,29 @@ double automationValueAt(const std::vector<AutomationPoint>& points, double beat
     return from.value + (to.value - from.value) * t;
 }
 
+AutomationPoint automationPointOnCurve(
+    const std::vector<AutomationPoint>& points, double beats, double fallback) {
+    AutomationPoint point;
+    point.beats = std::max(0.0, beats);
+    point.value = automationValueAt(points, point.beats, fallback);
+
+    const auto right = std::upper_bound(
+        points.begin(), points.end(), point.beats,
+        [](double value, const AutomationPoint& candidate) {
+            return value < candidate.beats;
+        });
+    if (right != points.begin() && right != points.end()) {
+        const AutomationPoint& segment = *std::prev(right);
+        point.shape = segment.shape;
+        point.curve = segment.curve;
+    } else {
+        // Before the first point and after the last, the existing curve holds
+        // a constant. Keep that hold if another point is added later.
+        point.shape = AutomationSegment::Hold;
+    }
+    return point;
+}
+
 uint32_t takeColor(uint32_t base, size_t index) {
     // Â±18% in steps, cycling, so take 1 is the track colour and the next few
     // walk away from it and back.

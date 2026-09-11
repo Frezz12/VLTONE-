@@ -51,8 +51,17 @@ fs::path preferredManifestPath(const fs::path& package) {
     std::string extension = package.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(),
                    [](unsigned char c) { return char(std::tolower(c)); });
-    return extension == ".vlt" ? package / package.filename()
-                               : package / ProjectSerializer::kProjectFile;
+    // Existing projects used an outer `Name.vlt` package with a same-named
+    // manifest. Templates remain packages as well. A newly created ordinary
+    // project folder uses `Name/Name.vlt`, which keeps Content and State
+    // directly accessible in Finder while retaining a clickable project file.
+    if (extension == ".vlt") return package / package.filename();
+    if (extension == ".vltt" || extension == ".dawp")
+        return package / ProjectSerializer::kProjectFile;
+    fs::path manifestName = package.filename();
+    manifestName += fs::path(".");
+    manifestName += fs::path(ProjectSerializer::kExtension);
+    return package / manifestName;
 }
 
 using serialization::insertFromJson;
@@ -688,6 +697,7 @@ json trackToJson(const TrackModel& t, MediaPaths media) {
         {"inputChannelCount", t.inputChannelCount},
         {"outputBusId", t.outputBusId},
         {"inputEnabled", t.inputEnabled},
+        {"inputRoutingVersion", 1},
         {"recordMode", toString(t.recordMode)},
         {"instrument", insertToJson(t.instrument)},
         {"sends", std::move(sends)},
@@ -742,7 +752,11 @@ TrackModel trackFromJson(const json& j, const std::string& mediaDir) {
     // is reopened and re-armed should record the mono source it was pointed at.
     t.inputChannelCount = std::clamp(j.value("inputChannelCount", 1u), 1u, 2u);
     t.outputBusId = j.value("outputBusId", "");
-    t.inputEnabled = j.value("inputEnabled", false);
+    t.inputEnabled = j.value("inputEnabled", t.kind == TrackKind::Audio);
+    // Older hosts ignored No Input while monitoring. Preserve that audible
+    // intent, while new explicit No Input choices round-trip unchanged.
+    if (!j.contains("inputRoutingVersion") && t.kind == TrackKind::Audio && t.monitor)
+        t.inputEnabled = true;
     t.recordMode = trackRecordModeFromString(j.value("recordMode", "global"));
     if (j.contains("instrument")) t.instrument = insertFromJson(j.at("instrument"));
     if (j.contains("samplerFx") && j.at("samplerFx").is_object()) {
@@ -797,6 +811,16 @@ json documentToJson(const ProjectModel& project, MediaPaths media) {
     root["keyRoot"] = project.keyRoot;
     root["scale"] = project.scale;
     root["aiInstructions"] = project.aiInstructions;
+    if (!project.notebookHtml.empty() || !project.notebookCues.empty()) {
+        json cues = reservedArray(project.notebookCues.size());
+        for (const auto& cue : project.notebookCues) {
+            cues.push_back({{"seconds", cue.seconds}, {"text", cue.text}});
+        }
+        root["notebook"] = {
+            {"html", project.notebookHtml},
+            {"cues", std::move(cues)},
+        };
+    }
     root["loopStart"] = project.loopStartSeconds;
     root["loopEnd"] = project.loopEndSeconds;
     root["loopEnabled"] = project.loopEnabled;
@@ -842,6 +866,30 @@ audio::Result documentFromJson(ProjectModel& out, const json& root,
         out.keyRoot = root.value("keyRoot", 0);
         out.scale = root.value("scale", std::string("major"));
         out.aiInstructions = root.value("aiInstructions", std::string());
+        if (root.contains("notebook") && root.at("notebook").is_object()) {
+            const auto& notebook = root.at("notebook");
+            out.notebookHtml = notebook.value("html", std::string());
+            constexpr std::size_t kMaxNotebookBytes = 4 * 1024 * 1024;
+            if (out.notebookHtml.size() > kMaxNotebookBytes)
+                out.notebookHtml.resize(kMaxNotebookBytes);
+            if (notebook.contains("cues") && notebook.at("cues").is_array()) {
+                const auto& cues = notebook.at("cues");
+                out.notebookCues.reserve(std::min<std::size_t>(cues.size(), 2000));
+                for (const auto& cue : cues) {
+                    if (!cue.is_object() || out.notebookCues.size() == 2000) break;
+                    const double seconds = cue.value("seconds", -1.0);
+                    std::string text = cue.value("text", std::string());
+                    if (!std::isfinite(seconds) || seconds < 0.0 || text.empty())
+                        continue;
+                    if (text.size() > 2000) text.resize(2000);
+                    out.notebookCues.push_back({seconds, std::move(text)});
+                }
+                std::stable_sort(out.notebookCues.begin(), out.notebookCues.end(),
+                    [](const NotebookCueModel& a, const NotebookCueModel& b) {
+                        return a.seconds < b.seconds;
+                    });
+            }
+        }
         out.loopStartSeconds = std::max(0.0, root.value("loopStart", 0.0));
         out.loopEndSeconds = std::max(0.0, root.value("loopEnd", 0.0));
         out.loopEnabled = root.value("loopEnabled", false);

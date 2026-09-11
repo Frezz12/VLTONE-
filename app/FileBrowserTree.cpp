@@ -25,6 +25,7 @@
 #include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QUrl>
 
 namespace {
@@ -68,6 +69,64 @@ icons::Glyph glyphFor(FileBrowserTree::Kind kind) {
     return icons::Glyph::Import;
 }
 
+QColor tintFor(FileBrowserTree::Kind kind) {
+    switch (kind) {
+        case FileBrowserTree::Kind::Audio: return Theme::audioAccent();
+        case FileBrowserTree::Kind::Midi: return Theme::midiAccent();
+        case FileBrowserTree::Kind::ChannelStripPreset:
+            return Theme::automationAccent();
+        case FileBrowserTree::Kind::Plugin:
+        case FileBrowserTree::Kind::ProjectTemplate: return th().accent;
+        case FileBrowserTree::Kind::Folder:
+        case FileBrowserTree::Kind::PluginGroup:
+        case FileBrowserTree::Kind::Other: break;
+    }
+    return th().textSecondary;
+}
+
+/// Browser glyphs live in small softly rounded tiles. The silhouette remains
+/// the same project icon language, while the tile gives audio, MIDI, folders
+/// and plugins a stable shape that is easier to scan in a dense tree.
+QIcon browserIcon(icons::Glyph glyph, const QColor& tint) {
+    // A library can contain tens of thousands of rows. Their icon palette has
+    // only a handful of combinations, so rasterise each one once per theme
+    // instead of allocating two pixmaps for every file discovered.
+    static QHash<quint64, QIcon> cache;
+    const quint64 key = (quint64(quint32(glyph)) << 32) |
+                        quint64(tint.rgba()) |
+                        (th().dark ? (quint64(1) << 63) : 0);
+    const auto cached = cache.constFind(key);
+    if (cached != cache.cend()) return cached.value();
+
+    QIcon icon;
+    constexpr int logical = 18;
+    for (int scale : {1, 2}) {
+        QPixmap pixmap(logical * scale, logical * scale);
+        pixmap.setDevicePixelRatio(scale);
+        pixmap.fill(Qt::transparent);
+
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF tile(0.5, 0.5, logical - 1.0, logical - 1.0);
+        QColor fill = tint;
+        fill.setAlphaF(th().dark ? 0.16 : 0.11);
+        QColor edge = tint;
+        edge.setAlphaF(th().dark ? 0.28 : 0.22);
+        painter.setPen(QPen(edge, 0.8));
+        painter.setBrush(fill);
+        painter.drawRoundedRect(tile, 5.5, 5.5);
+        icons::paint(painter, glyph, tile.adjusted(3.1, 3.1, -3.1, -3.1),
+                     tint);
+        icon.addPixmap(pixmap);
+    }
+    cache.insert(key, icon);
+    return icon;
+}
+
+QIcon browserIcon(FileBrowserTree::Kind kind) {
+    return browserIcon(glyphFor(kind), tintFor(kind));
+}
+
 bool draggable(FileBrowserTree::Kind kind) {
     return kind == FileBrowserTree::Kind::Audio ||
            kind == FileBrowserTree::Kind::Midi ||
@@ -89,7 +148,7 @@ FileBrowserTree::FileBrowserTree(QWidget* parent) : QTreeWidget(parent) {
     setRootIsDecorated(true);
     setUniformRowHeights(true);
     setIndentation(12);
-    setIconSize(QSize(14, 14));
+    setIconSize(QSize(18, 18));
     setSelectionMode(QAbstractItemView::SingleSelection);
     setDragEnabled(true);
     setDragDropMode(QAbstractItemView::DragOnly);
@@ -117,15 +176,21 @@ FileBrowserTree::FileBrowserTree(QWidget* parent) : QTreeWidget(parent) {
     connect(this, &QTreeWidget::itemCollapsed, this, &FileBrowserTree::collapseNode);
     connect(this, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* current, QTreeWidgetItem*) {
-                if (!current) return;
+                if (!current) {
+                    emit fileSelected({});
+                    return;
+                }
                 const auto kind = FileBrowserTree::Kind(current->data(0, kKindRole).toInt());
                 // Only a real file is auditioned; a plugin row has nothing to
                 // play and a folder is not a selection at all.
                 if (kind != Kind::Audio && kind != Kind::Midi &&
                     kind != Kind::Other) {
+                    emit fileSelected({});
                     return;
                 }
-                emit fileSelected(current->data(0, kPathRole).toString());
+                emit fileSelected(kind == Kind::Audio || kind == Kind::Midi
+                                      ? current->data(0, kPathRole).toString()
+                                      : QString{});
             });
     connect(this, &QTreeWidget::itemDoubleClicked, this,
             [this](QTreeWidgetItem* item, int) {
@@ -182,7 +247,7 @@ QTreeWidgetItem* FileBrowserTree::buildPluginRoot() {
     // and can never collide with a real folder.
     root->setData(0, kPathRole, QStringLiteral("daw://plugins"));
     root->setData(0, kKindRole, int(Kind::PluginGroup));
-    root->setIcon(0, icons::icon(icons::Glyph::Plugin, th().textSecondary, 14));
+    root->setIcon(0, browserIcon(icons::Glyph::Plugin, th().accent));
     root->setToolTip(0, tr("Scanned plugins: %1 — drag one onto a track to "
                            "insert it, or onto a clip to apply it to that clip "
                            "alone").arg(m_plugins.size()));
@@ -193,7 +258,7 @@ QTreeWidgetItem* FileBrowserTree::buildPluginRoot() {
         group->setText(0, format);
         group->setData(0, kPathRole, QStringLiteral("daw://plugins/") + format);
         group->setData(0, kKindRole, int(Kind::PluginGroup));
-        group->setIcon(0, icons::icon(icons::Glyph::Folder, th().textSecondary, 14));
+        group->setIcon(0, browserIcon(icons::Glyph::Folder, th().textSecondary));
         group->setFlags(Qt::ItemIsEnabled);
 
         QList<const PluginEntry*> entries = byFormat.value(format);
@@ -211,9 +276,11 @@ QTreeWidgetItem* FileBrowserTree::buildPluginRoot() {
             // Instruments and effects go to different places, and the glyph is
             // the only warning before the drag that one of them will be
             // refused by a track that already has an instrument.
-            row->setIcon(0, icons::icon(entry->instrument ? icons::Glyph::Synth
+            row->setIcon(0, browserIcon(entry->instrument ? icons::Glyph::Synth
                                                           : icons::Glyph::Plugin,
-                                        th().textSecondary, 14));
+                                        entry->instrument
+                                            ? Theme::midiAccent()
+                                            : th().accent));
             row->setToolTip(0, entry->vendor.isEmpty()
                                    ? entry->name
                                    : entry->name + QStringLiteral(" — ") +
@@ -286,11 +353,7 @@ QTreeWidgetItem* FileBrowserTree::makeItem(const QString& path, bool isDirectory
 
     const Kind kind = cachedKind >= 0 ? Kind(cachedKind) : kindOf(info);
     item->setData(0, kKindRole, int(kind));
-    item->setIcon(0, icons::icon(glyphFor(kind),
-                                 draggable(kind) || kind == Kind::Folder
-                                     ? th().textSecondary
-                                     : th().textSecondary.darker(140),
-                                 14));
+    item->setIcon(0, browserIcon(kind));
 
     Qt::ItemFlags flags = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
     if (draggable(kind)) flags |= Qt::ItemIsDragEnabled;

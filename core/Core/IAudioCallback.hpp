@@ -13,6 +13,13 @@ struct AudioCallbackContext {
     BufferSize numFrames = 0;
     SampleRate sampleRate = 0.0;
     bool isRealtime = true;
+    std::int64_t outputTimeNs = 0; // steady-clock time of the first output sample
+    bool outputTimeIsDeviceTimestamp = false;
+    enum class RenderStatus { NotRendered = -1, Complete = 0, Gated = 1, Failed = 2 };
+    RenderStatus renderStatus = RenderStatus::NotRendered;
+    std::int64_t inputTimeNs = 0;
+    bool inputTimeIsDeviceTimestamp = false;
+    std::uint32_t statusFlags = 0;
 };
 
 class IAudioCallback {

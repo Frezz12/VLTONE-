@@ -107,6 +107,7 @@ inline QJsonObject device(const audio::DeviceInfo& value) {
 inline QJsonObject audioSnapshot(const daw::EngineController& controller) {
     const auto config = controller.audioConfiguration();
     const auto xruns = controller.audioXruns();
+    const auto& diagnostics = controller.audioDeviceDiagnostics();
     QJsonArray inputs, outputs;
     for (int channel : config.inputChannelSelectors) if (inputs.size() < 256) inputs.append(channel);
     for (int channel : config.outputChannelSelectors) if (outputs.size() < 256) outputs.append(channel);
@@ -115,6 +116,14 @@ inline QJsonObject audioSnapshot(const daw::EngineController& controller) {
         {"input_channels", inputs}, {"output_channels", outputs},
         {"input_underflow", double(xruns[0])}, {"input_overflow", double(xruns[1])},
         {"output_underflow", double(xruns[2])}, {"output_overflow", double(xruns[3])},
+        {"callbacks", double(diagnostics.diagCallbackCount())},
+        {"render_calls", double(diagnostics.diagRenderCallCount())},
+        {"render_failures", double(controller.failedAudioBlocks())},
+        {"last_render_status", diagnostics.diagLastRenderStatus()},
+        {"last_render_error", controller.lastAudioRenderError()},
+        {"input_device_timestamp", diagnostics.diagInputUsesDeviceTime()},
+        {"last_callback_ns", QString::number(diagnostics.diagLastCallbackTimestamp())},
+        {"device_state", int(diagnostics.deviceState())},
         {"gated_blocks", double(controller.gatedAudioBlocks())}, {"workers", int(controller.audioWorkerCount())},
         {"realtime_workers", int(controller.realtimeAudioWorkerCount())}, {"workgroup_workers", int(controller.workgroupAudioWorkerCount())}};
 }

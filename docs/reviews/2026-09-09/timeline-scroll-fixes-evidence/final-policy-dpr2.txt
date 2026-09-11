@@ -1,0 +1,123 @@
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  live audio/recording frames reuse the static arrangement plate
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=32 recording=0 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=179 paints=89 paint_ms[p50,p95,max]=5.408,9.130,15.019 interval_ms=17.618,22.398,41.880 callback_ms=0.007,0.014,0.043 over_budget=0/2754
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  shifted plate matches full rendering across pan reversal, fractional motion and rounded corners
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  start real live waveform capture
+PASS  live audio/recording frames reuse the static arrangement plate
+SLOW_SCROLL paint=35.963 ms cpu=7.122 ms frame=36 static=1 tile_builds=1 tile_hits=25 raster_bytes=42417000 scroll=0.90000
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=32 recording=1 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=164 paints=89 paint_ms[p50,p95,max]=6.796,17.984,35.963 interval_ms=15.392,26.626,50.875 callback_ms=0.007,0.016,0.269 over_budget=0/2761
+FAIL  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  shifted plate matches full rendering across pan reversal, fractional motion and rounded corners
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  live audio/recording frames reuse the static arrangement plate
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=64 recording=0 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=181 paints=90 paint_ms[p50,p95,max]=5.188,7.882,12.569 interval_ms=17.801,20.055,27.710 callback_ms=0.007,0.020,0.059 over_budget=0/1383
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  start real live waveform capture
+PASS  live audio/recording frames reuse the static arrangement plate
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=64 recording=1 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=181 paints=90 paint_ms[p50,p95,max]=5.817,7.646,11.040 interval_ms=17.850,21.057,28.614 callback_ms=0.009,0.021,0.037 over_budget=0/1381
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  live audio/recording frames reuse the static arrangement plate
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=128 recording=0 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=180 paints=90 paint_ms[p50,p95,max]=5.348,7.923,13.581 interval_ms=17.791,20.869,34.887 callback_ms=0.015,0.032,0.057 over_budget=0/693
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  start real live waveform capture
+PASS  live audio/recording frames reuse the static arrangement plate
+SLOW_SCROLL paint=51.183 ms cpu=7.260 ms frame=36 static=1 tile_builds=1 tile_hits=17 raster_bytes=66924600 scroll=0.90000
+SLOW_SCROLL paint=34.736 ms cpu=9.822 ms frame=52 static=1 tile_builds=2 tile_hits=17 raster_bytes=66924600 scroll=0.00000
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=128 recording=1 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=151 paints=85 paint_ms[p50,p95,max]=6.847,16.352,51.183 interval_ms=16.007,27.668,69.880 callback_ms=0.019,0.032,0.189 over_budget=0/693
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  live audio/recording frames reuse the static arrangement plate
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=512 recording=0 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=186 paints=90 paint_ms[p50,p95,max]=4.925,5.798,12.299 interval_ms=17.747,19.461,24.668 callback_ms=0.025,0.038,0.065 over_budget=0/174
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  start real live waveform capture
+PASS  live audio/recording frames reuse the static arrangement plate
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=512 recording=1 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=172 paints=90 paint_ms[p50,p95,max]=6.185,11.371,24.555 interval_ms=15.233,24.541,37.336 callback_ms=0.032,0.049,0.061 over_budget=0/174
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+QApplication::removeTranslator: Please instantiate the QApplication object first
+QApplication::removeTranslator: Please instantiate the QApplication object first

@@ -1,0 +1,7 @@
+Test project /Users/nikolay/Documents/code/VLTONE/VLTONE-/build
+    Start 57: ui_frame_clock_test
+1/1 Test #57: ui_frame_clock_test ..............   Passed    5.60 sec
+
+100% tests passed out of 1
+
+Total Test time (real) =   5.61 sec

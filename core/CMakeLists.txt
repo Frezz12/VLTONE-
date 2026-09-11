@@ -60,7 +60,7 @@ target_link_libraries(daw_core PUBLIC
 if(APPLE)
     target_link_libraries(daw_core PUBLIC "-framework AudioToolbox" "-framework CoreFoundation" "-framework CoreAudio")
 elseif(WIN32)
-    target_link_libraries(daw_core PUBLIC mfplat mfreadwrite mfuuid ole32 propsys)
+    target_link_libraries(daw_core PUBLIC mfplat mfreadwrite mfuuid ole32 propsys advapi32)
 endif()
 
 if(MSVC)

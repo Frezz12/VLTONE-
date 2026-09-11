@@ -6,6 +6,8 @@
 #include <QSaveFile>
 #include <algorithm>
 #include <array>
+#include <cstdio>
+#include <string_view>
 #include <map>
 #include <string>
 #include <vector>
@@ -21,6 +23,9 @@ bool enabled() {
 }
 void sample(const char* name, double value) {
     if (!enabled()) return;
+    static const bool slowLog = qEnvironmentVariableIsSet("VLT_UI_SLOW_LOG");
+    if (slowLog && value >= 25.0 && std::string_view(name).ends_with(".ms"))
+        std::fprintf(stderr, "SLOW_UI %s %.3f\n", name, value);
     static const bool connected = [] {
         QObject::connect(qApp, &QCoreApplication::aboutToQuit, qApp, &flush);
         return true;
@@ -49,4 +54,5 @@ void flush() {
         file.write(QJsonDocument(report).toJson()); file.commit();
     }
 }
+void reset() { samples().clear(); }
 }

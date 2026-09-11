@@ -12,6 +12,7 @@ class QLabel;
 class QHideEvent;
 class QResizeEvent;
 class QShowEvent;
+namespace ui::graphics { class WorkspaceSurface; }
 class QVBoxLayout;
 
 namespace ui {
@@ -42,6 +43,9 @@ public:
     /// The body below the transport is used for initial placement and maximize.
     /// Floating windows can move across the entire parent, including its header.
     void setWorkspaceArea(QWidget* area);
+    /// Host a foreign NSView/HWND without allowing Qt to promote the shared
+    /// workspace and its Quick surface to native child widgets.
+    void prepareForNativeSurface();
 
     /// Restore the saved placement on first use, show, raise and activate.
     void present();
@@ -50,6 +54,8 @@ public:
 
     void setMaximized(bool maximized);
     bool isMaximized() const { return m_maximized; }
+    void setDetached(bool detached);
+    bool isDetached() const { return m_detached; }
 
     /// Resize for plugin UIs and parameter docks. Keep an on-screen editor
     /// fully visible, or preserve the title position of a parked editor.
@@ -105,6 +111,10 @@ private:
     QLabel* m_title = nullptr;
     ui::IconButton* m_maximizeButton = nullptr;
     ui::IconButton* m_closeButton = nullptr;
+    ui::IconButton* m_detachButton = nullptr;
+    QPointer<ui::graphics::WorkspaceSurface> m_detachedSurface;
+    QRect m_dockedGeometry;
+    bool m_detached = false;
     QPointer<QWidget> m_content;
     QPointer<QWidget> m_accessory;
     QPointer<QWidget> m_workspaceArea;

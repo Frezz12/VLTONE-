@@ -4,6 +4,7 @@
 
 #include <QColor>
 #include <QRectF>
+#include <span>
 
 class QPainter;
 
@@ -29,7 +30,7 @@ struct PeakPaint {
     QColor color = QColor(255, 255, 255);
 };
 
-/// Draw a min/max envelope across `area` as one filled shape.
+/// Draw a min/max envelope using bounded, source-anchored raster tiles.
 ///
 /// Lifted out of TimelineWidget so anything with a `WaveformPeaks` can draw one
 /// the same way: the clip bodies, the take rows of an open comp editor, the comp
@@ -39,6 +40,21 @@ struct PeakPaint {
 /// stair-stepping.
 void paintPeaks(QPainter& painter, const daw::WaveformPeaks* peaks,
                 const QRectF& area, const PeakPaint& how);
+
+/// Append-only capture envelope. Only sealed prefixes enter the raster cache;
+/// the current peak bucket is redrawn until it closes. Change id on compaction.
+void paintRecordingPeaks(QPainter& painter, std::span<const float> envelope,
+                         double bucketSeconds, std::uint64_t id,
+                         const QRectF& area, const PeakPaint& how);
+
+struct WaveformPaintStats {
+    std::uint64_t tileBuilds = 0;
+    std::uint64_t tileHits = 0;
+    std::size_t bytes = 0;
+};
+WaveformPaintStats waveformPaintStatsForTest();
+WaveformPaintStats waveformGeometryStatsForTest();
+void resetWaveformPaintCacheForTest();
 
 /// Headless pixel check: an empty waveform still paints its zero axis.
 bool checkWaveformBaselineForTest();

@@ -31,12 +31,11 @@ bool visible();
 void setVisible(bool visible);
 
 QString dataDirectory();
-QString contentFilePath();
 QString assetDirectory();
-QString timedCuesFilePath();
-
-QVector<TimedCue> timedCues();
-bool saveTimedCues(QVector<TimedCue> cues, QString* error = nullptr);
+/// Read-only migration sources from releases that shared one notebook across
+/// every project. New content is stored in ProjectModel.
+QString legacyContentFilePath();
+QVector<TimedCue> legacyTimedCues();
 int timedCueIndexAt(const QVector<TimedCue>& cues, double seconds);
 QString timedCueTimeText(double seconds);
 bool parseTimedCueTime(const QString& text, double& seconds);

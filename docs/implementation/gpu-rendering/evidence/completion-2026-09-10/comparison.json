@@ -1,0 +1,177 @@
+{
+  "runs": [
+    {
+      "name": "verified-cpu-1",
+      "lines": [
+        "PROJECT_SCROLL_READY pid=23468 backend=widgets tracks=16 viewport=906x761 dpr=2.0 distance=1800",
+        "PROJECT_SCROLL_RESULT inputs=861 frames=0 elapsed_ms=7199.008 gui_cpu_ms=3234.203 render_cpu_ms=0.000 prepare_p95=-1.000 sync_p95=-1.000 render_cpu_p95=-1.000 submission_p50=-1.000 submission_p95=-1.000 submission_p99=-1.000 gaps_over_25ms=0"
+      ],
+      "exit": 0,
+      "inputs": 861.0,
+      "frames": 0.0,
+      "elapsed_ms": 7199.008,
+      "gui_cpu_ms": 3234.203,
+      "render_cpu_ms": 0.0,
+      "prepare_p95": -1.0,
+      "sync_p95": -1.0,
+      "render_cpu_p95": -1.0,
+      "submission_p50": -1.0,
+      "submission_p95": -1.0,
+      "submission_p99": -1.0,
+      "gaps_over_25ms": 0.0,
+      "ui_cpu_core": 0.4492567587089777,
+      "timeline_paints": 426
+    },
+    {
+      "name": "verified-gpu-1",
+      "lines": [
+        "PROJECT_SCROLL_READY pid=23477 backend=gpu tracks=16 viewport=906x761 dpr=2.0 distance=1800",
+        "PROJECT_SCROLL_RESULT inputs=881 frames=429 elapsed_ms=7199.668 gui_cpu_ms=903.685 render_cpu_ms=983.083 prepare_p95=1.051 sync_p95=0.197 render_cpu_p95=4.002 submission_p50=16.663 submission_p95=18.085 submission_p99=18.936 gaps_over_25ms=3"
+      ],
+      "exit": 0,
+      "inputs": 881.0,
+      "frames": 429.0,
+      "elapsed_ms": 7199.668,
+      "gui_cpu_ms": 903.685,
+      "render_cpu_ms": 983.083,
+      "prepare_p95": 1.051,
+      "sync_p95": 0.197,
+      "render_cpu_p95": 4.002,
+      "submission_p50": 16.663,
+      "submission_p95": 18.085,
+      "submission_p99": 18.936,
+      "gaps_over_25ms": 3.0,
+      "ui_cpu_core": 0.2620631951362202,
+      "timeline_paints": 429
+    },
+    {
+      "name": "verified-cpu-2",
+      "lines": [
+        "PROJECT_SCROLL_READY pid=23484 backend=widgets tracks=16 viewport=906x761 dpr=2.0 distance=1800",
+        "PROJECT_SCROLL_RESULT inputs=600 frames=0 elapsed_ms=6999.609 gui_cpu_ms=4837.203 render_cpu_ms=0.000 prepare_p95=-1.000 sync_p95=-1.000 render_cpu_p95=-1.000 submission_p50=-1.000 submission_p95=-1.000 submission_p99=-1.000 gaps_over_25ms=0"
+      ],
+      "exit": 0,
+      "inputs": 600.0,
+      "frames": 0.0,
+      "elapsed_ms": 6999.609,
+      "gui_cpu_ms": 4837.203,
+      "render_cpu_ms": 0.0,
+      "prepare_p95": -1.0,
+      "sync_p95": -1.0,
+      "render_cpu_p95": -1.0,
+      "submission_p50": -1.0,
+      "submission_p95": -1.0,
+      "submission_p99": -1.0,
+      "gaps_over_25ms": 0.0,
+      "ui_cpu_core": 0.6910676010617165,
+      "timeline_paints": 392
+    },
+    {
+      "name": "verified-gpu-2",
+      "lines": [
+        "PROJECT_SCROLL_READY pid=23515 backend=gpu tracks=16 viewport=906x761 dpr=2.0 distance=1800",
+        "PROJECT_SCROLL_RESULT inputs=831 frames=400 elapsed_ms=6662.483 gui_cpu_ms=708.929 render_cpu_ms=833.809 prepare_p95=0.920 sync_p95=0.176 render_cpu_p95=3.111 submission_p50=16.677 submission_p95=17.324 submission_p99=17.868 gaps_over_25ms=0"
+      ],
+      "exit": 0,
+      "inputs": 831.0,
+      "frames": 400.0,
+      "elapsed_ms": 6662.483,
+      "gui_cpu_ms": 708.929,
+      "render_cpu_ms": 833.809,
+      "prepare_p95": 0.92,
+      "sync_p95": 0.176,
+      "render_cpu_p95": 3.111,
+      "submission_p50": 16.677,
+      "submission_p95": 17.324,
+      "submission_p99": 17.868,
+      "gaps_over_25ms": 0.0,
+      "ui_cpu_core": 0.23155601297594303,
+      "timeline_paints": 400
+    },
+    {
+      "name": "verified-cpu-3",
+      "lines": [
+        "PROJECT_SCROLL_READY pid=23523 backend=widgets tracks=16 viewport=906x761 dpr=2.0 distance=1800",
+        "PROJECT_SCROLL_RESULT inputs=571 frames=0 elapsed_ms=6999.602 gui_cpu_ms=5695.372 render_cpu_ms=0.000 prepare_p95=-1.000 sync_p95=-1.000 render_cpu_p95=-1.000 submission_p50=-1.000 submission_p95=-1.000 submission_p99=-1.000 gaps_over_25ms=0"
+      ],
+      "exit": 0,
+      "inputs": 571.0,
+      "frames": 0.0,
+      "elapsed_ms": 6999.602,
+      "gui_cpu_ms": 5695.372,
+      "render_cpu_ms": 0.0,
+      "prepare_p95": -1.0,
+      "sync_p95": -1.0,
+      "render_cpu_p95": -1.0,
+      "submission_p50": -1.0,
+      "submission_p95": -1.0,
+      "submission_p99": -1.0,
+      "gaps_over_25ms": 0.0,
+      "ui_cpu_core": 0.8136708344274433,
+      "timeline_paints": 396
+    },
+    {
+      "name": "verified-gpu-3",
+      "lines": [
+        "PROJECT_SCROLL_READY pid=23531 backend=gpu tracks=16 viewport=906x761 dpr=2.0 distance=1800",
+        "PROJECT_SCROLL_RESULT inputs=744 frames=441 elapsed_ms=7368.841 gui_cpu_ms=825.169 render_cpu_ms=1129.888 prepare_p95=1.061 sync_p95=0.212 render_cpu_p95=3.961 submission_p50=16.679 submission_p95=17.372 submission_p99=19.031 gaps_over_25ms=1"
+      ],
+      "exit": 0,
+      "inputs": 744.0,
+      "frames": 441.0,
+      "elapsed_ms": 7368.841,
+      "gui_cpu_ms": 825.169,
+      "render_cpu_ms": 1129.888,
+      "prepare_p95": 1.061,
+      "sync_p95": 0.212,
+      "render_cpu_p95": 3.961,
+      "submission_p50": 16.679,
+      "submission_p95": 17.372,
+      "submission_p99": 19.031,
+      "gaps_over_25ms": 1.0,
+      "ui_cpu_core": 0.2653140432803476,
+      "timeline_paints": 442
+    }
+  ],
+  "mean_cpu_ms_per_second": 651.3317313993791,
+  "mean_gpu_ui_cpu_ms_per_second": 252.97775046417027,
+  "mean_reduction_percent": 61.159922314754986,
+  "audio": [
+    {
+      "block": 32,
+      "exit": 0,
+      "lines": [
+        "PROJECT_SCROLL_READY pid=23559 backend=gpu tracks=16 viewport=906x761 dpr=2.0 distance=1800",
+        "PROJECT_SCROLL_RESULT inputs=596 frames=315 elapsed_ms=5264.302 gui_cpu_ms=2553.774 render_cpu_ms=1132.590 prepare_p95=4.458 sync_p95=0.573 render_cpu_p95=5.610 submission_p50=16.662 submission_p95=19.660 submission_p99=27.445 gaps_over_25ms=4",
+        "PROJECT_SCROLL_AUDIO block=32 callbacks=7823 p95_ms=0.328 over_budget=8"
+      ]
+    },
+    {
+      "block": 64,
+      "exit": 0,
+      "lines": [
+        "PROJECT_SCROLL_READY pid=23569 backend=gpu tracks=16 viewport=906x761 dpr=2.0 distance=1800",
+        "PROJECT_SCROLL_RESULT inputs=560 frames=284 elapsed_ms=4766.297 gui_cpu_ms=2050.975 render_cpu_ms=921.815 prepare_p95=3.371 sync_p95=0.460 render_cpu_p95=5.232 submission_p50=16.614 submission_p95=18.595 submission_p99=21.706 gaps_over_25ms=2",
+        "PROJECT_SCROLL_AUDIO block=64 callbacks=3556 p95_ms=0.567 over_budget=0"
+      ]
+    },
+    {
+      "block": 128,
+      "exit": 0,
+      "lines": [
+        "PROJECT_SCROLL_READY pid=25487 backend=gpu tracks=16 viewport=906x761 dpr=2.0 distance=1800",
+        "PROJECT_SCROLL_RESULT inputs=456 frames=303 elapsed_ms=5179.090 gui_cpu_ms=2404.403 render_cpu_ms=1314.340 prepare_p95=6.408 sync_p95=1.251 render_cpu_p95=6.868 submission_p50=16.759 submission_p95=23.699 submission_p99=35.086 gaps_over_25ms=13",
+        "PROJECT_SCROLL_AUDIO block=128 callbacks=1932 p95_ms=1.020 over_budget=2"
+      ]
+    },
+    {
+      "block": 512,
+      "exit": 0,
+      "lines": [
+        "PROJECT_SCROLL_READY pid=23602 backend=gpu tracks=16 viewport=906x761 dpr=2.0 distance=1800",
+        "PROJECT_SCROLL_RESULT inputs=653 frames=315 elapsed_ms=5266.930 gui_cpu_ms=1430.726 render_cpu_ms=863.585 prepare_p95=2.964 sync_p95=0.407 render_cpu_p95=4.254 submission_p50=16.612 submission_p95=18.635 submission_p99=19.163 gaps_over_25ms=0",
+        "PROJECT_SCROLL_AUDIO block=512 callbacks=493 p95_ms=3.202 over_budget=0"
+      ]
+    }
+  ]
+}

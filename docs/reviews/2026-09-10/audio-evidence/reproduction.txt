@@ -1,0 +1,26 @@
+Evidence output: /var/folders/ts/h40wx_6j4_jc96cyrtt6b6900000gn/T/vlt-audio-review-2dgjhdn2
+DEFAULT_TRACK enabled=0 monitor=1 output_peak=0.000000
+SELECT_INPUT_1 output_peak=0.250000
+MUTED_EXISTING_MONITOR recording=1 new_monitor=0 output_peak=0.000000
+MANUAL_MONITOR output_peak=0.250000
+ONE_INPUT_MENU_PICK graph_rebuilds=3
+CREATE_128_TRACKS ms=0.846 gated_blocks=1 silent_blocks=1 calls=32
+
+[INFO]  [Device] Initialized out='Original' in='Original' rate=48000 buffer=32
+[ERROR] [Device] Pa_OpenStream: injected device failure
+[ERROR] [Device] Pa_OpenStream: injected device failure
+[INFO]  [Device] Initialized out='Original' in='Original' rate=44100 buffer=512
+[INFO]  [Device] Initialized out='Original' in='Original' rate=48000 buffer=32
+APPLY_SAME_CONFIG success=1 extra_starts=3
+FALLBACK success=0 device_rate=44100 engine_rate=48000 project_rate=48000 input_enabled=0 running=1
+LOST_STREAM driver_active=0 manager_running=1 state=4
+RATE_DURING_RECORD success=1 engine_rate=96000 wav_rate=48000 frames=9600 device_seconds=.100 wav_seconds=0.200
+DISABLE_REENABLE_DEVICE_INPUT_DURING_RECORD expected_frames=9600 captured_frames=6400 dropped=0
+
+PROJECT opened=1 live_inserts=1 monitor=1 playing=0
+RECOVERY_TICK index=0 ms=22.874 gated_blocks=34
+RECOVERY_TICK index=1 ms=20.734 gated_blocks=31
+RECOVERY_TICK index=2 ms=24.786 gated_blocks=37
+RECOVERY_TICK index=3 ms=23.483 gated_blocks=36
+RECOVERY_TICK index=4 ms=25.068 gated_blocks=37
+TOTAL callbacks=1103 gated=175

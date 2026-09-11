@@ -1,0 +1,8 @@
+HARDWARE monitoring=0 frames=32 hardware_frames=64 workers=4 realtime_helpers=3 workgroup_helpers=3 callbacks=1502 p95_ms=0.2657 p99_ms=0.3416 max_ms=0.6710 over=1 xruns=0,0,0,0 input_enabled=1 input_peak=0.008138 device_adc_time=1
+HARDWARE monitoring=1 frames=32 hardware_frames=64 workers=4 realtime_helpers=3 workgroup_helpers=3 callbacks=1509 p95_ms=0.2382 p99_ms=0.2920 max_ms=0.4145 over=0 xruns=0,0,0,0 input_enabled=1 input_peak=0.003037 device_adc_time=1
+HARDWARE monitoring=0 frames=16 hardware_frames=64 workers=4 realtime_helpers=3 workgroup_helpers=3 callbacks=3019 p95_ms=0.1630 p99_ms=0.2062 max_ms=0.4002 over=4 xruns=0,0,0,0 input_enabled=1 input_peak=0.005699 device_adc_time=1
+HARDWARE monitoring=1 frames=16 hardware_frames=64 workers=4 realtime_helpers=3 workgroup_helpers=3 callbacks=3011 p95_ms=0.1417 p99_ms=0.1547 max_ms=0.1995 over=0 xruns=0,0,0,0 input_enabled=1 input_peak=0.046084 device_adc_time=1
+HARDWARE monitoring=0 frames=128 hardware_frames=128 workers=4 realtime_helpers=3 workgroup_helpers=3 callbacks=376 p95_ms=0.6434 p99_ms=0.6878 max_ms=0.7229 over=0 xruns=0,0,0,0 input_enabled=1 input_peak=0.009752 device_adc_time=1
+HARDWARE monitoring=1 frames=128 hardware_frames=128 workers=4 realtime_helpers=3 workgroup_helpers=3 callbacks=376 p95_ms=0.7169 p99_ms=0.7710 max_ms=0.8016 over=0 xruns=0,0,0,0 input_enabled=1 input_peak=0.014414 device_adc_time=1
+RESTORE device=109 hardware_frames=512 status=0
+RESTORE device=116 hardware_frames=512 status=0

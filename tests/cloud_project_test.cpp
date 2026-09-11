@@ -128,6 +128,13 @@ int main() {
             builtin("10000000-0000-4000-8000-000000000002", "daw.gravity"));
         project.masterInserts.push_back(
             builtin("10000000-0000-4000-8000-000000000003", "daw.graphit"));
+        for (const auto& [id, uid] : std::initializer_list<std::pair<const char*, const char*>>{
+                 {"10000000-0000-4000-8000-000000000004", "daw.doubler"},
+                 {"10000000-0000-4000-8000-000000000005", "daw.chorus"},
+                 {"10000000-0000-4000-8000-000000000006", "daw.flanger"},
+                 {"10000000-0000-4000-8000-000000000007", "daw.phaser"}}) {
+            project.masterInserts.push_back(builtin(id, uid));
+        }
         daw::TrackModel track;
         track.id = "20000000-0000-4000-8000-000000000001";
         track.instrument =
@@ -142,7 +149,7 @@ int main() {
 
         const auto report = daw::cloud::inspectForPublishV1(project);
         check(report.canPublish(),
-              "Sampler, Equalizer, Gravity and Graphit are publishable built-ins");
+              "all eight built-ins, including modulation, are publishable");
 
         project.masterInserts.front().stateSchemaVersion = 0;
         check(!daw::cloud::inspectForPublishV1(project).canPublish(),

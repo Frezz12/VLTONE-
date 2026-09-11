@@ -1,0 +1,7 @@
+PROJECT opened=1 live_inserts=1 monitor=1 playing=0
+RECOVERY_TICK index=0 ms=26.191 gated_blocks=39
+RECOVERY_TICK index=1 ms=20.219 gated_blocks=31
+RECOVERY_TICK index=2 ms=24.603 gated_blocks=37
+RECOVERY_TICK index=3 ms=22.574 gated_blocks=33
+RECOVERY_TICK index=4 ms=25.278 gated_blocks=38
+TOTAL callbacks=1122 gated=178

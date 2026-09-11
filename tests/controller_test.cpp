@@ -2018,6 +2018,25 @@ int main() {
         check(std::fabs(daw::automationValueAt(points, 0.0, 0.0)) < 1e-9 &&
                   std::fabs(daw::automationValueAt(points, 4.0, 0.0) - 1.0) < 1e-9,
               "a bend never moves the points it runs between");
+
+        const daw::AutomationPoint anchor =
+            daw::automationPointOnCurve(points, 2.25, 0.35);
+        check(std::abs(anchor.value -
+                       daw::automationValueAt(points, anchor.beats, 0.35)) < 1e-12,
+              "an on-curve automation anchor uses the audible curve value");
+        check(anchor.shape == points.front().shape &&
+                  std::abs(anchor.curve - points.front().curve) < 1e-12,
+              "an on-curve anchor inherits the segment it splits");
+
+        std::vector<daw::AutomationPoint> delayed{{4.0, 0.8}};
+        const daw::AutomationPoint beforeFirst =
+            daw::automationPointOnCurve(delayed, 2.0, 0.3);
+        delayed.push_back(beforeFirst);
+        daw::normalizeAutomation(delayed);
+        check(std::abs(beforeFirst.value - 0.3) < 1e-12 &&
+                  std::abs(daw::automationValueAt(delayed, 3.9, 0.3) - 0.3) <
+                      1e-12,
+              "an anchor before the first point preserves the default hold");
         (void)bent;
     }
 
@@ -2486,6 +2505,98 @@ int main() {
               "and puts its tracks back where they were");
     }
 
+    // Selecting a visible range includes folder rows and their child rows.  A
+    // pack must move each selected folder as one subtree instead of extracting
+    // its selected descendants and flattening the hierarchy into the new group.
+    {
+        daw::EngineController f;
+        f.initialize(48000, 512, /*openDevice=*/false);
+        const std::string outer = f.addFolder(/*summing=*/true, "Outer");
+        const std::string inner = f.addFolder(/*summing=*/true, "Inner");
+        const std::string innerLeaf =
+            f.addTrack(daw::TrackKind::Audio, "Inner Leaf");
+        const std::string outerLeaf =
+            f.addTrack(daw::TrackKind::Audio, "Outer Leaf");
+        const std::string second = f.addFolder(/*summing=*/true, "Second");
+        const std::string secondLeaf =
+            f.addTrack(daw::TrackKind::Audio, "Second Leaf");
+        const std::string loose =
+            f.addTrack(daw::TrackKind::Audio, "Loose");
+
+        f.moveTrackToFolder(inner, outer);
+        f.moveTrackToFolder(innerLeaf, inner);
+        f.moveTrackToFolder(outerLeaf, outer);
+        f.moveTrackToFolder(secondLeaf, second);
+
+        const auto hierarchyState = [](const daw::ProjectModel& project) {
+            std::vector<std::string> state;
+            state.reserve(project.tracks.size());
+            for (const auto& track : project.tracks) {
+                state.push_back(track.id + "\n" + track.parentId + "\n" +
+                                track.outputBusId);
+            }
+            return state;
+        };
+        const std::vector<std::string> before = hierarchyState(f.project());
+
+        // Deliberately scramble the ids and repeat Outer: UI selection order
+        // and duplicate delivery must not change the resulting tree order.
+        const std::string group = f.packIntoFolder(
+            {innerLeaf, loose, outerLeaf, outer, secondLeaf, inner, second,
+             outer},
+            "Hierarchy Group", /*summing=*/true);
+        check(!group.empty(), "packs a mixed hierarchical selection");
+        check(f.project().findTrack(outer)->parentId == group &&
+                  f.project().findTrack(second)->parentId == group &&
+                  f.project().findTrack(loose)->parentId == group,
+              "only the selected hierarchy roots enter the new group");
+        check(f.project().findTrack(inner)->parentId == outer &&
+                  f.project().findTrack(innerLeaf)->parentId == inner &&
+                  f.project().findTrack(outerLeaf)->parentId == outer &&
+                  f.project().findTrack(secondLeaf)->parentId == second,
+              "selected descendants keep their original folder parents");
+        check(f.project().findTrack(outer)->outputBusId == group &&
+                  f.project().findTrack(inner)->outputBusId == outer &&
+                  f.project().findTrack(innerLeaf)->outputBusId == inner &&
+                  f.project().findTrack(outerLeaf)->outputBusId == outer &&
+                  f.project().findTrack(second)->outputBusId == group &&
+                  f.project().findTrack(secondLeaf)->outputBusId == second &&
+                  f.project().findTrack(loose)->outputBusId == group,
+              "nested summing routes follow the preserved hierarchy");
+
+        const std::vector<std::string> expectedOrder{
+            group, outer, inner, innerLeaf, outerLeaf,
+            second, secondLeaf, loose};
+        std::vector<std::string> actualOrder;
+        for (const auto& track : f.project().tracks)
+            actualOrder.push_back(track.id);
+        check(actualOrder == expectedOrder,
+              "packing preserves document order for complete subtrees");
+
+        f.undo();
+        check(hierarchyState(f.project()) == before,
+              "undo restores the exact nested hierarchy and routing");
+
+        f.redo();
+        const daw::TrackModel* redoneGroup = nullptr;
+        for (const auto& track : f.project().tracks) {
+            if (track.name == "Hierarchy Group") {
+                check(redoneGroup == nullptr,
+                      "redo creates exactly one replacement group");
+                redoneGroup = &track;
+            }
+        }
+        check(redoneGroup &&
+                  f.project().findTrack(outer)->parentId == redoneGroup->id &&
+                  f.project().findTrack(inner)->parentId == outer &&
+                  f.project().findTrack(innerLeaf)->parentId == inner &&
+                  f.project().findTrack(secondLeaf)->parentId == second,
+              "redo restores the hierarchy without flattening descendants");
+        f.undo();
+        check(hierarchyState(f.project()) == before,
+              "undo after redo removes the current folder and restores the tree");
+    }
+
     // ── Move a clip to another track ──
     {
         daw::EngineController r;
@@ -2698,9 +2809,92 @@ int main() {
         check(d2 && d2->inserts.empty(),
               "duplicate without plugins drops the inserts");
 
+        const std::string dupEmpty = r.duplicateTrack(
+            src, /*withInserts=*/true, /*withClips=*/false);
+        const daw::TrackModel* empty = r.project().findTrack(dupEmpty);
+        check(empty && empty->clips.empty() && !empty->inserts.empty(),
+              "clip-free duplicate keeps the channel and plugins but no clips");
+
         r.undo();
-        check(r.project().findTrack(dupNoFx) == nullptr,
+        check(r.project().findTrack(dupEmpty) == nullptr,
               "duplicate is undoable");
+    }
+
+    // ── Duplicate a complete folder hierarchy ──
+    {
+        daw::EngineController r;
+        r.initialize(48000, 512, /*openDevice=*/false);
+        const std::string folder = r.addFolder(true, "Band");
+        const std::string audio = r.addTrack(daw::TrackKind::Audio, "Guitar");
+        r.importAudio(tonePath, audio, 0.5);
+        r.ensureInsertSlots(audio, 2);
+        r.moveTrackToFolder(audio, folder);
+        const std::string nested = r.addFolder(false, "Layers");
+        r.moveTrackToFolder(nested, folder);
+        const std::string midi = r.addTrack(daw::TrackKind::Midi, "Keys");
+        r.addMidiClip(midi, 0.0, 2.0);
+        r.moveTrackToFolder(midi, nested);
+
+        const std::string copy = r.duplicateTrack(
+            folder, /*withInserts=*/true, /*withClips=*/false);
+        const std::vector<std::string> copied = daw::subtreeOf(r.project(), copy);
+        const daw::TrackModel* copyRoot = r.project().findTrack(copy);
+        check(copyRoot && copyRoot->name == "Band copy" && copied.size() == 3,
+              "duplicating a folder copies its complete nested hierarchy");
+        bool hierarchyMapped = true;
+        bool lanesEmpty = true;
+        bool pluginsKept = false;
+        for (const std::string& id : copied) {
+            const daw::TrackModel* track = r.project().findTrack(id);
+            if (!track) {
+                hierarchyMapped = false;
+                continue;
+            }
+            lanesEmpty = lanesEmpty && track->clips.empty();
+            hierarchyMapped = hierarchyMapped && track->parentId != folder &&
+                              track->parentId != nested;
+            if (track->name == "Guitar") {
+                pluginsKept = !track->inserts.empty();
+                hierarchyMapped = hierarchyMapped &&
+                                  track->outputBusId == copy;
+            }
+        }
+        check(hierarchyMapped && lanesEmpty && pluginsKept,
+              "folder duplicate remaps parents/routing and honors clip-free mode");
+        check(r.project().indexOf(copy) == 4,
+              "folder duplicate lands after the complete source subtree");
+
+        r.undo();
+        check(r.project().findTrack(copy) == nullptr &&
+                  r.project().tracks.size() == 4,
+              "one undo removes the complete duplicated folder");
+        r.redo();
+        check(r.project().findTrack(copy) &&
+                  daw::subtreeOf(r.project(), copy).size() == 3,
+              "one redo restores the complete duplicated folder");
+
+        const std::string audioClipId =
+            r.project().findTrack(audio)->clips.front().id;
+        const std::string midiClipId =
+            r.project().findTrack(midi)->clips.front().id;
+        const std::string contentCopy = r.duplicateTrack(
+            folder, /*withInserts=*/true, /*withClips=*/true);
+        bool audioContentCopied = false;
+        bool midiContentCopied = false;
+        for (const std::string& id :
+             daw::subtreeOf(r.project(), contentCopy)) {
+            const daw::TrackModel* track = r.project().findTrack(id);
+            if (!track || track->clips.size() != 1) continue;
+            if (track->name == "Guitar")
+                audioContentCopied = track->clips.front().id != audioClipId;
+            if (track->name == "Keys")
+                midiContentCopied = track->clips.front().id != midiClipId;
+        }
+        check(audioContentCopied && midiContentCopied,
+              "enabled clip mode copies folder audio and MIDI with fresh ids");
+        r.undo();
+        check(r.project().findTrack(contentCopy) == nullptr,
+              "content-bearing folder duplicate remains one undo action");
     }
 
     // ── Track height ──
@@ -4131,6 +4325,8 @@ int main() {
         m.setTrackInstrument(trackId, "Sampler");
         const std::string clipId = m.addMidiClip(trackId, 1.0);
         const std::string noteId = m.addNote(trackId, clipId, 72, 2.25, 0.75, 88);
+        m.setNotebookHtml("<p>Notes for this project</p>");
+        m.setNotebookCues({{3.5, "Verse"}, {8.0, "Chorus"}});
 
         const std::string package = (dir / "midi.vlt").string();
         check(bool(daw::ProjectSerializer::save(m.project(), package)),
@@ -4143,6 +4339,11 @@ int main() {
         check(track && track->clips.size() == 1, "the MIDI clip survives a reload");
         check(track && track->instrument.name == "Sampler",
               "the instrument slot survives a reload");
+        check(reloaded.notebookHtml == "<p>Notes for this project</p>" &&
+                  reloaded.notebookCues.size() == 2 &&
+                  reloaded.notebookCues[0].text == "Verse" &&
+                  std::fabs(reloaded.notebookCues[1].seconds - 8.0) < 1e-9,
+              "the project notebook and timed lines survive a reload");
         if (track && !track->clips.empty()) {
             const auto& c = track->clips[0];
             check(c.kind == daw::ClipKind::Midi, "the clip reloads as MIDI");
@@ -4155,6 +4356,17 @@ int main() {
                       "every note field round-trips exactly");
             }
         }
+    }
+
+    // ── Notebook belongs to one project ──
+    {
+        daw::EngineController m;
+        m.initialize(48000, 512, /*openDevice=*/false);
+        m.setNotebookHtml("<p>Project A</p>");
+        m.setNotebookCues({{2.0, "A cue"}});
+        m.newProject(/*createDefaultAudioTrack=*/false);
+        check(m.notebookHtml().empty() && m.notebookCues().empty(),
+              "a new project starts with its own empty notebook");
     }
 
     // A plain audio clip must still reload as audio with no notes — that is the
@@ -4606,6 +4818,9 @@ int main() {
         m.setTrackInputChannel(vocal, 1);
         m.setTrackInputChannel(guitar, 2);
         m.setTrackInputChannel(backing, 1);
+        m.setTrackInputEnabled(vocal, true);
+        m.setTrackInputEnabled(guitar, true);
+        m.setTrackInputEnabled(backing, true);
         m.setTrackMonitor(guitar, true);   // a different input, already listening
 
         auto monitorOf = [&m](const std::string& id) {
@@ -5349,17 +5564,16 @@ int main() {
         // Two and a half passes: 2 s to the loop end, then 4 s, then 2 s more.
         m.seedRecordingForShot(tr, 8.0);
         const auto preview = m.recordingPreview(tr);
-        check(preview.spans.size() == 3, "three passes have been written");
-        if (preview.spans.size() == 3) {
+        check(preview.passCount == 3 && preview.spans.size() == 2,
+              "three passes retain only two visible pieces in the live preview");
+        if (preview.spans.size() == 2) {
             check(std::fabs(preview.spans[0].startSeconds - 6.0) < 1e-9 &&
-                      std::fabs(preview.spans[0].endSeconds - 8.0) < 1e-9,
-                  "the first runs from the punch point to the loop end");
+                      std::fabs(preview.spans[0].endSeconds - 8.0) < 1e-9 &&
+                      std::fabs(preview.spans[0].captureOffsetSeconds - 4.0) < 1e-9,
+                  "the uncovered tail belongs to the last completed pass");
             check(std::fabs(preview.spans[1].startSeconds - 4.0) < 1e-9 &&
-                      std::fabs(preview.spans[1].endSeconds - 8.0) < 1e-9,
-                  "the second is the whole cycle, back at the loop start");
-            check(std::fabs(preview.spans[2].startSeconds - 4.0) < 1e-9 &&
-                      std::fabs(preview.spans[2].captureOffsetSeconds - 6.0) < 1e-9,
-                  "and the third is the pass in flight, six seconds into the file");
+                      std::fabs(preview.spans[1].captureOffsetSeconds - 6.0) < 1e-9,
+                  "the current pass follows six captured seconds");
         }
         check(preview.envelope.size() > 100 && preview.envelopeStepSeconds > 0.0,
               "the envelope is bucketed in recorded time, not in frames drawn");

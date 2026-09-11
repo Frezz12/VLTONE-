@@ -1,0 +1,56 @@
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+QApplication::removeTranslator: Please instantiate the QApplication object first
+QApplication::removeTranslator: Please instantiate the QApplication object first
+PASS  adaptive overview uses sparse whole-bar groups, aligned snapping and correct meters
+PASS  visible track has a fader
+PASS  500 track headers create only viewport controls
+PASS  500 mixer channels create only viewport controls
+20 UI structure synchronizations: 16.456 ms
+PASS  unchanged row controls survive repeated sync
+PASS  multi-selection survives structure sync
+PASS  scroll materializes final rows
+PASS  scroll releases distant controls
+PASS  scroll back restores rows
+PASS  interval queries cover visible clip bodies and preserve ID lookup
+PASS  live placement invalidates interval geometry before undo commit
+PASS  missing and master IDs do not resolve to a track
+PASS  same-size reorder updates row positions
+200 empty ID lookups: 0.001 ms
+PASS  1000-clip gesture preserves interval correctness
+PASS  pixel scrolling preserves both axes and overrides wheel angles
+PASS  one-pixel momentum is not lost
+PASS  fractional mouse-wheel distances accumulate
+PASS  Shift preserves pixel precision and legacy mouse-wheel distance
+PASS  fine wheel zoom is proportional and centres the playhead
+PASS  opposite fine zoom restores the scale
+PASS  one wheel notch retains 15 percent zoom
+PASS  zero-delta gesture boundaries never zoom or move the anchor
+PASS  repeated pixel zoom keeps the playhead centred without drift
+PASS  toolbar and keyboard zoom use the same playhead focus
+PASS  native pinch centres the playhead regardless of pointer position
+PASS  reversing pinch preserves the focus and restores scale
+PASS  an off-screen selected clip takes zoom priority over the playhead
+PASS  native pinch uses the selected clip focus
+PASS  multiple selected clips zoom around their full time span
+PASS  selection order does not change the zoom focus
+PASS  clearing clip selection returns zoom focus to the playhead
+PASS  zoom at project start respects the left boundary
+PASS  track headers use the same pixel and fractional-wheel distances
+PASS  middle-button pan preserves fractional pointer movement
+PASS  fractional pan accumulates without losing either axis
+PASS  reversing a pan restores the original viewport
+PASS  panning away from a bound has no overscroll dead zone
+Slow playback (4 px/s): 72 callbacks, 72 paints, 5 distinct whole pixels in 1.283 s
+PASS  playback preserves fractional positions without stepping backwards
+PASS  zoomed-out playback paints intermediate frames within the same logical pixel
+Playback static paints: 0 (0 full window exposures)
+PASS  cursor-only frames reuse the static timeline without whole-window repainting
+PASS  panning either way leaves the playback trail length unchanged
+PASS  a backward seek jumps directly without stretching or reversing the trail
+PASS  after reverse pan the rendered trail extends only left from the cursor
+PASS  pause removes the trail immediately
+PASS  stopping erases the whole previous trail with a cached narrow repaint
+Continuous navigation: 148 inputs, 77 frames, 72 static paints (1250x640, DPR 1.0, 60.00 Hz)
+PASS  continuous scroll and zoom paint while input is active
+PASS  scrollbars do not repaint the canvas at input frequency

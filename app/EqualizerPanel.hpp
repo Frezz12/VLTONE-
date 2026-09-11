@@ -1,4 +1,5 @@
 #pragma once
+#include "graphics/ScenePaintSource.hpp"
 #include "UiFrameClock.hpp"
 
 #include "Internal/EqualizerInstance.hpp"
@@ -26,7 +27,7 @@ class QHideEvent;
 namespace ui { class Knob; }
 namespace daw { class EngineController; }
 
-class EqualizerGraph final : public ui::FrameWidget {
+class EqualizerGraph final : public ui::FrameWidget , public ui::graphics::ScenePaintSource {
     Q_OBJECT
 public:
     /// Samples per band curve. Each enabled band draws its own filled shape, so
@@ -70,6 +71,7 @@ public:
 
 protected:
     void paintEvent(QPaintEvent*) override;
+    void paintScene(QPainter&, const QRegion&) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;

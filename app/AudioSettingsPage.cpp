@@ -452,8 +452,7 @@ void AudioSettingsPage::apply() {
     if (!result) {
         syncSettledConfiguration();
         m_bufferNote->setText(
-            tr("Could not apply this configuration. The previous audio device "
-               "is still active."));
+            tr("Could not apply this configuration. The controls show the current audio settings."));
         m_bufferNote->setVisible(true);
         QMessageBox::warning(this, tr("Audio Settings"),
                              QString::fromStdString(result.message()));

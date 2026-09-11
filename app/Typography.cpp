@@ -7,6 +7,7 @@
 #include <QRawFont>
 #include <QtEndian>
 #include <QWebEngineProfile>
+#include <QQuickWebEngineProfile>
 #include <QWebEngineUrlRequestJob>
 #include <QWebEngineUrlScheme>
 #include <QWebEngineUrlSchemeHandler>
@@ -73,6 +74,11 @@ void registerFontUrlScheme() {
 }
 
 void installFontUrlHandler(QWebEngineProfile* profile) {
+    if (profile && !profile->urlSchemeHandler("vlt-font"))
+        profile->installUrlSchemeHandler("vlt-font", new FontUrlHandler(profile));
+}
+
+void installFontUrlHandler(QQuickWebEngineProfile* profile) {
     if (profile && !profile->urlSchemeHandler("vlt-font"))
         profile->installUrlSchemeHandler("vlt-font", new FontUrlHandler(profile));
 }

@@ -1,7 +1,6 @@
 #include "TimelineBackgroundPrefs.hpp"
 
 #include <QDir>
-#include <QJsonDocument>
 #include <QFileInfo>
 #include <QSettings>
 #include <QStringList>
@@ -94,30 +93,19 @@ QString path() {
 
 bool setPath(const QString& candidate) {
     if (!storePath(kTimelinePrefix, candidate)) return false;
-    clearWebSource();
+    // Remove settings left by releases that supported browser-video wallpaper.
+    QSettings settings;
+    settings.remove(key(kTimelinePrefix, "webSource"));
+    settings.remove(key(kTimelinePrefix, "sourceRevision"));
+    setEnabled(true);
     return true;
 }
 
 void clear() {
-    QSettings().remove(key(kTimelinePrefix, "path"));
-    clearWebSource();
-}
-
-QJsonObject webSource() {
-    return QJsonDocument::fromJson(QSettings().value(
-        key(kTimelinePrefix, "webSource")).toByteArray()).object();
-}
-void setWebSource(const QJsonObject& source) {
-    QSettings().setValue(key(kTimelinePrefix, "webSource"),
-        QJsonDocument(source).toJson(QJsonDocument::Compact));
-}
-quint64 sourceRevision() {
-    return QSettings().value(key(kTimelinePrefix, "sourceRevision"), 0).toULongLong();
-}
-void clearWebSource() {
     QSettings settings;
+    settings.remove(key(kTimelinePrefix, "path"));
     settings.remove(key(kTimelinePrefix, "webSource"));
-    settings.setValue(key(kTimelinePrefix, "sourceRevision"), sourceRevision() + 1);
+    settings.remove(key(kTimelinePrefix, "sourceRevision"));
 }
 
 bool enabled() {
@@ -193,7 +181,11 @@ void setEnabled(bool value) {
 }
 
 QString path() { return storedPath(kPrefix); }
-bool setPath(const QString& candidate) { return storePath(kPrefix, candidate); }
+bool setPath(const QString& candidate) {
+    if (!storePath(kPrefix, candidate)) return false;
+    setEnabled(true);
+    return true;
+}
 void clear() { QSettings().remove(key(kPrefix, "path")); }
 
 int visibility() { return storedPercent(kPrefix, "visibility", 28); }

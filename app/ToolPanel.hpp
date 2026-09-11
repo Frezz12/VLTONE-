@@ -8,6 +8,7 @@
 namespace icons { enum class Glyph; }
 namespace ui { class IconButton; }
 class QToolButton;
+class QSlider;
 
 /// A toolbar strip under the transport bar, divided into zones that line up
 /// with the columns below it (inspector | tracks | timeline). Arrangement
@@ -29,7 +30,6 @@ public:
     void setRestartMode(bool on);
     void setPlayFromClip(bool on);
     void setFollowPlayhead(bool on);
-    void setZoomFocusEnabled(bool on);
     /// Kept for the shell's benefit; the toggle itself is in the header drawer.
     void setInspectorVisible(bool visible);
     /// Sync the left zone width with the inspector column (collapsed/expanded).
@@ -51,6 +51,11 @@ public:
     /// Mirror the explicit mode choice without emitting another toggle.
     void setAutomationCreationActive(bool active);
     void setAutomationCreationShortcut(const QString& shortcut);
+    /// Mirror the representative lane height without turning a document sync
+    /// into another user edit.
+    void setTrackHeightValue(int height);
+    /// Keep the compact zoom control in step with wheel, pinch and shortcuts.
+    void setTimelineZoom(double pixelsPerSecond);
     /// Keep a permanent boundary before the waveform control, even while it
     /// is hidden. Its slot must not move when a context panel approaches it.
     int contextRightEdge() const;
@@ -62,9 +67,15 @@ signals:
     void restartModeToggled(bool on);
     void playFromClipToggled(bool on);
     void followPlayheadToggled(bool on);
-    void zoomFocusToggled(bool on);
     /// Display-only scale for audio waveforms in arrangement clips.
     void waveformScaleChanged(double scale);
+    /// A lane-height drag is one undoable edit even though it previews every
+    /// pointer sample live.
+    void trackHeightEditStarted();
+    void trackHeightChanged(int height);
+    void trackHeightEditFinished();
+    /// Absolute horizontal scale requested by the compact timeline slider.
+    void timelineZoomChanged(double pixelsPerSecond);
     /// Global reveal/collapse for automation lanes. Checked is the active
     /// state, so pressing the button a second time hides them again.
     void automationVisibilityToggled(bool visible);
@@ -76,10 +87,10 @@ protected:
     bool event(QEvent*) override;
     bool eventFilter(QObject*, QEvent*) override;
     void resizeEvent(QResizeEvent*) override;
-    void paintEvent(QPaintEvent*) override;
 
 private:
     void updateWaveformVisibility(QWidget* changingPanel = nullptr, bool showing = false);
+    void updateTimelineSliderVisibility();
     QVector<QPointer<QWidget>> m_contextPanels;
     void applyTheme();
     /// Push the assistant's zone back to the end of the row. The zones are
@@ -89,8 +100,12 @@ private:
     ui::IconButton* m_restart = nullptr;
     ui::IconButton* m_playFromClip = nullptr;
     ui::IconButton* m_followPlayhead = nullptr;
-    ui::IconButton* m_zoomFocus = nullptr;
     ui::IconButton* m_waveformScale = nullptr;
+    QSlider* m_trackHeightSlider = nullptr;
+    QSlider* m_timelineZoomSlider = nullptr;
+    QWidget* m_timelineZone = nullptr;
+    QWidget* m_timelineSliders = nullptr;
+    bool m_trackHeightDragging = false;
     ui::IconButton* m_createAutomation = nullptr;
     ui::IconButton* m_showAutomation = nullptr;
     QWidget* m_trackActions = nullptr;

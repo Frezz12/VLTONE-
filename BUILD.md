@@ -1,7 +1,8 @@
 # Building VLTONE
 
 VLTONE cross-platform digital audio workstation. C++23 graph audio engine + Qt 6
-Widgets front-end, audio I/O via PortAudio, file decode via libsndfile (plus
+front-end with a Qt Quick GPU workspace and a compatible Widgets renderer,
+audio I/O via PortAudio, file decode via libsndfile (plus
 AudioToolbox on macOS / Media Foundation on Windows for M4A, MP4A, MP4 audio
 and AAC), JSON via
 nlohmann/json. Build system: CMake (≥ 3.24) + Ninja.
@@ -11,7 +12,7 @@ engine/       the audio engine: node graph, work-stealing job system, DSP
                 (no dependencies beyond the STL and Threads)
 core/         platform layer: PortAudio device I/O, libsndfile decode, recording
 controller/   framework-agnostic app logic (EngineController, model, serializer)
-app/          Qt Widgets front-end and mandatory account gate
+app/          Qt Quick/Widgets front-end and mandatory account gate
 reporter/     Qt Core/Network diagnostics courier (separate process)
 backend/      Go API, migrations, OpenAPI contract and adminctl
 web/          public Next.js site and account cabinet (port 3000)
@@ -114,6 +115,17 @@ Dependencies via Homebrew:
 ```bash
 brew install cmake ninja qt qtmultimedia qtwebengine qtserialport portaudio rtmidi libsndfile nlohmann-json
 ```
+
+Avoid **Qt 6.11.0 and 6.11.1 on macOS**: native image conversion releases its
+color space too early, causing SIGTRAP when creating cursors or icons (including
+the plugin loading cursor). Qt 6.11.2 fixes the ownership defect. The configure
+step rejects the affected versions; update an existing Homebrew installation
+with `brew upgrade qt` before rebuilding. The supported Qt 6.8 line is also
+accepted. Rebuild packaged `.app`/DMG releases as well: they carry their own Qt.
+
+`qt_cgimage_lifetime_test` checks actual Qt/CoreGraphics ownership ordering and
+native image lifetime without a display or third-party plugins. Its diagnostic
+interposition library is loaded only by the test, never by VLTONE.
 
 Configure, build, test:
 

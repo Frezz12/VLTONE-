@@ -9,6 +9,7 @@ namespace daw { class EngineController; }
 
 class FileBrowserTree;
 class FileSearchWorker;
+class MidiPreviewLoader;
 class PreviewLoader;
 class WaveformStrip;
 class QLabel;
@@ -71,6 +72,9 @@ public:
     /// audition itself cannot be observed without an audio device, so this is
     /// what says the worker → strip → engine chain ran.
     bool hasPreviewWaveformForTest() const;
+    bool hasMidiPreviewForTest() const;
+    bool previewVisibleForTest() const;
+    bool clearFileSelectionForTest();
     /// Headless check only: the file URLs a drag of the current selection would
     /// carry. Empty when nothing draggable is selected.
     QStringList dragUrlsForTest() const;
@@ -119,6 +123,7 @@ private:
     void startPreview(const QString& path);
     void stopPreview();
     void refreshPreviewState();
+    void setPreviewVisible(bool visible, bool audioControls);
 
     /// Push `m_zoom` into every part of the panel that has a size.
     void applyZoom();
@@ -132,7 +137,9 @@ private:
     FileBrowserTree* m_tree = nullptr;
     FileSearchWorker* m_search = nullptr;
     PreviewLoader* m_loader = nullptr;
+    MidiPreviewLoader* m_midiLoader = nullptr;
     QLineEdit* m_searchField = nullptr;
+    QWidget* m_previewBar = nullptr;
     WaveformStrip* m_strip = nullptr;
     QLabel* m_fileLabel = nullptr;
     ui::IconButton* m_playButton = nullptr;

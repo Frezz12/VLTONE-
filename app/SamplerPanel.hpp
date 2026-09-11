@@ -1,4 +1,5 @@
 #pragma once
+#include "graphics/ScenePaintSource.hpp"
 #include "UiFrameClock.hpp"
 
 #include <QHash>
@@ -40,7 +41,7 @@ class SamplerKeyboard;
 /// It reads the *processed* sample — the one the precomputed effects were baked
 /// into — because that is what plays, and a reverse or a reverb that the
 /// display did not follow would make the markers point at the wrong place.
-class SamplerWaveform : public ui::FrameWidget {
+class SamplerWaveform : public ui::FrameWidget , public ui::graphics::ScenePaintSource {
     Q_OBJECT
 public:
     explicit SamplerWaveform(QWidget* parent = nullptr);
@@ -61,6 +62,7 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent*) override;
+    void paintScene(QPainter&, const QRegion&) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
@@ -69,6 +71,8 @@ private:
     /// Which marker a press at `x` grabs, or an empty string for none.
     QString markerAt(int x) const;
     void rebuildPeaks();
+    void requestPeakBuild();
+    void paintWaveformBase(QPainter&);
     /// Fraction 0…1 of the *base* sample → x. The reverb tail sits past the
     /// right edge of the marker area, so the two mappings differ.
     double xForFraction(double fraction) const;
@@ -76,6 +80,8 @@ private:
 
     std::shared_ptr<const daw::plugins::sampler::SampleData> m_sample;
     quint64 m_peakGeneration = 0;
+    quint64 m_gpuWaveformKey = 0;
+    bool m_peakBuildBusy = false;
     const void* m_peaksFor = nullptr;   ///< the buffer the peaks were built from
     /// The envelope at a fixed resolution rather than one entry per pixel.
     /// Scanning the whole sample is O(its length), and tying that to the

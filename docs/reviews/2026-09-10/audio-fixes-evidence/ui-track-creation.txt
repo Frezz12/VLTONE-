@@ -1,0 +1,4 @@
+This plugin does not support propagateSizeHints()
+QApplication::removeTranslator: Please instantiate the QApplication object first
+QApplication::removeTranslator: Please instantiate the QApplication object first
+PASS track creation dialog: cancel, editor, ordering, settings, batch undo/redo

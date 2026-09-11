@@ -22,7 +22,10 @@
 #include <QTableWidget>
 #include <QTimer>
 #include <QWebEnginePage>
-#include <QWebEngineView>
+#include "graphics/BrowserSurface.hpp"
+#include "graphics/GraphicsPreferences.hpp"
+#include "graphics/WorkspaceSurface.hpp"
+#include <QQuickWindow>
 
 #include <cmath>
 #include <memory>
@@ -53,7 +56,7 @@ bool NotebookWindow::checkTimedTextForTest(QString* error) {
         return false;
     }
     const QString original = run(QStringLiteral("editor.innerHTML")).toString();
-    const auto originalCues = ui::notebookprefs::timedCues();
+    const auto originalCues = m_controller->notebookCues();
     const bool originalEnabled = ui::notebookprefs::timedTextEnabled();
     const double originalPosition = m_controller->positionSeconds();
     bool ok = true;
@@ -106,7 +109,7 @@ bool NotebookWindow::checkTimedTextForTest(QString* error) {
     check(m_cueText->text() == QStringLiteral("Selected words"),
           "switching to timed text did not pick up the editor selection");
 
-    ui::notebookprefs::saveTimedCues({});
+    m_controller->setNotebookCues({});
     reloadTimedTextTable();
     m_timedTextPlaybackButton->setChecked(false);
     m_controller->seekSeconds(12.25);
@@ -116,19 +119,19 @@ bool NotebookWindow::checkTimedTextForTest(QString* error) {
     check(overrideEnter.isAccepted(), "the cue field did not reserve Enter from transport shortcuts");
     QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
     QApplication::sendEvent(m_cueText, &enter);
-    auto cues = ui::notebookprefs::timedCues();
+    auto cues = m_controller->notebookCues();
     check(cues.size() == 1 && std::abs(cues.front().seconds - 12.25) < 0.001 &&
-              cues.front().text == QStringLiteral("First cue") && ui::notebookprefs::timedTextEnabled(),
+              cues.front().text == "First cue" && ui::notebookprefs::timedTextEnabled(),
           "binding a line did not save its time and enable timeline display");
     m_controller->seekSeconds(3.5);
     m_cueText->setText(QStringLiteral("Earlier cue"));
     captureCurrentLine();
-    cues = ui::notebookprefs::timedCues();
-    check(cues.size() == 2 && cues.front().text == QStringLiteral("Earlier cue") &&
+    cues = m_controller->notebookCues();
+    check(cues.size() == 2 && cues.front().text == "Earlier cue" &&
               m_timedTextTable->currentRow() == 0 && m_setCueTime->isEnabled(),
           "sorting cues lost the selected line or edit actions");
     m_timedTextTable->item(0, 0)->setText(QStringLiteral("00:04,750"));
-    cues = ui::notebookprefs::timedCues();
+    cues = m_controller->notebookCues();
     check(cues.size() == 2 && std::abs(cues.front().seconds - 4.75) < 0.001,
           "a localized edited cue time did not save");
     m_seekCue->click();
@@ -139,19 +142,19 @@ bool NotebookWindow::checkTimedTextForTest(QString* error) {
     check(m_cuePreview->text().contains(QStringLiteral("First cue")),
           "current-line preview did not follow seeking");
     setSelectedCueToPlayhead();
-    cues = ui::notebookprefs::timedCues();
+    cues = m_controller->notebookCues();
     check(cues.size() == 2 && std::abs(cues.back().seconds - 14.0) < 0.001 &&
-              cues.back().text == QStringLiteral("Earlier cue"),
+              cues.back().text == "Earlier cue",
           "updating a cue time did not keep its text after sorting");
     deleteSelectedCue();
-    check(ui::notebookprefs::timedCues().size() == 1,
+    check(m_controller->notebookCues().size() == 1,
           "deleting a cue did not persist");
 
     const QString encoded = QString::fromLatin1(original.toUtf8().toBase64());
     run(QStringLiteral("editor.innerHTML=new TextDecoder().decode(Uint8Array.from(atob('%1'),c=>c.charCodeAt(0)));savedRange=null;sendContent();").arg(encoded));
     receiveContent(original);
     saveNow();
-    ui::notebookprefs::saveTimedCues(originalCues);
+    m_controller->setNotebookCues(originalCues);
     m_timedTextPlaybackButton->setChecked(originalEnabled);
     m_controller->seekSeconds(originalPosition);
     reloadTimedTextTable();
@@ -159,7 +162,12 @@ bool NotebookWindow::checkTimedTextForTest(QString* error) {
     emit timedTextChanged();
     m_tabs->setCurrentIndex(0);
     m_view->setFocus(Qt::OtherFocusReason);
-    QApplication::processEvents();
+    QElapsedTimer focusReady; focusReady.start();
+    while (!ownsEditorFocus() && focusReady.elapsed() < 1000) {
+        QEventLoop activation;
+        QTimer::singleShot(10, &activation, &QEventLoop::quit);
+        activation.exec();
+    }
     check(ownsEditorFocus() && m_view->property("dawWebInput").toBool(),
           "the embedded notebook was not recognized as a text input");
     return ok;
@@ -172,17 +180,35 @@ bool MainWindow::checkNotebookForTest() {
     setNotebookDetached(false);
     QApplication::processEvents();
     auto* notebook = m_notebookWindow;
-    auto* editor = notebook->findChild<QWebEngineView*>();
+    auto* editor = notebook->findChild<ui::graphics::BrowserSurface*>();
     auto* page = editor ? editor->page() : nullptr;
     bool ok = notebook && !notebook->isWindow() && notebook->parentWidget() == m_notebookContainer &&
               m_notebookContainer->isVisible();
     QString error;
     if (ok) ok = notebook->checkTimedTextForTest(&error);
+    if (ui::graphics::gpuWorkspaceEnabled()) {
+        ok = ok && centralWidget()->property("vlt.gpuSurfaceActive").toBool();
+        if (!ok && error.isEmpty()) error = QStringLiteral("notebook disabled the main GPU scene");
+    }
     if (m_webPanel) ok = ok && !m_webPanel->ownsFocus();
     setNotebookDetached(true);
     QApplication::processEvents();
     ok = ok && m_notebookWindow == notebook && m_notebookDetachedWindow->isVisible() &&
          m_notebookContainer->isHidden() && notebook->parentWidget() == m_notebookDetachedWindow;
+    if (ui::graphics::gpuWorkspaceEnabled()) {
+        QPointer<ui::graphics::WorkspaceSurface> surface =
+            m_notebookDetachedWindow->findChild<ui::graphics::WorkspaceSurface*>();
+        QElapsedTimer ready; ready.start();
+        while (surface && ready.elapsed() < 3000 &&
+               (!surface->quickWindow()->isExposed() || editor->page()->quickItem()->window() != surface->quickWindow())) {
+            QEventLoop presentation;
+            QTimer::singleShot(50, &presentation, &QEventLoop::quit);
+            presentation.exec();
+        }
+        ok = ok && surface && !surface->quickWindow()->grabWindow().isNull() &&
+             editor->page()->quickItem()->window() == surface->quickWindow();
+        if (!ok && error.isEmpty()) error = QStringLiteral("detached notebook did not join its own GPU scene");
+    }
     m_notebookDetachedWindow->close();
     QApplication::processEvents();
     ok = ok && !ui::notebookprefs::visible() && !notebook->isVisible();
@@ -191,7 +217,7 @@ bool MainWindow::checkNotebookForTest() {
     QApplication::processEvents();
     ok = ok && notebook->parentWidget() == m_notebookContainer && notebook->isVisible() &&
          m_notebookDetachedWindow->isHidden() &&
-         notebook->findChild<QWebEngineView*>() == editor && editor->page() == page;
+         notebook->findChild<ui::graphics::BrowserSurface*>() == editor && editor->page() == page;
     setNotebookVisible(false);
     ok = ok && m_notebookContainer->isHidden();
     if (!ok) std::fprintf(stderr, "Notebook check failed: %s\n", error.toUtf8().constData());

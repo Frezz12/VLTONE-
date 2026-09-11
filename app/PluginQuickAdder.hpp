@@ -135,6 +135,7 @@ private:
     void showOverlay();
     void hideOverlay();
     void positionOverlay();
+    QWidget* overlayRoot() const;
     QRect listViewport() const;
     void paintOverlay(QPaintEvent*);
     void overlayMousePress(QMouseEvent*);

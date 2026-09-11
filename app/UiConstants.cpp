@@ -2,6 +2,7 @@
 
 #include <QSettings>
 #include <QApplication>
+#include <QFontDatabase>
 
 #include <algorithm>
 
@@ -44,10 +45,47 @@ bool& cachedPlayheadTrail() {
     return trail;
 }
 
+bool& cachedDuplicateTrackClips() {
+    static bool include =
+        QSettings().value(kDuplicateTrackClipsSetting, false).toBool();
+    return include;
+}
+
 } // namespace
 
 QFont transportDisplayFont(int pixelSize, QFont::Weight weight) {
-    QFont font = QApplication::font();
+    static const QString family = [] {
+#if defined(Q_OS_MACOS)
+        const QStringList preferred{QStringLiteral("Menlo"),
+                                    QStringLiteral("SF Mono")};
+#elif defined(Q_OS_WIN)
+        const QStringList preferred{QStringLiteral("Cascadia Mono"),
+                                    QStringLiteral("Consolas")};
+#else
+        const QStringList preferred{QStringLiteral("DejaVu Sans Mono"),
+                                    QStringLiteral("Liberation Mono")};
+#endif
+        const QStringList installed = QFontDatabase::families();
+        for (const QString& candidate : preferred) {
+            for (const QString& available : installed) {
+                if (candidate.compare(available, Qt::CaseInsensitive) == 0)
+                    return available;
+            }
+        }
+        // Inter is bundled and has tabular figures enabled below, so even a
+        // minimal system image gets stable counter width without an alias scan.
+        return QStringLiteral("Inter");
+    }();
+    QFont font(family);
+    font.setPixelSize(pixelSize);
+    font.setWeight(weight);
+    font.setFeature(QFont::Tag("tnum"), 1);
+    return font;
+}
+
+QFont transportControlFont(int pixelSize, QFont::Weight weight) {
+    QFont font(QStringLiteral("Inter"));
+    font.setStyleName(QString());
     font.setPixelSize(pixelSize);
     font.setWeight(weight);
     font.setFeature(QFont::Tag("tnum"), 1);
@@ -98,6 +136,15 @@ bool playheadTrail() {
 void setPlayheadTrail(bool enabled) {
     cachedPlayheadTrail() = enabled;
     QSettings().setValue(kPlayheadTrailSetting, enabled);
+}
+
+bool duplicateTrackClips() {
+    return cachedDuplicateTrackClips();
+}
+
+void setDuplicateTrackClips(bool enabled) {
+    cachedDuplicateTrackClips() = enabled;
+    QSettings().setValue(kDuplicateTrackClipsSetting, enabled);
 }
 
 } // namespace ui

@@ -49,7 +49,6 @@
 #include <QWebEnginePage>
 #include <QWebEngineProfile>
 #include <QWebEngineSettings>
-#include <QWebEngineScript>
 #include <QWebEngineView>
 
 #include <algorithm>
@@ -183,43 +182,8 @@ bool sameLocalPath(const QUrl& a, const QUrl& b) {
     return !left.isEmpty() && left == right;
 }
 
-class RestrictedWebPage final : public QWebEnginePage {
-public:
-    RestrictedWebPage(QWebEngineProfile* profile, QObject* parent)
-        : QWebEnginePage(profile, parent) {}
-
-    std::function<void(const QUrl&)> navigationRejected;
-    std::function<bool(const QUrl&)> internalNavigationAllowed;
-
-protected:
-    bool acceptNavigationRequest(const QUrl& url, NavigationType type,
-                                 bool isMainFrame) override {
-        (void)type;
-        if (!isMainFrame || allowedMainFrameUrl(url) ||
-            (internalNavigationAllowed && internalNavigationAllowed(url))) {
-            return true;
-        }
-        if (navigationRejected) navigationRejected(url);
-        return false;
-    }
-
-    void javaScriptConsoleMessage(JavaScriptConsoleMessageLevel level,
-                                  const QString& message, int lineNumber,
-                                  const QString& sourceId) override {
-        const QString scheme = url().scheme().toLower();
-        if (scheme == QLatin1String("http") ||
-            scheme == QLatin1String("https")) {
-            // QWebEnginePage's default implementation copies every external
-            // site's console into the host process. Twitch alone emits WebGPU
-            // fallback, EventEmitter, cross-origin and unauthenticated GraphQL
-            // diagnostics during successful playback. They belong to the web
-            // page, not to the DAW, and can otherwise hide real engine errors.
-            return;
-        }
-        QWebEnginePage::javaScriptConsoleMessage(level, message, lineNumber,
-                                                 sourceId);
-    }
-};
+using RestrictedWebPage = ui::graphics::BrowserPage;
+using BrowserSurface = ui::graphics::BrowserSurface;
 
 QString safeDownloadName(QString name) {
     name = QFileInfo(name).fileName().trimmed();
@@ -267,7 +231,7 @@ QString initialDownloadName(QWebEngineDownloadRequest* request) {
 /// loading in the background must not turn the visible tab's reload button
 /// into a stop button.
 struct WebBrowserPanel::Tab {
-    QWebEngineView* view = nullptr;
+    BrowserSurface* view = nullptr;
     QString failedUrl;
     bool showingStartPage = false;
     bool showingErrorPage = false;
@@ -280,7 +244,7 @@ WebBrowserPanel::Tab* WebBrowserPanel::currentTab() const {
     return index >= 0 && index < m_tabs.size() ? m_tabs.at(index) : nullptr;
 }
 
-QWebEngineView* WebBrowserPanel::view() const {
+BrowserSurface* WebBrowserPanel::view() const {
     Tab* tab = currentTab();
     return tab ? tab->view : nullptr;
 }
@@ -291,15 +255,14 @@ int WebBrowserPanel::indexOfTab(const Tab* tab) const {
     return -1;
 }
 
-WebBrowserPanel::WebBrowserPanel(QWidget* parent, QWebEngineProfile* profile) : QWidget(parent) {
+WebBrowserPanel::WebBrowserPanel(QWidget* parent, QWebEngineProfile* profile)
+    : QWidget(parent) {
     setObjectName(QStringLiteral("WebBrowserPanel"));
     setAttribute(Qt::WA_StyledBackground, true);
     setProperty("dawWebInput", true);
     setMinimumWidth(ui::webprefs::kMinWidth);
 
-    m_ownsProfile = !profile;
-    m_profile = profile ? profile : ui::createWebBrowserProfile(this);
-    ui::installFontUrlHandler(m_profile);
+    m_profile = new ui::graphics::BrowserProfile(this, profile);
 
     auto* column = new QVBoxLayout(this);
     column->setContentsMargins(0, 0, 0, 0);
@@ -328,9 +291,8 @@ WebBrowserPanel::WebBrowserPanel(QWidget* parent, QWebEngineProfile* profile) : 
     viewLayout->addWidget(m_stack);
     column->addWidget(m_viewFrame, 1);
     column->addWidget(buildDownloadBar());
-    column->addWidget(buildVideoBar());
 
-    connect(m_profile, &QWebEngineProfile::downloadRequested, this,
+    connect(m_profile, &ui::graphics::BrowserProfile::downloadRequested, this,
             &WebBrowserPanel::acceptDownload, Qt::DirectConnection);
 
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, [this] {
@@ -372,8 +334,6 @@ WebBrowserPanel::WebBrowserPanel(QWidget* parent, QWebEngineProfile* profile) : 
 }
 
 WebBrowserPanel::~WebBrowserPanel() {
-    ++m_videoScanGeneration;
-    if (m_videoTimer) m_videoTimer->stop();
     for (const auto& download : std::as_const(m_downloads)) {
         if (download && !download->isFinished()) download->cancel();
     }
@@ -396,129 +356,8 @@ WebBrowserPanel::~WebBrowserPanel() {
     // The profile must not go before them — WebEngine says so itself, in a
     // warning, right before things stop working.
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-    if (m_ownsProfile) delete m_profile;
+    delete m_profile;
     m_profile = nullptr;
-}
-
-QWidget* WebBrowserPanel::buildVideoBar() {
-    auto* bar = new QWidget(this);
-    bar->setObjectName(QStringLiteral("WebVideoBar"));
-    auto* row = new QHBoxLayout(bar);
-    row->setContentsMargins(8, 3, 8, 3);
-    row->setSpacing(4);
-    m_videoBackground = new ui::IconButton(icons::Glyph::Image, tr("Use video as timeline background"), bar);
-    m_videoBackground->setObjectName(QStringLiteral("WebVideoBackgroundButton"));
-    m_videoBackground->setEnabled(false);
-    m_videoMute = new ui::IconButton(icons::Glyph::Volume, tr("Enable background sound"), bar);
-    m_videoMute->setCheckable(true);
-    m_videoMute->setObjectName(QStringLiteral("WebVideoMuteButton"));
-    m_videoClear = new ui::IconButton(icons::Glyph::Close, tr("Remove video background"), bar);
-    m_videoClear->setObjectName(QStringLiteral("WebVideoClearButton"));
-    m_videoOpen = new ui::IconButton(icons::Glyph::Globe, tr("Open background video page"), bar);
-    m_videoStatus = new QLabel(bar);
-    m_videoStatus->setObjectName(QStringLiteral("WebVideoStatus"));
-    m_videoStatus->setMinimumWidth(0);
-    m_videoStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    for (auto* button : {m_videoBackground, m_videoMute, m_videoClear, m_videoOpen}) {
-        button->setButtonSize(26, 26);
-        button->setAccessibleName(button->toolTip());
-    }
-    row->addWidget(m_videoBackground);
-    row->addWidget(m_videoStatus, 1);
-    row->addWidget(m_videoOpen);
-    row->addWidget(m_videoMute);
-    row->addWidget(m_videoClear);
-    m_videoMute->hide(); m_videoClear->hide(); m_videoOpen->hide();
-    connect(m_videoBackground, &QAbstractButton::clicked, this, &WebBrowserPanel::chooseBackgroundVideo);
-    connect(m_videoMute, &QAbstractButton::clicked, this, [this] {
-        emit videoBackgroundMuteRequested(!m_videoBackgroundMuted);
-    });
-    connect(m_videoClear, &QAbstractButton::clicked, this, &WebBrowserPanel::videoBackgroundClearRequested);
-    connect(m_videoOpen, &QAbstractButton::clicked, this, [this] {
-        if (!m_videoSourceUrl.isEmpty()) openTab(m_videoSourceUrl.toString());
-    });
-    m_videoTimer = new QTimer(this);
-    m_videoTimer->setInterval(1000);
-    connect(m_videoTimer, &QTimer::timeout, this, &WebBrowserPanel::refreshVideoButton);
-    m_videoTimer->start();
-    return bar;
-}
-
-void WebBrowserPanel::setBackgroundState(bool active, bool loading, bool muted, const QUrl& sourceUrl) {
-    m_videoBackgroundMuted = muted;
-    m_videoSourceUrl = sourceUrl;
-    m_videoMute->setVisible(active);
-    m_videoMute->setChecked(!muted);
-    m_videoMute->setToolTip(muted ? tr("Enable background sound") : tr("Mute background sound"));
-    m_videoMute->setAccessibleName(m_videoMute->toolTip());
-    m_videoClear->setVisible(active || loading || !sourceUrl.isEmpty());
-    m_videoOpen->setVisible(!sourceUrl.isEmpty());
-    m_videoStatus->setText(loading ? tr("Loading video…") : active ? tr("Timeline background") : QString());
-    m_videoStatus->setToolTip(sourceUrl.toDisplayString());
-    m_videoBackground->setAccentTint(active);
-    refreshVideoButton();
-}
-
-void WebBrowserPanel::showBackgroundError(const QString& message) {
-    m_videoStatus->setText(tr("Video unavailable"));
-    m_videoStatus->setToolTip(message);
-}
-
-void WebBrowserPanel::refreshVideoButton() {
-    if (!isVisible() || m_videoScanPending || !view()) return;
-    m_videoScanPending = true;
-    const auto generation = ++m_videoScanGeneration;
-    QTimer::singleShot(3000, this, [this, generation] {
-        if (generation == m_videoScanGeneration) {
-            ++m_videoScanGeneration;
-            m_videoScanPending = false;
-        }
-    });
-    const QPointer<QWebEngineView> target(view());
-    const QUrl url = target->url();
-    ui::discoverWebVideos(target->page(), this, [this, target, url, generation](const QList<ui::WebVideoSource>& videos) {
-        if (generation != m_videoScanGeneration) return;
-        m_videoScanPending = false;
-        if (!target || view() != target || target->url() != url) return;
-        m_videoBackground->setEnabled(!videos.isEmpty());
-        m_videoBackground->setToolTip(videos.isEmpty() ? tr("No video found on this page") : tr("Use video as timeline background"));
-    });
-}
-
-void WebBrowserPanel::chooseBackgroundVideo() {
-    if (!view()) return;
-    const QPointer<QWebEngineView> target(view());
-    const QUrl url = target->url();
-    ui::discoverWebVideos(target->page(), this, [this, target, url](const QList<ui::WebVideoSource>& videos) {
-        if (!target || view() != target || target->url() != url) return;
-        const auto request = [this, target, url](ui::WebVideoSource source) {
-            if (!target || target->url() != url || !source.frame || !source.frame->isValid()) return;
-            const QPointer<WebBrowserPanel> guard(this);
-            source.frame->runJavaScript(QStringLiteral("(()=>{const v=%1;return v? v.currentTime : -1})()")
-                .arg(ui::webVideoLookupScript(source)), QWebEngineScript::ApplicationWorld,
-                [guard, target, url, source](const QVariant& value) mutable {
-                    if (!guard || !target || target->url() != url || !value.isValid() || value.toDouble() < 0) return;
-                    source.position = value.toDouble();
-                    emit guard->videoBackgroundRequested(source);
-                });
-        };
-        if (videos.isEmpty()) {
-            m_videoBackground->setEnabled(false);
-            emit statusMessage(tr("No video found on this page"));
-        } else if (videos.size() == 1) request(videos.front());
-        else {
-            auto* menu = new QMenu(this);
-            menu->setAttribute(Qt::WA_DeleteOnClose);
-            int index = 0;
-            for (const auto& source : videos) {
-                auto* action = menu->addAction(tr("%1. %2%3").arg(++index)
-                    .arg(source.title.isEmpty() ? tr("Video") : source.title.left(70))
-                    .arg(source.playing ? tr(" (playing)") : QString()));
-                connect(action, &QAction::triggered, this, [request, source] { request(source); });
-            }
-            menu->popup(m_videoBackground->mapToGlobal(QPoint(0, m_videoBackground->height())));
-        }
-    });
 }
 
 QWidget* WebBrowserPanel::buildTabStrip() {
@@ -581,11 +420,11 @@ QWidget* WebBrowserPanel::buildTabStrip() {
 
 int WebBrowserPanel::openTab(const QString& url, bool activate, bool navigateNow) {
     auto* tab = new Tab;
-    tab->view = new QWebEngineView(m_stack);
+    tab->view = new BrowserSurface(m_profile, m_stack);
     tab->view->setObjectName(QStringLiteral("WebBrowserView"));
     tab->view->setProperty("dawWebInput", true);
 
-    auto* page = new RestrictedWebPage(m_profile, tab->view);
+    auto* page = tab->view->page();
     page->navigationRejected = [this](const QUrl& rejected) {
         emit statusMessage(
             tr("Blocked unsupported web address: %1").arg(rejected.toDisplayString()));
@@ -597,19 +436,20 @@ int WebBrowserPanel::openTab(const QString& url, bool activate, bool navigateNow
              !m_testDownloadPath.isEmpty());
         const QUrl startBase = startPageBaseUrl();
         return internalData ||
+               (!m_testDownloadPath.isEmpty() && candidate.isLocalFile() &&
+                sameLocalPath(candidate, QUrl::fromLocalFile(QFileInfo(m_testDownloadPath).absolutePath() + QLatin1Char('/')))) ||
                (tab->showingStartPage && startBase.isLocalFile() &&
                 sameLocalPath(candidate, startBase));
     };
-    tab->view->setPage(page);
-    tab->view->settings()->setAttribute(
+    page->setWebAttribute(
         QWebEngineSettings::JavascriptCanOpenWindows, true);
-    tab->view->settings()->setAttribute(
+    page->setWebAttribute(
         QWebEngineSettings::LocalContentCanAccessFileUrls, true);
     // Start pages with a local background also load the embedded font scheme.
     // Their CSP limits subresources to the explicit local/font sources.
-    tab->view->settings()->setAttribute(
+    page->setWebAttribute(
         QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);
-    tab->view->settings()->setAttribute(
+    page->setWebAttribute(
         QWebEngineSettings::FullScreenSupportEnabled, false);
     page->setBackgroundColor(th().background);
 
@@ -725,28 +565,25 @@ void WebBrowserPanel::reopenClosedTab() {
 }
 
 void WebBrowserPanel::wireTab(Tab* tab) {
-    QWebEngineView* target = tab->view;
+    BrowserSurface* target = tab->view;
 
-    connect(target, &QWebEngineView::loadStarted, this, [this, tab] {
+    connect(target, &BrowserSurface::loadStarted, this, [this, tab] {
         tab->loading = true;
         if (!tab->showingStartPage) {
             tab->showingErrorPage = false;
             tab->failedUrl.clear();
         }
         if (tab != currentTab()) return;
-        ++m_videoScanGeneration;
-        m_videoScanPending = false;
-        m_videoBackground->setEnabled(false);
         m_reloadStop->setGlyph(icons::Glyph::Close);
         m_reloadStop->setToolTip(tr("Stop loading"));
         m_pageProgress->setRange(0, 100);
         m_pageProgress->setValue(0);
         m_pageProgress->show();
     });
-    connect(target, &QWebEngineView::loadProgress, this, [this, tab](int progress) {
+    connect(target, &BrowserSurface::loadProgress, this, [this, tab](int progress) {
         if (tab == currentTab()) m_pageProgress->setValue(progress);
     });
-    connect(target, &QWebEngineView::loadFinished, this, [this, tab](bool ok) {
+    connect(target, &BrowserSurface::loadFinished, this, [this, tab](bool ok) {
         tab->loading = false;
         if (tab == currentTab()) {
             m_reloadStop->setGlyph(icons::Glyph::Reload);
@@ -765,7 +602,7 @@ void WebBrowserPanel::wireTab(Tab* tab) {
         }
         updateTabLabel(tab);
     });
-    connect(target, &QWebEngineView::urlChanged, this, [this, tab](const QUrl& url) {
+    connect(target, &BrowserSurface::urlChanged, this, [this, tab](const QUrl& url) {
         const bool internalData =
             url.scheme() == QLatin1String("data") &&
             (tab->showingStartPage || tab->showingErrorPage ||
@@ -789,13 +626,13 @@ void WebBrowserPanel::wireTab(Tab* tab) {
         updateTabLabel(tab);
         scheduleSessionSave();
     });
-    connect(target, &QWebEngineView::titleChanged, this,
+    connect(target, &BrowserSurface::titleChanged, this,
             [this, tab](const QString& title) {
                 tab->view->setToolTip(title);
                 updateTabLabel(tab);
                 if (tab == currentTab()) updateBookmarkState();
             });
-    connect(target, &QWebEngineView::iconChanged, this,
+    connect(target, &BrowserSurface::iconChanged, this,
             [this, tab](const QIcon& icon) {
                 const int index = indexOfTab(tab);
                 if (index >= 0) {
@@ -808,7 +645,7 @@ void WebBrowserPanel::wireTab(Tab* tab) {
             });
 
     auto* page = target->page();
-    connect(page, &QWebEnginePage::loadingChanged, this,
+    connect(page, &ui::graphics::BrowserPage::loadingChanged, this,
             [this, tab](const QWebEngineLoadingInfo& info) {
         // loadFinished(false) also means a cancelled/superseded navigation or
         // a download handoff. Never navigate from that signal: it destroys
@@ -826,7 +663,7 @@ void WebBrowserPanel::wireTab(Tab* tab) {
         }
         updateTabLabel(tab);
     });
-    connect(page, &QWebEnginePage::renderProcessTerminated, this,
+    connect(page, &ui::graphics::BrowserPage::renderProcessTerminated, this,
             [this, tab](QWebEnginePage::RenderProcessTerminationStatus status, int code) {
         if (status == QWebEnginePage::NormalTerminationStatus) return;
         tab->loading = false;
@@ -839,8 +676,7 @@ void WebBrowserPanel::wireTab(Tab* tab) {
             emit statusMessage(tr("The web page process stopped (%1). Reload the tab to try again.").arg(code));
         }
     });
-    denyWebPagePermissions(page, this);
-    connect(page, &QWebEnginePage::newWindowRequested, this,
+    connect(page, &ui::graphics::BrowserPage::newWindowRequested, this,
             [this](QWebEngineNewWindowRequest& request) {
                 // Every "open in a new window" gesture the page can make —
                 // target=_blank, a middle click, Ctrl+click — lands here. In a
@@ -851,7 +687,7 @@ void WebBrowserPanel::wireTab(Tab* tab) {
                     request.destination() ==
                     QWebEngineNewWindowRequest::InNewBackgroundTab;
                 const int index = openTab(QString(), !background, false);
-                request.openIn(m_tabs.at(index)->view->page());
+                m_tabs.at(index)->view->page()->openRequest(request);
             });
 }
 
@@ -874,10 +710,6 @@ void WebBrowserPanel::updateTabLabel(Tab* tab) {
 }
 
 void WebBrowserPanel::updateChromeForCurrentTab() {
-    ++m_videoScanGeneration;
-    m_videoScanPending = false;
-    if (m_videoBackground) m_videoBackground->setEnabled(false);
-    refreshVideoButton();
     Tab* tab = currentTab();
     if (!tab) return;
     if (m_reloadStop) {
@@ -895,7 +727,7 @@ void WebBrowserPanel::updateChromeForCurrentTab() {
     // tabs is not a reason to take focus away from whatever the user is
     // typing in, address bar included.
     if (m_findBar && m_findBar->isVisible()) {
-        if (QWebEngineView* target = view()) target->page()->findText(QString());
+        if (BrowserSurface* target = view()) target->page()->findText(QString());
         m_findBar->hide();
     }
 }
@@ -1021,10 +853,10 @@ QWidget* WebBrowserPanel::buildToolbar() {
     refreshCompletions();
 
     connect(m_back, &QAbstractButton::clicked, this, [this] {
-        if (QWebEngineView* target = view()) target->back();
+        if (BrowserSurface* target = view()) target->back();
     });
     connect(m_forward, &QAbstractButton::clicked, this, [this] {
-        if (QWebEngineView* target = view()) target->forward();
+        if (BrowserSurface* target = view()) target->forward();
     });
     connect(m_reloadStop, &QAbstractButton::clicked, this, [this] {
         Tab* tab = currentTab();
@@ -1359,10 +1191,10 @@ void WebBrowserPanel::showStartPage() {
 }
 
 void WebBrowserPanel::updateNavigationState() {
-    QWebEngineView* target = view();
+    BrowserSurface* target = view();
     if (!target) return;
-    m_back->setEnabled(target->history()->canGoBack());
-    m_forward->setEnabled(target->history()->canGoForward());
+    m_back->setEnabled((target->history() && target->history()->canGoBack()));
+    m_forward->setEnabled((target->history() && target->history()->canGoForward()));
 }
 
 QString WebBrowserPanel::currentPageUrl() const {
@@ -1652,16 +1484,16 @@ void WebBrowserPanel::showBrowserMenu() {
     QAction* zoomOut = menu.addAction(tr("Zoom out"));
     QAction* actualSize = menu.addAction(tr("Actual size"));
     connect(zoomIn, &QAction::triggered, this, [this] {
-        if (QWebEngineView* target = view())
+        if (BrowserSurface* target = view())
             target->setZoomFactor(std::min(5.0, target->zoomFactor() + 0.1));
     });
     connect(zoomOut, &QAction::triggered, this, [this] {
-        if (QWebEngineView* target = view())
+        if (BrowserSurface* target = view())
             target->setZoomFactor(std::max(0.25, target->zoomFactor() - 0.1));
     });
     connect(actualSize, &QAction::triggered, this,
             [this] {
-                if (QWebEngineView* target = view()) target->setZoomFactor(1.0);
+                if (BrowserSurface* target = view()) target->setZoomFactor(1.0);
             });
 
     QAction* copyAddress = menu.addAction(tr("Copy page address"));
@@ -1684,7 +1516,7 @@ void WebBrowserPanel::showFindBar() {
 }
 
 void WebBrowserPanel::closeFindBar() {
-    if (QWebEngineView* target = view()) {
+    if (BrowserSurface* target = view()) {
         target->page()->findText(QString());
         target->setFocus(Qt::ShortcutFocusReason);
     }
@@ -1692,7 +1524,7 @@ void WebBrowserPanel::closeFindBar() {
 }
 
 void WebBrowserPanel::findText(bool backward) {
-    QWebEngineView* target = view();
+    BrowserSurface* target = view();
     if (!target) return;
     const QString needle = m_findText->text();
     if (needle.isEmpty()) {
@@ -1750,24 +1582,24 @@ void WebBrowserPanel::installShortcuts() {
         else tab->view->reload();
     });
     add(QKeySequence(QStringLiteral("Alt+Left")), [this] {
-        if (QWebEngineView* target = view()) target->back();
+        if (BrowserSurface* target = view()) target->back();
     });
     add(QKeySequence(QStringLiteral("Alt+Right")), [this] {
-        if (QWebEngineView* target = view()) target->forward();
+        if (BrowserSurface* target = view()) target->forward();
     });
     add(QKeySequence(QStringLiteral("Alt+Home")),
         [this] { navigate(ui::webprefs::homeUrl()); });
     add(QKeySequence(QStringLiteral("Ctrl++")), [this] {
-        if (QWebEngineView* target = view())
+        if (BrowserSurface* target = view())
             target->setZoomFactor(std::min(5.0, target->zoomFactor() + 0.1));
     });
     add(QKeySequence(QStringLiteral("Ctrl+-")), [this] {
-        if (QWebEngineView* target = view())
+        if (BrowserSurface* target = view())
             target->setZoomFactor(std::max(0.25, target->zoomFactor() - 0.1));
     });
     add(QKeySequence(QStringLiteral("Ctrl+0")),
         [this] {
-            if (QWebEngineView* target = view()) target->setZoomFactor(1.0);
+            if (BrowserSurface* target = view()) target->setZoomFactor(1.0);
         });
     add(QKeySequence(Qt::Key_Escape), [this] {
         if (m_findBar->isVisible()) closeFindBar();
@@ -1779,6 +1611,7 @@ void WebBrowserPanel::installShortcuts() {
 }
 
 bool WebBrowserPanel::ownsFocus() const {
+    for (const auto* tab : m_tabs) if (tab->view->ownsQuickFocus()) return true;
     QWidget* focus = QApplication::focusWidget();
     // Deliberately not falling back to `window()->focusWidget()` when there is
     // no application focus widget. It looks like it would make Copy reliable
@@ -1806,7 +1639,7 @@ bool WebBrowserPanel::handleEditCommand(EditCommand command) {
     const Action action = command == EditCommand::Cut    ? Action::Cut
                           : command == EditCommand::Copy ? Action::Copy
                                                          : Action::Paste;
-    if (QWebEngineView* target = view()) target->page()->triggerAction(action);
+    if (BrowserSurface* target = view()) target->page()->triggerAction(action);
     return true;
 }
 
@@ -1817,17 +1650,13 @@ bool WebBrowserPanel::handleUndoRedo(bool redo) {
         else line->undo();
         return true;
     }
-    if (QWebEngineView* target = view())
+    if (BrowserSurface* target = view())
         target->page()->triggerAction(redo ? QWebEnginePage::Redo
                                            : QWebEnginePage::Undo);
     return true;
 }
 
 void WebBrowserPanel::acceptDownload(QWebEngineDownloadRequest* request) {
-    if (request && request->page() && request->page()->property("vltBackgroundPage").toBool()) {
-        request->cancel();
-        return;
-    }
     if (!request) return;
     const QString directory = ui::webprefs::downloadDirectory();
     if (!QDir().mkpath(directory)) {
@@ -1961,13 +1790,16 @@ void WebBrowserPanel::downloadAudioForTest(const QString& path) {
             "<!doctype html><meta charset='utf-8'><title>Offline download "
             "test</title><p>Preparing local audio download…</p>"),
         QUrl::fromLocalFile(QFileInfo(path).absolutePath() + QLatin1Char('/')));
+    // Quick executes the anchor inside the loaded document. Wait for its
+    // loadFinished handler above instead of racing navigation with a timer.
+    if (tab->view->page()->isQuick()) return;
     // Offscreen Chromium can suppress loadFinished while a preceding internal
     // page is being replaced. The download itself is still initiated by the
     // real QWebEnginePage and must travel through downloadRequested.
     QTimer::singleShot(100, this, [this, expected = m_testDownloadPath] {
         if (expected.isEmpty() || m_testDownloadPath != expected) return;
         const QString fixture = std::exchange(m_testDownloadPath, {});
-        if (QWebEngineView* target = view()) {
+        if (BrowserSurface* target = view()) {
             target->page()->download(QUrl::fromLocalFile(fixture),
                                      QFileInfo(fixture).fileName());
         }

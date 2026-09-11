@@ -43,9 +43,8 @@ struct Theme {
     static QColor solo()   { return QColor(0xF2, 0xC4, 0x3D); }
     static QColor record() { return QColor(0xE0, 0x3B, 0x3B); }
 
-    // Context accents: the tint the context panel takes on for each kind of
-    // object, so the colour itself says what is being edited. Fixed like the
-    // signal colours above — audio is always blue whatever the palette.
+    // Fixed semantic accents used by clips and editor content. The context
+    // panel itself follows the selected theme's accent consistently.
     /// The cycle region on a ruler. Yellow because that is what every DAW
     /// paints it, and because nothing else in the chrome is: a lit cycle has
     /// to be recognisable in the corner of the eye while looking at a clip.

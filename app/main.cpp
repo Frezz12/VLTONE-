@@ -40,6 +40,7 @@
 #include "LocalizationManager.hpp"
 #include "NotebookPrefs.hpp"
 #include "QuickImportPrefs.hpp"
+#include "StartupProjectPrefs.hpp"
 #include "TimelineBackgroundPrefs.hpp"
 #include "ThemeMediaBackground.hpp"
 #include "WaveformPaint.hpp"
@@ -55,9 +56,13 @@
 #include "ProjectDialogs.hpp"
 #include "Theme.hpp"
 #include "ThemePackage.hpp"
+#include "graphics/WorkspaceSurface.hpp"
+#include "graphics/GraphicsPreferences.hpp"
+#include <QQuickWindow>
 #include "Typography.hpp"
 
 #include <QApplication>
+#include <QtWebEngineQuick/qtwebenginequickglobal.h>
 #include <QNetworkProxyFactory>
 #include <QDir>
 #include <QSettings>
@@ -128,12 +133,14 @@ class ProjectOpenFilter : public QObject {
 public:
     using Handler = std::function<void(const QString&)>;
 
-    void setHandler(Handler handler, const QStringList& commandLinePaths = {}) {
+    bool setHandler(Handler handler,
+                    const QStringList& commandLinePaths = {}) {
         m_handler = std::move(handler);
         m_pending.append(commandLinePaths);
         const QStringList pending = std::move(m_pending);
         m_pending.clear();
         for (const QString& path : pending) deliver(path);
+        return !pending.isEmpty();
     }
 
     bool eventFilter(QObject* watched, QEvent* event) override {
@@ -152,11 +159,12 @@ public:
         int deliveries = 0;
         const QString path = QDir(QDir::tempPath()).filePath(
             QString::fromUtf8("VLTONE-быстрый-импорт.wav"));
-        filter.setHandler([&deliveries](const QString&) { ++deliveries; },
-                          {path, QDir::cleanPath(path)});
+        const bool deliveredLaunchRequest = filter.setHandler(
+            [&deliveries](const QString&) { ++deliveries; },
+            {path, QDir::cleanPath(path)});
         QFileOpenEvent duplicate(path);
         filter.eventFilter(nullptr, &duplicate);
-        return deliveries == 1;
+        return deliveredLaunchRequest && deliveries == 1;
     }
 
 private:
@@ -198,7 +206,9 @@ void selftestMessageHandler(QtMsgType type, const QMessageLogContext& context,
         (message.contains(QStringLiteral("QPainter::begin")) ||
          message.contains(QStringLiteral("QPainter::set")) ||
          message.contains(QStringLiteral("Painter not active")) ||
-         message.contains(QStringLiteral("QString::arg")))) {
+         message.contains(QStringLiteral("QString::arg")) ||
+         (qEnvironmentVariableIntValue("VLT_GPU_WORKSPACE") == 1 &&
+          message.startsWith(QStringLiteral("GPU workspace fallback:"))))) {
         g_selftestQtFailure.store(true, std::memory_order_relaxed);
     }
     if (g_previousMessageHandler) {
@@ -262,8 +272,20 @@ private:
 };
 
 int main(int argc, char** argv) {
+#if defined(Q_OS_MACOS)
+    // Qt's raster pool dispatches even small span batches and synchronously
+    // waits for its helpers. In our macOS timeline workload this adds wakeups
+    // and GUI waits alongside realtime audio; local raster work is faster.
+    // Configure before QApplication/first paint. Keep a diagnostic opt-in to
+    // Qt's default, and preserve an explicit QT_NO_GUI_THREADPOOL setting.
+    if (qEnvironmentVariableIntValue("VLT_QT_GUI_THREADPOOL") != 1 &&
+        !qEnvironmentVariableIsSet("QT_NO_GUI_THREADPOOL"))
+        qputenv("QT_NO_GUI_THREADPOOL", "1");
+#endif
     bool selftest = false;
     bool uiPerfCheck = false;
+    bool audioScrollCheck = false;
+    bool projectScrollCheck = false;
     bool patternCheck = false;
     bool samplerCheck = false;
     bool editorCheck = false;
@@ -285,6 +307,8 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--selftest") == 0) selftest = true;
         else if (std::strcmp(argv[i], "--uiperfcheck") == 0) uiPerfCheck = true;
+        else if (std::strcmp(argv[i], "--audio-scroll-check") == 0) audioScrollCheck = true;
+        else if (std::strcmp(argv[i], "--project-scroll-check") == 0) projectScrollCheck = true;
         else if (std::strcmp(argv[i], "--samplercheck") == 0) samplerCheck = true;
         else if (std::strcmp(argv[i], "--patterncheck") == 0) patternCheck = true;
         else if (std::strcmp(argv[i], "--editorcheck") == 0) editorCheck = true;
@@ -327,7 +351,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    const bool headless = pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
+    const bool headless = projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
                           crashtest || recovercheck;
     if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) {
         QByteArray chromiumFlags;
@@ -338,9 +362,10 @@ int main(int argc, char** argv) {
         // WebGPU; ordinary accelerated compositing and video remain enabled.
         chromiumFlags = QByteArrayLiteral("--disable-features=WebGPU");
 #endif
-        if (headless) {
-            // Chromium's GPU process has no display in the offscreen selftest
-            // and screenshot path.
+        const QString platform = qEnvironmentVariable("QT_QPA_PLATFORM").section(':', 0, 0);
+        if (headless && (platform == QLatin1String("offscreen") || platform == QLatin1String("minimal"))) {
+            // Test mode isolates preferences; it does not imply an absent GPU.
+            // Native hardware selftests must exercise Chromium's GPU path too.
             if (!chromiumFlags.isEmpty()) chromiumFlags.append(' ');
             chromiumFlags.append(QByteArrayLiteral("--disable-gpu"));
         }
@@ -358,6 +383,7 @@ int main(int argc, char** argv) {
     QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
 
     ui::registerFontUrlScheme();
+    QtWebEngineQuick::initialize();
     QApplication app(argc, argv);
     // Qt forwards the system proxy configuration (including local VPN proxy
     // endpoints and PAC rules) to Chromium. Tunnel VPNs use OS routing normally.
@@ -410,7 +436,11 @@ int main(int argc, char** argv) {
     QApplication::setOrganizationName(QStringLiteral("VLT Studio"));
     // Recorded in every recovery session, so a leftover file says which build
     // wrote it — the first thing worth knowing about a crash report.
-    QApplication::setApplicationVersion(QStringLiteral(VLTONE_VERSION));
+    // Account/session compatibility consumes this metadata as SemVer. Build
+    // labels use spaces for display ("0.2.1 alpha"), which are invalid on the
+    // wire; retain the prerelease channel using SemVer separators.
+    QApplication::setApplicationVersion(
+        QStringLiteral(VLTONE_VERSION).replace(QLatin1Char(' '), QLatin1Char('-')));
     ui::initializeApplicationFonts();
     if (selftest) {
         g_previousMessageHandler = qInstallMessageHandler(selftestMessageHandler);
@@ -456,6 +486,16 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Select the backend after settings isolation, before creating any Quick
+    // windows. User opt-in and the diagnostic override use the same path.
+    if (ui::graphics::gpuWorkspaceEnabled() && qEnvironmentVariableIsEmpty("QSG_RHI_BACKEND")) {
+#if defined(Q_OS_MACOS)
+        QQuickWindow::setGraphicsApi(QSGRendererInterface::Metal);
+#elif defined(Q_OS_WIN)
+        QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
+#endif
+    }
+
     // Screenshot-only width override uses the isolated headless preferences.
     if (screenshotPath) {
         if (const char* browserWidth = std::getenv("DAW_SHOT_BROWSER_WIDTH"))
@@ -478,6 +518,8 @@ int main(int argc, char** argv) {
         }
     }
     if (uiPerfCheck) return ui::checkUiScaling() ? 0 : 60;
+    if (audioScrollCheck) return ui::checkAudioTimelinePerformance() ? 0 : 61;
+    if (projectScrollCheck) return ui::checkProjectTimelinePerformance(projectArgument) ? 0 : 62;
     if (selftest) {
         QString localizationError;
         if (!ui::LocalizationManager::instance().checkJsonPackForTest(
@@ -528,6 +570,14 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "quick import preferences check failed: %s\n",
                          quickImportError.toUtf8().constData());
             return 62;
+        }
+        QString startupProjectError;
+        if (!ui::startupproject::checkPreferencesForTest(
+                &startupProjectError)) {
+            std::fprintf(stderr,
+                         "startup project preferences check failed: %s\n",
+                         startupProjectError.toUtf8().constData());
+            return 68;
         }
         if (!ProjectOpenFilter::checkDeduplicationForTest()) {
             std::fprintf(stderr, "external file routing deduplication failed\n");
@@ -809,6 +859,18 @@ int main(int argc, char** argv) {
         return app.exec();
     }
 
+    // Let visual QA capture both transport treatments without touching the
+    // user's real preference store. Production launches ignore this variable.
+    if (screenshotPath) {
+        const QString transportStyle =
+            qEnvironmentVariable("DAW_SHOT_TRANSPORT_STYLE");
+        if (transportStyle == QLatin1String("plain") ||
+            transportStyle == QLatin1String("neon")) {
+            QSettings().setValue(ui::kTransportPanelStyleSetting,
+                                 transportStyle);
+        }
+    }
+
     // In headless (selftest/screenshot) mode don't grab a real audio device.
 #ifdef DAW_ENABLE_COLLABORATION
     collab::CollaborationService collaborationService(&accountService);
@@ -979,7 +1041,8 @@ int main(int argc, char** argv) {
         startup->accept();
         startup.reset();
     }
-    if (!headless) window.completeInteractiveStartup();
+    const bool recoveredAtStartup =
+        !headless && window.completeInteractiveStartup();
 
     // No reporter in headless checks. Live sessions enqueue immediately and
     // let the separate process own retries and post-crash delivery.
@@ -995,10 +1058,12 @@ int main(int argc, char** argv) {
                            });
     }
 
-    projectOpenFilter.setHandler(
+    const bool externalLaunchRequest = projectOpenFilter.setHandler(
         [&window](const QString& path) { window.openExternalPath(path); },
         !headless && !projectArgument.isEmpty()
             ? QStringList{projectArgument} : QStringList{});
+    if (!headless && !recoveredAtStartup && !externalLaunchRequest)
+        window.openConfiguredStartupTemplate();
 
     // DAW_SHOT_PLUGIN_EDITOR names a scanned plugin (substring match): it is
     // loaded onto the first track and its editor opened. The only way to check
@@ -1391,7 +1456,14 @@ int main(int argc, char** argv) {
                     if (widget->isVisible() && widget->objectName() == QLatin1String("NotebookDetachedWindow"))
                         target = widget;
             }
-            target->grab().save(QString::fromUtf8(screenshotPath));
+            if (target == &window && qEnvironmentVariableIntValue("DAW_SHOT_WORKSPACE") == 1)
+                target = window.centralWidget();
+            // QWidget::grab does not include a native Quick child. Read the
+            // scene only for this explicit screenshot command, never at runtime.
+            if (auto* surface = target->findChild<ui::graphics::WorkspaceSurface*>())
+                surface->quickWindow()->grabWindow().save(QString::fromUtf8(screenshotPath));
+            else
+                target->grab().save(QString::fromUtf8(screenshotPath));
             QApplication::quit();
         });
     } else if (recovercheck) {
@@ -1436,10 +1508,58 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "the project save/open dialogs are incomplete\n");
             return 40;
         }
-        // Keep each built-in editor's widget and undo invariants independently runnable:
+        if (!window.checkStartupTemplateForTest()) {
+            std::fprintf(stderr,
+                         "startup template or New Project routing failed\n");
+            return 68;
+        }
+        if (!window.checkAudioAnalysisDialogForTest()) {
+            std::fprintf(stderr,
+                         "the audio analysis BPM options are incomplete\n");
+            return 40;
+        }
+        // Keep dialogs and each built-in editor's widget/undo invariants
+        // independently runnable.
         // the full UI selftest also exercises platform codecs, file watching
         // and WebEngine, which may be unavailable on a sanitizer machine.
-        if (qEnvironmentVariableIsSet("DAW_SELFTEST_NOTEBOOK_ONLY")) {
+        if (qEnvironmentVariableIsSet("DAW_SELFTEST_SETTINGS_ONLY")) {
+            window.openSettings(SettingsWindow::kInterfaceTab);
+            if (!window.checkSettingsViewportForTest()) {
+                std::fprintf(stderr,
+                             "focused settings selftest failed\n");
+                return 16;
+            }
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet(
+                       "DAW_SELFTEST_PROJECT_DIALOGS_ONLY")) {
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_SCRUB_ONLY")) {
+            window.populateDemo();
+            if (!window.checkTimelineClipGesturesForTest() ||
+                !window.checkTempoScrubForTest() ||
+                !window.checkContextSyncForTest()) {
+                std::fprintf(stderr,
+                             "focused interaction selftest failed\n");
+                return 17;
+            }
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_BROWSER_ONLY")) {
+            window.populateDemo();
+            QTemporaryDir fixture(
+                QDir::temp().filePath("daw-selftest-browser-XXXXXX"));
+            const QString audio = fixture.filePath("demo.wav");
+            const QString midi = fixture.filePath("phrase.mid");
+            const QString demo = QDir::temp().filePath("daw_demo_tone.wav");
+            if (!fixture.isValid() || !QFile::copy(demo, audio) ||
+                !writeDemoMidiFile(midi) ||
+                !window.checkBrowser(fixture.path(), audio, midi)) {
+                std::fprintf(stderr, "focused browser selftest failed\n");
+                return 5;
+            }
+            std::fprintf(stderr,
+                         "PASS Browser: rounded rows, audio/MIDI previews and empty selection\n");
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_NOTEBOOK_ONLY")) {
             if (!window.checkNotebookForTest()) return 41;
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
         } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_GRAPHIT_ONLY")) {
@@ -1461,6 +1581,17 @@ int main(int argc, char** argv) {
             if (!window.checkEqualizerPanelForTest()) {
                 std::fprintf(stderr, "Equalizer panel UI invariants failed\n");
                 return 31;
+            }
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet(
+                       "DAW_SELFTEST_PIANO_ROLL_ONLY")) {
+            window.populateDemo();
+            window.openFirstMidiClip();
+            QApplication::processEvents();
+            if (!window.checkPianoRollForTest()) {
+                std::fprintf(stderr,
+                             "focused Piano Roll and MIDI Tools selftest failed\n");
+                return 19;
             }
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
         } else {
@@ -1629,7 +1760,14 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "could not isolate the browser fixture\n");
                 return 5;
             }
-            if (!window.checkBrowser(browserFixture.path(), browserTone)) {
+            const QString browserMidi = browserFixture.filePath("phrase.mid");
+            if (!writeDemoMidiFile(browserMidi)) {
+                std::fprintf(stderr,
+                             "could not create the browser MIDI fixture\n");
+                return 5;
+            }
+            if (!window.checkBrowser(browserFixture.path(), browserTone,
+                                     browserMidi)) {
                 std::fprintf(stderr, "the browser did not audition a file\n");
                 return 5;
             }

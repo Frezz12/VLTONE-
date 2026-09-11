@@ -212,6 +212,11 @@ add_test(NAME graphit_test COMMAND graphit_test)
 set_tests_properties(graphit_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 
+add_executable(modulation_test modulation_test.cpp)
+target_link_libraries(modulation_test PRIVATE daw_pluginhost)
+add_test(NAME modulation_test COMMAND modulation_test)
+set_tests_properties(modulation_test PROPERTIES TIMEOUT 120)
+
 # The rebuilt engine: graph compilation, latency compensation, and the
 # dependency-driven parallel scheduler (correctness, determinism, scaling).
 add_executable(engine_graph_test engine_graph_test.cpp)
@@ -306,6 +311,9 @@ add_executable(plugin_probe EXCLUDE_FROM_ALL plugin_probe.cpp)
 target_link_libraries(plugin_probe PRIVATE daw_pluginhost)
 
 if(APPLE)
+    add_executable(plugin_parameter_editor_probe EXCLUDE_FROM_ALL plugin_parameter_editor_probe.mm)
+    target_link_libraries(plugin_parameter_editor_probe PRIVATE daw_controller "-framework AppKit")
+    target_compile_options(plugin_parameter_editor_probe PRIVATE -fobjc-arc)
     add_executable(plugin_lifetime_probe EXCLUDE_FROM_ALL plugin_lifetime_probe.mm)
     target_link_libraries(plugin_lifetime_probe PRIVATE daw_pluginhost "-framework AppKit")
     target_compile_options(plugin_lifetime_probe PRIVATE -fobjc-arc)
@@ -488,3 +496,29 @@ set_tests_properties(track_freeze_test PROPERTIES TIMEOUT 120)
 
 add_executable(audio_engine_bench EXCLUDE_FROM_ALL audio_engine_bench.cpp)
 target_link_libraries(audio_engine_bench PRIVATE daw_engine)
+
+# Capture channel publication and timestamped live waveform history.
+add_executable(recording_preview_test recording_preview_test.cpp)
+target_link_libraries(recording_preview_test PRIVATE daw_controller)
+add_test(NAME recording_preview_test COMMAND recording_preview_test)
+set_tests_properties(recording_preview_test PROPERTIES TIMEOUT 45)
+
+add_executable(graphics_quality_test graphics_quality_test.cpp)
+target_include_directories(graphics_quality_test PRIVATE ${CMAKE_SOURCE_DIR}/app)
+add_test(NAME graphics_quality_test COMMAND graphics_quality_test)
+add_executable(audio_presentation_clock_test audio_presentation_clock_test.cpp)
+target_link_libraries(audio_presentation_clock_test PRIVATE daw_engine)
+add_test(NAME audio_presentation_clock_test COMMAND audio_presentation_clock_test)
+
+add_executable(audio_monitoring_regression_test audio_monitoring_regression_test.cpp)
+target_link_libraries(audio_monitoring_regression_test PRIVATE daw_controller)
+add_test(NAME audio_monitoring_regression_test COMMAND audio_monitoring_regression_test)
+set_tests_properties(audio_monitoring_regression_test PROPERTIES TIMEOUT 45)
+# Executable symbol interposition replaces PortAudio only for this test. Static
+# Windows PortAudio needs a separate link seam; never run it against hardware.
+if(NOT WIN32)
+    add_executable(audio_device_recovery_test audio_device_recovery_test.cpp)
+    target_link_libraries(audio_device_recovery_test PRIVATE daw_controller)
+    add_test(NAME audio_device_recovery_test COMMAND audio_device_recovery_test)
+    set_tests_properties(audio_device_recovery_test PROPERTIES TIMEOUT 45)
+endif()

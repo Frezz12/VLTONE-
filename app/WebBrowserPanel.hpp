@@ -1,7 +1,7 @@
 #pragma once
 
 #include "platform/AudioFileDecoder.hpp"
-#include "WebVideoSource.hpp"
+#include "graphics/BrowserSurface.hpp"
 
 #include <QList>
 #include <QPointer>
@@ -39,12 +39,11 @@ class WebBrowserPanel final : public QWidget {
 public:
     enum class EditCommand { Cut, Copy, Paste };
 
-    explicit WebBrowserPanel(QWidget* parent = nullptr, QWebEngineProfile* profile = nullptr);
+    explicit WebBrowserPanel(QWidget* parent = nullptr,
+                             QWebEngineProfile* profile = nullptr);
     ~WebBrowserPanel() override;
 
     void reloadSettings();
-    void setBackgroundState(bool active, bool loading, bool muted, const QUrl& sourceUrl);
-    void showBackgroundError(const QString& message);
     bool ownsFocus() const;
     bool handleEditCommand(EditCommand command);
     bool handleUndoRedo(bool redo);
@@ -65,9 +64,6 @@ public:
     void reopenClosedTabForTest();
 
 signals:
-    void videoBackgroundRequested(const ui::WebVideoSource& source);
-    void videoBackgroundMuteRequested(bool muted);
-    void videoBackgroundClearRequested();
     void statusMessage(const QString& text);
     void settingsRequested();
     void audioDownloadReady(
@@ -87,15 +83,12 @@ private:
     QWidget* buildBookmarksBar();
     QWidget* buildFindBar();
     QWidget* buildDownloadBar();
-    QWidget* buildVideoBar();
-    void refreshVideoButton();
-    void chooseBackgroundVideo();
     void installShortcuts();
     void applyTheme();
 
     // ── Tabs ──
     Tab* currentTab() const;
-    QWebEngineView* view() const;
+    ui::graphics::BrowserSurface* view() const;
     int indexOfTab(const Tab* tab) const;
     /// Open a tab on `url` and return its index. `activate` false opens it in
     /// the background, which is what a middle-clicked link wants.
@@ -137,18 +130,7 @@ private:
     void refreshDownloadProgress();
     void probeCompletedDownload(const QString& path, const QString& mimeType);
 
-    QWebEngineProfile* m_profile = nullptr;
-    bool m_ownsProfile = false;
-    ui::IconButton* m_videoBackground = nullptr;
-    ui::IconButton* m_videoMute = nullptr;
-    ui::IconButton* m_videoClear = nullptr;
-    ui::IconButton* m_videoOpen = nullptr;
-    QLabel* m_videoStatus = nullptr;
-    QTimer* m_videoTimer = nullptr;
-    bool m_videoScanPending = false;
-    quint64 m_videoScanGeneration = 0;
-    bool m_videoBackgroundMuted = true;
-    QUrl m_videoSourceUrl;
+    ui::graphics::BrowserProfile* m_profile = nullptr;
     QTabBar* m_tabBar = nullptr;
     QWidget* m_tabStrip = nullptr;
     ui::IconButton* m_newTab = nullptr;

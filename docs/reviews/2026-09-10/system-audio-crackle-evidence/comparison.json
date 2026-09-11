@@ -1,0 +1,74 @@
+[
+  {
+    "before": {
+      "p99_median_ms": 0.2544,
+      "over_total": 130,
+      "blocks": 15000,
+      "cpu_median_ms": 2721.9
+    },
+    "after": {
+      "p99_median_ms": 0.257,
+      "over_total": 0,
+      "blocks": 15000,
+      "cpu_median_ms": 2521.3
+    },
+    "frames": 16,
+    "monitoring": 0,
+    "p99_reduction_percent": -1.022012578616338,
+    "cpu_reduction_percent": 7.369851941658401
+  },
+  {
+    "before": {
+      "p99_median_ms": 0.4885,
+      "over_total": 574,
+      "blocks": 15000,
+      "cpu_median_ms": 2688.3
+    },
+    "after": {
+      "p99_median_ms": 0.2428,
+      "over_total": 4,
+      "blocks": 15000,
+      "cpu_median_ms": 2468.6
+    },
+    "frames": 16,
+    "monitoring": 1,
+    "p99_reduction_percent": 50.29682702149437,
+    "cpu_reduction_percent": 8.172450991332825
+  },
+  {
+    "before": {
+      "p99_median_ms": 0.9673,
+      "over_total": 480,
+      "blocks": 15000,
+      "cpu_median_ms": 5557.1
+    },
+    "after": {
+      "p99_median_ms": 0.7625,
+      "over_total": 647,
+      "blocks": 15000,
+      "cpu_median_ms": 6579.0
+    },
+    "frames": 32,
+    "monitoring": 0,
+    "p99_reduction_percent": 21.17233536648404,
+    "cpu_reduction_percent": -18.389087833582263
+  },
+  {
+    "before": {
+      "p99_median_ms": 0.9946,
+      "over_total": 670,
+      "blocks": 15000,
+      "cpu_median_ms": 6215.2
+    },
+    "after": {
+      "p99_median_ms": 0.6562,
+      "over_total": 134,
+      "blocks": 15000,
+      "cpu_median_ms": 6105.4
+    },
+    "frames": 32,
+    "monitoring": 1,
+    "p99_reduction_percent": 34.023728131912335,
+    "cpu_reduction_percent": 1.766636632771268
+  }
+]

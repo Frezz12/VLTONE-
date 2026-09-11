@@ -2,12 +2,14 @@
 #include "EngineController.hpp"
 #include "PluginQuickAdder.hpp"
 #include "SelectionModel.hpp"
+#include "Theme.hpp"
 #include "ToolPanel.hpp"
 
 #include <QAbstractButton>
 #include <QApplication>
 #include <QEventLoop>
 #include <QSettings>
+#include <QSlider>
 #include <QTimer>
 
 #include <cstdio>
@@ -41,6 +43,9 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     int anchor = left + 200;
     panel.setBoundsProvider([&](int& from, int& to) { from = left; to = right; return true; });
     panel.setAnchorProvider([&](int& centre) { centre = anchor; return true; });
+    const int home = strip.width() / 2 + 64;
+    panel.setHomeAnchorProvider(
+        [&](int& centre) { centre = home; return true; });
     selection.setClips({audio});
     panel.relayout();
     const auto check = [](bool passed, const char* detail) {
@@ -63,9 +68,17 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
         return true;
     };
     auto* wave = strip.findChild<QAbstractButton*>("WaveformScaleButton");
+    auto* sliderCluster = strip.findChild<QWidget*>("TimelineSliderCluster");
+    auto* trackHeight = strip.findChild<QSlider*>("TimelineTrackHeightSlider");
+    auto* timelineZoom = strip.findChild<QSlider*>("TimelineZoomSlider");
     const int fullCount = visibleActions();
-    if (!check(fits() && fullCount >= 6 && wave && wave->isVisible(),
-               "wide strip shows all actions and the waveform control")) return false;
+    const bool utilitiesOrdered =
+        wave && sliderCluster && trackHeight && timelineZoom &&
+        wave->isVisible() && sliderCluster->isVisible() &&
+        wave->mapTo(&strip, QPoint()).x() <
+            sliderCluster->mapTo(&strip, QPoint()).x();
+    if (!check(fits() && fullCount >= 6 && utilitiesOrdered,
+               "wide strip shows waveform, track height and zoom in order")) return false;
     QPointer<QWidget> primary;
     QPointer<QWidget> colour;
     for (auto* widget : panel.findChildren<QWidget*>()) {
@@ -82,8 +95,10 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
                                   visibleActions() < fullCount,
                                   "gain survives after secondary controls disappear")) return false;
     }
-    if (!check(wave->isHidden() && strip.contextRightEdge() == right,
-               "waveform hides near the panel without moving its reserved boundary")) return false;
+    if (!check(wave->isHidden() && strip.contextRightEdge() == right &&
+                   sliderCluster->isVisible() &&
+                   panel.x() + panel.width() <= strip.contextRightEdge(),
+               "context stops before the timeline controls at its reserved boundary")) return false;
     for (int i = 0; i < 8; ++i) {
         panel.relayout();
         QApplication::processEvents();
@@ -103,9 +118,9 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
         QTimer::singleShot(380, &loop, &QEventLoop::quit);
         loop.exec();
     };
-    const auto centredInHeader = [&] {
+    const auto centredOnReadout = [&] {
         return panel.x() >= 12 && panel.x() + panel.width() <= strip.width() - 12 &&
-               std::abs(2 * panel.x() + panel.width() - strip.width()) <= 1;
+               std::abs(2 * panel.x() + panel.width() - 2 * home) <= 1;
     };
     // Keep returning the previous clip's position, as a timeline with its own
     // selection can do. The current panel context must outrank that stale span.
@@ -116,7 +131,7 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     panel.followSelection();
     selection.setTracks({audio.trackId});
     settle();
-    if (!check(centredInHeader(), "clip-to-track selection interrupts drift and returns under the header centre")) return false;
+    if (!check(centredOnReadout(), "clip-to-track selection returns under the transport readout")) return false;
     const QRect trackGeometry = panel.geometry();
     anchor = left;
     panel.followSelection();
@@ -127,21 +142,25 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
         if (id == audio.trackId) continue;
         selection.setTracks({audio.trackId, id});
         settle();
-        if (!check(centredInHeader(), "multiple selected tracks stay under the header centre")) return false;
+        if (!check(centredOnReadout(), "multiple selected tracks stay under the transport readout")) return false;
         break;
     }
     selection.setClips({audio});
     panel.setRecordEngaged(true);
     settle();
-    if (!check(centredInHeader(), "recording stays under the header centre even with an underlying selected clip")) return false;
+    if (!check(centredOnReadout(), "recording stays under the transport readout even with an underlying selected clip")) return false;
+    if (!check(panel.accentColor() == th().accent,
+               "recording context keeps the theme accent")) return false;
     panel.setRecordEngaged(false);
     settle();
     if (!check(fits() && panel.x() == left, "returning to clip tools restores following")) return false;
+    if (!check(panel.accentColor() == th().accent,
+               "audio context keeps the same theme accent")) return false;
 
     QSettings().setValue(QStringLiteral("contextPanel/followSelection"), false);
     panel.reloadFollowSetting();
     settle();
-    if (!check(centredInHeader(), "pinned clip context stays under the header centre")) return false;
+    if (!check(centredOnReadout(), "pinned clip context stays under the transport readout")) return false;
     QSettings().setValue(QStringLiteral("contextPanel/followSelection"), true);
     panel.reloadFollowSetting();
     settle();
@@ -163,7 +182,7 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     left = right - 140;
     panel.relayout();
     { QEventLoop loop; QTimer::singleShot(380, &loop, &QEventLoop::quit); loop.exec(); }
-    if (!check(centredInHeader(), "interrupted swap returns a track context under the header centre")) return false;
+    if (!check(centredOnReadout(), "interrupted swap returns under the transport readout")) return false;
     if (!midi.clipId.isEmpty()) {
         selection.setClips({midi});
         panel.relayout();
@@ -173,8 +192,18 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     panel.setRecordEngaged(true);
     panel.relayout();
     settle();
-    if (!check(centredInHeader(), "recording context stays under the header centre")) return false;
+    if (!check(centredOnReadout(), "recording context stays under the transport readout")) return false;
     panel.setPanelEnabled(false);
     { QEventLoop loop; QTimer::singleShot(380, &loop, &QEventLoop::quit); loop.exec(); }
-    return check(wave->isVisible(), "waveform returns when context panel closes");
+    if (!check(wave->isVisible(), "waveform returns when context panel closes")) return false;
+
+    strip.setBrowserVisible(true);
+    strip.setBrowserZoneWidth(520);
+    QApplication::processEvents();
+    if (!check(sliderCluster->isHidden(),
+               "timeline sliders hide when a widened browser leaves little room")) return false;
+    strip.setBrowserZoneWidth(30);
+    QApplication::processEvents();
+    return check(sliderCluster->isVisible(),
+                 "timeline sliders return after the arrangement widens");
 }

@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QString>
+#include "model/Document.hpp"
 
 class QComboBox;
 class QCheckBox;
@@ -14,7 +15,7 @@ class QTableWidget;
 class QStackedWidget;
 class QTabBar;
 class QTimer;
-class QWebEngineView;
+namespace ui::graphics { class BrowserSurface; }
 
 namespace daw { class EngineController; }
 namespace ui { class IconButton; }
@@ -29,14 +30,17 @@ public:
     bool ownsEditorFocus() const;
     bool handleEditorCommand(const QString& command);
     bool checkTimedTextForTest(QString* error = nullptr);
+    bool importedLegacyContent() const { return m_importedLegacyContent; }
 
 public slots:
     void reloadSettings();
+    void syncFromProject();
 
 signals:
     void settingsRequested();
     void visibilityChanged(bool visible);
     void timedTextChanged();
+    void projectContentChanged();
     void detachRequested();
     void closeRequested();
 
@@ -74,7 +78,7 @@ private:
     void updateMotionButton();
 
     daw::EngineController* m_controller = nullptr;
-    QWebEngineView* m_view = nullptr;
+    ui::graphics::BrowserSurface* m_view = nullptr;
     QWidget* m_toolbar = nullptr;
     QComboBox* m_font = nullptr;
     QComboBox* m_size = nullptr;
@@ -100,7 +104,25 @@ private:
     QTimer* m_saveTimer = nullptr;
     QTimer* m_reloadTimer = nullptr;
     QString m_content;
+    std::vector<daw::NotebookCueModel> m_loadedCues;
     bool m_contentDirty = false;
+    bool m_importedLegacyContent = false;
     bool m_backgroundPlaying = false;
     bool m_loadingTimedText = false;
+};
+
+// Expose only document commands to Chromium. Publishing the QWidget itself
+// serializes its entire property tree and unrelated window signals.
+class NotebookWebBridge final : public QObject {
+    Q_OBJECT
+public:
+    explicit NotebookWebBridge(NotebookWindow* notebook)
+        : QObject(notebook), m_notebook(notebook) {}
+    Q_INVOKABLE void receiveContent(const QString& html) { m_notebook->receiveContent(html); }
+    Q_INVOKABLE void importPastedImage(const QString& url, const QString& description) {
+        m_notebook->importPastedImage(url, description);
+    }
+    Q_INVOKABLE void reportMediaError() { m_notebook->reportMediaError(); }
+private:
+    NotebookWindow* m_notebook;
 };

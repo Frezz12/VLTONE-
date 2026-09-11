@@ -1,4 +1,5 @@
 #include "PianoRollTools.hpp"
+#include "Controls.hpp"
 
 #include <QCheckBox>
 #include <QCloseEvent>
@@ -10,7 +11,8 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QRandomGenerator>
-#include <QSlider>
+#include <QScrollArea>
+#include <QSizePolicy>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
@@ -63,20 +65,25 @@ void selectBeats(QComboBox* division, QComboBox* flavour, double beats) {
     }
 }
 
-QSlider* numberSlider(int low, int high, int value, int singleStep = 1,
-                      int pageStep = 0) {
-    auto* slider = new QSlider(Qt::Horizontal);
-    slider->setRange(low, high);
-    slider->setValue(value);
-    slider->setSingleStep(std::max(1, singleStep));
-    slider->setPageStep(pageStep > 0 ? pageStep
-                                     : std::max(1, (high - low) / 10));
-    slider->setProperty("midiNumericSlider", true);
-    return slider;
+ui::Knob* numberKnob(int low, int high, int value, int singleStep = 1,
+                     int pageStep = 0) {
+    Q_UNUSED(pageStep);
+    auto* knob = new ui::Knob({});
+    knob->setRange(low, high);
+    knob->setDefaultValue(value);
+    knob->setStepped(true);
+    knob->setValue(value);
+    knob->setVisualStyle(ui::Knob::VisualStyle::SamplerDigital);
+    knob->setBare(44);
+    knob->setProperty("midiNumericKnob", true);
+    knob->setProperty("midiNumericStep", std::max(1, singleStep));
+    knob->setAccessibleDescription(QObject::tr(
+        "Drag vertically to adjust. Hold Shift for fine control. Double click to reset."));
+    return knob;
 }
 
-QSlider* percentSlider(int low, int high, int value) {
-    return numberSlider(low, high, value);
+ui::Knob* percentKnob(int low, int high, int value) {
+    return numberKnob(low, high, value);
 }
 
 QString compactDecimal(double value, int decimals = 3) {
@@ -86,41 +93,52 @@ QString compactDecimal(double value, int decimals = 3) {
     return text;
 }
 
-using SliderFormatter = std::function<QString(int)>;
+using KnobFormatter = std::function<QString(int)>;
 
-/// Every numeric tool parameter is a slider, but never an anonymous one: the
+/// Every numeric tool parameter is a rotary control, but never an anonymous one: the
 /// live read-out preserves the exact value for fine keyboard adjustment.
-QWidget* withReadout(QSlider* slider, SliderFormatter format,
+QWidget* withReadout(ui::Knob* knob, KnobFormatter format,
                      int readoutWidth = 72) {
     auto* row = new QWidget;
+    // Internal editor frames are intentionally resizable below a content
+    // widget's size hint. Keep the dial's own row rigid so a short frame uses
+    // the form scroller instead of clipping the lower half of the control into
+    // the next parameter.
+    row->setFixedHeight(knob->height());
+    row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    row->setProperty("midiNumericRow", true);
     auto* layout = new QHBoxLayout(row);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(8);
-    auto* value = new QLabel(format(slider->value()), row);
+    auto* value = new QLabel(format(int(std::lround(knob->value()))), row);
     value->setMinimumWidth(readoutWidth);
     value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     value->setProperty("midiNumericReadout", true);
-    QObject::connect(slider, &QSlider::valueChanged, value, [value, format](int v) {
-        value->setText(format(v));
+    knob->setFormatter([format](double v) {
+        return format(int(std::lround(v)));
     });
-    layout->addWidget(slider, 1);
+    QObject::connect(knob, &ui::Knob::valueChanged, value, [value, format](double v) {
+        value->setText(format(int(std::lround(v))));
+    });
+    layout->addWidget(knob);
+    layout->addStretch(1);
     layout->addWidget(value);
     return row;
 }
 
-QWidget* withReadout(QSlider* slider, const QString& suffix) {
-    return withReadout(slider,
+QWidget* withReadout(ui::Knob* knob, const QString& suffix) {
+    return withReadout(knob,
                        [suffix](int value) {
                            return QString::number(value) + suffix;
                        },
                        suffix.isEmpty() ? 42 : 52);
 }
 
-QWidget* beatsReadout(QSlider* slider, double scale,
+QWidget* beatsReadout(ui::Knob* knob, double scale,
                       const QString& prefix = QString(),
                       const QString& zeroText = QString(), int decimals = 3) {
     return withReadout(
-        slider,
+        knob,
         [scale, prefix, zeroText, decimals](int raw) {
             if (raw == 0 && !zeroText.isEmpty()) return zeroText;
             return prefix + compactDecimal(double(raw) / scale, decimals) +
@@ -129,9 +147,9 @@ QWidget* beatsReadout(QSlider* slider, double scale,
         92);
 }
 
-QSlider* cellSlider(const QTableWidget* table, int row, int column) {
+ui::Knob* cellKnob(const QTableWidget* table, int row, int column) {
     QWidget* cell = table ? table->cellWidget(row, column) : nullptr;
-    return cell ? cell->findChild<QSlider*>() : nullptr;
+    return cell ? cell->findChild<ui::Knob*>() : nullptr;
 }
 
 const QStringList& pitchClasses() {
@@ -147,15 +165,36 @@ const QStringList& pitchClasses() {
 ToolDialog::ToolDialog(const QString& title, QWidget* parent)
     : QDialog(parent, Qt::Widget) {
     setWindowTitle(title);
-    // Modeless: a tool is something you sit with, nudging a slider against the
+    // Modeless: a tool is something you sit with, nudging a control against the
     // grid behind it. A modal dialog would hide the very thing being edited.
     setWindowModality(Qt::NonModal);
 
     auto* column = new QVBoxLayout(this);
-    m_form = new QGridLayout;
+    column->setContentsMargins(12, 10, 12, 10);
+    column->setSpacing(10);
+
+    // A hosted editor can be restored at a smaller height than the current
+    // translated labels and rotary controls require. Preserve the natural row
+    // geometry and scroll the form in that case; shrinking layout rows is what
+    // made the knobs overlap in the old implementation.
+    auto* scroller = new QScrollArea(this);
+    scroller->setObjectName(QStringLiteral("MidiToolFormScroller"));
+    scroller->setFrameShape(QFrame::NoFrame);
+    scroller->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroller->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scroller->setWidgetResizable(true);
+    scroller->setFocusPolicy(Qt::NoFocus);
+
+    auto* formHost = new QWidget(scroller);
+    formHost->setObjectName(QStringLiteral("MidiToolForm"));
+    m_form = new QGridLayout(formHost);
+    m_form->setContentsMargins(0, 0, 4, 0);
+    m_form->setHorizontalSpacing(14);
+    m_form->setVerticalSpacing(4);
+    m_form->setSizeConstraint(QLayout::SetMinimumSize);
     m_form->setColumnStretch(1, 1);
-    column->addLayout(m_form);
-    column->addStretch(1);
+    scroller->setWidget(formHost);
+    column->addWidget(scroller, 1);
 }
 
 QGridLayout* ToolDialog::form() { return m_form; }
@@ -179,18 +218,32 @@ void ToolDialog::finishLayout() {
     connect(m_buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
 
     auto* row = new QHBoxLayout;
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(8);
     row->addWidget(m_preview);
     row->addStretch(1);
     row->addWidget(m_buttons);
     static_cast<QVBoxLayout*>(layout())->addLayout(row);
+
+    // Give the internal host a useful first size without allowing a long tool
+    // to occupy the whole workspace. Shorter windows keep their natural size;
+    // the form scroller handles constrained or previously saved geometries.
+    layout()->activate();
+    const QSize formSize = m_form->minimumSize();
+    const int footerHeight = std::max(m_preview->sizeHint().height(),
+                                      m_buttons->sizeHint().height());
+    const QSize preferred(std::clamp(formSize.width() + 24, 520, 720),
+                          std::clamp(formSize.height() + footerHeight + 30,
+                                     300, 640));
+    resize(preferred);
 }
 
 void ToolDialog::watch(QWidget* widget) {
     if (auto* box = qobject_cast<QComboBox*>(widget)) {
         connect(box, &QComboBox::currentIndexChanged, this,
                 &ToolDialog::paramsChanged);
-    } else if (auto* slider = qobject_cast<QSlider*>(widget)) {
-        connect(slider, &QSlider::valueChanged, this, &ToolDialog::paramsChanged);
+    } else if (auto* knob = qobject_cast<ui::Knob*>(widget)) {
+        connect(knob, &ui::Knob::valueChanged, this, &ToolDialog::paramsChanged);
     } else if (auto* check = qobject_cast<QCheckBox*>(widget)) {
         connect(check, &QCheckBox::toggled, this, &ToolDialog::paramsChanged);
     }
@@ -232,11 +285,11 @@ QuantizeDialog::QuantizeDialog(QWidget* parent)
     grid->addWidget(new QLabel(tr("Quantize"), this), row, 0);
     grid->addWidget(m_target, row++, 1);
 
-    m_strength = percentSlider(0, 100, 100);
+    m_strength = percentKnob(0, 100, 100);
     grid->addWidget(new QLabel(tr("Strength"), this), row, 0);
     grid->addWidget(withReadout(m_strength, "%"), row++, 1);
 
-    m_swing = percentSlider(50, 90, 50);
+    m_swing = percentKnob(50, 90, 50);
     grid->addWidget(new QLabel(tr("Swing"), this), row, 0);
     grid->addWidget(withReadout(m_swing, "%"), row++, 1);
 
@@ -247,14 +300,14 @@ QuantizeDialog::QuantizeDialog(QWidget* parent)
     grid->addWidget(new QLabel(tr("Swing unit"), this), row, 0);
     grid->addWidget(m_swingUnit, row++, 1);
 
-    m_tolerance = numberSlider(0, 1000, 0, 5, 100);
+    m_tolerance = numberKnob(0, 1000, 0, 5, 100);
     m_tolerance->setToolTip(
         tr("Notes already this close to the grid are left exactly where they "
            "are — the dead zone that stops quantize from flattening detail."));
     grid->addWidget(new QLabel(tr("Leave notes within"), this), row, 0);
     grid->addWidget(beatsReadout(m_tolerance, 1000.0), row++, 1);
 
-    m_randomize = numberSlider(0, 250, 0, 1, 25);
+    m_randomize = numberKnob(0, 250, 0, 1, 25);
     grid->addWidget(new QLabel(tr("Randomize after"), this), row, 0);
     grid->addWidget(beatsReadout(m_randomize, 1000.0), row++, 1);
 
@@ -269,11 +322,11 @@ QuantizeDialog::QuantizeDialog(QWidget* parent)
     grid->addWidget(new QLabel(tr("Groove"), this), row, 0);
     grid->addWidget(m_groove, row++, 1);
 
-    m_grooveTiming = percentSlider(0, 100, 100);
+    m_grooveTiming = percentKnob(0, 100, 100);
     grid->addWidget(new QLabel(tr("Groove timing"), this), row, 0);
     grid->addWidget(withReadout(m_grooveTiming, "%"), row++, 1);
 
-    m_grooveVelocity = percentSlider(0, 100, 100);
+    m_grooveVelocity = percentKnob(0, 100, 100);
     grid->addWidget(new QLabel(tr("Groove velocity"), this), row, 0);
     grid->addWidget(withReadout(m_grooveVelocity, "%"), row++, 1);
 
@@ -338,7 +391,7 @@ ArpeggiatorDialog::ArpeggiatorDialog(QWidget* parent)
     grid->addWidget(new QLabel(tr("Direction"), this), row, 0);
     grid->addWidget(m_direction, row++, 1);
 
-    m_octaves = numberSlider(1, 5, 1);
+    m_octaves = numberKnob(1, 5, 1);
     grid->addWidget(new QLabel(tr("Octave range"), this), row, 0);
     grid->addWidget(withReadout(m_octaves, QString()), row++, 1);
 
@@ -354,39 +407,39 @@ ArpeggiatorDialog::ArpeggiatorDialog(QWidget* parent)
     grid->addWidget(new QLabel(tr("Rate"), this), row, 0);
     grid->addWidget(rateRow, row++, 1);
 
-    m_gate = percentSlider(10, 200, 90);
+    m_gate = percentKnob(10, 200, 90);
     grid->addWidget(new QLabel(tr("Gate"), this), row, 0);
     grid->addWidget(withReadout(m_gate, "%"), row++, 1);
 
-    m_stepCount = numberSlider(1, 16, 1);
+    m_stepCount = numberKnob(1, 16, 1);
     grid->addWidget(new QLabel(tr("Pattern steps"), this), row, 0);
     grid->addWidget(withReadout(m_stepCount, QString()), row++, 1);
 
     m_steps = new QTableWidget(0, 4, this);
     m_steps->setHorizontalHeaderLabels(
         {tr("Velocity"), tr("Skip"), tr("Tie"), tr("Transpose")});
-    m_steps->verticalHeader()->setDefaultSectionSize(34);
+    m_steps->verticalHeader()->setDefaultSectionSize(52);
+    m_steps->verticalHeader()->hide();
     m_steps->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    m_steps->setMinimumWidth(600);
-    m_steps->setMaximumHeight(260);
+    m_steps->setMinimumWidth(0);
     grid->addWidget(m_steps, row++, 0, 1, 2);
-    connect(m_stepCount, &QSlider::valueChanged, this,
-            &ArpeggiatorDialog::rebuildSteps);
+    connect(m_stepCount, &ui::Knob::valueChanged, this,
+            [this](double value) { rebuildSteps(int(std::lround(value))); });
     rebuildSteps(1);
 
-    m_ramp = percentSlider(-100, 100, 0);
+    m_ramp = percentKnob(-100, 100, 0);
     grid->addWidget(new QLabel(tr("Velocity ramp"), this), row, 0);
     grid->addWidget(withReadout(m_ramp, "%"), row++, 1);
 
-    m_swing = percentSlider(50, 90, 50);
+    m_swing = percentKnob(50, 90, 50);
     grid->addWidget(new QLabel(tr("Swing"), this), row, 0);
     grid->addWidget(withReadout(m_swing, "%"), row++, 1);
 
-    m_humanizeVelocity = numberSlider(0, 30, 0);
+    m_humanizeVelocity = numberKnob(0, 30, 0);
     grid->addWidget(new QLabel(tr("Humanize velocity"), this), row, 0);
     grid->addWidget(withReadout(m_humanizeVelocity, QString()), row++, 1);
 
-    m_humanizeTiming = numberSlider(0, 250, 0, 1, 25);
+    m_humanizeTiming = numberKnob(0, 250, 0, 1, 25);
     grid->addWidget(new QLabel(tr("Humanize timing"), this), row, 0);
     grid->addWidget(beatsReadout(m_humanizeTiming, 1000.0), row++, 1);
 
@@ -423,14 +476,14 @@ void ArpeggiatorDialog::rebuildSteps(int count) {
     const int previous = m_steps->rowCount();
     m_steps->setRowCount(count);
     for (int row = previous; row < count; ++row) {
-        auto* velocity = numberSlider(1, 127, 100);
+        auto* velocity = numberKnob(1, 127, 100);
         auto* skip = new QTableWidgetItem();
         skip->setCheckState(Qt::Unchecked);
         skip->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled);
         auto* tie = new QTableWidgetItem();
         tie->setCheckState(Qt::Unchecked);
         tie->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled);
-        auto* transpose = numberSlider(-24, 24, 0);
+        auto* transpose = numberKnob(-24, 24, 0);
         m_steps->setCellWidget(row, 0, withReadout(velocity, QString()));
         m_steps->setItem(row, 1, skip);
         m_steps->setItem(row, 2, tie);
@@ -439,11 +492,21 @@ void ArpeggiatorDialog::rebuildSteps(int count) {
             withReadout(transpose, [](int value) {
                 return QString(value > 0 ? "+%1 st" : "%1 st").arg(value);
             }, 48));
-        connect(velocity, &QSlider::valueChanged, this,
+        connect(velocity, &ui::Knob::valueChanged, this,
                 &ArpeggiatorDialog::paramsChanged);
-        connect(transpose, &QSlider::valueChanged, this,
+        connect(transpose, &ui::Knob::valueChanged, this,
                 &ArpeggiatorDialog::paramsChanged);
     }
+    // One step should not reserve an empty multi-row table. Four visible rows
+    // are enough to edit a pattern comfortably; longer patterns scroll inside
+    // the table and do not make the whole tool window grow.
+    const int visibleRows = std::clamp(count, 1, 4);
+    const int headerHeight =
+        std::max(28, m_steps->horizontalHeader()->sizeHint().height());
+    m_steps->setFixedHeight(headerHeight + visibleRows * 52 +
+                            2 * m_steps->frameWidth());
+    m_steps->setVerticalScrollBarPolicy(
+        count > visibleRows ? Qt::ScrollBarAsNeeded : Qt::ScrollBarAlwaysOff);
     emit paramsChanged();
 }
 
@@ -463,16 +526,16 @@ mt::ArpParams ArpeggiatorDialog::params() const {
 
     for (int row = 0; row < m_steps->rowCount(); ++row) {
         mt::ArpParams::Step step;
-        if (auto* slider = cellSlider(m_steps, row, 0))
-            step.velocity = slider->value();
+        if (auto* knob = cellKnob(m_steps, row, 0))
+            step.velocity = int(std::lround(knob->value()));
         if (auto* item = m_steps->item(row, 1)) {
             step.skip = item->checkState() == Qt::Checked;
         }
         if (auto* item = m_steps->item(row, 2)) {
             step.tie = item->checkState() == Qt::Checked;
         }
-        if (auto* slider = cellSlider(m_steps, row, 3))
-            step.transpose = slider->value();
+        if (auto* knob = cellKnob(m_steps, row, 3))
+            step.transpose = int(std::lround(knob->value()));
         p.steps.push_back(step);
     }
     return p;
@@ -500,11 +563,11 @@ GlueDialog::GlueDialog(QWidget* parent) : ToolDialog(tr("Glue"), parent) {
     m_samePitch->setChecked(true);
     grid->addWidget(m_samePitch, row++, 1);
 
-    m_gap = numberSlider(0, 4000, 0, 5, 250);
+    m_gap = numberKnob(0, 4000, 0, 5, 250);
     grid->addWidget(new QLabel(tr("Gap tolerance"), this), row, 0);
     grid->addWidget(beatsReadout(m_gap, 1000.0), row++, 1);
 
-    m_legatoMax = numberSlider(0, 32000, 0, 50, 2000);
+    m_legatoMax = numberKnob(0, 32000, 0, 50, 2000);
     grid->addWidget(new QLabel(tr("Legato max length"), this), row, 0);
     grid->addWidget(beatsReadout(m_legatoMax, 1000.0, QString(), tr("no limit")),
                     row++, 1);
@@ -561,11 +624,11 @@ ArticulateDialog::ArticulateDialog(QWidget* parent)
 
     // Past 100% a gate overlaps the next note, which is a legitimate thing to
     // ask for on a pad or a sustained bass.
-    m_gate = percentSlider(5, 200, 80);
+    m_gate = percentKnob(5, 200, 80);
     grid->addWidget(new QLabel(tr("Gate"), this), row, 0);
     grid->addWidget(withReadout(m_gate, "%"), row++, 1);
 
-    m_amount = percentSlider(0, 100, 100);
+    m_amount = percentKnob(0, 100, 100);
     m_amount->setToolTip(
         tr("How far each note travels toward the gated length. Below 100% the "
            "phrasing already in the part survives."));
@@ -574,12 +637,12 @@ ArticulateDialog::ArticulateDialog(QWidget* parent)
 
     // One slider step is 1/32 beat, matching the musical increment the old
     // numeric field used without losing the exact fraction to decimal rounding.
-    m_minLength = numberSlider(1, 128, 2);
+    m_minLength = numberKnob(1, 128, 2);
     grid->addWidget(new QLabel(tr("Shortest"), this), row, 0);
     grid->addWidget(beatsReadout(m_minLength, 32.0, QString(), QString(), 5),
                     row++, 1);
 
-    m_maxLength = numberSlider(0, 128, 0);
+    m_maxLength = numberKnob(0, 128, 0);
     m_maxLength->setToolTip(
         tr("Stops a note gating against a distant next note from stretching "
            "across the whole bar."));
@@ -588,7 +651,7 @@ ArticulateDialog::ArticulateDialog(QWidget* parent)
                     row++, 1);
 
     m_accentOn = new QCheckBox(tr("Accent every"), this);
-    m_accentEvery = numberSlider(2, 16, 4);
+    m_accentEvery = numberKnob(2, 16, 4);
     auto* accentRow = new QWidget(this);
     auto* accentLayout = new QHBoxLayout(accentRow);
     accentLayout->setContentsMargins(0, 0, 0, 0);
@@ -598,7 +661,7 @@ ArticulateDialog::ArticulateDialog(QWidget* parent)
         [](int value) { return QObject::tr("%1th note").arg(value); }, 68), 1);
     grid->addWidget(accentRow, row++, 1);
 
-    m_accentVelocity = numberSlider(-64, 64, 14);
+    m_accentVelocity = numberKnob(-64, 64, 14);
     grid->addWidget(new QLabel(tr("Velocity"), this), row, 0);
     grid->addWidget(withReadout(
                         m_accentVelocity,
@@ -610,7 +673,7 @@ ArticulateDialog::ArticulateDialog(QWidget* parent)
                         84),
                     row++, 1);
 
-    m_otherVelocity = numberSlider(-64, 64, -6);
+    m_otherVelocity = numberKnob(-64, 64, -6);
     m_otherVelocity->setToolTip(
         tr("Pulling the unaccented notes down is what makes an accent audible "
            "without the part getting louder overall."));
@@ -685,7 +748,7 @@ StrumDialog::StrumDialog(QWidget* parent) : ToolDialog(tr("Strum"), parent) {
     grid->addWidget(new QLabel(tr("Direction"), this), row, 0);
     grid->addWidget(m_direction, row++, 1);
 
-    m_span = numberSlider(5, 2000, 125, 1, 125);
+    m_span = numberKnob(5, 2000, 125, 1, 125);
     grid->addWidget(new QLabel(tr("Time"), this), row, 0);
     grid->addWidget(beatsReadout(m_span, 1000.0), row++, 1);
 
@@ -696,11 +759,11 @@ StrumDialog::StrumDialog(QWidget* parent) : ToolDialog(tr("Strum"), parent) {
     grid->addWidget(new QLabel(tr("Shape"), this), row, 0);
     grid->addWidget(m_shape, row++, 1);
 
-    m_taper = percentSlider(-100, 100, 0);
+    m_taper = percentKnob(-100, 100, 0);
     grid->addWidget(new QLabel(tr("Velocity taper"), this), row, 0);
     grid->addWidget(withReadout(m_taper, "%"), row++, 1);
 
-    m_window = numberSlider(0, 1000, 20, 1, 50);
+    m_window = numberKnob(0, 1000, 20, 1, 50);
     m_window->setToolTip(
         tr("Notes starting within this of each other count as one chord. "
            "Anything further apart is a separate event and is left alone."));
@@ -740,7 +803,7 @@ RandomizeDialog::RandomizeDialog(QWidget* parent)
     int row = 0;
 
     m_velocityOn = new QCheckBox(tr("Velocity"), this);
-    m_velocity = numberSlider(1, 127, 20);
+    m_velocity = numberKnob(1, 127, 20);
     grid->addWidget(m_velocityOn, row, 0);
     grid->addWidget(withReadout(m_velocity, [](int value) {
                         return QString::fromUtf8("± %1").arg(value);
@@ -748,7 +811,7 @@ RandomizeDialog::RandomizeDialog(QWidget* parent)
                     row++, 1);
 
     m_pitchOn = new QCheckBox(tr("Pitch"), this);
-    m_pitch = numberSlider(1, 48, 2);
+    m_pitch = numberKnob(1, 48, 2);
     grid->addWidget(m_pitchOn, row, 0);
     grid->addWidget(withReadout(
                         m_pitch,
@@ -778,7 +841,7 @@ RandomizeDialog::RandomizeDialog(QWidget* parent)
     grid->addWidget(scaleRow, row++, 1);
 
     m_timingOn = new QCheckBox(tr("Timing"), this);
-    m_timing = numberSlider(1, 1000, 20, 1, 50);
+    m_timing = numberKnob(1, 1000, 20, 1, 50);
     grid->addWidget(m_timingOn, row, 0);
     grid->addWidget(beatsReadout(m_timing, 1000.0, QString::fromUtf8("± ")),
                     row++, 1);
@@ -787,7 +850,7 @@ RandomizeDialog::RandomizeDialog(QWidget* parent)
     grid->addWidget(m_constrain, row++, 1);
 
     m_durationOn = new QCheckBox(tr("Duration"), this);
-    m_duration = numberSlider(1, 100, 20);
+    m_duration = numberKnob(1, 100, 20);
     grid->addWidget(m_durationOn, row, 0);
     grid->addWidget(withReadout(m_duration, [](int value) {
                         return QString::fromUtf8("± %1%").arg(value);
@@ -803,14 +866,19 @@ RandomizeDialog::RandomizeDialog(QWidget* parent)
     m_preserveTotal->setChecked(true);
     grid->addWidget(m_preserveTotal, row++, 1);
 
-    m_seed = numberSlider(1, 999999, 1, 1, 10000);
+    m_seed = numberKnob(1, 999999, 1, 1, 10000);
     auto* seedRow = new QWidget(this);
     auto* seedLayout = new QHBoxLayout(seedRow);
     seedLayout->setContentsMargins(0, 0, 0, 0);
     auto* dice = new QPushButton(tr("Dice"), seedRow);
     dice->setToolTip(tr("Another roll of the same settings."));
-    connect(dice, &QPushButton::clicked, this,
-            [this] { m_seed->setValue(QRandomGenerator::global()->bounded(1, 999999)); });
+    connect(dice, &QPushButton::clicked, this, [this] {
+        const double seed = QRandomGenerator::global()->bounded(1, 999999);
+        m_seed->setValue(seed);
+        // Knob::setValue is deliberately silent for controller-to-view sync.
+        // Dice is user input, so publish the change to its readout and preview.
+        emit m_seed->valueChanged(seed);
+    });
     seedLayout->addWidget(withReadout(m_seed, QString()), 1);
     seedLayout->addWidget(dice);
     grid->addWidget(new QLabel(tr("Seed"), this), row, 0);
@@ -880,7 +948,7 @@ ChordDialog::ChordDialog(QWidget* parent)
     grid->addWidget(new QLabel(tr("Chord"), this), row, 0);
     grid->addWidget(m_type, row++, 1);
 
-    m_inversion = numberSlider(0, 4, 0);
+    m_inversion = numberKnob(0, 4, 0);
     grid->addWidget(new QLabel(tr("Inversion"), this), row, 0);
     grid->addWidget(withReadout(m_inversion, QString()), row++, 1);
 

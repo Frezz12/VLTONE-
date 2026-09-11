@@ -49,6 +49,20 @@ int main(int argc, char** argv) {
     const auto check = [&](bool ok, const char* what) {
         if (!ok) { ++failures; std::cerr << "FAIL: " << what << '\n'; }
     };
+    QSettings().setValue(QStringLiteral("ui/themeId"),
+                         QStringLiteral("logic"));
+    ThemeManager& themes = ThemeManager::instance();
+    QStringList presetIds;
+    for (const Theme& theme : themes.presets()) presetIds.push_back(theme.id);
+    check(presetIds == QStringList({QStringLiteral("dark"),
+                                    QStringLiteral("light"),
+                                    QStringLiteral("solarized-light"),
+                                    QStringLiteral("gruvbox")}),
+          "only the four supported built-in themes remain");
+    check(themes.themeId() == QStringLiteral("dark") &&
+              QSettings().value(QStringLiteral("ui/themeId")).toString() ==
+                  QStringLiteral("dark"),
+          "a retired saved theme migrates to Dark");
     const auto source = temporary.filePath("source.wav");
     audio::platform::AudioFileWriter writer;
     check(bool(writer.open(source.toStdString(), 48000, 2, 480000)), "fixture opens");
@@ -183,7 +197,7 @@ int main(int argc, char** argv) {
             const double x = luminance(a), y = luminance(b);
             return (std::max(x, y) + .05) / (std::min(x, y) + .05);
         };
-        for (const QString& theme : {QStringLiteral("logic"), QStringLiteral("logic-light")}) {
+        for (const QString& theme : {QStringLiteral("light"), QStringLiteral("solarized-light")}) {
             ThemeManager::instance().setThemeId(theme, false);
             completed.resize(640, 760);
             QApplication::processEvents();

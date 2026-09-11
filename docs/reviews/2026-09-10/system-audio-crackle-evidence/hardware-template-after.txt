@@ -1,0 +1,4 @@
+HARDWARE frames=32 hardware_frames=64 workers=4 realtime_helpers=3 workgroup_helpers=3 callbacks=1502 p95_ms=0.2157 p99_ms=0.2367 max_ms=0.3366 over=0 xruns=0,0,0,0 input_enabled=0
+HARDWARE frames=16 hardware_frames=64 workers=4 realtime_helpers=3 workgroup_helpers=3 callbacks=3013 p95_ms=0.1450 p99_ms=0.1520 max_ms=0.2209 over=0 xruns=0,0,0,0 input_enabled=0
+HARDWARE frames=128 hardware_frames=128 workers=4 realtime_helpers=3 workgroup_helpers=3 callbacks=377 p95_ms=0.6533 p99_ms=0.7293 max_ms=0.7888 over=0 xruns=0,0,0,0 input_enabled=0
+RESTORE hardware_frames=512 status=0

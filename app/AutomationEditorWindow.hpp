@@ -1,4 +1,6 @@
 #pragma once
+#include "graphics/ScenePaintSource.hpp"
+#include "graphics/RetainedScene.hpp"
 #include "UiFrameClock.hpp"
 
 #include "AutomationTools.hpp"
@@ -22,16 +24,16 @@ namespace daw { class EngineController; }
 ///
 /// The same gestures the arrangement lane offers, because a curve should not
 /// behave differently depending on how much of it you can see — click empty
-/// space to add a point and drag it straight away, drag a point to move it,
-/// Shift-drag a point in time, Alt-drag a segment to bend it, right-click for
-/// its shape. What the lane cannot give is room: a Shift rubber band from empty
-/// space, a value axis in the parameter's own units, and the generators that act
-/// on a selection.
+/// space to add a point and drag it straight away, Shift-click to add a timing
+/// anchor on the existing curve, drag a point to move it, Shift-drag a point in
+/// time, Alt-drag a segment to bend it, right-click for its shape. What the lane
+/// cannot give is room: a Shift rubber band from empty space, a value axis in the
+/// parameter's own units, and the generators that act on a selection.
 ///
 /// It owns no data. Every edit goes to `EngineController::setAutomationPoints`
 /// while the gesture runs and to `commitAutomationEdit` when it is let go, so
 /// the whole drag is one undo entry and the engine hears it live.
-class AutomationCurveView : public ui::FrameWidget {
+class AutomationCurveView : public ui::FrameWidget , public ui::graphics::ScenePaintSource {
     Q_OBJECT
 public:
     using ui::FrameWidget::update;
@@ -89,6 +91,7 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent*) override;
+    void paintScene(QPainter&, const QRegion&) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
@@ -99,6 +102,9 @@ protected:
 
 private:
     void paintStatic(QPainter& painter);
+    ui::graphics::RetainedScene m_gpuStatic;
+    QSize m_gpuStaticSize;
+    qreal m_gpuStaticDpr = 0;
     QRegion overlayRegion() const;
     QFont m_staticFont;
     QPixmap m_staticFrame;
@@ -157,6 +163,7 @@ private:
     double m_selectTo = 0.0;
     bool m_banding = false;
     double m_bandAnchor = 0.0;
+    QPointF m_bandPressPosition;
 
     int m_hoverPoint = -1;
     QPointF m_cursor;

@@ -1,4 +1,5 @@
 #pragma once
+#include "graphics/ScenePaintSource.hpp"
 
 #include <QColor>
 #include <QWidget>
@@ -11,7 +12,7 @@
 /// The twelve bars are real log-spaced frequency bands, low at the left and
 /// high at the right. The engine supplies linear RMS values; this widget only
 /// performs display smoothing and the dB-to-height mapping.
-class SpectrumMeter final : public QWidget {
+class SpectrumMeter final : public QWidget, public ui::graphics::ScenePaintSource {
     Q_OBJECT
 public:
     static constexpr std::size_t kBandCount = 12;
@@ -29,6 +30,7 @@ public:
 
 protected:
     void paintEvent(QPaintEvent*) override;
+    void paintScene(QPainter&, const QRegion&) override;
 
 private:
     static double displayHeight(float linear);

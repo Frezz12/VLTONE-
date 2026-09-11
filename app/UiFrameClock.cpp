@@ -32,6 +32,11 @@ public:
     FrameClock* clock;
     QPointer<QWidget> window;
     QPointer<QWindow> native;
+    QPointer<QObject> presenter;
+    QPointer<QWindow> presentationWindow;
+    std::function<void()> requestFrame;
+    std::function<bool(QWidget*, const QRegion&)> presentDamage;
+    quint64 generation = 0;
     QTimer wait;
     QList<Dirty> dirty;
     qint64 lastNs = 0;
@@ -51,9 +56,16 @@ public:
     }
     void schedule() {
         if (!window) { deleteLater(); return; }
-        if (!needed()) { wait.stop(); requested = false; return; }
-        native = window->windowHandle();
-        if (!native || !native->isExposed() || requested || queued) return;
+        if (!needed()) {
+            wait.stop(); requested = false; lastNs = 0; cadence.reset();
+            return;
+        }
+        native = presenter ? presentationWindow.data() : window->windowHandle();
+        if (!native || !native->isExposed()) {
+            wait.stop(); requested = false; lastNs = 0; cadence.reset();
+            return;
+        }
+        if (requested || queued) return;
         // Request ahead of the deadline by the measured platform delivery
         // latency. Waiting a whole period before requestUpdate adds another
         // display interval on a vsync platform and halves the requested rate.
@@ -73,13 +85,15 @@ public:
         // Unlimited mode. There is no zero-interval timer or idle paint loop.
         queued = true;
         const auto queuedAt = nowNs();
-        QMetaObject::invokeMethod(this, [this, queuedAt] {
+        QMetaObject::invokeMethod(this, [this, queuedAt, ticket = generation] {
+            if (ticket != generation) return;
             queued = false;
             ui::perf::sample("gui.queue.delay.ms", double(nowNs() - queuedAt) / 1e6);
             if (!needed() || !native || !native->isExposed() || requested) return;
             requested = true;
             requestNs = nowNs();
-            native->requestUpdate();
+            if (presenter && requestFrame) requestFrame();
+            else native->requestUpdate();
         }, Qt::QueuedConnection);
     }
     void frame() {
@@ -91,8 +105,11 @@ public:
         const qint64 period = qint64(clock->periodSeconds(window) * 1e9);
         if (!cadence.due(now, period)) { schedule(); return; }
         cadence.advance(now, period);
-        if (lastNs && now - lastNs < 250000000)
+        if (lastNs) {
             ui::perf::sample("frame.interval.ms", double(now - lastNs) / 1e6);
+            if (now - lastNs >= 250000000)
+                ui::perf::sample("frame.stall.ms", double(now - lastNs) / 1e6);
+        }
         lastNs = now;
         ui::perf::Scope timing("frame.prepare.ms");
         const auto timers = clock->m_timers; // callbacks may destroy/register timers
@@ -106,8 +123,16 @@ public:
         auto paint = std::move(dirty);
         dirty.clear();
         for (const auto& item : paint)
-            if (visible(item.surface)) item.surface->update(item.region);
+            if (visible(item.surface) && !(presenter && presentDamage && presentDamage(item.surface, item.region)))
+                item.surface->update(item.region);
         schedule();
+    }
+    void resetPresenter() {
+        ++generation;
+        presenter = nullptr; presentationWindow = nullptr;
+        requestFrame = {}; presentDamage = {};
+        native = nullptr; requested = queued = false;
+        wait.stop(); lastNs = nativeLeadNs = 0; cadence.reset();
     }
 };
 
@@ -117,7 +142,7 @@ FrameClock& FrameClock::instance() {
 }
 FrameClock::FrameClock(QObject* parent) : QObject(parent) {
     QSettings settings;
-    const auto mode = settings.value("ui/frameMode", "fixed").toString();
+    const auto mode = settings.value("ui/frameMode", "display").toString();
     m_mode = mode == "display" ? FrameMode::Display : mode == "unlimited" ? FrameMode::Unlimited : FrameMode::Fixed;
     m_limit = std::clamp(settings.value("ui/frameLimit", 60).toInt(), 1, 1000);
     qApp->installEventFilter(this);
@@ -155,6 +180,30 @@ FrameClock::Driver* FrameClock::driver(QWidget* surface) {
     m_drivers.push_back(d);
     return d;
 }
+void FrameClock::setPresenter(QWidget* surface, QObject* owner, QWindow* window,
+                              std::function<void()> requestFrame,
+                              std::function<bool(QWidget*, const QRegion&)> damage) {
+    auto* d = driver(surface);
+    if (!d || !owner || !window) return;
+    d->resetPresenter();
+    d->presenter = owner; d->presentationWindow = window;
+    d->requestFrame = std::move(requestFrame); d->presentDamage = std::move(damage);
+    connect(owner, &QObject::destroyed, d, [d, ticket = d->generation] {
+        if (d->generation != ticket) return;
+        d->resetPresenter(); d->schedule();
+    });
+    d->schedule();
+}
+void FrameClock::clearPresenter(QWidget* surface, QObject* owner) {
+    for (const auto& d : std::as_const(m_drivers))
+        if (d && surface && d->window == surface->window() && d->presenter == owner) {
+            d->resetPresenter(); d->schedule();
+        }
+}
+void FrameClock::presentationFrame(QWidget* surface, QObject* owner) {
+    for (const auto& d : std::as_const(m_drivers))
+        if (d && surface && d->window == surface->window() && d->presenter == owner) d->frame();
+}
 void FrameClock::request(QWidget* surface, const QRegion& region) {
     if (!surface || region.isEmpty() || !visible(surface)) return;
     auto* d = driver(surface);
@@ -180,7 +229,7 @@ void FrameClock::wake() {
 bool FrameClock::eventFilter(QObject* object, QEvent* event) {
     if (event->type() == QEvent::UpdateRequest) {
         for (const auto& d : std::as_const(m_drivers)) {
-            if (d && d->native == object && d->requested) {
+            if (d && !d->presenter && d->native == object && d->requested) {
                 d->frame();
                 // This native request is our cadence pulse. QWidgetWindow's
                 // default handler calls repaint() on the entire top-level

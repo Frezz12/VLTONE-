@@ -1,0 +1,4 @@
+COMMAND: ['build/bin/VLTONE', '--editorcheck']
+This plugin does not support propagateSizeHints()
+QApplication::removeTranslator: Please instantiate the QApplication object first
+QApplication::removeTranslator: Please instantiate the QApplication object first

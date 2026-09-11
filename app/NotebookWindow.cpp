@@ -1,4 +1,5 @@
 #include "NotebookWindow.hpp"
+#include "graphics/BrowserSurface.hpp"
 #include "Typography.hpp"
 
 #include "Controls.hpp"
@@ -76,22 +77,6 @@ protected:
     }
 };
 
-class NotebookPage final : public QWebEnginePage {
-public:
-    NotebookPage(QWebEngineProfile* profile, QObject* parent)
-        : QWebEnginePage(profile, parent) {}
-
-protected:
-    bool acceptNavigationRequest(const QUrl& url, NavigationType type,
-                                 bool isMainFrame) override {
-        if (!isMainFrame) return true;
-        if (type == NavigationTypeReload) return true;
-        if (type == NavigationTypeLinkClicked) return false;
-        return url.isLocalFile() || url.scheme() == QLatin1String("about");
-    }
-
-    QWebEnginePage* createWindow(WebWindowType) override { return nullptr; }
-};
 
 QString jsArray(const QString& value) {
     return QString::fromUtf8(
@@ -158,27 +143,21 @@ NotebookWindow::NotebookWindow(daw::EngineController* controller,
     buildToolbar();
     column->addWidget(m_toolbar);
 
-    auto* profile = new QWebEngineProfile(this);
-    ui::installFontUrlHandler(profile);
-    profile->setHttpCacheType(QWebEngineProfile::MemoryHttpCache);
-    profile->setPersistentCookiesPolicy(
-        QWebEngineProfile::NoPersistentCookies);
-    m_view = new QWebEngineView(this);
+    auto* profile = new ui::graphics::BrowserProfile(this, nullptr, false);
+    m_view = new ui::graphics::BrowserSurface(profile, this);
     m_view->setProperty("dawWebInput", true);
-    auto* page = new NotebookPage(profile, m_view);
-    m_view->setPage(page);
-    page->settings()->setAttribute(
-        QWebEngineSettings::LocalContentCanAccessFileUrls, true);
-    page->settings()->setAttribute(
-        // Chromium classifies custom CORS schemes as remote. The document's
-        // CSP still permits only local files and the embedded font handler;
-        // all network connections, frames and remote scripts remain blocked.
-        QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);
-    page->settings()->setAttribute(QWebEngineSettings::JavascriptCanOpenWindows,
-                                   false);
-    auto* channel = new QWebChannel(page);
-    channel->registerObject(QStringLiteral("notebook"), this);
-    page->setWebChannel(channel);
+    auto* page = m_view->page();
+    page->navigationPolicy = [](const QUrl& url, bool mainFrame) {
+        if (!mainFrame) return true; // Subresources remain constrained by CSP.
+        if (url == QUrl(QStringLiteral("about:blank"))) return true;
+        QUrl document = url; document.setFragment(QString());
+        return document == QUrl::fromLocalFile(editorPagePath());
+    };
+    page->setWebAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, true);
+    // The local document's CSP allows only its files and embedded font scheme.
+    page->setWebAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);
+    page->setWebAttribute(QWebEngineSettings::JavascriptCanOpenWindows, false);
+    page->setWebChannelObject(QStringLiteral("notebook"), new NotebookWebBridge(this));
     m_pages = new QStackedWidget(this);
     m_pages->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     m_pages->addWidget(m_view);
@@ -194,7 +173,7 @@ NotebookWindow::NotebookWindow(daw::EngineController* controller,
     connect(m_positionTimer, &QTimer::timeout, this,
             &NotebookWindow::updateTimedTextPosition);
 
-    connect(m_view, &QWebEngineView::loadFinished, this, [this](bool ok) {
+    connect(m_view, &ui::graphics::BrowserSurface::loadFinished, this, [this](bool ok) {
         if (!ok) {
             setSaveStatus(tr("Could not open notebook"), true);
             return;
@@ -208,7 +187,7 @@ NotebookWindow::NotebookWindow(daw::EngineController* controller,
                 }
                 if (isVisible() && m_backgroundPlaying)
                     m_view->page()->runJavaScript(
-                        QStringLiteral("setBackgroundMotion(true);"));
+                        QStringLiteral("typeof setBackgroundMotion==='function'&&setBackgroundMotion(true);"));
             });
     });
 
@@ -222,9 +201,38 @@ NotebookWindow::NotebookWindow(daw::EngineController* controller,
     connect(m_reloadTimer, &QTimer::timeout, this,
             &NotebookWindow::renderDocument);
 
-    QFile contentFile(ui::notebookprefs::contentFilePath());
-    if (contentFile.open(QIODevice::ReadOnly))
-        m_content = QString::fromUtf8(contentFile.readAll());
+    if (m_controller) {
+        m_content = QString::fromStdString(m_controller->notebookHtml());
+        m_loadedCues = m_controller->notebookCues();
+    }
+    // One-time migration from releases that stored one notebook for the whole
+    // application. Import it into the project that is open when Notes is first
+    // used, then never offer it to another project.
+    QSettings settings;
+    if (!settings.value(QStringLiteral("notebook/projectStorageMigrated"), false).toBool()) {
+        bool imported = false;
+        if (m_controller && m_controller->notebookHtml().empty()) {
+            QFile legacy(ui::notebookprefs::legacyContentFilePath());
+            if (legacy.open(QIODevice::ReadOnly)) {
+                const QString html = QString::fromUtf8(legacy.readAll());
+                if (!html.trimmed().isEmpty()) {
+                    imported |= m_controller->setNotebookHtml(html.toStdString());
+                    m_content = QString::fromStdString(m_controller->notebookHtml());
+                }
+            }
+        }
+        if (m_controller && m_controller->notebookCues().empty()) {
+            std::vector<daw::NotebookCueModel> cues;
+            for (const auto& cue : ui::notebookprefs::legacyTimedCues())
+                cues.push_back({cue.seconds, cue.text.toStdString()});
+            if (!cues.empty()) {
+                imported |= m_controller->setNotebookCues(std::move(cues));
+                m_loadedCues = m_controller->notebookCues();
+            }
+        }
+        settings.setValue(QStringLiteral("notebook/projectStorageMigrated"), true);
+        m_importedLegacyContent = imported;
+    }
 
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, [this] {
         applyTheme();
@@ -255,7 +263,7 @@ void NotebookWindow::buildToolbar() {
     title->setObjectName(QStringLiteral("NotebookTitle"));
     header->addWidget(title);
     header->addStretch(1);
-    m_saveStatus = new QLabel(tr("Saved locally"), m_toolbar);
+    m_saveStatus = new QLabel(tr("Saved in project"), m_toolbar);
     m_saveStatus->setObjectName(QStringLiteral("NotebookSaveStatus"));
     m_saveStatus->setAccessibleName(tr("Notebook save status"));
     header->addWidget(m_saveStatus);
@@ -269,7 +277,7 @@ void NotebookWindow::buildToolbar() {
         m_backgroundPlaying = playing;
         if (m_view)
             m_view->page()->runJavaScript(
-                QStringLiteral("setBackgroundMotion(%1);")
+                QStringLiteral("typeof setBackgroundMotion==='function'&&setBackgroundMotion(%1);")
                     .arg(playing ? QStringLiteral("true")
                                  : QStringLiteral("false")));
         updateMotionButton();
@@ -585,7 +593,7 @@ void NotebookWindow::buildTimedTextPanel() {
             });
     column->addWidget(m_timedTextFont);
 
-    m_timedTextStatus = new QLabel(tr("Timings are saved locally"),
+    m_timedTextStatus = new QLabel(tr("Timings are saved with the project"),
                                    m_timedTextPanel);
     m_timedTextStatus->setObjectName(QStringLiteral("NotebookTimedTextStatus"));
     m_timedTextStatus->setAccessibleName(tr("Timed text save status"));
@@ -603,18 +611,20 @@ void NotebookWindow::reloadTimedTextTable() {
     const QString selectedText = oldText ? oldText->text() : QString();
     m_loadingTimedText = true;
     m_timedTextTable->setRowCount(0);
-    const QVector<ui::notebookprefs::TimedCue> cues =
-        ui::notebookprefs::timedCues();
+    const auto& cues = m_controller->notebookCues();
+    m_loadedCues = cues;
     for (const auto& cue : cues) {
         const int row = m_timedTextTable->rowCount();
         m_timedTextTable->insertRow(row);
         m_timedTextTable->setItem(row, 0,
             new QTableWidgetItem(ui::notebookprefs::timedCueTimeText(
                 cue.seconds)));
-        m_timedTextTable->setItem(row, 1, new QTableWidgetItem(cue.text));
+        m_timedTextTable->setItem(
+            row, 1, new QTableWidgetItem(QString::fromStdString(cue.text)));
         double oldSeconds = 0.0;
         if (ui::notebookprefs::parseTimedCueTime(selectedTime, oldSeconds) &&
-            std::abs(oldSeconds - cue.seconds) < 0.0005 && selectedText == cue.text)
+            std::abs(oldSeconds - cue.seconds) < 0.0005 &&
+            selectedText == QString::fromStdString(cue.text))
             m_timedTextTable->setCurrentCell(row, 1);
     }
     m_loadingTimedText = false;
@@ -626,7 +636,7 @@ void NotebookWindow::reloadTimedTextTable() {
 
 void NotebookWindow::saveTimedTextTable() {
     if (m_loadingTimedText || !m_timedTextTable) return;
-    QVector<ui::notebookprefs::TimedCue> cues;
+    std::vector<daw::NotebookCueModel> cues;
     cues.reserve(m_timedTextTable->rowCount());
     for (int row = 0; row < m_timedTextTable->rowCount(); ++row) {
         QTableWidgetItem* timeItem = m_timedTextTable->item(row, 0);
@@ -653,19 +663,18 @@ void NotebookWindow::saveTimedTextTable() {
             m_timedTextStatus->style()->polish(m_timedTextStatus);
             return;
         }
-        cues.push_back({seconds, text});
+        cues.push_back({seconds, text.toStdString()});
     }
-
-    QString error;
-    if (!ui::notebookprefs::saveTimedCues(std::move(cues), &error)) {
-        m_timedTextStatus->setProperty("error", true);
-        m_timedTextStatus->setText(tr("Could not save timed text."));
-    } else {
-        m_timedTextStatus->setProperty("error", false);
-        m_timedTextStatus->setText(tr("Timings are saved locally"));
-        reloadTimedTextTable();
-        emit timedTextChanged();
-    }
+    std::stable_sort(cues.begin(), cues.end(),
+                     [](const auto& a, const auto& b) {
+                         return a.seconds < b.seconds;
+                     });
+    const bool changed = m_controller->setNotebookCues(std::move(cues));
+    m_timedTextStatus->setProperty("error", false);
+    m_timedTextStatus->setText(tr("Timings are saved with the project"));
+    reloadTimedTextTable();
+    if (changed) emit projectContentChanged();
+    emit timedTextChanged();
     m_timedTextStatus->style()->unpolish(m_timedTextStatus);
     m_timedTextStatus->style()->polish(m_timedTextStatus);
 }
@@ -1127,7 +1136,13 @@ void NotebookWindow::insertImageFile(const QString& path,
 
 void NotebookWindow::receiveContent(const QString& html) {
     if (html == m_content) return;
-    m_content = html;
+    if (m_controller) {
+        if (!m_controller->setNotebookHtml(html.toStdString())) return;
+        m_content = QString::fromStdString(m_controller->notebookHtml());
+        emit projectContentChanged();
+    } else {
+        m_content = html;
+    }
     m_contentDirty = true;
     setSaveStatus(tr("Saving…"));
     m_saveTimer->start();
@@ -1183,16 +1198,26 @@ void NotebookWindow::importPastedImage(const QString& dataUrl,
 
 void NotebookWindow::saveNow() {
     if (!m_contentDirty) return;
-    QDir().mkpath(ui::notebookprefs::dataDirectory());
-    QSaveFile file(ui::notebookprefs::contentFilePath());
-    const QByteArray bytes = m_content.toUtf8();
-    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() ||
-        !file.commit()) {
-        setSaveStatus(tr("Could not save"), true);
-        return;
-    }
     m_contentDirty = false;
-    setSaveStatus(tr("Saved locally"));
+    setSaveStatus(tr("Saved in project"));
+}
+
+void NotebookWindow::syncFromProject() {
+    if (!m_controller) return;
+    const QString content = QString::fromStdString(m_controller->notebookHtml());
+    const bool contentChanged = content != m_content;
+    const bool cuesChanged = m_loadedCues != m_controller->notebookCues();
+    if (!contentChanged && !cuesChanged) return;
+    if (m_saveTimer) m_saveTimer->stop();
+    m_contentDirty = false;
+    m_content = content;
+    m_loadedCues = m_controller->notebookCues();
+    if (contentChanged) renderDocument();
+    if (cuesChanged) {
+        reloadTimedTextTable();
+        emit timedTextChanged();
+    }
+    setSaveStatus(tr("Saved in project"));
 }
 
 void NotebookWindow::setSaveStatus(const QString& text, bool error) {
@@ -1232,7 +1257,8 @@ void NotebookWindow::closeEvent(QCloseEvent* event) {
 
 void NotebookWindow::hideEvent(QHideEvent* event) {
     if (m_view)
-        m_view->page()->runJavaScript(QStringLiteral("setBackgroundMotion(false);"));
+        m_view->page()->runJavaScript(QStringLiteral(
+            "typeof setBackgroundMotion==='function'&&setBackgroundMotion(false);"));
     emit visibilityChanged(false);
     if (m_positionTimer) m_positionTimer->stop();
     saveNow();
@@ -1244,6 +1270,7 @@ void NotebookWindow::showEvent(QShowEvent* event) {
     if (m_positionTimer) m_positionTimer->start();
     updateTimedTextPosition();
     if (m_view && m_backgroundPlaying)
-        m_view->page()->runJavaScript(QStringLiteral("setBackgroundMotion(true);"));
+        m_view->page()->runJavaScript(QStringLiteral(
+            "typeof setBackgroundMotion==='function'&&setBackgroundMotion(true);"));
     emit visibilityChanged(true);
 }

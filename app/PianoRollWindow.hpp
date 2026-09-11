@@ -1,4 +1,6 @@
 #pragma once
+#include "graphics/ScenePaintSource.hpp"
+#include "graphics/RetainedScene.hpp"
 #include "UiFrameClock.hpp"
 
 #include "MidiPreviewIndex.hpp"
@@ -64,9 +66,12 @@ class ToolDialog;
 /// every `ClipModel*`/`NoteModel*` would dangle. `clip()` re-resolves on each
 /// use and returns null once the clip is gone, which the paint and input paths
 /// all check.
-class PianoRollView : public ui::FrameWidget {
+class PianoRollView : public ui::FrameWidget, public ui::graphics::ScenePaintSource {
     Q_OBJECT
 public:
+    using ui::FrameWidget::update;
+    void update() { m_gpuNoteTiles.clear(); m_gpuLaneTiles.clear(); ui::FrameWidget::update(); }
+
     /// What the left mouse button does on the grid.
     ///
     /// Erase is deliberately *not* here: like FL, the right button erases in
@@ -306,6 +311,13 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent*) override;
+    void paintScene(QPainter&, const QRegion&) override;
+    void paintGridAndNotes(QPainter&, const QRegion&);
+    void paintOverlays(QPainter&, const QRegion&);
+    ui::graphics::RetainedScene m_gpuNoteTiles;
+    ui::graphics::RetainedScene m_gpuLaneTiles;
+    QByteArray m_gpuTileSignature;
+
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
@@ -438,6 +450,7 @@ private:
     void ensureSoundingPitchIndex(const daw::miditools::Notes& notes) const;
     void paintKeyboard(QPainter& p, double fieldBottom);
     void paintLane(QPainter& p);
+    void paintLaneValues(QPainter& p);
     void invalidateNotePaintIndex() noexcept;
     /// Forget paint indexes after undo/project reload or switching clips. The
     /// vectors retain capacity during ordinary edits; their revision tokens

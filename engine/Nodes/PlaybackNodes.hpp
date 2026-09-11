@@ -522,20 +522,30 @@ class InputNode : public Node {
 public:
     InputNode(std::string name, const InputBus* bus, ChannelCount firstChannel,
               ChannelCount channelCount)
-        : m_name(std::move(name)), m_bus(bus), m_firstChannel(firstChannel),
-          m_channelCount(std::max<ChannelCount>(1, channelCount)) {}
+        : m_name(std::move(name)), m_bus(bus) {
+        setRouting(firstChannel, channelCount, true);
+    }
 
     std::string_view name() const noexcept override { return m_name; }
     bool isSource() const noexcept override { return true; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
 
     void setEnabled(bool enabled) noexcept {
-        m_enabled.store(enabled, std::memory_order_relaxed);
+        if (enabled) m_routing.fetch_or(0x100, std::memory_order_relaxed);
+        else m_routing.fetch_and(~std::uint64_t(0x100), std::memory_order_relaxed);
+    }
+
+    void setRouting(ChannelCount first, ChannelCount count, bool enabled,
+                    unsigned channelMask = 3) noexcept {
+        m_routing.store((std::uint64_t(first) << 32) |
+            std::clamp<ChannelCount>(count, 1, 2) | (enabled ? 0x100 : 0) |
+            ((channelMask & 3u) << 16), std::memory_order_relaxed);
     }
 
     void process(const ProcessContext& context) override {
         const ChannelCount outChannels = context.output.numChannels();
-        if (!m_enabled.load(std::memory_order_relaxed) || !m_bus ||
+        const auto routing = m_routing.load(std::memory_order_relaxed);
+        if (!(routing & 0x100) || !m_bus ||
             !m_bus->channels) {
             for (ChannelCount ch = 0; ch < outChannels; ++ch) {
                 dsp::clear(context.output.channel(ch));
@@ -547,8 +557,10 @@ public:
             const std::span<float> destination = context.output.channel(ch);
             // A mono input feeds both sides; a stereo pair maps straight across.
             const ChannelCount sourceChannel =
-                m_firstChannel + (m_channelCount >= 2 ? ch : 0);
-            const float* source = sourceChannel < m_bus->channelCount
+                ChannelCount(routing >> 32) + ((routing & 0xff) >= 2 ? ch : 0);
+            const unsigned side = (routing & 0xff) >= 2 ? ch : 0;
+            const float* source = side < 2 && ((routing >> 16) & (1u << side)) &&
+                                      sourceChannel < m_bus->channelCount
                                       ? m_bus->channels[sourceChannel]
                                       : nullptr;
             if (!source) {
@@ -568,9 +580,7 @@ public:
 private:
     std::string m_name;
     const InputBus* m_bus = nullptr;
-    ChannelCount m_firstChannel = 0;
-    ChannelCount m_channelCount = 1;
-    std::atomic<bool> m_enabled{true};
+    std::atomic<std::uint64_t> m_routing{0};
 };
 
 } // namespace daw::engine

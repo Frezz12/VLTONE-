@@ -501,6 +501,11 @@ void MixerWidget::syncVisibleStrips() {
     if (master) m_strips.push_back(master);
 }
 
+void MixerWidget::syncMeterTimer() {
+    if (m_controller->isPlaying() || m_controller->isRecording()) m_meterTimer->start();
+    else { m_meterTimer->stop(); refreshMeters(); }
+}
+
 void MixerWidget::refreshMeters() {
     // A detached console follows its own screen, including while the main
     // window is minimised. The low-rate control poll wakes playback changes.

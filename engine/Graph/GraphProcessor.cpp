@@ -220,6 +220,7 @@ Status GraphProcessor::process(const AudioBlock& output, FrameCount frames,
                                bool offline, const TransportInfo& transport) {
     const rt::ScopedNoDenormals noDenormals;
     const CompiledGraph* snapshot = acquireGraph();
+    m_lastBlockLatency = snapshot ? snapshot->totalLatency : 0;
     if (!snapshot) return fail(EngineError::NotCompiled);
     if (frames > snapshot->maxBlockSize) {
         releaseGraph();
@@ -253,14 +254,17 @@ Status GraphProcessor::process(const AudioBlock& output, FrameCount frames,
     prepareMidiTimeline(*snapshot, frames, timelinePosition, playing, offline);
     prepareBlockState(*snapshot);
 
-    // Waking a worker that then finds nothing to steal is pure cost: a syscall
-    // out, a scan of every deque, a syscall back. Ask for one helper per
-    // kNodesPerHelper nodes, so a 100-node session wakes a couple of threads and
-    // a thousand-track session still wakes the whole pool.
-    constexpr std::size_t kNodesPerHelper = 16;
-    const unsigned helpers =
-        unsigned(std::max<std::size_t>(snapshot->nodes.size() / kNodesPerHelper, 1));
-    m_jobs.beginPass(m_fuseBlock ? snapshot->taskCount : std::uint32_t(snapshot->nodes.size()), helpers);
+    // A fused chain is one stealable task, regardless of its raw node count.
+    // Wake only helpers that can take ready roots; runNode announces later
+    // fan-outs when they actually become ready. Keep the established wake
+    // density for wide DSP graphs: a plugin can have an expensive block at
+    // any buffer size, so a low node count is not a reason to withhold workers.
+    const auto tasks = m_fuseBlock ? snapshot->taskCount : std::uint32_t(snapshot->nodes.size());
+    const auto ready = std::min<std::size_t>(snapshot->roots.size(), tasks);
+    const unsigned available = ready > 0 ? unsigned(ready - 1) : 0;
+    const unsigned helpers = std::min({available, m_jobs.workerCount() - 1,
+        unsigned(std::max<std::size_t>(snapshot->nodes.size() / 16, 1))});
+    m_jobs.beginPass(tasks, helpers);
 
     // Seed every source into worker 0's deque — this thread owns it, and a
     // work-stealing deque may only be pushed to by its owner. The other workers
@@ -282,6 +286,7 @@ Status GraphProcessor::processSerial(const AudioBlock& output, FrameCount frames
                                      const TransportInfo& transport) {
     const rt::ScopedNoDenormals noDenormals;
     const CompiledGraph* snapshot = acquireGraph();
+    m_lastBlockLatency = snapshot ? snapshot->totalLatency : 0;
     if (!snapshot) return fail(EngineError::NotCompiled);
     if (frames > snapshot->maxBlockSize) {
         releaseGraph();

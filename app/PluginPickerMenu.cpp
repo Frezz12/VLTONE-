@@ -10,16 +10,20 @@
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QFontMetrics>
+#include <QHash>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
 #include <QActionGroup>
 #include <QProxyStyle>
 #include <QSettings>
+#include <QStyleOption>
 #include <QTimer>
+#include <QWheelEvent>
 #include <QWidgetAction>
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <vector>
@@ -44,6 +48,30 @@ public:
                   QStyleHintReturn* returnData = nullptr) const override {
         if (hint == QStyle::SH_Menu_Scrollable) return 1;
         return QProxyStyle::styleHint(hint, option, widget, returnData);
+    }
+
+    int pixelMetric(PixelMetric metric, const QStyleOption* option,
+                    const QWidget* widget) const override {
+        if (metric == QStyle::PM_MenuScrollerHeight) return 10;
+        return QProxyStyle::pixelMetric(metric, option, widget);
+    }
+
+    void drawPrimitive(PrimitiveElement element, const QStyleOption* option,
+                       QPainter* painter,
+                       const QWidget* widget = nullptr) const override {
+        const bool verticalArrow = element == QStyle::PE_IndicatorArrowUp ||
+                                   element == QStyle::PE_IndicatorArrowDown;
+        const bool submenuArrow = element == QStyle::PE_IndicatorArrowLeft ||
+                                  element == QStyle::PE_IndicatorArrowRight;
+        if (option && (verticalArrow || submenuArrow)) {
+            QStyleOption compact(*option);
+            compact.rect = QStyle::alignedRect(
+                Qt::LeftToRight, Qt::AlignCenter,
+                verticalArrow ? QSize(6, 4) : QSize(4, 6), option->rect);
+            QProxyStyle::drawPrimitive(element, &compact, painter, widget);
+            return;
+        }
+        QProxyStyle::drawPrimitive(element, option, painter, widget);
     }
 };
 
@@ -144,14 +172,51 @@ QString vendorOf(const daw::plugins::PluginDescriptor& descriptor) {
 class MenuSearchFilter : public QObject {
 public:
     MenuSearchFilter(QMenu* menu, QLineEdit* edit)
-        : QObject(menu), m_edit(edit) {}
+        : QObject(menu), m_edit(edit) {
+        if (m_edit) m_edit->installEventFilter(this);
+    }
 
     void watch(QMenu* menu) {
         if (menu) menu->installEventFilter(this);
     }
 
 protected:
-    bool eventFilter(QObject*, QEvent* event) override {
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::Wheel) {
+            auto* menu = qobject_cast<QMenu*>(watched);
+            auto* wheel = static_cast<QWheelEvent*>(event);
+            if (!menu) return false;
+            const int delta = !wheel->pixelDelta().isNull()
+                                  ? wheel->pixelDelta().y()
+                                  : wheel->angleDelta().y();
+            if (!delta) return false;
+
+            std::vector<QAction*> rows;
+            rows.reserve(std::size_t(menu->actions().size()));
+            for (QAction* action : menu->actions()) {
+                if (!action->isVisible() || !action->isEnabled() ||
+                    action->isSeparator() ||
+                    qobject_cast<QWidgetAction*>(action)) {
+                    continue;
+                }
+                rows.push_back(action);
+            }
+            if (rows.empty()) return false;
+
+            const int divisor = wheel->pixelDelta().isNull() ? 120 : 24;
+            const int steps = std::max(1, std::abs(delta) / divisor);
+            // Drive QMenu through its keyboard navigation path. Besides moving
+            // the active row, that path updates its private scroll offset and
+            // therefore works on macOS styles where wheelEvent itself does not.
+            const int key = delta < 0 ? Qt::Key_Down : Qt::Key_Up;
+            for (int step = 0; step < steps; ++step) {
+                QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+                QApplication::sendEvent(menu, &press);
+            }
+            wheel->accept();
+            return true;
+        }
+
         const bool shortcutOverride = event->type() == QEvent::ShortcutOverride;
         if (!shortcutOverride && event->type() != QEvent::KeyPress) return false;
         auto* key = static_cast<QKeyEvent*>(event);
@@ -196,6 +261,18 @@ protected:
             return true;
         }
 
+        // When the editor itself owns the event, let QLineEdit insert the
+        // printable text normally. Its ShortcutOverride above has already
+        // prevented application-wide DAW commands such as bare R from firing.
+        if (watched == m_edit) {
+            if (find) {
+                m_edit->selectAll();
+                key->accept();
+                return true;
+            }
+            return false;
+        }
+
         if (find) {
             m_edit->setFocus(Qt::ShortcutFocusReason);
             m_edit->selectAll();
@@ -230,30 +307,28 @@ void applyDarkPluginMenuStyle(QMenu* menu) {
         menu->setProperty("pluginPickerScrollable", true);
     }
     const Theme& theme = th();
-    const QColor background = theme.pluginMenuBackground;
-    // Keep the requested white ink on the default graphite, but preserve
-    // legibility when someone deliberately chooses a light menu background.
-    const QColor ink = background.lightnessF() > 0.6 ? QColor(25, 25, 25)
-                                                    : QColor(245, 245, 245);
+    const QColor background(8, 8, 8, 255);
+    const QColor ink(238, 238, 238);
     const QColor hover = mixColors(background, ink, 0.08);
     const QColor selected = mixColors(background, ink, 0.16);
     const QColor border = mixColors(background, ink, 0.22);
-    menu->setAttribute(Qt::WA_TranslucentBackground);
+    menu->setAttribute(Qt::WA_TranslucentBackground, false);
     menu->setWindowFlag(Qt::FramelessWindowHint);
-    menu->setMinimumWidth(220);
+    menu->setWindowOpacity(1.0);
+    menu->setMinimumWidth(210);
     menu->setToolTipsVisible(true);
     menu->setObjectName(QStringLiteral("PluginPickerMenu"));
     menu->setStyleSheet(QString(R"(
 QMenu { background: %1; color: %2; border: 1px solid %3;
-        border-radius: 10px; padding: 5px; }
-QMenu::item { min-height: 18px; padding: 3px 20px 3px 9px;
+        border-radius: 8px; padding: 4px; font-size: 11px; }
+QMenu::item { min-height: 16px; padding: 2px 18px 2px 8px;
               border-radius: 5px; background: transparent; }
 QMenu::item:selected { background: %4; color: %2; }
 QMenu::item:disabled { color: %5; }
-QMenu::separator { height: 1px; background: %3; margin: 4px 6px; }
-QMenu::scroller { height: 14px; background: %1; }
+QMenu::separator { height: 1px; background: %3; margin: 3px 6px; }
+QMenu::scroller { height: 10px; background: %1; }
 QLineEdit { color: %2; background: %6; border: 1px solid %3;
-            border-radius: 6px; padding: 4px 8px; }
+            border-radius: 5px; padding: 3px 7px; font-size: 11px; }
 QLineEdit:hover { background: %7; }
 QLineEdit:focus { border-color: %8; }
 )")
@@ -266,6 +341,99 @@ QLineEdit:focus { border-color: %8; }
 using PickCallback =
     std::function<void(const daw::plugins::PluginDescriptor&)>;
 using SharedPickCallback = std::shared_ptr<PickCallback>;
+
+struct SearchablePlugin {
+    daw::plugins::PluginDescriptor descriptor;
+    QString label;
+    QString haystack;
+};
+
+struct PreparedPluginCatalogue {
+    std::uint64_t managerId = 0;
+    std::uint64_t revision = 0;
+    daw::plugins::Format preferredFormat = daw::plugins::Format::Unknown;
+    bool instruments = false;
+    std::vector<daw::plugins::PluginDescriptor> catalogue;
+    std::vector<daw::plugins::PluginDescriptor> preferred;
+    std::map<QString, std::vector<daw::plugins::PluginDescriptor>> categories;
+    std::map<QString, std::vector<daw::plugins::PluginDescriptor>> vendors;
+    std::vector<SearchablePlugin> searchable;
+    QHash<QString, std::size_t> byUid;
+};
+
+std::shared_ptr<const PreparedPluginCatalogue> preparedCatalogue(
+    daw::EngineController* controller, bool instruments) {
+    const std::uint64_t managerId =
+        controller->pluginManager().instanceId();
+    const std::uint64_t revision =
+        controller->pluginManager().catalogueRevision();
+    const daw::plugins::Format preferredFormat = ui::preferredPluginFormat();
+    struct CacheEntry {
+        std::uint64_t managerId = 0;
+        std::uint64_t revision = 0;
+        daw::plugins::Format preferredFormat = daw::plugins::Format::Unknown;
+        bool instruments = false;
+        std::shared_ptr<const PreparedPluginCatalogue> catalogue;
+    };
+    static std::vector<CacheEntry> cache;
+    for (const auto& entry : cache) {
+        if (entry.managerId == managerId && entry.revision == revision &&
+            entry.preferredFormat == preferredFormat &&
+            entry.instruments == instruments) {
+            return entry.catalogue;
+        }
+    }
+
+    std::vector<daw::plugins::PluginDescriptor> catalogue =
+        instruments ? controller->pluginManager().instruments()
+                    : controller->pluginManager().effects();
+    auto prepared = std::make_shared<PreparedPluginCatalogue>();
+    prepared->managerId = managerId;
+    prepared->revision = revision;
+    prepared->preferredFormat = preferredFormat;
+    prepared->instruments = instruments;
+    prepared->catalogue = std::move(catalogue);
+    prepared->preferred = daw::preferredPluginVariants(
+        prepared->catalogue, preferredFormat);
+    prepared->byUid.reserve(prepared->catalogue.size());
+    for (std::size_t index = 0; index < prepared->catalogue.size(); ++index) {
+        const auto& descriptor = prepared->catalogue[index];
+        prepared->byUid.insert(QString::fromStdString(descriptor.uid), index);
+    }
+    prepared->searchable.reserve(prepared->preferred.size());
+    for (const auto& descriptor : prepared->preferred) {
+        prepared->categories[categoryOf(descriptor)].push_back(descriptor);
+        prepared->vendors[vendorOf(descriptor)].push_back(descriptor);
+        SearchablePlugin item;
+        item.descriptor = descriptor;
+        item.label = QString::fromStdString(descriptor.name);
+        item.haystack = item.label + QLatin1Char('\n') +
+                        QString::fromStdString(descriptor.vendor);
+        prepared->searchable.push_back(std::move(item));
+    }
+    const auto byName = [](const auto& a, const auto& b) {
+        return QString::compare(QString::fromStdString(a.name),
+                                QString::fromStdString(b.name),
+                                Qt::CaseInsensitive) < 0;
+    };
+    for (auto* groups : {&prepared->categories, &prepared->vendors}) {
+        for (auto& [name, entries] : *groups) {
+            Q_UNUSED(name);
+            std::sort(entries.begin(), entries.end(), byName);
+        }
+    }
+    std::sort(prepared->searchable.begin(), prepared->searchable.end(),
+              [](const auto& a, const auto& b) {
+                  return QString::compare(a.label, b.label,
+                                          Qt::CaseInsensitive) < 0;
+              });
+    cache.push_back(
+        {managerId, revision, preferredFormat, instruments, prepared});
+    // A rescan or preferred-format change leaves one old immutable snapshot.
+    // Bound those generations; open menus retain their own shared copy safely.
+    if (cache.size() > 8) cache.erase(cache.begin());
+    return prepared;
+}
 
 bool sameProduct(const daw::plugins::PluginDescriptor& a,
                  const daw::plugins::PluginDescriptor& b) {
@@ -333,10 +501,9 @@ void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
                         const PluginPickerTarget& target = {}) {
     if (!menu || !controller) return;
 
-    const std::vector<daw::plugins::PluginDescriptor> catalogue =
-        instruments ? controller->pluginManager().instruments()
-                    : controller->pluginManager().effects();
-    auto found = daw::preferredPluginVariants(catalogue, ui::preferredPluginFormat());
+    const auto prepared = preparedCatalogue(controller, instruments);
+    const auto& catalogue = prepared->catalogue;
+    const auto& found = prepared->preferred;
     QWidget* context = callbackContext;
     // A replacement picker can itself be inside an auto-deleting context
     // menu. Queued mutations must outlive that popup, but not its owning strip.
@@ -384,23 +551,6 @@ void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
         });
         return action;
     };
-    auto addProduct = [&](QMenu* owner, const daw::plugins::PluginDescriptor& d) {
-        const QString label = owner->fontMetrics().elidedText(
-            QString::fromStdString(d.name), Qt::ElideRight, 250).replace('&', QStringLiteral("&&"));
-        auto* variants = owner->addMenu(label);
-        variants->menuAction()->setToolTip(QString::fromStdString(d.name));
-        applyDarkPluginMenuStyle(variants);
-        searchFilter->watch(variants);
-        for (const auto& variant : catalogue) {
-            if (!sameProduct(d, variant)) continue;
-            QString label = formatLabel(variant.format);
-            if (!variant.version.empty())
-                label += QStringLiteral(" · %1").arg(QString::fromStdString(variant.version));
-            pickAction(variants, label, variant);
-        }
-        return variants->menuAction();
-    };
-
     if (const auto* slot = controller->insertModel(target.channelId.toStdString(),
                                                    target.slotId.toStdString());
         slot && slot->isLoaded()) {
@@ -469,19 +619,28 @@ void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
     const auto recent = QSettings().value("contextPanel/pluginRecent").toStringList();
     std::vector<daw::plugins::PluginDescriptor> recentPlugins;
     for (const auto& uid : recent) {
-        const auto it = std::find_if(catalogue.begin(), catalogue.end(), [&](const auto& d) {
-            return QString::fromStdString(d.uid) == uid;
-        });
-        if (it == catalogue.end() || std::any_of(recentPlugins.begin(), recentPlugins.end(),
-                                                [&](const auto& d) { return sameProduct(d, *it); })) continue;
-        recentPlugins.push_back(*it);
+        const auto foundUid = prepared->byUid.constFind(uid);
+        if (foundUid == prepared->byUid.cend()) continue;
+        const auto& descriptor = catalogue[foundUid.value()];
+        if (std::any_of(recentPlugins.begin(), recentPlugins.end(),
+                        [&](const auto& existing) {
+                            return sameProduct(existing, descriptor);
+                        })) {
+            continue;
+        }
+        recentPlugins.push_back(descriptor);
         if (recentPlugins.size() == 5) break;
     }
     auto* recentHeading = menu->addAction(QObject::tr("Recent"));
     recentHeading->setObjectName(QStringLiteral("PluginPickerRecent"));
     recentHeading->setEnabled(false);
     groupActions.push_back(recentHeading);
-    for (const auto& d : recentPlugins) groupActions.push_back(addProduct(menu, d));
+    for (const auto& d : recentPlugins) {
+        const QString label = menu->fontMetrics().elidedText(
+            QString::fromStdString(d.name), Qt::ElideRight, 250)
+                                  .replace('&', QStringLiteral("&&"));
+        groupActions.push_back(pickAction(menu, label, d));
+    }
     if (recentPlugins.empty()) {
         auto* empty = menu->addAction(QObject::tr("No recent plugins"));
         empty->setEnabled(false);
@@ -489,68 +648,77 @@ void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
     }
     groupActions.push_back(menu->addSeparator());
 
-    // ── Grouped, by whatever the user asked for ──
-    const bool byCategory =
-        QSettings().value(QStringLiteral("plugins/menuGrouping"),
-                          QStringLiteral("category")).toString() ==
-        QLatin1String("category");
-
-    std::map<QString, std::vector<daw::plugins::PluginDescriptor>> groups;
-    for (const daw::plugins::PluginDescriptor& descriptor : found) {
-        groups[byCategory ? categoryOf(descriptor) : vendorOf(descriptor)]
-            .push_back(descriptor);
+    // Only the first level is materialized while the popup opens. Each category
+    // and manufacturer pays for its plugin actions only when it is opened.
+    const auto addLazyPluginList =
+        [searchFilter, pickAction,
+         prepared](QMenu* owner, const QString& title,
+                   const std::vector<daw::plugins::PluginDescriptor>* entries) {
+            auto* submenu = owner->addMenu(title);
+            applyDarkPluginMenuStyle(submenu);
+            searchFilter->watch(submenu);
+            QObject::connect(
+                submenu, &QMenu::aboutToShow, submenu,
+                [submenu, entries, pickAction, prepared] {
+                    if (submenu->property("pluginPickerPopulated").toBool())
+                        return;
+                    submenu->setProperty("pluginPickerPopulated", true);
+                    for (const auto& descriptor : *entries) {
+                        const QString label = submenu->fontMetrics().elidedText(
+                            QString::fromStdString(descriptor.name),
+                            Qt::ElideRight, 250)
+                                                  .replace(
+                                                      '&',
+                                                      QStringLiteral("&&"));
+                        pickAction(submenu, label, descriptor);
+                    }
+                });
+            return submenu;
+        };
+    for (auto& [name, entries] : prepared->categories) {
+        auto* category = addLazyPluginList(menu, name, &entries);
+        category->setObjectName(QStringLiteral("PluginPickerCategory"));
+        groupActions.push_back(
+            category->menuAction());
     }
 
-    // The group submenus, and — hidden until something is typed — one flat row
-    // per plugin. Two lists rather than a rebuild: a menu cannot be repopulated
-    // while it is open without closing the popup the user is typing into.
-    for (auto& [name, entries] : groups) {
-        std::sort(entries.begin(), entries.end(),
-                  [](const auto& a, const auto& b) { return a.name < b.name; });
-        QMenu* submenu = menu->addMenu(name);
-        applyDarkPluginMenuStyle(submenu);
-        searchFilter->watch(submenu);
-        groupActions.push_back(submenu->menuAction());
-        for (const daw::plugins::PluginDescriptor& descriptor : entries) {
-            addProduct(submenu, descriptor);
-        }
+    // The final branch is a single manufacturer catalogue. Its entries already
+    // contain the preferred variant chosen in Settings (with the established
+    // per-product fallback when that format is unavailable).
+    if (!prepared->vendors.empty()) {
+        groupActions.push_back(menu->addSeparator());
+        auto* manufacturers = menu->addMenu(
+            QCoreApplication::translate("PluginPickerMenu", "Manufacturers"));
+        applyDarkPluginMenuStyle(manufacturers);
+        manufacturers->setObjectName(
+            QStringLiteral("PluginPickerManufacturers"));
+        searchFilter->watch(manufacturers);
+        groupActions.push_back(manufacturers->menuAction());
+        QObject::connect(
+            manufacturers, &QMenu::aboutToShow, manufacturers,
+            [manufacturers, vendors = &prepared->vendors,
+             addLazyPluginList, prepared] {
+                if (manufacturers->property("pluginPickerPopulated").toBool())
+                    return;
+                manufacturers->setProperty("pluginPickerPopulated", true);
+                for (const auto& [vendor, entries] : *vendors) {
+                    auto* vendorMenu = addLazyPluginList(
+                        manufacturers,
+                        QString(vendor).replace('&', QStringLiteral("&&")),
+                        &entries);
+                    vendorMenu->setObjectName(
+                        QStringLiteral("PluginPickerManufacturer"));
+                }
+            });
     }
 
-    // Explicit format access is never hidden by the preferred-format setting.
-    // Categories provide the quick path, this is the complete installed list.
-    std::map<daw::plugins::Format, std::map<QString,
-        std::vector<daw::plugins::PluginDescriptor>>> formats;
-    for (const auto& d : catalogue)
-        if (d.format != daw::plugins::Format::Internal)
-            formats[d.format][vendorOf(d)].push_back(d);
-    if (!formats.empty()) groupActions.push_back(menu->addSeparator());
-    for (auto& [format, vendors] : formats) {
-        auto* formatMenu = menu->addMenu(format == daw::plugins::Format::AudioUnit
-            ? QObject::tr("Audio Units") : formatLabel(format));
-        applyDarkPluginMenuStyle(formatMenu);
-        searchFilter->watch(formatMenu);
-        groupActions.push_back(formatMenu->menuAction());
-        for (auto& [vendor, entries] : vendors) {
-            auto* vendorMenu = formatMenu->addMenu(QString(vendor).replace('&', QStringLiteral("&&")));
-            applyDarkPluginMenuStyle(vendorMenu);
-            searchFilter->watch(vendorMenu);
-            std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
-            for (const auto& d : entries)
-                pickAction(vendorMenu, vendorMenu->fontMetrics().elidedText(
-                    QString::fromStdString(d.name), Qt::ElideRight, 250).replace('&', QStringLiteral("&&")), d);
-        }
-    }
-
-    std::vector<daw::plugins::PluginDescriptor> flat(found.begin(), found.end());
-    std::sort(flat.begin(), flat.end(),
-              [](const auto& a, const auto& b) { return a.name < b.name; });
-    std::vector<QAction*> matchActions;
-    matchActions.reserve(flat.size());
-    for (const daw::plugins::PluginDescriptor& descriptor : flat) {
-        QAction* action = addProduct(menu, descriptor);
-        action->setVisible(false);
-        matchActions.push_back(action);
-    }
+    // Search owns a fixed number of reusable actions. A 2,000-plugin setup now
+    // opens with 40 dormant rows rather than 2,000 product submenus (and their
+    // variants). Even those 40 rows are deferred until the first character so
+    // opening the popup has no search-result construction on its critical path.
+    auto searchMatches =
+        std::make_shared<std::vector<daw::plugins::PluginDescriptor>>();
+    auto matchActions = std::make_shared<std::vector<QAction*>>();
     QAction* noMatch = menu->addAction(QObject::tr("Nothing matches"));
     noMatch->setEnabled(false);
     noMatch->setVisible(false);
@@ -563,26 +731,64 @@ void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
     }
 
     QObject::connect(edit, &QLineEdit::textChanged, menu,
-                     [groupActions, matchActions, noMatch, flat](const QString& query) {
+                     [menu, lifetime, onPick, groupActions, matchActions,
+                      noMatch, prepared, searchMatches](const QString& query) {
         const QString needle = query.trimmed();
         const bool searching = !needle.isEmpty();
         for (QAction* group : groupActions) group->setVisible(!searching);
 
-        int shown = 0;
-        for (std::size_t i = 0; i < matchActions.size(); ++i) {
-            bool hit = false;
-            if (searching && shown < kMaxMatches) {
-                // Name or vendor: "waves" and "reverb" are both things a person
-                // types into this box, and only one of them is the name.
-                const QString name = QString::fromStdString(flat[i].name);
-                const QString vendor = QString::fromStdString(flat[i].vendor);
-                hit = name.contains(needle, Qt::CaseInsensitive) ||
-                      vendor.contains(needle, Qt::CaseInsensitive);
-                if (hit) ++shown;
+        if (searching && matchActions->empty()) {
+            matchActions->reserve(kMaxMatches);
+            for (int index = 0; index < kMaxMatches; ++index) {
+                auto* action = new QAction(menu);
+                action->setVisible(false);
+                menu->insertAction(noMatch, action);
+                matchActions->push_back(action);
+                QObject::connect(
+                    action, &QAction::triggered, lifetime,
+                    [lifetime, onPick, searchMatches, index] {
+                        if (index < 0 || index >= static_cast<int>(
+                                                   searchMatches->size()))
+                            return;
+                        const auto descriptor = searchMatches->at(
+                            static_cast<std::size_t>(index));
+                        QTimer::singleShot(0, lifetime,
+                                           [onPick, descriptor] {
+                            if (*onPick) (*onPick)(descriptor);
+                        });
+                    });
             }
-            matchActions[i]->setVisible(hit);
         }
-        noMatch->setVisible(searching && shown == 0);
+
+        searchMatches->clear();
+        if (searching) {
+            searchMatches->reserve(kMaxMatches);
+            for (const auto& plugin : prepared->searchable) {
+                if (!plugin.haystack.contains(needle, Qt::CaseInsensitive))
+                    continue;
+                searchMatches->push_back(plugin.descriptor);
+                if (searchMatches->size() == kMaxMatches) break;
+            }
+        }
+        for (std::size_t i = 0; i < matchActions->size(); ++i) {
+            QAction* action = matchActions->at(i);
+            const bool visible = i < searchMatches->size();
+            if (visible) {
+                const auto& descriptor = searchMatches->at(i);
+                const QString label = QString::fromStdString(descriptor.name)
+                                          .replace('&', QStringLiteral("&&"));
+                action->setText(label);
+                action->setToolTip(QString::fromStdString(
+                    descriptor.name + "\n" + descriptor.vendor + "\n" +
+                    descriptor.version));
+                action->setProperty(
+                    "pluginUid", QString::fromStdString(descriptor.uid));
+            } else {
+                action->setProperty("pluginUid", QVariant());
+            }
+            action->setVisible(visible);
+        }
+        noMatch->setVisible(searching && searchMatches->empty());
     });
 }
 
@@ -598,6 +804,12 @@ QMenu* buildPluginMenu(QWidget* parent, daw::EngineController* controller,
         menu, parent, controller, instruments,
         std::make_shared<PickCallback>(std::move(onPick)), /*openingNow=*/false, target);
     return menu;
+}
+
+void preparePluginPickerMenus(daw::EngineController* controller) {
+    if (!controller) return;
+    (void)preparedCatalogue(controller, /*instruments=*/false);
+    (void)preparedCatalogue(controller, /*instruments=*/true);
 }
 
 QMenu* buildLazyPluginMenu(

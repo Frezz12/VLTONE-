@@ -271,6 +271,12 @@ void GlassPanel::setShadowMargin(int margin) {
     update();
 }
 
+void GlassPanel::setShadowVisible(bool visible) {
+    if (m_shadowVisible == visible) return;
+    m_shadowVisible = visible;
+    update();
+}
+
 void GlassPanel::setTopAttached(bool attached) {
     if (m_topAttached == attached) return;
     m_topAttached = attached;
@@ -339,7 +345,7 @@ void GlassPanel::paintEvent(QPaintEvent*) {
     // as a smudge of dirt under the panel. The ramp is quadratic so the density
     // collapses within a couple of pixels of the edge.
     const QRectF halo = shape.boundingRect();
-    if (halo.width() > 1.0 && halo.height() > 1.0) {
+    if (m_shadowVisible && halo.width() > 1.0 && halo.height() > 1.0) {
         // Pure black under a light palette reads as grime. A very dark, faintly
         // cool grey sits on warm greys as a shadow instead.
         const QColor ink = theme.dark ? QColor(0, 0, 0)

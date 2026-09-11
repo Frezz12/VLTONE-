@@ -1,0 +1,6 @@
+COMMAND: ['build/bin/audio_engine_bench', '--tracks', '64', '--frames', '32', '--blocks', '400', '--rounds', '1', '--clips', '--heavy', '--paced', '--realtime-workers']
+tracks=64 nodes=385 fused_tasks=193 workers=8 rate=48000 frames=32 EQ=1
+clips=1 paced=1 serial=0 realtime_workers=7 caller_realtime=1 (no device workgroup) budget_ms=0.6667
+round,fusion,mean_ms,p95_ms,p99_ms,p99_9_ms,max_ms,over_budget,cpu_ms_per_block,pcm_misses
+0,0,0.0715,0.0941,0.0974,0.1353,0.1353,0,0.3004,0
+0,1,0.1231,0.1538,0.1857,0.2427,0.2427,0,0.5366,0

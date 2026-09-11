@@ -1,0 +1,112 @@
+{
+  "os": "macOS 26.5.1",
+  "architecture": "arm64",
+  "gpu": "Apple M1 (Metal)",
+  "qt": "6.11.2",
+  "build": "RelWithDebInfo",
+  "viewport_logical_pixels": [
+    1600,
+    907
+  ],
+  "dpr": 2,
+  "requested_fps": 60,
+  "measurement_window_ms": 1500,
+  "cases": [
+    {
+      "buffer_frames": 32,
+      "recording": false,
+      "widgets_gui_cpu_ms": 1017.069,
+      "gpu_gui_cpu_ms": 558.831,
+      "gpu_render_thread_cpu_ms": 152.625,
+      "ui_cpu_reduction_percent": 30.04840379561268,
+      "widgets_paint_callbacks": 91,
+      "gpu_paint_callbacks": 91,
+      "widgets_input_events": 107,
+      "gpu_input_events": 189
+    },
+    {
+      "buffer_frames": 32,
+      "recording": true,
+      "widgets_gui_cpu_ms": 1043.313,
+      "gpu_gui_cpu_ms": 561.871,
+      "gpu_render_thread_cpu_ms": 178.508,
+      "ui_cpu_reduction_percent": 29.0357735406345,
+      "widgets_paint_callbacks": 91,
+      "gpu_paint_callbacks": 91,
+      "widgets_input_events": 118,
+      "gpu_input_events": 189
+    },
+    {
+      "buffer_frames": 64,
+      "recording": false,
+      "widgets_gui_cpu_ms": 1057.015,
+      "gpu_gui_cpu_ms": 548.799,
+      "gpu_render_thread_cpu_ms": 161.336,
+      "ui_cpu_reduction_percent": 32.81694204907216,
+      "widgets_paint_callbacks": 89,
+      "gpu_paint_callbacks": 91,
+      "widgets_input_events": 112,
+      "gpu_input_events": 189
+    },
+    {
+      "buffer_frames": 64,
+      "recording": true,
+      "widgets_gui_cpu_ms": 1094.616,
+      "gpu_gui_cpu_ms": 579.575,
+      "gpu_render_thread_cpu_ms": 175.698,
+      "ui_cpu_reduction_percent": 31.001099929107557,
+      "widgets_paint_callbacks": 91,
+      "gpu_paint_callbacks": 91,
+      "widgets_input_events": 99,
+      "gpu_input_events": 189
+    },
+    {
+      "buffer_frames": 128,
+      "recording": false,
+      "widgets_gui_cpu_ms": 1011.247,
+      "gpu_gui_cpu_ms": 542.138,
+      "gpu_render_thread_cpu_ms": 170.321,
+      "ui_cpu_reduction_percent": 29.54649061999689,
+      "widgets_paint_callbacks": 91,
+      "gpu_paint_callbacks": 91,
+      "widgets_input_events": 102,
+      "gpu_input_events": 189
+    },
+    {
+      "buffer_frames": 128,
+      "recording": true,
+      "widgets_gui_cpu_ms": 1077.066,
+      "gpu_gui_cpu_ms": 567.624,
+      "gpu_render_thread_cpu_ms": 195.566,
+      "ui_cpu_reduction_percent": 29.141761043427238,
+      "widgets_paint_callbacks": 91,
+      "gpu_paint_callbacks": 91,
+      "widgets_input_events": 100,
+      "gpu_input_events": 189
+    },
+    {
+      "buffer_frames": 512,
+      "recording": false,
+      "widgets_gui_cpu_ms": 1047.765,
+      "gpu_gui_cpu_ms": 565.393,
+      "gpu_render_thread_cpu_ms": 166.698,
+      "ui_cpu_reduction_percent": 30.128320758948814,
+      "widgets_paint_callbacks": 90,
+      "gpu_paint_callbacks": 91,
+      "widgets_input_events": 106,
+      "gpu_input_events": 189
+    },
+    {
+      "buffer_frames": 512,
+      "recording": true,
+      "widgets_gui_cpu_ms": 1101.712,
+      "gpu_gui_cpu_ms": 590.276,
+      "gpu_render_thread_cpu_ms": 195.783,
+      "ui_cpu_reduction_percent": 28.651135687003503,
+      "widgets_paint_callbacks": 91,
+      "gpu_paint_callbacks": 91,
+      "widgets_input_events": 102,
+      "gpu_input_events": 189
+    }
+  ]
+}

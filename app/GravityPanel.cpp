@@ -301,6 +301,10 @@ void GravityField::keyPressEvent(QKeyEvent* event) {
 
 void GravityField::paintEvent(QPaintEvent*) {
     QPainter painter(this);
+    paintScene(painter, QRegion(rect()));
+}
+
+void GravityField::paintScene(QPainter& painter, const QRegion&) {
     painter.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF bounds = QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0);

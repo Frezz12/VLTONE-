@@ -111,7 +111,7 @@ public:
     JobSystem(const JobSystem&) = delete;
     JobSystem& operator=(const JobSystem&) = delete;
 
-    unsigned workerCount() const noexcept { return m_workerCount; }
+    unsigned workerCount() const noexcept { return m_activeWorkerCount.load(std::memory_order_relaxed); }
     // Control thread with rendering stopped. Waits for helpers to re-register
     // on their own threads before the audio device is allowed to start.
     void configureAudioWorkers(const rt::AudioWorkerConfig& config);
@@ -200,6 +200,7 @@ private:
     void park(unsigned index, std::uint64_t lastGeneration) noexcept;
 
     unsigned m_workerCount = 1;
+    std::atomic<unsigned> m_activeWorkerCount{1};
     /// Slots reserved per deque. Monotonic, so the common rebuild — same
     /// project, same node count or fewer — never reallocates.
     std::size_t m_itemCapacity = 0;

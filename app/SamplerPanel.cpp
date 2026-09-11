@@ -1,3 +1,6 @@
+#include "graphics/ScenePaintSource.hpp"
+#include "graphics/SceneRecordingTag.hpp"
+#include <QHashFunctions>
 #include "SamplerPanel.hpp"
 #include "AudioImportPreparation.hpp"
 #include <QThreadPool>
@@ -272,15 +275,25 @@ void SamplerWaveform::rebuildPeaks() {
     m_minima.clear();
     m_maxima.clear();
     m_peaksFor = m_sample && m_sample->audio ? m_sample->audio.get() : nullptr;
-    if (!m_peaksFor) return;
+    requestPeakBuild();
+}
+
+void SamplerWaveform::requestPeakBuild() {
+    if (m_peakBuildBusy || !m_sample || !m_sample->audio) return;
+    m_peakBuildBusy = true;
 
     const auto sample = m_sample->audio;
     const quint64 generation = m_peakGeneration;
     const QPointer<SamplerWaveform> guard(this);
-    QThreadPool::globalInstance()->start([sample, generation, guard] {
+    static QThreadPool pool;
+    static const bool configured = [] {
+        pool.setMaxThreadCount(2); pool.setThreadPriority(QThread::LowPriority);
+        pool.setExpiryTimeout(5000); return true;
+    }();
+    Q_UNUSED(configured);
+    pool.start([sample, generation, guard] {
     const daw::engine::SampleBuffer& audio = *sample;
     const daw::engine::FrameCount frames = audio.frames();
-    if (frames == 0) return;
 
     // Fixed resolution, not one bucket per pixel: the strip is a few hundred
     // pixels wide and gets resized with the window, and this scan is the only
@@ -288,7 +301,7 @@ void SamplerWaveform::rebuildPeaks() {
     const int buckets =
         int(std::min<daw::engine::FrameCount>(frames, kWaveformBuckets));
     QVector<float> minima(buckets), maxima(buckets);
-    const double perBucket = double(frames) / double(buckets);
+    const double perBucket = buckets ? double(frames) / double(buckets) : 0.;
     for (int b = 0; b < buckets; ++b) {
         const auto from = daw::engine::FrameCount(double(b) * perBucket);
         const auto to = std::min<daw::engine::FrameCount>(
@@ -307,7 +320,9 @@ void SamplerWaveform::rebuildPeaks() {
         maxima[b] = high;
     }
         QMetaObject::invokeMethod(qApp, [guard, generation, minima = std::move(minima), maxima = std::move(maxima)]() mutable {
-            if (!guard || guard->m_peakGeneration != generation) return;
+            if (!guard) return;
+            guard->m_peakBuildBusy = false;
+            if (guard->m_peakGeneration != generation) { guard->requestPeakBuild(); return; }
             guard->m_minima = std::move(minima);
             guard->m_maxima = std::move(maxima);
             guard->update();
@@ -333,6 +348,10 @@ double SamplerWaveform::fractionForX(int x) const {
 
 void SamplerWaveform::paintEvent(QPaintEvent*) {
     QPainter p(this);
+    paintScene(p, QRegion(rect()));
+}
+
+void SamplerWaveform::paintWaveformBase(QPainter& p) {
     p.setRenderHint(QPainter::Antialiasing, true);
     const Theme& t = th();
 
@@ -445,6 +464,26 @@ void SamplerWaveform::paintEvent(QPaintEvent*) {
                   Qt::RoundJoin));
     p.drawPath(upper);
     p.drawPath(lower);
+
+    p.restore();
+}
+
+void SamplerWaveform::paintScene(QPainter& p, const QRegion&) {
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const quint64 key = qHashMulti(0, m_peakGeneration, m_minima.size(),
+        m_sample ? m_sample->baseFrames : 0);
+    auto* scene = ui::graphics::sceneGeometrySink(p);
+    if (!scene || scene->beginRetainedSection(1002, key != m_gpuWaveformKey)) {
+        p.save(); paintWaveformBase(p); p.restore();
+        if (scene) { scene->endRetainedSection(); m_gpuWaveformKey = key; }
+    }
+    if (m_minima.isEmpty()) return;
+    const Theme& t = th();
+    const double baseEnd = xForFraction(1.0);
+    const QRectF frame = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    QPainterPath clipping;
+    clipping.addRoundedRect(frame.adjusted(1.0, 1.0, -1.0, -1.0), 6.0, 6.0);
+    p.save(); p.setClipPath(clipping);
 
     // ── Fades, drawn as the ramps they apply ──
     const double start = xForFraction(m_startOffset);
@@ -568,7 +607,7 @@ void SamplerWaveform::mouseReleaseEvent(QMouseEvent*) {
     m_dragging.clear();
 }
 
-class SamplerEnvelopeView : public QWidget {
+class SamplerEnvelopeView : public QWidget, public ui::graphics::ScenePaintSource {
 public:
     explicit SamplerEnvelopeView(QWidget* parent = nullptr) : QWidget(parent) {
         setFixedHeight(112);
@@ -651,8 +690,8 @@ protected:
         return best;
     }
 
-    void paintEvent(QPaintEvent*) override {
-        QPainter p(this);
+    void paintEvent(QPaintEvent*) override { QPainter p(this); paintScene(p, QRegion(rect())); }
+    void paintScene(QPainter& p, const QRegion&) override {
         p.setRenderHint(QPainter::Antialiasing, true);
         const Theme& t = th();
         p.fillRect(rect(), mixColors(t.well(), t.background, 0.18));
@@ -766,7 +805,7 @@ private:
     double m_dragValue = 0.0;
 };
 
-class SamplerKeyboard : public QWidget {
+class SamplerKeyboard : public QWidget, public ui::graphics::ScenePaintSource {
 public:
     explicit SamplerKeyboard(QWidget* parent = nullptr) : QWidget(parent) {
         setFixedSize(75 * kWhiteWidth, 68);
@@ -806,8 +845,8 @@ protected:
         }
         return -1;
     }
-    void paintEvent(QPaintEvent*) override {
-        QPainter p(this);
+    void paintEvent(QPaintEvent*) override { QPainter p(this); paintScene(p, QRegion(rect())); }
+    void paintScene(QPainter& p, const QRegion&) override {
         p.setRenderHint(QPainter::Antialiasing, true);
         const Theme& t = th();
         for (int pitch = 0; pitch < 128; ++pitch) {

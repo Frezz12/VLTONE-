@@ -1,0 +1,15 @@
+Test project /Users/nikolay/Documents/code/VLTONE/VLTONE-/build
+    Start  1: platform_test
+1/5 Test  #1: platform_test ....................   Passed    0.84 sec
+    Start  8: controller_test
+2/5 Test  #8: controller_test ..................   Passed    5.64 sec
+    Start 24: engine_graph_test
+3/5 Test #24: engine_graph_test ................   Passed    1.44 sec
+    Start 48: recording_preview_test
+4/5 Test #48: recording_preview_test ...........   Passed    1.16 sec
+    Start 50: audio_presentation_clock_test
+5/5 Test #50: audio_presentation_clock_test ....   Passed    0.00 sec
+
+100% tests passed out of 5
+
+Total Test time (real) =   9.11 sec

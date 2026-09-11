@@ -125,12 +125,6 @@ ContextPanelPage::ContextPanelPage(QWidget* parent) : QWidget(parent) {
                {tr("Start of chain"), QStringLiteral("start")},
                {tr("After selected plugin"), QStringLiteral("after")}},
               QStringLiteral("end"));
-    addChoice(tr("Group the plugin menu by"),
-              QStringLiteral("plugins/menuGrouping"),
-              {{tr("Manufacturer"), QStringLiteral("vendor")},
-               {tr("Kind of plugin"), QStringLiteral("category")}},
-              QStringLiteral("category"));
-
     QList<QPair<QString, QString>> formatChoices;
     auto addFormatChoice = [&formatChoices](daw::plugins::Format format,
                                             const QString& label) {

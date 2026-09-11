@@ -76,6 +76,11 @@ public:
     /// in a short strip has to trim it.
     int shadowMargin() const { return m_shadowMargin; }
     void setShadowMargin(int margin);
+    /// Keep the reserved geometry while suppressing the painted shadow. The
+    /// attached context strips use this to retain their flare and stable
+    /// animation bounds without casting a dark band onto the workspace.
+    void setShadowVisible(bool visible);
+    bool isShadowVisible() const { return m_shadowVisible; }
     /// The plate itself, inset from the widget by the shadow margin. When
     /// attached at the top there is no inset there — the plate starts flush
     /// with the host's edge.
@@ -104,6 +109,7 @@ private:
     int m_radius = 14;
     int m_shadowMargin = 12;
     bool m_topAttached = false;
+    bool m_shadowVisible = true;
     bool m_subtleVerticalGradient = false;
     QPixmap m_backdrop;
     QElapsedTimer m_sinceCapture;

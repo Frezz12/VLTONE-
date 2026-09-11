@@ -2421,6 +2421,16 @@ void routingPluginAssetReducerAndWire() {
                   .changed(),
           "Graphit is accepted by the shared built-in allowlist");
 
+    for (const char* uid : {"daw.doubler", "daw.chorus", "daw.flanger", "daw.phaser"}) {
+        const std::string key(uid);
+        InsertModel modulation = builtinInsert(key, key);
+        const std::string parameter = key == "daw.doubler" ? "width" : "amount";
+        check(apply(key + "-add", AddPluginInsert{trackChain, modulation, graphit.id}).changed() &&
+                  apply(key + "-param", SetPluginParameter{trackChain, modulation.id,
+                                                          parameter, 0.62, false}).changed(),
+              "modulation effects and their parameters pass the shared built-in allowlist");
+    }
+
     InsertModel sampler = builtinInsert("sampler", "daw.sampler");
     const PluginAssetBinding sample = sampler.assetBindings.front();
     sampler.assetBindings.clear();

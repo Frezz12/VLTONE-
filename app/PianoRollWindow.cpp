@@ -1,4 +1,7 @@
 #include "PianoRollWindow.hpp"
+#include <QScopedValueRollback>
+#include <QDataStream>
+#include <QIODevice>
 #include "Controls.hpp"
 #include "Icons.hpp"
 #include "KeyboardLayout.hpp"
@@ -856,12 +859,12 @@ void PianoRollView::setScrollX(double x) {
     if (std::abs(clamped - m_scrollX) < 1.0e-6) return;
     m_scrollX = clamped;
     m_lastPlayheadX = -1;
-    update();
+    ui::FrameWidget::update();
 }
 
 void PianoRollView::setScrollY(double y) {
     m_scrollY = std::clamp(y, 0.0, maxScrollY());
-    update();
+    ui::FrameWidget::update();
 }
 
 bool PianoRollView::checkInteractionGesturesForTest() {
@@ -2756,8 +2759,61 @@ QColor PianoRollView::colorFor(const daw::NoteModel& n,
 
 void PianoRollView::paintEvent(QPaintEvent* event) {
     QPainter p(this);
+    paintScene(p, event->region());
+}
+
+void PianoRollView::paintScene(QPainter& p, const QRegion& region) {
+    if (!ui::graphics::isSceneRecording(p) || !clip()) {
+        paintGridAndNotes(p, region);
+        paintOverlays(p, region);
+        return;
+    }
+    QByteArray signature;
+    QDataStream stream(&signature, QIODevice::WriteOnly);
+    stream << size() << font() << palette().cacheKey() << p.device()->devicePixelRatioF()
+           << pxPerBeat() << m_rowHeight << keyboardWidth() << laneTop() << laneHeight() << int(m_laneParam)
+           << quint64(m_controller->projectRevision())
+           << quint64(m_controller->midiNotesRevision(m_trackId.toStdString()));
+    if (signature != m_gpuTileSignature) {
+        m_gpuNoteTiles.clear();
+        m_gpuLaneTiles.clear();
+        m_gpuTileSignature = signature;
+    }
+    p.fillRect(rect(), th().background);
+    const double key = keyboardWidth(), top = ui::kRulerHeight;
+    const QRectF field(key, top, std::max(0., width() - key), std::max(0., laneTop() - top));
+    const int tileWidth = std::max(1, std::min(512, int(field.width())));
+    const int tileHeight = std::max(1, std::min(256, int(field.height())));
+    const double scrollX = m_scrollX, scrollY = m_scrollY;
+    for (qint64 y = qint64(std::floor(scrollY / tileHeight)); y * tileHeight < scrollY + field.height(); ++y) {
+        for (qint64 x = qint64(std::floor(scrollX / tileWidth)); x * tileWidth < scrollX + field.width(); ++x) {
+            const QPointF origin(x * tileWidth - scrollX, y * tileHeight - scrollY);
+            p.save();
+            p.setClipRect(field.intersected(QRectF(key + origin.x(), top + origin.y(), tileWidth, tileHeight)), Qt::IntersectClip);
+            m_gpuNoteTiles.paint(p, (quint64(x) << 16) | quint64(y), size(), origin,
+                [&](QPainter& local) {
+                    QScopedValueRollback<double> sx(m_scrollX, double(x * tileWidth));
+                    QScopedValueRollback<double> sy(m_scrollY, double(y * tileHeight));
+                    const QRect dirty(int(key), int(top), tileWidth, tileHeight);
+                    local.setClipRect(dirty);
+                    paintGridAndNotes(local, QRegion(dirty));
+                });
+            p.restore();
+        }
+    }
+    // The ruler is anchored vertically, and the keyboard/playhead respond on
+    // this frame. They never ride along with a pitch tile.
+    p.save();
+    const QRect ruler(0, 0, width(), ui::kRulerHeight);
+    p.setClipRect(ruler, Qt::IntersectClip);
+    paintGridAndNotes(p, QRegion(ruler));
+    p.restore();
+    paintOverlays(p, region);
+}
+
+void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
     const Theme& t = th();
-    const QRectF dirtyRect(event->region().boundingRect());
+    const QRectF dirtyRect(region.boundingRect());
     p.fillRect(rect(), t.background);
 
     const auto* c = clip();
@@ -2786,7 +2842,7 @@ void PianoRollView::paintEvent(QPaintEvent* event) {
     const QColor clipColor = ui::colorFromRgb(c->color);
 
     p.save();
-    p.setClipRect(QRectF(0, 0, double(width()), fieldBottom));
+    p.setClipRect(QRectF(0, 0, double(width()), fieldBottom), Qt::IntersectClip);
     p.fillRect(field, t.well());
 
     // The ruler is clip-local: bar 1 is always the clip's own beginning, even
@@ -2844,9 +2900,9 @@ void PianoRollView::paintEvent(QPaintEvent* event) {
     // strips as one wide rectangle -- made a long clip expensive at 60 Hz even
     // though Qt was going to accept only a handful of painted pixels.
     std::vector<std::pair<double, double>> dirtyBeatRanges;
-    dirtyBeatRanges.reserve(std::size_t(event->region().rectCount()));
+    dirtyBeatRanges.reserve(std::size_t(region.rectCount()));
     constexpr double kGridPaintMarginPx = 2.0;
-    for (const QRect& updateRect : event->region()) {
+    for (const QRect& updateRect : region) {
         if (updateRect.top() > fieldBottom) continue;
         const double leftPx = std::max(
             keyWidth, double(updateRect.left()) - kGridPaintMarginPx);
@@ -3029,7 +3085,7 @@ void PianoRollView::paintEvent(QPaintEvent* event) {
                     if (r.bottom() < gridTop || r.top() > fieldBottom) continue;
                     if (r.right() < keyWidth || r.left() > width()) continue;
                     if (!r.intersects(dirtyRect)) continue;
-                    if (!event->region().intersects(r.toAlignedRect())) continue;
+                    if (!region.intersects(r.toAlignedRect())) continue;
                     r = ui::pixelAlignedRect(r, devicePixelRatioF());
                     if (!roundedGhosts || r.width() < 12.0)
                         p.drawRect(r);
@@ -3066,7 +3122,7 @@ void PianoRollView::paintEvent(QPaintEvent* event) {
         if (r.bottom() < gridTop || r.top() > fieldBottom) return;
         if (r.right() < keyWidth || r.left() > width()) return;
         if (!r.intersects(dirtyRect)) return;
-        if (!event->region().intersects(r.toAlignedRect())) return;
+        if (!region.intersects(r.toAlignedRect())) return;
         const bool selected = m_selected.contains(QString::fromStdString(n.id));
 
         QColor fill = colorFor(n, clipColor);
@@ -3119,6 +3175,20 @@ void PianoRollView::paintEvent(QPaintEvent* event) {
         }
     }
 
+    p.restore();
+    m_paintClip = nullptr;
+}
+
+void PianoRollView::paintOverlays(QPainter& p, const QRegion& region) {
+    const auto* c = clip();
+    if (!c) return;
+    m_paintClip = c;
+    const Theme& t = th();
+    const QRectF dirtyRect(region.boundingRect());
+    const double keyWidth = keyboardWidth(), gridTop = ui::kRulerHeight;
+    const double fieldBottom = laneTop(), totalBeats = clipBeats();
+    p.save();
+    p.setClipRect(QRectF(0, 0, double(width()), fieldBottom), Qt::IntersectClip);
     // ── Stretch phantom ──
     //
     // While a stretch is armed the originals stay put and a hollow outline
@@ -3650,8 +3720,64 @@ void PianoRollView::paintLane(QPainter& p) {
     p.drawText(QRectF(7.0, fieldBottom + 23.0, keyWidth - 12.0, 13.0),
                Qt::AlignLeft | Qt::AlignVCenter, range);
 
+    if (ui::graphics::isSceneRecording(p) && !m_laneDragging && !m_laneResizing &&
+        !(m_pointerInside && m_pointer.y() >= fieldBottom - kLaneGripPx)) {
+        const int tileWidth = std::max(1, std::min(512, int(parameterField.width())));
+        const double scroll = m_scrollX;
+        for (qint64 tile = qint64(std::floor(scroll / tileWidth));
+             tile * tileWidth < scroll + parameterField.width(); ++tile) {
+            const double origin = tile * tileWidth - scroll;
+            p.save();
+            p.setClipRect(parameterField.intersected(QRectF(keyWidth + origin, fieldBottom,
+                                                          tileWidth, laneHeight())), Qt::IntersectClip);
+            m_gpuLaneTiles.paint(p, quint64(tile), size(), QPointF(origin, 0), [&](QPainter& local) {
+                QScopedValueRollback<double> sx(m_scrollX, double(tile * tileWidth));
+                local.setClipRect(QRectF(keyWidth, fieldBottom, tileWidth, laneHeight()));
+                paintLaneValues(local);
+            });
+            p.restore();
+        }
+    } else paintLaneValues(p);
+
+    // The value of whatever is being dragged, so a move is readable.
+    if (m_laneDragging && !m_primary.isEmpty()) {
+        if (const auto* n = note(m_primary)) {
+            QString readout = tr("velocity %1").arg(n->velocity);
+            if (m_laneParam == LaneParam::Pan) {
+                readout = std::abs(n->pan) < 0.005
+                              ? tr("pan centre")
+                              : tr("pan %1%2")
+                                    .arg(n->pan < 0 ? tr("L") : tr("R"))
+                                    .arg(int(std::lround(std::abs(n->pan) * 100)));
+            }
+            QFont readoutFont = p.font();
+            readoutFont.setPixelSize(10);
+            readoutFont.setWeight(QFont::DemiBold);
+            p.setFont(readoutFont);
+            const QRectF bubble(width() - 116.0, fieldBottom + 7.0, 106.0, 22.0);
+            p.setPen(QPen(mixColors(t.separator(), laneAccent, 0.35), 1.0));
+            p.setBrush(mixColors(t.surfaceElevated, t.background, 0.08));
+            p.drawRoundedRect(bubble, 7.0, 7.0);
+            p.setPen(t.textPrimary);
+            p.drawText(bubble.adjusted(8.0, 0.0, -8.0, 0.0),
+                       Qt::AlignRight | Qt::AlignVCenter, readout);
+        }
+    }
+    paintResizeGrip();
+}
+
+void PianoRollView::paintLaneValues(QPainter& p) {
+    const auto* c = clip();
+    if (!c) return;
+    const Theme& t = th();
+    const double keyWidth = keyboardWidth(), fieldBottom = laneTop();
+    const QRectF parameterField(keyWidth, fieldBottom, std::max(0., width() - keyWidth), laneHeight());
+    const QRectF visible = p.hasClipping() ? parameterField.intersected(p.clipBoundingRect()) : parameterField;
+    const QColor laneAccent = m_laneParam == LaneParam::Controller ? Theme::automationAccent() :
+                              m_laneParam == LaneParam::Pan ? Theme::audioAccent() : t.accent;
+    const auto* paintedController = m_laneParam == LaneParam::Controller ? controllerLane() : nullptr;
     p.save();
-    p.setClipRect(parameterField);
+    p.setClipRect(parameterField, Qt::IntersectClip);
 
     // Quiet value guides make height and centre readable at a glance, but stay
     // behind the actual data. The middle guide is slightly stronger.
@@ -3667,14 +3793,13 @@ void PianoRollView::paintLane(QPainter& p) {
     if (m_laneParam == LaneParam::Controller) {
         if (!paintedController) {
             p.restore();
-            paintResizeGrip();
             return;
         }
         // A curve, not a bar per note: a controller is continuous, and the
         // whole point of the lane is the shape between the breakpoints.
         const double defaultY = laneValueToY(paintedController->defaultValue);
-        const double visibleFirstBeat = xToBeats(keyWidth - 2.0);
-        const double visibleLastBeat = xToBeats(double(width()) + 2.0);
+        const double visibleFirstBeat = xToBeats(visible.left() - 2.0);
+        const double visibleLastBeat = xToBeats(visible.right() + 2.0);
         const auto firstVisible = std::lower_bound(
             paintedController->points.begin(), paintedController->points.end(),
             visibleFirstBeat,
@@ -3740,7 +3865,6 @@ void PianoRollView::paintLane(QPainter& p) {
             p.drawEllipse(handle, 1.7, 1.7);
         }
         p.restore();
-        paintResizeGrip();
         return;
     }
 
@@ -3763,8 +3887,8 @@ void PianoRollView::paintLane(QPainter& p) {
         notePaintIndexFor(laneNotes);
     m_notePaintScratch.clear();
     laneNoteIndex.forEachVisible(
-        laneNotes, xToBeats(keyWidth - kHandleGrabPx),
-        xToBeats(double(width()) + kHandleGrabPx),
+        laneNotes, xToBeats(visible.left() - kHandleGrabPx),
+        xToBeats(visible.right() + kHandleGrabPx),
         [this](const daw::NoteModel&, std::size_t noteIndex) {
             m_notePaintScratch.push_back(noteIndex);
         });
@@ -3803,31 +3927,6 @@ void PianoRollView::paintLane(QPainter& p) {
     }
     p.restore();
 
-    // The value of whatever is being dragged, so a move is readable.
-    if (m_laneDragging && !m_primary.isEmpty()) {
-        if (const auto* n = note(m_primary)) {
-            QString readout = tr("velocity %1").arg(n->velocity);
-            if (m_laneParam == LaneParam::Pan) {
-                readout = std::abs(n->pan) < 0.005
-                              ? tr("pan centre")
-                              : tr("pan %1%2")
-                                    .arg(n->pan < 0 ? tr("L") : tr("R"))
-                                    .arg(int(std::lround(std::abs(n->pan) * 100)));
-            }
-            QFont readoutFont = p.font();
-            readoutFont.setPixelSize(10);
-            readoutFont.setWeight(QFont::DemiBold);
-            p.setFont(readoutFont);
-            const QRectF bubble(width() - 116.0, fieldBottom + 7.0, 106.0, 22.0);
-            p.setPen(QPen(mixColors(t.separator(), laneAccent, 0.35), 1.0));
-            p.setBrush(mixColors(t.surfaceElevated, t.background, 0.08));
-            p.drawRoundedRect(bubble, 7.0, 7.0);
-            p.setPen(t.textPrimary);
-            p.drawText(bubble.adjusted(8.0, 0.0, -8.0, 0.0),
-                       Qt::AlignRight | Qt::AlignVCenter, readout);
-        }
-    }
-    paintResizeGrip();
 }
 
 // ── Input ───────────────────────────────────────────────────────────────────
@@ -4682,7 +4781,7 @@ void PianoRollView::wheelEvent(QWheelEvent* ev) {
         clampScroll();
     }
     emit viewportChanged();
-    update();
+    ui::FrameWidget::update();
     ev->accept();
 }
 
@@ -6756,9 +6855,9 @@ bool PianoRollWindow::checkInteractionGesturesForTest() {
         findChild<QToolButton*>(QStringLiteral("PianoRollBuildChordsButton")) &&
         m_trackMuteButton && m_trackSoloButton;
 
-    // Build every MIDI Tool dialog and verify that numeric input is uniformly
-    // slider-based, with one exact live read-out per slider. This guards both
-    // top-level parameters and the arpeggiator's per-step values.
+    // Build every MIDI Tool dialog and verify that numeric input uniformly uses
+    // the Sampler's rotary controls, with one exact live read-out per knob. This
+    // guards both top-level parameters and the arpeggiator's per-step values.
     for (QAction* action : {m_quantizeAction, m_arpAction, m_chordAction,
                             m_glueAction, m_strumAction, m_articulateAction,
                             m_randomAction}) {
@@ -6771,17 +6870,24 @@ bool PianoRollWindow::checkInteractionGesturesForTest() {
         std::all_of(toolDialogs.begin(), toolDialogs.end(), [](ToolDialog* dialog) {
             if (!dialog || !dialog->findChildren<QAbstractSpinBox*>().isEmpty())
                 return false;
-            const auto sliders = dialog->findChildren<QSlider*>();
+            if (!dialog->findChild<QWidget*>(QStringLiteral("MidiToolFormScroller")))
+                return false;
+            const auto knobs = dialog->findChildren<ui::Knob*>();
             const auto readouts = dialog->findChildren<QLabel*>();
             const int numericReadouts =
                 int(std::count_if(readouts.begin(), readouts.end(), [](QLabel* label) {
                     return label->property("midiNumericReadout").toBool();
                 }));
-            return !sliders.isEmpty() &&
-                   std::all_of(sliders.begin(), sliders.end(), [](QSlider* slider) {
-                       return slider->property("midiNumericSlider").toBool();
+            return !knobs.isEmpty() &&
+                   std::all_of(knobs.begin(), knobs.end(), [](ui::Knob* knob) {
+                       QWidget* row = knob->parentWidget();
+                       return knob->property("midiNumericKnob").toBool() &&
+                              knob->size() == QSize(44, 44) &&
+                              row && row->property("midiNumericRow").toBool() &&
+                              row->height() >= knob->height() &&
+                              row->rect().contains(knob->geometry());
                    }) &&
-                   numericReadouts == sliders.size();
+                   numericReadouts == knobs.size();
         });
 
     // Three parameter notifications in one event-loop turn retain only the last

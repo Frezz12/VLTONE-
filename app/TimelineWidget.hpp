@@ -1,5 +1,7 @@
 #pragma once
 #include "UiFrameClock.hpp"
+#include "graphics/ScenePaintSource.hpp"
+#include "graphics/RetainedScene.hpp"
 
 #include <QPixmap>
 #include <QElapsedTimer>
@@ -54,7 +56,7 @@ struct PendingCloudRecordingSpan {
 /// zooms, Shift+wheel moves through time, and dragging with the middle mouse
 /// button grabs the arrangement in both axes. Rendered with QPainter — the
 /// cross-platform replacement for the macOS Metal renderer.
-class TimelineWidget : public QWidget {
+class TimelineWidget : public QWidget, public ui::graphics::ScenePaintSource {
     Q_OBJECT
 public:
     /// Edit tool chosen in the transport bar.
@@ -116,9 +118,6 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
     /// Re-open the local image/GIF/video selected on the Themes settings page.
     /// Media is presentation-only and never enters the project document.
     void reloadBackgroundSettings();
-    void setWebBackgroundFrame(const QImage& frame, quint64 sourceId);
-    void clearWebBackground();
-    bool backgroundPlaying() const;
     /// Re-read locally timed notebook lines and their presentation settings.
     void reloadTimedTextSettings();
     /// Replace the local recovery/outbox overlay. These spans are display-only
@@ -140,15 +139,14 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
     void setWaveformScale(double scale);
     double waveformScale() const { return m_waveformScale; }
 
-    /// Choose the zoom anchor. Off keeps the time beneath the pointer in place;
-    /// on centres selected clips, falling back to the playhead.
-    void setZoomFocusEnabled(bool enabled) { m_zoomFocusEnabled = enabled; }
-    bool zoomFocusEnabled() const { return m_zoomFocusEnabled; }
-    /// `pointerX` is supplied by wheel/pinch input. Toolbar and keyboard zoom
-    /// use the live pointer when it is horizontally over the arrangement, and
-    /// the viewport centre otherwise.
+    /// `pointerX` is supplied by wheel/pinch input from the track lanes. Other
+    /// zoom commands use the live pointer while it is over those lanes and
+    /// centre the audible playhead when it is over the ruler/header or outside
+    /// the arrangement.
     void zoomBy(double factor,
                 std::optional<double> pointerX = std::nullopt);
+    /// Set an absolute horizontal scale using the same contextual anchor.
+    void setHorizontalZoom(double pixelsPerSecond);
     void zoomToFit();
 
     /// True when at least one clip is selected in the arrangement.
@@ -245,6 +243,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
     /// column is in step with the lanes.
     bool checkClipIndexForTest() const;
     bool checkAdaptiveGridForTest();
+    bool checkScrollCacheForTest();
     int laneTopForTest(int lane) const { return laneTop(lane); }
     int bottomInsetForTest() const { return m_bottomInset; }
     Tool activeToolForTest() const { return tool(); }
@@ -281,7 +280,6 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
                                   bool fadeIn) const;
 
 signals:
-    void backgroundPlaybackChanged(bool playing);
     void clipSelected(const QString& trackId, const QString& clipId);
     void bounceInPlaceRequested();
     void offlineRenderRequested();
@@ -330,10 +328,15 @@ signals:
     /// growing or shrinking. The header column re-reads its row heights so the
     /// two columns stay aligned on every frame of the animation.
     void laneHeightsChanged();
+    void horizontalZoomChanged(double pixelsPerSecond);
 
 protected:
     bool event(QEvent*) override;   // trackpad pinch (native zoom gesture)
     void paintEvent(QPaintEvent*) override;
+    void paintScene(QPainter&, const QRegion&) override;
+    ui::graphics::RetainedScene m_gpuLaneTiles;
+    QSize m_gpuTileSize;
+    qreal m_gpuTileDpr = 0;
     void resizeEvent(class QResizeEvent*) override;
     void showEvent(class QShowEvent*) override;
     void hideEvent(class QHideEvent*) override;
@@ -373,6 +376,7 @@ private:
     mutable std::uint64_t m_clipIntervalClock = 0;
     mutable std::size_t m_clipIntervalEntries = 0;
     QRegion m_staticDirty;
+    bool m_lastPaintWasScene = false;
     bool m_collectingGestureDamage = false;
     bool m_gestureRequestedPaint = false;
     QRegion m_lastKnifeDamage;
@@ -462,7 +466,10 @@ private:
     int maxVerticalScroll() const;
     double visibleSeconds() const;
     void setHorizontalScroll(double seconds);
-    double zoomFocusSeconds() const;
+    void noteManualNavigation();
+    void applyHorizontalZoom(double pixelsPerSecond,
+                             std::optional<double> pointerX);
+    std::optional<double> liveZoomPointerX() const;
     void layoutNavigationControls();
     void syncNavigationControls();
     void scheduleNavigationSync();
@@ -509,7 +516,8 @@ private:
     void drawTakeRow(QPainter& p, const daw::TrackModel& track,
                      const daw::ClipModel& clip, const daw::TakeModel& take,
                      int index, const QRectF& row, double reveal,
-                     std::uint64_t midiNotesRevision);
+                     std::uint64_t midiNotesRevision,
+                     std::span<const daw::CompSegment* const> segments);
     /// The whole comp editor under an expanded clip: take rows plus the brush
     /// feedback of a swipe in flight.
     void drawCompEditor(QPainter& p, int lane, const daw::TrackModel& track,
@@ -575,6 +583,7 @@ private:
     /// cached layer under the old/new cursor strips instead of traversing the
     /// project at 60 Hz.
     void drawStaticFrame(QPainter& p, const QRegion& paintRegion);
+    void drawRecordingOverlays(QPainter& p);
     /// Draw persistent Pattern clips on the parent lane, with linked child MIDI
     /// notes as their compact overview. The parent lane stays visible expanded.
     /// One automation lane's clips: the body, and the curve drawn inside it.
@@ -749,7 +758,9 @@ private:
     QScrollBar* m_horizontalScrollBar = nullptr;
     QScrollBar* m_verticalScrollBar = nullptr;
     bool m_followPlayhead = false;
-    bool m_zoomFocusEnabled = false;
+    bool m_followSuspended = false;
+    bool m_followWasPlaying = false;
+    QElapsedTimer m_navigationInputTime;
     /// Preserve subpixel motion, including on a zoomed-out timeline. Remember
     /// the entire painted footprint so a shrinking/disabled trail is erased.
     std::optional<double> m_lastPlayheadX;
@@ -760,7 +771,12 @@ private:
     double m_seededPlayheadTrailPx = 0.0;
     QPixmap m_staticFrame;
     bool m_staticFrameValid = false;
+    double m_staticFrameScroll = 0.0;
+    double m_staticFrameScale = 0.0;
     std::uint64_t m_staticFramePaintCount = 0;
+    using PatternSources = std::vector<std::pair<std::string, std::size_t>>;
+    std::unordered_map<std::string, std::unordered_map<std::string, PatternSources>> m_patternSources;
+    std::array<std::uint64_t, 3> m_patternSourcesStamp{};
     struct MidiPreviewCacheEntry {
         daw::MidiPreviewIndex index;
         std::uint64_t revision = 0;
@@ -782,11 +798,12 @@ private:
     /// Any paint containing pixels outside this set is a real content repaint
     /// and refreshes the static cache for those pixels.
     QRegion m_playbackOnlyDirty;
+    QRegion m_recordingOnlyDirty;
+    QRegion m_lastRecordingRegion;
     /// Animated wallpaper invalidation is independent of the project cache:
     /// a new video frame must not redraw every clip and waveform.
     bool m_backgroundFrameRepaint = false;
     ui::ThemeMediaBackground* m_backgroundMedia = nullptr;
-    bool m_webBackground = false;
     int m_backgroundVisibility = 0;
     bool m_backgroundEnabled = true;
     bool m_backgroundActive = false;

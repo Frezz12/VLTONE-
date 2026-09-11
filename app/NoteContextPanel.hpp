@@ -50,6 +50,7 @@ public:
     /// Match the arrangement island's placement policy inside the shared tool
     /// strip. Providers use parent coordinates, just like ContextPanel.
     void setAnchorProvider(std::function<bool(int&)> provider);
+    void setHomeAnchorProvider(std::function<bool(int&)> provider);
     void setBoundsProvider(std::function<bool(int&, int&)> provider);
     /// Y coordinate of the shared context strip when the panel's parent is the
     /// whole application surface rather than ToolPanel itself.
@@ -100,6 +101,7 @@ private:
     bool m_enabled = true;
     bool m_follow = true;
     std::function<bool(int&)> m_anchorProvider;
+    std::function<bool(int&)> m_homeAnchorProvider;
     std::function<bool(int&, int&)> m_boundsProvider;
     std::function<int()> m_topProvider;
     /// Suppresses control signals while loading, so writing a slider's value

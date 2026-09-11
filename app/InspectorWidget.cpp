@@ -31,6 +31,8 @@
 #include <cmath>
 
 namespace {
+constexpr int kClipParameterFieldHeight = 20;
+
 void scrollInspector(QWidget* source, QWheelEvent* event) {
     for (QWidget* parent = source->parentWidget(); parent; parent = parent->parentWidget()) {
         if (auto* scroll = qobject_cast<QScrollArea*>(parent)) {
@@ -55,7 +57,7 @@ public:
         setKeyboardTracking(false);
         setAlignment(Qt::AlignRight);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        setFixedHeight(22);
+        setFixedHeight(kClipParameterFieldHeight);
         lineEdit()->installEventFilter(this);
         endInteraction();
         connect(this, &QDoubleSpinBox::editingFinished, this,
@@ -219,7 +221,7 @@ public:
         setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
         setMinimumContentsLength(1);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        setFixedHeight(22);
+        setFixedHeight(kClipParameterFieldHeight);
     }
 protected:
     void wheelEvent(QWheelEvent* event) override { scrollInspector(this, event); }
@@ -249,7 +251,7 @@ protected:
 
 void configureClipForm(QFormLayout* form) {
     form->setContentsMargins(0, 0, 0, 0);
-    form->setVerticalSpacing(3);
+    form->setVerticalSpacing(2);
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     // At the inspector's 152 px width, translated labels and numeric units
     // need separate lines. Do not let their combined minimum widths overflow.
@@ -872,7 +874,7 @@ void InspectorWidget::applyTheme() {
     color: %ACCENT%;
 }
 #InspectorClipSection QComboBox, #InspectorClipSection QDoubleSpinBox {
-    min-height: 18px; padding: 1px 4px; border-radius: 4px;
+    min-height: 16px; padding: 1px 4px; border-radius: 4px;
     font-size: 11px; font-weight: 400;
 }
 #InspectorClipSection QDoubleSpinBox QLineEdit {

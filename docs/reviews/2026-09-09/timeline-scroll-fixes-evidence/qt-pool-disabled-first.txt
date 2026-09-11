@@ -1,0 +1,213 @@
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+SLOW_UI timeline.lanes.paint.ms 193.934
+SLOW_UI timeline.static.paint.ms 202.536
+SLOW_UI timeline.paint.ms 214.662
+SLOW_UI timeline.event.ms 214.701
+PASS  live audio/recording frames reuse the static arrangement plate
+SLOW_UI timeline.input.to.paint.end.ms 36.029
+SLOW_UI timeline.event.ms 26.541
+SLOW_UI frame.interval.ms 26.615
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=32 recording=0 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=179 paints=90 paint_ms[p50,p95,max]=5.781,9.873,16.594 interval_ms=17.712,22.274,39.621 callback_ms=0.007,0.014,0.036 over_budget=0/2762
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+SLOW_UI timeline.paint.ms 29.158
+SLOW_UI timeline.event.ms 29.206
+SLOW_UI timeline.lanes.paint.ms 97.949
+SLOW_UI timeline.static.paint.ms 99.310
+SLOW_UI timeline.paint.ms 105.593
+SLOW_UI timeline.event.ms 105.605
+PASS  shifted plate matches full rendering across pan reversal, fractional motion and rounded corners
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  start real live waveform capture
+SLOW_UI gui.queue.delay.ms 863.246
+SLOW_UI timeline.paint.ms 34.060
+SLOW_UI timeline.event.ms 34.102
+SLOW_UI timeline.paint.ms 57.962
+SLOW_UI timeline.event.ms 58.167
+SLOW_UI timeline.event.ms 58.727
+SLOW_UI frame.interval.ms 62.615
+SLOW_UI timeline.recording.paint.ms 77.422
+SLOW_UI timeline.paint.ms 160.207
+SLOW_UI timeline.event.ms 160.245
+SLOW_UI timeline.event.ms 163.857
+SLOW_UI frame.interval.ms 180.389
+PASS  live audio/recording frames reuse the static arrangement plate
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=32 recording=1 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=182 paints=89 paint_ms[p50,p95,max]=5.046,6.457,12.232 interval_ms=17.669,19.760,23.738 callback_ms=0.006,0.013,0.091 over_budget=0/2977
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  shifted plate matches full rendering across pan reversal, fractional motion and rounded corners
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+SLOW_UI gui.queue.delay.ms 514.471
+PASS  live audio/recording frames reuse the static arrangement plate
+SLOW_UI timeline.input.to.paint.end.ms 26.922
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=64 recording=0 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=183 paints=90 paint_ms[p50,p95,max]=4.669,6.687,12.271 interval_ms=17.707,18.996,32.658 callback_ms=0.008,0.029,0.060 over_budget=0/1381
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  start real live waveform capture
+SLOW_UI timeline.lanes.paint.ms 29.503
+SLOW_UI timeline.static.paint.ms 30.195
+SLOW_UI timeline.paint.ms 32.613
+SLOW_UI timeline.event.ms 32.623
+PASS  live audio/recording frames reuse the static arrangement plate
+SLOW_UI timeline.input.to.paint.end.ms 25.341
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=64 recording=1 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=183 paints=90 paint_ms[p50,p95,max]=5.263,7.603,10.008 interval_ms=17.723,20.221,29.505 callback_ms=0.008,0.023,0.051 over_budget=0/1383
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+SLOW_UI timeline.input.to.paint.end.ms 25.877
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+SLOW_UI timeline.lanes.paint.ms 26.800
+SLOW_UI timeline.static.paint.ms 27.346
+SLOW_UI timeline.paint.ms 31.480
+SLOW_UI timeline.event.ms 31.489
+PASS  live audio/recording frames reuse the static arrangement plate
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=128 recording=0 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=186 paints=90 paint_ms[p50,p95,max]=4.891,6.524,10.200 interval_ms=17.706,20.277,28.096 callback_ms=0.010,0.022,0.035 over_budget=0/694
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  start real live waveform capture
+SLOW_UI timeline.paint.ms 26.433
+SLOW_UI timeline.event.ms 26.467
+PASS  live audio/recording frames reuse the static arrangement plate
+SLOW_UI timeline.input.to.paint.end.ms 28.698
+SLOW_UI frame.interval.ms 25.140
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=128 recording=1 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=181 paints=90 paint_ms[p50,p95,max]=5.050,7.783,16.114 interval_ms=17.815,21.325,29.016 callback_ms=0.012,0.031,0.048 over_budget=0/693
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  live audio/recording frames reuse the static arrangement plate
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=512 recording=0 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=182 paints=90 paint_ms[p50,p95,max]=4.667,7.745,12.376 interval_ms=17.548,22.737,29.575 callback_ms=0.024,0.048,0.069 over_budget=0/174
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  start real live waveform capture
+PASS  live audio/recording frames reuse the static arrangement plate
+SLOW_UI timeline.recording.paint.ms 25.004
+SLOW_UI timeline.input.to.paint.end.ms 104.610
+SLOW_UI timeline.paint.ms 120.881
+SLOW_SCROLL paint=140.634 ms cpu=10.068 ms frame=24 static=1 tile_builds=1 tile_hits=17 raster_bytes=66924600 scroll=1.65000
+SLOW_UI timeline.event.ms 147.853
+SLOW_UI timeline.event.ms 167.173
+SLOW_UI frame.interval.ms 168.723
+SLOW_UI timeline.waveform.paint.ms 39.959
+SLOW_UI timeline.lanes.paint.ms 52.830
+SLOW_UI timeline.static.paint.ms 74.803
+SLOW_UI timeline.input.to.paint.end.ms 103.825
+SLOW_UI timeline.paint.ms 95.197
+SLOW_SCROLL paint=95.326 ms cpu=13.997 ms frame=25 static=1 tile_builds=1 tile_hits=17 raster_bytes=66924600 scroll=1.61250
+SLOW_UI timeline.event.ms 95.438
+SLOW_UI timeline.event.ms 100.331
+SLOW_UI frame.interval.ms 107.581
+SLOW_UI timeline.input.to.paint.end.ms 44.396
+SLOW_UI timeline.paint.ms 37.122
+SLOW_SCROLL paint=37.146 ms cpu=17.116 ms frame=26 static=1 tile_builds=1 tile_hits=25 raster_bytes=66924600 scroll=1.57500
+SLOW_UI timeline.event.ms 37.167
+SLOW_UI timeline.event.ms 49.704
+SLOW_UI frame.interval.ms 49.872
+SLOW_UI timeline.lanes.paint.ms 43.227
+SLOW_UI timeline.static.paint.ms 44.182
+SLOW_UI timeline.input.to.paint.end.ms 65.795
+SLOW_UI timeline.paint.ms 51.359
+SLOW_SCROLL paint=51.376 ms cpu=30.021 ms frame=28 static=1 tile_builds=1 tile_hits=113 raster_bytes=66924600 scroll=1.46250
+SLOW_UI timeline.event.ms 51.396
+SLOW_UI timeline.event.ms 60.909
+SLOW_UI frame.interval.ms 61.099
+SLOW_UI timeline.input.to.paint.end.ms 36.757
+SLOW_UI timeline.paint.ms 47.130
+SLOW_SCROLL paint=47.163 ms cpu=15.457 ms frame=38 static=1 tile_builds=1 tile_hits=114 raster_bytes=66924600 scroll=1.05000
+SLOW_UI timeline.event.ms 47.174
+SLOW_UI timeline.event.ms 49.253
+SLOW_UI frame.interval.ms 54.899
+SLOW_UI timeline.input.to.paint.end.ms 27.646
+SLOW_UI timeline.lanes.paint.ms 26.012
+SLOW_UI timeline.static.paint.ms 27.601
+SLOW_UI timeline.input.to.paint.end.ms 43.290
+SLOW_UI timeline.paint.ms 30.582
+SLOW_SCROLL paint=30.586 ms cpu=19.015 ms frame=49 static=1 tile_builds=1 tile_hits=106 raster_bytes=66924600 scroll=0.48750
+SLOW_UI timeline.event.ms 30.593
+SLOW_UI timeline.event.ms 32.278
+SLOW_UI frame.interval.ms 38.653
+SLOW_UI frame.interval.ms 26.352
+SLOW_UI timeline.input.to.paint.end.ms 44.081
+SLOW_UI timeline.paint.ms 25.091
+SLOW_UI timeline.event.ms 25.105
+SLOW_UI timeline.event.ms 26.666
+SLOW_UI frame.interval.ms 26.817
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=512 recording=1 DPR=2.0 realtime_helpers=7 realtime_caller=1 inputs=112 paints=67 paint_ms[p50,p95,max]=6.145,47.163,140.634 interval_ms=17.817,47.860,156.425 callback_ms=0.032,0.049,0.074 over_budget=0/175
+FAIL  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+SLOW_UI timeline.input.to.paint.end.ms 29.559
+QApplication::removeTranslator: Please instantiate the QApplication object first
+QApplication::removeTranslator: Please instantiate the QApplication object first

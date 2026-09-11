@@ -1,6 +1,9 @@
 #include "UiPerformance.hpp"
 #include "AudioImportPreparation.hpp"
 #include "MainWindow.hpp"
+#include "graphics/WorkspaceSurface.hpp"
+#include <QQuickWindow>
+#include "graphics/GraphicsPreferences.hpp"
 #include "CreateTracksDialog.hpp"
 #include <QContextMenuEvent>
 #include "CompLayout.hpp"
@@ -71,6 +74,7 @@
 #include "collaboration/SharedProjectSnapshot.hpp"
 #include "ProjectTemplates.hpp"
 #include "QuickImportPrefs.hpp"
+#include "StartupProjectPrefs.hpp"
 #include "RecoveryPrefs.hpp"
 #include "RecoverySupport.hpp"
 #include "plugins/ScanProcess.hpp"
@@ -90,7 +94,6 @@
 #include "TypingKeyboard.hpp"
 #include "UiConstants.hpp"
 #include "WebBrowserPanel.hpp"
-#include "WebVideoBackground.hpp"
 #include "WebPrefs.hpp"
 
 #include <array>
@@ -128,13 +131,17 @@
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSlider>
 #include <QSet>
 #include <QUuid>
 #include <QScreen>
 #include <QScopedValueRollback>
+#include <QScopeGuard>
 #include <QAbstractSpinBox>
 #include <QApplication>
+#include <QAbstractAnimation>
 #include <QComboBox>
+#include <QCursor>
 #include <QEventLoop>
 #include <QElapsedTimer>
 #include <QKeyEvent>
@@ -145,6 +152,7 @@
 #include <QTextEdit>
 #include <QThreadPool>
 #include <QToolButton>
+#include <QTemporaryDir>
 #include <QTreeWidget>
 #include <QWheelEvent>
 #include <QShortcut>
@@ -191,19 +199,16 @@ QString canonicalCloudUuid(const QString& value) {
 }
 #endif
 
-/// A VLTONE project is a directory package on disk. macOS presents that package
-/// as one document; other file managers may expose its inner manifest file.
-/// Normalize both entry points before the controller sees them.
+/// The controller owns a project directory, while Finder or a file-open event
+/// may hand us its inner manifest. Legacy `.vlt` directory packages and modern
+/// ordinary project folders are both normalized to their containing directory.
 QString packagePathFromSelection(const QString& path) {
     if (path.isEmpty()) return {};
     const QFileInfo info(path);
     const QString name = info.fileName();
-    const QFileInfo parent(info.absolutePath());
     if (info.isFile() &&
-        ((info.suffix().compare(QStringLiteral("vlt"),
-                                Qt::CaseInsensitive) == 0 &&
-          parent.suffix().compare(QStringLiteral("vlt"),
-                                  Qt::CaseInsensitive) == 0) ||
+        (info.suffix().compare(QStringLiteral("vlt"),
+                               Qt::CaseInsensitive) == 0 ||
          name.compare(QString::fromLatin1(daw::ProjectSerializer::kProjectFile),
                       Qt::CaseInsensitive) == 0 ||
          name.compare(QStringLiteral("project.json"),
@@ -680,9 +685,27 @@ public:
                     .arg(result.tempo.highConfidence() ? tr("confident") : tr("ambiguous")), this);
             column->addWidget(tempoTitle);
             m_tempo = new QComboBox(this);
-            for (int bpm : daw::analysis::applicableTempos(result.tempo))
+            m_tempo->setObjectName(QStringLiteral("DetectedTempoOptions"));
+            m_tempo->setAccessibleName(tr("Detected BPM"));
+            const auto tempoOptions =
+                daw::analysis::applicableTempos(result.tempo);
+            for (int bpm : tempoOptions)
                 m_tempo->addItem(tr("%1 BPM").arg(bpm), bpm);
             column->addWidget(m_tempo);
+            if (tempoOptions.size() > 1) {
+                auto* showAll = new QToolButton(this);
+                showAll->setObjectName(QStringLiteral("ShowAllTempoOptions"));
+                showAll->setText(
+                    tr("Show all BPM options (%1)").arg(tempoOptions.size()));
+                showAll->setArrowType(Qt::DownArrow);
+                showAll->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+                showAll->setAutoRaise(true);
+                showAll->setCursor(Qt::PointingHandCursor);
+                showAll->setAccessibleName(tr("Show all detected BPM options"));
+                connect(showAll, &QToolButton::clicked, m_tempo,
+                        [combo = m_tempo] { combo->showPopup(); });
+                column->addWidget(showAll, 0, Qt::AlignLeft);
+            }
             if (m_quickImport) {
                 auto* chooseTempo = new QLabel(
                     tr("Choose the BPM to use for this project."), this);
@@ -779,6 +802,27 @@ private:
     int m_keyRoot = -1;
     std::string m_keyScale;
 };
+
+bool checkAudioAnalysisResultDialogForTest(QWidget* parent) {
+    daw::analysis::MusicalAnalysisResult result;
+    result.tempo.status = daw::analysis::DetectionStatus::Ambiguous;
+    result.tempo.bpm = 140.0;
+    result.tempo.alternatives = {70.0, 280.0, 35.0};
+    daw::analysis::MusicalAnalysisRequest request;
+    request.detectTempo = true;
+    request.detectKey = false;
+    AudioAnalysisResultDialog dialog(
+        result, request, 120.0, AudioAnalysisResultDialog::Mode::Review,
+        false, parent);
+    const auto* options =
+        dialog.findChild<QComboBox*>(QStringLiteral("DetectedTempoOptions"));
+    const auto* showAll =
+        dialog.findChild<QToolButton*>(QStringLiteral("ShowAllTempoOptions"));
+    return options && options->count() == 4 &&
+           options->itemData(0).toInt() == 140 && showAll &&
+           showAll->text().contains(QStringLiteral("4")) &&
+           !showAll->accessibleName().isEmpty();
+}
 
 #ifdef DAW_ENABLE_COLLABORATION
 QString presenceContextId(const QString& ownerId, const QString& objectId) {
@@ -1095,13 +1139,13 @@ MainWindow::MainWindow(bool openDevice, QWidget* parent,
     // Headless recovery tests use a disposable DAW_RECOVERY_ROOT and never
     // show a prompt. Live recovery is deliberately started by main() only
     // after this window is visible and the modal startup dialog is gone.
-    if (!openDevice) startRecovery(/*interactive=*/false);
+    if (!openDevice) (void)startRecovery(/*interactive=*/false);
 
     updateWindowTitle();
 }
 
-void MainWindow::completeInteractiveStartup() {
-    startRecovery(/*interactive=*/true);
+bool MainWindow::completeInteractiveStartup() {
+    return startRecovery(/*interactive=*/true);
 }
 
 #ifdef DAW_ENABLE_COLLABORATION
@@ -2530,7 +2574,12 @@ void MainWindow::onMakeLocalCopy() {
     target = packagePathFromSelection(target);
     const QString extension =
         QStringLiteral(".") + QString::fromLatin1(daw::ProjectSerializer::kExtension);
+#ifdef Q_OS_MACOS
+    if (target.endsWith(extension, Qt::CaseInsensitive))
+        target.chop(extension.size());
+#else
     if (!target.endsWith(extension, Qt::CaseInsensitive)) target += extension;
+#endif
     target = absoluteCleanPath(target);
     if (target.isEmpty() ||
         (!m_cloudLocalBackupPath.isEmpty() &&
@@ -2544,7 +2593,7 @@ void MainWindow::onMakeLocalCopy() {
     if (targetInfo.exists() && !targetInfo.isDir()) {
         QMessageBox::warning(
             this, tr("Local Copy Failed"),
-            tr("The selected destination is not a VLTONE project package."));
+            tr("The selected destination is not a VLTONE project folder."));
         return;
     }
 
@@ -2669,10 +2718,14 @@ void MainWindow::onMakeLocalCopy() {
     const QString stagingName = QStringLiteral(".%1.tmp-%2").arg(targetName, nonce);
     const QString backupName = QStringLiteral(".%1.backup-%2").arg(targetName, nonce);
     const QString staging = parent.absoluteFilePath(stagingName);
+    const QString finalManifestName = QFileInfo(QString::fromStdString(
+        daw::ProjectSerializer::manifestPath(target.toStdString()))).fileName();
 
     QApplication::setOverrideCursor(Qt::WaitCursor);
     audio::Result saved = m_controller.saveProject(staging.toStdString());
     if (saved) {
+        const QString stagingManifest = QString::fromStdString(
+            daw::ProjectSerializer::manifestPath(staging.toStdString()));
         daw::ProjectModel portable;
         saved = daw::ProjectSerializer::load(portable, staging.toStdString());
         if (saved) {
@@ -2701,13 +2754,18 @@ void MainWindow::onMakeLocalCopy() {
             }
             portable.sampleRate = frozen->project.sampleRate;
             portable.name = QFileInfo(target).completeBaseName().toStdString();
+            const QString finalManifest =
+                QDir(staging).absoluteFilePath(finalManifestName);
             saved = daw::ProjectSerializer::saveDocument(
-                portable,
-                QDir(staging)
-                    .absoluteFilePath(
-                        QString::fromLatin1(daw::ProjectSerializer::kProjectFile))
-                    .toStdString(),
+                portable, finalManifest.toStdString(),
                 daw::MediaPaths::Basenames);
+            if (saved && stagingManifest != finalManifest &&
+                QFileInfo::exists(stagingManifest) &&
+                !QFile::remove(stagingManifest)) {
+                saved = audio::Result::fail(
+                    audio::EngineError::FileWriteError,
+                    "could not remove the temporary project manifest");
+            }
         }
     }
 
@@ -3666,7 +3724,7 @@ void MainWindow::onPublishCloudProject() {
         !QFileInfo::exists(m_projectPath)) {
         QMessageBox::warning(
             this, tr("Project Is Not Saved"),
-            tr("VLTONE could not confirm a clean local project package. Save the "
+            tr("VLTONE could not confirm a clean local project folder. Save the "
                "project and try again."));
         return;
     }
@@ -3902,7 +3960,8 @@ void MainWindow::registerAutomationPresence(AutomationEditorWindow* editor) {
 }
 #endif
 
-void MainWindow::startRecovery(bool interactive) {
+bool MainWindow::startRecovery(bool interactive) {
+    bool restoredAtStartup = false;
     const QString root = ui::recovery::rootDir();
     // Install this even when ordinary project recovery is disabled. A cloud
     // recording may start the journal on demand later in the run, and a clean
@@ -3933,16 +3992,17 @@ void MainWindow::startRecovery(bool interactive) {
     // A headless run writes into whatever DAW_RECOVERY_ROOT names, and nothing
     // at all when it names nothing — a screenshot must not litter the user's
     // application data or, worse, offer to recover into it.
-    if (!interactive && !std::getenv("DAW_RECOVERY_ROOT")) return;
+    if (!interactive && !std::getenv("DAW_RECOVERY_ROOT")) return false;
     // Turned off, the leftovers of an earlier session are left where they are
     // rather than deleted: switching recovery off is not a request to throw
     // away work it already saved.
-    if (!ui::recoveryprefs::enabled()) return;
+    if (!ui::recoveryprefs::enabled()) return false;
 
     if (interactive) {
         const ui::recovery::Choice choice =
             ui::recovery::offerRecovery(this, m_controller);
         if (choice.restored) {
+            restoredAtStartup = true;
 #ifdef DAW_ENABLE_COLLABORATION
             clearCloudProjectBinding(/*cancelPublication=*/true);
 #endif
@@ -3963,7 +4023,7 @@ void MainWindow::startRecovery(bool interactive) {
 
     m_journal.start(root.toStdString(),
                     QCoreApplication::applicationVersion().toStdString());
-    if (!m_journal.running()) return;
+    if (!m_journal.running()) return restoredAtStartup;
 
     if (!m_projectPath.isEmpty()) {
         m_journal.setProjectPath(m_projectPath.toStdString(),
@@ -3982,7 +4042,22 @@ void MainWindow::startRecovery(bool interactive) {
     // One second: fast enough that little is ever at risk, slow enough that
     // copying the document is invisible next to the 33 ms UI tick.
     m_journalTimer = new QTimer(this);
-    connect(m_journalTimer, &QTimer::timeout, this, &MainWindow::sampleForRecovery);
+    connect(m_journalTimer, &QTimer::timeout, this, [this] {
+        if (m_controller.audioDeviceNeedsRecovery()) {
+            // Preserve the closed take before changing device format. A lost
+            // device must never silently resume into the middle of that WAV.
+            if (m_controller.isRecording()) {
+                m_controller.markRecordingInterrupted();
+                stopRecordingNow();
+            }
+            cancelCountIn();
+            const auto recovered = m_controller.recoverAudioDevice();
+            if (!recovered) statusBar()->showMessage(
+                (m_controller.isDeviceOpen() ? tr("Audio recovered: %1") : tr("Audio device unavailable: %1")).arg(QString::fromStdString(recovered.message())), 5000);
+            else statusBar()->showMessage(tr("Audio device reconnected"), 5000);
+        }
+        sampleForRecovery();
+    });
     m_journalTimer->start(1000);
 
     // The handler cannot save anything either — see crash/CrashHandler.hpp —
@@ -4004,7 +4079,7 @@ void MainWindow::startRecovery(bool interactive) {
              std::to_string(daw::recovery::currentProcessId())},
             &m_guardPipe);
     }
-
+    return restoredAtStartup;
 }
 
 void MainWindow::stageAutomationForShot() {
@@ -4180,6 +4255,42 @@ bool MainWindow::checkAutomationForTest() {
         send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton, mods);
         QApplication::processEvents();
     };
+
+    // ── Shift-click adds a timing anchor at the curve's current value ──
+    {
+        const std::vector<daw::AutomationPoint> pointsBefore = curve()->points;
+        const double fallback = curve()->defaultValue;
+        const QPoint anchorAt(m_timeline->width() * 2 / 5, y + 16);
+        click(anchorAt, anchorAt, Qt::ShiftModifier);
+        const daw::ClipAutomationModel* anchored = curve();
+        const daw::AutomationPoint* added = nullptr;
+        if (anchored) {
+            for (const auto& candidate : anchored->points) {
+                const bool existed = std::any_of(
+                    pointsBefore.begin(), pointsBefore.end(),
+                    [&](const daw::AutomationPoint& point) {
+                        return std::abs(point.beats - candidate.beats) < 1e-9;
+                    });
+                if (!existed) added = &candidate;
+            }
+        }
+        if (!anchored || anchored->points.size() != pointsBefore.size() + 1 ||
+            !added ||
+            std::abs(added->value - daw::automationValueAt(
+                                        pointsBefore, added->beats, fallback)) >
+                1e-9) {
+            std::fprintf(stderr,
+                         "Shift-click did not add a point on the existing curve\n");
+            return false;
+        }
+        m_controller.undo();
+        QApplication::processEvents();
+        if (!curve() || curve()->points != pointsBefore) {
+            std::fprintf(stderr,
+                         "undo did not remove the Shift-click automation point\n");
+            return false;
+        }
+    }
 
     // ── A click on empty curve adds a breakpoint and places it in one gesture ──
     const std::size_t before = curve()->points.size();
@@ -4547,6 +4658,54 @@ bool MainWindow::checkAutomationEditorForTest() {
                        held, mods);
         QApplication::sendEvent(view, &ev);
     };
+
+    // A short Shift-click and a Shift range drag share the same initial press.
+    // The click adds an exact timing anchor; movement beyond the hysteresis
+    // remains the range-selection gesture tested by the screenshot harness.
+    {
+        const std::vector<daw::AutomationPoint> pointsBefore = curve()->points;
+        const double fallback = curve()->defaultValue;
+        const QPoint first = view->pointPositionForTest(0);
+        const QPoint second = view->pointPositionForTest(1);
+        const QPoint anchorAt((first.x() + second.x()) / 2,
+                              view->height() - 40);
+        sendView(QEvent::MouseButtonPress, anchorAt, Qt::LeftButton,
+                 Qt::LeftButton, Qt::ShiftModifier);
+        sendView(QEvent::MouseButtonRelease, anchorAt, Qt::LeftButton,
+                 Qt::NoButton, Qt::ShiftModifier);
+        QApplication::processEvents();
+
+        const daw::ClipAutomationModel* anchored = curve();
+        const daw::AutomationPoint* added = nullptr;
+        if (anchored) {
+            for (const auto& candidate : anchored->points) {
+                const bool existed = std::any_of(
+                    pointsBefore.begin(), pointsBefore.end(),
+                    [&](const daw::AutomationPoint& point) {
+                        return std::abs(point.beats - candidate.beats) < 1e-9;
+                    });
+                if (!existed) added = &candidate;
+            }
+        }
+        if (!anchored || anchored->points.size() != pointsBefore.size() + 1 ||
+            !added ||
+            std::abs(added->value - daw::automationValueAt(
+                                        pointsBefore, added->beats, fallback)) >
+                1e-9) {
+            std::fprintf(stderr,
+                         "the editor's Shift-click missed the existing curve\n");
+            editor->close();
+            return false;
+        }
+        m_controller.undo();
+        QApplication::processEvents();
+        if (!curve() || curve()->points != pointsBefore) {
+            std::fprintf(stderr,
+                         "undo did not remove the editor's Shift-click point\n");
+            editor->close();
+            return false;
+        }
+    }
 
     // ── The large editor uses the same constrained point gestures as the lane ──
     const QPoint pointAtFour = view->pointPositionForTest(1);
@@ -5267,12 +5426,19 @@ bool MainWindow::checkCycleRegionForTest() {
         std::fprintf(stderr, "the cycle did not arm\n");
         return false;
     }
+    // This assertion starts a fresh run. In Restart mode a seek while playing
+    // deliberately preserves the old play anchor, which another UI check may
+    // have left inside this range.
+    m_controller.pause();
     m_controller.seekSeconds(0.0);
     m_controller.play();
-    const bool jumpedIn = std::abs(m_controller.positionSeconds() - from) < 1e-6;
+    const double startedAt = m_controller.positionSeconds();
+    const bool jumpedIn = std::abs(startedAt - from) < 1e-6;
     m_controller.stop();
     if (!jumpedIn) {
-        std::fprintf(stderr, "playing from outside the cycle did not enter it\n");
+        std::fprintf(stderr, "playing from outside the cycle did not enter it: expected=%.9f actual=%.9f range=%.9f..%.9f enabled=%d rate=%.1f\n",
+                     from, startedAt, m_controller.loopStartSeconds(), m_controller.loopEndSeconds(),
+                     m_controller.isLoopEnabled(), m_controller.sampleRate());
         return false;
     }
 
@@ -5781,7 +5947,9 @@ bool MainWindow::checkTrackSelectionForTest() {
             return false;
         }
         const QPoint from(fader->width() - 6, fader->height() / 2);
-        const QPoint to(fader->width() / 2, fader->height() / 2);
+        const QPoint to = fader->isCompactKnob()
+            ? from + QPoint(0, 24)
+            : QPoint(fader->width() / 2, fader->height() / 2);
         const auto send = [&](QEvent::Type type, const QPoint& at,
                               Qt::MouseButton button, Qt::MouseButtons held) {
             QMouseEvent ev(type, QPointF(at), QPointF(fader->mapToGlobal(at)),
@@ -6090,8 +6258,8 @@ bool MainWindow::checkTrackRowHeightsForTest() {
 bool MainWindow::checkTimelinePanForTest() {
     if (!m_timeline) return false;
     const bool savedFollow = m_timeline->followsPlayhead();
-    const bool savedZoomFocus = m_timeline->zoomFocusEnabled();
     const double savedPosition = m_controller.positionSeconds();
+    const QPoint savedCursor = QCursor::pos();
     m_timeline->setFollowPlayhead(false);
     m_controller.seekSeconds(0.0);
     m_timeline->setVerticalScroll(0);
@@ -6126,15 +6294,17 @@ bool MainWindow::checkTimelinePanForTest() {
     const bool centred = m_timeline->horizontalScrollForTest() < manualScroll;
     const bool scrollbarsPresent = m_timeline->hasNavigationControlsForTest();
 
-    // Pointer mode preserves the exact project time under the pointer. Focus
-    // mode deliberately changes that mapping and puts the playhead at centre.
+    // The pointer itself chooses the anchor. Inside the arrangement, the time
+    // beneath it stays fixed. Above it, toolbar/keyboard zoom centres the
+    // playhead, irrespective of clip selection.
     m_timeline->clearClipSelection();
-    const double pointerX = m_timeline->width() * 0.72;
-    m_timeline->setZoomFocusEnabled(false);
+    const int pointerX = int(m_timeline->width() * 0.72);
+    QCursor::setPos(m_timeline->mapToGlobal(
+        QPoint(pointerX, ui::kRulerHeight + 40)));
     const double timeUnderPointer =
         m_timeline->horizontalScrollForTest() +
         pointerX / m_timeline->pixelsPerSecondForTest();
-    m_timeline->zoomBy(1.2, pointerX);
+    m_timeline->zoomBy(1.2);
     const double timeUnderPointerAfter =
         m_timeline->horizontalScrollForTest() +
         pointerX / m_timeline->pixelsPerSecondForTest();
@@ -6143,69 +6313,48 @@ bool MainWindow::checkTimelinePanForTest() {
 
     const double playheadFocus =
         m_timeline->horizontalScrollForTest() +
-        m_timeline->width() /
+        (m_timeline->width() - 12) /
             (2.0 * m_timeline->pixelsPerSecondForTest());
     m_controller.seekSeconds(playheadFocus);
-    m_timeline->setZoomFocusEnabled(true);
-    m_timeline->zoomBy(1.1, pointerX);
+    for (const auto& track : m_controller.project().tracks) {
+        if (track.clips.empty()) continue;
+        m_timeline->selectClips({{
+            QString::fromStdString(track.id),
+            QString::fromStdString(track.clips.front().id)}});
+        break;
+    }
+    QCursor::setPos(m_timeline->mapToGlobal(
+        QPoint(pointerX, ui::kRulerHeight / 2)));
+    m_timeline->zoomBy(1.1);
     const double focusedPlayheadX =
         (m_controller.presentationPositionSeconds() -
          m_timeline->horizontalScrollForTest()) *
         m_timeline->pixelsPerSecondForTest();
     const bool playheadCentred =
-        // The 12 px vertical scrollbar is outside the timeline viewport.
-        std::abs(focusedPlayheadX - m_timeline->width() * 0.5) <= 8.0;
+        std::abs(focusedPlayheadX - (m_timeline->width() - 12) * 0.5) <= 1.0;
+    const bool zoomFocusButtonRemoved =
+        !m_toolPanel->findChild<QWidget*>(QStringLiteral("ZoomFocusButton"));
 
-    // A selected clip outranks the playhead in focus mode. Pick the latest
-    // clip in the deterministic self-test project so the zero-time boundary
-    // cannot prevent it from reaching the middle.
-    const daw::TrackModel* focusTrack = nullptr;
-    const daw::ClipModel* focusClip = nullptr;
-    double clipFocus = -1.0;
-    for (const auto& track : m_controller.project().tracks) {
-        for (const auto& clip : track.clips) {
-            const double centre = clip.startSeconds +
-                m_controller.clipDisplayDuration(clip) * 0.5;
-            if (centre > clipFocus) {
-                clipFocus = centre;
-                focusTrack = &track;
-                focusClip = &clip;
-            }
-        }
-    }
-    bool clipCentred = true;
-    if (focusTrack && focusClip && clipFocus > 0.0) {
-        m_timeline->selectClips({{
-            QString::fromStdString(focusTrack->id),
-            QString::fromStdString(focusClip->id)}});
-        m_controller.seekSeconds(0.0);
-        m_timeline->zoomBy(1.1, pointerX);
-        const double focusedClipX =
-            (clipFocus - m_timeline->horizontalScrollForTest()) *
-            m_timeline->pixelsPerSecondForTest();
-        clipCentred =
-            std::abs(focusedClipX - m_timeline->width() * 0.5) <= 8.0;
-    }
-
+    QCursor::setPos(savedCursor);
+    m_timeline->clearClipSelection();
     m_timeline->setFollowPlayhead(false);
     m_controller.seekSeconds(savedPosition);
-    m_timeline->setZoomFocusEnabled(savedZoomFocus);
     m_timeline->setFollowPlayhead(savedFollow);
 
     if (!timeMoved || !rowsMoved || !independent || !centred ||
         !scrollbarsPresent || !pointerAnchored || !playheadCentred ||
-        !clipCentred) {
+        !zoomFocusButtonRemoved) {
         std::fprintf(stderr,
                      "timeline navigation failed (time %d, tracks %d, "
                      "independent %d, centred %d, scrollbars %d, "
-                     "pointer zoom %d, focused zoom %d, clip zoom %d)\n",
+                     "pointer zoom %d, playhead zoom %d, button gone %d)\n",
                      int(timeMoved), int(rowsMoved), int(independent),
                      int(centred), int(scrollbarsPresent), int(pointerAnchored),
-                     int(playheadCentred), int(clipCentred));
+                     int(playheadCentred), int(zoomFocusButtonRemoved));
     }
     return timeMoved && rowsMoved && independent && centred &&
            scrollbarsPresent && pointerAnchored && playheadCentred &&
-           clipCentred;
+           zoomFocusButtonRemoved;
 }
 
 bool MainWindow::checkTimelineClipGesturesForTest() {
@@ -6236,23 +6385,27 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
     if (!waveformScale) return false;
     m_timeline->setWaveformScale(1.0);
     const QPointF scaleFrom(waveformScale->rect().center());
-    const QPointF scaleTo = scaleFrom - QPointF(0.0, 40.0);
+    const QPointF scaleTo = scaleFrom - QPointF(0.0, 20.0);
     QMouseEvent scalePress(
         QEvent::MouseButtonPress, scaleFrom,
         QPointF(waveformScale->mapToGlobal(scaleFrom.toPoint())), Qt::LeftButton,
         Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(waveformScale, &scalePress);
-    QMouseEvent scaleMove(
-        QEvent::MouseMove, scaleTo,
-        QPointF(waveformScale->mapToGlobal(scaleTo.toPoint())), Qt::NoButton,
-        Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(waveformScale, &scaleMove);
+    for (int sample = 0; sample < 2; ++sample) {
+        QMouseEvent scaleMove(
+            QEvent::MouseMove, scaleTo,
+            QPointF(waveformScale->mapToGlobal(scaleTo.toPoint())), Qt::NoButton,
+            Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(waveformScale, &scaleMove);
+    }
     QMouseEvent scaleRelease(
-        QEvent::MouseButtonRelease, scaleTo,
-        QPointF(waveformScale->mapToGlobal(scaleTo.toPoint())), Qt::LeftButton,
+        QEvent::MouseButtonRelease, scaleFrom,
+        QPointF(waveformScale->mapToGlobal(scaleFrom.toPoint())), Qt::LeftButton,
         Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(waveformScale, &scaleRelease);
-    const bool waveformGrew = m_timeline->waveformScale() > 1.0;
+    // Two identical 20 px throws must accumulate to 40 px worth of scaling.
+    // An absolute, screen-bounded drag would stop at about 1.19 here.
+    const bool waveformGrew = m_timeline->waveformScale() > 1.35;
     QMouseEvent scaleReset(
         QEvent::MouseButtonDblClick, scaleFrom,
         QPointF(waveformScale->mapToGlobal(scaleFrom.toPoint())), Qt::LeftButton,
@@ -6265,6 +6418,124 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
                      "waveform display scale failed (grow=%d reset=%d value=%.3f)\n",
                      int(waveformGrew), int(waveformReset),
                      m_timeline->waveformScale());
+        return false;
+    }
+
+    auto* trackHeightSlider = m_toolPanel->findChild<QSlider*>(
+        QStringLiteral("TimelineTrackHeightSlider"));
+    auto* timelineZoomSlider = m_toolPanel->findChild<QSlider*>(
+        QStringLiteral("TimelineZoomSlider"));
+    if (!trackHeightSlider || !timelineZoomSlider) return false;
+
+    const auto dragCompactControl = [](QWidget* control, const QPointF& delta,
+                                       int samples = 1) {
+        const QPointF from(control->rect().center());
+        const QPointF to = from + delta;
+        QMouseEvent press(
+            QEvent::MouseButtonPress, from,
+            QPointF(control->mapToGlobal(from.toPoint())), Qt::LeftButton,
+            Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(control, &press);
+        for (int sample = 0; sample < samples; ++sample) {
+            // Cursor locking returns the native pointer to `from` after every
+            // sample, so the next physical motion reports the same relative
+            // offset again.  Repeating it verifies that the control accumulates
+            // movement instead of remaining tied to the original screen point.
+            QMouseEvent move(
+                QEvent::MouseMove, to,
+                QPointF(control->mapToGlobal(to.toPoint())), Qt::NoButton,
+                Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(control, &move);
+        }
+        QMouseEvent release(
+            QEvent::MouseButtonRelease, from,
+            QPointF(control->mapToGlobal(from.toPoint())), Qt::LeftButton,
+            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(control, &release);
+    };
+    const bool compactControls =
+        trackHeightSlider->size() == QSize(28, 24) &&
+        timelineZoomSlider->size() == QSize(28, 24);
+
+    const auto originalHeights = [&] {
+        std::vector<std::pair<std::string, double>> values;
+        for (const auto& track : m_controller.project().tracks)
+            values.emplace_back(track.id, track.height);
+        return values;
+    }();
+    const std::size_t heightUndoMark = m_controller.undoDepth();
+    const int heightBaseline = trackHeightSlider->value();
+    dragCompactControl(trackHeightSlider, QPointF(0.0, -6.0), 2);
+    const int heightTarget = trackHeightSlider->value();
+    const bool upwardDragExpanded =
+        heightBaseline == trackHeightSlider->maximum()
+            ? heightTarget == heightBaseline
+            : heightTarget > heightBaseline;
+    const bool heightThrowsAccumulated =
+        heightBaseline > trackHeightSlider->maximum() - 16 ||
+        heightTarget >= heightBaseline + 16;
+    bool allHeightsChanged = !m_controller.project().tracks.empty();
+    for (const auto& [trackId, storedHeight] : originalHeights) {
+        const auto* track = m_controller.project().findTrack(trackId);
+        const int expected = std::clamp(
+            int(std::lround(ui::laneHeightFor(storedHeight) *
+                            double(heightTarget) / std::max(1, heightBaseline))),
+            ui::kMinLaneHeight, ui::kMaxLaneHeight);
+        allHeightsChanged = allHeightsChanged && track &&
+                            ui::laneHeightFor(track->height) == expected;
+    }
+    const bool oneHeightUndo =
+        m_controller.undoDepth() ==
+        std::min(heightUndoMark + 1, m_controller.undoLimit());
+    if (oneHeightUndo) m_controller.undo();
+    for (const auto& [trackId, height] : originalHeights)
+        m_controller.setTrackHeight(trackId, height);
+    if (!originalHeights.empty())
+        m_toolPanel->setTrackHeightValue(
+            ui::laneHeightFor(originalHeights.front().second));
+    if (m_trackList) m_trackList->syncRowHeights();
+    m_timeline->update();
+
+    const double scaleBeforeSlider = m_timeline->pixelsPerSecondForTest();
+    const double scrollBeforeSlider = m_timeline->horizontalScrollForTest();
+    const double anchorX =
+        std::max(1, m_timeline->width() - 12) * 0.5;
+    const double centreBeforeSlider =
+        scrollBeforeSlider + anchorX / scaleBeforeSlider;
+    const QPoint cursorBeforeSlider = QCursor::pos();
+    const double positionBeforeSlider = m_controller.positionSeconds();
+    m_controller.seekSeconds(centreBeforeSlider);
+    QCursor::setPos(timelineZoomSlider->mapToGlobal(
+        timelineZoomSlider->rect().center()));
+    const int zoomBaseline = timelineZoomSlider->value();
+    dragCompactControl(timelineZoomSlider, QPointF(5.0, 0.0), 2);
+    const bool rightDragZoomedIn =
+        zoomBaseline == timelineZoomSlider->maximum()
+            ? timelineZoomSlider->value() == zoomBaseline
+            : timelineZoomSlider->value() > zoomBaseline;
+    const bool zoomThrowsAccumulated =
+        zoomBaseline > timelineZoomSlider->maximum() - 9 ||
+        timelineZoomSlider->value() >= zoomBaseline + 9;
+    const double centreAfterSlider =
+        m_timeline->horizontalScrollForTest() +
+        anchorX / m_timeline->pixelsPerSecondForTest();
+    const bool zoomCentredOnPlayhead =
+        std::abs(m_timeline->pixelsPerSecondForTest() - scaleBeforeSlider) > 0.1 &&
+        std::abs(centreAfterSlider - centreBeforeSlider) < 1.0e-6;
+    m_timeline->setHorizontalZoom(scaleBeforeSlider);
+    QCursor::setPos(cursorBeforeSlider);
+    m_controller.seekSeconds(positionBeforeSlider);
+    if (!compactControls || !upwardDragExpanded || !heightThrowsAccumulated ||
+        !allHeightsChanged || !oneHeightUndo || !rightDragZoomedIn ||
+        !zoomThrowsAccumulated || !zoomCentredOnPlayhead) {
+        std::fprintf(stderr,
+                     "compact timeline controls failed (size=%d up=%d "
+                     "height-repeat=%d height=%d undo=%d right=%d "
+                     "zoom-repeat=%d centre=%d)\n",
+                     int(compactControls), int(upwardDragExpanded),
+                     int(heightThrowsAccumulated), int(allHeightsChanged),
+                     int(oneHeightUndo), int(rightDragZoomedIn),
+                     int(zoomThrowsAccumulated), int(zoomCentredOnPlayhead));
         return false;
     }
 
@@ -6450,13 +6721,14 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
         const double before = field->value();
         clipWheel(field);
         clipWheel(field->findChild<QLineEdit*>(), QPoint(0, -12));
-        if (!inspectorCheck(field->value() == before && field->height() <= 24,
-                            "compact numeric field ignores both wheel types")) return false;
+        if (!inspectorCheck(field->value() == before && field->height() == 20,
+                            "thin numeric field ignores both wheel types")) return false;
     }
     for (auto* field : clipSection->findChildren<QComboBox*>()) {
         const int before = field->currentIndex();
         clipWheel(field);
-        if (!inspectorCheck(field->currentIndex() == before, "wheel preserves clip mode")) return false;
+        if (!inspectorCheck(field->currentIndex() == before && field->height() == 20,
+                            "thin mode field ignores the wheel")) return false;
     }
     clipScroll->verticalScrollBar()->setValue(0);
     clipWheel(pitchEdit);
@@ -6881,8 +7153,16 @@ bool MainWindow::checkSettingsViewportForTest() {
     QApplication::processEvents();   // runs the post-show native-frame clamp
 
     auto* tabs = m_settingsWindow->findChild<QTabWidget*>();
+    auto* startupTemplate = m_settingsWindow->findChild<QComboBox*>(
+        QStringLiteral("StartupProjectTemplate"));
+    const bool startupTemplateControl =
+        startupTemplate && startupTemplate->count() >= 1 &&
+        startupTemplate->itemData(0).toString().isEmpty() &&
+        !startupTemplate->accessibleName().isEmpty();
     bool scrollable = tabs && tabs->count() == SettingsWindow::kInterfaceTab + 1 &&
-                      m_settingsWindow->checkAudioPageForTest();
+                      m_settingsWindow->checkAudioPageForTest() &&
+                      SettingsWindow::checkWheelRoutingForTest() &&
+                      startupTemplateControl;
     if (tabs) {
         for (int i = 0; i < tabs->count(); ++i) {
             auto* scroll = qobject_cast<QScrollArea*>(tabs->widget(i));
@@ -6892,6 +7172,80 @@ bool MainWindow::checkSettingsViewportForTest() {
                              Qt::ScrollBarAlwaysOff;
         }
     }
+
+    // Exercise the exact input path used by the running workspace. With GPU
+    // rendering the physical event lands in QQuickWindow first; in
+    // compatibility mode it lands on the child control. Both mouse-wheel and
+    // precision trackpad deltas must scroll without changing the slider.
+    bool liveWheelRouting = false;
+    if (tabs && tabs->count() > SettingsWindow::kThemesTab) {
+        const int previousTab = tabs->currentIndex();
+        tabs->setCurrentIndex(SettingsWindow::kThemesTab);
+        QApplication::processEvents();
+        auto* themeScroll = qobject_cast<QScrollArea*>(
+            tabs->widget(SettingsWindow::kThemesTab));
+        QSlider* target = nullptr;
+        if (themeScroll && themeScroll->widget()) {
+            const auto sliders = themeScroll->widget()->findChildren<QSlider*>();
+            for (QSlider* candidate : sliders) {
+                if (candidate->isVisible()) {
+                    target = candidate;
+                    break;
+                }
+            }
+        }
+        if (themeScroll && target &&
+            themeScroll->verticalScrollBar()->maximum() > 0) {
+            themeScroll->ensureWidgetVisible(target, 0, 40);
+            QApplication::processEvents();
+            QScrollBar* bar = themeScroll->verticalScrollBar();
+            const int beforeWheel = bar->value();
+            const int direction = beforeWheel < bar->maximum() ? -1 : 1;
+            const int sliderValue = target->value();
+            const QPointF targetPoint(target->rect().center());
+            const QPointF global = target->mapToGlobal(targetPoint);
+            auto* surface = centralWidget()
+                ? centralWidget()->findChild<ui::graphics::WorkspaceSurface*>()
+                : nullptr;
+            const auto sendWheel = [&](QPoint pixels, QPoint angles) {
+                QObject* receiver = target;
+                QPointF local = targetPoint;
+                if (surface && surface->quickWindow()) {
+                    receiver = surface->quickWindow();
+                    local = surface->quickWindow()->mapFromGlobal(global);
+                }
+                QWheelEvent wheel(local, global, pixels, angles, Qt::NoButton,
+                                  Qt::NoModifier, Qt::ScrollUpdate, false);
+                QApplication::sendEvent(receiver, &wheel);
+            };
+            sendWheel({}, QPoint(0, direction * 120));
+            const int afterAngle = bar->value();
+            sendWheel(QPoint(0, direction * 24), {});
+            const int afterPixels = bar->value();
+            const auto movedInDirection = [direction](int from, int to) {
+                return direction < 0 ? to > from : to < from;
+            };
+            liveWheelRouting = movedInDirection(beforeWheel, afterAngle) &&
+                movedInDirection(afterAngle, afterPixels) &&
+                target->value() == sliderValue;
+            if (!liveWheelRouting) {
+                std::fprintf(stderr,
+                    "settings live wheel failed (gpu %d, max %d, angle %d, "
+                    "pixel %d, slider %d/%d, target %s)\n",
+                    int(surface != nullptr),
+                    bar->maximum(), afterAngle, afterPixels, target->value(),
+                    sliderValue, target->objectName().toUtf8().constData());
+            }
+        } else {
+            std::fprintf(stderr,
+                "settings live wheel setup failed (scroll %d, target %d, max %d)\n",
+                int(themeScroll != nullptr), int(target != nullptr),
+                themeScroll ? themeScroll->verticalScrollBar()->maximum() : -1);
+        }
+        tabs->setCurrentIndex(previousTab);
+        QApplication::processEvents();
+    }
+    scrollable = scrollable && liveWheelRouting;
 
     auto* cpuToggle = m_settingsWindow->findChild<QCheckBox*>(
         QStringLiteral("ShowCpuStatusBar"));
@@ -6910,6 +7264,29 @@ bool MainWindow::checkSettingsViewportForTest() {
             (statusBar()->isHidden() != original);
     }
     scrollable = scrollable && cpuStatusSynced;
+
+    auto* gpuToggle = m_settingsWindow->findChild<QCheckBox*>(
+        QStringLiteral("GpuWorkspaceEnabled"));
+    auto* gpuRestart = m_settingsWindow->findChild<QPushButton*>(
+        QStringLiteral("GpuRestartButton"));
+    const bool runningGpuMode = ui::graphics::gpuWorkspaceEnabled();
+    bool gpuRestartSynced = gpuToggle && gpuRestart &&
+        (gpuRestart->isHidden() ==
+         (gpuToggle->isChecked() == runningGpuMode));
+    if (gpuToggle && gpuRestart) {
+        const bool original = gpuToggle->isChecked();
+        gpuToggle->setChecked(!runningGpuMode);
+        QApplication::processEvents();
+        gpuRestartSynced = gpuRestartSynced && !gpuRestart->isHidden();
+        gpuToggle->setChecked(runningGpuMode);
+        QApplication::processEvents();
+        gpuRestartSynced = gpuRestartSynced && gpuRestart->isHidden();
+        gpuToggle->setChecked(original);
+        QApplication::processEvents();
+        gpuRestartSynced = gpuRestartSynced &&
+            (gpuRestart->isHidden() == (original == runningGpuMode));
+    }
+    scrollable = scrollable && gpuRestartSynced;
 
     InternalEditorFrame* frame =
         m_internalEditorFrames.value(m_settingsWindow, nullptr);
@@ -6933,7 +7310,7 @@ bool MainWindow::checkTempoScrubForTest() {
     auto* edit = m_transport->findChild<QLineEdit*>(QStringLiteral("TempoField"));
     if (!edit || !edit->isReadOnly()) return false;
 
-    const auto scrub = [edit](int verticalPixels) {
+    const auto scrub = [edit](int verticalPixels, int samples = 1) {
         const QPoint start = edit->rect().center();
         const QPoint finish = start + QPoint(0, verticalPixels);
         const QPoint globalStart = edit->mapToGlobal(start);
@@ -6942,18 +7319,20 @@ bool MainWindow::checkTempoScrubForTest() {
                           QPointF(globalStart), Qt::LeftButton,
                           Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(edit, &press);
-        QMouseEvent move(QEvent::MouseMove, QPointF(finish),
-                         QPointF(globalFinish), Qt::NoButton,
-                         Qt::LeftButton, Qt::NoModifier);
-        QApplication::sendEvent(edit, &move);
-        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(finish),
-                            QPointF(globalFinish), Qt::LeftButton,
+        for (int sample = 0; sample < samples; ++sample) {
+            QMouseEvent move(QEvent::MouseMove, QPointF(finish),
+                             QPointF(globalFinish), Qt::NoButton,
+                             Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(edit, &move);
+        }
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(start),
+                            QPointF(globalStart), Qt::LeftButton,
                             Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(edit, &release);
     };
 
     const double original = m_controller.tempo();
-    scrub(-24);   // upward movement raises the number
+    scrub(-12, 2);  // repeated upward throws keep raising the number
     const double raised = m_controller.tempo();
     scrub(48);    // downward movement lowers it again
     const double lowered = m_controller.tempo();
@@ -6974,13 +7353,19 @@ bool MainWindow::checkTempoScrubForTest() {
     const bool scrubbed = raised > original && lowered < raised &&
                           raised == std::round(raised) &&
                           lowered == std::round(lowered);
-    if (!scrubbed || !enteredTextMode || !leftTextMode) {
+    const bool repeatedThrowsAccumulated = original > 295.0 ||
+                                           raised >= original + 5.0;
+    if (!scrubbed || !repeatedThrowsAccumulated || !enteredTextMode ||
+        !leftTextMode) {
         std::fprintf(stderr,
-                     "tempo scrub failed (%.1f -> %.1f -> %.1f, text %d/%d)\n",
-                     original, raised, lowered, int(enteredTextMode),
+                     "tempo scrub failed (%.1f -> %.1f -> %.1f, repeat %d, "
+                     "text %d/%d)\n",
+                     original, raised, lowered,
+                     int(repeatedThrowsAccumulated), int(enteredTextMode),
                      int(leftTextMode));
     }
-    return scrubbed && enteredTextMode && leftTextMode;
+    return scrubbed && repeatedThrowsAccumulated && enteredTextMode &&
+           leftTextMode;
 }
 
 bool MainWindow::checkPositionScrubForTest() {
@@ -7261,6 +7646,19 @@ bool MainWindow::checkPianoRollForTest() {
 
     const bool gestures = m_pianoRoll->checkInteractionGesturesForTest();
     const bool compact = m_pianoRoll->checkCompactLayoutForTest();
+    // The gesture check opens and closes every native MIDI-tool dialog. Finish
+    // their activation events before restoring the editor's shared-strip focus.
+    if (auto* surface = findChild<ui::graphics::WorkspaceSurface*>()) {
+        auto* inputWindow = surface->quickWindow();
+        inputWindow->requestActivate();
+        QElapsedTimer activationReady; activationReady.start();
+        while (!inputWindow->isActive() && activationReady.elapsed() < 1000) {
+            QApplication::processEvents(QEventLoop::AllEvents, 10);
+            QThread::msleep(1);
+        }
+    }
+    QApplication::processEvents();
+    if (m_pianoRollFrame) m_pianoRollFrame->present();
     m_pianoRoll->selectAllNotesForTest();
     syncPianoRollContextPanel();
     QApplication::processEvents();
@@ -7802,9 +8200,7 @@ void MainWindow::sampleForRecovery() {
     // work — or the accompanying deep ProjectModel copy — on the playback or
     // record path. The stale flag remains set and the next idle one-second tick
     // catches up automatically after transport stops.
-    const bool transportActive = m_controller.isPlaying() ||
-                                 m_controller.isRecording() ||
-                                 m_controller.isCountingIn();
+    const bool transportActive = m_controller.isPlaying() || m_controller.isRecording() || m_controller.isCountingIn();
     if (!transportActive && !m_projectFileJob && QApplication::mouseButtons() == Qt::NoButton && !QWidget::mouseGrabber()) {
         // A native plugin can change preset/program data without reporting a
         // host parameter. Sample one state per idle tick, prioritising editors
@@ -7817,7 +8213,9 @@ void MainWindow::sampleForRecovery() {
             preferredPluginStates.push_back(stem);
             preferredPluginStates.push_back(stem + "-right");
         }
-        const bool pluginStateChanged =
+        // Cached document edits can still be journalled while monitoring.
+        // Only opaque plugin serialization must wait for all live audio tails.
+        const bool pluginStateChanged = !m_controller.liveAudioActivity() &&
             m_controller.refreshRecoveryPluginStates(1,
                                                        preferredPluginStates);
 
@@ -7988,8 +8386,6 @@ MainWindow::~MainWindow() {
     m_notebookWindow = nullptr;
     delete m_webPanel;
     m_webPanel = nullptr;
-    delete m_webVideoBackground;
-    m_webVideoBackground = nullptr;
     delete m_aiPanel;
     m_aiPanel = nullptr;
     const QList<PluginEditorWindow*> editors = m_pluginEditors.values();
@@ -8051,10 +8447,14 @@ void MainWindow::buildLayout() {
     // behind what it had already decided.
     m_contextPanel->setAnchorProvider(
         [this](int& centreX) { return contextPanelAnchor(centreX); });
+    m_contextPanel->setHomeAnchorProvider(
+        [this](int& centreX) { return contextPanelHomeAnchor(centreX); });
     m_contextPanel->setBoundsProvider([this](int& left, int& right) {
         return contextPanelBounds(left, right);
     });
     connect(m_toolPanel, &ToolPanel::resized, this,
+            &MainWindow::layoutContextPanel);
+    connect(m_transport, &TransportBar::readoutGeometryChanged, this,
             &MainWindow::layoutContextPanel);
 
     // ── Main row: browser | inspector | (arrangement over mixer) ──
@@ -8067,7 +8467,7 @@ void MainWindow::buildLayout() {
     // trigger a one-off backing-view rebuild and remain visually present but
     // outside Qt's hit-test hierarchy; later plugin windows then appear fine.
     const QString platform = QGuiApplication::platformName();
-    if (platform != QLatin1String("offscreen") &&
+    if (!ui::graphics::gpuWorkspaceEnabled() && platform != QLatin1String("offscreen") &&
         platform != QLatin1String("minimal")) {
         workspace->setAttribute(Qt::WA_NativeWindow);
     }
@@ -8178,7 +8578,7 @@ void MainWindow::buildLayout() {
     // parent before the shell is shown, or its first lazy construction rebuilds
     // the backing hierarchy and leaves the workspace visually displaced until
     // another panel change forces a relayout.
-    if (platform != QLatin1String("offscreen") &&
+    if (!ui::graphics::gpuWorkspaceEnabled() && platform != QLatin1String("offscreen") &&
         platform != QLatin1String("minimal")) {
         m_webContainer->setAttribute(Qt::WA_NativeWindow);
     }
@@ -8206,7 +8606,7 @@ void MainWindow::buildLayout() {
     m_notebookWidth = std::clamp(QSettings().value("notebook/panelWidth", 440).toInt(), 320, 800);
     m_notebookContainer = new QWidget(central);
     m_notebookContainer->setObjectName(QStringLiteral("NotebookContainer"));
-    if (platform != QLatin1String("offscreen") && platform != QLatin1String("minimal"))
+    if (!ui::graphics::gpuWorkspaceEnabled() && platform != QLatin1String("offscreen") && platform != QLatin1String("minimal"))
         m_notebookContainer->setAttribute(Qt::WA_NativeWindow);
     m_notebookContainer->setFixedWidth(m_notebookWidth);
     auto* notebookLayout = new QVBoxLayout(m_notebookContainer);
@@ -8241,43 +8641,6 @@ void MainWindow::buildLayout() {
     if (m_toolPanel)
         m_trackList->setRulerActions(m_toolPanel->takeTrackActions());
     m_timeline = new TimelineWidget(&m_controller, m_arrangementHost);
-    const bool zoomFocus =
-        QSettings().value(QLatin1String(ui::kZoomFocusSetting), false).toBool();
-    m_timeline->setZoomFocusEnabled(zoomFocus);
-    m_toolPanel->setZoomFocusEnabled(zoomFocus);
-    connect(m_toolPanel, &ToolPanel::zoomFocusToggled, this, [this](bool on) {
-        m_timeline->setZoomFocusEnabled(on);
-        QSettings().setValue(QLatin1String(ui::kZoomFocusSetting), on);
-    });
-    m_webVideoBackground = new ui::WebVideoBackground(this);
-    connect(m_webVideoBackground, &ui::WebVideoBackground::frameReady,
-            m_timeline, &TimelineWidget::setWebBackgroundFrame);
-    connect(m_webVideoBackground, &ui::WebVideoBackground::cleared,
-            m_timeline, &TimelineWidget::clearWebBackground);
-    connect(m_webVideoBackground, &ui::WebVideoBackground::cleared, this, [this] {
-        if (m_settingsWindow) m_settingsWindow->refreshTimelineBackgroundSource();
-    });
-    connect(m_timeline, &TimelineWidget::backgroundPlaybackChanged,
-            m_webVideoBackground, &ui::WebVideoBackground::setPlaying);
-    connect(m_webVideoBackground, &ui::WebVideoBackground::sourceCommitted,
-            this, [this](const ui::WebVideoSource& source) {
-                ui::pauseWebVideo(source);
-                m_timeline->reloadBackgroundSettings();
-                if (m_settingsWindow) m_settingsWindow->refreshTimelineBackgroundSource();
-            });
-    connect(m_webVideoBackground, &ui::WebVideoBackground::stateChanged, this, [this] {
-        if (m_webPanel) m_webPanel->setBackgroundState(
-            m_webVideoBackground->active(), m_webVideoBackground->loading(),
-            m_webVideoBackground->muted(), m_webVideoBackground->sourceUrl());
-    });
-    connect(m_webVideoBackground, &ui::WebVideoBackground::error, this, [this](const QString& message) {
-        statusBar()->showMessage(message, 10000);
-        if (m_webPanel) m_webPanel->showBackgroundError(message);
-    });
-    QTimer::singleShot(0, m_webVideoBackground, [this] {
-        m_webVideoBackground->setPlaying(m_timeline->backgroundPlaying());
-        m_webVideoBackground->restore();
-    });
     m_trackHeaderWidth = std::max(
         ui::kMinTrackHeaderWidth,
         QSettings().value(ui::kTrackHeaderWidthSetting,
@@ -8368,6 +8731,8 @@ void MainWindow::buildLayout() {
     shell->addWidget(m_aiPanel);
 
     setCentralWidget(central);
+    installGpuSurface(central);
+
     // Start with the keyboard on the window itself rather than in whatever
     // field happens to be first in the tab chain, so Space plays straight away.
     central->setFocusPolicy(Qt::StrongFocus);
@@ -8452,6 +8817,95 @@ void MainWindow::buildLayout() {
             });
     connect(m_toolPanel, &ToolPanel::waveformScaleChanged, m_timeline,
             &TimelineWidget::setWaveformScale);
+    connect(m_toolPanel, &ToolPanel::timelineZoomChanged, m_timeline,
+            &TimelineWidget::setHorizontalZoom);
+    connect(m_timeline, &TimelineWidget::horizontalZoomChanged, m_toolPanel,
+            &ToolPanel::setTimelineZoom);
+
+    struct TrackHeightSliderEdit {
+        std::vector<std::pair<std::string, double>> before;
+        int baseline = ui::kLaneHeight;
+        bool active = false;
+        bool changed = false;
+    };
+    const auto trackHeightEdit = std::make_shared<TrackHeightSliderEdit>();
+    connect(m_toolPanel, &ToolPanel::trackHeightEditStarted, this,
+            [this, trackHeightEdit] {
+                if (trackHeightEdit->active) return;
+                trackHeightEdit->before.clear();
+                trackHeightEdit->before.reserve(
+                    m_controller.project().tracks.size());
+                for (const auto& track : m_controller.project().tracks)
+                    trackHeightEdit->before.emplace_back(track.id, track.height);
+                std::vector<int> heights;
+                heights.reserve(trackHeightEdit->before.size());
+                for (const auto& [id, storedHeight] : trackHeightEdit->before) {
+                    (void)id;
+                    heights.push_back(ui::laneHeightFor(storedHeight));
+                }
+                if (!heights.empty()) {
+                    const auto middle = heights.begin() + heights.size() / 2;
+                    std::nth_element(heights.begin(), middle, heights.end());
+                    trackHeightEdit->baseline = *middle;
+                }
+                trackHeightEdit->active = true;
+                trackHeightEdit->changed = false;
+            });
+    connect(m_toolPanel, &ToolPanel::trackHeightChanged, this,
+            [this, trackHeightEdit](int height) {
+                if (!trackHeightEdit->active) return;
+                const int clamped = std::clamp(height, ui::kMinLaneHeight,
+                                               ui::kMaxLaneHeight);
+                const double factor = double(clamped) /
+                                      std::max(1, trackHeightEdit->baseline);
+                bool sampleChanged = false;
+                for (const auto& [trackId, storedHeight] :
+                     trackHeightEdit->before) {
+                    const int next = std::clamp(
+                        int(std::lround(ui::laneHeightFor(storedHeight) * factor)),
+                        ui::kMinLaneHeight, ui::kMaxLaneHeight);
+                    const auto* track =
+                        m_controller.project().findTrack(trackId);
+                    if (!track || ui::laneHeightFor(track->height) == next)
+                        continue;
+                    m_controller.setTrackHeight(trackId, double(next));
+                    sampleChanged = true;
+                }
+                if (!sampleChanged) return;
+                trackHeightEdit->changed = true;
+                // Both columns read the same document heights. Refresh them in
+                // this input frame so the lane edge never runs ahead of its
+                // header while the slider is moving.
+                if (m_trackList) m_trackList->syncRowHeights();
+                if (m_timeline) {
+                    m_timeline->clampVerticalScroll();
+                    m_timeline->update();
+                }
+            });
+    connect(m_toolPanel, &ToolPanel::trackHeightEditFinished, this,
+            [this, trackHeightEdit] {
+                if (!trackHeightEdit->active) return;
+                bool finalChanged = false;
+                if (trackHeightEdit->changed) {
+                    for (const auto& [trackId, storedHeight] :
+                         trackHeightEdit->before) {
+                        const auto* track =
+                            m_controller.project().findTrack(trackId);
+                        if (track && std::abs(track->height - storedHeight) >
+                                         1.0e-9) {
+                            finalChanged = true;
+                            break;
+                        }
+                    }
+                }
+                if (finalChanged) {
+                    m_controller.commitTrackHeightEdit(trackHeightEdit->before);
+                    markDirty();
+                }
+                trackHeightEdit->before.clear();
+                trackHeightEdit->active = false;
+                trackHeightEdit->changed = false;
+            });
     connect(m_toolPanel, &ToolPanel::createTracksRequested, this,
             [this] {
                 CreateTracksDialog dialog(m_controller, this);
@@ -8626,6 +9080,17 @@ void MainWindow::buildLayout() {
         // same origin before either column paints this frame.
         m_timeline->clampVerticalScroll();
         m_timeline->update();
+        if (m_toolPanel) {
+            std::vector<int> heights;
+            heights.reserve(m_controller.project().tracks.size());
+            for (const auto& track : m_controller.project().tracks)
+                heights.push_back(ui::laneHeightFor(track.height));
+            if (!heights.empty()) {
+                const auto middle = heights.begin() + heights.size() / 2;
+                std::nth_element(heights.begin(), middle, heights.end());
+                m_toolPanel->setTrackHeightValue(*middle);
+            }
+        }
         markDirty();
     });
     connect(m_trackList, &TrackListWidget::openPatternRequested, this,
@@ -9030,6 +9495,7 @@ void MainWindow::syncViews() {
     }
     if (m_timeline) {
         m_timeline->setSelectedTrack(m_selectedTrackId);
+        m_timeline->reloadTimedTextSettings();
         m_timeline->update();
     }
     if (m_inspector) {
@@ -9042,6 +9508,7 @@ void MainWindow::syncViews() {
     // so this one line is what keeps an open piano roll honest — including
     // showing its empty state when the clip it was editing has gone.
     if (m_pianoRoll) m_pianoRoll->refresh();
+    if (m_notebookWindow) m_notebookWindow->syncFromProject();
     for (SampleEditorWindow* editor : m_sampleEditors) {
         if (editor) editor->refresh();
     }
@@ -9139,6 +9606,17 @@ void MainWindow::syncStructureViews() {
             m_trackList ? m_trackList->selectedTrackIds() : QStringList{});
         m_timeline->clampVerticalScroll();
         m_timeline->update();
+    }
+    if (m_toolPanel) {
+        std::vector<int> heights;
+        heights.reserve(m_controller.project().tracks.size());
+        for (const auto& track : m_controller.project().tracks)
+            heights.push_back(ui::laneHeightFor(track.height));
+        if (!heights.empty()) {
+            const auto middle = heights.begin() + heights.size() / 2;
+            std::nth_element(heights.begin(), middle, heights.end());
+            m_toolPanel->setTrackHeightValue(*middle);
+        }
     }
     m_selection.refresh();
     syncAutomationVisibilityButton();
@@ -9255,15 +9733,7 @@ void MainWindow::setBrowserVisible(bool visible) {
 
 void MainWindow::ensureWebBrowser() {
     if (m_webPanel || !m_webContainer) return;
-    m_webPanel = new WebBrowserPanel(m_webContainer, m_webVideoBackground->browserProfile());
-    connect(m_webPanel, &WebBrowserPanel::videoBackgroundRequested,
-            m_webVideoBackground, &ui::WebVideoBackground::request);
-    connect(m_webPanel, &WebBrowserPanel::videoBackgroundMuteRequested,
-            m_webVideoBackground, &ui::WebVideoBackground::setMuted);
-    connect(m_webPanel, &WebBrowserPanel::videoBackgroundClearRequested,
-            m_webVideoBackground, &ui::WebVideoBackground::clear);
-    m_webPanel->setBackgroundState(m_webVideoBackground->active(), m_webVideoBackground->loading(),
-        m_webVideoBackground->muted(), m_webVideoBackground->sourceUrl());
+    m_webPanel = new WebBrowserPanel(m_webContainer);
     m_webContainer->layout()->addWidget(m_webPanel);
     connect(m_webPanel, &WebBrowserPanel::statusMessage, this,
             [this](const QString& text) { statusBar()->showMessage(text, 4000); });
@@ -9308,6 +9778,9 @@ void MainWindow::ensureNotebook() {
             [this] {
                 if (m_timeline) m_timeline->reloadTimedTextSettings();
             });
+    connect(m_notebookWindow, &NotebookWindow::projectContentChanged,
+            this, [this] { markDirty(); });
+    if (m_notebookWindow->importedLegacyContent()) markDirty();
     if (QSettings().value("notebook/detached", false).toBool())
         setNotebookDetached(true);
 }
@@ -9344,6 +9817,7 @@ void MainWindow::setNotebookDetached(bool detached) {
             m_notebookDetachedWindow->setWindowTitle(tr("Notebook"));
             m_notebookDetachedWindow->resize(640, 760);
             m_notebookDetachedWindow->setMinimumSize(340, 540);
+            installGpuSurface(m_notebookDetachedWindow);
             auto* layout = new QVBoxLayout(m_notebookDetachedWindow);
             layout->setContentsMargins(0, 0, 0, 0);
             layout->setSpacing(0);
@@ -9576,7 +10050,7 @@ bool MainWindow::contextPanelAnchor(int& centreX) const {
 
     // Only a clip selection has a horizontal extent. A whole track spans the
     // window and the recording options belong to no clip at all, so both leave
-    // the plate where it has always been — in the middle.
+    // the plate at its stable home under the transport readout.
     int left = 0, right = 0;
     if (!m_timeline->selectionSpanX(left, right)) return false;
 
@@ -9585,6 +10059,14 @@ bool MainWindow::contextPanelAnchor(int& centreX) const {
     const QPoint global =
         m_timeline->mapToGlobal(QPoint((left + right) / 2, 0));
     centreX = m_toolPanel->mapFromGlobal(global).x();
+    return true;
+}
+
+bool MainWindow::contextPanelHomeAnchor(int& centreX) const {
+    if (!m_transport || !m_toolPanel) return false;
+    centreX = m_toolPanel
+                  ->mapFromGlobal(m_transport->readoutCenterGlobal())
+                  .x();
     return true;
 }
 
@@ -10363,6 +10845,7 @@ void MainWindow::openPluginManager(int tab) {
         // The browser lists the scanned plugins too; a rescan has to reach it.
         connect(m_pluginManagerWindow, &PluginManagerWindow::pluginsChanged,
                 this, [this] {
+                    ui::preparePluginPickerMenus(&m_controller);
                     if (m_browser) m_browser->reloadPlugins();
                 });
         hostInternalWindow(m_pluginManagerWindow,
@@ -10374,6 +10857,7 @@ void MainWindow::openPluginManager(int tab) {
 
 void MainWindow::applyStartupPluginScanResults() {
     m_controller.pluginManager().takeScanFinished();
+    ui::preparePluginPickerMenus(&m_controller);
     if (m_browser) m_browser->reloadPlugins();
 }
 
@@ -10731,10 +11215,13 @@ bool MainWindow::probePluginEditorSwap(const QString& firstName,
         QString::fromStdString(m_controller.project().tracks.front().id);
 
     auto settle = [] {
-        // Long enough for the refresh tick — the orphan sweep lives there — to
-        // run several times.
-        for (int i = 0; i < 40; ++i)
-            QApplication::processEvents(QEventLoop::AllEvents, 10);
+        // processEvents() returns as soon as the queue is empty, so a tight
+        // loop can finish before the editor's 80 ms settle timer ever becomes
+        // due. Keep a real event loop alive long enough for native mapping,
+        // attachment, close/deleteLater and the orphan sweep.
+        QEventLoop loop;
+        QTimer::singleShot(500, &loop, &QEventLoop::quit);
+        loop.exec();
     };
     auto describe = [this](const QString& channel, const QString& slot,
                            const char* stage) {
@@ -11438,6 +11925,10 @@ bool MainWindow::checkFileDrop(const QStringList& paths, int expectedClips) {
     return int(countClips() - before) == expectedClips;
 }
 
+bool MainWindow::checkAudioAnalysisDialogForTest() {
+    return checkAudioAnalysisResultDialogForTest(this);
+}
+
 bool MainWindow::openDemoBrowser(const QString& folder, const QString& selectFile) {
     if (!m_browser) return false;
     setBrowserVisible(true);
@@ -11450,7 +11941,8 @@ bool MainWindow::openDemoBrowserPlugins() {
     return m_browser->showPluginsForTest();
 }
 
-bool MainWindow::checkBrowser(const QString& folder, const QString& audioFile) {
+bool MainWindow::checkBrowser(const QString& folder, const QString& audioFile,
+                              const QString& midiFile) {
     constexpr qint64 kDecodeTimeoutMs = 15'000;
     const auto fail = [](const char* reason) {
         std::fprintf(stderr, "browser self-test: %s\n", reason);
@@ -11481,6 +11973,8 @@ bool MainWindow::checkBrowser(const QString& folder, const QString& audioFile) {
         return fail("decoded preview has no duration");
     if (!m_browser->hasPreviewWaveformForTest())
         return fail("decoded preview has no waveform");
+    if (!m_browser->previewVisibleForTest())
+        return fail("audio preview area stayed hidden");
 
     m_controller.stopPreview();
 
@@ -11506,6 +12000,27 @@ bool MainWindow::checkBrowser(const QString& folder, const QString& audioFile) {
         if (!drew) return fail("waveform did not redraw with auto-preview off");
         if (!silent) return fail("auto-preview off still started playback");
     }
+
+    // MIDI selections use the same lower preview area but render their notes,
+    // and parsing must arrive through the worker without blocking selection.
+    if (!m_browser->showFolderForTest(folder, midiFile, /*persist=*/false))
+        return fail("MIDI file was not found in the browser tree");
+    decodeTimeout.restart();
+    while (!m_browser->hasMidiPreviewForTest() &&
+           decodeTimeout.elapsed() < kDecodeTimeoutMs) {
+        QApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
+    if (!m_browser->hasMidiPreviewForTest())
+        return fail("MIDI selection did not draw its notes");
+    if (!m_browser->previewVisibleForTest())
+        return fail("MIDI preview area stayed hidden");
+    if (!m_browser->clearFileSelectionForTest())
+        return fail("preview area remained after file selection was cleared");
+
+    // Put the audio row back before checking its real drag payload below.
+    if (!m_browser->showFolderForTest(folder, audioFile, /*persist=*/false))
+        return fail("audio file could not be reselected after MIDI preview");
 
     // What a drag out of the browser would carry, fed straight into the
     // arrangement's real drop handler: this is the whole chain the user's
@@ -11973,6 +12488,11 @@ bool MainWindow::checkPluginAutoOpenForTest() {
 
     instrumentMenu->popup(QPoint(0, 0));
     QApplication::processEvents();
+    if (auto* search = instrumentMenu->findChild<QLineEdit*>(
+            QStringLiteral("PluginPickerSearch"))) {
+        search->setText(QStringLiteral("Sampler"));
+        QApplication::processEvents();
+    }
     QAction* pick = findSampler(instrumentMenu);
     if (!pick) {
         std::fprintf(stderr, "plugin auto-open: sampler action missing\n");
@@ -12064,10 +12584,28 @@ bool MainWindow::checkPluginSearchFocusForTest() {
         delete menu;
         return false;
     }
+    QHash<QAction*, QList<QKeySequence>> shortcutsBeforePopup;
+    for (const auto& command : m_shortcuts->commands()) {
+        if (command.action)
+            shortcutsBeforePopup.insert(command.action,
+                                        command.action->shortcuts());
+    }
 
     menu->popup(mapToGlobal(QPoint(16, 16)));
     QApplication::processEvents();
     const bool focusedOnOpen = edit->hasFocus();
+    bool bareApplicationShortcutsSuppressed = true;
+    for (const auto& command : m_shortcuts->commands()) {
+        if (!command.action) continue;
+        for (const QKeySequence& sequence : command.action->shortcuts()) {
+            if (sequence.count() == 1 &&
+                sequence[0].keyboardModifiers() == Qt::NoModifier) {
+                bareApplicationShortcutsSuppressed = false;
+                break;
+            }
+        }
+        if (!bareApplicationShortcutsSuppressed) break;
+    }
 
     QMenu* submenu = nullptr;
     for (QAction* action : menu->actions()) {
@@ -12126,7 +12664,17 @@ bool MainWindow::checkPluginSearchFocusForTest() {
                                         edit->text() == QStringLiteral("и");
     menu->close();
     delete menu;
-    return focusedOnOpen && routed && shortcutStayedInSearch &&
+    QApplication::processEvents();
+    bool shortcutsRestored = true;
+    for (auto it = shortcutsBeforePopup.cbegin();
+         it != shortcutsBeforePopup.cend(); ++it) {
+        if (it.key()->shortcuts() != it.value()) {
+            shortcutsRestored = false;
+            break;
+        }
+    }
+    return focusedOnOpen && bareApplicationShortcutsSuppressed && routed &&
+           shortcutStayedInSearch && shortcutsRestored &&
            singleScrollableColumns;
 }
 
@@ -12178,7 +12726,6 @@ void MainWindow::openSettings(int tab) {
         connect(m_settingsWindow,
                 &SettingsWindow::themeBackgroundSettingsChanged, this,
                 [this] {
-                    if (m_webVideoBackground) m_webVideoBackground->reloadSettings();
                     if (m_timeline) m_timeline->reloadBackgroundSettings();
                     if (m_transport) m_transport->reloadBackgroundSettings();
                 });
@@ -12365,6 +12912,10 @@ void MainWindow::openPianoRoll(const QString& trackId, const QString& clipId) {
             m_noteContextPanel->setBoundsProvider([this](int& left, int& right) {
                 return contextPanelBounds(left, right);
             });
+            m_noteContextPanel->setHomeAnchorProvider(
+                [this](int& centreX) {
+                    return contextPanelHomeAnchor(centreX);
+                });
             m_pianoRollFrame->setAccessoryWidget(m_noteContextPanel);
             m_noteContextPanel->setPanelEnabled(
                 m_contextPanel && m_contextPanel->isPanelEnabled());
@@ -12853,6 +13404,40 @@ bool MainWindow::routeEditChord(EditChord chord) {
     return true;
 }
 
+void MainWindow::installGpuSurface(QWidget* source) {
+    ui::graphics::GraphicsPreferences::instance().watchCompatibilityWindow(source,
+        [this, source](ui::graphics::FrameStats& frame) {
+            for (const auto xruns : m_controller.audioXruns()) frame.audioXruns += xruns;
+            frame.frameBudgetMs = ui::FrameClock::instance().periodSeconds(source) * 1000.;
+        });
+    if (!source || !ui::graphics::gpuWorkspaceEnabled() ||
+        source->property("vlt.gpuSurfaceActive").toBool()) return;
+    auto* surface = new ui::graphics::WorkspaceSurface(source);
+    surface->setProjectRevisionProvider([this] { return m_controller.projectRevision(); });
+    connect(&ui::FrameClock::instance(), &ui::FrameClock::preferenceChanged,
+            surface, &ui::graphics::WorkspaceSurface::refreshPresentationMode);
+    connect(&ThemeManager::instance(), &ThemeManager::changed,
+            surface, &ui::graphics::WorkspaceSurface::invalidate);
+    surface->setFrameContextProvider([this, source](ui::graphics::FrameStats& frame) {
+        for (const auto xruns : m_controller.audioXruns()) frame.audioXruns += xruns;
+        frame.frameBudgetMs = ui::FrameClock::instance().periodSeconds(source) * 1000.;
+    });
+    connect(surface, &ui::graphics::WorkspaceSurface::frameMeasured, this,
+            [](double preparation, double synchronization, double render, double submission, double renderThreadCpu) {
+        ui::perf::sample("gpu.scene.prepare.ms", preparation);
+        ui::perf::sample("gpu.scene.sync.ms", synchronization);
+        ui::perf::sample("gpu.scene.render.cpu.ms", render);
+        if (submission > 0) ui::perf::sample("gpu.scene.submission.interval.ms", submission);
+        if (renderThreadCpu >= 0) ui::perf::sample("gpu.scene.render.thread.cpu.ms", renderThreadCpu);
+    });
+    connect(surface, &ui::graphics::WorkspaceSurface::failed, this,
+            [this, source, guard = QPointer<ui::graphics::WorkspaceSurface>(surface)](const QString& reason) {
+        // Defer teardown until recording/event delivery has unwound.
+        if (guard) guard->deleteLater();
+        statusBar()->showMessage(tr("GPU workspace unavailable: %1. Using compatibility rendering.").arg(reason), 10000);
+    }, Qt::QueuedConnection);
+}
+
 InternalEditorFrame* MainWindow::hostInternalWindow(
     QWidget* content, const QString& settingsKey) {
     if (!content || !m_editorHost) return nullptr;
@@ -12860,6 +13445,16 @@ InternalEditorFrame* MainWindow::hostInternalWindow(
         return existing;
 
     auto* frame = new InternalEditorFrame(settingsKey, m_editorHost);
+    if (ui::graphics::gpuWorkspaceEnabled()) {
+        auto* pluginEditor = qobject_cast<PluginEditorWindow*>(content);
+        if (pluginEditor && pluginEditor->requiresNativeSurface()) {
+            // A vendor NSView/HWND has to live above the Quick scene. Keep
+            // exactly this editor frame native; allowing Qt to promote its
+            // ancestors turns the complete workspace into native siblings and
+            // permanently breaks the Quick container's stacking after close.
+            frame->prepareForNativeSurface();
+        }
+    }
     frame->setWorkspaceArea(m_editorBody);
     frame->setContent(content);
     m_internalEditorFrames.insert(content, frame);
@@ -12884,7 +13479,10 @@ InternalEditorFrame* MainWindow::hostInternalWindow(
 void MainWindow::presentInternalWindow(QWidget* content) {
     if (!content) return;
     InternalEditorFrame* frame = m_internalEditorFrames.value(content, nullptr);
-    if (!frame) return;
+    if (!frame) {
+        if (content->property("dawAuxiliaryWindow").toBool()) presentAuxiliaryWindow(content);
+        return;
+    }
     content->show();
     frame->present();
 }
@@ -13425,7 +14023,7 @@ void MainWindow::stopCloudRecordingNow(bool interactiveError) {
         capture.channels = track.channels;
         capture.frames = track.frames;
         capture.status = daw::recovery::classifyCloudRecordingCaptureStatus(
-            track.fileWriteSucceeded, track.capturedFrames,
+            track.fileWriteSucceeded && !track.interrupted && track.inputXruns == 0, track.capturedFrames,
             track.writtenFrames, track.droppedFrames,
             track.audioReadable, track.frames);
         capture.semantics.mode =
@@ -13604,6 +14202,9 @@ void MainWindow::stopRecordingNow() {
     // Copied, not referenced: stopRecording() clears the controller's list.
     const std::vector<std::string> tracks = m_controller.recordingTracks();
     m_controller.stopRecording();
+    const auto warning = QString::fromStdString(m_controller.recordingWarning());
+    if (!warning.isEmpty()) QMessageBox::warning(this, tr("Recording interrupted"),
+        tr("This take contains missing audio or an incomplete file. Available audio has been retained at the paths below. Check it before continuing.\n\n%1").arg(warning));
     syncPlayheadTimer();
     // Record stays engaged: landing a take is not a decision to stop recording,
     // and the next one usually follows straight after with the same settings.
@@ -13995,16 +14596,21 @@ void MainWindow::onDuplicateSelectedTrack() {
     if (!track) return;
 
     std::string copy;
+    const bool withClips = ui::duplicateTrackClips();
     if (track->kind == daw::TrackKind::Pattern) {
-        copy = m_controller.duplicatePattern(trackId.toStdString());
-    } else if (!daw::isFolder(*track)) {
+        copy = m_controller.duplicatePattern(trackId.toStdString(), withClips);
+    } else {
         copy = m_controller.duplicateTrack(trackId.toStdString(),
-                                           /*withInserts=*/true);
+                                           /*withInserts=*/true, withClips);
     }
     if (copy.empty()) return;
 
     const QString copyId = QString::fromStdString(copy);
     syncViews();
+    // The freshly created root is the new editing context. Updating the list's
+    // selection as well as MainWindow's primary id keeps the visual highlight,
+    // the inspector and the next rapid Cmd+D on the same track.
+    if (m_trackList) m_trackList->setSelectedTrack(copyId);
     selectTrackFromHeader(copyId);
     markDirty();
 }
@@ -14622,20 +15228,6 @@ void MainWindow::openWebBrowserForShot() {
     if (m_webPanel) {
         const QString url = qEnvironmentVariable("DAW_SHOT_WEB_URL").trimmed();
         if (!url.isEmpty()) m_webPanel->openUrlForTest(url);
-        if (qEnvironmentVariableIsSet("DAW_SHOT_WEB_BACKGROUND")) {
-            // Drive the same footer action as the user, after dynamic video
-            // discovery enables it. Screenshot settings are isolated by main.
-            auto* poll = new QTimer(m_webPanel);
-            poll->setInterval(100);
-            connect(poll, &QTimer::timeout, m_webPanel, [this, poll] {
-                auto* button = m_webPanel->findChild<ui::IconButton*>(
-                    QStringLiteral("WebVideoBackgroundButton"));
-                if (!button || !button->isEnabled()) return;
-                poll->stop(); poll->deleteLater();
-                button->click();
-            });
-            poll->start();
-        }
     }
 }
 
@@ -15055,19 +15647,27 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
     const int collapsedDockWidth = leftDock ? leftDock->width() : 0;
     const bool drawerInitiallyCompact = dockBrowser && !dockBrowser->isVisible();
     if (dockReveal) dockReveal->click();
-    QElapsedTimer drawerTimer;
-    drawerTimer.start();
-    while (drawerTimer.elapsed() < 220)
-        QApplication::processEvents(QEventLoop::AllEvents, 5);
+    const auto waitForDrawer = [&] {
+        QElapsedTimer timeout; timeout.start();
+        // Wait for the observable final state, not a sleep barely longer than
+        // the animation. Busy CI/build hosts can defer the final timer event.
+        while (timeout.elapsed() < 1500) {
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+            QThread::msleep(1);
+            if (!leftDock) break;
+            const auto animations = leftDock->findChildren<QAbstractAnimation*>();
+            if (std::none_of(animations.cbegin(), animations.cend(),
+                            [](QAbstractAnimation* a) { return a->state() == QAbstractAnimation::Running; })) break;
+        }
+    };
+    waitForDrawer();
     const bool drawerExpanded = leftDock && dockBrowser &&
         leftDock->width() > collapsedDockWidth && dockBrowser->isVisible();
     const bool expandedClusterCentered = transportPill &&
         std::abs(transportPill->mapTo(m_transport, QPoint()).x() * 2 +
                      transportPill->width() - m_transport->width()) <= 2;
     if (dockReveal) dockReveal->click();
-    drawerTimer.restart();
-    while (drawerTimer.elapsed() < 220)
-        QApplication::processEvents(QEventLoop::AllEvents, 5);
+    waitForDrawer();
     const bool drawerCollapsedAgain = leftDock && dockBrowser &&
         leftDock->width() == collapsedDockWidth && !dockBrowser->isVisible();
     const auto headerButtons = m_transport->findChildren<QAbstractButton*>();
@@ -15165,9 +15765,31 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
         std::fprintf(stderr, "web self-test: address field missing\n");
         return false;
     }
+    raise();
     activateWindow();
+    // Activate the actual input window before assigning QWidget focus. The
+    // raster shell may still be inactive after native dialogs and hide/show;
+    // setting child focus alone does not activate its embedded Quick window.
+    QWindow* inputWindow = windowHandle();
+    if (auto* surface = findChild<ui::graphics::WorkspaceSurface*>())
+        inputWindow = surface->quickWindow();
+    if (inputWindow) inputWindow->requestActivate();
+    QElapsedTimer activationReady; activationReady.start();
+    while (inputWindow && !inputWindow->isActive() && activationReady.elapsed() < 1000) {
+        QApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
     address->setFocus(Qt::OtherFocusReason);
-    QApplication::processEvents(QEventLoop::AllEvents, 10);
+    QElapsedTimer focusReady; focusReady.start();
+    while (QApplication::focusWidget() != address && focusReady.elapsed() < 1000) {
+        QApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
+    if (QApplication::focusWidget() != address) {
+        std::fprintf(stderr, "web self-test: address focus was not established (active=%d visible=%d)\n",
+                     inputWindow && inputWindow->isActive(), address->isVisible());
+        return false;
+    }
     const std::size_t focusUndo = m_controller.undoDepth();
     onUndo();
     if (m_controller.undoDepth() != focusUndo) {
@@ -15682,63 +16304,10 @@ void MainWindow::onNewProject() {
 }
 
 QString MainWindow::chooseProjectTemplate() {
-    QDialog dialog(this);
-    dialog.setWindowTitle(tr("New Project from Template"));
-    dialog.setModal(true);
-    dialog.resize(460, 360);
-
-    auto* layout = new QVBoxLayout(&dialog);
-    layout->setContentsMargins(16, 16, 16, 16);
-    layout->setSpacing(12);
-
-    auto* instructions = new QLabel(
-        tr("Choose a saved template. The new project will be independent of "
-           "the template file."),
-        &dialog);
-    instructions->setWordWrap(true);
-    layout->addWidget(instructions);
-
-    auto* list = new QListWidget(&dialog);
-    list->setAccessibleName(tr("Project templates"));
-    list->setSelectionMode(QAbstractItemView::SingleSelection);
-    for (const QString& path : ui::projecttemplates::files()) {
-        auto* item = new QListWidgetItem(
-            icons::icon(icons::Glyph::Layers, th().textSecondary, 16),
-            ui::projecttemplates::displayName(path), list);
-        item->setData(Qt::UserRole, path);
-        item->setToolTip(path);
-    }
-    layout->addWidget(list, 1);
-
-    auto* empty = new QLabel(
-        tr("No templates have been saved yet. Use File → Save as Template… "
-           "to create one."),
-        &dialog);
-    empty->setWordWrap(true);
-    empty->setAlignment(Qt::AlignCenter);
-    empty->setVisible(list->count() == 0);
-    list->setVisible(list->count() != 0);
-    layout->addWidget(empty, 1);
-
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok |
-                                              QDialogButtonBox::Cancel,
-                                          &dialog);
-    QPushButton* create = buttons->button(QDialogButtonBox::Ok);
-    create->setText(tr("Create"));
-    create->setEnabled(false);
-    connect(list, &QListWidget::currentItemChanged, &dialog,
-            [create](QListWidgetItem* current, QListWidgetItem*) {
-                create->setEnabled(current != nullptr);
-            });
-    connect(list, &QListWidget::itemDoubleClicked, &dialog,
-            [&dialog](QListWidgetItem*) { dialog.accept(); });
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    layout->addWidget(buttons);
-
-    if (list->count() > 0) list->setCurrentRow(0);
-    if (dialog.exec() != QDialog::Accepted || !list->currentItem()) return {};
-    return list->currentItem()->data(Qt::UserRole).toString();
+    ui::ProjectTemplateOpenDialog dialog(ui::projecttemplates::files(), this);
+    const int result = dialog.exec();
+    if (dialog.libraryChanged() && m_browser) m_browser->reloadSettings();
+    return result == QDialog::Accepted ? dialog.selectedPath() : QString();
 }
 
 void MainWindow::onNewProjectFromTemplate() {
@@ -15751,10 +16320,15 @@ void MainWindow::onNewProjectFromTemplate() {
 }
 
 bool MainWindow::createProjectFromTemplatePath(const QString& packageDir) {
+    return loadProjectTemplatePath(packageDir, /*startup=*/false);
+}
+
+bool MainWindow::loadProjectTemplatePath(const QString& packageDir,
+                                         bool startup) {
 #ifdef DAW_ENABLE_COLLABORATION
     if (!prepareCloudRecordingForProjectTransition()) return false;
 #endif
-    if (packageDir.isEmpty() || !maybeSaveChanges()) return false;
+    if (packageDir.isEmpty() || (!startup && !maybeSaveChanges())) return false;
 
     statusBar()->showMessage(tr("Creating project from template…"));
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
@@ -15764,6 +16338,16 @@ bool MainWindow::createProjectFromTemplatePath(const QString& packageDir) {
     QApplication::restoreOverrideCursor();
     if (!result) {
         statusBar()->clearMessage();
+        if (startup) {
+            qWarning().noquote()
+                << "Startup template could not be opened:"
+                << QString::fromStdString(result.message());
+            statusBar()->showMessage(
+                tr("Startup template “%1” is unavailable; opened an empty project")
+                    .arg(ui::projecttemplates::displayName(packageDir)),
+                8000);
+            return false;
+        }
         QMessageBox::warning(
             this, tr("Open Template Failed"),
             tr("The template could not be opened.\n\n%1\n\n"
@@ -15789,12 +16373,73 @@ bool MainWindow::createProjectFromTemplatePath(const QString& packageDir) {
     }
     updateWindowTitle();
     statusBar()->showMessage(
-        tr("Created a new project from “%1”")
-            .arg(ui::projecttemplates::displayName(packageDir)),
+        startup
+            ? tr("Opened startup template “%1”")
+                  .arg(ui::projecttemplates::displayName(packageDir))
+            : tr("Created a new project from “%1”")
+                  .arg(ui::projecttemplates::displayName(packageDir)),
         4000);
-    raise();
-    activateWindow();
+    if (!startup) {
+        raise();
+        activateWindow();
+    }
     return true;
+}
+
+bool MainWindow::openConfiguredStartupTemplate() {
+    const QString path = ui::startupproject::templatePath();
+    if (path.isEmpty()) return false;
+    if (!QFileInfo(path).isDir() ||
+        !ui::projecttemplates::isTemplatePackage(path)) {
+        statusBar()->showMessage(
+            tr("Startup template “%1” is unavailable; opened an empty project")
+                .arg(ui::projecttemplates::displayName(path)),
+            8000);
+        return false;
+    }
+    return loadProjectTemplatePath(path, /*startup=*/true);
+}
+
+bool MainWindow::checkStartupTemplateForTest() {
+    const QString previous = ui::startupproject::templatePath();
+    const auto restorePreference = qScopeGuard([&] {
+        ui::startupproject::setTemplatePath(previous);
+    });
+    QTemporaryDir temporary;
+    const QString package = QDir(temporary.path()).filePath(
+        QStringLiteral("Startup Test.vltt"));
+    daw::ProjectModel model;
+    daw::TrackModel track;
+    track.id = "startup-track";
+    track.kind = daw::TrackKind::Audio;
+    track.name = "Startup Vocal";
+    model.tracks.push_back(track);
+    if (!temporary.isValid() ||
+        !daw::ProjectSerializer::save(model, package.toStdString())) {
+        return false;
+    }
+
+    ui::startupproject::setTemplatePath(package);
+    const bool loaded = openConfiguredStartupTemplate() &&
+        m_controller.project().tracks.size() == 1 &&
+        m_controller.project().tracks.front().name == "Startup Vocal";
+
+    // File > New Project remains the existing clean-project command and must
+    // never reapply the launch preference that is still selected above.
+    onNewProject();
+    const bool newProjectStayedBlank =
+        m_controller.project().tracks.size() == 1 &&
+        m_controller.project().tracks.front().name != "Startup Vocal";
+
+    // Restore the headless harness invariant for the checks that follow.
+    m_controller.newProject(/*createDefaultAudioTrack=*/false);
+    m_projectPath.clear();
+    m_selectedTrackId.clear();
+    m_dirty = false;
+    syncViews();
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    QDir(temporary.path()).removeRecursively();
+    return loaded && newProjectStayedBlank;
 }
 
 void MainWindow::addProjectTemplateTracks(const QString& packageDir) {
@@ -15844,13 +16489,18 @@ bool MainWindow::openExternalPath(const QString& sourcePath) {
         return true;
     }
     const QString parentSuffix = QFileInfo(info.absolutePath()).suffix().toLower();
+    const bool isProjectDirectory = info.isDir() &&
+        QFileInfo(QString::fromStdString(daw::ProjectSerializer::manifestPath(
+                      path.toStdString())))
+            .isFile();
     if (suffix == QLatin1String(daw::ProjectSerializer::kExtension) ||
         suffix == QLatin1String(daw::ProjectSerializer::kTemplateExtension) ||
         parentSuffix == QLatin1String(daw::ProjectSerializer::kExtension) ||
         parentSuffix == QLatin1String(daw::ProjectSerializer::kTemplateExtension) ||
         info.fileName().compare(
             QString::fromLatin1(daw::ProjectSerializer::kProjectFile),
-            Qt::CaseInsensitive) == 0) {
+            Qt::CaseInsensitive) == 0 ||
+        isProjectDirectory) {
         return openProjectPath(path);
     }
 
@@ -15904,7 +16554,7 @@ bool MainWindow::openProjectPath(const QString& path) {
     if (!r) {
         QMessageBox::warning(this, tr("Open failed"),
                              tr("Could not open the VLTONE project.\n\n%1\n\n"
-                                "Make sure the package still contains a "
+                                "Make sure the project folder still contains a "
                                 "matching .vlt manifest and its Content folder.")
                                  .arg(QString::fromStdString(r.message())));
         return false;
@@ -15948,9 +16598,11 @@ bool MainWindow::doSave(const QString& packageDir) {
     if (m_controller.isRecording()) stopRecordingNow();
 
     QString dir = packagePathFromSelection(packageDir);
+#ifndef Q_OS_MACOS
     const QString extension =
         QStringLiteral(".") + QString::fromLatin1(daw::ProjectSerializer::kExtension);
     if (!dir.endsWith(extension, Qt::CaseInsensitive)) dir += extension;
+#endif
     dir = absoluteCleanPath(dir);
 
 #ifdef DAW_ENABLE_COLLABORATION
@@ -16038,14 +16690,13 @@ void MainWindow::onSaveProjectTemplate() {
 #ifdef DAW_ENABLE_COLLABORATION
     if (!prepareCloudRecordingForProjectTransition()) return;
 #endif
-    bool accepted = false;
     const QString initial = displayProjectName(m_controller.projectName()).trimmed();
-    const QString name = QInputDialog::getText(
-                             this, tr("Save as Template"),
-                             tr("Template name:"), QLineEdit::Normal, initial,
-                             &accepted)
-                             .trimmed();
-    if (!accepted) return;
+    const QString currentArtwork =
+        QString::fromStdString(m_controller.project().coverImagePath);
+    ui::ProjectTemplateSaveDialog dialog(initial, currentArtwork, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    const ui::ProjectTemplateSaveOptions options = dialog.options();
+    const QString name = options.name;
 
     const QString path = ui::projecttemplates::filePathForName(name);
     if (path.isEmpty()) {
@@ -16084,6 +16735,22 @@ void MainWindow::onSaveProjectTemplate() {
                "Check free disk space and folder permissions, then try again.")
                 .arg(QString::fromStdString(result.message())));
         return;
+    }
+
+    if (!options.artworkPath.isEmpty()) {
+        statusBar()->showMessage(tr("Adding template artwork…"));
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        QString artworkError;
+        const bool artworkInstalled = ui::projecttemplates::installArtwork(
+            path, options.artworkPath, &artworkError);
+        QApplication::restoreOverrideCursor();
+        if (!artworkInstalled) {
+            QMessageBox::warning(
+                this, tr("Template Artwork Failed"),
+                tr("The template was saved, but its artwork could not be added.\n\n%1")
+                    .arg(artworkError));
+        }
     }
 
     if (m_browser) m_browser->reloadSettings();
@@ -16269,8 +16936,11 @@ void MainWindow::syncPlayheadTimer() {
 void MainWindow::refreshUi() {
     ui::perf::Scope timing("refreshUi.MainWindow.ms");
     if (m_controller.offlineRenderInProgress()) return;
-    publishSessionTransport(false);
-    updateLocalProcessingActions();
+    {
+        ui::perf::Scope phase("refreshUi.actions.ms");
+        publishSessionTransport(false);
+        updateLocalProcessingActions();
+    }
     const bool realtimeUi = m_controller.isPlaying() || m_controller.isRecording() ||
                             m_controller.isCountingIn();
     const int desiredInterval = realtimeUi ? 33 : 100;
@@ -16286,29 +16956,35 @@ void MainWindow::refreshUi() {
     // scrolling, zooming and a clip being dragged, and those happen in half a
     // dozen places inside the timeline. Asking costs a few integer operations
     // and the panel ignores an answer that has not moved.
-    if (m_contextPanel) m_contextPanel->followSelection();
-    m_transport->refresh();
-    if (m_mixer && m_mixer->isVisible()) m_mixer->refreshMeters();
+    {
+        ui::perf::Scope phase("refreshUi.transport.ms");
+        if (m_contextPanel) m_contextPanel->followSelection();
+        m_transport->refresh();
+    }
+    if (m_mixer && m_mixer->isVisible()) m_mixer->syncMeterTimer();
     if (!m_controller.isPlaying() && !m_controller.isRecording()) {
         if (m_trackList && m_trackList->isVisible()) m_trackList->refreshMeters();
         if (m_inspector && m_inspector->isVisible()) m_inspector->refreshMeters();
     }
     const bool automationPlaying = m_controller.isPlaying();
-    if (automationPlaying) {
-        if (m_trackList && m_trackList->isVisible())
-            m_trackList->refreshAutomationValues();
-        if (m_mixer && m_mixer->isVisible()) m_mixer->refreshAutomationValues();
-        if (m_inspector && m_inspector->isVisible())
-            m_inspector->refreshAutomationValues();
-    } else if (m_wasAutomationPlaying) {
-        // Return controls from their last automated positions to the document
-        // once. Repeating this scan ten times a second while stopped was pure
-        // work in large sessions.
-        if (m_trackList) m_trackList->syncTrackValues();
-        if (m_mixer) m_mixer->syncFromModel();
-        if (m_inspector) m_inspector->syncFromModel();
+    {
+        ui::perf::Scope phase("refreshUi.automation.ms");
+        if (automationPlaying) {
+            if (m_trackList && m_trackList->isVisible())
+                m_trackList->refreshAutomationValues();
+            if (m_mixer && m_mixer->isVisible()) m_mixer->refreshAutomationValues();
+            if (m_inspector && m_inspector->isVisible())
+                m_inspector->refreshAutomationValues();
+        } else if (m_wasAutomationPlaying) {
+            // Return controls from their last automated positions to the document
+            // once. Repeating this scan ten times a second while stopped was pure
+            // work in large sessions.
+            if (m_trackList) m_trackList->syncTrackValues();
+            if (m_mixer) m_mixer->syncFromModel();
+            if (m_inspector) m_inspector->syncFromModel();
+        }
+        m_wasAutomationPlaying = automationPlaying;
     }
-    m_wasAutomationPlaying = automationPlaying;
 
     // The take being recorded has no file yet, so its shape is sampled here —
     // once per frame, from the same input meters the mixer reads.
@@ -16324,24 +17000,39 @@ void MainWindow::refreshUi() {
     // graph so delay compensation follows). Polling here rather than signalling
     // keeps the controller free of any observer machinery, the same way the
     // recorder is handled.
-    if (m_controller.pumpPluginEvents()) markDirty();
+    {
+        ui::perf::Scope phase("refreshUi.pluginEvents.ms");
+        if (m_controller.pumpPluginEvents()) markDirty();
+    }
 
-    const QString left = tr("%1 kHz   Buffer %2   %3 tracks   %4")
-                             .arg(m_controller.sampleRate() / 1000.0, 0, 'f', 1)
-                             .arg(m_controller.bufferSizeFrames())
-                             .arg(m_controller.project().tracks.size())
-                             .arg(displayProjectName(m_controller.projectName()));
-    if (m_statusLeft->text() != left) m_statusLeft->setText(left);
-    const int cpuPercent = std::clamp(
-        int(std::lround(double(m_controller.dspLoad()) * 100.0)), 0, 999);
-    if (m_cpuStatusMeter)
-        m_cpuStatusMeter->setValue(std::min(cpuPercent, 100));
-    const QString right = QStringLiteral("%1%").arg(cpuPercent);
-    if (m_statusRight->text() != right) {
-        m_statusRight->setText(right);
-        const QString description = tr("Audio CPU load: %1 percent").arg(cpuPercent);
-        m_statusRight->setAccessibleName(description);
-        if (m_cpuStatusButton) m_cpuStatusButton->setAccessibleName(description);
+    {
+        ui::perf::Scope phase("refreshUi.status.ms");
+        const QString left = tr("%1 kHz   Buffer %2   %3 tracks   %4")
+                                 .arg(m_controller.sampleRate() / 1000.0, 0, 'f', 1)
+                                 .arg(m_controller.bufferSizeFrames())
+                                 .arg(m_controller.project().tracks.size())
+                                 .arg(displayProjectName(m_controller.projectName()));
+        if (m_statusLeft->text() != left) m_statusLeft->setText(left);
+        const int cpuPercent = std::clamp(
+            int(std::lround(double(m_controller.dspLoad()) * 100.0)), 0, 999);
+        if (m_cpuStatusMeter && m_cpuStatusMeter->value() != std::min(cpuPercent, 100)) {
+            // QProgressBar::setValue calls repaint() synchronously. On macOS
+            // that flushed the native window inside this tick and blocked the
+            // GUI for up to 10 ms while Quick was submitting its frame. Keep
+            // the value/accessibility update immediate, and coalesce painting
+            // with the next normal QWidget update instead.
+            const bool updates = m_cpuStatusMeter->updatesEnabled();
+            if (updates) m_cpuStatusMeter->setUpdatesEnabled(false);
+            m_cpuStatusMeter->setValue(std::min(cpuPercent, 100));
+            if (updates) m_cpuStatusMeter->setUpdatesEnabled(true);
+        }
+        const QString right = QStringLiteral("%1%").arg(cpuPercent);
+        if (m_statusRight->text() != right) {
+            m_statusRight->setText(right);
+            const QString description = tr("Audio CPU load: %1 percent").arg(cpuPercent);
+            m_statusRight->setAccessibleName(description);
+            if (m_cpuStatusButton) m_cpuStatusButton->setAccessibleName(description);
+        }
     }
 
     // "From clip": loop the selected clip — as soon as the playhead reaches the

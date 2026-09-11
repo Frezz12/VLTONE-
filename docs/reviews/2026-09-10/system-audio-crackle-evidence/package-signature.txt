@@ -1,0 +1,2 @@
+/Users/nikolay/Documents/code/VLTONE/VLTONE-/build-gpu-test-stage/VLTONE.app: replacing existing signature
+Updated Release executable: all dependencies bundled; full bundle signature verified

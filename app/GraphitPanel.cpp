@@ -154,57 +154,17 @@ protected:
     }
 };
 
-class PrioritySlider final : public QSlider {
+class PrioritySlider final : public ui::GlassSlider {
 public:
     explicit PrioritySlider(QWidget* parent)
-        : QSlider(Qt::Horizontal, parent) {
+        : ui::GlassSlider(Qt::Horizontal, parent) {
         setRange(-100, 100);
         setSingleStep(5);
         setPageStep(25);
+        setFillFrom(0.5);
+        setDetent(0.5);
         setFocusPolicy(Qt::TabFocus);
         setCursor(Qt::PointingHandCursor);
-    }
-
-protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        const QRectF groove(6.0, height() * 0.5 - 1.25,
-                            width() - 12.0, 2.5);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(0x31, 0x34, 0x36));
-        painter.drawRoundedRect(groove, 1.25, 1.25);
-
-        const double fraction = (double(value()) - minimum()) /
-                                double(maximum() - minimum());
-        const double x = groove.left() + groove.width() * fraction;
-        painter.setBrush(QColor(0x55, 0xE0, 0xC8, 150));
-        painter.drawRoundedRect(QRectF(std::min(x, groove.center().x()),
-                                      groove.top(),
-                                      std::abs(x - groove.center().x()),
-                                      groove.height()), 1.25, 1.25);
-        painter.setPen(QPen(QColor(0x78, 0x7D, 0x80), 1.0));
-        painter.drawLine(QPointF(groove.center().x(), groove.top() - 3.0),
-                         QPointF(groove.center().x(), groove.bottom() + 3.0));
-
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(0, 0, 0, 150));
-        painter.drawEllipse(QPointF(x, groove.center().y() + 2.0), 6.0, 6.0);
-        QRadialGradient handle(QPointF(x - 2.0, groove.center().y() - 2.0), 8.0);
-        handle.setColorAt(0.0, QColor(0xF5, 0xF6, 0xF5));
-        handle.setColorAt(0.45, QColor(0xA6, 0xAA, 0xAC));
-        handle.setColorAt(1.0, QColor(0x31, 0x34, 0x36));
-        painter.setPen(QPen(QColor(0x08, 0x09, 0x0A), 1.0));
-        painter.setBrush(handle);
-        painter.drawEllipse(QPointF(x, groove.center().y()), 5.5, 5.5);
-
-        if (hasFocus()) {
-            painter.setBrush(Qt::NoBrush);
-            painter.setPen(QPen(kAccent, 1.0, Qt::SolidLine));
-            painter.drawRoundedRect(QRectF(rect()).adjusted(1.0, 1.0,
-                                                           -1.0, -1.0),
-                                    4.0, 4.0);
-        }
     }
 };
 
@@ -583,6 +543,10 @@ void GraphitPanel::refreshTelemetry() {
 
 void GraphitPanel::paintEvent(QPaintEvent*) {
     QPainter painter(this);
+    paintScene(painter, QRegion(rect()));
+}
+
+void GraphitPanel::paintScene(QPainter& painter, const QRegion&) {
     painter.setRenderHint(QPainter::Antialiasing, true);
     QLinearGradient surface(0.0, 0.0, 0.0, height());
     surface.setColorAt(0.0, QColor(0x1B, 0x1C, 0x1E));

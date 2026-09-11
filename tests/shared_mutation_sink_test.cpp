@@ -430,6 +430,42 @@ bool allBatches(const FakeSharedMutationSink& sink, int firstCall) {
         });
 }
 
+void verifyFolderDuplicateBatch(daw::collab::SharedMutationResult result) {
+    const bool submitted =
+        result == daw::collab::SharedMutationResult::Submitted;
+    daw::EngineController controller;
+    check(controller.initialize(48000.0, 512, false).isOk(),
+          "shared folder-duplicate fixture initializes");
+    const std::string folder = controller.addFolder(true, "Group");
+    const std::string child =
+        controller.addTrack(daw::TrackKind::Midi, "Child");
+    controller.addMidiClip(child, 0.0, 2.0);
+    controller.moveTrackToFolder(child, folder);
+    const std::size_t tracksBefore = controller.project().tracks.size();
+    const std::size_t clipsBefore =
+        controller.project().findTrack(child)->clips.size();
+    const std::size_t undoDepth = controller.undoDepth();
+
+    FakeSharedMutationSink sink;
+    sink.result = result;
+    controller.attachSharedMutationSink(sink);
+    const std::string copy = controller.duplicateTrack(
+        folder, /*withInserts=*/true, /*withClips=*/false);
+    check(sink.genericCalls == 1 && allBatches(sink, 0) &&
+              (submitted ? !copy.empty() : copy.empty()),
+          "folder duplication offers one validated outer batch");
+    const daw::TrackModel* unchangedChild = controller.project().findTrack(child);
+    check(controller.project().tracks.size() == tracksBefore && unchangedChild &&
+              unchangedChild->parentId == folder &&
+              unchangedChild->clips.size() == clipsBefore &&
+              controller.undoDepth() == undoDepth,
+          submitted
+              ? "submitted folder duplicate avoids local mutation and undo"
+              : "blocked folder duplicate avoids local mutation and undo");
+    check(controller.detachSharedMutationSink(sink),
+          "folder-duplicate sink detaches");
+}
+
 daw::AssetRef sharedAudioAsset() {
     daw::AssetRef asset;
     asset.assetId = daw::newUuid();
@@ -1815,6 +1851,9 @@ int main() {
     verifyCompExitGates(daw::collab::SharedMutationResult::Blocked);
     verifyTemplateBatch(daw::collab::SharedMutationResult::Submitted);
     verifyTemplateBatch(daw::collab::SharedMutationResult::Blocked);
+    verifyFolderDuplicateBatch(
+        daw::collab::SharedMutationResult::Submitted);
+    verifyFolderDuplicateBatch(daw::collab::SharedMutationResult::Blocked);
     verifyScratchBatchMutators(daw::collab::SharedMutationResult::Submitted);
     verifyScratchBatchMutators(daw::collab::SharedMutationResult::Blocked);
     verifySharedChannelBatchMutators(

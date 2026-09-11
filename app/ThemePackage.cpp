@@ -355,13 +355,6 @@ bool ThemePackage::captureCurrent(const QString& requestedName,
         if (error) *error = message;
         return false;
     };
-    if (!timelinebackgroundprefs::webSource().isEmpty()) {
-        return fail(QCoreApplication::translate(
-            "ThemePackage",
-            "The active browser video cannot be embedded. Choose a local video "
-            "for the timeline background before saving this theme."));
-    }
-
     snapshot = {};
     snapshot.name = requestedName.trimmed().left(128);
     if (snapshot.name.isEmpty())
@@ -894,7 +887,6 @@ ThemePackageResult ThemePackage::apply(const QString& installedPath,
             return failure(fontError);
     }
 
-    timelinebackgroundprefs::clearWebSource();
     if (timelinePath.isEmpty()) timelinebackgroundprefs::clear();
     else timelinebackgroundprefs::setPath(timelinePath);
     timelinebackgroundprefs::setEnabled(

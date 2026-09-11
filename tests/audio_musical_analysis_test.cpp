@@ -64,6 +64,28 @@ static std::vector<float> musicalBeat(double bpm, int root,
     return audio;
 }
 
+/// A common half-time drum pattern: strong kick/snare accents at half tempo,
+/// with quieter but still explicit attacks on every audible beat.
+static std::vector<float> accentedPulse(double bpm, double weakGain,
+                                        double seconds = 18.0) {
+    constexpr double rate = 22050.0;
+    std::vector<float> audio(std::size_t(seconds * rate), 0.0f);
+    const double beat = 60.0 / bpm;
+    for (int index = 0; double(index) * beat < seconds; ++index) {
+        const double gain = (index & 1) ? weakGain : 1.0;
+        const std::size_t first = std::size_t(index * beat * rate);
+        for (std::size_t i = 0; i < 650 && first + i < audio.size(); ++i) {
+            const double decay = std::exp(-double(i) / 85.0);
+            const double click = (i % 19 < 8 ? 1.0 : -1.0);
+            const double kick = std::sin(2.0 * std::numbers::pi * 75.0 * i /
+                                         rate);
+            audio[first + i] += float(gain * decay *
+                                      (0.48 * click + 0.52 * kick));
+        }
+    }
+    return audio;
+}
+
 int main() {
     constexpr double rate = 22050.0;
     {
@@ -115,6 +137,25 @@ int main() {
                 std::abs(result.tempo.bpm - expected) < 0.1;
         }
         check(coveredRange, "tempo detector covers slow through fast beat loops");
+    }
+    {
+        analysis::MusicalAnalysisRequest request;
+        request.detectKey = false;
+        request.useNeuralModels = false;
+        analysis::MusicalAnalysisResult halfTime;
+        auto beat = accentedPulse(140.0, 0.34);
+        analysis::analyzeAudioSamples(beat.data(), beat.size(), 1, rate,
+                                      request, halfTime);
+        analysis::MusicalAnalysisResult slow;
+        beat = accentedPulse(70.0, 1.0);
+        analysis::analyzeAudioSamples(beat.data(), beat.size(), 1, rate,
+                                      request, slow);
+        std::printf("      half-time 140 -> %.1f BPM; true slow 70 -> %.1f BPM\n",
+                    halfTime.tempo.bpm, slow.tempo.bpm);
+        check(analysis::roundedBpm(halfTime.tempo.bpm) == 140,
+              "clear 140 BPM subdivisions outrank their 70 BPM accents");
+        check(analysis::roundedBpm(slow.tempo.bpm) == 70,
+              "a genuine slow pulse is not doubled without subdivisions");
     }
     {
         bool coveredKeys = true;

@@ -10,5 +10,8 @@ struct AudioWorkerConfig {
     double sampleRate = 48000;
     std::uint32_t blockFrames = 512;
     std::shared_ptr<void> workgroup;
+    // Maximum simultaneous render threads, INCLUDING the device/calling
+    // thread. Zero keeps the pool's full capacity (offline/unknown platform).
+    std::uint32_t maxParallelThreads = 0;
 };
 } // namespace daw::rt

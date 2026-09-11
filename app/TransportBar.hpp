@@ -1,6 +1,8 @@
 #pragma once
+#include "graphics/ScenePaintSource.hpp"
 
 #include <QList>
+#include <QPoint>
 #include <QWidget>
 
 #include <cstddef>
@@ -17,7 +19,7 @@ namespace ui { class IconButton; class ThemeMediaBackground; }
 
 /// The top chrome: three compact control blocks centred as one cluster, with
 /// independent workspace docks pinned to the outer edges.
-class TransportBar : public QWidget {
+class TransportBar : public QWidget , public ui::graphics::ScenePaintSource {
     Q_OBJECT
 public:
     explicit TransportBar(daw::EngineController* controller,
@@ -90,6 +92,9 @@ public:
     /// trailing edit group intact. Only secondary buttons in the transport
     /// group are allowed to disappear below its preferred size.
     int minimumResponsiveWidth() const;
+    /// Centre of the position/BPM/signature display in screen coordinates.
+    /// The shared context strip uses this as its stable home position.
+    QPoint readoutCenterGlobal() const;
 
 signals:
     void playPauseRequested();
@@ -127,10 +132,12 @@ signals:
     void detachMixerRequested();
     void addTrackRequested();
     void settingsRequested();
+    void readoutGeometryChanged();
 
 protected:
     bool event(QEvent*) override;
     void paintEvent(QPaintEvent*) override;
+    void paintScene(QPainter&, const QRegion&) override;
     void resizeEvent(QResizeEvent*) override;
     void showEvent(QShowEvent*) override;
     void hideEvent(QHideEvent*) override;
@@ -173,6 +180,7 @@ private:
     QWidget* m_positionGroup = nullptr;
     /// Tempo, time signature, grid and time format in one 2x2 socket.
     QWidget* m_statsGroup = nullptr;
+    int m_lastReadoutCenterX = -1;
     QLabel* m_tempoIcon = nullptr;
     QLabel* m_signatureIcon = nullptr;
     QLabel* m_gridIcon = nullptr;

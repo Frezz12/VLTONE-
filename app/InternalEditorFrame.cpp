@@ -3,6 +3,9 @@
 #include "Controls.hpp"
 #include "Icons.hpp"
 #include "Theme.hpp"
+#include "graphics/WorkspaceSurface.hpp"
+#include "graphics/GraphicsPreferences.hpp"
+#include "UiFrameClock.hpp"
 
 #include <QApplication>
 #include <QEvent>
@@ -11,8 +14,11 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QQuickWindow>
+#include <QEventLoop>
 #include <QResizeEvent>
 #include <QSettings>
+#include <QScreen>
 #include <QShowEvent>
 #include <QSizePolicy>
 #include <QTimer>
@@ -79,6 +85,15 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
     m_title->setFont(titleFont);
     titleRow->addWidget(m_title, 1);
 
+    m_detachButton = new ui::IconButton(icons::Glyph::Detach, tr("Detach editor"), m_titleBar);
+    m_detachButton->setObjectName(QStringLiteral("InternalEditorDetach"));
+    m_detachButton->setButtonSize(32, 30);
+    m_detachButton->setFocusPolicy(Qt::StrongFocus);
+    m_detachButton->setAccessibleName(tr("Detach editor"));
+    m_detachButton->setAccessibleDescription(tr("Move this editor to its own window, or return it to the workspace."));
+    connect(m_detachButton, &QAbstractButton::clicked, this, [this] { setDetached(!m_detached); });
+    titleRow->addWidget(m_detachButton);
+
     m_maximizeButton = new ui::IconButton(
         icons::Glyph::WindowMaximize, tr("Maximize editor"), m_titleBar);
     m_maximizeButton->setObjectName(QStringLiteral("InternalEditorMaximize"));
@@ -131,6 +146,7 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
 }
 
 InternalEditorFrame::~InternalEditorFrame() {
+    delete m_detachedSurface.data();
     cancelPendingInteractiveResize();
     uninstallApplicationEventFilter();
     // QWidget deletes its children after our QPointer members have already
@@ -173,6 +189,15 @@ void InternalEditorFrame::setWorkspaceArea(QWidget* area) {
     if (m_placementRestored) constrainToParent();
 }
 
+void InternalEditorFrame::prepareForNativeSurface() {
+    // This must precede WA_NativeWindow. Otherwise QWidget promotes every
+    // ancestor to a native view, an irreversible change for the lifetime of
+    // the main window which leaves the Quick scene in a broken stacking tree.
+    setAttribute(Qt::WA_DontCreateNativeAncestors);
+    setAttribute(Qt::WA_NativeWindow);
+    setProperty("vlt.nativeOverlay", true);
+}
+
 void InternalEditorFrame::present() {
     if (!m_placementRestored) restorePlacement();
     if (m_content) m_content->show();
@@ -206,6 +231,37 @@ void InternalEditorFrame::setMaximized(bool maximized) {
     updateResizeHandles();
     savePlacement();
     activateEditor();
+}
+
+void InternalEditorFrame::setDetached(bool detached) {
+    if (m_detached == detached || m_dragging || m_resizing) return;
+    cancelPendingInteractiveResize();
+    const bool visible = isVisible();
+    const QPoint global = mapToGlobal(QPoint());
+    if (m_maximized) setMaximized(false);
+    // Release the old window's render resources before changing native hosts.
+    // The editor, command handlers and project model keep their identities.
+    delete m_detachedSurface.data();
+    m_detachedSurface = nullptr;
+    if (detached) { savePlacement(); m_dockedGeometry = geometry(); }
+    hide();
+    m_detached = detached;
+    setParent(parentWidget(), detached ? Qt::Window | Qt::FramelessWindowHint : Qt::Widget);
+    setGeometry(detached ? QRect(global, size()) : m_dockedGeometry);
+    if (!detached) m_restoreGeometry = m_dockedGeometry;
+    m_detachButton->setToolTip(detached ? tr("Return editor to workspace") : tr("Detach editor"));
+    m_detachButton->setAccessibleName(m_detachButton->toolTip());
+    if (detached && ui::graphics::gpuWorkspaceEnabled()) {
+        m_detachedSurface = new ui::graphics::WorkspaceSurface(this);
+        connect(&ui::FrameClock::instance(), &ui::FrameClock::preferenceChanged,
+                m_detachedSurface, &ui::graphics::WorkspaceSurface::refreshPresentationMode);
+        connect(&ThemeManager::instance(), &ThemeManager::changed,
+                m_detachedSurface, &ui::graphics::WorkspaceSurface::invalidate);
+        connect(m_detachedSurface, &ui::graphics::WorkspaceSurface::failed,
+                m_detachedSurface, &QObject::deleteLater, Qt::QueuedConnection);
+    }
+    constrainToParent();
+    if (visible) { show(); raise(); activateWindow(); restoreContentFocus(); }
 }
 
 void InternalEditorFrame::resizeForContent(const QSize& contentSize) {
@@ -465,6 +521,7 @@ void InternalEditorFrame::restorePlacement() {
 }
 
 void InternalEditorFrame::savePlacement() {
+    if (m_detached) return; // Keep the docked placement in workspace coordinates.
     if (!m_placementRestored || m_settingsKey.isEmpty()) return;
     QSettings settings;
     settings.setValue(m_settingsKey + "/geometry", m_restoreGeometry);
@@ -491,6 +548,7 @@ void InternalEditorFrame::constrainToParent() {
 }
 
 QRect InternalEditorFrame::availableRect() const {
+    if (m_detached && screen()) return screen()->availableGeometry();
     QWidget* host = parentWidget();
     if (!host) return QRect(0, 0, std::max(1, width()), std::max(1, height()));
     // Floating editors share the transport's parent, so Qt neither clips their
@@ -502,6 +560,7 @@ QRect InternalEditorFrame::availableRect() const {
 
 QRect InternalEditorFrame::workspaceRect() const {
     const QRect bounds = availableRect();
+    if (m_detached) return bounds;
     if (!m_workspaceArea || !parentWidget()) return bounds;
     const QRect body(m_workspaceArea->mapTo(parentWidget(), QPoint()),
                      m_workspaceArea->size());
@@ -672,6 +731,23 @@ bool InternalEditorFrame::checkPlacementForTest() {
     QWidget body(&host);
     body.setGeometry(0, 120, 1000, 580);
     host.show();
+    QWidget overlayHost(&host);
+    overlayHost.setGeometry(host.rect());
+    overlayHost.show();
+    {
+        InternalEditorFrame nativeFrame(key + QStringLiteral("/native"),
+                                        &overlayHost);
+        nativeFrame.prepareForNativeSurface();
+        nativeFrame.setContent(new QWidget);
+        nativeFrame.present();
+        QApplication::processEvents();
+        check(nativeFrame.testAttribute(Qt::WA_NativeWindow) &&
+                  nativeFrame.property("vlt.nativeOverlay").toBool() &&
+                  !overlayHost.testAttribute(Qt::WA_NativeWindow),
+              "a native plugin frame does not promote the shared workspace");
+        nativeFrame.hide();
+    }
+    overlayHost.hide();
     InternalEditorFrame frame(key, &host);
     frame.setWorkspaceArea(&body);
     auto* content = new QWidget;
@@ -730,6 +806,26 @@ bool InternalEditorFrame::checkPlacementForTest() {
     frame.m_resizeEdges = NoEdge;
     drag(frame, QPoint(0, 250 - frame.y()));
     check(frame.y() == 250, "parked windows can be brought back with their title");
+    const QRect docked = frame.geometry();
+    const auto savedPlacement = settings.value(key + "/geometry");
+    frame.setDetached(true);
+    QApplication::processEvents();
+    check(frame.isWindow() && frame.content() == content && content->parentWidget() == &frame,
+          "detaching preserves the live editor and its command state");
+    if (ui::graphics::gpuWorkspaceEnabled()) {
+        QEventLoop frameReady;
+        QTimer::singleShot(300, &frameReady, &QEventLoop::quit);
+        frameReady.exec();
+        check(frame.m_detachedSurface && !frame.m_detachedSurface->quickWindow()->grabWindow().isNull(),
+              "the detached editor presents through its own hardware scene");
+    }
+    frame.setMaximized(true); frame.setMaximized(false);
+    check(settings.value(key + "/geometry") == savedPlacement,
+          "desktop coordinates do not overwrite the workspace placement");
+    frame.setDetached(false);
+    QApplication::processEvents();
+    check(!frame.isWindow() && frame.geometry() == docked && frame.content() == content,
+          "docking restores placement without recreating editor content");
     frame.hide();
     {
         InternalEditorFrame reopened(key, &host);

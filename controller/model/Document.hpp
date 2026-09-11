@@ -679,6 +679,7 @@ struct TrackModel {
     /// the user. Session state, not persisted: a manual click hands control
     /// back to the user, and a reload starts fresh.
     bool monitorAuto = false;
+    unsigned monitorInputMask = 3;    // runtime only: uncovered sides of an automatic monitor
     bool mono = false;                // true = fold to mono; false = keep stereo
     double height = 72.0;             // lane height in px (resizable)
     bool expanded = true;             // folders
@@ -726,6 +727,15 @@ struct TrackRow {
     int depth = 0;        // 0 = root
 };
 
+/// One notebook line tied to a project position. It lives beside the notebook
+/// HTML in the project document so opening another song cannot expose or edit
+/// the previous song's notes.
+struct NotebookCueModel {
+    double seconds = 0.0;
+    std::string text;
+    bool operator==(const NotebookCueModel&) const = default;
+};
+
 struct ProjectMetadata {
     std::string name = "Untitled";
     std::string author;
@@ -745,6 +755,10 @@ struct ProjectMetadata {
     /// project rather than the application settings, because they describe
     /// *this* music and should travel with it.
     std::string aiInstructions;
+    /// Rich notebook contents and its timeline-bound lines. These are project
+    /// data, unlike notebook colours/fonts which remain application settings.
+    std::string notebookHtml;
+    std::vector<NotebookCueModel> notebookCues;
     /// The cycle region, in seconds, and whether the playhead is going round
     /// it. Part of the document because it is part of the arrangement: a
     /// reopened project should still be looping the eight bars that were being
@@ -863,6 +877,12 @@ void normalizeAutomation(std::vector<AutomationPoint>& points);
 /// arrangement's drawing all use.
 double automationValueAt(const std::vector<AutomationPoint>& points, double beats,
                          double fallback);
+
+/// Make a breakpoint at the value the existing curve already has at `beats`.
+/// The outgoing segment inherits the run it splits, so a Shift-click does not
+/// introduce a new segment style along with the requested timing anchor.
+AutomationPoint automationPointOnCurve(
+    const std::vector<AutomationPoint>& points, double beats, double fallback);
 
 /// The colour take `index` of a stack wears: the track's colour nudged in
 /// brightness, so a pile of layers reads as a family rather than a wall of one

@@ -1,0 +1,12 @@
+{
+  "app/WaveformPaint.cpp": "991f930c5bc2ee6b075c28492deae78ffc9b69ef08efead48112204082024bc3",
+  "app/TimelineWidget.cpp": "deb0139c346ea82b035b015ecf2a5b29d7f968be9fbf10afe6dc422057611f37",
+  "app/UiFrameClock.cpp": "c5228e55b2f881af162067364fe344ae99e7ec24659c957d5f4aa6947ba18259",
+  "controller/EngineController.cpp": "ba918b1d05221679f5213e40227f1545987cc5c90088a9cc52bf19ce5557098b",
+  "core/Recording/RecordingEngine.cpp": "0107b43984da41908f9e0c1f807fc40009784698d779ff770a135bcabf311ba1",
+  "core/Device/AudioDeviceManager.cpp": "e6638c2900e0fbb96c80e39d031e39d1594792503fd90b6cc8fb12507313760c",
+  "engine/Graph/GraphProcessor.cpp": "b784b983c2c54ffd30494e5df2610a618a94ae28e5acc5fa41639ea35471528b",
+  "engine/Job/JobSystem.cpp": "22a1e029f7af3cbd1cb43e192386c44627c70d17346bfb0962faf0dcf7027a30",
+  "engine/Job/AudioWorkerRegistration.cpp": "21f9feb639337f70e09a3072cd1a40e1effa02fcbcdd686777b9620d895efa90",
+  "tests/audio_engine_bench.cpp": "70c94e3be9fc7d4ed8f096b4f24cf31f4feb1fa465484a4182ee64c263812251"
+}

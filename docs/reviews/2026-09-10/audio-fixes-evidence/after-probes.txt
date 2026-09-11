@@ -1,0 +1,15 @@
+Evidence output: /var/folders/ts/h40wx_6j4_jc96cyrtt6b6900000gn/T/vlt-audio-review-5gq_tpsf
+DEFAULT_TRACK enabled=1 monitor=1 output_peak=0.250000
+SELECT_INPUT_1 output_peak=0.250000
+MUTED_EXISTING_MONITOR recording=1 new_monitor=1 output_peak=0.250000
+MANUAL_MONITOR output_peak=0.250000
+ONE_INPUT_MENU_PICK graph_rebuilds=0
+CREATE_128_TRACKS ms=0.838 gated_blocks=1 silent_blocks=1 calls=39
+
+PROJECT opened=1 live_inserts=1 monitor=1 playing=0
+RECOVERY_TICK index=0 ms=0.020 gated_blocks=0
+RECOVERY_TICK index=1 ms=0.001 gated_blocks=0
+RECOVERY_TICK index=2 ms=0.001 gated_blocks=0
+RECOVERY_TICK index=3 ms=0.001 gated_blocks=0
+RECOVERY_TICK index=4 ms=0.001 gated_blocks=0
+TOTAL callbacks=930 gated=0

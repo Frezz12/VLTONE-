@@ -3,12 +3,14 @@
 #include <QString>
 
 class QWebEngineProfile;
+class QQuickWebEngineProfile;
 
 namespace ui {
 
 /// Register before QApplication; install a read-only font handler per profile.
 void registerFontUrlScheme();
 void installFontUrlHandler(QWebEngineProfile* profile);
+void installFontUrlHandler(QQuickWebEngineProfile* profile);
 
 /// Register the bundled Inter family and set the default before creating UI.
 /// User font overrides are applied afterwards by ThemeManager.

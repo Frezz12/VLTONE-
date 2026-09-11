@@ -11,6 +11,11 @@ struct AudioTarget {
     QString displayPath;
 };
 
+struct ArtworkInfo {
+    QString path;
+    QString displayName;
+};
+
 inline constexpr const char* kExtension = "vltt";
 
 /// The application-managed `Presets/Templates` folder. Calling this creates it.
@@ -19,6 +24,15 @@ QString folder();
 /// Saved project template packages, ordered by display name.
 QStringList files();
 QString displayName(const QString& packagePath);
+
+/// Optional photo, animated image or video stored inside the template package.
+/// Empty fields mean that the template uses the standard artwork.
+ArtworkInfo artwork(const QString& packagePath);
+/// Copy `sourcePath` into the package and write its portable display metadata.
+bool installArtwork(const QString& packagePath, const QString& sourcePath,
+                    QString* error = nullptr);
+/// Delete one template from the application-managed Templates directory.
+bool remove(const QString& packagePath, QString* error = nullptr);
 
 /// Resolve a user-entered name inside the managed folder. Empty means the name
 /// is not portable across the desktop platforms supported by the application.

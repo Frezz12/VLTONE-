@@ -145,6 +145,7 @@ CreateTracksDialog::CreateTracksDialog(daw::EngineController& controller, QWidge
     m_channels->setObjectName(QStringLiteral("TrackChannels"));
     m_channels->addItem(icons::icon(icons::Glyph::StereoRings, th().textPrimary), tr("Stereo"), 2);
     m_channels->addItem(icons::icon(icons::Glyph::MonoRing, th().textPrimary), tr("Mono"), 1);
+    m_channels->setCurrentIndex(1);
     m_channelField = field(tr("Channels"), m_channels, m_form);
     m_channelField->setFixedWidth(128);
     auto* nameRow = new QHBoxLayout;
@@ -292,7 +293,7 @@ void CreateTracksDialog::syncType() {
 }
 
 void CreateTracksDialog::rebuildInputs() {
-    const int previous = m_input->currentIndex() < 0 ? -1 : m_input->currentData().toInt();
+    const int previous = m_input->currentIndex() < 0 ? 0 : m_input->currentData().toInt();
     m_input->clear();
     m_input->addItem(tr("No input"), -1);
     const auto device = m_controller.currentInputDeviceInfo();

@@ -7,6 +7,7 @@
 
 #include <QApplication>
 #include <QEvent>
+#include <QElapsedTimer>
 #include <QFontMetrics>
 #include <QKeyEvent>
 #include <QKeySequence>
@@ -93,9 +94,10 @@ QColor withAlpha(QColor color, int alpha) {
 
 } // namespace
 
-/// Results live outside the ToolPanel's clipped child hierarchy, but remain a
-/// child of the main window. That gives them overlay z-order without creating a
-/// second native window or stealing focus from the inline search field.
+/// Results live outside the ToolPanel's clipped child hierarchy. In GPU mode
+/// they belong to the workspace presentation root so the scene graph composites
+/// them above the timeline; in compatibility mode that root is the main window.
+/// This avoids a second native window and keeps focus in the inline search.
 class PluginQuickAdderOverlay final : public QWidget {
 public:
     PluginQuickAdderOverlay(PluginQuickAdder* owner, QWidget* parent)
@@ -643,9 +645,14 @@ void PluginQuickAdder::queueInsertCurrent(bool openEditor, bool keepOpen) {
 }
 
 void PluginQuickAdder::showOverlay() {
-    if (!m_expanded || !window()) return;
+    QWidget* root = overlayRoot();
+    if (!m_expanded || !root) return;
     if (!m_overlay) {
-        m_overlay = new PluginQuickAdderOverlay(this, window());
+        m_overlay = new PluginQuickAdderOverlay(this, root);
+    } else if (m_overlay->parentWidget() != root) {
+        // The renderer can fall back without rebuilding the context panel.
+        // Reparent the popup so its z-order still belongs to the active surface.
+        m_overlay->setParent(root);
     }
     positionOverlay();
     m_overlay->show();
@@ -657,9 +664,23 @@ void PluginQuickAdder::hideOverlay() {
     if (m_overlay) m_overlay->hide();
 }
 
+QWidget* PluginQuickAdder::overlayRoot() const {
+    // WorkspaceSurface records descendants of the widget marked with this
+    // property into one QQuickWindow. A sibling attached to MainWindow cannot
+    // be raised over that native surface, so keep the popup inside the recorded
+    // hierarchy. Choose the nearest marked ancestor for nested workspaces.
+    for (QWidget* ancestor = parentWidget(); ancestor;
+         ancestor = ancestor->parentWidget()) {
+        if (ancestor->property("vlt.gpuSurfaceActive").toBool())
+            return ancestor;
+    }
+    return window();
+}
+
 void PluginQuickAdder::positionOverlay() {
-    if (!m_overlay || !window()) return;
-    QWidget* root = window();
+    if (!m_overlay) return;
+    QWidget* root = m_overlay->parentWidget();
+    if (!root) return;
     const QPoint belowField = mapTo(root, QPoint(0, height() + 3));
     // Match the search field pixel-for-pixel; only clamp as a last resort for
     // a window narrower than the expanded Context Panel itself.
@@ -1003,12 +1024,24 @@ void PluginQuickAdder::keyPressEvent(QKeyEvent* event) {
 }
 
 bool PluginQuickAdder::eventFilter(QObject* watched, QEvent* event) {
-    if (m_expanded && watched == window() &&
-        (event->type() == QEvent::Resize || event->type() == QEvent::Move)) {
+    const bool geometryEvent = event->type() == QEvent::Resize ||
+                               event->type() == QEvent::Move;
+    if (m_expanded && geometryEvent && watched == overlayRoot()) {
         positionOverlay();
     }
     if (watched == m_search && event->type() == QEvent::ShortcutOverride) {
         auto* key = static_cast<QKeyEvent*>(event);
+        const bool editingShortcut =
+            key->matches(QKeySequence::Copy) ||
+            key->matches(QKeySequence::Cut) ||
+            key->matches(QKeySequence::Paste) ||
+            key->matches(QKeySequence::SelectAll) ||
+            key->matches(QKeySequence::Undo) ||
+            key->matches(QKeySequence::Redo);
+        const bool typing = key->key() == Qt::Key_Backspace ||
+                            key->key() == Qt::Key_Delete ||
+                            (!key->text().isEmpty() &&
+                             key->text().at(0).isPrint());
         switch (key->key()) {
             case Qt::Key_Escape:
             case Qt::Key_Down:
@@ -1021,6 +1054,16 @@ bool PluginQuickAdder::eventFilter(QObject* watched, QEvent* event) {
                 return true;
             default:
                 break;
+        }
+        // A visible search field owns every printable key. Accept before
+        // QAction processes application shortcuts, otherwise typing R starts
+        // recording instead of adding the letter to the query.
+        if (typing || editingShortcut ||
+            key->modifiers().testAnyFlags(Qt::ControlModifier |
+                                          Qt::AltModifier |
+                                          Qt::MetaModifier)) {
+            key->accept();
+            return true;
         }
     }
     if (watched == m_search && event->type() == QEvent::KeyPress) {
@@ -1058,12 +1101,15 @@ bool PluginQuickAdder::checkInteractionForTest() {
 
     const QString trackId = QString::fromStdString(
         probe.addTrack(daw::TrackKind::Audio, "Quick Add Probe"));
-    QWidget root;
-    root.resize(640, 420);
+    QWidget shell;
+    shell.resize(700, 500);
+    QWidget root(&shell);
+    root.setGeometry(20, 30, 640, 420);
+    root.setProperty("vlt.gpuSurfaceActive", true);
     PluginQuickAdder adder(&probe, &root);
     adder.move(40, 40);
     adder.setTrackId(trackId);
-    root.show();
+    shell.show();
 
     int inserted = 0;
     QObject::connect(&adder, &PluginQuickAdder::pluginInserted, &adder,
@@ -1072,16 +1118,42 @@ bool PluginQuickAdder::checkInteractionForTest() {
                      });
 
     const auto openOnGraphit = [&adder] {
+        QElapsedTimer elapsed;
+        elapsed.start();
         adder.openSearch();
         if (adder.m_expandAnim->state() == QAbstractAnimation::Running)
             adder.m_expandAnim->setCurrentTime(adder.m_expandAnim->duration());
         adder.m_search->setText(QStringLiteral("Graphit"));
         QApplication::processEvents();
+        if (qEnvironmentVariableIsSet("DAW_SELFTEST_VERBOSE")) {
+            std::fprintf(stderr, "Quick plugin search open: %lld ms\n",
+                         static_cast<long long>(elapsed.elapsed()));
+        }
         return adder.m_overlay && adder.m_overlay->isVisible() &&
                adder.visibleAt(adder.m_highlight);
     };
 
     if (!openOnGraphit()) return false;
+    const QPoint overlayProbe = adder.m_overlay->geometry().center();
+    const bool overlayInGpuScene =
+        adder.m_overlay->parentWidget() == &root &&
+        root.childAt(overlayProbe) == adder.m_overlay;
+    if (!overlayInGpuScene) return false;
+    adder.m_search->clear();
+    QKeyEvent recordOverride(QEvent::ShortcutOverride, Qt::Key_R,
+                             Qt::NoModifier, QStringLiteral("r"));
+    recordOverride.setAccepted(false);
+    QApplication::sendEvent(adder.m_search, &recordOverride);
+    QKeyEvent recordLetter(QEvent::KeyPress, Qt::Key_R, Qt::NoModifier,
+                           QStringLiteral("r"));
+    QApplication::sendEvent(adder.m_search, &recordLetter);
+    const bool searchOwnsRecordKey =
+        recordOverride.isAccepted() &&
+        adder.m_search->text() == QLatin1String("r");
+    adder.m_search->setText(QStringLiteral("Graphit"));
+    QApplication::processEvents();
+    if (!searchOwnsRecordKey || !adder.visibleAt(adder.m_highlight))
+        return false;
     const QPoint rowPoint(kSide + 16, kListTop + kPluginHeight / 2);
     QMouseEvent click(QEvent::MouseButtonPress, QPointF(rowPoint),
                       QPointF(adder.m_overlay->mapToGlobal(rowPoint)),
@@ -1107,7 +1179,7 @@ bool PluginQuickAdder::checkInteractionForTest() {
     QApplication::processEvents();
     const bool keyboardPicked = shortcut.isAccepted() && enter.isAccepted() &&
                                 inserted == 2;
-    root.hide();
+    shell.hide();
     return pointerPicked && keyboardPicked;
 }
 

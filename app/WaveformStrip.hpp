@@ -2,8 +2,12 @@
 
 #include "WaveformCache.hpp"
 
+#include <memory>
+#include <QPixmap>
 #include <QString>
 #include <QWidget>
+
+namespace daw::midifile { struct File; }
 
 /// One file's waveform across the full width, with a playhead.
 ///
@@ -20,6 +24,10 @@ public:
     /// Show this envelope. Copied, because the worker that built it is about to
     /// drop it and the widget outlives the decode.
     void setPeaks(const daw::WaveformPeaks& peaks);
+    /// Show a compact piano-roll view of a Standard MIDI file. The parsed file
+    /// is immutable and shared with the background loader, so selecting a
+    /// dense arrangement does not copy every note on the GUI thread.
+    void setMidi(std::shared_ptr<const daw::midifile::File> file);
     /// Forget the waveform and show `message` instead ("no file", "decoding…",
     /// "cannot be read"). An empty message leaves the strip blank.
     void clear(const QString& message = {});
@@ -28,6 +36,7 @@ public:
     void setPlayheadSeconds(double seconds);
     double durationSeconds() const { return m_peaks.durationSeconds; }
     bool hasWaveform() const { return m_peaks.isValid(); }
+    bool hasMidiPreview() const { return bool(m_midi); }
 
 signals:
     /// The user pointed at a position in the file, in seconds.
@@ -37,12 +46,16 @@ protected:
     void paintEvent(QPaintEvent*) override;
     void mousePressEvent(QMouseEvent* ev) override;
     void mouseMoveEvent(QMouseEvent* ev) override;
+    void resizeEvent(class QResizeEvent* event) override;
 
 private:
     /// Seconds under an x in widget coordinates, clamped to the file.
     double secondsAt(double x) const;
+    void rebuildMidiLayer();
 
     daw::WaveformPeaks m_peaks;
+    std::shared_ptr<const daw::midifile::File> m_midi;
+    QPixmap m_midiLayer;
     QString m_message;
     double m_playheadSeconds = -1.0;
 };

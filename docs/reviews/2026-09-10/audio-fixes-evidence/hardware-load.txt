@@ -1,0 +1,10 @@
+[INFO]  [Device] Initialized out='Динамики MacBook Air' in='Микрофон MacBook Air' rate=48000 buffer=32
+INPUT coreaudio:BuiltInMicrophoneDevice OUTPUT coreaudio:BuiltInSpeakerDevice
+TIMING tracks=64 frames=32 mean_ms=0.1046 p95_ms=0.1190 p99_ms=0.1222 max_ms=0.1310 deadline_overruns=0
+HARDWARE frames=32 rate=48000 callbacks=3002 running=1 recovery_needed=0 render_failures=0 xruns=0,0,0,0 input_peak=0.001804 device_adc_time=1
+TIMING tracks=64 frames=64 mean_ms=0.0150 p95_ms=0.0180 p99_ms=0.0224 max_ms=0.0338 deadline_overruns=0
+HARDWARE frames=64 rate=48000 callbacks=1502 running=1 recovery_needed=0 render_failures=0 xruns=0,0,0,0 input_peak=0.001191 device_adc_time=1
+TIMING tracks=64 frames=128 mean_ms=0.0203 p95_ms=0.0259 p99_ms=0.0326 max_ms=0.0470 deadline_overruns=0
+HARDWARE frames=128 rate=48000 callbacks=750 running=1 recovery_needed=0 render_failures=0 xruns=0,0,0,0 input_peak=0.004445 device_adc_time=1
+TIMING tracks=64 frames=512 mean_ms=0.1478 p95_ms=0.1976 p99_ms=0.2043 max_ms=0.2080 deadline_overruns=0
+HARDWARE frames=512 rate=48000 callbacks=188 running=1 recovery_needed=0 render_failures=0 xruns=0,0,0,0 input_peak=0.001389 device_adc_time=1

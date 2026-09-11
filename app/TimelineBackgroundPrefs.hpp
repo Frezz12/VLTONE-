@@ -1,7 +1,6 @@
 #pragma once
 
 #include <QString>
-#include <QJsonObject>
 
 namespace ui::timelinebackgroundprefs {
 
@@ -28,13 +27,6 @@ void setEnabled(bool enabled);
 QString path();
 bool setPath(const QString& path);
 void clear();
-
-// Internet media overlays the retained local file. An empty object selects
-// local media; this state belongs to appearance settings, not the project.
-QJsonObject webSource();
-void setWebSource(const QJsonObject& source);
-void clearWebSource();
-quint64 sourceRevision();
 
 int visibility();
 void setVisibility(int percent);

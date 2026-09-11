@@ -1,2 +1,3 @@
 #pragma once
-namespace ui { bool checkUiScaling(); }
+#include <QString>
+namespace ui { bool checkUiScaling(); bool checkAudioTimelinePerformance(); bool checkProjectTimelinePerformance(const QString& path); }

@@ -51,7 +51,6 @@ class NoteContextPanel;
 class FileBrowserPanel;
 class AiChatPanel;
 class WebBrowserPanel;
-namespace ui { class WebVideoBackground; }
 class NotebookWindow;
 class TypingKeyboard;
 class MidiInputManager;
@@ -101,7 +100,13 @@ public:
     /// window is visible. On macOS a modal prompt parented to a still-hidden
     /// main window can sit behind the modal startup dialog and look like a
     /// permanent "Loading system" hang.
-    void completeInteractiveStartup();
+    /// Finish recovery initialization. Returns true when an earlier unsaved
+    /// document was restored, so the normal launch template must not replace it.
+    bool completeInteractiveStartup();
+
+    /// Apply the configured launch template to the initial clean document.
+    /// main() calls this only for an ordinary launch without a file request.
+    bool openConfiguredStartupTemplate();
 
     /// Narrow collaboration seam.  The projection adapter is owned at app
     /// scope (beside CommandGateway) while the engine is owned by this window.
@@ -323,7 +328,10 @@ public:
     /// (which decodes on a worker and starts an audition), search, and flip the
     /// panel from one side of the window to the other. False when a step did
     /// not do what it claims.
-    bool checkBrowser(const QString& folder, const QString& audioFile);
+    bool checkBrowser(const QString& folder, const QString& audioFile,
+                      const QString& midiFile);
+    bool checkAudioAnalysisDialogForTest();
+    bool checkStartupTemplateForTest();
 
     /// Headless check only: run a whole assistant turn against a scripted
     /// stand-in for a provider — no key, no network — and report whether the
@@ -391,6 +399,7 @@ public:
     /// Drive an actual middle-button drag through the timeline and prove it
     /// moves both time and the track stack without an edit tool being involved.
     bool checkTimelinePanForTest();
+    bool checkProjectScrollForTest(const QString& path);
     /// Exercise multi-lane clip movement, Shift-add/duplicate and marquee
     /// auto-scroll with real mouse events.
     bool checkTimelineClipGesturesForTest();
@@ -611,6 +620,7 @@ private:
     bool hasActiveInternalWindow() const;
 
     void registerAuxiliaryWindow(QWidget* window);
+    void installGpuSurface(QWidget* source);
     void presentAuxiliaryWindow(QWidget* window);
     void raiseAuxiliaryWindows();
     void lowerAuxiliaryWindowsForWorkspace();
@@ -706,6 +716,8 @@ private:
     /// context panel can ride above them. False when the selection has no
     /// horizontal extent.
     bool contextPanelAnchor(int& centreX) const;
+    /// Centre of the transport readout, mapped into the shared tool strip.
+    bool contextPanelHomeAnchor(int& centreX) const;
     /// How far the context plate may travel: the arrangement's left and right
     /// edges in the tool strip's coordinates.
     bool contextPanelBounds(int& left, int& right) const;
@@ -713,7 +725,7 @@ private:
     /// earlier session left behind. Interactive startup invokes this only once
     /// the splash is gone; headless runs skip it unless DAW_RECOVERY_ROOT
     /// points somewhere disposable.
-    void startRecovery(bool interactive);
+    bool startRecovery(bool interactive);
     /// Hand the journal the current document if anything changed since the last
     /// sample. Driven by a timer rather than by markDirty() directly: an edit
     /// can fire on every mouse move, and the journal copies the whole document.
@@ -810,6 +822,7 @@ private:
     void initializeBlankProject();
     QString chooseProjectTemplate();
     bool createProjectFromTemplatePath(const QString& packageDir);
+    bool loadProjectTemplatePath(const QString& packageDir, bool startup);
     bool quickImportAudioPath(const QString& path);
     void addProjectTemplateTracks(const QString& packageDir);
 
@@ -882,7 +895,6 @@ private:
     QWidget* m_browserHandle = nullptr;
     QWidget* m_webContainer = nullptr;
     WebBrowserPanel* m_webPanel = nullptr;
-    ui::WebVideoBackground* m_webVideoBackground = nullptr;
     QWidget* m_webHandle = nullptr;
     NotebookWindow* m_notebookWindow = nullptr;
     QWidget* m_notebookContainer = nullptr;

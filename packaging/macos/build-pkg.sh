@@ -8,9 +8,10 @@
 #           build-pkg/VLTONE-<version>.pkg — Installer package, and
 #           build-pkg/VLTONE-<version>.dmg — drag-to-Applications image.
 #
-# The bundle carries its own Qt, PortAudio, RtMidi and libsndfile (macdeployqt
-# copies every non-system dylib and rewrites the load commands), plus the three helper
-# executables the app looks for *next to itself*: daw_scan, which loads
+# The bundle carries its own Qt, PortAudio and libsndfile (macdeployqt copies
+# every non-system dylib and rewrites the load commands). The locally patched
+# macOS RtMidi backend is linked statically. The bundle also carries the three
+# helper executables the app looks for *next to itself*: daw_scan, which loads
 # third-party plugins out of process, daw_guard, the network-free crash
 # watchdog, and daw_reporter, the restricted diagnostics courier.
 #
@@ -68,6 +69,8 @@ rm -rf "$STAGE"
 cmake --install "$BUILD" --prefix "$STAGE" || true
 test -x "$STAGE/$APP_BUNDLE/Contents/MacOS/$APP_NAME" ||
     { echo "no app was staged"; exit 1; }
+python3 "$ROOT/packaging/prune-qml.py" "$STAGE/$APP_BUNDLE" \
+    --source "$ROOT/app/graphics/qml"
 for helper in daw_scan daw_guard daw_reporter; do
     test -x "$STAGE/$APP_BUNDLE/Contents/MacOS/$helper" ||
         { echo "$helper is missing from the bundle"; exit 1; }
@@ -83,10 +86,17 @@ for resource in qtwebengine_resources.pak icudtl.dat; do
     find "$STAGE/$APP_BUNDLE" -type f -name "$resource" -print -quit | grep -q . ||
         { echo "$resource is missing from the bundle"; exit 1; }
 done
-find "$STAGE/$APP_BUNDLE/Contents/Frameworks" -type f \
-    -name 'librtmidi*.dylib' -print -quit | grep -q . ||
-    { echo "RtMidi is missing from the bundle"; exit 1; }
-
+# QML imports are runtime dependencies even though the scene's own QML and
+# shaders are compiled into the executable. Missing these produces a blank
+# workspace only on machines without the developer's Qt installation.
+for module in QtQuick QtMultimedia QtWebEngine; do
+    test -f "$STAGE/$APP_BUNDLE/Contents/Resources/qml/$module/qmldir" ||
+        { echo "Required QML module $module is missing from the bundle"; exit 1; }
+done
+for framework in QtQuick QtQml QtMultimedia QtWebEngineQuick; do
+    test -d "$STAGE/$APP_BUNDLE/Contents/Frameworks/$framework.framework" ||
+        { echo "Required $framework framework is missing from the bundle"; exit 1; }
+done
 # Some Homebrew dylibs carry their Cellar/opt path as their own install ID.
 # macdeployqt normally rewrites these, but not every leaf library (brotli has
 # been one such case).  A bundled dylib must identify itself through @rpath so

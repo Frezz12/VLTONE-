@@ -6,7 +6,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
 
@@ -28,6 +27,10 @@ QString normalizedExistingFile(const QString& path) {
     return info.exists() && info.isFile()
                ? QDir::cleanPath(info.absoluteFilePath())
                : QString();
+}
+
+QString legacyTimedCuesFilePath() {
+    return QDir(dataDirectory()).filePath(QStringLiteral("timed-text.json"));
 }
 
 bool hasSuffix(const QString& path, const QStringList& suffixes) {
@@ -160,7 +163,7 @@ QString dataDirectory() {
     return QDir(root).filePath(QStringLiteral("notebook"));
 }
 
-QString contentFilePath() {
+QString legacyContentFilePath() {
     return QDir(dataDirectory()).filePath(QStringLiteral("note.html"));
 }
 
@@ -168,12 +171,8 @@ QString assetDirectory() {
     return QDir(dataDirectory()).filePath(QStringLiteral("assets"));
 }
 
-QString timedCuesFilePath() {
-    return QDir(dataDirectory()).filePath(QStringLiteral("timed-text.json"));
-}
-
-QVector<TimedCue> timedCues() {
-    QFile file(timedCuesFilePath());
+QVector<TimedCue> legacyTimedCues() {
+    QFile file(legacyTimedCuesFilePath());
     if (!file.open(QIODevice::ReadOnly)) return {};
     const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
     if (!document.isArray()) return {};
@@ -186,26 +185,6 @@ QVector<TimedCue> timedCues() {
                         object.value(QStringLiteral("text")).toString()});
     }
     return normalizedCues(std::move(cues));
-}
-
-bool saveTimedCues(QVector<TimedCue> cues, QString* error) {
-    cues = normalizedCues(std::move(cues));
-    QJsonArray array;
-    for (const TimedCue& cue : std::as_const(cues)) {
-        array.push_back(QJsonObject{
-            {QStringLiteral("seconds"), cue.seconds},
-            {QStringLiteral("text"), cue.text},
-        });
-    }
-    QDir().mkpath(dataDirectory());
-    QSaveFile file(timedCuesFilePath());
-    const QByteArray bytes = QJsonDocument(array).toJson(QJsonDocument::Compact);
-    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() ||
-        !file.commit()) {
-        if (error) *error = QStringLiteral("could not save timed text");
-        return false;
-    }
-    return true;
 }
 
 int timedCueIndexAt(const QVector<TimedCue>& cues, double seconds) {
@@ -281,7 +260,7 @@ bool checkPreferencesForTest(QString* error) {
                     !isSupportedBackground(QStringLiteral("run.exe")) &&
                     isSupportedFont(QStringLiteral("notes.woff2")) &&
                     !isSupportedFont(QStringLiteral("font.txt")) &&
-                    !contentFilePath().isEmpty() &&
+                    !dataDirectory().isEmpty() &&
                     timedCueIndexAt(cues, 9.99) == -1 &&
                     timedCueIndexAt(cues, 10.0) == 0 &&
                     timedCueIndexAt(cues, 19.99) == 0 &&

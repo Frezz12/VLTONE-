@@ -64,6 +64,7 @@ public:
     /// transport's Layers button, and an open window has to follow.
     void reloadRecordingPage();
     bool checkAudioPageForTest() const;
+    static bool checkWheelRoutingForTest();
     void showQuickImportError(const QString& message);
     /// Import and apply a .vlttheme delivered by a file picker, Finder or
     /// Explorer. The operation owns a private copy before returning success.
@@ -110,6 +111,7 @@ private:
     void refreshFontStatus();
     void refreshThemeLibrary();
     void refreshThemeControls();
+    void refreshStartupTemplateOptions();
     bool applyInstalledTheme(const QString& filePath, const QString& storageId);
     void saveCurrentThemeToLibrary();
     void exportCurrentTheme();
@@ -136,7 +138,12 @@ private:
 
     Theme m_editTheme;                             // the working custom palette
     QLineEdit* m_themeNameEdit = nullptr;
+    QWidget* m_themePreview = nullptr;
+    QLabel* m_themeLiveStatus = nullptr;
+    QLabel* m_themeContrastStatus = nullptr;
+    QPushButton* m_themeSaveButton = nullptr;
     QComboBox* m_languageList = nullptr;
+    QComboBox* m_startupTemplate = nullptr;
     QLabel* m_languageStatus = nullptr;
     QPushButton* m_removeLanguage = nullptr;
     QLabel* m_fontStatus = nullptr;
@@ -166,5 +173,5 @@ private:
     QRadioButton* m_trackColourTint = nullptr;
     QRadioButton* m_neutralTint = nullptr;
     bool m_applyingInstalledTheme = false;
-    QHash<QString, QPushButton*> m_swatches;       // field key → swatch button
+    QHash<QString, QPushButton*> m_swatches;       // field key → labelled colour button
 };

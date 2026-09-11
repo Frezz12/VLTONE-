@@ -1,4 +1,5 @@
 #include "SettingsWindow.hpp"
+#include "graphics/GraphicsPreferences.hpp"
 #include "UiFrameClock.hpp"
 #include <QSpinBox>
 #include "AiSettingsPage.hpp"
@@ -13,7 +14,10 @@
 #include "ShortcutManager.hpp"
 #include "Theme.hpp"
 #include "ThemePackage.hpp"
+#include "Controls.hpp"
 #include "TimelineBackgroundPrefs.hpp"
+#include "ProjectTemplates.hpp"
+#include "StartupProjectPrefs.hpp"
 #include "UiConstants.hpp"
 #include "RecordingSettingsPage.hpp"
 #include "TransportSettingsPage.hpp"
@@ -41,13 +45,18 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QPainter>
+#include <QPaintEvent>
+#include <QPainterPath>
 #include <QPointer>
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QCheckBox>
+#include <QChildEvent>
 #include <QRadioButton>
 #include <QSlider>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QScreen>
 #include <QSettings>
 #include <QShowEvent>
@@ -59,68 +68,294 @@
 #include <QThreadPool>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <vector>
 
 namespace {
+enum class ColorSection {
+    Surfaces,
+    Typography,
+    Accent,
+    Timeline,
+};
+
 // The editable colours of a theme, paired with a pointer-to-member so the
 // editor can read and write each one generically.
 struct ColorField {
     const char* key;
     const char* label;
     QColor Theme::* member;
+    ColorSection section;
 };
 const std::vector<ColorField>& colorFields() {
     static const std::vector<ColorField> fields = {
-        {"background", QT_TRANSLATE_NOOP("SettingsWindow", "Background"), &Theme::background},
-        {"surface", QT_TRANSLATE_NOOP("SettingsWindow", "Surface"), &Theme::surface},
-        {"surfaceElevated", QT_TRANSLATE_NOOP("SettingsWindow", "Surface (elevated)"), &Theme::surfaceElevated},
-        {"headerBackground", QT_TRANSLATE_NOOP("SettingsWindow", "Header"), &Theme::headerBackground},
-        {"transportBackground", QT_TRANSLATE_NOOP("SettingsWindow", "Transport"), &Theme::transportBackground},
-        {"toolbarBackground", QT_TRANSLATE_NOOP("SettingsWindow", "Toolbar"), &Theme::toolbarBackground},
-        {"pluginMenuBackground", QT_TRANSLATE_NOOP("SettingsWindow", "Plugin menu background"), &Theme::pluginMenuBackground},
-        {"textPrimary", QT_TRANSLATE_NOOP("SettingsWindow", "Text"), &Theme::textPrimary},
-        {"textSecondary", QT_TRANSLATE_NOOP("SettingsWindow", "Text (secondary)"), &Theme::textSecondary},
-        {"accent", QT_TRANSLATE_NOOP("SettingsWindow", "Accent"), &Theme::accent},
-        {"accentHighlight", QT_TRANSLATE_NOOP("SettingsWindow", "Accent (highlight)"), &Theme::accentHighlight},
-        {"waveform", QT_TRANSLATE_NOOP("SettingsWindow", "Waveform"), &Theme::waveform},
-        {"cursor", QT_TRANSLATE_NOOP("SettingsWindow", "Playhead"), &Theme::cursor},
-        {"gridLine", QT_TRANSLATE_NOOP("SettingsWindow", "Grid line"), &Theme::gridLine},
-        {"gridLineStrong", QT_TRANSLATE_NOOP("SettingsWindow", "Grid line (strong)"), &Theme::gridLineStrong},
-        {"selection", QT_TRANSLATE_NOOP("SettingsWindow", "Selection"), &Theme::selection},
+        {"background", QT_TRANSLATE_NOOP("SettingsWindow", "Background"), &Theme::background, ColorSection::Surfaces},
+        {"surface", QT_TRANSLATE_NOOP("SettingsWindow", "Surface"), &Theme::surface, ColorSection::Surfaces},
+        {"surfaceElevated", QT_TRANSLATE_NOOP("SettingsWindow", "Surface (elevated)"), &Theme::surfaceElevated, ColorSection::Surfaces},
+        {"headerBackground", QT_TRANSLATE_NOOP("SettingsWindow", "Header"), &Theme::headerBackground, ColorSection::Surfaces},
+        {"transportBackground", QT_TRANSLATE_NOOP("SettingsWindow", "Transport"), &Theme::transportBackground, ColorSection::Surfaces},
+        {"toolbarBackground", QT_TRANSLATE_NOOP("SettingsWindow", "Toolbar"), &Theme::toolbarBackground, ColorSection::Surfaces},
+        {"pluginMenuBackground", QT_TRANSLATE_NOOP("SettingsWindow", "Plugin menu background"), &Theme::pluginMenuBackground, ColorSection::Surfaces},
+        {"textPrimary", QT_TRANSLATE_NOOP("SettingsWindow", "Text"), &Theme::textPrimary, ColorSection::Typography},
+        {"textSecondary", QT_TRANSLATE_NOOP("SettingsWindow", "Text (secondary)"), &Theme::textSecondary, ColorSection::Typography},
+        {"accent", QT_TRANSLATE_NOOP("SettingsWindow", "Accent"), &Theme::accent, ColorSection::Accent},
+        {"accentHighlight", QT_TRANSLATE_NOOP("SettingsWindow", "Accent (highlight)"), &Theme::accentHighlight, ColorSection::Accent},
+        {"selection", QT_TRANSLATE_NOOP("SettingsWindow", "Selection"), &Theme::selection, ColorSection::Accent},
+        {"waveform", QT_TRANSLATE_NOOP("SettingsWindow", "Waveform"), &Theme::waveform, ColorSection::Timeline},
+        {"cursor", QT_TRANSLATE_NOOP("SettingsWindow", "Playhead"), &Theme::cursor, ColorSection::Timeline},
+        {"gridLine", QT_TRANSLATE_NOOP("SettingsWindow", "Grid line"), &Theme::gridLine, ColorSection::Timeline},
+        {"gridLineStrong", QT_TRANSLATE_NOOP("SettingsWindow", "Grid line (strong)"), &Theme::gridLineStrong, ColorSection::Timeline},
     };
     return fields;
 }
 
+class ThemePreviewWidget final : public QWidget {
+public:
+    ThemePreviewWidget(std::function<Theme()> themeProvider, QWidget* parent)
+        : QWidget(parent), m_themeProvider(std::move(themeProvider)) {
+        setMinimumHeight(152);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setAccessibleName(QCoreApplication::translate(
+            "SettingsWindow", "Live theme preview"));
+        setAccessibleDescription(QCoreApplication::translate(
+            "SettingsWindow",
+            "A miniature arrangement that updates with the selected colours."));
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        const Theme theme = m_themeProvider();
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+
+        const QRectF frame = QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0);
+        QPainterPath clip;
+        clip.addRoundedRect(frame, 10.0, 10.0);
+        painter.setClipPath(clip);
+        painter.fillPath(clip, theme.background);
+
+        const qreal headerHeight = 28.0;
+        const qreal footerHeight = 25.0;
+        const qreal sidebarWidth = std::clamp(frame.width() * 0.22, 82.0, 118.0);
+        painter.fillRect(QRectF(frame.left(), frame.top(), frame.width(), headerHeight),
+                         theme.headerBackground);
+        painter.fillRect(QRectF(frame.left(), frame.top() + headerHeight,
+                                sidebarWidth, frame.height() - headerHeight),
+                         theme.surface);
+        painter.fillRect(QRectF(frame.left() + sidebarWidth,
+                                frame.bottom() - footerHeight,
+                                frame.width() - sidebarWidth, footerHeight),
+                         theme.toolbarBackground);
+
+        const QRectF transport(frame.center().x() - 58.0, frame.top() + 5.0,
+                               116.0, 18.0);
+        painter.setPen(theme.separator());
+        painter.setBrush(theme.transportBackground);
+        painter.drawRoundedRect(transport, 6.0, 6.0);
+        painter.setPen(theme.accentHighlight);
+        painter.drawText(transport, Qt::AlignCenter, QStringLiteral("1.1.000   120"));
+
+        painter.setPen(theme.textSecondary);
+        QFont small = font();
+        small.setPixelSize(9);
+        small.setWeight(QFont::DemiBold);
+        painter.setFont(small);
+        painter.drawText(QRectF(frame.left() + 10.0, frame.top() + 38.0,
+                                sidebarWidth - 20.0, 16.0),
+                         Qt::AlignLeft | Qt::AlignVCenter,
+                         QCoreApplication::translate("SettingsWindow", "Tracks"));
+
+        const qreal laneLeft = frame.left() + sidebarWidth;
+        const qreal laneTop = frame.top() + headerHeight;
+        const qreal laneRight = frame.right();
+        const qreal laneBottom = frame.bottom() - footerHeight;
+        painter.setPen(theme.gridLine);
+        for (qreal x = laneLeft + 18.0; x < laneRight; x += 18.0)
+            painter.drawLine(QPointF(x, laneTop), QPointF(x, laneBottom));
+        painter.setPen(theme.gridLineStrong);
+        for (qreal x = laneLeft + 72.0; x < laneRight; x += 72.0)
+            painter.drawLine(QPointF(x, laneTop), QPointF(x, laneBottom));
+
+        const qreal trackHeight = (laneBottom - laneTop) / 3.0;
+        const QString trackNames[] = {
+            QCoreApplication::translate("SettingsWindow", "Drums"),
+            QCoreApplication::translate("SettingsWindow", "Bass"),
+            QCoreApplication::translate("SettingsWindow", "Synth"),
+        };
+        for (int i = 0; i < 3; ++i) {
+            const qreal top = laneTop + i * trackHeight;
+            if (i == 1)
+                painter.fillRect(QRectF(frame.left(), top, frame.width(), trackHeight),
+                                 theme.selection);
+            painter.setPen(theme.separator());
+            painter.drawLine(QPointF(frame.left(), top + trackHeight),
+                             QPointF(frame.right(), top + trackHeight));
+            painter.setPen(i == 0 ? theme.textPrimary : theme.textSecondary);
+            painter.drawText(QRectF(frame.left() + 10.0, top, sidebarWidth - 20.0,
+                                    trackHeight),
+                             Qt::AlignLeft | Qt::AlignVCenter,
+                             trackNames[i]);
+        }
+
+        const QRectF clipRect(laneLeft + 22.0, laneTop + 12.0,
+                              std::max(90.0, (laneRight - laneLeft) * 0.48),
+                              trackHeight - 20.0);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(theme.accent);
+        painter.drawRoundedRect(clipRect, 5.0, 5.0);
+        painter.setPen(QPen(theme.waveform, 1.5));
+        QPainterPath waveform;
+        waveform.moveTo(clipRect.left() + 8.0, clipRect.center().y());
+        for (int x = 8; x < int(clipRect.width()) - 8; x += 8) {
+            const qreal y = clipRect.center().y() + ((x / 8) % 2 ? -6.0 : 6.0);
+            waveform.lineTo(clipRect.left() + x, y);
+        }
+        painter.drawPath(waveform);
+
+        painter.setPen(QPen(theme.cursor, 2.0));
+        const qreal playheadX = laneLeft + (laneRight - laneLeft) * 0.72;
+        painter.drawLine(QPointF(playheadX, laneTop),
+                         QPointF(playheadX, laneBottom));
+
+        painter.setClipping(false);
+        painter.setPen(theme.sectionDivider());
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(frame, 10.0, 10.0);
+    }
+
+private:
+    std::function<Theme()> m_themeProvider;
+};
+
+QColor compositeOver(const QColor& foreground, const QColor& background) {
+    const double alpha = foreground.alphaF();
+    return QColor::fromRgbF(
+        foreground.redF() * alpha + background.redF() * (1.0 - alpha),
+        foreground.greenF() * alpha + background.greenF() * (1.0 - alpha),
+        foreground.blueF() * alpha + background.blueF() * (1.0 - alpha));
+}
+
+double relativeLuminance(const QColor& colour) {
+    const auto channel = [](double value) {
+        return value <= 0.04045 ? value / 12.92
+                               : std::pow((value + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * channel(colour.redF()) +
+           0.7152 * channel(colour.greenF()) +
+           0.0722 * channel(colour.blueF());
+}
+
+double contrastRatio(const QColor& foreground, const QColor& background) {
+    const QColor opaqueForeground = compositeOver(foreground, background);
+    const double lighter = std::max(relativeLuminance(opaqueForeground),
+                                    relativeLuminance(background));
+    const double darker = std::min(relativeLuminance(opaqueForeground),
+                                   relativeLuminance(background));
+    return (lighter + 0.05) / (darker + 0.05);
+}
+
 QString presetDisplayName(const Theme& theme) {
-    if (theme.id == QLatin1String("logic")) return QCoreApplication::translate(
-        "SettingsWindow", "Logic Graphite");
-    if (theme.id == QLatin1String("logic-light")) return QCoreApplication::translate(
-        "SettingsWindow", "Logic Light");
     if (theme.id == QLatin1String("dark")) return QCoreApplication::translate(
         "SettingsWindow", "Dark");
     if (theme.id == QLatin1String("light")) return QCoreApplication::translate(
         "SettingsWindow", "Light");
-    if (theme.id == QLatin1String("midnight")) return QCoreApplication::translate(
-        "SettingsWindow", "Midnight");
-    if (theme.id == QLatin1String("carbon")) return QCoreApplication::translate(
-        "SettingsWindow", "Carbon");
-    if (theme.id == QLatin1String("dracula")) return QCoreApplication::translate(
-        "SettingsWindow", "Dracula");
-    if (theme.id == QLatin1String("solarized-dark")) return QCoreApplication::translate(
-        "SettingsWindow", "Solarized Dark");
     if (theme.id == QLatin1String("solarized-light")) return QCoreApplication::translate(
         "SettingsWindow", "Solarized Light");
-    if (theme.id == QLatin1String("nord")) return QCoreApplication::translate(
-        "SettingsWindow", "Nord");
     if (theme.id == QLatin1String("gruvbox")) return QCoreApplication::translate(
         "SettingsWindow", "Gruvbox");
     return theme.name;
 }
+
+// Dense settings rows contain sliders, combo boxes and spin boxes that accept
+// Wheel on hover. A vertical gesture over those controls should move the page;
+// values remain directly editable by drag, click and keyboard.
+class SettingsScrollArea final : public QScrollArea {
+public:
+    using QScrollArea::QScrollArea;
+
+    void setSettingsWidget(QWidget* page) {
+        setWidget(page);
+        watch(page);
+    }
+
+    static bool checkWheelRoutingForTest() {
+        SettingsScrollArea scroll;
+        auto* page = new QWidget;
+        page->setFixedSize(180, 600);
+        auto* slider = new ui::GlassSlider(Qt::Horizontal, page);
+        slider->setGeometry(20, 20, 120, 28);
+        slider->setRange(0, 100);
+        slider->setValue(50);
+        scroll.setSettingsWidget(page);
+        scroll.resize(200, 140);
+        scroll.show();
+        QApplication::processEvents();
+
+        const QPointF point(slider->rect().center());
+        const QPointF global = slider->mapToGlobal(point);
+        QWheelEvent angle(point, global, {}, QPoint(0, -120), Qt::NoButton,
+                          Qt::NoModifier, Qt::ScrollUpdate, false);
+        QApplication::sendEvent(slider, &angle);
+        const int afterAngle = scroll.verticalScrollBar()->value();
+        QWheelEvent pixels(point, global, QPoint(0, -24), {}, Qt::NoButton,
+                           Qt::NoModifier, Qt::ScrollUpdate, false);
+        QApplication::sendEvent(slider, &pixels);
+        return angle.isAccepted() && pixels.isAccepted() && afterAngle > 0 &&
+               scroll.verticalScrollBar()->value() > afterAngle &&
+               slider->value() == 50;
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::ChildAdded) {
+            auto* childEvent = static_cast<QChildEvent*>(event);
+            if (auto* child = qobject_cast<QWidget*>(childEvent->child())) watch(child);
+        }
+        if (event->type() == QEvent::Wheel && widget()) {
+            auto* source = qobject_cast<QWidget*>(watched);
+            auto* wheel = static_cast<QWheelEvent*>(event);
+            const bool belongsToPage = source &&
+                (source == widget() || widget()->isAncestorOf(source));
+            const bool vertical = wheel->pixelDelta().y() != 0 ||
+                                  wheel->angleDelta().y() != 0;
+            if (belongsToPage && vertical &&
+                verticalScrollBar()->maximum() > verticalScrollBar()->minimum()) {
+                if (wheel->pixelDelta().y() != 0) {
+                    verticalScrollBar()->setValue(
+                        verticalScrollBar()->value() - wheel->pixelDelta().y());
+                    event->accept();
+                    return true;
+                }
+                QWheelEvent forwarded(
+                    viewport()->mapFromGlobal(wheel->globalPosition()),
+                    wheel->globalPosition(), wheel->pixelDelta(),
+                    wheel->angleDelta(), wheel->buttons(), wheel->modifiers(),
+                    wheel->phase(), wheel->inverted(), wheel->source(),
+                    wheel->pointingDevice());
+                forwarded.setTimestamp(wheel->timestamp());
+                forwarded.ignore();
+                QApplication::sendEvent(viewport(), &forwarded);
+                event->setAccepted(forwarded.isAccepted());
+                return forwarded.isAccepted();
+            }
+        }
+        return QScrollArea::eventFilter(watched, event);
+    }
+
+private:
+    void watch(QWidget* branch) {
+        if (!branch) return;
+        branch->installEventFilter(this);
+        const auto descendants = branch->findChildren<QWidget*>();
+        for (QWidget* child : descendants) child->installEventFilter(this);
+    }
+};
 
 /// A settings page owns its natural size, while the dialog owns the viewport.
 /// This breaks the size-hint chain that used to let a long page push the whole
@@ -136,7 +371,7 @@ QScrollArea* scrollablePage(QWidget* page) {
         label->setWordWrap(true);
         label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     }
-    auto* scroll = new QScrollArea;
+    auto* scroll = new SettingsScrollArea;
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidgetResizable(true);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -144,7 +379,7 @@ QScrollArea* scrollablePage(QWidget* page) {
     scroll->setSizeAdjustPolicy(QAbstractScrollArea::AdjustIgnored);
     scroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
     scroll->setMinimumSize(0, 0);
-    scroll->setWidget(page);
+    scroll->setSettingsWidget(page);
     return scroll;
 }
 
@@ -289,9 +524,8 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
 
 void SettingsWindow::refreshTimelineBackgroundSource() {
     if (!m_timelineBackgroundPath) return;
-    const QString webUrl = ui::timelinebackgroundprefs::webSource().value("pageUrl").toString();
-    const QString display = webUrl.isEmpty()
-        ? QDir::toNativeSeparators(ui::timelinebackgroundprefs::path()) : webUrl;
+    const QString display = QDir::toNativeSeparators(
+        ui::timelinebackgroundprefs::path());
     m_timelineBackgroundPath->setText(display);
     m_timelineBackgroundPath->setToolTip(display);
     m_clearTimelineBackground->setEnabled(!display.isEmpty());
@@ -301,6 +535,7 @@ void SettingsWindow::refreshTimelineBackgroundSource() {
 
 void SettingsWindow::showEvent(QShowEvent* event) {
     refreshTimelineBackgroundSource();
+    refreshStartupTemplateOptions();
     refreshThemeLibrary();
     refreshThemeControls();
     if (m_notebookPage) m_notebookPage->refresh();
@@ -362,6 +597,10 @@ void SettingsWindow::reloadRecordingPage() {
 
 bool SettingsWindow::checkAudioPageForTest() const {
     return m_audioPage && m_audioPage->checkForTest();
+}
+
+bool SettingsWindow::checkWheelRoutingForTest() {
+    return SettingsScrollArea::checkWheelRoutingForTest();
 }
 
 QWidget* SettingsWindow::buildLanguageTab() {
@@ -797,14 +1036,13 @@ QWidget* SettingsWindow::buildThemesTab() {
                         tr("Choose a supported image, GIF or video file."));
                     return;
                 }
+                m_enableTimelineBackground->setChecked(true);
                 refreshBackgroundPath();
                 emit themeBackgroundSettingsChanged();
             });
     connect(clearBackground, &QPushButton::clicked, this,
             [this, refreshBackgroundPath] {
-                if (!ui::timelinebackgroundprefs::webSource().isEmpty())
-                    ui::timelinebackgroundprefs::clearWebSource();
-                else ui::timelinebackgroundprefs::clear();
+                ui::timelinebackgroundprefs::clear();
                 refreshBackgroundPath();
                 emit themeBackgroundSettingsChanged();
             });
@@ -816,7 +1054,7 @@ QWidget* SettingsWindow::buildThemesTab() {
             auto* layout = new QHBoxLayout(row);
             layout->setContentsMargins(0, 0, 0, 0);
             layout->setSpacing(8);
-            auto* slider = new QSlider(Qt::Horizontal, row);
+            auto* slider = new ui::GlassSlider(Qt::Horizontal, row);
             slider->setRange(0, 100);
             slider->setValue(value);
             slider->setAccessibleName(accessibleName);
@@ -849,7 +1087,7 @@ QWidget* SettingsWindow::buildThemesTab() {
     auto* blurLayout = new QHBoxLayout(blurRow);
     blurLayout->setContentsMargins(0, 0, 0, 0);
     blurLayout->setSpacing(8);
-    auto* blur = new QSlider(Qt::Horizontal, blurRow);
+    auto* blur = new ui::GlassSlider(Qt::Horizontal, blurRow);
     m_timelineBlur = blur;
     blur->setRange(0, 32);
     blur->setValue(ui::timelinebackgroundprefs::blurRadius());
@@ -968,6 +1206,7 @@ QWidget* SettingsWindow::buildThemesTab() {
                         tr("Choose a supported image, GIF or video file."));
                     return;
                 }
+                m_enableHeaderBackground->setChecked(true);
                 refreshHeaderBackgroundPath();
                 emit themeBackgroundSettingsChanged();
             });
@@ -1010,7 +1249,7 @@ QWidget* SettingsWindow::buildThemesTab() {
             auto* layout = new QHBoxLayout(row);
             layout->setContentsMargins(0, 0, 0, 0);
             layout->setSpacing(8);
-            auto* slider = new QSlider(Qt::Horizontal, row);
+            auto* slider = new ui::GlassSlider(Qt::Horizontal, row);
             slider->setRange(0, 100);
             slider->setValue(value);
             slider->setAccessibleName(accessibleName);
@@ -1044,7 +1283,7 @@ QWidget* SettingsWindow::buildThemesTab() {
     auto* headerBlurLayout = new QHBoxLayout(headerBlurRow);
     headerBlurLayout->setContentsMargins(0, 0, 0, 0);
     headerBlurLayout->setSpacing(8);
-    auto* headerBlur = new QSlider(Qt::Horizontal, headerBlurRow);
+    auto* headerBlur = new ui::GlassSlider(Qt::Horizontal, headerBlurRow);
     m_headerBlur = headerBlur;
     headerBlur->setRange(0, 32);
     headerBlur->setValue(ui::headerbackgroundprefs::blurRadius());
@@ -1112,7 +1351,7 @@ QWidget* SettingsWindow::buildThemesTab() {
     auto* headCol = new QVBoxLayout(headGroup);
     auto* widthRow = new QHBoxLayout;
     auto* widthLabel = new QLabel(tr("Line thickness"), headGroup);
-    auto* widthSlider = new QSlider(Qt::Horizontal, headGroup);
+    auto* widthSlider = new ui::GlassSlider(Qt::Horizontal, headGroup);
     m_playheadWidth = widthSlider;
     // Tenths of a pixel: the default is 1.6, and whole steps would take that
     // choice away.
@@ -1350,13 +1589,23 @@ bool SettingsWindow::applyInstalledTheme(const QString& filePath,
 }
 
 void SettingsWindow::saveCurrentThemeToLibrary() {
-    bool accepted = false;
-    const QString initial = ThemeManager::instance().theme().name.isEmpty()
-        ? tr("Custom Theme") : ThemeManager::instance().theme().name;
-    const QString name = QInputDialog::getText(
-        this, tr("Save Theme"), tr("Theme name"), QLineEdit::Normal,
-        initial, &accepted).trimmed();
-    if (!accepted || name.isEmpty()) return;
+    QString name;
+    if (m_tabs && m_tabs->currentIndex() == kThemeEditorTab &&
+        m_themeNameEdit) {
+        name = m_themeNameEdit->text().trimmed();
+        if (name.isEmpty()) {
+            m_themeNameEdit->setFocus();
+            return;
+        }
+    } else {
+        bool accepted = false;
+        const QString initial = ThemeManager::instance().theme().name.isEmpty()
+            ? tr("Custom Theme") : ThemeManager::instance().theme().name;
+        name = QInputDialog::getText(
+            this, tr("Save Theme"), tr("Theme name"), QLineEdit::Normal,
+            initial, &accepted).trimmed();
+        if (!accepted || name.isEmpty()) return;
+    }
 
     ui::ThemePackageSnapshot snapshot;
     QString error;
@@ -1484,74 +1733,201 @@ void SettingsWindow::importThemeFile(const QString& path) {
 
 QWidget* SettingsWindow::buildThemeEditorTab() {
     m_editTheme = ThemeManager::instance().theme();   // start from the active one
+    if (m_editTheme.id != QLatin1String("custom"))
+        m_editTheme.name = tr("My Theme");
 
     auto* page = new QWidget;
+    page->setObjectName(QStringLiteral("ThemeEditorPage"));
     auto* col = new QVBoxLayout(page);
-    col->addWidget(new QLabel(
-        tr("Design your own palette — changes apply live. Export it to share, "
-           "or import a theme file.")));
+    col->setSpacing(12);
 
-    // Name row.
-    auto* nameRow = new QHBoxLayout;
-    nameRow->addWidget(new QLabel(tr("Name")));
-    m_themeNameEdit = new QLineEdit(m_editTheme.name.isEmpty() ? tr("Custom")
-                                                              : m_editTheme.name);
-    connect(m_themeNameEdit, &QLineEdit::textEdited, this, [this](const QString& s) {
-        m_editTheme.name = s;
-    });
-    nameRow->addWidget(m_themeNameEdit, 1);
-    col->addLayout(nameRow);
+    auto* title = new QLabel(tr("Create your theme"), page);
+    title->setProperty("role", "pageTitle");
+    col->addWidget(title);
+    auto* introduction = new QLabel(
+        tr("Start with a familiar palette, then make it yours. The preview "
+           "updates as you choose colours, and accepted changes appear "
+           "throughout VLTONE immediately."),
+        page);
+    introduction->setProperty("role", "secondary");
+    introduction->setWordWrap(true);
+    col->addWidget(introduction);
 
-    // A scrollable grid of colour swatches.
-    auto* scroll = new QScrollArea(page);
-    scroll->setWidgetResizable(true);
-    auto* gridingHost = new QWidget;
-    auto* grid = new QGridLayout(gridingHost);
-    grid->setContentsMargins(2, 2, 2, 2);
-    grid->setHorizontalSpacing(14);
-    grid->setVerticalSpacing(7);
+    auto* detailsGroup = new QGroupBox(tr("Theme details"), page);
+    auto* detailsForm = new QFormLayout(detailsGroup);
+    detailsForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    detailsForm->setHorizontalSpacing(14);
+    detailsForm->setVerticalSpacing(9);
 
-    const auto& fields = colorFields();
-    for (int i = 0; i < int(fields.size()); ++i) {
-        const ColorField& f = fields[size_t(i)];
-        const int rowN = i / 2;
-        const int colN = (i % 2) * 2;
+    m_themeNameEdit = new QLineEdit(
+        m_editTheme.name.isEmpty() ? tr("My Theme") : m_editTheme.name,
+        detailsGroup);
+    m_themeNameEdit->setObjectName(QStringLiteral("ThemeEditorName"));
+    m_themeNameEdit->setAccessibleName(tr("Theme name"));
+    m_themeNameEdit->setPlaceholderText(tr("My studio theme"));
+    m_themeNameEdit->setMaxLength(80);
+    detailsForm->addRow(tr("Name"), m_themeNameEdit);
 
-        auto* swatch = new QPushButton;
-        swatch->setFixedSize(46, 22);
-        swatch->setCursor(Qt::PointingHandCursor);
-        swatch->setToolTip(tr("Pick a colour"));
-        m_swatches.insert(f.key, swatch);
-        QColor Theme::* member = f.member;
-        connect(swatch, &QPushButton::clicked, this, [this, member] {
-            const QColor start = m_editTheme.*member;
-            const QColor picked = QColorDialog::getColor(
-                start, this, tr("Choose colour"),
-                QColorDialog::ShowAlphaChannel);
-            if (!picked.isValid()) return;
-            m_editTheme.*member = picked;
-            applyEditTheme();
-        });
-
-        grid->addWidget(new QLabel(
-            QCoreApplication::translate("SettingsWindow", f.label)), rowN,
-            colN);
-        grid->addWidget(swatch, rowN, colN + 1);
+    auto* starterRow = new QWidget(detailsGroup);
+    auto* starterLayout = new QHBoxLayout(starterRow);
+    starterLayout->setContentsMargins(0, 0, 0, 0);
+    starterLayout->setSpacing(8);
+    auto* starter = new QComboBox(starterRow);
+    starter->setObjectName(QStringLiteral("ThemeEditorStarter"));
+    starter->setAccessibleName(tr("Starting palette"));
+    int currentPreset = -1;
+    for (const Theme& preset : ThemeManager::instance().presets()) {
+        starter->addItem(presetDisplayName(preset), preset.id);
+        if (preset.id == ThemeManager::instance().themeId())
+            currentPreset = starter->count() - 1;
     }
-    grid->setColumnStretch(0, 1);
-    grid->setColumnStretch(2, 1);
-    scroll->setWidget(gridingHost);
-    col->addWidget(scroll, 1);
+    if (currentPreset >= 0) starter->setCurrentIndex(currentPreset);
+    auto* useStarter = new QPushButton(tr("Use palette"), starterRow);
+    useStarter->setToolTip(tr("Replace the colours below with this palette"));
+    useStarter->setEnabled(starter->count() > 0);
+    starterLayout->addWidget(starter, 1);
+    starterLayout->addWidget(useStarter);
+    detailsForm->addRow(tr("Start from"), starterRow);
 
-    // Actions: reseed from the active theme, export and import.
-    auto* fromCurrent = new QPushButton(tr("Start From Active Theme"));
-    connect(fromCurrent, &QPushButton::clicked, this, [this] {
-        m_editTheme = ThemeManager::instance().theme();
-        m_editTheme.name = tr("Custom");
-        if (m_themeNameEdit) m_themeNameEdit->setText(m_editTheme.name);
-        refreshSwatches();
+    auto* starterHint = new QLabel(
+        tr("Your current appearance is already loaded. A starter palette "
+           "replaces only the colours; your theme name stays the same."),
+        detailsGroup);
+    starterHint->setProperty("role", "secondary");
+    starterHint->setWordWrap(true);
+    detailsForm->addRow(QString(), starterHint);
+    col->addWidget(detailsGroup);
+
+    auto* previewGroup = new QGroupBox(tr("Live preview"), page);
+    auto* previewColumn = new QVBoxLayout(previewGroup);
+    auto* previewHeader = new QHBoxLayout;
+    auto* previewHint = new QLabel(
+        tr("Check surfaces, text, clips, grid lines and the playhead together."),
+        previewGroup);
+    previewHint->setProperty("role", "secondary");
+    previewHint->setWordWrap(true);
+    m_themeLiveStatus = new QLabel(tr("● Applied live"), previewGroup);
+    m_themeLiveStatus->setAccessibleName(tr("Theme changes are applied live"));
+    previewHeader->addWidget(previewHint, 1);
+    previewHeader->addWidget(m_themeLiveStatus, 0, Qt::AlignTop);
+    previewColumn->addLayout(previewHeader);
+    m_themePreview = new ThemePreviewWidget([this] { return m_editTheme; },
+                                            previewGroup);
+    m_themePreview->setObjectName(QStringLiteral("ThemeEditorPreview"));
+    previewColumn->addWidget(m_themePreview);
+    m_themeContrastStatus = new QLabel(previewGroup);
+    m_themeContrastStatus->setObjectName(QStringLiteral("ThemeContrastStatus"));
+    m_themeContrastStatus->setWordWrap(true);
+    previewColumn->addWidget(m_themeContrastStatus);
+    col->addWidget(previewGroup);
+
+    struct SectionInfo {
+        ColorSection section;
+        const char* title;
+        const char* hint;
+    };
+    const SectionInfo sections[] = {
+        {ColorSection::Surfaces,
+         QT_TRANSLATE_NOOP("SettingsWindow", "Surfaces"),
+         QT_TRANSLATE_NOOP("SettingsWindow", "Window, panels and toolbars.")},
+        {ColorSection::Typography,
+         QT_TRANSLATE_NOOP("SettingsWindow", "Text"),
+         QT_TRANSLATE_NOOP("SettingsWindow", "Primary and supporting labels.")},
+        {ColorSection::Accent,
+         QT_TRANSLATE_NOOP("SettingsWindow", "Accent & selection"),
+         QT_TRANSLATE_NOOP("SettingsWindow", "Actions, highlights and selected content.")},
+        {ColorSection::Timeline,
+         QT_TRANSLATE_NOOP("SettingsWindow", "Timeline"),
+         QT_TRANSLATE_NOOP("SettingsWindow", "Waveforms, playhead and grid lines.")},
+    };
+
+    m_swatches.clear();
+    for (const SectionInfo& section : sections) {
+        auto* group = new QGroupBox(
+            QCoreApplication::translate("SettingsWindow", section.title), page);
+        auto* groupColumn = new QVBoxLayout(group);
+        auto* hint = new QLabel(
+            QCoreApplication::translate("SettingsWindow", section.hint), group);
+        hint->setProperty("role", "secondary");
+        hint->setWordWrap(true);
+        groupColumn->addWidget(hint);
+
+        auto* grid = new QGridLayout;
+        grid->setContentsMargins(0, 2, 0, 0);
+        grid->setHorizontalSpacing(18);
+        grid->setVerticalSpacing(7);
+        int sectionIndex = 0;
+        for (const ColorField& field : colorFields()) {
+            if (field.section != section.section) continue;
+            const QString fieldName = QCoreApplication::translate(
+                "SettingsWindow", field.label);
+            auto* row = new QWidget(group);
+            auto* rowLayout = new QHBoxLayout(row);
+            rowLayout->setContentsMargins(0, 0, 0, 0);
+            rowLayout->setSpacing(8);
+            auto* label = new QLabel(fieldName, row);
+            auto* swatch = new QPushButton(row);
+            swatch->setObjectName(QStringLiteral("ThemeColour_%1").arg(field.key));
+            swatch->setMinimumSize(122, 30);
+            swatch->setCursor(Qt::PointingHandCursor);
+            swatch->setAccessibleName(tr("Choose %1 colour").arg(fieldName));
+            swatch->setToolTip(tr("Choose %1 colour").arg(fieldName));
+            rowLayout->addWidget(label, 1);
+            rowLayout->addWidget(swatch);
+            m_swatches.insert(field.key, swatch);
+
+            QColor Theme::* member = field.member;
+            connect(swatch, &QPushButton::clicked, this, [this, member] {
+                const QColor start = m_editTheme.*member;
+                QColorDialog dialog(start, this);
+                dialog.setWindowTitle(tr("Choose colour"));
+                dialog.setOption(QColorDialog::ShowAlphaChannel);
+                connect(&dialog, &QColorDialog::currentColorChanged, this,
+                        [this, member](const QColor& colour) {
+                            if (!colour.isValid()) return;
+                            m_editTheme.*member = colour;
+                            refreshSwatches();
+                        });
+                if (dialog.exec() == QDialog::Accepted) {
+                    m_editTheme.*member = dialog.selectedColor();
+                    applyEditTheme();
+                } else {
+                    m_editTheme.*member = start;
+                    refreshSwatches();
+                }
+            });
+
+            grid->addWidget(row, sectionIndex / 2, sectionIndex % 2);
+            ++sectionIndex;
+        }
+        grid->setColumnStretch(0, 1);
+        grid->setColumnStretch(1, 1);
+        groupColumn->addLayout(grid);
+        col->addWidget(group);
+    }
+
+    connect(m_themeNameEdit, &QLineEdit::textEdited, this,
+            [this](const QString& text) {
+                m_editTheme.name = text.trimmed();
+                if (m_themeSaveButton)
+                    m_themeSaveButton->setEnabled(!m_editTheme.name.isEmpty());
+            });
+    connect(useStarter, &QPushButton::clicked, this, [this, starter] {
+        const QString presetId = starter->currentData().toString();
+        const auto& presets = ThemeManager::instance().presets();
+        const auto found = std::find_if(
+            presets.cbegin(), presets.cend(),
+            [&presetId](const Theme& preset) { return preset.id == presetId; });
+        if (found == presets.cend()) return;
+        const QString name = m_themeNameEdit->text().trimmed();
+        m_editTheme = *found;
+        m_editTheme.name = name.isEmpty() ? tr("Custom") : name;
+        m_themeNameEdit->setText(m_editTheme.name);
         applyEditTheme();
     });
+
+    // Import/export are supporting actions. Saving is the clear completion of
+    // the editor flow and therefore gets the single accented button.
     auto* exportBtn = new QPushButton(tr("Export…"));
     connect(exportBtn, &QPushButton::clicked, this, [this] {
         applyEditTheme();
@@ -1564,13 +1940,25 @@ QWidget* SettingsWindow::buildThemeEditorTab() {
             tr("VLTONE Theme (*.vlttheme);;Legacy Theme (*.json *.dawtheme.json);;All Files (*)"));
         if (!path.isEmpty()) importThemeFile(path);
     });
+    m_themeSaveButton = new QPushButton(tr("Save to Library"));
+    m_themeSaveButton->setObjectName(QStringLiteral("ThemeEditorSave"));
+    m_themeSaveButton->setProperty("accentAction", true);
+    m_themeSaveButton->setAccessibleDescription(
+        tr("Save this theme so it can be applied again later"));
+    m_themeSaveButton->setEnabled(!m_themeNameEdit->text().trimmed().isEmpty());
+    connect(m_themeSaveButton, &QPushButton::clicked, this, [this] {
+        m_editTheme.name = m_themeNameEdit->text().trimmed();
+        applyEditTheme();
+        saveCurrentThemeToLibrary();
+    });
 
     auto* actions = new QHBoxLayout;
-    actions->addWidget(fromCurrent);
-    actions->addStretch(1);
     actions->addWidget(importBtn);
     actions->addWidget(exportBtn);
+    actions->addStretch(1);
+    actions->addWidget(m_themeSaveButton);
     col->addLayout(actions);
+    col->addStretch();
 
     refreshSwatches();
     return page;
@@ -1593,12 +1981,49 @@ void SettingsWindow::refreshSwatches() {
         auto* swatch = m_swatches.value(f.key);
         if (!swatch) continue;
         const QColor c = m_editTheme.*(f.member);
-        // A checkerboard-free preview: solid fill with a hairline border.
-        swatch->setStyleSheet(
-            QString("background: %1; border: 1px solid rgba(128,128,128,0.6); "
-                    "border-radius: 5px;")
-                .arg(c.name(QColor::HexArgb)));
+        QPixmap sample(24, 16);
+        sample.fill(Qt::transparent);
+        QPainter painter(&sample);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(mixColors(c, m_editTheme.textPrimary, 0.35), 1.0));
+        painter.setBrush(c);
+        painter.drawRoundedRect(QRectF(0.5, 0.5, 23.0, 15.0), 4.0, 4.0);
+        swatch->setIcon(QIcon(sample));
+        swatch->setIconSize(sample.size());
+        const QString hex = c.name(QColor::HexRgb).toUpper();
+        swatch->setText(c.alpha() == 255
+                            ? hex
+                            : tr("%1 · %2%").arg(hex).arg(c.alphaF() * 100.0,
+                                                        0, 'f', 0));
+        swatch->setAccessibleDescription(
+            tr("Current colour %1").arg(swatch->text()));
     }
+
+    if (m_themePreview) m_themePreview->update();
+    if (m_themeLiveStatus) {
+        m_themeLiveStatus->setStyleSheet(
+            QStringLiteral("color: %1; font-weight: 600;")
+                .arg(m_editTheme.accentHighlight.name(QColor::HexArgb)));
+    }
+    if (m_themeContrastStatus) {
+        const double weakest = std::min(
+            {contrastRatio(m_editTheme.textPrimary, m_editTheme.background),
+             contrastRatio(m_editTheme.textPrimary, m_editTheme.surface),
+             contrastRatio(m_editTheme.textSecondary, m_editTheme.background),
+             contrastRatio(m_editTheme.textSecondary, m_editTheme.surface)});
+        if (weakest >= 4.5) {
+            m_themeContrastStatus->setText(
+                tr("✓ Text contrast looks good — weakest pairing is %1:1.")
+                    .arg(weakest, 0, 'f', 1));
+        } else {
+            m_themeContrastStatus->setText(
+                tr("⚠ Low text contrast — weakest pairing is %1:1. Aim for "
+                   "4.5:1 or higher.")
+                    .arg(weakest, 0, 'f', 1));
+        }
+    }
+    if (m_themeSaveButton && m_themeNameEdit)
+        m_themeSaveButton->setEnabled(!m_themeNameEdit->text().trimmed().isEmpty());
 }
 
 QWidget* SettingsWindow::buildShortcutsTab() {
@@ -1703,6 +2128,32 @@ void SettingsWindow::refreshShortcutEditors() {
 QWidget* SettingsWindow::buildInterfaceTab() {
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
+
+    auto* startupGroup = new QGroupBox(tr("Startup"), page);
+    auto* startupForm = new QFormLayout(startupGroup);
+    m_startupTemplate = new QComboBox(startupGroup);
+    m_startupTemplate->setObjectName(QStringLiteral("StartupProjectTemplate"));
+    m_startupTemplate->setAccessibleName(tr("Default project at launch"));
+    m_startupTemplate->setSizeAdjustPolicy(
+        QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_startupTemplate->setMinimumContentsLength(24);
+    refreshStartupTemplateOptions();
+    connect(m_startupTemplate,
+            qOverload<int>(&QComboBox::currentIndexChanged), startupGroup,
+            [this] {
+                ui::startupproject::setTemplatePath(
+                    m_startupTemplate->currentData().toString());
+            });
+    startupForm->addRow(tr("Project opened at launch:"), m_startupTemplate);
+    auto* startupHint = new QLabel(
+        tr("Applies only when VLTONE starts normally. Opening a project, "
+           "restoring work after a crash, and File > New Project take "
+           "priority over this template."),
+        startupGroup);
+    startupHint->setWordWrap(true);
+    startupForm->addRow(startupHint);
+    layout->addWidget(startupGroup);
+
     auto* group = new QGroupBox(tr("Refresh rate"), page);
     auto* form = new QFormLayout(group);
     auto* mode = new QComboBox(group);
@@ -1747,6 +2198,97 @@ QWidget* SettingsWindow::buildInterfaceTab() {
     explanation->setWordWrap(true);
     form->addRow(explanation);
     layout->addWidget(group);
+
+    auto* graphicsGroup = new QGroupBox(tr("Graphics quality"), page);
+    auto* graphicsForm = new QFormLayout(graphicsGroup);
+    auto* gpu = new QCheckBox(tr("GPU rendering (experimental)"), graphicsGroup);
+    gpu->setObjectName("GpuWorkspaceEnabled");
+    const bool runningGpuMode = ui::graphics::gpuWorkspaceEnabled();
+    gpu->setChecked(QSettings().value("ui/gpuWorkspace", false).toBool());
+    auto* restartGpu = new QPushButton(tr("Restart VLTONE"), graphicsGroup);
+    restartGpu->setObjectName(QStringLiteral("GpuRestartButton"));
+    restartGpu->setProperty("accentAction", true);
+    restartGpu->setAccessibleName(tr("Restart VLTONE to apply rendering mode"));
+    restartGpu->setToolTip(
+        tr("Restart VLTONE and reopen the current project"));
+    restartGpu->setVisible(gpu->isChecked() != runningGpuMode);
+    connect(gpu, &QCheckBox::toggled, page,
+            [restartGpu, runningGpuMode](bool enabled) {
+        QSettings().setValue("ui/gpuWorkspace", enabled);
+        restartGpu->setVisible(enabled != runningGpuMode);
+    });
+    connect(restartGpu, &QPushButton::clicked, this,
+            &SettingsWindow::restartRequested);
+    graphicsForm->addRow(gpu);
+    auto* gpuHint = new QLabel(tr("Takes effect after restarting VLTONE. Accelerates the workspace, "
+        "editors and media. Turn this off to use compatibility rendering."), graphicsGroup);
+    gpuHint->setWordWrap(true);
+    graphicsForm->addRow(gpuHint);
+    graphicsForm->addRow(restartGpu);
+    auto* quality = new QComboBox(graphicsGroup);
+    quality->setObjectName("GraphicsQuality");
+    quality->setAccessibleName(tr("Graphics quality"));
+    using ui::graphics::Quality;
+    for (const auto& entry : {std::pair{tr("Auto"), Quality::Automatic},
+            std::pair{tr("Maximum"), Quality::Maximum}, std::pair{tr("Medium"), Quality::Medium},
+            std::pair{tr("Low"), Quality::Low}})
+        quality->addItem(entry.first, int(entry.second));
+    auto& graphics = ui::graphics::GraphicsPreferences::instance();
+    quality->setCurrentIndex(quality->findData(int(graphics.quality())));
+    connect(quality, &QComboBox::currentIndexChanged, page, [quality, &graphics] {
+        graphics.setQuality(Quality(quality->currentData().toInt()));
+    });
+    connect(&graphics, &ui::graphics::GraphicsPreferences::qualityChanged, page, [quality, &graphics] {
+        const QSignalBlocker blocker(quality);
+        quality->setCurrentIndex(quality->findData(int(graphics.quality())));
+    });
+    graphicsForm->addRow(tr("Quality"), quality);
+    auto* qualityHint = new QLabel(tr("Controls decorative backgrounds only. Maximum keeps full resolution; "
+        "Medium uses 75% resolution and up to 30 FPS; Low uses 50% and up to 15 FPS. "
+        "Auto adapts to graphics load. Text, notes, waveforms and editing stay sharp. "
+        "Your blur setting is independent of graphics quality."), graphicsGroup);
+    qualityHint->setWordWrap(true);
+    graphicsForm->addRow(qualityHint);
+    layout->addWidget(graphicsGroup);
+
+    auto* editingGroup = new QGroupBox(tr("Editing"), page);
+    auto* editingLayout = new QVBoxLayout(editingGroup);
+    auto* duplicateClips = new QCheckBox(
+        tr("Include clips when duplicating tracks and folders"),
+        editingGroup);
+    duplicateClips->setObjectName(QStringLiteral("DuplicateTrackClips"));
+    duplicateClips->setAccessibleName(
+        tr("Include clips when duplicating tracks and folders"));
+    duplicateClips->setChecked(ui::duplicateTrackClips());
+    auto* duplicateHint = new QLabel(
+        tr("When off, Duplicate keeps the track hierarchy, instruments, "
+           "plugins, mixer settings and routing, but creates empty lanes."),
+        editingGroup);
+    duplicateHint->setWordWrap(true);
+    connect(duplicateClips, &QCheckBox::toggled, editingGroup,
+            [](bool enabled) { ui::setDuplicateTrackClips(enabled); });
+    editingLayout->addWidget(duplicateClips);
+    editingLayout->addWidget(duplicateHint);
+    layout->addWidget(editingGroup);
     layout->addStretch();
     return page;
+}
+
+void SettingsWindow::refreshStartupTemplateOptions() {
+    if (!m_startupTemplate) return;
+    const QString selected = ui::startupproject::templatePath();
+    const QSignalBlocker blocker(m_startupTemplate);
+    m_startupTemplate->clear();
+    m_startupTemplate->addItem(tr("Empty project"), QString());
+    for (const QString& path : ui::projecttemplates::files()) {
+        m_startupTemplate->addItem(
+            ui::projecttemplates::displayName(path), path);
+    }
+    int index = m_startupTemplate->findData(selected);
+    if (index < 0 && !selected.isEmpty()) {
+        m_startupTemplate->addItem(
+            tr("Missing: %1").arg(QFileInfo(selected).fileName()), selected);
+        index = m_startupTemplate->count() - 1;
+    }
+    m_startupTemplate->setCurrentIndex(std::max(0, index));
 }

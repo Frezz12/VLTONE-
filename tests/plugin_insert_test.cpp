@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -143,6 +144,45 @@ int main() {
 
     const std::string trackId = ctrl.addTrack(daw::TrackKind::Audio, "Audio");
     const std::string clipId = ctrl.importAudio(tonePath, trackId, 0.0);
+
+    // Command+D normally duplicates a channel without its arrangement clips.
+    // A preset or a plugin's own editor can change opaque state before the
+    // document parameter mirror catches up; the duplicate must still sound
+    // exactly like the source rather than starting from defaults.
+    {
+        const std::string source =
+            ctrl.addTrack(daw::TrackKind::Audio, "Duplicate State");
+        const std::string insert = ctrl.addInsert(source, found);
+        auto* instance = ctrl.insertInstance(source, insert);
+        const double values[2] = {0.37, -0.14};
+        std::vector<std::uint8_t> opaque(sizeof(values));
+        std::memcpy(opaque.data(), values, sizeof(values));
+        check(instance && instance->loadState(opaque),
+              "source plugin accepts an editor/preset state change");
+
+        const std::string duplicate = ctrl.duplicateTrack(
+            source, /*withInserts=*/true, /*withClips=*/false);
+        const auto* copied = ctrl.channelInserts(duplicate);
+        const bool copiedState = copied && copied->size() == 1 &&
+            std::fabs(ctrl.insertParameter(duplicate, copied->front().id,
+                                           "0") - values[0]) < 1e-9 &&
+            std::fabs(ctrl.insertParameter(duplicate, copied->front().id,
+                                           "1") - values[1]) < 1e-9;
+        check(copiedState,
+              "Command+D preserves the plugin's current opaque state");
+
+        ctrl.undo();
+        ctrl.redo();
+        copied = ctrl.channelInserts(duplicate);
+        check(copied && copied->size() == 1 &&
+                  std::fabs(ctrl.insertParameter(duplicate, copied->front().id,
+                                                 "0") - values[0]) < 1e-9 &&
+                  std::fabs(ctrl.insertParameter(duplicate, copied->front().id,
+                                                 "1") - values[1]) < 1e-9,
+              "redo restores the duplicated plugin state");
+        ctrl.removeTrack(duplicate);
+        ctrl.removeTrack(source);
+    }
 
     std::string gravityTrackId;
     std::string gravityInsertId;

@@ -15,6 +15,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QCursor>
+#include <QScreen>
 #include <QTimer>
 #include <QVariantAnimation>
 #include <QWheelEvent>
@@ -28,6 +29,30 @@ namespace ui {
 namespace {
 bool g_automationCreationMode = false;
 }
+
+void LockedCursorDrag::begin(const QPointF& globalPosition) {
+    m_anchor = globalPosition.toPoint();
+    m_active = true;
+}
+
+QPointF LockedCursorDrag::takeDelta(const QPointF& globalPosition) {
+    if (!m_active) return {};
+    const QPointF delta = globalPosition - QPointF(m_anchor);
+    // setPos produces a zero-delta move on some platforms.  Avoid issuing it
+    // again for that event, otherwise a locked pointer can create an event
+    // loop while the application is under load.
+    if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y()))
+        QCursor::setPos(m_anchor);
+    return delta;
+}
+
+QPointF LockedCursorDrag::finish(const QPointF& globalPosition) {
+    const QPointF delta = takeDelta(globalPosition);
+    m_active = false;
+    return delta;
+}
+
+void LockedCursorDrag::cancel() { m_active = false; }
 
 void setAutomationCreationMode(bool enabled) {
     g_automationCreationMode = enabled;
@@ -98,8 +123,7 @@ QRectF spanRect(const QRectF& track, Qt::Orientation orientation, double from,
                : QRectF(from, track.top(), to - from, track.height());
 }
 
-/// The handle: a circle centred on `axis`, its diameter the groove's thickness
-/// less the inset, so it rides *inside* the track rather than over it.
+/// The handle: a circle centred on `axis`, larger than the visible rail.
 QRectF handleRect(const QRectF& track, Qt::Orientation orientation, double axis,
                   bool flush) {
     const double thickness =
@@ -121,28 +145,26 @@ void paintGlassHandle(QPainter& p, const QRectF& handle, bool active,
     const Theme& t = th();
     const double radius = std::min(handle.width(), handle.height()) / 2.0;
 
-    // A dark contact ring first, so the pane has an edge against both halves of
-    // the track it rides between — the lit accent below it and the empty groove
-    // above. Without it the glass dissolves into whichever it happens to be on.
+    // A restrained contact ring keeps the transparent pane legible over both
+    // the filled and empty halves of the rail.
     QColor contact(0, 0, 0);
-    contact.setAlphaF(t.dark ? 0.55 : 0.28);
+    contact.setAlphaF(t.dark ? 0.30 : 0.18);
     p.setPen(Qt::NoPen);
     p.setBrush(contact);
     p.drawRoundedRect(handle.adjusted(-0.7, -0.7, 0.7, 0.7), radius + 0.7,
                       radius + 0.7);
 
-    // Milky enough to stay one object over both halves of the track — a glass
-    // that let the accent through unchecked read as a half-lit moon, since the
-    // handle always straddles the boundary between the filled and empty groove.
+    // The body remains translucent: the rail and its accent are visible through
+    // it, while the vertical density gradient gives the pane a physical edge.
     QLinearGradient body(handle.topLeft(), handle.bottomLeft());
     QColor top(255, 255, 255);
     QColor bottom(255, 255, 255);
     if (t.dark) {
-        top.setAlphaF(active ? 0.86 : 0.74);
-        bottom.setAlphaF(active ? 0.66 : 0.54);
+        top.setAlphaF(active ? 0.46 : 0.36);
+        bottom.setAlphaF(active ? 0.22 : 0.14);
     } else {
-        top.setAlphaF(active ? 0.98 : 0.92);
-        bottom.setAlphaF(active ? 0.86 : 0.76);
+        top.setAlphaF(active ? 0.72 : 0.62);
+        bottom.setAlphaF(active ? 0.38 : 0.28);
     }
     body.setColorAt(0.0, top);
     body.setColorAt(1.0, bottom);
@@ -191,10 +213,7 @@ void paintGlassHandle(QPainter& p, const QRectF& handle, bool active,
 } // namespace
 
 double sliderHandleDiameter(double trackThickness) {
-    // Two pixels of groove all the way round the handle: enough that the track
-    // reads as continuous behind it, not so much that the handle looks lost in
-    // it. Never below 8, so a small flyout track still gets a real target.
-    return std::max(8.0, trackThickness - 4.0);
+    return std::max(16.0, trackThickness - 2.0);
 }
 
 double sliderHandleAxis(const QRectF& track, Qt::Orientation orientation,
@@ -227,24 +246,28 @@ void paintSlider(QPainter& p, const QRectF& track, const SliderPaint& spec) {
     const QColor accent = spec.accent.isValid() ? spec.accent : t.accent;
     const bool vertical = spec.orientation == Qt::Vertical;
     const double thickness = vertical ? track.width() : track.height();
-    const double radius = thickness / 2.0;
+    constexpr double railThickness = 4.0;
+    const QRectF rail = vertical
+                            ? QRectF(track.center().x() - railThickness / 2.0,
+                                     track.top(), railThickness, track.height())
+                            : QRectF(track.left(),
+                                     track.center().y() - railThickness / 2.0,
+                                     track.width(), railThickness);
+    constexpr double railRadius = railThickness / 2.0;
     const Axis axis = axisOf(track, spec.orientation);
 
     p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
 
     // ── The track ──
-    // Recessed, but by shading alone: a darker lip on the lit side and nothing
-    // else. No bevel, no cast shadow — the depth cue is that the glass on top
-    // is the only thing catching the light.
-    QLinearGradient bed(track.topLeft(),
-                        vertical ? track.topRight() : track.bottomLeft());
+    QLinearGradient bed(rail.topLeft(),
+                        vertical ? rail.topRight() : rail.bottomLeft());
     bed.setColorAt(0.0, mixColors(t.well(), QColor(0, 0, 0), t.dark ? 0.45 : 0.16));
     bed.setColorAt(0.55, t.well());
     bed.setColorAt(1.0, mixColors(t.well(), t.textPrimary, t.dark ? 0.07 : 0.04));
     p.setPen(Qt::NoPen);
     p.setBrush(bed);
-    p.drawRoundedRect(track, radius, radius);
+    p.drawRoundedRect(rail, railRadius, railRadius);
 
     // ── The value ──
     const double handleAxis =
@@ -262,8 +285,8 @@ void paintSlider(QPainter& p, const QRectF& track, const SliderPaint& spec) {
     value.setColorAt(0.0, mixColors(accent, t.background, 0.22));
     value.setColorAt(1.0, spec.active ? t.accentHighlight : accent);
     p.setBrush(value);
-    p.drawRoundedRect(spanRect(track, spec.orientation, fillFrom, handleAxis),
-                      radius, radius);
+    p.drawRoundedRect(spanRect(rail, spec.orientation, fillFrom, handleAxis),
+                      railRadius, railRadius);
 
     // ── The detent ──
     // Inside the track, not a pair of ticks hung outside it: at this thickness
@@ -275,17 +298,188 @@ void paintSlider(QPainter& p, const QRectF& track, const SliderPaint& spec) {
         QColor mark = t.ink(t.dark ? 70 : 90);
         p.setPen(QPen(mark, 1.0));
         if (vertical) {
-            p.drawLine(QPointF(track.left() + 3.0, at),
-                       QPointF(track.right() - 3.0, at));
+            p.drawLine(QPointF(rail.left() - 2.0, at),
+                       QPointF(rail.right() + 2.0, at));
         } else {
-            p.drawLine(QPointF(at, track.top() + 3.0),
-                       QPointF(at, track.bottom() - 3.0));
+            p.drawLine(QPointF(at, rail.top() - 2.0),
+                       QPointF(at, rail.bottom() + 2.0));
         }
     }
 
     paintGlassHandle(p, handleRect(track, spec.orientation, handleAxis, spec.flush),
                      spec.active, accent);
     p.restore();
+}
+
+// ── GlassSlider ───────────────────────────────────────────────────────────
+
+GlassSlider::GlassSlider(Qt::Orientation orientation, QWidget* parent)
+    : QSlider(orientation, parent) {
+    setFocusPolicy(Qt::TabFocus);
+    setCursor(orientation == Qt::Horizontal ? Qt::SizeHorCursor
+                                            : Qt::SizeVerCursor);
+    setMouseTracking(true);
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+            QOverload<>::of(&QWidget::update));
+}
+
+QSize GlassSlider::sizeHint() const {
+    return orientation() == Qt::Horizontal ? QSize(140, 28) : QSize(28, 140);
+}
+
+QSize GlassSlider::minimumSizeHint() const {
+    return orientation() == Qt::Horizontal ? QSize(44, 24) : QSize(24, 44);
+}
+
+QRectF GlassSlider::interactionTrack() const {
+    if (orientation() == Qt::Horizontal)
+        return QRectF(1.0, (height() - kSliderTrack) / 2.0,
+                      std::max(0.0, width() - 2.0), kSliderTrack);
+    return QRectF((width() - kSliderTrack) / 2.0, 1.0,
+                  kSliderTrack, std::max(0.0, height() - 2.0));
+}
+
+double GlassSlider::visualFraction() const {
+    if (maximum() <= minimum()) return 0.0;
+    double fraction = double(sliderPosition() - minimum()) /
+                      double(maximum() - minimum());
+    bool reversed = invertedAppearance();
+    if (orientation() == Qt::Horizontal && layoutDirection() == Qt::RightToLeft)
+        reversed = !reversed;
+    return reversed ? 1.0 - fraction : fraction;
+}
+
+double GlassSlider::axisCoordinate(const QPointF& position) const {
+    return orientation() == Qt::Horizontal ? position.x() : position.y();
+}
+
+void GlassSlider::setFromCoordinate(double coordinate) {
+    double fraction = sliderPositionAt(interactionTrack(), orientation(),
+                                       coordinate - m_grabOffset);
+    bool reversed = invertedAppearance();
+    if (orientation() == Qt::Horizontal && layoutDirection() == Qt::RightToLeft)
+        reversed = !reversed;
+    if (reversed) fraction = 1.0 - fraction;
+    const int position = minimum() + int(std::lround(
+        fraction * double(maximum() - minimum())));
+    setSliderPosition(std::clamp(position, minimum(), maximum()));
+    update();
+}
+
+void GlassSlider::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    if (!isEnabled()) painter.setOpacity(0.42);
+    SliderPaint spec;
+    spec.orientation = orientation();
+    spec.position = visualFraction();
+    spec.fillFrom = m_fillFrom;
+    spec.detent = m_detent;
+    spec.active = isSliderDown() || underMouse() || hasFocus();
+    paintSlider(painter, interactionTrack(), spec);
+}
+
+void GlassSlider::mousePressEvent(QMouseEvent* event) {
+    if (event->button() != Qt::LeftButton || !isEnabled()) {
+        QSlider::mousePressEvent(event);
+        return;
+    }
+    const QRectF track = interactionTrack();
+    const double coordinate = axisCoordinate(event->position());
+    const double centre = sliderHandleAxis(track, orientation(), visualFraction());
+    // The visible pane is 18px and the hit target extends to 28px. A click on
+    // the surrounding rail jumps there and immediately becomes the same drag.
+    const double hitRadius = std::max(14.0,
+        sliderHandleDiameter(orientation() == Qt::Horizontal
+                                 ? track.height() : track.width()) / 2.0 + 4.0);
+    m_grabOffset = std::abs(coordinate - centre) <= hitRadius
+                       ? coordinate - centre : 0.0;
+    setFocus(Qt::MouseFocusReason);
+    setSliderDown(true);
+    if (m_grabOffset == 0.0) setFromCoordinate(coordinate);
+    event->accept();
+}
+
+void GlassSlider::mouseMoveEvent(QMouseEvent* event) {
+    if (!isSliderDown() || !(event->buttons() & Qt::LeftButton)) {
+        QSlider::mouseMoveEvent(event);
+        return;
+    }
+    setFromCoordinate(axisCoordinate(event->position()));
+    event->accept();
+}
+
+void GlassSlider::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() != Qt::LeftButton || !isSliderDown()) {
+        QSlider::mouseReleaseEvent(event);
+        return;
+    }
+    setFromCoordinate(axisCoordinate(event->position()));
+    if (!hasTracking()) setValue(sliderPosition());
+    setSliderDown(false);
+    m_grabOffset = 0.0;
+    event->accept();
+}
+
+void GlassSlider::wheelEvent(QWheelEvent* event) {
+    const double raw = !event->pixelDelta().isNull()
+                           ? event->pixelDelta().y() / 16.0
+                           : event->angleDelta().y() / 120.0 * 3.0;
+    if (std::abs(raw) < 1e-9) {
+        event->accept();
+        return;
+    }
+    const double fine = event->modifiers() & Qt::ShiftModifier ? 0.25 : 1.0;
+    m_wheelRemainder += raw * std::max(1, singleStep()) * fine;
+    const int whole = m_wheelRemainder > 0.0 ? int(std::floor(m_wheelRemainder))
+                                              : int(std::ceil(m_wheelRemainder));
+    if (whole != 0) {
+        setValue(std::clamp(value() + whole, minimum(), maximum()));
+        m_wheelRemainder -= whole;
+    }
+    event->accept();
+}
+
+void GlassSlider::enterEvent(QEnterEvent* event) {
+    QSlider::enterEvent(event);
+    update();
+}
+
+void GlassSlider::leaveEvent(QEvent* event) {
+    QSlider::leaveEvent(event);
+    update();
+}
+
+bool GlassSlider::checkInteractionForTest() {
+    GlassSlider slider;
+    slider.resize(220, 28);
+    slider.setRange(0, 100);
+    slider.setValue(20);
+    int presses = 0, releases = 0;
+    QObject::connect(&slider, &QSlider::sliderPressed, [&] { ++presses; });
+    QObject::connect(&slider, &QSlider::sliderReleased, [&] { ++releases; });
+
+    const QPointF railPoint(slider.width() * 0.75, slider.height() / 2.0);
+    QMouseEvent press(QEvent::MouseButtonPress, railPoint, railPoint,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    slider.mousePressEvent(&press);
+    const int jumped = slider.value();
+    const QPointF beyond(slider.width() + 30.0, slider.height() / 2.0);
+    QMouseEvent move(QEvent::MouseMove, beyond, beyond, Qt::NoButton,
+                     Qt::LeftButton, Qt::NoModifier);
+    slider.mouseMoveEvent(&move);
+    QMouseEvent release(QEvent::MouseButtonRelease, beyond, beyond,
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    slider.mouseReleaseEvent(&release);
+
+    const int beforeWheel = slider.value();
+    const QPointF centre(slider.rect().center());
+    for (int i = 0; i < 8; ++i) {
+        QWheelEvent wheel(centre, centre, QPoint(0, -3), {}, Qt::NoButton,
+                          Qt::NoModifier, Qt::ScrollUpdate, false);
+        slider.wheelEvent(&wheel);
+    }
+    return jumped >= 70 && slider.value() < beforeWheel &&
+           presses == 1 && releases == 1 && !slider.isSliderDown();
 }
 
 // ── ThemedWidget ──
@@ -339,17 +533,46 @@ public:
         setAttribute(Qt::WA_ShowWithoutActivating);
         setAttribute(Qt::WA_TransparentForMouseEvents);
         setFocusPolicy(Qt::NoFocus);
+        m_present.setSingleShot(true);
+        connect(&m_present, &QTimer::timeout, this,
+                [this] { presentPending(); });
     }
 
     void setText(const QString& text) {
+        if (m_text == text) return;
         m_text = text;
         QFont f = font();
         f.setPixelSize(11);
         f.setBold(true);
         setFont(f);
         const int w = QFontMetrics(f).horizontalAdvance(text) + 16;
-        resize(std::max(38, w), 22);
+        const QSize wanted(std::max(38, w), 22);
+        if (size() != wanted) resize(wanted);
         update();
+    }
+
+    void queue(QWidget* owner, const QPoint& anchor, const QString& text) {
+        m_owner = owner;
+        m_anchor = anchor;
+        m_pendingText = text;
+        if (!isVisible()) {
+            presentPending();
+            return;
+        }
+        if (m_present.isActive()) return;
+        double seconds = FrameClock::instance().periodSeconds(owner);
+        if (!(seconds > 0.0)) {
+            const double hz = owner && owner->screen()
+                                  ? owner->screen()->refreshRate() : 60.0;
+            seconds = 1.0 / (std::isfinite(hz) && hz > 0.0 ? hz : 60.0);
+        }
+        m_present.start(std::clamp(int(std::ceil(seconds * 1000.0)), 1, 34));
+    }
+
+    void dismiss() {
+        m_present.stop();
+        m_owner = nullptr;
+        if (isVisible()) hide();
     }
 
 protected:
@@ -366,7 +589,24 @@ protected:
     }
 
 private:
+    void presentPending() {
+        if (!m_owner) return;
+        setText(m_pendingText);
+        const QPoint global = m_owner->mapToGlobal(m_anchor);
+        const QPoint wanted(global.x() - width() / 2,
+                            global.y() - height() - 8);
+        if (pos() != wanted) move(wanted);
+        if (!isVisible()) {
+            show();
+            raise();
+        }
+    }
+
     QString m_text;
+    QString m_pendingText;
+    QPointer<QWidget> m_owner;
+    QPoint m_anchor;
+    QTimer m_present;
 };
 
 BubbleWindow* bubble() {
@@ -378,16 +618,11 @@ BubbleWindow* bubble() {
 
 void ValueBubble::showFor(QWidget* owner, const QPoint& anchor,
                           const QString& text) {
-    BubbleWindow* b = bubble();
-    b->setText(text);
-    const QPoint global = owner->mapToGlobal(anchor);
-    b->move(global.x() - b->width() / 2, global.y() - b->height() - 8);
-    b->show();
-    b->raise();
+    bubble()->queue(owner, anchor, text);
 }
 
 void ValueBubble::dismiss() {
-    if (bubble()->isVisible()) bubble()->hide();
+    bubble()->dismiss();
 }
 
 // ── IconButton ──
@@ -691,6 +926,11 @@ FaderWidget::FaderWidget(Qt::Orientation orientation, QWidget* parent)
     setToolTip(tr("Drag to set level · double-click for unity · Shift for fine"));
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             QOverload<>::of(&QWidget::update));
+    m_wheelCommit = new QTimer(this);
+    m_wheelCommit->setSingleShot(true);
+    m_wheelCommit->setInterval(140);
+    connect(m_wheelCommit, &QTimer::timeout, this,
+            &FaderWidget::finishWheelEdit);
 }
 
 void FaderWidget::setGain(double gain) {
@@ -1063,6 +1303,7 @@ void FaderWidget::showBubble() {
 
 void FaderWidget::mousePressEvent(QMouseEvent* ev) {
     if (ev->button() != Qt::LeftButton) return;
+    finishWheelEdit();
     m_dragging = true;
     m_dragStartPosition = faderPositionFromGain(m_gain);
     m_dragStartCoord = int((m_orientation == Qt::Vertical || m_compactKnob)
@@ -1085,10 +1326,16 @@ void FaderWidget::mouseMoveEvent(QMouseEvent* ev) {
         ((m_orientation == Qt::Vertical || m_compactKnob) ? -moved : moved) /
         (throwPixels * sensitivity);
     const double pos = std::clamp(m_dragStartPosition + delta, 0.0, 1.0);
-    m_gain = gainFromFaderPosition(pos);
+    const double next = gainFromFaderPosition(pos);
+    if (std::abs(next - m_gain) < 1e-9) {
+        ev->accept();
+        return;
+    }
+    m_gain = next;
     update();
     showBubble();
     emit gainChanged(m_gain);
+    ev->accept();
 }
 
 void FaderWidget::mouseReleaseEvent(QMouseEvent*) {
@@ -1130,12 +1377,33 @@ void FaderWidget::contextMenuEvent(QContextMenuEvent* event) {
 
 void FaderWidget::wheelEvent(QWheelEvent* ev) {
     const double step = (ev->modifiers() & Qt::ShiftModifier) ? 0.005 : 0.02;
+    const double units = !ev->pixelDelta().isNull()
+                             ? ev->pixelDelta().y() / 60.0
+                             : ev->angleDelta().y() / 120.0;
+    if (std::abs(units) < 1e-9) {
+        if (ev->phase() == Qt::ScrollEnd) finishWheelEdit();
+        ev->accept();
+        return;
+    }
     const double pos = std::clamp(
-        faderPositionFromGain(m_gain) + (ev->angleDelta().y() > 0 ? step : -step),
+        faderPositionFromGain(m_gain) + units * step,
         0.0, 1.0);
-    m_gain = gainFromFaderPosition(pos);
-    update();
-    emit gainChanged(m_gain);
+    const double next = gainFromFaderPosition(pos);
+    if (std::abs(next - m_gain) >= 1e-9) {
+        m_gain = next;
+        m_wheelEditing = true;
+        update();
+        emit gainChanged(m_gain);
+    }
+    if (ev->phase() == Qt::ScrollEnd) finishWheelEdit();
+    else if (m_wheelEditing) m_wheelCommit->start();
+    ev->accept();
+}
+
+void FaderWidget::finishWheelEdit() {
+    if (m_wheelCommit) m_wheelCommit->stop();
+    if (!m_wheelEditing) return;
+    m_wheelEditing = false;
     emit editFinished();
 }
 
@@ -1581,6 +1849,11 @@ PanKnob::PanKnob(QWidget* parent) : QWidget(parent) {
         tr("Pan · drag horizontally or vertically · double-click to centre"));
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             QOverload<>::of(&QWidget::update));
+    m_wheelCommit = new QTimer(this);
+    m_wheelCommit->setSingleShot(true);
+    m_wheelCommit->setInterval(140);
+    connect(m_wheelCommit, &QTimer::timeout, this,
+            &PanKnob::finishWheelEdit);
 }
 
 void PanKnob::setPan(double pan) {
@@ -1679,6 +1952,7 @@ void PanKnob::paintEvent(QPaintEvent*) {
 
 void PanKnob::mousePressEvent(QMouseEvent* ev) {
     if (ev->button() != Qt::LeftButton) return;
+    finishWheelEdit();
     m_dragging = true;
     m_dragStart = m_pan;
     m_dragStartX = int(ev->position().x());
@@ -1728,9 +2002,27 @@ void PanKnob::mouseDoubleClickEvent(QMouseEvent*) {
 
 void PanKnob::wheelEvent(QWheelEvent* ev) {
     const double step = (ev->modifiers() & Qt::ShiftModifier) ? 0.01 : 0.05;
-    commit(m_pan + (ev->angleDelta().y() >= 0 ? step : -step));
-    emit editFinished();
+    const double units = !ev->pixelDelta().isNull()
+                             ? ev->pixelDelta().y() / 60.0
+                             : ev->angleDelta().y() / 120.0;
+    if (std::abs(units) < 1e-9) {
+        if (ev->phase() == Qt::ScrollEnd) finishWheelEdit();
+        ev->accept();
+        return;
+    }
+    const double before = m_pan;
+    commit(m_pan + units * step);
+    if (std::abs(m_pan - before) >= 1e-9) m_wheelEditing = true;
+    if (ev->phase() == Qt::ScrollEnd) finishWheelEdit();
+    else if (m_wheelEditing) m_wheelCommit->start();
     ev->accept();
+}
+
+void PanKnob::finishWheelEdit() {
+    if (m_wheelCommit) m_wheelCommit->stop();
+    if (!m_wheelEditing) return;
+    m_wheelEditing = false;
+    emit editFinished();
 }
 
 bool PanKnob::event(QEvent* event) {
@@ -2001,7 +2293,7 @@ void Knob::paintEvent(QPaintEvent*) {
                                       : (m_compact ? kKnobCompactSize : kKnobSize);
     const double inset = m_bare ? 1.5 : 2.0;
     const QRectF ring(double(width() - size) / 2.0 + inset,
-                      inset + (digital ? 18.0 : 0.0),
+                      inset + (digital && !m_bare ? 18.0 : 0.0),
                       size - inset * 2.0, size - inset * 2.0);
     const QPointF centre = ring.center();
     const double radius = ring.width() / 2.0;
@@ -2220,18 +2512,20 @@ void Knob::paintEvent(QPaintEvent*) {
             p.setPen(QPen(accent, 1.5));
             p.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 5, 5);
         }
-        QFont labelFont = font();
-        labelFont.setPixelSize(10);
-        labelFont.setWeight(QFont::Medium);
-        p.setFont(labelFont);
-        p.setPen(t.textSecondary);
-        p.drawText(QRect(0, 0, width(), 16), Qt::AlignCenter,
-                   elidedCaption(p, m_caption, width()));
-        labelFont.setPixelSize(11);
-        p.setFont(labelFont);
-        p.setPen(m_dragging ? accent : t.textPrimary);
-        p.drawText(QRect(0, 60, width(), 17), Qt::AlignCenter,
-                   elidedCaption(p, text(), width()));
+        if (!m_bare) {
+            QFont labelFont = font();
+            labelFont.setPixelSize(10);
+            labelFont.setWeight(QFont::Medium);
+            p.setFont(labelFont);
+            p.setPen(t.textSecondary);
+            p.drawText(QRect(0, 0, width(), 16), Qt::AlignCenter,
+                       elidedCaption(p, m_caption, width()));
+            labelFont.setPixelSize(11);
+            p.setFont(labelFont);
+            p.setPen(m_dragging ? accent : t.textPrimary);
+            p.drawText(QRect(0, 60, width(), 17), Qt::AlignCenter,
+                       elidedCaption(p, text(), width()));
+        }
         return;
     }
 
@@ -2705,7 +2999,9 @@ void LevelMeter::setMeterStyle(Style style) {
 }
 
 void LevelMeter::paintEvent(QPaintEvent*) {
-    QPainter p(this);
+    QPainter p(this); paintScene(p, QRegion(rect()));
+}
+void LevelMeter::paintScene(QPainter& p, const QRegion&) {
     p.setRenderHint(QPainter::Antialiasing, m_style == Style::Panel);
 
     if (m_style == Style::Rail) {

@@ -1,0 +1,110 @@
+[
+  {
+    "name": "pair-1-16-before",
+    "exit": 0,
+    "lines": [
+      "CONFIG frames=16 tracks=14 plugins=34 workers=8 realtime_helpers=7 requested_limit=0",
+      "RESULT monitoring=0 frames=16 p50=0.1084 p95=0.2274 p99=0.5130 max=0.7772 over=129/5000 cpu_ms=2721.9 nonfinite=0 peak=0.00000",
+      "RESULT monitoring=1 frames=16 p50=0.1021 p95=0.1913 p99=0.4672 max=1.0422 over=142/5000 cpu_ms=2584.1 nonfinite=0 peak=0.20618"
+    ]
+  },
+  {
+    "name": "pair-1-16-after",
+    "exit": 0,
+    "lines": [
+      "CONFIG frames=16 tracks=14 plugins=34 workers=4 realtime_helpers=3 requested_limit=4",
+      "RESULT monitoring=0 frames=16 p50=0.1110 p95=0.2188 p99=0.2570 max=0.3175 over=0/5000 cpu_ms=2521.3 nonfinite=0 peak=0.00000",
+      "RESULT monitoring=1 frames=16 p50=0.1092 p95=0.2048 p99=0.2428 max=0.2624 over=0/5000 cpu_ms=2468.6 nonfinite=0 peak=0.20618"
+    ]
+  },
+  {
+    "name": "pair-1-32-before",
+    "exit": 0,
+    "lines": [
+      "CONFIG frames=32 tracks=14 plugins=34 workers=8 realtime_helpers=7 requested_limit=0",
+      "RESULT monitoring=0 frames=32 p50=0.2235 p95=0.6380 p99=1.0389 max=1.4538 over=239/5000 cpu_ms=5557.1 nonfinite=0 peak=0.00000",
+      "RESULT monitoring=1 frames=32 p50=0.2104 p95=0.7702 p99=1.1095 max=1.8276 over=348/5000 cpu_ms=5640.8 nonfinite=0 peak=0.22342"
+    ]
+  },
+  {
+    "name": "pair-1-32-after",
+    "exit": 0,
+    "lines": [
+      "CONFIG frames=32 tracks=14 plugins=34 workers=4 realtime_helpers=3 requested_limit=4",
+      "RESULT monitoring=0 frames=32 p50=0.2540 p95=0.6761 p99=0.7878 max=1.5821 over=282/5000 cpu_ms=5918.5 nonfinite=0 peak=0.00000",
+      "RESULT monitoring=1 frames=32 p50=0.2562 p95=0.6030 p99=0.7068 max=1.4206 over=75/5000 cpu_ms=5865.0 nonfinite=0 peak=0.22342"
+    ]
+  },
+  {
+    "name": "pair-2-16-after",
+    "exit": 0,
+    "lines": [
+      "CONFIG frames=16 tracks=14 plugins=34 workers=4 realtime_helpers=3 requested_limit=4",
+      "RESULT monitoring=0 frames=16 p50=0.1290 p95=0.2527 p99=0.2580 max=0.3018 over=0/5000 cpu_ms=2823.0 nonfinite=0 peak=0.00000",
+      "RESULT monitoring=1 frames=16 p50=0.1155 p95=0.2267 p99=0.2854 max=0.3400 over=4/5000 cpu_ms=2604.9 nonfinite=0 peak=0.20618"
+    ]
+  },
+  {
+    "name": "pair-2-16-before",
+    "exit": 0,
+    "lines": [
+      "CONFIG frames=16 tracks=14 plugins=34 workers=8 realtime_helpers=7 requested_limit=0",
+      "RESULT monitoring=0 frames=16 p50=0.1151 p95=0.2234 p99=0.2544 max=0.6355 over=1/5000 cpu_ms=2669.9 nonfinite=0 peak=0.00000",
+      "RESULT monitoring=1 frames=16 p50=0.1075 p95=0.2098 p99=0.4885 max=0.7365 over=93/5000 cpu_ms=2688.3 nonfinite=0 peak=0.20618"
+    ]
+  },
+  {
+    "name": "pair-2-32-after",
+    "exit": 0,
+    "lines": [
+      "CONFIG frames=32 tracks=14 plugins=34 workers=4 realtime_helpers=3 requested_limit=4",
+      "RESULT monitoring=0 frames=32 p50=0.3422 p95=0.5701 p99=0.7053 max=1.4723 over=174/5000 cpu_ms=6742.4 nonfinite=0 peak=0.00000",
+      "RESULT monitoring=1 frames=32 p50=0.2983 p95=0.4998 p99=0.6330 max=0.9854 over=19/5000 cpu_ms=6105.4 nonfinite=0 peak=0.22342"
+    ]
+  },
+  {
+    "name": "pair-2-32-before",
+    "exit": 0,
+    "lines": [
+      "CONFIG frames=32 tracks=14 plugins=34 workers=8 realtime_helpers=7 requested_limit=0",
+      "RESULT monitoring=0 frames=32 p50=0.2951 p95=0.4920 p99=0.9673 max=1.2470 over=197/5000 cpu_ms=6509.2 nonfinite=0 peak=0.00000",
+      "RESULT monitoring=1 frames=32 p50=0.2828 p95=0.5261 p99=0.9946 max=1.3916 over=193/5000 cpu_ms=6458.7 nonfinite=0 peak=0.22342"
+    ]
+  },
+  {
+    "name": "pair-3-16-before",
+    "exit": 0,
+    "lines": [
+      "CONFIG frames=16 tracks=14 plugins=34 workers=8 realtime_helpers=7 requested_limit=0",
+      "RESULT monitoring=0 frames=16 p50=0.1215 p95=0.2277 p99=0.2542 max=0.2815 over=0/5000 cpu_ms=2816.7 nonfinite=0 peak=0.00000",
+      "RESULT monitoring=1 frames=16 p50=0.1025 p95=0.4166 p99=0.5271 max=1.6683 over=339/5000 cpu_ms=2800.6 nonfinite=0 peak=0.20618"
+    ]
+  },
+  {
+    "name": "pair-3-16-after",
+    "exit": 0,
+    "lines": [
+      "CONFIG frames=16 tracks=14 plugins=34 workers=4 realtime_helpers=3 requested_limit=4",
+      "RESULT monitoring=0 frames=16 p50=0.0942 p95=0.1739 p99=0.1835 max=0.2543 over=0/5000 cpu_ms=2123.4 nonfinite=0 peak=0.00000",
+      "RESULT monitoring=1 frames=16 p50=0.0915 p95=0.1609 p99=0.1718 max=0.2252 over=0/5000 cpu_ms=2039.6 nonfinite=0 peak=0.20618"
+    ]
+  },
+  {
+    "name": "pair-3-32-before",
+    "exit": 0,
+    "lines": [
+      "CONFIG frames=32 tracks=14 plugins=34 workers=8 realtime_helpers=7 requested_limit=0",
+      "RESULT monitoring=0 frames=32 p50=0.1708 p95=0.2610 p99=0.5707 max=1.5545 over=44/5000 cpu_ms=3928.3 nonfinite=0 peak=0.00000",
+      "RESULT monitoring=1 frames=32 p50=0.2855 p95=0.5042 p99=0.9415 max=1.3328 over=129/5000 cpu_ms=6215.2 nonfinite=0 peak=0.22342"
+    ]
+  },
+  {
+    "name": "pair-3-32-after",
+    "exit": 0,
+    "lines": [
+      "CONFIG frames=32 tracks=14 plugins=34 workers=4 realtime_helpers=3 requested_limit=4",
+      "RESULT monitoring=0 frames=32 p50=0.3117 p95=0.6490 p99=0.7625 max=1.4044 over=191/5000 cpu_ms=6579.0 nonfinite=0 peak=0.00000",
+      "RESULT monitoring=1 frames=32 p50=0.3495 p95=0.5983 p99=0.6562 max=0.9820 over=40/5000 cpu_ms=6628.3 nonfinite=0 peak=0.22342"
+    ]
+  }
+]

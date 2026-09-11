@@ -15,6 +15,7 @@
 #include "Transport/Transport.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -207,6 +208,48 @@ struct OutputBuffer {
 } // namespace
 
 int main() {
+    // Device recommendations count the caller too. Excluded helpers must not
+    // steal jobs, consume an active helper's wake, or hang on shutdown. Exercise
+    // limits changing in both directions and a frontier revealed mid-pass.
+    {
+        JobSystem jobs(8);
+        jobs.prepare(128);
+        struct Probe {
+            JobSystem* jobs;
+            std::array<std::atomic<unsigned>, 64> seen{};
+            std::atomic<bool> invalidWorker{false};
+            unsigned limit = 8;
+            static void execute(void* opaque, std::uint32_t item, unsigned worker) {
+                auto& self = *static_cast<Probe*>(opaque);
+                if (worker >= self.limit) self.invalidWorker.store(true);
+                self.seen[item].fetch_add(1);
+                if (item == 0) {
+                    for (unsigned i = 1; i < self.seen.size(); ++i) self.jobs->submit(worker, i);
+                    self.jobs->wakeHelpers(63);
+                }
+                std::this_thread::yield();
+            }
+        } probe{&jobs};
+        jobs.setSink({&Probe::execute, &probe});
+        bool correct = true;
+        for (unsigned limit : {1u, 4u, 2u, 8u, 1u, 0u, 50u, 1u}) {
+            daw::rt::AudioWorkerConfig config;
+            config.maxParallelThreads = limit;
+            jobs.configureAudioWorkers(config);
+            probe.limit = limit ? std::min(limit, 8u) : 8u;
+            correct &= jobs.workerCount() == probe.limit && jobs.realtimeWorkerCount() == 0;
+            for (int pass = 0; pass < 40; ++pass) {
+                for (auto& count : probe.seen) count.store(0);
+                jobs.beginPass(64, 0);
+                jobs.submit(0, 0);
+                jobs.waitForPass();
+                for (auto& count : probe.seen) correct &= count.load() == 1;
+            }
+        }
+        check(correct && !probe.invalidWorker.load(),
+              "device worker limits include caller, preserve every job/fan-out and restore full offline capacity");
+        // Destruction below wakes the seven configuration-only sleepers.
+    }
     {
         bool rampMatches = true;
         for (std::size_t count : {0, 1, 2, 3, 4, 5, 17, 255}) {
@@ -426,7 +469,7 @@ int main() {
     // the fixed threshold of 64. Forcing the pool alone is insufficient: the
     // one initially requested helper parks while the root sleeps, so the root
     // must also announce the wide frontier when it becomes ready.
-    {
+    for (FrameCount blockFrames : {32u, 64u, 128u, 512u}) {
         constexpr int kWidth = 24;
         std::atomic<int> active{0};
         std::atomic<int> peak{0};
@@ -441,7 +484,8 @@ int main() {
         }
         graph.setSink(sink);
 
-        auto compiled = graph.compile(info);
+        auto wideInfo = info; wideInfo.maxBlockSize = blockFrames;
+        auto compiled = graph.compile(wideInfo);
         check(compiled.has_value(), "compact slow-root graph compiles");
         check(compiled && (*compiled)->nodes.size() < 64 &&
                   (*compiled)->parallelWidth == kWidth,
@@ -449,11 +493,11 @@ int main() {
 
         GraphProcessor processor(4);
         processor.setGraph(*compiled);
-        OutputBuffer output(2, kBlock);
+        OutputBuffer output(2, blockFrames);
 
         const auto parallelStart = std::chrono::steady_clock::now();
         const Status parallelStatus =
-            processor.process(output.block(), kBlock, 0, true);
+            processor.process(output.block(), blockFrames, 0, true);
         const auto parallelEnd = std::chrono::steady_clock::now();
         const int parallelPeak = peak.load(std::memory_order_relaxed);
         check(parallelStatus.has_value(),
@@ -466,16 +510,16 @@ int main() {
         active.store(0, std::memory_order_relaxed);
         peak.store(0, std::memory_order_relaxed);
         const auto serialStart = std::chrono::steady_clock::now();
-        processor.processSerial(output.block(), kBlock, 0, true);
+        processor.processSerial(output.block(), blockFrames, 0, true);
         const auto serialEnd = std::chrono::steady_clock::now();
 
         const double parallelMs = std::chrono::duration<double, std::milli>(
                                       parallelEnd - parallelStart).count();
         const double serialMs = std::chrono::duration<double, std::milli>(
                                     serialEnd - serialStart).count();
-        std::printf("      slow root -> %d successors: parallel %.2f ms, "
+        std::printf("      block %u, slow root -> %d successors: parallel %.2f ms, "
                     "serial %.2f ms, peak width %d\n",
-                    kWidth, parallelMs, serialMs, parallelPeak);
+                    blockFrames, kWidth, parallelMs, serialMs, parallelPeak);
         check(peak.load(std::memory_order_relaxed) == 1,
               "serial reference executes the wide stage one node at a time");
     }

@@ -211,6 +211,7 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
     // re-check, or a gate opening in between would see `rendering` clear and
     // let the control thread reconfigure nodes underneath this block.
     if (m_gateRequested.load()) {
+        m_lastBlockResult.store(BlockResult::Gated, std::memory_order_relaxed);
         m_gatedBlocks.fetch_add(1, std::memory_order_relaxed);
         for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
             dsp::clear(output.channel(ch).first(frames));
@@ -219,6 +220,7 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
     }
     m_rendering.store(true);
     if (m_gateRequested.load()) {
+        m_lastBlockResult.store(BlockResult::Gated, std::memory_order_relaxed);
         m_gatedBlocks.fetch_add(1, std::memory_order_relaxed);
         m_rendering.store(false);
         for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
@@ -236,8 +238,10 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
     const bool playing = m_transport.isPlaying();
     // Read the playhead for this block, then advance — every node in the graph
     // sees exactly the same timeline position.
-    const SamplePos position = playing ? m_transport.advance(frames)
+    const SamplePos position = playing ? m_transport.advance(frames, /*deferPresentation=*/true)
                                        : m_transport.position();
+
+    m_lastBlockPosition = position;
 
     // Musical time is read once, for the position this block starts at, so the
     // whole graph agrees on the beat even though nodes run on several threads.
@@ -247,13 +251,18 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
     // to render leaves the device buffer undefined, and that is the one case
     // that needs silencing.
     const auto graphStarted = rt::nowNanos();
-    if (!m_processor.process(output, frames, position, playing, /*offline=*/false,
-                             transport)) {
+    m_lastBlockResult.store(BlockResult::Complete, std::memory_order_relaxed);
+    const auto processed = m_processor.process(output, frames, position, playing, /*offline=*/false, transport);
+    m_lastRenderError.store(processed ? -1 : int(processed.error()), std::memory_order_relaxed);
+    if (!processed) {
+        m_lastBlockResult.store(BlockResult::Failed, std::memory_order_relaxed);
+        m_failedBlocks.fetch_add(1, std::memory_order_relaxed);
         for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
             dsp::clear(output.channel(ch).first(frames));
         }
     }
 
+    if (playing) m_transport.finishPresentationBlock(m_processor.lastBlockLatencySamples());
     m_graphMetrics.record(rt::nowNanos() - graphStarted, frames, m_prepareInfo.sampleRate);
 
     updateMasterMeters(output, frames);

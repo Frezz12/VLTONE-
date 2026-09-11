@@ -338,28 +338,98 @@ TempoEstimate detectTempo(std::span<const float> mono, const MusicalAnalysisRequ
     checkpoint(progress, 0.96, "tempo_done");
     if (segments.empty()) { out.reason = "not enough rhythmic information"; return out; }
     // Pick the supported tempo cluster, then aggregate its precise local fits.
-    double primary = 0, support = -1;
+    // Keep the coverage and vote count as well as the raw score: they are the
+    // evidence that separates an audible 140 pulse from strong 70 BPM accents.
+    struct SupportedTempo {
+        double bpm = 0.0;
+        double support = 0.0;
+        double coverage = 0.0;
+        int votes = 0;
+    };
+    std::vector<SupportedTempo> supported;
     for (const auto& segment : segments) {
         for (const auto& candidate : segment) {
-            double score = 0;
-            for (const auto& votes : segments) {
-                for (const auto& vote : votes) {
-                    if (std::abs(std::log2(vote.bpm / candidate.bpm)) < 0.025) { score += vote.score; break; }
-                }
+            if (std::any_of(supported.begin(), supported.end(),
+                    [&](const auto& existing) {
+                        return std::abs(std::log2(candidate.bpm /
+                                                  existing.bpm)) < 0.025;
+                    })) {
+                continue;
             }
-            if (score > support) { support = score; primary = candidate.bpm; }
+            SupportedTempo cluster;
+            cluster.bpm = candidate.bpm;
+            for (const auto& votes : segments) {
+                const Candidate* best = nullptr;
+                for (const auto& vote : votes) {
+                    if (std::abs(std::log2(vote.bpm / cluster.bpm)) >= 0.025)
+                        continue;
+                    if (!best || vote.score > best->score) best = &vote;
+                }
+                if (!best) continue;
+                cluster.support += best->score;
+                cluster.coverage += best->grid.coverage;
+                ++cluster.votes;
+            }
+            if (cluster.votes > 0) {
+                cluster.coverage /= cluster.votes;
+                supported.push_back(cluster);
+            }
         }
     }
+    std::sort(supported.begin(), supported.end(),
+              [](const auto& a, const auto& b) {
+                  return a.support > b.support;
+              });
+    if (supported.empty()) {
+        out.reason = "not enough rhythmic information";
+        return out;
+    }
+
+    SupportedTempo selected = supported.front();
+    // Autocorrelation naturally likes both a beat and its half-time accents.
+    // Prefer the three-digit double only when it is independently strong: it
+    // must occur throughout the clip and match almost as many grid attacks.
+    // The threshold becomes stricter near 100 BPM, where the slower reading is
+    // already a common musical tactus. A genuine 60–90 BPM recording without
+    // subdivisions therefore keeps its original answer.
+    if (selected.bpm < 100.0) {
+        const double doubled = selected.bpm * 2.0;
+        const auto faster = std::find_if(
+            supported.begin() + 1, supported.end(), [&](const auto& candidate) {
+                return candidate.bpm >= 100.0 && candidate.bpm <= 200.0 &&
+                       std::abs(std::log2(candidate.bpm / doubled)) < 0.035;
+            });
+        const double scoreRatio = selected.bpm < 65.0 ? 0.76
+                                : selected.bpm < 82.0 ? 0.82
+                                                     : 0.90;
+        if (faster != supported.end() &&
+            faster->support >= selected.support * scoreRatio &&
+            faster->coverage >= selected.coverage * 0.80 &&
+            faster->votes * 4 >= selected.votes * 3) {
+            selected = *faster;
+        }
+    }
+    const double primary = selected.bpm;
     std::vector<double> consistent;
     double scoreSum = 0, marginSum = 0;
     int stable = 0;
     for (const auto& segment : segments) {
-        if (std::abs(std::log2(segment.front().bpm / primary)) < 0.025) ++stable;
+        const auto chosen = std::find_if(segment.begin(), segment.end(),
+            [&](const auto& candidate) {
+                return std::abs(std::log2(candidate.bpm / primary)) < 0.025;
+            });
+        if (chosen != segment.end() &&
+            chosen->score >= segment.front().score * 0.70)
+            ++stable;
         for (const auto& c : segment) {
             if (std::abs(std::log2(c.bpm / primary)) >= 0.025) continue;
             consistent.push_back(c.bpm);
             scoreSum += c.score;
-            const double runner = segment.size() > 1 ? segment[1].score : 0.0;
+            double runner = 0.0;
+            for (const auto& other : segment) {
+                if (std::abs(std::log2(other.bpm / primary)) >= 0.025)
+                    runner = std::max(runner, other.score);
+            }
             marginSum += std::clamp((c.score - runner) / std::max(0.01, c.score), 0.0, 1.0);
             break;
         }

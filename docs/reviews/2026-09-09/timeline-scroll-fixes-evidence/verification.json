@@ -1,0 +1,130 @@
+[
+  {
+    "name": "ctest",
+    "exit_code": 0,
+    "seconds": 18.82
+  },
+  {
+    "name": "ui-navigation",
+    "exit_code": 0,
+    "seconds": 7.12
+  },
+  {
+    "name": "ui-pattern",
+    "exit_code": 0,
+    "seconds": 0.35
+  },
+  {
+    "name": "ui-editor",
+    "exit_code": 0,
+    "seconds": 0.26
+  },
+  {
+    "name": "audio-scroll-dpr1",
+    "exit_code": 0,
+    "seconds": 18.49
+  },
+  {
+    "name": "audio-scroll-dpr2",
+    "exit_code": 0,
+    "seconds": 18.94
+  },
+  {
+    "name": "audio-before-8-32",
+    "exit_code": 0,
+    "seconds": 0.63
+  },
+  {
+    "name": "audio-after-8-32",
+    "exit_code": 0,
+    "seconds": 2.29
+  },
+  {
+    "name": "audio-before-8-512",
+    "exit_code": 0,
+    "seconds": 8.64
+  },
+  {
+    "name": "audio-after-8-512",
+    "exit_code": 0,
+    "seconds": 8.66
+  },
+  {
+    "name": "audio-before-64-32",
+    "exit_code": 0,
+    "seconds": 0.96
+  },
+  {
+    "name": "audio-after-64-32",
+    "exit_code": 0,
+    "seconds": 0.84
+  },
+  {
+    "name": "audio-before-64-512",
+    "exit_code": 0,
+    "seconds": 8.83
+  },
+  {
+    "name": "audio-after-64-512",
+    "exit_code": 0,
+    "seconds": 9.02
+  },
+  {
+    "name": "diagnostic-final-dpr2-strict",
+    "exit_code": 0
+  },
+  {
+    "name": "frame-clock-after-diagnostics",
+    "exit_code": 0
+  },
+  {
+    "name": "final-daw-build",
+    "exit_code": 0
+  },
+  {
+    "name": "git-diff-check",
+    "exit_code": 0
+  },
+  {
+    "name": "qt-raster-sampled-run-not-performance",
+    "exit_code": 61,
+    "note": "Profiler disrupted process timing; stack evidence only."
+  },
+  {
+    "name": "qt-pool-disabled-first-strict",
+    "exit_code": 61
+  },
+  {
+    "name": "qt-pool-disabled-repeat-strict",
+    "exit_code": 0
+  },
+  {
+    "name": "qt-pool-enabled-repeat-strict",
+    "exit_code": 61
+  },
+  {
+    "name": "final-policy-dpr1",
+    "exit_code": 0
+  },
+  {
+    "name": "final-policy-dpr2",
+    "exit_code": 61
+  },
+  {
+    "name": "final-policy-navigation",
+    "exit_code": 0
+  },
+  {
+    "name": "final-policy-pattern",
+    "exit_code": 0
+  },
+  {
+    "name": "final-policy-editor",
+    "exit_code": 0
+  },
+  {
+    "name": "final-audio-timeline-scroll-ctest",
+    "exit_code": 0,
+    "note": "Default paint p95 limit 33.4 ms; one synthetic callback exceeded its 0.667 ms deadline."
+  }
+]

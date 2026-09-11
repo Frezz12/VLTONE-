@@ -29,6 +29,7 @@ struct TrackLocalState {
     bool armed = false;
     bool monitor = false;
     bool monitorAuto = false;
+    unsigned monitorInputMask = 3;
     daw::TrackRecordMode recordMode = daw::TrackRecordMode::UseGlobal;
     bool inputEnabled = false;
     std::uint32_t inputChannel = 0;
@@ -163,6 +164,8 @@ public:
         loopStartSeconds = current.loopStartSeconds;
         loopEndSeconds = current.loopEndSeconds;
         loopEnabled = current.loopEnabled;
+        notebookHtml = current.notebookHtml;
+        notebookCues = current.notebookCues;
 
         for (const daw::TrackModel& track : current.tracks) {
             trackLocal[track.id] = {
@@ -170,6 +173,7 @@ public:
                 track.armed,
                 track.monitor,
                 track.monitorAuto,
+                track.monitorInputMask,
                 track.recordMode,
                 track.inputEnabled,
                 track.inputChannel,
@@ -203,6 +207,8 @@ public:
         runtime.loopStartSeconds = loopStartSeconds;
         runtime.loopEndSeconds = loopEndSeconds;
         runtime.loopEnabled = loopEnabled;
+        runtime.notebookHtml = notebookHtml;
+        runtime.notebookCues = notebookCues;
 
         for (daw::TrackModel& track : runtime.tracks) {
             if (const auto found = trackLocal.find(track.id);
@@ -212,6 +218,7 @@ public:
                 track.armed = local.armed;
                 track.monitor = local.monitor;
                 track.monitorAuto = local.monitorAuto;
+                track.monitorInputMask = local.monitorInputMask;
                 track.recordMode = local.recordMode;
                 track.inputEnabled = local.inputEnabled;
                 track.inputChannel = local.inputChannel;
@@ -611,6 +618,8 @@ public:
     double loopStartSeconds = 0.0;
     double loopEndSeconds = 0.0;
     bool loopEnabled = false;
+    std::string notebookHtml;
+    std::vector<daw::NotebookCueModel> notebookCues;
     std::unordered_map<std::string, TrackLocalState> trackLocal;
     std::unordered_map<std::string, bool> clipExpanded;
     std::unordered_map<std::string, PluginLocalState> pluginLocal;

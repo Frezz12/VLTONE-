@@ -9,8 +9,8 @@ class QCheckBox;
 class QComboBox;
 class QDialogButtonBox;
 class QGridLayout;
-class QSlider;
 class QTableWidget;
+namespace ui { class Knob; }
 
 // Parameter dialogs for the piano roll's Tools menu.
 //
@@ -73,15 +73,15 @@ private:
     QComboBox* m_grid = nullptr;
     QComboBox* m_flavour = nullptr;
     QComboBox* m_target = nullptr;
-    QSlider* m_strength = nullptr;
-    QSlider* m_swing = nullptr;
+    ui::Knob* m_strength = nullptr;
+    ui::Knob* m_swing = nullptr;
     QComboBox* m_swingUnit = nullptr;
-    QSlider* m_tolerance = nullptr;
+    ui::Knob* m_tolerance = nullptr;
     QCheckBox* m_preserveOrder = nullptr;
-    QSlider* m_randomize = nullptr;
+    ui::Knob* m_randomize = nullptr;
     QComboBox* m_groove = nullptr;
-    QSlider* m_grooveTiming = nullptr;
-    QSlider* m_grooveVelocity = nullptr;
+    ui::Knob* m_grooveTiming = nullptr;
+    ui::Knob* m_grooveVelocity = nullptr;
 };
 
 // ── Arpeggiator ─────────────────────────────────────────────────────────────
@@ -98,17 +98,17 @@ private:
     void rebuildSteps(int count);
 
     QComboBox* m_direction = nullptr;
-    QSlider* m_octaves = nullptr;
+    ui::Knob* m_octaves = nullptr;
     QComboBox* m_rate = nullptr;
     QComboBox* m_flavour = nullptr;
-    QSlider* m_gate = nullptr;
-    QSlider* m_stepCount = nullptr;
+    ui::Knob* m_gate = nullptr;
+    ui::Knob* m_stepCount = nullptr;
     /// One row per pattern step: velocity, skip, tie, transpose.
     QTableWidget* m_steps = nullptr;
-    QSlider* m_ramp = nullptr;
-    QSlider* m_swing = nullptr;
-    QSlider* m_humanizeVelocity = nullptr;
-    QSlider* m_humanizeTiming = nullptr;
+    ui::Knob* m_ramp = nullptr;
+    ui::Knob* m_swing = nullptr;
+    ui::Knob* m_humanizeVelocity = nullptr;
+    ui::Knob* m_humanizeTiming = nullptr;
     QComboBox* m_playMode = nullptr;
     QCheckBox* m_merge = nullptr;
 };
@@ -125,8 +125,8 @@ public:
 private:
     QComboBox* m_mode = nullptr;
     QCheckBox* m_samePitch = nullptr;
-    QSlider* m_gap = nullptr;
-    QSlider* m_legatoMax = nullptr;
+    ui::Knob* m_gap = nullptr;
+    ui::Knob* m_legatoMax = nullptr;
 };
 
 // ── Articulate ──────────────────────────────────────────────────────────────
@@ -140,14 +140,14 @@ public:
 
 private:
     QComboBox* m_mode = nullptr;
-    QSlider* m_gate = nullptr;
-    QSlider* m_amount = nullptr;
-    QSlider* m_minLength = nullptr;
-    QSlider* m_maxLength = nullptr;
+    ui::Knob* m_gate = nullptr;
+    ui::Knob* m_amount = nullptr;
+    ui::Knob* m_minLength = nullptr;
+    ui::Knob* m_maxLength = nullptr;
     QCheckBox* m_accentOn = nullptr;
-    QSlider* m_accentEvery = nullptr;
-    QSlider* m_accentVelocity = nullptr;
-    QSlider* m_otherVelocity = nullptr;
+    ui::Knob* m_accentEvery = nullptr;
+    ui::Knob* m_accentVelocity = nullptr;
+    ui::Knob* m_otherVelocity = nullptr;
 };
 
 // ── Strum ───────────────────────────────────────────────────────────────────
@@ -161,10 +161,10 @@ public:
 
 private:
     QComboBox* m_direction = nullptr;
-    QSlider* m_span = nullptr;
+    ui::Knob* m_span = nullptr;
     QComboBox* m_shape = nullptr;
-    QSlider* m_taper = nullptr;
-    QSlider* m_window = nullptr;
+    ui::Knob* m_taper = nullptr;
+    ui::Knob* m_window = nullptr;
     QCheckBox* m_adjustEnds = nullptr;
 };
 
@@ -182,20 +182,20 @@ public:
 
 private:
     QCheckBox* m_velocityOn = nullptr;
-    QSlider* m_velocity = nullptr;
+    ui::Knob* m_velocity = nullptr;
     QCheckBox* m_pitchOn = nullptr;
-    QSlider* m_pitch = nullptr;
+    ui::Knob* m_pitch = nullptr;
     QCheckBox* m_scaleAware = nullptr;
     QComboBox* m_scaleRoot = nullptr;
     QComboBox* m_scale = nullptr;
     QCheckBox* m_timingOn = nullptr;
-    QSlider* m_timing = nullptr;
+    ui::Knob* m_timing = nullptr;
     QCheckBox* m_constrain = nullptr;
     QCheckBox* m_durationOn = nullptr;
-    QSlider* m_duration = nullptr;
+    ui::Knob* m_duration = nullptr;
     QCheckBox* m_gaussian = nullptr;
     QCheckBox* m_preserveTotal = nullptr;
-    QSlider* m_seed = nullptr;
+    ui::Knob* m_seed = nullptr;
     double m_regionEndBeats = 0.0;
     double m_gridBeats = 0.25;
 };
@@ -211,7 +211,7 @@ public:
 
 private:
     QComboBox* m_type = nullptr;
-    QSlider* m_inversion = nullptr;
+    ui::Knob* m_inversion = nullptr;
     QCheckBox* m_addOctave = nullptr;
     QCheckBox* m_bassOctave = nullptr;
 };

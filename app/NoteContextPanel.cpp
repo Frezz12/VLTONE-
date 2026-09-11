@@ -100,7 +100,10 @@ NoteContextPanel::NoteContextPanel(PianoRollView* view, QWidget* parent)
     m_follow = QSettings().value("contextPanel/followSelection", true).toBool();
     // This is now a peer of the arrangement plate in the same tool strip.
     setTopAttached(true);
+    setShadowVisible(false);
     setAccentColor(th().accent);
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+            [this] { setAccentColor(th().accent); });
     hide();
 }
 
@@ -458,6 +461,12 @@ void NoteContextPanel::setAnchorProvider(std::function<bool(int&)> provider) {
     relayout();
 }
 
+void NoteContextPanel::setHomeAnchorProvider(
+    std::function<bool(int&)> provider) {
+    m_homeAnchorProvider = std::move(provider);
+    relayout();
+}
+
 void NoteContextPanel::setBoundsProvider(
     std::function<bool(int&, int&)> provider) {
     m_boundsProvider = std::move(provider);
@@ -511,6 +520,10 @@ QRect NoteContextPanel::targetGeometry() const {
     int left = limitLeft + (available - width) / 2;
     if (followAnchor) {
         left = std::clamp(anchorCentreX - width / 2, limitLeft, rightmost);
+    } else {
+        int homeCentreX = 0;
+        if (m_homeAnchorProvider && m_homeAnchorProvider(homeCentreX))
+            left = std::clamp(homeCentreX - width / 2, limitLeft, rightmost);
     }
     return QRect(left, top, width, height);
 }

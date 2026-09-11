@@ -1,4 +1,5 @@
 #pragma once
+#include "graphics/ScenePaintSource.hpp"
 #include <QElapsedTimer>
 
 #include "Icons.hpp"
@@ -10,8 +11,12 @@
 #include <QSizeF>
 #include <QHash>
 #include <QLineEdit>
+#include <QPoint>
+#include <QPointF>
+#include <QSlider>
 #include <QWidget>
 
+#include <algorithm>
 #include <functional>
 
 class QLabel;
@@ -30,6 +35,23 @@ namespace daw { class EngineController; }
 namespace ui {
 class FrameTimer;
 
+/// Relative pointer gesture for controls that must keep moving after the
+/// physical pointer would otherwise reach a screen edge.  Each sample is
+/// measured from the press position and the system pointer is immediately
+/// returned there, so callers receive small, directionally stable deltas.
+class LockedCursorDrag {
+public:
+    void begin(const QPointF& globalPosition);
+    QPointF takeDelta(const QPointF& globalPosition);
+    QPointF finish(const QPointF& globalPosition);
+    void cancel();
+    bool active() const { return m_active; }
+
+private:
+    QPoint m_anchor;
+    bool m_active = false;
+};
+
 /// Linear gain ↔ fader travel with a dB taper (−60 … +6 dB), so unity sits at
 /// ~80 % of the throw and the top of the fader is usable for fine moves.
 double gainFromFaderPosition(double position);
@@ -44,11 +66,10 @@ bool automationCreationMode();
 
 /// How every slider in the application is drawn, in one place.
 ///
-/// One thick recessed track, the value filled from the start of the throw, and
-/// a glass handle that rides **inside** the track instead of sitting on top of
-/// it — the same pane-of-glass vocabulary as `ui::GlassPanel`, at the size of a
-/// fader cap: a translucent body, a sheen over its top half and a rim graded
-/// from lit to shadowed. No metal, no drop shadow, nothing embossed.
+/// A quiet four-pixel rail and a large translucent glass handle above it. The
+/// rail shows the range; the handle is the object the pointer can confidently
+/// grab. The same geometry is used for painting and input, so the visual value
+/// cannot drift away from the cursor.
 ///
 /// The QSS in `Theme.cpp` mirrors this for the plain `QSlider`s in settings and
 /// generic plugin editors, so a slider looks the same wherever it comes from.
@@ -73,8 +94,8 @@ struct SliderPaint {
 /// Paint one into `track` — the groove's full rect, thickness included.
 void paintSlider(QPainter& painter, const QRectF& track, const SliderPaint& spec);
 
-/// Diameter of the handle in a track of this thickness. The handle is a circle
-/// that fits *inside* the groove, so there is only ever one number to derive.
+/// Diameter of the handle in the supplied interaction envelope. It is much
+/// larger than the visible rail, with extra invisible hit padding beyond it.
 double sliderHandleDiameter(double trackThickness);
 /// Where the centre of the handle sits for `position`, along the axis.
 double sliderHandleAxis(const QRectF& track, Qt::Orientation orientation,
@@ -83,8 +104,50 @@ double sliderHandleAxis(const QRectF& track, Qt::Orientation orientation,
 double sliderPositionAt(const QRectF& track, Qt::Orientation orientation,
                         double coordinate, bool flush = false);
 
-/// Thickness of a track: wide enough for a round handle to travel inside it.
-inline constexpr double kSliderTrack = 18.0;
+/// Cross-axis interaction envelope. The rail itself is only four pixels tall.
+inline constexpr double kSliderTrack = 20.0;
+
+/// The application slider: custom glass painting and reliable direct
+/// manipulation for both mouse and trackpad. Clicking anywhere on the rail
+/// begins a drag immediately; grabbing the handle preserves the grab offset.
+class GlassSlider : public QSlider {
+public:
+    explicit GlassSlider(Qt::Orientation orientation = Qt::Horizontal,
+                         QWidget* parent = nullptr);
+
+    void setFillFrom(double fraction) {
+        m_fillFrom = std::clamp(fraction, 0.0, 1.0);
+        update();
+    }
+    void setDetent(double fraction) {
+        m_detent = fraction < 0.0 ? -1.0 : std::clamp(fraction, 0.0, 1.0);
+        update();
+    }
+
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+    static bool checkInteractionForTest();
+
+protected:
+    void paintEvent(QPaintEvent*) override;
+    void mousePressEvent(QMouseEvent*) override;
+    void mouseMoveEvent(QMouseEvent*) override;
+    void mouseReleaseEvent(QMouseEvent*) override;
+    void wheelEvent(QWheelEvent*) override;
+    void enterEvent(QEnterEvent*) override;
+    void leaveEvent(QEvent*) override;
+
+private:
+    QRectF interactionTrack() const;
+    double visualFraction() const;
+    double axisCoordinate(const QPointF& position) const;
+    void setFromCoordinate(double coordinate);
+
+    double m_grabOffset = 0.0;
+    double m_wheelRemainder = 0.0;
+    double m_fillFrom = 0.0;
+    double m_detent = -1.0;
+};
 
 /// Base for widgets that need a repaint when the palette changes.
 class ThemedWidget : public QWidget {
@@ -262,7 +325,7 @@ public:
     /// creation gesture or context-menu command.
     void setAutomatable(bool automatable) { m_automatable = automatable; }
     bool isAutomatable() const noexcept { return m_automatable; }
-    bool isEditing() const noexcept { return m_dragging; }
+    bool isEditing() const noexcept { return m_dragging || m_wheelEditing; }
 
 signals:
     void gainChanged(double gain);
@@ -299,6 +362,7 @@ private:
     void showBubble();
     void paintScale(QPainter& p) const;
     void paintCap(QPainter& p, const QRectF& cap) const;
+    void finishWheelEdit();
 
     Qt::Orientation m_orientation = Qt::Vertical;
     bool m_scale = false;
@@ -306,9 +370,11 @@ private:
     double m_dragStartPosition = 0.0;
     int m_dragStartCoord = 0;
     bool m_dragging = false;
+    bool m_wheelEditing = false;
     bool m_hovered = false;
     bool m_automatable = false;
     bool m_compactKnob = false;
+    QTimer* m_wheelCommit = nullptr;
     int m_regularMinimumWidth = -1;
     int m_regularMaximumWidth = QWIDGETSIZE_MAX;
 };
@@ -420,7 +486,7 @@ public:
     /// creation gesture or context-menu command.
     void setAutomatable(bool automatable) { m_automatable = automatable; }
     bool isAutomatable() const noexcept { return m_automatable; }
-    bool isEditing() const noexcept { return m_dragging; }
+    bool isEditing() const noexcept { return m_dragging || m_wheelEditing; }
     static bool checkInteractionForTest();
 
 signals:
@@ -447,13 +513,16 @@ private:
     /// Float the L/C/R readout above the knob while dragging.
     void showBubble();
     void commit(double pan);
+    void finishWheelEdit();
 
     double m_pan = 0.0;
     double m_dragStart = 0.0;
     int m_dragStartX = 0;
     int m_dragStartY = 0;
     bool m_dragging = false;
+    bool m_wheelEditing = false;
     bool m_automatable = false;
+    QTimer* m_wheelCommit = nullptr;
     Fade m_hoverFade{this};
 };
 
@@ -633,7 +702,7 @@ private:
 };
 
 /// dB-scaled level meter with peak hold. One or two bars.
-class LevelMeter : public QWidget {
+class LevelMeter : public QWidget, public ui::graphics::ScenePaintSource {
     Q_OBJECT
 public:
     explicit LevelMeter(Qt::Orientation orientation = Qt::Vertical,
@@ -656,6 +725,7 @@ public:
 
 protected:
     void paintEvent(QPaintEvent*) override;
+    void paintScene(QPainter&, const QRegion&) override;
     void mousePressEvent(QMouseEvent*) override;
 
 private:

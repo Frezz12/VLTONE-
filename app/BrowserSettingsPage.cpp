@@ -83,7 +83,7 @@ BrowserSettingsPage::BrowserSettingsPage(QWidget* parent) : QWidget(parent) {
     });
     form->addRow(QString(), m_loop);
 
-    m_gain = new QSlider(Qt::Horizontal, this);
+    m_gain = new ui::GlassSlider(Qt::Horizontal, this);
     m_gain->setRange(0, 200);   // percent of the recorded level
     m_gain->setValue(int(ui::browserprefs::previewGain() * 100.0f));
     connect(m_gain, &QSlider::valueChanged, this, [this](int value) {

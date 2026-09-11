@@ -92,15 +92,15 @@ TransportSettingsPage::TransportSettingsPage(daw::EngineController* controller,
     auto* panelStyle = new QComboBox(this);
     panelStyle->setObjectName(QStringLiteral("TransportPanelStyle"));
     panelStyle->setAccessibleName(tr("Top panel style"));
-    panelStyle->addItem(tr("Neon"), QStringLiteral("neon"));
-    panelStyle->addItem(tr("Plain"), QStringLiteral("plain"));
+    panelStyle->addItem(tr("Accent"), QStringLiteral("neon"));
+    panelStyle->addItem(tr("Monochrome"), QStringLiteral("plain"));
     const QString savedStyle = QSettings().value(
         ui::kTransportPanelStyleSetting, QStringLiteral("neon")).toString();
     panelStyle->setCurrentIndex(savedStyle == QLatin1String("plain") ? 1 : 0);
     auto* appearanceForm = new QFormLayout;
     appearanceForm->addRow(tr("Top panel style"), panelStyle);
     auto* appearanceHint = new QLabel(
-        tr("Neon: colored glow. Plain: black recesses with white text and no glow."),
+        tr("Accent: a restrained project-color tint. Monochrome: neutral controls with no glow."),
         this);
     appearanceHint->setWordWrap(true);
     connect(panelStyle, &QComboBox::currentIndexChanged, this,

@@ -430,7 +430,9 @@ void appendCommand(const std::shared_ptr<collab::BatchCommand>& batch,
 bool supportedSharedBuiltin(const InsertModel& insert) {
     return insert.format == PluginFormat::Internal &&
            (insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
-            insert.uid == "daw.gravity" || insert.uid == "daw.graphit");
+            insert.uid == "daw.gravity" || insert.uid == "daw.graphit" ||
+            insert.uid == "daw.doubler" || insert.uid == "daw.chorus" ||
+            insert.uid == "daw.flanger" || insert.uid == "daw.phaser");
 }
 
 bool supportedSharedPlugin(const InsertModel& insert) {
@@ -736,6 +738,93 @@ TrackModel mintTrackCopy(const TrackModel& source, bool withInserts) {
     return copy;
 }
 
+/// Mint a connected set of tracks as one independent hierarchy. The ordinary
+/// single-track copier already refreshes every object identity owned by a
+/// track; this second pass repairs references which cross track boundaries —
+/// folder parents and buses, Pattern ownership, automation targets, sends and
+/// plugin sidechains.
+std::vector<TrackModel> mintConnectedTrackCopies(
+    const ProjectModel& project, const std::vector<std::string>& sourceIds,
+    bool withInserts, bool withClips) {
+    std::vector<TrackModel> copies;
+    copies.reserve(sourceIds.size());
+
+    std::unordered_map<std::string, std::string> trackIds;
+    std::unordered_map<std::string, std::string> slotIds;
+    std::unordered_map<std::string, std::string> sendIds;
+    std::unordered_map<std::string, std::string> clipIds;
+
+    const auto remember = [](auto& map, const std::string& before,
+                             const std::string& after) {
+        if (!before.empty() && !after.empty()) map[before] = after;
+    };
+    const auto rememberSlots = [&](const std::vector<InsertModel>& before,
+                                   const std::vector<InsertModel>& after) {
+        const std::size_t count = std::min(before.size(), after.size());
+        for (std::size_t i = 0; i < count; ++i)
+            remember(slotIds, before[i].id, after[i].id);
+    };
+
+    for (const std::string& id : sourceIds) {
+        const TrackModel* source = project.findTrack(id);
+        if (!source) return {};
+        TrackModel copy = mintTrackCopy(*source, withInserts);
+        remember(trackIds, source->id, copy.id);
+        remember(slotIds, source->instrument.id, copy.instrument.id);
+        rememberSlots(source->samplerFx.inserts, copy.samplerFx.inserts);
+        rememberSlots(source->inserts, copy.inserts);
+        for (std::size_t i = 0;
+             i < source->sends.size() && i < copy.sends.size(); ++i) {
+            remember(sendIds, source->sends[i].id, copy.sends[i].id);
+        }
+        if (withClips) {
+            for (std::size_t i = 0;
+                 i < source->clips.size() && i < copy.clips.size(); ++i) {
+                remember(clipIds, source->clips[i].id, copy.clips[i].id);
+                rememberSlots(source->clips[i].inserts,
+                              copy.clips[i].inserts);
+            }
+        } else {
+            copy.clips.clear();
+        }
+        copies.push_back(std::move(copy));
+    }
+
+    const auto remap = [](std::string& id, const auto& map) {
+        if (const auto found = map.find(id); found != map.end())
+            id = found->second;
+    };
+    const auto remapInsert = [&](InsertModel& insert) {
+        remap(insert.sidechainTrackId, trackIds);
+    };
+
+    for (TrackModel& copy : copies) {
+        remap(copy.parentId, trackIds);
+        remap(copy.outputBusId, trackIds);
+        remap(copy.samplerFx.ownerInstrumentId, slotIds);
+        remapInsert(copy.instrument);
+        for (InsertModel& insert : copy.samplerFx.inserts)
+            remapInsert(insert);
+        for (InsertModel& insert : copy.inserts) remapInsert(insert);
+        for (SendModel& send : copy.sends)
+            remap(send.destinationTrackId, trackIds);
+
+        for (ClipModel& clip : copy.clips) {
+            remap(clip.patternClipId, clipIds);
+            remap(clip.playbackInjection.anchorChannelId, trackIds);
+            for (InsertModel& insert : clip.inserts) remapInsert(insert);
+            for (InsertModel& insert : clip.offlineProcess.chain)
+                remapInsert(insert);
+            for (ControllerLane& lane : clip.lanes)
+                remap(lane.slotId, slotIds);
+            remap(clip.automation.target.channelId, trackIds);
+            remap(clip.automation.target.slotId, slotIds);
+            remap(clip.automation.target.sendId, sendIds);
+        }
+    }
+    return copies;
+}
+
 bool appendSharedTrackContents(
     const std::shared_ptr<collab::BatchCommand>& batch,
     const TrackModel& track) {
@@ -1018,20 +1107,39 @@ public:
             inputChannelData = m_inputPointers.data();
         }
 
+        m_engine.transport().setPresentationTiming(ctx.outputTimeNs,
+            ctx.outputTimeIsDeviceTimestamp ? engine::PresentationClockSource::DeviceTimestamp :
+            ctx.outputTimeNs > 0 ? engine::PresentationClockSource::DeviceLatency :
+                                  engine::PresentationClockSource::RenderEstimate);
+        auto recorders = m_recorders.read(); // one capture snapshot for this entire block
         m_engine.renderBlock(output, inputChannelData, inputChannels, frames);
+        using BlockResult = engine::RealtimeEngine::BlockResult;
+        ctx.renderStatus = m_engine.lastBlockResult() == BlockResult::Complete
+            ? audio::AudioCallbackContext::RenderStatus::Complete
+            : m_engine.lastBlockResult() == BlockResult::Gated
+                ? audio::AudioCallbackContext::RenderStatus::Gated
+                : audio::AudioCallbackContext::RenderStatus::Failed;
 
         // Recording taps the hardware input, not the mix: capturing the master
         // would print everything already on the timeline into the new take.
         // Each armed track has its own recorder, and each picks its own input
         // channels out of this same buffer.
-        if (ctx.inputBuffer) {
-            auto recorders = m_recorders.read();
-            if (recorders) {
-                for (const auto& recorder : *recorders) {
-                    if (recorder && recorder->isRecording()) {
-                        recorder->process(*ctx.inputBuffer, ctx.numFrames);
-                    }
+        if (recorders && !recorders->empty()) {
+            const auto result = m_engine.lastBlockResult();
+            // The graph's latency delays the accompaniment as well as the
+            // device's DAC queue. ADC timestamps identify when this input was
+            // heard against that accompaniment; subtract each delay once.
+            const double ioDelay = ctx.outputTimeNs > 0 && ctx.inputTimeNs > 0
+                ? double(ctx.outputTimeNs - ctx.inputTimeNs) * ctx.sampleRate / 1e9 : 0.;
+            const auto inputPosition = m_engine.lastBlockPosition() -
+                engine::SamplePos(std::llround(ioDelay)) - m_engine.lastBlockLatency();
+            for (const auto& recorder : *recorders) {
+                if (!recorder || !recorder->isRecording()) continue;
+                if (result != BlockResult::Complete) {
+                    recorder->markInterrupted();
+                    if (result == BlockResult::Gated) continue; // transport did not advance
                 }
+                recorder->process(ctx.inputBuffer, frames, 0, (ctx.statusFlags & 3u) != 0, inputPosition);
             }
         }
     }
@@ -1044,6 +1152,18 @@ private:
     std::array<float*, engine::kMaxChannels> m_outputPointers{};
     std::array<const float*, engine::kMaxChannels> m_inputPointers{};
 };
+
+bool EngineController::processDeviceBlockForTest(const audio::AudioBuffer& input,
+                                                 audio::AudioBuffer& output,
+                                                 audio::BufferSize frames) {
+    if (m_liveDeviceAllowed || !m_prepared || !m_callback || frames > input.numFrames() ||
+        frames > output.numFrames() || frames > m_bufferSize) return false;
+    audio::AudioCallbackContext context;
+    context.inputBuffer = &input; context.outputBuffer = &output;
+    context.numFrames = frames; context.sampleRate = m_sampleRate;
+    m_callback->onAudioCallback(context);
+    return true;
+}
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -1313,24 +1433,11 @@ audio::Result EngineController::initialize(
 
     if (!openDevice) return audio::Result::ok();
 
-    auto r = m_devices->initialize(config);
-    if (!r) return r;                       // offline path stays usable
-    m_devices->setAudioCallback(m_callback.get());
-    auto started = m_devices->start();
-    if (!started) return started;
-
-    // The device may have opened at a different rate than we asked for.
-    m_sampleRate = m_devices->sampleRate();
-    m_bufferSize = m_devices->bufferSize();
-    m_project.sampleRate = m_sampleRate;
-    m_engine.prepare(m_sampleRate, m_bufferSize, 2);
-    m_recorder->initialize(m_sampleRate, 2);
-    rebuildGraph();
-    m_deviceOpen = true;
-    return audio::Result::ok();
+    return applyAudioConfiguration(config);
 }
 
 void EngineController::shutdown() {
+    m_liveDeviceAllowed = false;
     if (m_devices->isInitialized()) {
         m_devices->setAudioCallback(nullptr);
         m_devices->stop();
@@ -2777,6 +2884,7 @@ void EngineController::syncTrackGain(const TrackModel& track,
 }
 
 void EngineController::syncAllTrackGains() {
+    refreshAutomaticMonitoring(false);
     const SoloState solo = soloState();
     for (const auto& t : m_project.tracks) syncTrackGain(t, solo);
 }
@@ -3170,7 +3278,7 @@ plugins::PluginNode* EngineController::editorInsertNode(
 
 // ── Graph construction ─────────────────────────────────────────────────────
 
-audio::Result EngineController::rebuildGraph(bool reconfigurePlugins) {
+audio::Result EngineController::rebuildGraph(bool reconfigurePlugins, bool publish) {
     struct FreezeRebuildScope { bool& flag; bool previous; ~FreezeRebuildScope() { flag = previous; } };
     FreezeRebuildScope freezeScope{m_rebuildingFrozenGraph, m_rebuildingFrozenGraph};
     m_rebuildingFrozenGraph = true;
@@ -3372,20 +3480,16 @@ audio::Result EngineController::rebuildGraph(bool reconfigurePlugins) {
             channel.clipFxSum.reset();
         }
 
-        // A live input node only exists while the channel is listening or armed,
-        // so an idle project carries no input plumbing at all.
-        if (isRecordable(track) && (track.monitor || track.armed)) {
-            if (!channel.input || channel.inputChannel != track.inputChannel ||
-                channel.inputChannelCount != track.inputChannelCount) {
-                channel.input = std::make_shared<engine::InputNode>(
-                    track.name + " Input", m_engine.inputBus(),
-                    engine::ChannelCount(track.inputChannel),
-                    engine::ChannelCount(
-                        std::clamp(track.inputChannelCount, 1u, 2u)));
-                channel.inputChannel = track.inputChannel;
-                channel.inputChannelCount = track.inputChannelCount;
-            }
-            channel.input->setEnabled(track.monitor);
+        // Retain an existing input node so routing and monitor changes are
+        // one atomic publication; never reconstruct clip/MIDI/automation data.
+        if (isRecordable(track) && (track.monitor || track.monitorAuto || track.armed || channel.input)) {
+            if (!channel.input) channel.input = std::make_shared<engine::InputNode>(
+                track.name + " Input", m_engine.inputBus(), track.inputChannel,
+                track.inputChannelCount);
+            channel.input->setRouting(track.inputChannel, track.inputChannelCount,
+                track.monitor && track.inputEnabled, track.monitorInputMask);
+            channel.inputChannel = track.inputChannel;
+            channel.inputChannelCount = track.inputChannelCount;
             channel.ids.input = graph.adoptNode(channel.input);
         } else {
             channel.input.reset();
@@ -3701,6 +3805,7 @@ audio::Result EngineController::rebuildGraph(bool reconfigurePlugins) {
     }
     syncAllTrackGains();
 
+    if (!publish) return audio::Result::ok();
     auto committed = m_engine.commitGraph(reconfigurePlugins);
     if (!committed) {
         return audio::Result::fail(audio::EngineError::InvalidArgument,
@@ -3755,6 +3860,7 @@ void EngineController::newProject(bool createDefaultAudioTrack) {
     m_deferredClipSync.clear();
     announceAllRetiring();
     m_channels.clear();
+    m_liveMidiKeys.clear(); m_lastLiveMidiNs = 0;
     m_engine.transport().stop();
     m_engine.transport().seek(0);
     if (createDefaultAudioTrack) {
@@ -3762,6 +3868,7 @@ void EngineController::newProject(bool createDefaultAudioTrack) {
         track.id = newUuid();
         track.kind = TrackKind::Audio;
         track.name = "Audio 1";
+        track.inputEnabled = true;
         track.color = colorForNewTrack(track.kind);
         m_project.tracks.push_back(std::move(track));
     }
@@ -4158,6 +4265,10 @@ cloud::CloudPublicationCapture EngineController::captureCloudPublicationV1(
 bool EngineController::refreshRecoveryPluginStates(
     std::size_t maxPluginStateCaptures,
     std::span<const std::string> preferredStems) {
+    // A bounded refresh is background work. An explicit full snapshot (Save,
+    // export, initial journal checkpoint) must still capture current opaque
+    // presets, with the existing format-safe gate, rather than saving stale data.
+    if (maxPluginStateCaptures != std::numeric_limits<std::size_t>::max() && liveAudioActivity()) return false;
     struct Candidate {
         plugins::PluginInstance* instance = nullptr;
         std::string stem;
@@ -4799,8 +4910,10 @@ audio::Result EngineController::saveProjectTemplate(
     templ.sampleRate = m_sampleRate;
     stripTemplateArrangement(templ, templateName);
 
-    fs::path staging = target;
-    staging += ".tmp-" + newUuid();
+    fs::path stagingName = target.stem();
+    stagingName += ".tmp-" + newUuid();
+    stagingName += target.extension();
+    const fs::path staging = target.parent_path() / stagingName;
     fs::path backup = target;
     backup += ".backup-" + newUuid();
     std::error_code ec;
@@ -5531,6 +5644,7 @@ audio::Result EngineController::activateProject(
     m_recoveryPluginCaptureCursor = 0;
     announceAllRetiring();
     m_channels.clear();
+    m_liveMidiKeys.clear(); m_lastLiveMidiNs = 0;
     m_waveforms.clear();
     if (prepared) {
         for (auto& audio : prepared->audio) {
@@ -6054,6 +6168,21 @@ collab::SharedMutationResult EngineController::setAiInstructions(
     return collab::SharedMutationResult::LocalFallback;
 }
 
+bool EngineController::setNotebookHtml(std::string html) {
+    constexpr std::size_t kMaxNotebookBytes = 4 * 1024 * 1024;
+    if (html.size() > kMaxNotebookBytes) html.resize(kMaxNotebookBytes);
+    if (m_project.notebookHtml == html) return false;
+    m_project.notebookHtml = std::move(html);
+    return true;
+}
+
+bool EngineController::setNotebookCues(std::vector<NotebookCueModel> cues) {
+    if (cues.size() > 2000) cues.resize(2000);
+    if (m_project.notebookCues == cues) return false;
+    m_project.notebookCues = std::move(cues);
+    return true;
+}
+
 void EngineController::setMetronomeEnabled(bool enabled) {
     m_metronomeEnabled = enabled;
     if (m_metronome) m_metronome->setEnabled(enabled);
@@ -6110,6 +6239,7 @@ std::string EngineController::addTrack(TrackKind kind, const std::string& name) 
     TrackModel model;
     model.id = newUuid();
     model.kind = kind;
+    model.inputEnabled = kind == TrackKind::Audio;
     model.name = name.empty() ? defaultTrackName(kind) : name;
     model.color = colorForNewTrack(kind);
     const std::string afterId = m_project.tracks.empty()
@@ -6119,7 +6249,10 @@ std::string EngineController::addTrack(TrackKind kind, const std::string& name) 
         collab::AddTrack{model.id, model.kind, model.name, model.color, {},
                          afterId},
         "Add Track");
-    if (shared == collab::SharedMutationResult::Submitted) return model.id;
+    if (shared == collab::SharedMutationResult::Submitted) {
+        if (kind == TrackKind::Audio) setTrackInputEnabled(model.id, true);
+        return model.id;
+    }
     if (shared == collab::SharedMutationResult::Blocked) return {};
     return appendTrack(std::move(model));
 }
@@ -6601,9 +6734,10 @@ audio::Result EngineController::createTracks(
         rebuildGraph();
     };
     const auto apply = [this, tracks, source, remove]() -> audio::Result {
-        const engine::RealtimeEngine::RenderGate gate(m_engine);
+        // New instances remain outside the published graph until their state
+        // has loaded. Existing audio continues throughout plugin preparation.
         m_project.tracks.insert(m_project.tracks.end(), tracks->begin(), tracks->end());
-        rebuildGraph();
+        if (auto built = rebuildGraph(false, false); !built) { remove(); return built; }
         const auto restore = [this](const std::string& trackId, const InsertModel& model,
                                      const ChainSlotSnapshot& stored) {
             auto* live = liveInsertSlot(trackId, model.id);
@@ -6629,6 +6763,12 @@ audio::Result EngineController::createTracks(
                     "A plugin or its saved settings could not be loaded. No tracks were created.");
             }
         }
+        if (auto committed = m_engine.commitGraph(); !committed) {
+            remove();
+            return audio::Result::fail(audio::EngineError::PluginLoadFailed,
+                std::string(engine::describe(committed.error())));
+        }
+        updateTimelineDuration();
         return audio::Result::ok();
     };
     const auto result = apply();
@@ -6913,12 +7053,11 @@ void EngineController::setTrackVolumeLive(const std::string& trackId,
     if (!track) return;
     const float applied = std::clamp(volume, 0.0f, 2.0f);
     if (track->volume == applied) return;
-    track->volume = applied;
+    setTrackVolumeGestureSample(trackId, applied);
     AutomationTarget target;
     target.kind = AutomationTargetKind::TrackVolume;
     target.channelId = trackId;
     followPassiveAutomation(target, normalizedFromGain(applied));
-    syncTrackGain(*track);
 }
 
 void EngineController::setTrackPanLive(const std::string& trackId, float pan) {
@@ -6926,12 +7065,37 @@ void EngineController::setTrackPanLive(const std::string& trackId, float pan) {
     if (!track) return;
     const float applied = std::clamp(pan, -1.0f, 1.0f);
     if (track->pan == applied) return;
-    track->pan = applied;
+    setTrackPanGestureSample(trackId, applied);
     AutomationTarget target;
     target.kind = AutomationTargetKind::TrackPan;
     target.channelId = trackId;
     followPassiveAutomation(target, plainToAutomation(target, applied));
-    syncTrackGain(*track);
+}
+
+void EngineController::setTrackVolumeGestureSample(
+    const std::string& trackId, float volume) {
+    auto* track = m_project.findTrack(trackId);
+    if (!track) return;
+    const float applied = std::clamp(volume, 0.0f, 2.0f);
+    if (track->volume == applied) return;
+    const bool audibilityChanged = (track->volume > 0) != (applied > 0);
+    track->volume = applied;
+    const auto channel = m_channels.find(trackId);
+    if (channel != m_channels.end() && channel->second.fader)
+        channel->second.fader->setGain(applied);
+    if (audibilityChanged) refreshAutomaticMonitoring();
+}
+
+void EngineController::setTrackPanGestureSample(const std::string& trackId,
+                                                 float pan) {
+    auto* track = m_project.findTrack(trackId);
+    if (!track) return;
+    const float applied = std::clamp(pan, -1.0f, 1.0f);
+    if (track->pan == applied) return;
+    track->pan = applied;
+    const auto channel = m_channels.find(trackId);
+    if (channel != m_channels.end() && channel->second.fader)
+        channel->second.fader->setPan(applied);
 }
 
 void EngineController::commitTrackVolumeEdit(
@@ -6942,6 +7106,10 @@ void EngineController::commitTrackVolumeEdit(
     for (const auto& [trackId, value] : before) {
         const TrackModel* track = m_project.findTrack(trackId);
         if (!track || track->volume == value) continue;
+        AutomationTarget target;
+        target.kind = AutomationTargetKind::TrackVolume;
+        target.channelId = trackId;
+        followPassiveAutomation(target, normalizedFromGain(track->volume));
         from.emplace_back(trackId, value);
         to.emplace_back(trackId, track->volume);
     }
@@ -6977,6 +7145,11 @@ void EngineController::commitTrackPanEdit(
     for (const auto& [trackId, value] : before) {
         const TrackModel* track = m_project.findTrack(trackId);
         if (!track || track->pan == value) continue;
+        AutomationTarget target;
+        target.kind = AutomationTargetKind::TrackPan;
+        target.channelId = trackId;
+        followPassiveAutomation(target,
+                                plainToAutomation(target, track->pan));
         from.emplace_back(trackId, value);
         to.emplace_back(trackId, track->pan);
     }
@@ -7063,6 +7236,7 @@ collab::SharedMutationResult EngineController::setTrackMuted(
     if (!track) return collab::SharedMutationResult::LocalFallback;
     track->muted = muted;
     syncTrackGain(*track);
+    refreshAutomaticMonitoring();
     return collab::SharedMutationResult::LocalFallback;
 }
 
@@ -7115,7 +7289,7 @@ void EngineController::setTrackArmed(const std::string& trackId, bool armed) {
     auto* track = m_project.findTrack(trackId);
     if (!track || !isRecordable(*track) || track->armed == armed) return;
     track->armed = armed;
-    rebuildGraph();            // an armed track grows an input node
+    syncTrackInput(*track);
 }
 
 void EngineController::setTrackMonitor(const std::string& trackId, bool monitor) {
@@ -7124,23 +7298,33 @@ void EngineController::setTrackMonitor(const std::string& trackId, bool monitor)
     // A deliberate click outranks smart monitoring: from here on this track's
     // monitor is the user's, and the "A" mark goes away.
     if (m_recording.manualMonitorDisablesAuto) track->monitorAuto = false;
-    if (track->monitor == monitor) return;
+    if (track->monitor == monitor && track->monitorInputMask == 3) return;
     track->monitor = monitor;
-    rebuildGraph();
+    track->monitorInputMask = 3;
+    syncTrackInput(*track);
+    refreshAutomaticMonitoring();
 }
 
 double EngineController::recordingStartSeconds(const std::string& trackId) const {
     for (const auto& cap : m_captures) {
-        if (cap.trackId == trackId) return cap.startSeconds;
+        if (cap.trackId == trackId) return cap.recorder && cap.recorder->recordedFrames() > 0
+            ? double(cap.recorder->startSample()) / m_sampleRate : cap.startSeconds;
     }
     return -1.0;
 }
 
 bool EngineController::isInputMonitoringActive() const {
     for (const auto& t : m_project.tracks) {
-        if (t.monitor) return true;
+        if (isRecordable(t) && t.monitor && t.inputEnabled) return true;
     }
     return false;
+}
+
+bool EngineController::liveAudioActivity() const {
+    if (isPlaying() || isRecording() || isCountingIn() || isInputMonitoringActive()) return true;
+    for (const auto& [trackId, keys] : m_liveMidiKeys)
+        if (!keys.empty() && m_project.findTrack(trackId)) return true;
+    return masterPeak() > 1e-5f || (m_lastLiveMidiNs && rt::nowNanos() - m_lastLiveMidiNs < 2'000'000'000ull);
 }
 
 float EngineController::inputPeak(uint32_t channel) const {
@@ -7234,9 +7418,230 @@ void EngineController::commitTrackHeightEdit(
 }
 
 std::string EngineController::duplicateTrack(const std::string& trackId,
-                                             bool withInserts) {
+                                             bool withInserts,
+                                             bool withClips) {
+    // A native plugin editor may have published parameter notifications just
+    // before the shortcut reached the application. Drain them first so the
+    // copied model and the opaque state below describe the same audible state.
+    (void)pumpPluginEvents();
+
     const size_t index = m_project.indexOf(trackId);
     if (index == std::string::npos) return {};
+
+    std::vector<std::string> sourceIds{trackId};
+    const std::vector<std::string> descendants = subtreeOf(m_project, trackId);
+    sourceIds.insert(sourceIds.end(), descendants.begin(), descendants.end());
+
+    struct DuplicatedPluginState {
+        std::string channelId;
+        ChainSlotSnapshot slot;
+    };
+    const auto captureDuplicatePluginStates =
+        [this, &sourceIds](std::span<const TrackModel> copies) {
+            auto captured =
+                std::make_shared<std::vector<DuplicatedPluginState>>();
+            if (copies.size() != sourceIds.size()) return captured;
+
+            // Most duplicate operations involve an empty channel. Do not gate
+            // the audio engine at all until there is an actual live plugin
+            // whose state must be serialized.
+            std::unique_ptr<engine::RealtimeEngine::RenderGate> gate;
+            for (std::size_t trackIndex = 0; trackIndex < copies.size();
+                 ++trackIndex) {
+                const TrackModel* source =
+                    m_project.findTrack(sourceIds[trackIndex]);
+                const TrackModel& destination = copies[trackIndex];
+                if (!source) continue;
+
+                const auto captureSlot = [&](const InsertModel& from,
+                                             const InsertModel& to) {
+                    if (!from.isLoaded() || !to.isLoaded()) return;
+                    // Sampler's durable state is its mirrored parameter set
+                    // plus the decoded source handled by samplerReloads below.
+                    // Loading its JSON state here would read the sample again
+                    // while rendering is gated.
+                    if (from.uid == "daw.sampler") return;
+                    InsertSlot* live = liveInsertSlot(source->id, from.id);
+                    if (!live) return;
+                    if (!gate) {
+                        gate = std::make_unique<
+                            engine::RealtimeEngine::RenderGate>(m_engine);
+                    }
+                    DuplicatedPluginState state;
+                    state.channelId = destination.id;
+                    state.slot.model = to;
+                    if (live->node && live->node->instance()) {
+                        std::vector<std::uint8_t> bytes;
+                        if (live->node->instance()->saveState(bytes))
+                            state.slot.state = std::move(bytes);
+                    }
+                    if (live->rightNode && live->rightNode->instance()) {
+                        std::vector<std::uint8_t> bytes;
+                        if (live->rightNode->instance()->saveState(bytes))
+                            state.slot.rightState = std::move(bytes);
+                    }
+                    if (!state.slot.state.empty() ||
+                        !state.slot.rightState.empty()) {
+                        captured->push_back(std::move(state));
+                    }
+                };
+                const auto captureChain = [&](const auto& from,
+                                              const auto& to) {
+                    const std::size_t count =
+                        std::min(from.size(), to.size());
+                    for (std::size_t i = 0; i < count; ++i)
+                        captureSlot(from[i], to[i]);
+                };
+
+                captureSlot(source->instrument, destination.instrument);
+                captureChain(source->samplerFx.inserts,
+                             destination.samplerFx.inserts);
+                captureChain(source->inserts, destination.inserts);
+                const std::size_t clipCount =
+                    std::min(source->clips.size(), destination.clips.size());
+                for (std::size_t clipIndex = 0; clipIndex < clipCount;
+                     ++clipIndex) {
+                    captureChain(source->clips[clipIndex].inserts,
+                                 destination.clips[clipIndex].inserts);
+                }
+            }
+            return captured;
+        };
+
+    const auto restoreDuplicatePluginStates =
+        [this](const std::vector<DuplicatedPluginState>& captured) {
+            if (captured.empty()) return;
+            const engine::RealtimeEngine::RenderGate gate(m_engine);
+            for (const DuplicatedPluginState& state : captured) {
+                InsertSlot* live =
+                    liveInsertSlot(state.channelId, state.slot.model.id);
+                if (!live) continue;
+                const auto restoreOne =
+                    [this](plugins::PluginNode* node,
+                           const std::vector<std::uint8_t>& bytes,
+                           const std::vector<InsertParameter>& parameters) {
+                        if (!node || !node->instance() || bytes.empty()) return;
+                        if (!node->instance()->loadState(bytes)) return;
+                        // syncSlots queued the model fallback when it created
+                        // the instance. The captured plugin state is newer;
+                        // replace those events, then put the freshly drained
+                        // host-side parameter mirror on top.
+                        node->discardPendingEvents();
+                        applyStoredParameters(*node, parameters);
+                    };
+                restoreOne(live->node.get(), state.slot.state,
+                           state.slot.model.parameters);
+                restoreOne(
+                    live->rightNode.get(), state.slot.rightState,
+                    state.slot.model.rightParameters.empty()
+                        ? state.slot.model.parameters
+                        : state.slot.model.rightParameters);
+            }
+        };
+
+    // A hierarchy must be minted as a unit so every internal reference points
+    // at the duplicate. The same route handles the clip-free preference even
+    // for a leaf track; keeping that choice in the controller makes local and
+    // shared projects obey identical semantics.
+    if (sourceIds.size() > 1 || isFolder(m_project.tracks[index]) ||
+        !withClips) {
+        std::vector<TrackModel> copies = mintConnectedTrackCopies(
+            m_project, sourceIds, withInserts, withClips);
+        if (copies.empty()) return {};
+        copies.front().name += " copy";
+        const std::string copyRootId = copies.front().id;
+        const bool pattern = m_project.tracks[index].kind == TrackKind::Pattern;
+        const bool folder = isFolder(m_project.tracks[index]);
+        const char* label = pattern ? "Duplicate Pattern"
+                           : folder ? "Duplicate Folder"
+                                    : "Duplicate Track";
+
+        if (cloudProjectBound()) {
+            auto batch = std::make_shared<collab::BatchCommand>();
+            std::string anchor = sourceIds.back();
+            for (const TrackModel& copy : copies) {
+                if (!appendSharedTrack(batch, copy, anchor)) return {};
+                anchor = copy.id;
+            }
+            if (!sharedBatchApplies(m_project, batch)) return {};
+            const auto result = submitSharedMutation(
+                collab::CommandBody{std::move(batch)}, label);
+            return result == collab::SharedMutationResult::Submitted
+                       ? copyRootId
+                       : std::string{};
+        }
+
+        const auto pluginStates = captureDuplicatePluginStates(
+            std::span<const TrackModel>(copies.data(), copies.size()));
+
+        std::size_t insertAt = index + 1;
+        for (const std::string& sourceId : sourceIds) {
+            const std::size_t sourceIndex = m_project.indexOf(sourceId);
+            if (sourceIndex != std::string::npos)
+                insertAt = std::max(insertAt, sourceIndex + 1);
+        }
+
+        struct SamplerReload {
+            std::string trackId;
+            std::string instrumentId;
+            std::string path;
+        };
+        std::vector<SamplerReload> samplerReloads;
+        for (std::size_t i = 0; i < sourceIds.size(); ++i) {
+            const TrackModel* source = m_project.findTrack(sourceIds[i]);
+            if (!source || copies[i].instrument.uid != "daw.sampler") continue;
+            if (auto* sampler = samplerInstance(source->id,
+                                                source->instrument.id)) {
+                samplerReloads.push_back(
+                    {copies[i].id, copies[i].instrument.id,
+                     sampler->samplePath()});
+            }
+        }
+
+        auto models = std::make_shared<std::vector<TrackModel>>(
+            std::move(copies));
+        const auto apply = [this, models, insertAt, samplerReloads,
+                            pluginStates,
+                            restoreDuplicatePluginStates](bool insert) {
+            if (insert) {
+                const std::size_t at = std::min(insertAt,
+                                                m_project.tracks.size());
+                m_project.tracks.insert(
+                    m_project.tracks.begin() + std::ptrdiff_t(at),
+                    models->begin(), models->end());
+                rebuildGraph();
+                restoreDuplicatePluginStates(*pluginStates);
+                for (const SamplerReload& reload : samplerReloads) {
+                    if (!reload.path.empty()) {
+                        loadSamplerSampleSilently(reload.trackId,
+                                                  reload.instrumentId,
+                                                  reload.path);
+                    }
+                }
+                return;
+            }
+
+            std::unordered_set<std::string> ids;
+            for (const TrackModel& copy : *models) ids.insert(copy.id);
+            for (const TrackModel& track : m_project.tracks) {
+                if (!ids.contains(track.id)) continue;
+                for (const ClipModel& clip : track.clips)
+                    m_clipSampleCache.erase(clip.id);
+                m_midiNotesRevisions.erase(track.id);
+            }
+            std::erase_if(m_project.tracks, [&](const TrackModel& track) {
+                return ids.contains(track.id);
+            });
+            m_deferredClipSync.clear();
+            rebuildGraph();
+            pruneDecodedSampleCache();
+        };
+
+        apply(true);
+        m_undo.push(label, [apply] { apply(false); },
+                    [apply] { apply(true); });
+        return copyRootId;
+    }
 
     if (cloudProjectBound()) {
         TrackModel copy = mintTrackCopy(m_project.tracks[index], withInserts);
@@ -7317,23 +7722,29 @@ std::string EngineController::duplicateTrack(const std::string& trackId,
         }
     }
 
+    const auto pluginStates = captureDuplicatePluginStates(
+        std::span<const TrackModel>(&copy, 1));
+
     const std::string newId = copy.id;
     m_project.tracks.insert(m_project.tracks.begin() +
                                 std::ptrdiff_t(index + 1),
                             copy);
     rebuildGraph();
+    restoreDuplicatePluginStates(*pluginStates);
     if (!samplerPath.empty()) {
         loadSamplerSampleSilently(newId, copy.instrument.id, samplerPath);
     }
 
     m_undo.push("Duplicate Track",
                 [this, newId] { removeTrack(newId); },
-                [this, copy, index, samplerPath] {
+                [this, copy, index, samplerPath, pluginStates,
+                 restoreDuplicatePluginStates] {
                     const size_t at =
                         std::min(index + 1, m_project.tracks.size());
                     m_project.tracks.insert(
                         m_project.tracks.begin() + std::ptrdiff_t(at), copy);
                     rebuildGraph();
+                    restoreDuplicatePluginStates(*pluginStates);
                     if (!samplerPath.empty()) {
                         loadSamplerSampleSilently(copy.id, copy.instrument.id,
                                                   samplerPath);
@@ -7342,146 +7753,52 @@ std::string EngineController::duplicateTrack(const std::string& trackId,
     return newId;
 }
 
-std::string EngineController::duplicatePattern(const std::string& patternId) {
+std::string EngineController::duplicatePattern(const std::string& patternId,
+                                               bool withClips) {
     const TrackModel* pattern = m_project.findTrack(patternId);
     if (!pattern || pattern->kind != TrackKind::Pattern) return {};
 
-    if (cloudProjectBound()) {
-        TrackModel patternCopy = mintTrackCopy(*pattern, true);
-        patternCopy.name += " copy";
-        std::unordered_map<std::string, std::string> patternClipIds;
-        for (std::size_t index = 0;
-             index < pattern->clips.size() &&
-             index < patternCopy.clips.size();
-             ++index) {
-            if (pattern->clips[index].kind == ClipKind::Pattern)
-                patternClipIds[pattern->clips[index].id] =
-                    patternCopy.clips[index].id;
-        }
-
-        std::vector<TrackModel> children;
-        for (const TrackModel& source : m_project.tracks) {
-            if (source.parentId != patternId) continue;
-            TrackModel child = mintTrackCopy(source, true);
-            child.name = source.name;
-            child.parentId = patternCopy.id;
-            if (child.outputBusId == patternId)
-                child.outputBusId = patternCopy.id;
-            for (ClipModel& clip : child.clips) {
-                if (const auto found = patternClipIds.find(clip.patternClipId);
-                    found != patternClipIds.end()) {
-                    clip.patternClipId = found->second;
-                }
-            }
-            children.push_back(std::move(child));
-        }
-
-        auto batch = std::make_shared<collab::BatchCommand>();
-        if (!appendSharedTrack(batch, patternCopy, patternId)) return {};
-        std::string anchor = patternCopy.id;
-        for (const TrackModel& child : children) {
-            if (!appendSharedTrack(batch, child, anchor)) return {};
-            anchor = child.id;
-        }
-        if (!sharedBatchApplies(m_project, batch)) return {};
-        const auto result = submitSharedMutation(
-            collab::CommandBody{std::move(batch)}, "Duplicate Pattern");
-        return result == collab::SharedMutationResult::Submitted
-                   ? patternCopy.id
-                   : std::string{};
-    }
-
-    std::vector<std::string> originalPatternClips;
-    for (const ClipModel& clip : pattern->clips) {
-        if (clip.kind == ClipKind::Pattern)
-            originalPatternClips.push_back(clip.id);
-    }
-
-    std::vector<std::string> sources;
-    for (const TrackModel& track : m_project.tracks) {
-        if (track.parentId == patternId) sources.push_back(track.id);
-    }
-
-    const std::size_t undoStart = m_undo.depth();
-    const std::string copyId = duplicateTrack(patternId, /*withInserts=*/true);
-    if (copyId.empty()) return {};
-
-    std::unordered_map<std::string, std::string> patternClipMap;
-    if (const TrackModel* patternCopy = m_project.findTrack(copyId)) {
-        std::size_t index = 0;
-        for (const ClipModel& clip : patternCopy->clips) {
-            if (clip.kind != ClipKind::Pattern ||
-                index >= originalPatternClips.size()) {
-                continue;
-            }
-            patternClipMap[originalPatternClips[index++]] = clip.id;
-        }
-    }
-
-    size_t slot = m_project.indexOf(copyId) + 1;
-    for (const std::string& sourceId : sources) {
-        const TrackModel* source = m_project.findTrack(sourceId);
-        if (!source) continue;
-        const std::string sourceName = source->name;
-        const std::string sourceCopy =
-            duplicateTrack(sourceId, /*withInserts=*/true);
-        if (sourceCopy.empty()) continue;
-        if (TrackModel* copiedSource = m_project.findTrack(sourceCopy)) {
-            for (ClipModel& clip : copiedSource->clips) {
-                const auto mapped = patternClipMap.find(clip.patternClipId);
-                if (mapped == patternClipMap.end()) continue;
-                const std::string beforeOwner = clip.patternClipId;
-                const std::string afterOwner = mapped->second;
-                const std::string clipId = clip.id;
-                clip.patternClipId = afterOwner;
-                auto setOwner = [this, sourceCopy,
-                                 clipId](const std::string& owner) {
-                    if (TrackModel* target = m_project.findTrack(sourceCopy)) {
-                        for (ClipModel& candidate : target->clips) {
-                            if (candidate.id == clipId) {
-                                candidate.patternClipId = owner;
-                                if (trackAccepts(target->kind, ClipKind::Midi))
-                                    syncTrackNotes(*target);
-                                return;
-                            }
-                        }
-                    }
-                };
-                m_undo.push("Relink Pattern Clip",
-                            [setOwner, beforeOwner] { setOwner(beforeOwner); },
-                            [setOwner, afterOwner] { setOwner(afterOwner); });
-            }
-        }
-        moveTrack(sourceCopy, slot, copyId);
-        // Source names describe instruments/files inside the Pattern. The
-        // Pattern itself gets the "copy" suffix; its internal labels do not.
-        renameTrack(sourceCopy, sourceName);
-        slot = m_project.indexOf(sourceCopy) + 1;
-    }
-    collapseUndo(undoStart, "Duplicate Pattern");
-    return copyId;
+    // Patterns and folders now share the same connected-hierarchy copier. It
+    // preserves Pattern clip ownership as well as deeper nested descendants,
+    // and keeps the entire action atomic in local and shared projects.
+    return duplicateTrack(patternId, /*withInserts=*/true, withClips);
 }
 
-void EngineController::setTrackInputChannel(const std::string& trackId,
-                                            uint32_t channel) {
-    auto* track = m_project.findTrack(trackId);
-    if (!track || track->inputChannel == channel) return;
-    track->inputChannel = channel;
-    // A different input is a different signal, so whatever smart monitoring
-    // decided about the old one no longer holds — including mid-recording.
-    if (track->monitorAuto) applySmartMonitoring(*track);
-    retargetCaptureInput(*track);
-    if (track->monitor || track->armed) rebuildGraph();
+void EngineController::setTrackInputChannel(const std::string& id, uint32_t first) {
+    if (const auto* t = m_project.findTrack(id))
+        setTrackInputRouting(id, first, t->inputChannelCount, t->inputEnabled);
 }
 
-void EngineController::setTrackInputChannelCount(const std::string& trackId,
-                                                 uint32_t count) {
-    auto* track = m_project.findTrack(trackId);
+void EngineController::setTrackInputChannelCount(const std::string& id, uint32_t count) {
+    if (const auto* t = m_project.findTrack(id))
+        setTrackInputRouting(id, t->inputChannel, count, t->inputEnabled);
+}
+
+void EngineController::setTrackInputRouting(const std::string& id, uint32_t first,
+                                            uint32_t count, bool enabled) {
+    auto* track = m_project.findTrack(id);
     count = std::clamp(count, 1u, 2u);
-    if (!track || track->inputChannelCount == count) return;
+    if (!track || !isRecordable(*track) || first >= engine::kMaxChannels) return;
+    if (track->inputChannel == first && track->inputChannelCount == count &&
+        track->inputEnabled == enabled) return;
+    track->inputChannel = first;
     track->inputChannelCount = count;
+    track->inputEnabled = enabled;
     retargetCaptureInput(*track);
-    if (track->monitor || track->armed) rebuildGraph();
+    syncTrackInput(*track);
+    refreshAutomaticMonitoring();
+}
+
+void EngineController::syncTrackInput(const TrackModel& track) {
+    const auto found = m_channels.find(track.id);
+    if (found != m_channels.end() && found->second.input) {
+        found->second.input->setRouting(track.inputChannel, track.inputChannelCount,
+            track.monitor && track.inputEnabled, track.monitorInputMask);
+        found->second.inputChannel = track.inputChannel;
+        found->second.inputChannelCount = track.inputChannelCount;
+    } else if (track.monitor || track.armed) {
+        rebuildGraph();
+    }
 }
 
 void EngineController::retargetCaptureInput(const TrackModel& track) {
@@ -7489,7 +7806,7 @@ void EngineController::retargetCaptureInput(const TrackModel& track) {
         if (capture.trackId != track.id || !capture.recorder) continue;
         capture.recorder->setInputChannels(
             audio::ChannelCount(track.inputChannel),
-            audio::ChannelCount(track.inputChannelCount));
+            audio::ChannelCount(track.inputChannelCount), track.inputEnabled);
     }
 }
 
@@ -7727,8 +8044,40 @@ std::string EngineController::packIntoFolder(
     bool summing) {
     if (trackIds.empty()) return {};
 
+    // A visible tree selection can contain both a folder and any number of its
+    // descendants (Shift-selecting a range is the common case).  moveTrack()
+    // carries a folder's whole subtree, so moving those descendants again would
+    // pull them out of their original folders and flatten the hierarchy.  Work
+    // only with the outermost selected nodes.  Iterating the document also
+    // removes duplicate ids and makes the result independent of selection order.
+    std::unordered_set<std::string> selected;
+    selected.reserve(trackIds.size());
+    for (const std::string& id : trackIds) {
+        if (m_project.findTrack(id)) selected.insert(id);
+    }
+
+    std::vector<std::string> roots;
+    roots.reserve(selected.size());
+    for (const TrackModel& track : m_project.tracks) {
+        if (!selected.contains(track.id)) continue;
+
+        bool coveredBySelectedAncestor = false;
+        std::string ancestorId = track.parentId;
+        for (std::size_t guard = 0;
+             !ancestorId.empty() && guard < m_project.tracks.size(); ++guard) {
+            if (selected.contains(ancestorId)) {
+                coveredBySelectedAncestor = true;
+                break;
+            }
+            const TrackModel* ancestor = m_project.findTrack(ancestorId);
+            ancestorId = ancestor ? ancestor->parentId : std::string{};
+        }
+        if (!coveredBySelectedAncestor) roots.push_back(track.id);
+    }
+    if (roots.empty()) return {};
+
     size_t firstIndex = m_project.tracks.size();
-    for (const auto& id : trackIds) {
+    for (const std::string& id : roots) {
         const size_t index = m_project.indexOf(id);
         if (index != std::string::npos) firstIndex = std::min(firstIndex, index);
     }
@@ -7736,7 +8085,8 @@ std::string EngineController::packIntoFolder(
 
     struct Origin { std::string id; size_t index; std::string parentId; };
     std::vector<Origin> origins;
-    for (const auto& id : trackIds) {
+    origins.reserve(roots.size());
+    for (const std::string& id : roots) {
         const size_t index = m_project.indexOf(id);
         if (index == std::string::npos) continue;
         origins.push_back({id, index, m_project.tracks[index].parentId});
@@ -7745,28 +8095,6 @@ std::string EngineController::packIntoFolder(
 
     const std::string parentId = m_project.tracks[firstIndex].parentId;
     if (cloudProjectBound()) {
-        std::unordered_set<std::string> requested;
-        for (const Origin& origin : origins) requested.insert(origin.id);
-        std::vector<std::string> roots;
-        for (const Origin& origin : origins) {
-            bool nested = false;
-            const TrackModel* current = m_project.findTrack(origin.id);
-            for (std::string cursor = current ? current->parentId : std::string();
-                 !cursor.empty();) {
-                if (requested.contains(cursor)) {
-                    nested = true;
-                    break;
-                }
-                const TrackModel* ancestor = m_project.findTrack(cursor);
-                cursor = ancestor ? ancestor->parentId : std::string();
-            }
-            if (!nested &&
-                std::find(roots.begin(), roots.end(), origin.id) == roots.end()) {
-                roots.push_back(origin.id);
-            }
-        }
-        if (roots.empty()) return {};
-
         TrackModel folder;
         folder.id = newUuid();
         folder.kind = TrackKind::Folder;
@@ -7852,16 +8180,21 @@ std::string EngineController::packIntoFolder(
         }
     }
 
+    // Redo creates a fresh model id.  Keep the id used by the currently live
+    // folder shared between both closures, otherwise the next undo would try
+    // to remove the folder from the first execution and leave the redone one
+    // behind as an empty row.
+    auto liveFolderId = std::make_shared<std::string>(folderId);
     m_undo.push("Pack into Folder",
-                [this, origins, folderId] {
+                [this, origins, liveFolderId] {
                     UndoStack::Suspend quiet(m_undo);
                     for (auto it = origins.rbegin(); it != origins.rend(); ++it) {
                         moveTrack(it->id, it->index, it->parentId);
                     }
-                    removeTrack(folderId);
+                    removeTrack(*liveFolderId);
                 },
-                [this, trackIds, name, summing] {
-                    packIntoFolder(trackIds, name, summing);
+                [this, roots, name, summing, liveFolderId] {
+                    *liveFolderId = packIntoFolder(roots, name, summing);
                 });
     return folderId;
 }
@@ -8010,9 +8343,9 @@ bool EngineController::setTrackOutputBus(const std::string& trackId,
     return true;
 }
 
-void EngineController::setTrackInputEnabled(const std::string& trackId,
-                                            bool enabled) {
-    if (auto* t = m_project.findTrack(trackId)) t->inputEnabled = enabled;
+void EngineController::setTrackInputEnabled(const std::string& id, bool enabled) {
+    if (const auto* t = m_project.findTrack(id))
+        setTrackInputRouting(id, t->inputChannel, t->inputChannelCount, enabled);
 }
 
 void EngineController::ensureInsertSlots(const std::string& trackId,
@@ -14781,8 +15114,22 @@ bool EngineController::liveMidiEvent(const std::string& trackId, int status,
     unfreezeTrack(trackId, false);
     auto found = m_channels.find(trackId);
     if (found == m_channels.end() || !found->second.midiClips) return false;
-    return found->second.midiClips->sendLiveEvent(engine::MidiEvent{
-        0, std::uint8_t(status), std::uint8_t(data1), std::uint8_t(data2)});
+    if (!found->second.midiClips->sendLiveEvent(engine::MidiEvent{
+            0, std::uint8_t(status), std::uint8_t(data1), std::uint8_t(data2)})) return false;
+    m_lastLiveMidiNs = rt::nowNanos();
+    auto& keys = m_liveMidiKeys[trackId];
+    const unsigned channel = unsigned(status & 15);
+    const unsigned key = channel * 256 + unsigned(data1);
+    const int type = status & 0xf0;
+    if (type == 0x90 && data2 > 0) keys.insert(key);
+    if (type == 0x80 || (type == 0x90 && data2 == 0)) keys.erase(key);
+    if (type == 0xb0 && data1 == 64) {
+        if (data2 >= 64) keys.insert(channel * 256 + 128);
+        else keys.erase(channel * 256 + 128);
+    }
+    if (type == 0xb0 && (data1 == 120 || data1 == 123))
+        std::erase_if(keys, [channel, data1](unsigned k) { return k / 256 == channel && (data1 == 120 || k % 256 < 128); });
+    return true;
 }
 
 std::string EngineController::liveNoteTarget(const std::string& preferred) const {
@@ -15774,8 +16121,10 @@ void EngineController::setMasterPan(float pan) {
 void EngineController::setMasterVolumeLive(float volume) {
     const float applied = std::clamp(volume, 0.0f, 2.0f);
     if (m_project.masterVolume == applied) return;
+    const bool audibilityChanged = (m_project.masterVolume > 0) != (applied > 0);
     m_project.masterVolume = applied;
     if (m_masterFader) m_masterFader->setGain(applied);
+    if (audibilityChanged) refreshAutomaticMonitoring();
 }
 
 void EngineController::commitMasterVolumeEdit(float before,
@@ -15891,6 +16240,7 @@ std::array<std::uint64_t, 4> EngineController::audioXruns() const {
 // ── Recording ──────────────────────────────────────────────────────────────
 
 void EngineController::publishRecorders() {
+    if (m_captures.empty()) { m_activeRecorders.publish({}); return; }
     auto list = std::make_shared<RecorderList>();
     list->reserve(m_captures.size());
     for (const auto& capture : m_captures) {
@@ -16015,6 +16365,7 @@ bool EngineController::startRecordingTracksImpl(
             track->armed = it->armedBefore;
             track->monitor = it->monitorBefore;
             track->monitorAuto = it->monitorAutoBefore;
+            track->monitorInputMask = it->monitorInputMaskBefore;
         }
         prepared.clear();
         if (localStateChanged) rebuildGraph();
@@ -16031,6 +16382,7 @@ bool EngineController::startRecordingTracksImpl(
         }
 
         Capture capture;
+        capture.envelopeId = allocateWaveformGeometryId();
         capture.trackId = trackId;
         capture.startSeconds = startSeconds;
         capture.semantics = frozenRecordingSemantics(trackId);
@@ -16039,14 +16391,17 @@ bool EngineController::startRecordingTracksImpl(
         // opened the monitor by now, and restoring to that would leave it on
         // for good.
         capture.monitorBefore = track->monitor;
+        capture.monitorAutoBefore = track->monitorAuto;
+        capture.monitorInputMaskBefore = track->monitorInputMask;
         for (const auto& [id, monitor] : m_countInMonitorBefore) {
             if (id == trackId) {
-                capture.monitorBefore = monitor;
+                capture.monitorBefore = monitor.enabled;
+                capture.monitorAutoBefore = monitor.automatic;
+                capture.monitorInputMaskBefore = monitor.mask;
                 capture.monitorManaged = true;
             }
         }
         capture.armedBefore = track->armed;
-        capture.monitorAutoBefore = track->monitorAuto;
 
         // Exactly as wide as the input the track is pointed at. Capturing a
         // pair from a mono source wrote a file whose right channel was whatever
@@ -16068,7 +16423,8 @@ bool EngineController::startRecordingTracksImpl(
         capture.recorder->setRecordPath(m_recordDir);
         capture.recorder->setInputChannels(
             audio::ChannelCount(track->inputChannel),
-            audio::ChannelCount(captureChannels));
+            audio::ChannelCount(captureChannels), track->inputEnabled);
+        capture.envelopeStepSeconds = double(capture.recorder->peakBucketFrames()) / m_sampleRate;
         if (!capture.recorder->startRecording(0, m_engine.transport().position())) {
             if (requireEveryTarget) {
                 rollbackExactStart();
@@ -16104,9 +16460,9 @@ bool EngineController::startRecordingTracksImpl(
     m_countInRequiresExactTargets = false;
     m_countInMonitorBefore.clear();
 
-    publishRecorders();
-    rebuildGraph();            // arming and monitoring both grow input nodes
+    rebuildGraph();            // prepare before making any recorder visible
     m_engine.transport().startRecording();
+    publishRecorders();        // first accepted block latches its actual position
     return true;
 }
 
@@ -16166,7 +16522,7 @@ bool EngineController::armCountInImpl(
             auto* track = m_project.findTrack(id);
             if (!track || !isRecordable(*track)) continue;
             const bool before = track->monitor;
-            m_countInMonitorBefore.emplace_back(id, before);
+            m_countInMonitorBefore.emplace_back(id, MonitorState{before, track->monitorAuto, track->monitorInputMask});
             applySmartMonitoring(*track);
             if (track->monitor != before) monitorChanged = true;
         }
@@ -16208,9 +16564,11 @@ bool EngineController::tickCountIn(double deltaSeconds) {
         bool monitorChanged = false;
         for (const auto& [id, monitor] : m_countInMonitorBefore) {
             auto* track = m_project.findTrack(id);
-            if (!track || !track->monitorAuto || track->monitor == monitor)
+            if (!track || !track->monitorAuto)
                 continue;
-            track->monitor = monitor;
+            track->monitor = monitor.enabled;
+            track->monitorAuto = monitor.automatic;
+            track->monitorInputMask = monitor.mask;
             monitorChanged = true;
         }
         m_countInMonitorBefore.clear();
@@ -16232,8 +16590,10 @@ void EngineController::cancelCountIn() {
     bool monitorChanged = false;
     for (const auto& [id, monitor] : m_countInMonitorBefore) {
         auto* track = m_project.findTrack(id);
-        if (!track || !track->monitorAuto || track->monitor == monitor) continue;
-        track->monitor = monitor;
+        if (!track || !track->monitorAuto) continue;
+        track->monitor = monitor.enabled;
+        track->monitorAuto = monitor.automatic;
+        track->monitorInputMask = monitor.mask;
         monitorChanged = true;
     }
     m_countInMonitorBefore.clear();
@@ -16279,57 +16639,38 @@ constexpr size_t kMaxEnvelopeBuckets = 8192;
 }  // namespace
 
 void EngineController::pumpRecordingEnvelopes() {
-    if (m_captures.empty()) return;
-
     for (auto& capture : m_captures) {
-        const auto* track = m_project.findTrack(capture.trackId);
-        if (!track || !capture.recorder) continue;
-        if (capture.seededSeconds >= 0.0) continue;   // an offline harness owns it
-        // Both sides of a stereo pair, so a mono source on either one still
-        // draws. This is the same meter the mixer reads, sampled per frame.
-        const float peak = std::clamp(std::max(inputPeak(track->inputChannel),
-                                               inputPeak(track->inputChannel + 1)),
-                                      0.0f, 1.0f);
-
-        // The recorder's own frame count, not the wall clock and not the
-        // playhead: it is the clock the finished file is measured on, it never
-        // wraps at the loop end, and drawing against it is what stops the shape
-        // from creeping under the write head.
-        const double captured =
-            m_sampleRate > 0.0
-                ? double(capture.recorder->recordedFrames()) / m_sampleRate
-                : 0.0;
-
-        // Bucket `i` is [i·step, (i+1)·step) of recorded time, so a sample's
-        // position is a property of *when it was captured* rather than of how
-        // many frames happened to be drawn before it.
-        size_t wanted =
-            size_t(captured / std::max(0.001, capture.envelopeStepSeconds)) + 1;
-        while (wanted > kMaxEnvelopeBuckets) {
-            // Halving pairs the buckets up and doubles the step, which keeps
-            // every remaining bucket's start time exactly what it was.
-            std::vector<float> thinned;
-            thinned.reserve(capture.envelope.size() / 2 + 1);
-            for (size_t i = 0; i < capture.envelope.size(); i += 2) {
-                thinned.push_back(std::max(capture.envelope[i],
-                                           i + 1 < capture.envelope.size()
-                                               ? capture.envelope[i + 1]
-                                               : 0.0f));
+        if (!capture.recorder || capture.seededSeconds >= 0.0 || !(m_sampleRate > 0.0)) continue;
+        const auto frames = capture.recorder->recordedFrames();
+        if (frames <= 0) continue;
+        capture.startSeconds = double(capture.recorder->startSample()) / m_sampleRate;
+        const auto bucketFrames = capture.recorder->peakBucketFrames();
+        const double baseStep = double(bucketFrames) / m_sampleRate;
+        const auto latest = (std::uint64_t(frames) - 1) / bucketFrames;
+        auto factor = std::uint64_t(std::max(1.0, std::round(capture.envelopeStepSeconds / baseStep)));
+        while (latest / factor >= kMaxEnvelopeBuckets) {
+            capture.envelopeId = allocateWaveformGeometryId();
+            // Compact on the control thread, retaining extrema in recorded time.
+            for (std::size_t i = 0; i < capture.envelope.size(); i += 2)
+                capture.envelope[i / 2] = std::max(capture.envelope[i],
+                    i + 1 < capture.envelope.size() ? capture.envelope[i + 1] : 0.0f);
+            capture.envelope.resize((capture.envelope.size() + 1) / 2);
+            factor *= 2;
+        }
+        capture.envelopeStepSeconds = baseStep * double(factor);
+        capture.envelope.resize(std::size_t(latest / factor + 1), 0.0f);
+        const auto oldest = latest >= audio::AudioRecorder::kPeakHistoryBuckets
+            ? latest - audio::AudioRecorder::kPeakHistoryBuckets + 1 : 0;
+        for (auto i = std::max(capture.nextPeakBucket, oldest); i <= latest; ++i) {
+            float peak = 0.0f;
+            if (capture.recorder->readPeakBucket(i, peak)) {
+                auto& value = capture.envelope[std::size_t(i / factor)];
+                value = std::max(value, std::clamp(peak, 0.0f, 1.0f));
             }
-            capture.envelope = std::move(thinned);
-            capture.envelopeStepSeconds *= 2.0;
-            wanted =
-                size_t(captured / std::max(0.001, capture.envelopeStepSeconds)) + 1;
         }
-
-        // Buckets the tick skipped over get this frame's peak too: the meter is
-        // itself a peak over the blocks since the last read, so it describes the
-        // gap as well as the instant.
-        while (capture.envelope.size() < wanted) capture.envelope.push_back(peak);
-        if (!capture.envelope.empty()) {
-            // The newest bucket is still filling; hold its loudest sample.
-            capture.envelope.back() = std::max(capture.envelope.back(), peak);
-        }
+        // Read the partial bucket again next tick; no transient depends on the
+        // GUI sampling the particular audio block in which it occurred.
+        capture.nextPeakBucket = latest;
     }
 }
 
@@ -16345,7 +16686,6 @@ std::vector<RecordingSpan> EngineController::capturePasses(
     const double loopLength =
         semantics.loopEndSeconds - semantics.loopStartSeconds;
     if (semantics.loopEnabled && loopLength > 0.0 &&
-        startSeconds >= semantics.loopStartSeconds &&
         startSeconds < semantics.loopEndSeconds) {
         double cursor = semantics.loopEndSeconds - startSeconds;
         while (cursor < capturedLength) {
@@ -16374,9 +16714,11 @@ std::vector<RecordingSpan> EngineController::capturePasses(
 void EngineController::seedRecordingForShot(
     const std::string& trackId, double seconds,
     const std::function<float(double)>& level) {
+    if (m_liveDeviceAllowed) return;
     for (auto& capture : m_captures) {
         if (capture.trackId != trackId) continue;
         capture.seededSeconds = std::max(0.0, seconds);
+        capture.envelopeId = allocateWaveformGeometryId();
         capture.envelope.clear();
         const size_t buckets =
             size_t(capture.seededSeconds / capture.envelopeStepSeconds) + 1;
@@ -16403,6 +16745,8 @@ void EngineController::seedRecordingForShot(
             : 1;
         const std::uint64_t targetFrames = std::uint64_t(
             std::llround(capture.seededSeconds * m_sampleRate));
+        capture.recorder->setInputChannels(track ? track->inputChannel : 0,
+            track ? track->inputChannelCount : 1, true);
         constexpr audio::BufferSize kSeedBlock = 512;
         audio::AudioBuffer input(neededChannels, kSeedBlock);
         int stalledWrites = 0;
@@ -16430,6 +16774,8 @@ void EngineController::seedRecordingForShot(
                 stalledWrites = 0;
             }
         }
+        if (track) capture.recorder->setInputChannels(
+            track->inputChannel, track->inputChannelCount, track->inputEnabled);
     }
 }
 
@@ -16447,6 +16793,7 @@ RecordingPreview EngineController::recordingPreview(
     preview.active = true;
     preview.trackId = trackId;
     preview.envelope = capture->envelope;
+    preview.envelopeId = capture->envelopeId;
     preview.envelopeStepSeconds = capture->envelopeStepSeconds;
     preview.capturedSeconds =
         capture->seededSeconds >= 0.0 ? capture->seededSeconds
@@ -16457,17 +16804,31 @@ RecordingPreview EngineController::recordingPreview(
     preview.name =
         platform::pathToUtf8(platform::pathFromUtf8(capture->path).stem());
 
-    preview.spans = capturePasses(capture->semantics, capture->startSeconds,
-                                  preview.capturedSeconds);
-    // Nothing yet: still show where the take begins, so the punch point is
-    // visible from the instant record is pressed.
-    if (preview.spans.empty()) {
-        preview.spans.push_back({capture->startSeconds, capture->startSeconds, 0.0});
-    }
-    // With loop takes off the passes overwrite each other, so only the newest
-    // one will survive — and only the newest one is drawn.
-    if (!capture->semantics.loopCreatesTakes && preview.spans.size() > 1) {
-        preview.spans.erase(preview.spans.begin(), preview.spans.end() - 1);
+    const auto& semantics = capture->semantics;
+    const double length = std::max(0.0, preview.capturedSeconds);
+    const double firstLength = semantics.loopEndSeconds - capture->startSeconds;
+    const double loopLength = semantics.loopEndSeconds - semantics.loopStartSeconds;
+    const bool looping = semantics.loopEnabled && loopLength > 0.0 &&
+        capture->startSeconds >= semantics.loopStartSeconds && firstLength > 0.0;
+    preview.passCount = 1;
+    if (looping && length > firstLength) {
+        // Arithmetic instead of materialising every old pass. At an exact
+        // boundary the completed pass remains the head until new audio arrives.
+        const auto cycle = std::max(1.0, std::ceil((length - firstLength) / loopLength));
+        preview.passCount += std::uint64_t(cycle);
+        const double offset = firstLength + (cycle - 1.0) * loopLength;
+        const double end = std::min(semantics.loopEndSeconds,
+            semantics.loopStartSeconds + length - offset);
+        if (semantics.loopCreatesTakes && end < semantics.loopEndSeconds) {
+            const double previousStart = cycle == 1.0 ? capture->startSeconds : semantics.loopStartSeconds;
+            const double previousOffset = cycle == 1.0 ? 0.0 : offset - loopLength;
+            const double uncovered = std::max(end, previousStart);
+            preview.spans.push_back({uncovered, semantics.loopEndSeconds,
+                previousOffset + uncovered - previousStart});
+        }
+        preview.spans.push_back({semantics.loopStartSeconds, end, offset});
+    } else {
+        preview.spans.push_back({capture->startSeconds, capture->startSeconds + length, 0.0});
     }
 
     // The write head belongs against the playhead. The capture clock decides
@@ -16488,12 +16849,9 @@ RecordingPreview EngineController::recordingPreview(
     // Layer recording: a punch-in lands *inside* the clip it was recorded over,
     // as the next take in that clip's stack — so it is drawn in that take's
     // colour, under that take's name, rather than as a clip of its own.
-    double runStart = preview.spans.front().startSeconds;
-    double runEnd = runStart;
-    for (const RecordingSpan& span : preview.spans) {
-        runStart = std::min(runStart, span.startSeconds);
-        runEnd = std::max(runEnd, span.endSeconds);
-    }
+    const bool allPasses = looping && length > firstLength && semantics.loopCreatesTakes;
+    const double runStart = allPasses ? semantics.loopStartSeconds : preview.spans.back().startSeconds;
+    const double runEnd = allPasses ? semantics.loopEndSeconds : preview.spans.back().endSeconds;
     const ClipModel* target =
         punchTarget(std::as_const(track->clips), runStart, runEnd,
                     [this](const ClipModel& c) { return effectiveClipLength(c); });
@@ -16510,29 +16868,57 @@ RecordingPreview EngineController::recordingPreview(
     return preview;
 }
 
+void EngineController::refreshAutomaticMonitoring(bool allowBuild) {
+    // The A badge also remembers a completed automatic decision. Only a
+    // current recording/count-in owns the right to reconsider that decision;
+    // otherwise ReturnToPrevious would reopen a monitor immediately at Stop.
+    const auto managed = [&](const TrackModel& t) {
+        return t.monitorAuto && (std::any_of(m_captures.begin(), m_captures.end(), [&](const auto& c) {
+            return c.trackId == t.id && c.monitorManaged;
+        }) || std::any_of(m_countInMonitorBefore.begin(), m_countInMonitorBefore.end(), [&](const auto& before) {
+            return before.first == t.id;
+        }));
+    };
+    for (auto& t : m_project.tracks) if (managed(t)) {
+        t.monitor = false; t.monitorInputMask = 0;
+    }
+    bool needsBuild = false;
+    for (auto& t : m_project.tracks) if (managed(t)) {
+        applySmartMonitoring(t);
+        const auto found = m_channels.find(t.id);
+        if (found != m_channels.end() && found->second.input) syncTrackInput(t);
+        else if (t.monitor) needsBuild = true;
+    }
+    if (needsBuild && allowBuild) rebuildGraph();
+}
+
 void EngineController::applySmartMonitoring(TrackModel& track) {
-    // Two tracks listening to the same physical input means hearing the source
-    // twice — comb filtering, and CPU spent to produce it. So the monitor only
-    // opens when nothing else is already carrying this input.
-    bool alreadyMonitored = false;
+    const SoloState solo = soloState();
+    const auto reachesMaster = [&](const TrackModel& source) {
+        const TrackModel* current = &source;
+        for (std::size_t depth = 0; current && depth <= m_project.tracks.size(); ++depth) {
+            if (current->muted || current->volume <= 0 ||
+                (solo.any && !solo.open.contains(current->id))) return false;
+            if (current->outputBusId.empty()) return m_project.masterVolume > 0;
+            current = m_project.findTrack(current->outputBusId);
+        }
+        return false;
+    };
+    const unsigned width = std::clamp(track.inputChannelCount, 1u, 2u);
+    unsigned mask = (1u << width) - 1;
     for (const auto& other : m_project.tracks) {
-        if (other.id == track.id) continue;
-        if (!carriesAudio(other)) continue;
-        if (other.inputChannel != track.inputChannel) continue;
-        if (other.monitor) {
-            alreadyMonitored = true;
-            break;
+        if (other.id == track.id || !isRecordable(other) || !other.monitor ||
+            !other.inputEnabled || !reachesMaster(other)) continue;
+        for (unsigned side = 0; side < width; ++side) {
+            const auto input = track.inputChannel + side;
+            if (input >= other.inputChannel &&
+                input - other.inputChannel < std::clamp(other.inputChannelCount, 1u, 2u) &&
+                (other.monitorInputMask & (1u << (input - other.inputChannel))))
+                mask &= ~(1u << side);
         }
     }
-
-    const bool wanted = !alreadyMonitored;
-    if (track.monitor == wanted) {
-        // Nothing to change, but the track is still under automatic control —
-        // that is what the "A" mark next to the button reports.
-        track.monitorAuto = true;
-        return;
-    }
-    track.monitor = wanted;
+    track.monitorInputMask = mask;
+    track.monitor = mask != 0;
     track.monitorAuto = true;
 }
 
@@ -16741,6 +17127,9 @@ EngineController::finalizeRecordingCapture() {
             if (!session.filePath.empty())
                 recording.closedWavPath = session.filePath;
             recording.sampleRate = session.sampleRate;
+            recording.startSeconds = session.sampleRate > 0 ? double(session.startSample) / session.sampleRate : capture.startSeconds;
+            recording.inputXruns = session.inputXruns;
+            recording.interrupted = session.interrupted;
             recording.channels = session.channelCount;
             recording.capturedFrames = session.capturedFrames > 0
                 ? std::uint64_t(session.capturedFrames)
@@ -16762,11 +17151,13 @@ EngineController::finalizeRecordingCapture() {
                 switch (capture.semantics.monitorStopPolicy) {
                     case MonitorStopPolicy::KeepOn: break;
                     case MonitorStopPolicy::ReturnToPrevious:
-                        if (track->monitorAuto)
+                        if (track->monitorAuto) {
                             track->monitor = capture.monitorBefore;
+                            track->monitorInputMask = capture.monitorInputMaskBefore;
+                        }
                         break;
                     case MonitorStopPolicy::AutoDisable:
-                        if (track->monitorAuto) track->monitor = false;
+                        if (track->monitorAuto) { track->monitor = false; track->monitorInputMask = 3; }
                         break;
                 }
             }
@@ -16815,8 +17206,13 @@ EngineController::finalizeRecordingCapture() {
     return run;
 }
 
+void EngineController::markRecordingInterrupted() {
+    for (auto& capture : m_captures) if (capture.recorder) capture.recorder->markInterrupted();
+}
+
 std::string EngineController::stopRecording() {
     FinalizedRecordingRun run = finalizeRecordingCapture();
+    m_recordingWarning.clear();
     if (run.empty()) return {};
 
     struct Landing {
@@ -16828,6 +17224,13 @@ std::string EngineController::stopRecording() {
     std::string firstPath;
 
     for (const FinalizedRecordingTrack& recording : run.tracks) {
+        if (!recording.fileWriteSucceeded || recording.droppedFrames || recording.inputXruns || recording.interrupted) {
+            m_recordingWarning += recording.closedWavPath + "\n";
+            m_recordingWarning += "Missing frames: " + std::to_string(recording.droppedFrames) +
+                "; input xruns: " + std::to_string(recording.inputXruns) +
+                (recording.interrupted ? "; audio interrupted" : "") +
+                (!recording.fileWriteSucceeded ? "; file write failed" : "") + "\n";
+        }
         TrackModel* track = m_project.findTrack(recording.trackId);
         if (!track || !recording.audioReadable) continue;
 
@@ -18114,55 +18517,119 @@ audio::AudioDeviceConfig EngineController::audioConfiguration() const {
     return config;
 }
 
-audio::Result EngineController::applyAudioConfiguration(
-    const audio::AudioDeviceConfig& config) {
-    const bool resumePlayback = isPlaying() && !isRecording();
+audio::Result EngineController::startConfiguredAudioDevice() {
+    m_deviceOpen = false;
+    if (!m_devices->hasStream())
+        return audio::Result::fail(audio::EngineError::DeviceError, "No audio stream is open.");
+    const double rate = m_devices->sampleRate();
+    const auto buffer = m_devices->bufferSize();
+    const bool rateChanged = std::abs(rate - m_sampleRate) > 0.01;
+    const bool bufferChanged = buffer != m_bufferSize;
+    m_bufferSize = buffer;
+    if (rateChanged) {
+        if (auto prepared = applyRenderSampleRate(rate); !prepared) return prepared;
+        if (auto rebuilt = rebuildGraph(); !rebuilt) return rebuilt;
+    } else if (bufferChanged) {
+        if (auto prepared = m_engine.prepare(rate, buffer, 2); !prepared)
+            return audio::Result::fail(audio::EngineError::InvalidArgument,
+                std::string(engine::describe(prepared.error())));
+    }
+    m_project.sampleRate = m_sampleRate;
+    if (auto attached = m_devices->setAudioCallback(m_callback.get()); !attached) return attached;
+    auto started = m_devices->start();
+    m_deviceOpen = bool(started) && m_devices->isRunning();
+    return started;
+}
+
+audio::Result EngineController::applyAudioConfiguration(const audio::AudioDeviceConfig& config) {
+    if (!std::isfinite(config.sampleRate) || config.sampleRate < audio::kMinSampleRate ||
+        config.sampleRate > audio::kMaxSampleRate || config.bufferSize == 0 || config.bufferSize > 8192)
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "Invalid sample rate or buffer size.");
+    if (m_liveDeviceAllowed && m_devices->isRunning() && m_devices->matchesConfiguration(config))
+        return audio::Result::ok();
+    if (isRecording() || isCountingIn())
+        return audio::Result::fail(audio::EngineError::DeviceError,
+            "Finish the recording or count-in before changing audio settings.");
     if (!m_liveDeviceAllowed) {
         const bool rateChanged = std::abs(config.sampleRate - m_sampleRate) > 0.01;
         const bool bufferChanged = config.bufferSize != m_bufferSize;
         m_bufferSize = config.bufferSize;
-        if (rateChanged)
-            applyRenderSampleRate(config.sampleRate);
-        else if (bufferChanged)
-            (void)m_engine.prepare(m_sampleRate, m_bufferSize, 2);
-        m_project.sampleRate = m_sampleRate;
-        auto rebuilt = rateChanged ? rebuildGraph() : audio::Result::ok();
-        if (resumePlayback) m_engine.transport().play();
-        return rebuilt;
+        if (rateChanged) {
+            if (auto prepared = applyRenderSampleRate(config.sampleRate); !prepared) return prepared;
+            return rebuildGraph();
+        }
+        if (bufferChanged) if (auto prepared = m_engine.prepare(m_sampleRate, m_bufferSize, 2); !prepared)
+            return audio::Result::fail(audio::EngineError::InvalidArgument,
+                std::string(engine::describe(prepared.error())));
+        return audio::Result::ok();
     }
 
-    // A newly opened stream may start immediately. Keep it silent until the
-    // graph has been resized for its actual block size and sample rate.
-    m_devices->setAudioCallback(nullptr);
-    auto applied = m_devices->applyConfiguration(config);
-    if (!applied) {
-        m_devices->setAudioCallback(m_callback.get());
-        m_deviceOpen = m_devices->isRunning();
-        if (resumePlayback) m_engine.transport().play();
-        return applied;
+    const auto previous = m_devices->configuration();
+    const auto stopped = m_devices->stop();
+    if (!stopped) { m_deviceOpen = false; return stopped; }
+    if (auto detached = m_devices->setAudioCallback(nullptr); !detached) return detached;
+    const auto applied = m_devices->applyConfiguration(config);
+    // A failed request may still have opened a different fallback device.
+    // Its actual format must be settled before any callback can run.
+    const auto started = startConfiguredAudioDevice();
+    if (!started) {
+        const auto failure = audio::Result::fail(started.error(),
+            (applied ? std::string() : applied.message() + "; ") + started.message());
+        m_devices->stop();
+        m_devices->setAudioCallback(nullptr);
+        auto restored = m_devices->applyConfiguration(previous);
+        if (m_devices->hasStream()) restored = startConfiguredAudioDevice();
+        if (!restored) {
+            auto fallback = previous;
+            fallback.inputDeviceUid.clear(); fallback.outputDeviceUid.clear();
+            fallback.inputChannelSelectors.clear(); fallback.outputChannelSelectors.clear();
+            m_devices->stop(); m_devices->setAudioCallback(nullptr);
+            restored = m_devices->applyConfiguration(fallback);
+            if (m_devices->hasStream()) restored = startConfiguredAudioDevice();
+        }
+        return audio::Result::fail(failure.error(), failure.message() +
+            (restored ? "; audio restored; controls show the active settings" : "; audio recovery failed: " + restored.message()));
     }
+    return applied;
+}
 
-    const double settledRate = m_devices->sampleRate();
-    const uint32_t settledBuffer = m_devices->bufferSize();
-    const bool rateChanged = std::abs(settledRate - m_sampleRate) > 0.01;
-    const bool bufferChanged = settledBuffer != m_bufferSize;
-    m_bufferSize = settledBuffer;
-    if (rateChanged) {
-        applyRenderSampleRate(settledRate);
-    } else if (bufferChanged) {
-        (void)m_engine.prepare(m_sampleRate, m_bufferSize, 2);
-        m_recorder->initialize(m_sampleRate, 2);
+bool EngineController::audioDeviceNeedsRecovery() const {
+    return m_liveDeviceAllowed && m_prepared &&
+        (!m_devices->isRunning() || m_devices->callbackStalled() || !m_devices->devicesAvailable());
+}
+
+audio::Result EngineController::recoverAudioDevice() {
+    if (!m_liveDeviceAllowed || !m_prepared)
+        return audio::Result::fail(audio::EngineError::NotInitialized);
+    if (!audioDeviceNeedsRecovery()) return audio::Result::ok();
+    if (isRecording() || isCountingIn())
+        return audio::Result::fail(audio::EngineError::DeviceError,
+            "Finalize the interrupted recording before recovering audio.");
+    const auto now = rt::nowNanos();
+    if (now < m_nextDeviceRecoveryNs)
+        return audio::Result::fail(audio::EngineError::DeviceError, "Waiting for the audio device.");
+    m_nextDeviceRecoveryNs = now + 3'000'000'000ull;
+    const auto previous = m_devices->configuration();
+    if (auto stopped = m_devices->stop(); !stopped) return stopped;
+    if (auto detached = m_devices->setAudioCallback(nullptr); !detached) return detached;
+    if (auto refreshed = m_devices->refreshDevices(); !refreshed) return refreshed;
+    auto recovered = m_devices->applyConfiguration(previous);
+    if (!m_devices->hasStream()) {
+        audio::AudioDeviceConfig fallback = previous;
+        fallback.inputDeviceUid.clear(); fallback.outputDeviceUid.clear();
+        fallback.inputChannelSelectors.clear(); fallback.outputChannelSelectors.clear();
+        auto opened = m_devices->applyConfiguration(fallback);
+        if (!m_devices->hasStream() && fallback.inputEnabled) {
+            fallback.inputEnabled = false;
+            opened = m_devices->applyConfiguration(fallback);
+        }
+        if (!opened && !m_devices->hasStream()) return opened;
+        recovered = audio::Result::fail(audio::EngineError::DeviceNotFound,
+            "Previous audio device unavailable; using system defaults. Check input selection.");
     }
-    m_project.sampleRate = m_sampleRate;
-    auto rebuilt = rateChanged ? rebuildGraph() : audio::Result::ok();
-
-    m_devices->setAudioCallback(m_callback.get());
-    audio::Result started = audio::Result::ok();
-    if (!m_devices->isRunning()) started = m_devices->start();
-    m_deviceOpen = bool(started) && m_devices->isRunning();
+    const auto started = startConfiguredAudioDevice();
     if (!started) return started;
-    if (resumePlayback) m_engine.transport().play();
-    return rebuilt;
+    return recovered;
 }
 
 audio::Result EngineController::setOutputDevice(const std::string& uid) {
@@ -18185,28 +18652,14 @@ audio::Result EngineController::probeDevice(const std::string& uid,
     return m_devices->probeDevice(uid, wantInput, out);
 }
 
-audio::Result EngineController::showDeviceControlPanel(const std::string& uid,
-                                                       void* nativeWindow) {
-    const bool resumePlayback = isPlaying() && !isRecording();
-    m_devices->setAudioCallback(nullptr);
-    auto shown = m_devices->showControlPanel(uid, nativeWindow);
-    if (shown) {
-        const double settledRate = m_devices->sampleRate();
-        const uint32_t settledBuffer = m_devices->bufferSize();
-        const bool rateChanged = std::abs(settledRate - m_sampleRate) > 0.01;
-        const bool bufferChanged = settledBuffer != m_bufferSize;
-        m_bufferSize = settledBuffer;
-        if (rateChanged)
-            applyRenderSampleRate(settledRate);
-        else if (bufferChanged)
-            (void)m_engine.prepare(m_sampleRate, m_bufferSize, 2);
-        m_project.sampleRate = m_sampleRate;
-        if (rateChanged) (void)rebuildGraph();
-    }
-    m_devices->setAudioCallback(m_callback.get());
-    m_deviceOpen = m_devices->isRunning();
-    if (resumePlayback) m_engine.transport().play();
-    return shown;
+audio::Result EngineController::showDeviceControlPanel(const std::string& uid, void* nativeWindow) {
+    if (isRecording() || isCountingIn()) return audio::Result::fail(audio::EngineError::DeviceError,
+        "Finish the recording or count-in before opening hardware setup.");
+    if (auto stopped = m_devices->stop(); !stopped) return stopped;
+    if (auto detached = m_devices->setAudioCallback(nullptr); !detached) return detached;
+    const auto shown = m_devices->showControlPanel(uid, nativeWindow);
+    const auto started = startConfiguredAudioDevice();
+    return !started ? started : shown;
 }
 
 audio::Result EngineController::setSampleRateHz(double hz) {

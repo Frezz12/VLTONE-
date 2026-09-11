@@ -1,0 +1,9 @@
+Test project /Users/nikolay/Documents/code/VLTONE/VLTONE-/build
+    Start 51: audio_monitoring_regression_test
+1/2 Test #51: audio_monitoring_regression_test ...   Passed    8.56 sec
+    Start 52: audio_device_recovery_test
+2/2 Test #52: audio_device_recovery_test .........   Passed    3.02 sec
+
+100% tests passed out of 2
+
+Total Test time (real) =  11.59 sec

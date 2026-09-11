@@ -154,6 +154,10 @@ private:
     /// Re-derive every action's shortcuts from its binding and the suppressor,
     /// parking the bindings that lose keys so they can still be reported.
     void applySuppression();
+    /// Keep native menu key equivalents away from an active text editor. On
+    /// macOS AppKit may dispatch a bare QAction shortcut before the receiving
+    /// widget's ShortcutOverride, so event filtering alone is not sufficient.
+    void refreshTextEntrySuppression();
 
     /// Canonical US-position form used on disk and by QAction. A binding made
     /// while a Cyrillic layout is active is therefore the same binding the
@@ -169,6 +173,8 @@ private:
     /// while a suppressor is installed and only for the commands it touches.
     QHash<QString, QList<QKeySequence>> m_parked;
     std::function<bool(int)> m_suppressed;
+    bool m_textEntrySuppressesBareKeys = false;
+    bool m_textEntryRefreshPending = false;
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(ShortcutManager::ModeMask)

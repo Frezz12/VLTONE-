@@ -86,13 +86,17 @@ struct RecordingPreview {
     bool layered = false;
     std::string targetClipId;
     int takeIndex = -1;                ///< which row of the stack it becomes
+    /// Actual recorded pass count; spans contain only the at-most-two visible
+    /// pieces (the live pass and the uncovered tail of the preceding pass).
+    std::uint64_t passCount = 0;
     std::vector<RecordingSpan> spans;
     /// Input peak per bucket since the punch point, oldest first, 0…1.
     /// Bucket `i` covers [i·step, (i+1)·step) of *recorded* time. A view into
     /// the live capture rather than a copy — the arrangement asks for this
     /// every frame, for every recording lane, and a long take's envelope is
-    /// thousands of floats. Valid until the take stops.
+    /// thousands of floats. Valid until the next envelope pump, seed or stop.
     std::span<const float> envelope;
+    std::uint64_t envelopeId = 0;
     double envelopeStepSeconds = 0.0;
     /// Seconds captured so far, from the recorder's own frame count — the
     /// clock the stripe and its waveform are both drawn against.
@@ -237,7 +241,9 @@ public:
     audio::Result initialize(const audio::AudioDeviceConfig& config,
                              bool openDevice = true);
     void shutdown();
-    bool isDeviceOpen() const { return m_deviceOpen; }
+    bool isDeviceOpen() const { return m_deviceOpen && m_devices->isRunning(); }
+    bool audioDeviceNeedsRecovery() const;
+    audio::Result recoverAudioDevice();
     double sampleRate() const { return m_sampleRate; }
 
     // ── Document ──
@@ -364,6 +370,12 @@ public:
     /// Not undoable: it is a preference about the work, not part of it.
     collab::SharedMutationResult setAiInstructions(std::string text);
     const std::string& aiInstructions() const { return m_project.aiInstructions; }
+    bool setNotebookHtml(std::string html);
+    bool setNotebookCues(std::vector<NotebookCueModel> cues);
+    const std::string& notebookHtml() const { return m_project.notebookHtml; }
+    const std::vector<NotebookCueModel>& notebookCues() const {
+        return m_project.notebookCues;
+    }
 
     int keyRoot() const { return m_project.keyRoot; }
     const std::string& projectScale() const { return m_project.scale; }
@@ -407,6 +419,12 @@ public:
     /// touching history; commit the captured starts when the gesture ends.
     void setTrackVolumeLive(const std::string& trackId, float volume);
     void setTrackPanLive(const std::string& trackId, float pan);
+    /// High-frequency samples from an in-progress pointer/wheel gesture. The
+    /// audible node and document change immediately; passive automation is
+    /// reconciled once by commitTrack*Edit instead of scanning the arrangement
+    /// for every input sample.
+    void setTrackVolumeGestureSample(const std::string& trackId, float volume);
+    void setTrackPanGestureSample(const std::string& trackId, float pan);
     void commitTrackVolumeEdit(
         const std::vector<std::pair<std::string, float>>& before,
         const std::string& label = "Set Volume");
@@ -446,12 +464,18 @@ public:
     void commitTrackHeightEdit(
         const std::vector<std::pair<std::string, double>>& before,
         const std::string& label = "Resize Tracks");
-    /// Duplicate a track (its clips, routing intent and flags). With
-    /// `withInserts=false` the copy starts with empty insert slots. Undoable.
-    std::string duplicateTrack(const std::string& trackId, bool withInserts = true);
+    /// Duplicate a track and every structural child below it. This makes a
+    /// folder copy one object with its complete nested hierarchy and also keeps
+    /// a channel's automation lanes attached. With `withInserts=false` the
+    /// copies start with empty insert slots; with `withClips=false` their lanes
+    /// start empty. Undoable as one operation.
+    std::string duplicateTrack(const std::string& trackId,
+                               bool withInserts = true,
+                               bool withClips = true);
     /// Duplicate a Pattern as one musical object, including every source track,
     /// instrument/sampler slot and MIDI clip. Undoable as one operation.
-    std::string duplicatePattern(const std::string& patternId);
+    std::string duplicatePattern(const std::string& patternId,
+                                 bool withClips = true);
     void setTrackInputChannel(const std::string& trackId, uint32_t channel);
     /// How wide this track's input is: 1 for a mono source, 2 for a stereo pair
     /// starting at `inputChannel`. This is what a recording captures and what
@@ -487,6 +511,9 @@ public:
     /// Turn summing on or off for an existing folder, re-routing its contents
     /// either into its new bus or back out to wherever they were headed.
     void setFolderSumming(const std::string& folderId, bool summing);
+    /// Put the selected hierarchy roots into one new folder.  When both a
+    /// folder and one of its descendants are selected, the descendant keeps
+    /// its existing parent and moves as part of the folder subtree.
     std::string packIntoFolder(const std::vector<std::string>& trackIds,
                                const std::string& name = "",
                                bool summing = false);
@@ -518,6 +545,9 @@ public:
     bool setTrackOutputBus(const std::string& trackId,
                            const std::string& busTrackId);
     void setTrackInputEnabled(const std::string& trackId, bool enabled);
+    void setTrackInputRouting(const std::string& trackId, uint32_t first,
+                              uint32_t count, bool enabled);
+    bool liveAudioActivity() const;
     void ensureInsertSlots(const std::string& trackId, size_t count);
     void ensureMasterInsertSlots(size_t count);
 
@@ -624,9 +654,9 @@ public:
         std::uint32_t count = 1;
         std::string name;
         bool mono = false;
-        bool inputEnabled = false;
+        bool inputEnabled = true;
         std::uint32_t inputChannel = 0;
-        std::uint32_t inputChannelCount = 2;
+        std::uint32_t inputChannelCount = 1;
         std::string outputBusId;
         std::vector<ChainSlotSnapshot> inserts;
         std::optional<ChainSlotSnapshot> instrument;
@@ -1469,6 +1499,9 @@ public:
     rt::BlockMetrics& callbackMetrics();
     rt::BlockMetrics& graphMetrics() { return m_engine.graphMetrics(); }
     std::array<std::uint64_t, 4> audioXruns() const;
+    int lastAudioRenderError() const { return m_engine.lastRenderError(); }
+    std::uint64_t failedAudioBlocks() const { return m_engine.failedBlocks(); }
+    const audio::AudioDeviceManager& audioDeviceDiagnostics() const { return *m_devices; }
     std::uint64_t gatedAudioBlocks() const { return m_engine.gatedBlocks(); }
     void setAudioProfiling(bool enabled) { m_engine.setProfiling(enabled); }
     unsigned audioWorkerCount() const { return m_engine.workerCount(); }
@@ -1567,6 +1600,8 @@ public:
         std::uint64_t capturedFrames = 0;
         std::uint64_t writtenFrames = 0;
         std::uint64_t droppedFrames = 0;
+        std::uint64_t inputXruns = 0;
+        bool interrupted = false;
         double sampleRate = 0.0;
         std::uint32_t channels = 0;
         std::vector<RecordingSpan> passes;
@@ -1610,6 +1645,8 @@ public:
     /// or as one take per loop pass in Layer mode. Returns the path of the
     /// captured file for the first track (empty when nothing was recorded).
     std::string stopRecording();
+    void markRecordingInterrupted();
+    const std::string& recordingWarning() const { return m_recordingWarning; }
     bool isRecording() const;
     /// The tracks currently capturing, in the order recording started.
     const std::vector<std::string>& recordingTracks() const {
@@ -1642,11 +1679,21 @@ public:
     /// as the clip it is about to become. Inactive when that track is not
     /// recording.
     RecordingPreview recordingPreview(const std::string& trackId);
-    /// Sample the input meters into every active capture's envelope. Called
-    /// from the UI's refresh tick; each sample lands in a fixed slice of
-    /// *recorded* time, so the picture neither stretches nor slides when the
-    /// frame rate wobbles.
+    /// Drain timestamped peaks of the captured input into the UI envelope.
+    /// GUI stalls neither lose short transients nor spread the last block over
+    /// the intervening time (within the recorder's bounded history).
     void pumpRecordingEnvelopes();
+    /// Headless integration harness: drive the real device callback with caller-
+    /// owned buffers. Refuses a controller allowed to open hardware. Exactly one
+    /// producer may call this, joined before changing device/lifecycle state.
+    unsigned configureAudioWorkersForTest(bool realtime, unsigned maxParallelThreads = 0) {
+        if (m_liveDeviceAllowed || !m_prepared || isPlaying() || isRecording()) return 0;
+        m_engine.configureAudioWorkers({realtime, m_sampleRate, m_bufferSize, {}, maxParallelThreads});
+        return m_engine.realtimeWorkerCount();
+    }
+    bool processDeviceBlockForTest(const audio::AudioBuffer& input,
+                                   audio::AudioBuffer& output,
+                                   audio::BufferSize frames);
     /// Offline hook: pretend `seconds` of input have been captured on
     /// `trackId`, shaped by `level(t)` (a flat 0.6 when it is not given).
     /// An offline harness has no audio device, so the recorder's own clock
@@ -1844,7 +1891,7 @@ private:
     void retireOrphanedPendingAudioImports();
 
     /// Rebuild the whole node graph from the document and publish it.
-    audio::Result rebuildGraph(bool reconfigurePlugins = false);
+    audio::Result rebuildGraph(bool reconfigurePlugins = false, bool publish = true);
     /// Push the document's clip list for one track into its player node.
     void syncTrackClips(const TrackModel& track);
     std::string freezeFingerprint(const TrackModel& track) const;
@@ -2093,7 +2140,9 @@ private:
     /// Move the whole session to another sample rate, dropping the decoded-clip
     /// caches that were converted for the old one. Used by a render that writes
     /// at a rate the project does not run at, in both directions.
-    void applyRenderSampleRate(double rate);
+    audio::Result applyRenderSampleRate(double rate);
+    audio::Result startConfiguredAudioDevice();
+    std::uint64_t m_nextDeviceRecoveryNs = 0;
 
     // ── Insert plumbing (declared here: it needs TrackChannel above) ──
     /// Bring a channel's loaded plugins in line with its document slots,
@@ -2253,7 +2302,8 @@ private:
         double startSeconds = 0.0;      ///< timeline position recording began
         bool monitorBefore = false;     ///< monitor state to restore on stop
         bool armedBefore = false;
-        bool monitorAutoBefore = false; ///< exact-start rollback only
+        bool monitorAutoBefore = false;
+        unsigned monitorInputMaskBefore = 3; ///< exact-start rollback only
         bool monitorManaged = false;
         FrozenRecordingSemantics semantics;
         /// Input peak per bucket since the capture began, for the growing
@@ -2263,13 +2313,16 @@ private:
         /// for the take), and an evenly-drawn frame-per-sample envelope slides
         /// backwards under the playhead every time it does.
         std::vector<float> envelope;
+        std::uint64_t envelopeId = 0;
         /// Set by `seedRecordingForShot` in an offline harness, where the
         /// recorder's own clock never advances. Negative in a real take.
         double seededSeconds = -1.0;
         /// Seconds one bucket covers. Doubles each time the envelope hits its
         /// cap and is halved, so index times stay exact on a long take.
         double envelopeStepSeconds = 0.025;
+        std::uint64_t nextPeakBucket = 0;
     };
+    std::string m_recordingWarning;
     std::vector<Capture> m_captures;
     std::vector<std::string> m_recordingTracks;
     /// The count-in in flight: what it will record onto, how many beats are
@@ -2281,7 +2334,8 @@ private:
     /// Each count-in target's monitor state before the count-in opened it, so
     /// cancelling puts it back and the take that follows knows what "before"
     /// really was.
-    std::vector<std::pair<std::string, bool>> m_countInMonitorBefore;
+    struct MonitorState { bool enabled = false, automatic = false; unsigned mask = 3; };
+    std::vector<std::pair<std::string, MonitorState>> m_countInMonitorBefore;
 
     /// The recorders the audio thread taps, published as an immutable snapshot
     /// exactly like a track's clip list. Starting or stopping a capture swaps
@@ -2294,6 +2348,7 @@ private:
     /// Open or leave closed the track's monitor per the smart-monitoring rule:
     /// only listen when no other track is already carrying the same input.
     /// Marks the track as auto-managed either way.
+    void refreshAutomaticMonitoring(bool allowBuild = true);
     void applySmartMonitoring(TrackModel& track);
     bool startRecordingTracksImpl(const std::vector<std::string>& trackIds,
                                   bool requireEveryTarget);
@@ -2344,6 +2399,9 @@ private:
     /// channel, or a different width. Live: the input can be changed while the
     /// take is rolling.
     void retargetCaptureInput(const TrackModel& track);
+    void syncTrackInput(const TrackModel& track);
+    std::unordered_map<std::string, std::unordered_set<unsigned>> m_liveMidiKeys;
+    std::uint64_t m_lastLiveMidiNs = 0;
 
     /// Push a fully-formed track onto the project, rebuild and make it
     /// undoable. The one place a track is born, so `addTrack` and `addFolder`

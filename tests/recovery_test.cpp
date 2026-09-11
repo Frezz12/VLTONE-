@@ -240,6 +240,23 @@ int main() {
               !fs::exists(legacyPackage / "Project.vlt"),
           "saving migrates a legacy manifest to the project name");
 
+    const fs::path ordinaryProjectFolder = dir / "Visible Project";
+    check(daw::ProjectSerializer::save(legacyProject,
+                                       ordinaryProjectFolder.string())
+              .isOk() &&
+              fs::is_regular_file(ordinaryProjectFolder /
+                                  "Visible Project.vlt") &&
+              fs::is_directory(ordinaryProjectFolder / "Content") &&
+              fs::is_directory(ordinaryProjectFolder / "State") &&
+              !fs::exists(ordinaryProjectFolder / "Project.vlt"),
+          "ordinary project folder contains its same-named manifest and data");
+    daw::ProjectModel ordinaryProject;
+    check(daw::ProjectSerializer::load(ordinaryProject,
+                                       ordinaryProjectFolder.string())
+              .isOk() &&
+              ordinaryProject.tracks.size() == legacyProject.tracks.size(),
+          "ordinary project folder reloads through its inner manifest");
+
     // The application contract is UTF-8 std::string at its public boundary and
     // native filesystem paths underneath. Exercise both directions here: the
     // audio source, project package and manifest all contain Cyrillic and

@@ -1,4 +1,5 @@
 #pragma once
+#include "graphics/ScenePaintSource.hpp"
 
 #include "Internal/GraphitInstance.hpp"
 
@@ -21,7 +22,7 @@ namespace ui { class Knob; }
 namespace daw { class EngineController; }
 
 /// Compact host-drawn editor for the built-in Graphit effect.
-class GraphitPanel final : public ui::FrameWidget {
+class GraphitPanel final : public ui::FrameWidget , public ui::graphics::ScenePaintSource {
     Q_OBJECT
 public:
     GraphitPanel(daw::EngineController* controller, QString channelId,
@@ -35,6 +36,7 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent*) override;
+    void paintScene(QPainter&, const QRegion&) override;
     void resizeEvent(QResizeEvent*) override;
     void showEvent(QShowEvent*) override;
     void hideEvent(QHideEvent*) override;

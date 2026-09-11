@@ -81,7 +81,9 @@ double SpectrumMeter::displayHeight(float linear) {
 }
 
 void SpectrumMeter::paintEvent(QPaintEvent*) {
-    QPainter painter(this);
+    QPainter painter(this); paintScene(painter, QRegion(rect()));
+}
+void SpectrumMeter::paintScene(QPainter& painter, const QRegion&) {
     painter.setRenderHint(QPainter::Antialiasing);
 
     const Theme& theme = th();

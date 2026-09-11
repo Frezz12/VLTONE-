@@ -6,6 +6,7 @@
 
 class QLabel;
 class QLineEdit;
+class QListWidget;
 class QPushButton;
 class QWidget;
 
@@ -63,6 +64,63 @@ private:
     QString m_selectedPath;
     QPushButton* m_browse = nullptr;
     QWidget* m_projectList = nullptr;
+};
+
+struct ProjectTemplateSaveOptions {
+    QString name;
+    QString artworkPath;
+};
+
+class ProjectTemplateSaveDialog final : public QDialog {
+    Q_OBJECT
+public:
+    ProjectTemplateSaveDialog(const QString& name,
+                              const QString& artworkPath = {},
+                              QWidget* parent = nullptr);
+
+    ProjectTemplateSaveOptions options() const;
+    bool checkForTest() const;
+
+private:
+    void chooseArtwork();
+    void setArtworkPath(const QString& path);
+    void updateState();
+    void applyTheme();
+
+    QLineEdit* m_name = nullptr;
+    QWidget* m_preview = nullptr;
+    QLabel* m_mediaName = nullptr;
+    QLabel* m_destination = nullptr;
+    QLabel* m_error = nullptr;
+    QPushButton* m_removeArtwork = nullptr;
+    QPushButton* m_save = nullptr;
+    QString m_artworkPath;
+};
+
+class ProjectTemplateOpenDialog final : public QDialog {
+    Q_OBJECT
+public:
+    explicit ProjectTemplateOpenDialog(const QStringList& templatePaths,
+                                       QWidget* parent = nullptr);
+
+    QString selectedPath() const { return m_selectedPath; }
+    bool libraryChanged() const { return m_libraryChanged; }
+    bool checkForTest() const;
+
+private:
+    void updateSelection();
+    void deleteSelected();
+    void applyTheme();
+
+    QString m_selectedPath;
+    QListWidget* m_templates = nullptr;
+    QWidget* m_preview = nullptr;
+    QLabel* m_name = nullptr;
+    QLabel* m_mediaName = nullptr;
+    QLabel* m_empty = nullptr;
+    QPushButton* m_create = nullptr;
+    QPushButton* m_delete = nullptr;
+    bool m_libraryChanged = false;
 };
 
 QStringList recentProjectPaths();

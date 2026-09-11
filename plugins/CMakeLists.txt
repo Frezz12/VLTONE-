@@ -24,6 +24,7 @@ set(DAW_PLUGINHOST_SOURCES
     Host/Registry.cpp
     Host/PluginNode.cpp
     Internal/EqualizerInstance.cpp
+    Internal/ModulationInstance.cpp
     Internal/GraphitInstance.cpp
     Internal/GravityInstance.cpp
     Internal/InternalFactory.cpp

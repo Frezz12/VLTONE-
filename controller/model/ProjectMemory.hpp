@@ -6,7 +6,10 @@ namespace daw {
 // Includes headroom for string allocation, object metadata and model indexes.
 inline std::size_t estimatedProjectBytes(const ProjectModel& project) {
     std::size_t bytes = sizeof(project) + project.name.size() + project.author.size() +
-        project.aiInstructions.size() + project.coverImagePath.size();
+        project.aiInstructions.size() + project.coverImagePath.size() +
+        project.notebookHtml.size() +
+        project.notebookCues.capacity() * sizeof(NotebookCueModel);
+    for (const auto& cue : project.notebookCues) bytes += cue.text.size();
     const auto inserts = [&](const auto& slots) {
         std::size_t result = slots.capacity() * sizeof(InsertModel);
         for (const auto& slot : slots) {

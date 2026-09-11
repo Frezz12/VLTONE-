@@ -1,4 +1,5 @@
 #include "RecordingEngine.hpp"
+#include <bit>
 #include "platform/Log.hpp"
 #include "platform/PathUtils.hpp"
 
@@ -6,6 +7,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
@@ -169,8 +171,12 @@ Result AudioRecorder::initialize(SampleRate sampleRate, uint32_t channels) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_initialized) return Result::ok();
 
+    if (!std::isfinite(sampleRate) || sampleRate < kMinSampleRate || sampleRate > kMaxSampleRate || channels < 1 || channels > 2)
+        return Result::fail(EngineError::InvalidArgument);
     m_sampleRate = sampleRate;
-    m_fileChannels = static_cast<ChannelCount>(std::max(1u, channels));
+    m_peakBucketFrames = std::max<std::uint32_t>(1, std::uint32_t(std::llround(sampleRate / 40.0)));
+    m_fileChannels = static_cast<ChannelCount>(channels);
+    m_inputRouting.store(channels);
     m_session.sampleRate = sampleRate;
     m_session.channelCount = m_fileChannels;
 
@@ -178,6 +184,7 @@ Result AudioRecorder::initialize(SampleRate sampleRate, uint32_t channels) {
     const auto samples = static_cast<size_t>(sampleRate) * m_fileChannels * 4;
     m_ringCapacity = nextPowerOfTwo(std::max<size_t>(samples, 1 << 16));
     m_ring.assign(m_ringCapacity, 0.0f);
+    m_ringPositions.resize(m_ringCapacity / m_fileChannels);
     m_writeIndex.store(0);
     m_readIndex.store(0);
 
@@ -196,9 +203,23 @@ void AudioRecorder::shutdown() {
 }
 
 void AudioRecorder::setInputChannels(ChannelCount firstChannel,
-                                     ChannelCount count) {
-    m_inputFirstChannel = firstChannel;
-    m_inputChannelCount = std::max<ChannelCount>(count, 1);
+                                     ChannelCount count, bool enabled) {
+    m_inputRouting.store((std::uint64_t(firstChannel) << 32) |
+        (enabled ? std::uint32_t(std::clamp<ChannelCount>(count, 1, 2)) : 0u),
+        std::memory_order_relaxed);
+}
+
+void AudioRecorder::publishPeak() noexcept {
+    m_peakHistory[m_peakIndex % kPeakHistoryBuckets].store(
+        ((m_peakIndex + 1) << 32) | std::bit_cast<std::uint32_t>(m_peak),
+        std::memory_order_relaxed);
+}
+
+bool AudioRecorder::readPeakBucket(std::uint64_t index, float& peak) const noexcept {
+    const auto value = m_peakHistory[index % kPeakHistoryBuckets].load(std::memory_order_relaxed);
+    if ((value >> 32) != index + 1) return false;
+    peak = std::bit_cast<float>(std::uint32_t(value));
+    return true;
 }
 
 std::string AudioRecorder::makeRecordingPath(TrackID trackID,
@@ -284,11 +305,18 @@ Result AudioRecorder::startRecording(TrackID trackID, TimeSamples startSample) {
     m_recordedFrames.store(0, std::memory_order_relaxed);
     m_writtenFrames.store(0, std::memory_order_relaxed);
     m_writerFailures.store(0, std::memory_order_relaxed);
+    m_startSample.store(startSample);
+    m_startLatched = false;
+    m_initialSkip = 0;
+    m_inputXruns.store(0);
+    m_interrupted.store(false);
 
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_session.state = RecordingSession::State::Recording;
     }
+    m_peak = 0.0f; m_peakIndex = 0; m_peakFrames = 0;
+    for (auto& bucket : m_peakHistory) bucket.store(0, std::memory_order_relaxed);
     m_recording.store(true, std::memory_order_release);
 
     m_writerRunning.store(true, std::memory_order_release);
@@ -330,6 +358,9 @@ Result AudioRecorder::stopRecording() {
             m_droppedFrames.load(std::memory_order_relaxed);
         m_session.fileWriteSucceeded =
             m_writerFailures.load(std::memory_order_relaxed) == 0;
+        m_session.startSample = m_startSample.load();
+        m_session.inputXruns = m_inputXruns.load();
+        m_session.interrupted = m_interrupted.load();
         m_session.state = RecordingSession::State::Stopped;
         completed = m_session;
         m_session.state = RecordingSession::State::Idle;
@@ -345,47 +376,60 @@ Result AudioRecorder::stopRecording() {
                        "Recording file write did not complete");
 }
 
-void AudioRecorder::process(const AudioBuffer& input, BufferSize numFrames) {
+void AudioRecorder::process(const AudioBuffer* input, BufferSize frames,
+                            BufferSize offset, bool inputXrun, std::optional<TimeSamples> inputPosition) {
     if (!m_recording.load(std::memory_order_acquire)) return;
     m_processInFlight.fetch_add(1, std::memory_order_acq_rel);
     struct ProcessGuard {
         std::atomic<std::uint32_t>& count;
         ~ProcessGuard() { count.fetch_sub(1, std::memory_order_release); }
     } guard{m_processInFlight};
-    if (!m_recording.load(std::memory_order_acquire)) return;
-    if (m_ringCapacity == 0 || !input.isValid()) return;
-
-    const BufferSize frames = std::min(numFrames, input.numFrames());
-    if (frames == 0) return;
-
+    if (!m_recording.load(std::memory_order_acquire) || !m_ringCapacity || !frames) return;
+    if (!m_startLatched) {
+        if (inputPosition) {
+            m_startSample.store(std::max<TimeSamples>(0, *inputPosition), std::memory_order_release);
+            m_initialSkip = std::max<TimeSamples>(0, -*inputPosition);
+        }
+        m_startLatched = true;
+    }
+    const auto skip = BufferSize(std::min<TimeSamples>(frames, m_initialSkip));
+    m_initialSkip -= skip; frames -= skip; offset += skip;
+    if (!frames) return;
+    if (inputXrun) m_inputXruns.fetch_add(1, std::memory_order_relaxed);
+    const auto start = m_recordedFrames.load(std::memory_order_relaxed);
+    const auto routing = m_inputRouting.load(std::memory_order_relaxed);
+    const auto first = ChannelCount(routing >> 32);
+    const auto count = ChannelCount(std::uint32_t(routing));
+    const bool missing = count && (!input || !input->isValid() ||
+        offset > input->numFrames() || frames > input->numFrames() - offset ||
+        first >= input->numChannels() || count > input->numChannels() - first);
     const size_t mask = m_ringCapacity - 1;
     const size_t write = m_writeIndex.load(std::memory_order_relaxed);
     const size_t read = m_readIndex.load(std::memory_order_acquire);
-    const size_t used = (write - read) & mask;
-    const size_t free = mask - used;
-
-    const size_t needed = static_cast<size_t>(frames) * m_fileChannels;
-    if (needed > free) {
-        // Better to drop a block than to block the audio thread.
-        m_droppedFrames.fetch_add(frames, std::memory_order_relaxed);
-        return;
-    }
-
+    const bool fits = size_t(frames) * m_fileChannels <= mask - ((write - read) & mask);
+    if (missing || !fits) m_droppedFrames.fetch_add(frames, std::memory_order_relaxed);
+    const float* sources[2]{};
+    for (ChannelCount ch = 0; ch < m_fileChannels; ++ch)
+        if (count && input && input->isValid() && first + (count >= 2 ? ch : 0) < input->numChannels())
+            sources[ch] = input->getChannel(first + (count >= 2 ? ch : 0));
     size_t cursor = write;
     for (BufferSize frame = 0; frame < frames; ++frame) {
+        if (fits) m_ringPositions[cursor / m_fileChannels] = start + frame;
         for (ChannelCount ch = 0; ch < m_fileChannels; ++ch) {
-            // Mono sources are duplicated across the file's channels.
-            const ChannelCount sourceCh = m_inputFirstChannel +
-                (m_inputChannelCount >= 2 ? ch : 0);
-            const float* data = sourceCh < input.numChannels()
-                ? input.getChannel(sourceCh) : nullptr;
-            m_ring[cursor] = data ? data[frame] : 0.0f;
-            cursor = (cursor + 1) & mask;
+            const float* data = sources[ch];
+            const float sample = data && offset + frame < input->numFrames() ? data[offset + frame] : 0.0f;
+            if (fits) { m_ring[cursor] = sample; cursor = (cursor + 1) & mask; }
+            if (fits && std::isfinite(sample)) m_peak = std::max(m_peak, std::abs(sample));
+        }
+        if (++m_peakFrames == m_peakBucketFrames) {
+            publishPeak(); ++m_peakIndex; m_peakFrames = 0; m_peak = 0.0f;
         }
     }
-    m_writeIndex.store(cursor, std::memory_order_release);
-
-    m_recordedFrames.fetch_add(frames, std::memory_order_relaxed);
+    if (m_peakFrames) publishPeak();
+    if (fits) m_writeIndex.store(cursor, std::memory_order_release);
+    // Even a lost block occupies time. The writer fills holes using each
+    // queued frame's absolute position; later audio never slides left.
+    m_recordedFrames.store(start + frames, std::memory_order_release);
 }
 
 void AudioRecorder::latchWriterFailure(WriterFailure failure) noexcept {
@@ -414,38 +458,42 @@ void AudioRecorder::writerLoop() {
     std::vector<float> chunk(4096 * channels);
     bool dataWritable = true;
 
+    const auto writeChunk = [&](size_t count) {
+        if (!dataWritable) return;
+        file.write(reinterpret_cast<const char*>(chunk.data()),
+                   static_cast<std::streamsize>(count * sizeof(float)));
+        if (file) {
+            samplesWritten += count;
+            m_writtenFrames.store(TimeSamples(samplesWritten / channels), std::memory_order_relaxed);
+        } else {
+            latchWriterFailure(WriterDataWriteFailed);
+            dataWritable = false;
+        }
+    };
+    const auto padTo = [&](TimeSamples position) {
+        while (dataWritable && TimeSamples(samplesWritten / channels) < position) {
+            const size_t count = std::min<uint64_t>(chunk.size(),
+                uint64_t(position - TimeSamples(samplesWritten / channels)) * channels);
+            std::fill_n(chunk.data(), count, 0.0f);
+            writeChunk(count);
+        }
+    };
     const auto drain = [&] {
         while (true) {
             const size_t write = m_writeIndex.load(std::memory_order_acquire);
-            size_t read = m_readIndex.load(std::memory_order_relaxed);
-            size_t available = (write - read) & mask;
-            if (available == 0) break;
-
-            const size_t count = std::min(available, chunk.size());
+            const size_t read = m_readIndex.load(std::memory_order_relaxed);
+            const size_t available = ((write - read) & mask) / channels;
+            if (!available) break;
+            const auto position = m_ringPositions[read / channels];
+            padTo(position);
+            size_t frames = 1;
+            while (frames < std::min(available, chunk.size() / channels) &&
+                m_ringPositions[((read + frames * channels) & mask) / channels] == position + TimeSamples(frames)) ++frames;
+            const size_t count = frames * channels;
             if (dataWritable) {
-                for (size_t i = 0; i < count; ++i) {
-                    chunk[i] = m_ring[(read + i) & mask];
-                }
-                file.write(
-                    reinterpret_cast<const char*>(chunk.data()),
-                    static_cast<std::streamsize>(count * sizeof(float)));
-                if (file) {
-                    samplesWritten += count;
-                    m_writtenFrames.store(
-                        static_cast<TimeSamples>(samplesWritten / channels),
-                        std::memory_order_relaxed);
-                } else {
-                    // A failed stream does not reveal how much of this chunk
-                    // reached the device. Count only earlier complete writes;
-                    // the header below deliberately excludes any uncertain
-                    // trailing bytes, leaving the known prefix recoverable.
-                    latchWriterFailure(WriterDataWriteFailed);
-                    dataWritable = false;
-                }
+                for (size_t i = 0; i < count; ++i) chunk[i] = m_ring[(read + i) & mask];
+                writeChunk(count);
             }
-            // Consume failed/unwritable data too. Retrying a poisoned stream
-            // would spin forever and fill the realtime ring; the difference
-            // between capturedFrames and writtenFrames records this loss.
             m_readIndex.store((read + count) & mask, std::memory_order_release);
         }
     };
@@ -463,6 +511,7 @@ void AudioRecorder::writerLoop() {
     // Final pass for anything the audio thread pushed while we were shutting
     // down.
     drain();
+    padTo(m_recordedFrames.load(std::memory_order_acquire));
     file.flush();
     if (!file) latchWriterFailure(WriterFlushFailed);
     file.close();
@@ -509,6 +558,9 @@ void AudioRecorder::setRecordingCompleteCallback(
 RecordingSession AudioRecorder::session() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     RecordingSession copy = m_session;
+    copy.startSample = m_startSample.load();
+    copy.inputXruns = m_inputXruns.load();
+    copy.interrupted = m_interrupted.load();
     if (copy.state == RecordingSession::State::Recording) {
         const TimeSamples captured =
             m_recordedFrames.load(std::memory_order_relaxed);

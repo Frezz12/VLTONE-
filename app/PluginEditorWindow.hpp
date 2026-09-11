@@ -51,6 +51,7 @@ public:
     /// False when the plugin has no GUI or refused to open one; the caller
     /// should fall back to the generic parameter panel.
     bool isEmbedded() const { return m_embedded; }
+    bool requiresNativeSurface() const;
 
     /// Clear any maximized/full-screen state inherited from the main macOS
     /// Space and restore this editor as a bounded auxiliary window.
@@ -60,9 +61,9 @@ public:
     /// its final InternalEditorFrame and shown that frame. Calling winId()
     /// before that reparent can leave a plugin drawing into a dead NSView/HWND.
     ///
-    /// This first marks the complete, final parent chain as native. Qt requires
-    /// that chain for reliable stacking, clipping and input to an embedded
-    /// native child; it must happen before the frame is shown.
+    /// This first marks the final parent chain inside the editor frame as
+    /// native. The surrounding workspace must remain untouched so closing a
+    /// vendor editor cannot change the Qt Quick scene's native hierarchy.
     void prepareNativeHostHierarchy();
     void initializeEditor();
     bool isEditorInitialized() const { return m_editorReady; }

@@ -1,0 +1,24 @@
+ROUTING frames=32 run=0 actions=1000 cpu_ms=0.085 wall_ms=0.079 rebuilds=0
+ROUTING frames=32 run=1 actions=1000 cpu_ms=0.080 wall_ms=0.080 rebuilds=0
+ROUTING frames=32 run=2 actions=1000 cpu_ms=0.088 wall_ms=0.080 rebuilds=0
+ROUTING frames=32 run=3 actions=1000 cpu_ms=0.080 wall_ms=0.081 rebuilds=0
+ROUTING frames=32 run=4 actions=1000 cpu_ms=0.084 wall_ms=0.080 rebuilds=0
+ROUTING frames=32 run=5 actions=1000 cpu_ms=0.080 wall_ms=0.080 rebuilds=0
+ROUTING frames=32 run=6 actions=1000 cpu_ms=0.079 wall_ms=0.079 rebuilds=0
+CALLBACK frames=32 run=0 blocks=10000 cpu_ms=1498.549 wall_ms=239.148
+CALLBACK frames=32 run=1 blocks=10000 cpu_ms=1636.833 wall_ms=252.121
+CALLBACK frames=32 run=2 blocks=10000 cpu_ms=1568.988 wall_ms=249.447
+CALLBACK frames=32 run=3 blocks=10000 cpu_ms=1616.653 wall_ms=256.077
+CALLBACK frames=32 run=4 blocks=10000 cpu_ms=1494.703 wall_ms=241.577
+ROUTING frames=512 run=0 actions=1000 cpu_ms=0.086 wall_ms=0.081 rebuilds=0
+ROUTING frames=512 run=1 actions=1000 cpu_ms=0.079 wall_ms=0.079 rebuilds=0
+ROUTING frames=512 run=2 actions=1000 cpu_ms=0.078 wall_ms=0.079 rebuilds=0
+ROUTING frames=512 run=3 actions=1000 cpu_ms=0.079 wall_ms=0.079 rebuilds=0
+ROUTING frames=512 run=4 actions=1000 cpu_ms=0.079 wall_ms=0.079 rebuilds=0
+ROUTING frames=512 run=5 actions=1000 cpu_ms=0.080 wall_ms=0.079 rebuilds=0
+ROUTING frames=512 run=6 actions=1000 cpu_ms=0.081 wall_ms=0.080 rebuilds=0
+CALLBACK frames=512 run=0 blocks=10000 cpu_ms=3604.869 wall_ms=542.474
+CALLBACK frames=512 run=1 blocks=10000 cpu_ms=3515.918 wall_ms=556.382
+CALLBACK frames=512 run=2 blocks=10000 cpu_ms=3527.535 wall_ms=621.641
+CALLBACK frames=512 run=3 blocks=10000 cpu_ms=3566.686 wall_ms=547.951
+CALLBACK frames=512 run=4 blocks=10000 cpu_ms=3645.661 wall_ms=526.454

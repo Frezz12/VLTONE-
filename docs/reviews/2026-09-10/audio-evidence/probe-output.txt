@@ -1,0 +1,6 @@
+DEFAULT_TRACK enabled=0 monitor=1 output_peak=0.000000
+SELECT_INPUT_1 output_peak=0.250000
+MUTED_EXISTING_MONITOR recording=1 new_monitor=0 output_peak=0.000000
+MANUAL_MONITOR output_peak=0.250000
+ONE_INPUT_MENU_PICK graph_rebuilds=3
+CREATE_128_TRACKS ms=0.785 gated_blocks=1 silent_blocks=1 calls=32

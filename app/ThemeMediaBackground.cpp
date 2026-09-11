@@ -1,9 +1,17 @@
 #include "ThemeMediaBackground.hpp"
+#include "graphics/GraphicsPreferences.hpp"
+#include "graphics/MediaImageItem.hpp"
+#include "graphics/AnimatedImageDecoder.hpp"
+#include "graphics/SceneRecordingTag.hpp"
+#include "UiFrameClock.hpp"
+#include <QQmlComponent>
+#include <QImageReader>
 #include <QApplication>
 #include <QPointer>
 #include <QThreadPool>
+#include <QWidget>
+#include <QScreen>
 
-#include <QDateTime>
 #include <QImage>
 #include <QMediaPlayer>
 #include <QMovie>
@@ -17,6 +25,17 @@
 
 namespace ui {
 namespace {
+QThreadPool& mediaPool() {
+    static QThreadPool pool;
+    static const bool configured = [] {
+        pool.setMaxThreadCount(2);
+        pool.setThreadPriority(QThread::LowPriority);
+        pool.setExpiryTimeout(5000);
+        return true;
+    }();
+    Q_UNUSED(configured);
+    return pool;
+}
 
 QImage composeFrame(const QImage& source, const QSize& target,
                     timelinebackgroundprefs::Placement placement,
@@ -70,11 +89,18 @@ QImage composeFrame(const QImage& source, const QSize& target,
 
 } // namespace
 
-ThemeMediaBackground::ThemeMediaBackground(QObject* parent) : QObject(parent) {}
+ThemeMediaBackground::ThemeMediaBackground(QObject* parent) : graphics::QuickVisual(parent) {
+    m_gpu = graphics::gpuWorkspaceEnabled();
+    m_frameTime.start();
+    connect(&FrameClock::instance(), &FrameClock::preferenceChanged, this, &ThemeMediaBackground::gpuConfigurationChanged);
+    connect(&graphics::GraphicsPreferences::instance(), &graphics::GraphicsPreferences::effectiveQualityChanged,
+            this, [this] { rebuild(); });
+}
 
 ThemeMediaBackground::~ThemeMediaBackground() { clearDecoder(); }
 
 void ThemeMediaBackground::clearDecoder() {
+    if (m_animation) { delete m_animation; m_animation = nullptr; }
     if (m_movie) {
         m_movie->stop();
         delete m_movie;
@@ -90,10 +116,35 @@ void ThemeMediaBackground::clearDecoder() {
     m_videoSink = nullptr;
 }
 
+void ThemeMediaBackground::requestImage() {
+    if (m_imageLoading) { m_imagePending = true; return; }
+    if (timelinebackgroundprefs::mediaKind(m_path) != timelinebackgroundprefs::MediaKind::Image) return;
+    m_imageLoading = true; m_imagePending = false;
+    const QPointer<ThemeMediaBackground> guard(this);
+    const auto generation = m_sourceGeneration;
+    const auto path = m_path;
+    mediaPool().start([guard, generation, path] {
+        QImageReader reader(path);
+        const QSize original = reader.size();
+        if (qint64(original.width()) * original.height() > 16 * 1024 * 1024)
+            reader.setScaledSize(original.scaled(4096, 4096, Qt::KeepAspectRatio));
+        QImage image = reader.read();
+        QMetaObject::invokeMethod(qApp, [guard, generation, path, image] {
+            if (!guard) return;
+            guard->m_imageLoading = false;
+            if (guard->m_sourceGeneration == generation && guard->m_path == path)
+                guard->acceptSourceFrame(image, false);
+            if (guard && guard->m_imagePending) {
+                guard->m_imagePending = false;
+                guard->requestImage();
+            }
+        }, Qt::QueuedConnection);
+    });
+}
+
 void ThemeMediaBackground::setSource(const QString& path) {
-    if (!m_external && path == m_path) return;
+    if (path == m_path) return;
     clearDecoder();
-    m_external = false;
     ++m_sourceGeneration;
     ++m_generation;
     m_path = path;
@@ -104,43 +155,31 @@ void ThemeMediaBackground::setSource(const QString& path) {
 
     using namespace timelinebackgroundprefs;
     switch (mediaKind(path)) {
-    case MediaKind::Image: {
-        const QPointer<ThemeMediaBackground> guard(this);
-        const auto generation = m_sourceGeneration;
-        QThreadPool::globalInstance()->start([guard, generation, path] {
-            QImage image(path);
-            QMetaObject::invokeMethod(qApp, [guard, generation, path, image] {
-                if (guard && guard->m_sourceGeneration == generation && guard->m_path == path)
-                    guard->acceptSourceFrame(image, false);
-            }, Qt::QueuedConnection);
-        });
+    case MediaKind::Image:
+        requestImage();
         break;
-    }
     case MediaKind::AnimatedImage:
-        m_movie = new QMovie(path, QByteArray(), this);
-        // Retaining every high-resolution GIF frame is unnecessary for a
-        // wallpaper. The local source remains seekable when it loops.
-        m_movie->setCacheMode(QMovie::CacheNone);
-        connect(m_movie, &QMovie::frameChanged, this, [this](int) {
-            acceptSourceFrame(m_movie->currentImage(), true);
-            syncPlayback();
-        });
-        connect(m_movie, &QMovie::finished, this, [this] {
-            if (m_playRequested) m_movie->start();
-        });
-        // Decode one still frame even when motion is disabled.
-        m_movie->start();
+        m_animation = new graphics::AnimatedImageDecoder(this);
+        connect(m_animation, &graphics::AnimatedImageDecoder::frameReady, this,
+                [this](const QImage& image) { acceptSourceFrame(image, true); });
+        m_animation->setSource(path);
+        m_animation->setPlaying(m_playRequested);
         break;
     case MediaKind::Video:
+        if (m_gpu) break;
         m_videoSink = new QVideoSink(this);
         m_video = new QMediaPlayer(this);
         m_video->setVideoSink(m_videoSink);
         m_video->setLoops(QMediaPlayer::Infinite);
         connect(m_videoSink, &QVideoSink::videoFrameChanged, this,
                 [this](const QVideoFrame& videoFrame) {
-                    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                    const qint64 now = m_frameTime.elapsed();
+                    const int preferredFps = graphics::GraphicsPreferences::instance().backgroundFps();
+                    // This compatibility path still converts frames on CPU.
+                    // Preserve its previous ceiling until VideoOutput owns it.
+                    const int fps = preferredFps > 0 ? std::min(30, preferredFps) : 30;
                     if (!m_sourceFrame.isNull() &&
-                        now - m_lastVideoFrameMs < 33)
+                        now - m_lastVideoFrameMs < 1000. / fps)
                         return;
                     m_lastVideoFrameMs = now;
                     acceptSourceFrame(videoFrame.toImage(), true);
@@ -153,18 +192,8 @@ void ThemeMediaBackground::setSource(const QString& path) {
     case MediaKind::None:
         break;
     }
-}
-
-void ThemeMediaBackground::setExternalFrame(const QImage& frame, quint64 sourceId) {
-    if (frame.isNull()) return;
-    if (!m_external || m_externalSourceId != sourceId) {
-        clearDecoder();
-        m_external = true;
-        m_externalSourceId = sourceId;
-        ++m_sourceGeneration;
-        m_path.clear();
-    }
-    acceptSourceFrame(frame, true);
+    emit gpuConfigurationChanged();
+    if (m_gpu && videoSource()) emit frameChanged(false);
 }
 
 void ThemeMediaBackground::setTargetSize(const QSize& logicalSize,
@@ -199,6 +228,8 @@ void ThemeMediaBackground::setPlaying(bool playing) {
 }
 
 void ThemeMediaBackground::syncPlayback() {
+    emit gpuConfigurationChanged();
+    if (m_animation) m_animation->setPlaying(m_playRequested);
     if (m_movie) {
         if (m_playRequested) {
             if (m_movie->state() == QMovie::NotRunning)
@@ -220,12 +251,24 @@ void ThemeMediaBackground::syncPlayback() {
 void ThemeMediaBackground::acceptSourceFrame(const QImage& source,
                                              bool animatedFrame) {
     if (source.isNull()) return;
+    if (m_gpu && animatedFrame && !m_sourceFrame.isNull()) {
+        const int fps = frameLimit();
+        const qint64 now = m_frameTime.elapsed();
+        if (fps > 0 && now - m_lastVideoFrameMs < 1000. / fps) return;
+        m_lastVideoFrameMs = now;
+    }
+    const bool first = m_sourceFrame.isNull();
     m_sourceFrame = source;
-    rebuild(animatedFrame);
+    emit gpuFrameChanged();
+    if (m_gpu) {
+        if (first) emit frameChanged(false);
+    } else rebuild(animatedFrame);
 }
 
 void ThemeMediaBackground::rebuild(bool animatedFrame) {
     ++m_generation;
+    emit gpuConfigurationChanged();
+    if (m_gpu) return;
     m_pendingAnimated = animatedFrame;
     if (m_sourceFrame.isNull() || m_logicalSize.isEmpty()) {
         m_frame = {}; m_composePending = false;
@@ -239,19 +282,30 @@ void ThemeMediaBackground::rebuild(bool animatedFrame) {
     const auto logical = m_logicalSize;
     const auto source = m_sourceFrame;
     const auto placement = m_placement;
-    const auto dpr = m_devicePixelRatio;
+    const auto scale = graphics::GraphicsPreferences::instance().backgroundScale();
+    const auto dpr = m_devicePixelRatio * scale;
     const int blur = int(std::lround(m_blurRadius * dpr));
     const QSize pixels(std::max(1, int(std::ceil(m_logicalSize.width() * dpr))),
                        std::max(1, int(std::ceil(m_logicalSize.height() * dpr))));
     const QPointer<ThemeMediaBackground> guard(this);
-    QThreadPool::globalInstance()->start([guard, path, sourceGeneration, logical, source, pixels, placement, blur, dpr, animatedFrame] {
-        auto image = composeFrame(source, pixels, placement, blur);
-        QMetaObject::invokeMethod(qApp, [guard, path, sourceGeneration, logical, placement, blur, image = std::move(image), dpr, animatedFrame] {
+    mediaPool().start([guard, path, sourceGeneration, logical, source, pixels, placement, blur, dpr, scale, animatedFrame] {
+        auto decoration = source;
+        if (scale != 1. && (placement == timelinebackgroundprefs::Placement::Center ||
+                            placement == timelinebackgroundprefs::Placement::Tile)) {
+            // Quality changes texture density, not the apparent image size
+            // or repeat period. Fill/stretch already scale to the target.
+            decoration = source.scaled(QSize(std::max(1, int(std::lround(source.width() * scale))),
+                                              std::max(1, int(std::lround(source.height() * scale)))),
+                                       Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        }
+        auto image = composeFrame(decoration, pixels, placement, blur);
+        QMetaObject::invokeMethod(qApp, [guard, path, sourceGeneration, logical, placement, blur, image = std::move(image), dpr, scale, animatedFrame] {
             if (!guard) return;
             guard->m_composing = false;
-            if (guard->m_sourceGeneration == sourceGeneration &&
+            if (!guard->m_gpu && guard->m_sourceGeneration == sourceGeneration &&
                 guard->m_path == path && guard->m_logicalSize == logical &&
-                guard->m_placement == placement && guard->m_devicePixelRatio == dpr &&
+                guard->m_placement == placement && guard->m_devicePixelRatio * scale == dpr &&
+                graphics::GraphicsPreferences::instance().backgroundScale() == scale &&
                 int(std::lround(guard->m_blurRadius * dpr)) == blur) {
                 guard->m_frame = QPixmap::fromImage(image);
                 guard->m_frame.setDevicePixelRatio(dpr);
@@ -260,6 +314,56 @@ void ThemeMediaBackground::rebuild(bool animatedFrame) {
             if (guard->m_composePending) guard->rebuild(guard->m_pendingAnimated);
         }, Qt::QueuedConnection);
     });
+}
+
+QUrl ThemeMediaBackground::sourceUrl() const { return QUrl::fromLocalFile(m_path); }
+bool ThemeMediaBackground::videoSource() const {
+    return timelinebackgroundprefs::mediaKind(m_path) == timelinebackgroundprefs::MediaKind::Video;
+}
+double ThemeMediaBackground::textureScale() const { return graphics::GraphicsPreferences::instance().backgroundScale(); }
+int ThemeMediaBackground::frameLimit() const {
+    const int quality = graphics::GraphicsPreferences::instance().backgroundFps();
+    const auto& clock = FrameClock::instance();
+    const auto* widget = qobject_cast<QWidget*>(parent());
+    const auto* screen = widget ? widget->screen() : QGuiApplication::primaryScreen();
+    const double hz = screen ? screen->refreshRate() : 60.;
+    const int displayCap = std::isfinite(hz) && hz > 0 ? int(std::ceil(hz)) : 60;
+    const int cap = clock.mode() == FrameMode::Fixed ? clock.limit() :
+                    clock.mode() == FrameMode::Display ? displayCap : 0;
+    return quality && cap ? std::min(quality, cap) : std::max(quality, cap);
+}
+void ThemeMediaBackground::setCornerRadius(int radius) {
+    if (m_cornerRadius == radius) return;
+    m_cornerRadius = radius; emit gpuConfigurationChanged();
+}
+void ThemeMediaBackground::setGpuPresentation(bool enabled) {
+    if (m_gpu == enabled) return;
+    m_gpu = enabled;
+    if (videoSource()) {
+        const auto path = m_path;
+        m_path.clear();
+        setSource(path);
+    } else rebuild();
+}
+void ThemeMediaBackground::paint(QPainter& painter, const QRectF& bounds) {
+    setGpuPresentation(graphics::isSceneRecording(painter));
+    if (m_gpu) paintVisual(painter, bounds);
+    else painter.drawPixmap(bounds.topLeft(), m_frame);
+}
+QQuickItem* ThemeMediaBackground::createItem(QQmlEngine* engine, QQuickItem* parent) {
+    graphics::registerMediaImageItem();
+    setGpuPresentation(true);
+    QQmlComponent component(engine, QUrl(QStringLiteral("qrc:/vlt/graphics/MediaBackground.qml")));
+    auto* item = qobject_cast<QQuickItem*>(component.createWithInitialProperties(
+        {{QStringLiteral("media"), QVariant::fromValue(static_cast<QObject*>(this))}}));
+    if (!item) { qWarning() << component.errors(); return nullptr; }
+    QQmlEngine::setObjectOwnership(item, QQmlEngine::CppOwnership);
+    item->setParent(parent); item->setParentItem(parent);
+    return item;
+}
+void ThemeMediaBackground::releaseItem(QQuickItem*) {
+    // Retain the raw decoder/image while hidden. Compatibility painting calls
+    // setGpuPresentation(false) if the window falls back, without losing prefs.
 }
 
 bool checkThemeMediaBackgroundForTest(QString* error) {

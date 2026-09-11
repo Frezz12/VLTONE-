@@ -383,7 +383,7 @@ audio::Result EngineController::renderProjectPass(
 
     // ── Sample rate ──
     if (std::abs(targetRate - m_sampleRate) > 0.01) {
-        applyRenderSampleRate(targetRate);
+        if (auto prepared = applyRenderSampleRate(targetRate); !prepared) return prepared;
     }
 
     // ── Taps ──
@@ -686,7 +686,8 @@ audio::Result EngineController::renderProjectPass(
     return audio::Result::ok();
 }
 
-void EngineController::applyRenderSampleRate(double rate) {
+audio::Result EngineController::applyRenderSampleRate(double rate) {
+    const double previousPosition = positionSeconds();
     // Clip audio is converted to the session rate once, when it is decoded, and
     // then cached by path. Changing the rate without dropping those caches would
     // render every clip at the wrong speed — the reason this is a helper and not
@@ -695,9 +696,14 @@ void EngineController::applyRenderSampleRate(double rate) {
     m_clipSampleCache.clear();
     m_sharedClipSampleCache.clear();
     m_sampleRate = rate;
-    m_engine.prepare(m_sampleRate, m_bufferSize, 2);
+    if (auto prepared = m_engine.prepare(m_sampleRate, m_bufferSize, 2); !prepared)
+        return audio::Result::fail(audio::EngineError::InvalidArgument,
+            std::string(engine::describe(prepared.error())));
+    m_engine.transport().seek(toSamples(previousPosition));
+    m_recorder->shutdown();
     m_recorder->initialize(m_sampleRate, 2);
     updateTimelineDuration();
+    return audio::Result::ok();
 }
 
 } // namespace daw

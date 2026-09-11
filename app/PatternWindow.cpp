@@ -1,3 +1,4 @@
+#include "graphics/ScenePaintSource.hpp"
 #include "PatternWindow.hpp"
 
 #include "Controls.hpp"
@@ -238,7 +239,7 @@ QColor rgb(uint32_t value) {
 /// One row's miniature arrangement. It deliberately draws every MIDI clip on
 /// the source, rather than mirroring only the first clip, so the Pattern stays
 /// useful as a structural overview after it grows beyond a one-bar loop.
-class SourceSketch final : public QAbstractButton {
+class SourceSketch final : public QAbstractButton, public ui::graphics::ScenePaintSource {
 public:
     SourceSketch(daw::EngineController* controller, QString trackId,
                  QWidget* parent)
@@ -261,8 +262,8 @@ public:
     }
 
 protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter p(this);
+    void paintEvent(QPaintEvent*) override { QPainter p(this); paintScene(p, QRegion(rect())); }
+    void paintScene(QPainter& p, const QRegion&) override {
         p.setRenderHint(QPainter::Antialiasing, true);
         const Theme& t = th();
         const auto* track = m_controller

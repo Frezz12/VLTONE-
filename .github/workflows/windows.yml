@@ -51,9 +51,9 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_64
-          modules: "qtmultimedia qtwebengine qtwebchannel qtpositioning qtserialport qtwebsockets"
+          modules: "qtmultimedia qtwebengine qtwebchannel qtpositioning qtserialport qtwebsockets qtshadertools"
           cache: true
-          cache-key-prefix: windows-qt-complete-v2
+          cache-key-prefix: windows-qt-complete-v3-shadertools
 
       - name: Locate Qt and Inno Setup
         shell: pwsh

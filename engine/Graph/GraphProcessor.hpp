@@ -74,6 +74,9 @@ public:
     bool popProfile(unsigned worker, rt::ProfileEvent& event) noexcept { return m_jobs.popProfile(worker, event); }
     std::uint64_t droppedProfileEvents() const noexcept { return m_jobs.droppedProfileEvents(); }
     FrameCount latencySamples() const;
+    // Renderer only: latency of the snapshot actually used by the last pass.
+    // Unlike latencySamples(), this does not acquire the control-side mutex.
+    FrameCount lastBlockLatencySamples() const noexcept { return m_lastBlockLatency; }
 
 private:
     static void executeJob(void* context, std::uint32_t nodeIndex,
@@ -112,6 +115,7 @@ private:
     // Per-block state, written by the renderer before the pass opens and read
     // by every worker inside it.
     FrameCount m_frames = 0;
+    FrameCount m_lastBlockLatency = 0;
     SamplePos m_position = 0;
     bool m_playing = false;
     bool m_offline = false;

@@ -5,7 +5,9 @@
 #include "UiConstants.hpp"
 
 #include <QAbstractButton>
+#include <QEnterEvent>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QKeyEvent>
 #include <QLinearGradient>
 #include <QMouseEvent>
@@ -13,6 +15,7 @@
 #include <QResizeEvent>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QSlider>
 #include <QToolButton>
 
 #include <algorithm>
@@ -20,6 +23,173 @@
 #include <functional>
 
 namespace {
+
+constexpr int kCompactZoomSteps = 100;
+constexpr double kMinTimelineZoom = 4.0;
+constexpr double kMaxTimelineZoom = 1200.0;
+
+double timelineZoomForSlider(int value) {
+    const double position = std::clamp(value, 0, kCompactZoomSteps) /
+                            double(kCompactZoomSteps);
+    return kMinTimelineZoom *
+           std::pow(kMaxTimelineZoom / kMinTimelineZoom, position);
+}
+
+int sliderForTimelineZoom(double pixelsPerSecond) {
+    const double zoom = std::clamp(pixelsPerSecond, kMinTimelineZoom,
+                                   kMaxTimelineZoom);
+    const double position =
+        std::log(zoom / kMinTimelineZoom) /
+        std::log(kMaxTimelineZoom / kMinTimelineZoom);
+    return int(std::lround(position * kCompactZoomSteps));
+}
+
+void paintInsetScrubber(QPainter& painter, const QWidget* control,
+                        bool pressed) {
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const Theme& theme = th();
+    const QRectF plate = QRectF(control->rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    const qreal radius = 6.0;
+
+    // A small well cut into the toolbar: the cluster has no surrounding plate,
+    // so each icon reads as a direct manipulation handle rather than a slider.
+    QLinearGradient bed(plate.topLeft(), plate.bottomLeft());
+    bed.setColorAt(0.0, mixColors(theme.well(), QColor(0, 0, 0),
+                                  theme.dark ? 0.34 : 0.12));
+    bed.setColorAt(1.0, mixColors(theme.well(), theme.surfaceElevated,
+                                  pressed ? 0.02 : 0.12));
+    painter.setBrush(bed);
+    painter.setPen(QPen(mixColors(theme.separator(), QColor(0, 0, 0),
+                                  theme.dark ? 0.24 : 0.08), 1.0));
+    painter.drawRoundedRect(plate, radius, radius);
+
+    QColor innerShadow(0, 0, 0, pressed ? 92 : 58);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(innerShadow, 1.0));
+    painter.drawLine(QPointF(plate.left() + radius, plate.top() + 1.25),
+                     QPointF(plate.right() - radius, plate.top() + 1.25));
+    painter.drawLine(QPointF(plate.left() + 1.25, plate.top() + radius),
+                     QPointF(plate.left() + 1.25, plate.bottom() - radius));
+    QColor lowerEdge = theme.textPrimary;
+    lowerEdge.setAlpha(theme.dark ? 16 : 28);
+    painter.setPen(QPen(lowerEdge, 1.0));
+    painter.drawLine(QPointF(plate.left() + radius, plate.bottom() - 1.25),
+                     QPointF(plate.right() - radius, plate.bottom() - 1.25));
+    if (control->underMouse() || control->hasFocus()) {
+        QColor edge = theme.accent;
+        edge.setAlpha(pressed ? 150 : 82);
+        painter.setPen(QPen(edge, 1.0));
+        painter.drawRoundedRect(plate.adjusted(1.0, 1.0, -1.0, -1.0),
+                                radius - 1.0, radius - 1.0);
+    }
+}
+
+class TimelineScrubButton final : public QSlider {
+public:
+    enum class Axis { Horizontal, Vertical };
+
+    TimelineScrubButton(icons::Glyph glyph, Axis axis, int resetValue,
+                        QWidget* parent)
+        : QSlider(Qt::Horizontal, parent), m_glyph(glyph), m_axis(axis),
+          m_resetValue(resetValue) {
+        setFixedSize(28, 24);
+        setCursor(axis == Axis::Vertical ? Qt::SizeVerCursor
+                                        : Qt::SizeHorCursor);
+        setFocusPolicy(Qt::StrongFocus);
+        setMouseTracking(true);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        paintInsetScrubber(painter, this, isSliderDown());
+        const QColor ink = isSliderDown() ? th().accent : th().textSecondary;
+        icons::paint(painter, m_glyph,
+                     QRectF(rect()).adjusted(5.0, 3.0, -5.0, -3.0), ink);
+    }
+
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() != Qt::LeftButton) {
+            QSlider::mousePressEvent(event);
+            return;
+        }
+        m_positionAccumulator = sliderPosition();
+        m_cursorDrag.begin(event->globalPosition());
+        setFocus(Qt::MouseFocusReason);
+        setSliderDown(true);
+        event->accept();
+        update();
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override {
+        if (!isSliderDown()) return;
+        if (!(event->buttons() & Qt::LeftButton)) {
+            m_cursorDrag.cancel();
+            setSliderDown(false);
+            update();
+            return;
+        }
+        applyPointerDelta(m_cursorDrag.takeDelta(event->globalPosition()),
+                          event->modifiers());
+        event->accept();
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override {
+        if (event->button() != Qt::LeftButton || !isSliderDown()) return;
+        applyPointerDelta(m_cursorDrag.finish(event->globalPosition()),
+                          event->modifiers());
+        setSliderDown(false);
+        event->accept();
+        update();
+    }
+
+    void hideEvent(QHideEvent* event) override {
+        m_cursorDrag.cancel();
+        if (isSliderDown()) setSliderDown(false);
+        QSlider::hideEvent(event);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* event) override {
+        if (event->button() != Qt::LeftButton) {
+            QSlider::mouseDoubleClickEvent(event);
+            return;
+        }
+        setValue(m_resetValue);
+        event->accept();
+    }
+
+    void enterEvent(QEnterEvent* event) override {
+        QSlider::enterEvent(event);
+        update();
+    }
+
+    void leaveEvent(QEvent* event) override {
+        QSlider::leaveEvent(event);
+        update();
+    }
+
+private:
+    bool applyPointerDelta(const QPointF& delta,
+                           Qt::KeyboardModifiers modifiers) {
+        const double moved = (m_axis == Axis::Vertical ? -delta.y()
+                                                       : delta.x());
+        if (std::abs(moved) < 1.0e-9) return false;
+        const double throwPixels = modifiers & Qt::ShiftModifier
+                                       ? 360.0 : 90.0;
+        m_positionAccumulator = std::clamp(
+            m_positionAccumulator + moved / throwPixels *
+                                        double(maximum() - minimum()),
+            double(minimum()), double(maximum()));
+        setSliderPosition(int(std::lround(m_positionAccumulator)));
+        return true;
+    }
+
+    icons::Glyph m_glyph;
+    Axis m_axis = Axis::Horizontal;
+    int m_resetValue = 0;
+    double m_positionAccumulator = 0.0;
+    ui::LockedCursorDrag m_cursorDrag;
+};
 
 class WaveformScaleButton final : public ui::IconButton {
 public:
@@ -34,15 +204,23 @@ public:
         setObjectName(QStringLiteral("WaveformScaleButton"));
         setAccessibleName(QObject::tr("Waveform display height"));
         setFocusPolicy(Qt::StrongFocus);
+        setButtonSize(28, 24);
+        setCursor(Qt::SizeVerCursor);
     }
 
 protected:
+    void paintEvent(QPaintEvent* event) override {
+        {
+            QPainter painter(this);
+            paintInsetScrubber(painter, this, m_dragging || isDown());
+        }
+        ui::IconButton::paintEvent(event);
+    }
+
     void mousePressEvent(QMouseEvent* event) override {
         if (event->button() == Qt::LeftButton) {
             m_dragging = true;
-            m_startY = event->globalPosition().y();
-            m_startValue = m_value;
-            setCursor(Qt::SizeVerCursor);
+            m_cursorDrag.begin(event->globalPosition());
         }
         ui::IconButton::mousePressEvent(event);
     }
@@ -52,8 +230,20 @@ protected:
             ui::IconButton::mouseMoveEvent(event);
             return;
         }
-        setValue(m_startValue *
-                 std::pow(2.0, (m_startY - event->globalPosition().y()) / 80.0));
+        if (!(event->buttons() & Qt::LeftButton)) {
+            m_cursorDrag.cancel();
+            m_dragging = false;
+            setDown(false);
+            ui::ValueBubble::dismiss();
+            update();
+            return;
+        }
+        const bool moved =
+            applyPointerDelta(m_cursorDrag.takeDelta(event->globalPosition()));
+        if (!moved) {
+            event->accept();
+            return;
+        }
         ui::ValueBubble::showFor(
             this, rect().center(),
             QObject::tr("Waveform %1%").arg(int(std::lround(m_value * 100.0))));
@@ -62,12 +252,21 @@ protected:
 
     void mouseReleaseEvent(QMouseEvent* event) override {
         const bool wasDragging = m_dragging;
+        if (wasDragging)
+            applyPointerDelta(m_cursorDrag.finish(event->globalPosition()));
         m_dragging = false;
         if (wasDragging) {
             ui::ValueBubble::dismiss();
-            setCursor(Qt::PointingHandCursor);
+            setCursor(Qt::SizeVerCursor);
         }
         ui::IconButton::mouseReleaseEvent(event);
+    }
+
+    void hideEvent(QHideEvent* event) override {
+        m_cursorDrag.cancel();
+        m_dragging = false;
+        ui::ValueBubble::dismiss();
+        ui::IconButton::hideEvent(event);
     }
 
     void mouseDoubleClickEvent(QMouseEvent* event) override {
@@ -94,17 +293,22 @@ protected:
     }
 
 private:
-    void setValue(double value) {
+    bool applyPointerDelta(const QPointF& delta) {
+        if (std::abs(delta.y()) < 1.0e-9) return false;
+        return setValue(m_value * std::pow(2.0, -delta.y() / 80.0));
+    }
+
+    bool setValue(double value) {
         const double next = std::clamp(value, 0.25, 4.0);
-        if (std::abs(next - m_value) < 1.0e-9) return;
+        if (std::abs(next - m_value) < 1.0e-9) return false;
         m_value = next;
         if (m_change) m_change(m_value);
+        return true;
     }
 
     Change m_change;
     double m_value = 1.0;
-    double m_startValue = 1.0;
-    double m_startY = 0.0;
+    ui::LockedCursorDrag m_cursorDrag;
     bool m_dragging = false;
 };
 
@@ -112,8 +316,8 @@ private:
 
 ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     setObjectName("ToolPanel");
-    // Tall enough to hold the context-panel island with its shadow: a child
-    // can't paint outside its parent, so the strip has to make room.
+    // Keep the context panel's existing animation envelope so switching
+    // contexts never changes the surrounding workspace geometry.
     setFixedHeight(44);
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             QOverload<>::of(&QWidget::update));
@@ -228,20 +432,9 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     connect(m_followPlayhead, &QAbstractButton::toggled, this,
             &ToolPanel::followPlayheadToggled);
 
-    m_zoomFocus = new ui::IconButton(
-        icons::Glyph::Crosshair,
-        tr("Zoom focus: selected clips, otherwise the playhead; turn off to zoom under the pointer"),
-        m_trackActions);
-    m_zoomFocus->setObjectName(QStringLiteral("ZoomFocusButton"));
-    m_zoomFocus->setCheckable(true);
-    m_zoomFocus->setAccessibleName(
-        tr("Centre zoom on selected clips or the playhead"));
-    connect(m_zoomFocus, &QAbstractButton::toggled, this,
-            &ToolPanel::zoomFocusToggled);
-
     for (ui::IconButton* button : {m_restart, m_playFromClip,
                                    m_createAutomation, m_showAutomation,
-                                   m_followPlayhead, m_zoomFocus}) {
+                                   m_followPlayhead}) {
         button->setButtonSize(22, 22);
         actions->addWidget(button);
     }
@@ -253,20 +446,90 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
 
     row->addWidget(ui::separatorLine(Qt::Vertical, 18, this));
 
-    // Timeline zone: the context island travels through its centre. The far
-    // edge holds a display-only vertical zoom for audio waveforms.
-    auto* timelineZone = new QWidget(this);
-    auto* timelineLayout = new QHBoxLayout(timelineZone);
+    // Timeline zone: the context island travels through its centre. Its far
+    // edge is a stable utility rail: waveform height first, then track height
+    // and horizontal zoom, matching the visual order of what they affect.
+    m_timelineZone = new QWidget(this);
+    auto* timelineLayout = new QHBoxLayout(m_timelineZone);
     timelineLayout->setContentsMargins(2, 0, 2, 0);
     timelineLayout->setSpacing(2);
     timelineLayout->addStretch(1);
     m_waveformScale = new WaveformScaleButton(
-        [this](double scale) { emit waveformScaleChanged(scale); }, timelineZone);
+        [this](double scale) { emit waveformScaleChanged(scale); }, m_timelineZone);
     auto waveformPolicy = m_waveformScale->sizePolicy();
     waveformPolicy.setRetainSizeWhenHidden(true);
     m_waveformScale->setSizePolicy(waveformPolicy);
     timelineLayout->addWidget(m_waveformScale);
-    row->addWidget(timelineZone, 1);
+
+    m_timelineSliders = new QWidget(m_timelineZone);
+    m_timelineSliders->setObjectName(QStringLiteral("TimelineSliderCluster"));
+    auto* sliderRow = new QHBoxLayout(m_timelineSliders);
+    sliderRow->setContentsMargins(0, 0, 0, 0);
+    sliderRow->setSpacing(2);
+
+    m_trackHeightSlider = new TimelineScrubButton(
+        icons::Glyph::ResizeVertical, TimelineScrubButton::Axis::Vertical,
+        ui::kLaneHeight, m_timelineSliders);
+    m_trackHeightSlider->setObjectName(QStringLiteral("TimelineTrackHeightSlider"));
+    m_trackHeightSlider->setRange(ui::kMinLaneHeight, 180);
+    m_trackHeightSlider->setValue(ui::kLaneHeight);
+    m_trackHeightSlider->setSingleStep(2);
+    m_trackHeightSlider->setPageStep(12);
+    m_trackHeightSlider->setAccessibleName(tr("Timeline track height"));
+    m_trackHeightSlider->setToolTip(
+        tr("Track height: drag the icon up or down; double-click resets"));
+    sliderRow->addWidget(m_trackHeightSlider);
+    auto* sliderDivider = ui::separatorLine(Qt::Vertical, 18, m_timelineSliders);
+    sliderDivider->setObjectName(QStringLiteral("TimelineSliderDivider"));
+    sliderRow->addWidget(sliderDivider);
+
+    const int defaultZoomValue = sliderForTimelineZoom(80.0);
+    m_timelineZoomSlider = new TimelineScrubButton(
+        icons::Glyph::ResizeHorizontal, TimelineScrubButton::Axis::Horizontal,
+        defaultZoomValue, m_timelineSliders);
+    m_timelineZoomSlider->setObjectName(QStringLiteral("TimelineZoomSlider"));
+    m_timelineZoomSlider->setRange(0, kCompactZoomSteps);
+    m_timelineZoomSlider->setValue(defaultZoomValue);
+    m_timelineZoomSlider->setSingleStep(1);
+    m_timelineZoomSlider->setPageStep(8);
+    m_timelineZoomSlider->setAccessibleName(tr("Timeline horizontal zoom"));
+    m_timelineZoomSlider->setToolTip(
+        tr("Timeline zoom: drag the icon left or right; double-click resets"));
+    sliderRow->addWidget(m_timelineZoomSlider);
+    timelineLayout->addWidget(m_timelineSliders);
+    row->addWidget(m_timelineZone, 1);
+
+    connect(m_trackHeightSlider, &QSlider::sliderPressed, this, [this] {
+        m_trackHeightDragging = true;
+        emit trackHeightEditStarted();
+    });
+    connect(m_trackHeightSlider, &QSlider::valueChanged, this, [this](int value) {
+        const bool oneShot = !m_trackHeightDragging;
+        if (oneShot) emit trackHeightEditStarted();
+        emit trackHeightChanged(value);
+        if (oneShot) emit trackHeightEditFinished();
+    });
+    connect(m_trackHeightSlider, &QSlider::sliderMoved, this, [this](int value) {
+        ui::ValueBubble::showFor(
+            m_trackHeightSlider, m_trackHeightSlider->rect().center(),
+            tr("Tracks %1 px").arg(value));
+    });
+    connect(m_trackHeightSlider, &QSlider::sliderReleased, this, [this] {
+        m_trackHeightDragging = false;
+        ui::ValueBubble::dismiss();
+        emit trackHeightEditFinished();
+    });
+    connect(m_timelineZoomSlider, &QSlider::valueChanged, this, [this](int value) {
+        emit timelineZoomChanged(timelineZoomForSlider(value));
+    });
+    connect(m_timelineZoomSlider, &QSlider::sliderMoved, this, [this](int value) {
+        const double relative = timelineZoomForSlider(value) / 80.0;
+        ui::ValueBubble::showFor(
+            m_timelineZoomSlider, m_timelineZoomSlider->rect().center(),
+            tr("Zoom %1×").arg(relative, 0, 'f', relative < 1.0 ? 2 : 1));
+    });
+    connect(m_timelineZoomSlider, &QSlider::sliderReleased,
+            this, [] { ui::ValueBubble::dismiss(); });
 
     // Past the stretch, so it sits over the assistant column at the far right.
     moveAiZoneLast();
@@ -301,12 +564,6 @@ void ToolPanel::setFollowPlayhead(bool on) {
     m_followPlayhead->setChecked(on);
 }
 
-void ToolPanel::setZoomFocusEnabled(bool on) {
-    if (!m_zoomFocus || m_zoomFocus->isChecked() == on) return;
-    QSignalBlocker blocker(m_zoomFocus);
-    m_zoomFocus->setChecked(on);
-}
-
 void ToolPanel::setAutomationVisible(bool visible) {
     if (!m_showAutomation || m_showAutomation->isChecked() == visible) return;
     QSignalBlocker blocker(m_showAutomation);
@@ -323,6 +580,18 @@ void ToolPanel::setAutomationCreationShortcut(const QString& shortcut) {
     QString tip = tr("Create automation: click to enable, then double-click a parameter");
     if (!shortcut.isEmpty()) tip += QStringLiteral(" (%1)").arg(shortcut);
     m_createAutomation->setToolTip(tip);
+}
+
+void ToolPanel::setTrackHeightValue(int height) {
+    if (!m_trackHeightSlider) return;
+    const QSignalBlocker blocker(m_trackHeightSlider);
+    m_trackHeightSlider->setValue(height);
+}
+
+void ToolPanel::setTimelineZoom(double pixelsPerSecond) {
+    if (!m_timelineZoomSlider) return;
+    const QSignalBlocker blocker(m_timelineZoomSlider);
+    m_timelineZoomSlider->setValue(sliderForTimelineZoom(pixelsPerSecond));
 }
 
 void ToolPanel::setInspectorVisible(bool) {}
@@ -383,28 +652,9 @@ void ToolPanel::setBrowserOnLeft(bool onLeft) {
     moveAiZoneLast();
 }
 
-void ToolPanel::paintEvent(QPaintEvent*) {
-    // The header is a plate above this strip, not a band printed on the same
-    // sheet. A short cast shadow along the top edge is what makes the workspace
-    // read as sitting *under* the transport: without it the two fuse into one
-    // field of the same grey and the window loses its top storey.
-    QPainter p(this);
-    const Theme& t = th();
-    constexpr int kDepth = 10;
-    QColor ink = t.dark ? QColor(0, 0, 0)
-                        : mixColors(t.surface, QColor(10, 14, 22), 0.86);
-    QLinearGradient cast(0, 0, 0, kDepth);
-    ink.setAlpha(t.dark ? 82 : 66);
-    cast.setColorAt(0.0, ink);
-    ink.setAlpha(t.dark ? 24 : 20);
-    cast.setColorAt(0.45, ink);
-    ink.setAlpha(0);
-    cast.setColorAt(1.0, ink);
-    p.fillRect(QRect(0, 0, width(), kDepth), cast);
-}
-
 void ToolPanel::resizeEvent(QResizeEvent* ev) {
     QWidget::resizeEvent(ev);
+    updateTimelineSliderVisibility();
     emit resized();
 }
 
@@ -445,12 +695,21 @@ void ToolPanel::updateWaveformVisibility(QWidget* changingPanel, bool showing) {
     m_waveformScale->setVisible(!crowded);
 }
 
+void ToolPanel::updateTimelineSliderVisibility() {
+    if (!m_timelineZone || !m_timelineSliders) return;
+    // The compact icon pair is secondary chrome. Hysteresis avoids a splitter
+    // sitting on the threshold making them flicker in and out.
+    const int threshold = m_timelineSliders->isHidden() ? 280 : 240;
+    m_timelineSliders->setVisible(m_timelineZone->width() >= threshold);
+}
+
 bool ToolPanel::event(QEvent* event) {
     const bool handled = QWidget::event(event);
     if (event->type() == QEvent::LayoutRequest) {
         // Sidebar/track-zone widths can change without resizing this strip.
         // Notify after Qt has positioned the reserved waveform slot.
         if (m_row) m_row->activate();
+        updateTimelineSliderVisibility();
         emit resized();
         updateWaveformVisibility();
     }
@@ -474,8 +733,9 @@ void ToolPanel::applyTheme() {
         m_followPlayhead->setIcon(
             icons::svgIcon(QStringLiteral("signpost.svg"), t.textPrimary, 18));
     }
-    if (m_zoomFocus) m_zoomFocus->setActiveColor(t.cursor);
-    setStyleSheet(QString(
-        "#ToolPanel { background: %1; border-bottom: 1px solid %2; }")
-                      .arg(t.headerBackground.name(), t.sectionDivider().name()));
+    setStyleSheet(QString(R"(
+#ToolPanel { background: %1; border-bottom: 1px solid %2; }
+#TimelineSliderCluster { background: transparent; border: none; }
+)")
+        .arg(t.headerBackground.name(), t.sectionDivider().name()));
 }

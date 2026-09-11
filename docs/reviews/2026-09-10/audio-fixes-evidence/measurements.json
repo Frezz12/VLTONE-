@@ -1,0 +1,46 @@
+[
+  {
+    "operation": "ROUTING",
+    "frames": 32,
+    "before_samples": 21,
+    "after_samples": 21,
+    "before_cpu_ms": 149.268,
+    "after_cpu_ms": 0.086,
+    "cpu_reduction_percent": 99.94238550794545,
+    "before_wall_ms": 156.254,
+    "after_wall_ms": 0.085
+  },
+  {
+    "operation": "ROUTING",
+    "frames": 512,
+    "before_samples": 21,
+    "after_samples": 21,
+    "before_cpu_ms": 153.355,
+    "after_cpu_ms": 0.086,
+    "cpu_reduction_percent": 99.94392096768935,
+    "before_wall_ms": 154.536,
+    "after_wall_ms": 0.086
+  },
+  {
+    "operation": "CALLBACK",
+    "frames": 32,
+    "before_samples": 15,
+    "after_samples": 15,
+    "before_cpu_ms": 1474.07,
+    "after_cpu_ms": 1328.571,
+    "cpu_reduction_percent": 9.870562456328402,
+    "before_wall_ms": 333.964,
+    "after_wall_ms": 321.192
+  },
+  {
+    "operation": "CALLBACK",
+    "frames": 512,
+    "before_samples": 15,
+    "after_samples": 15,
+    "before_cpu_ms": 3198.072,
+    "after_cpu_ms": 2974.13,
+    "cpu_reduction_percent": 7.002406449886056,
+    "before_wall_ms": 710.204,
+    "after_wall_ms": 1247.97
+  }
+]

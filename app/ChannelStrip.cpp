@@ -628,7 +628,7 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
                 if (const auto* track = m_controller->project().findTrack(id))
                     m_panGestureStart = track->pan;
             }
-            m_controller->setTrackPanLive(id, float(v));
+            m_controller->setTrackPanGestureSample(id, float(v));
         }
         m_panLabel->setText(panText(v));
     });
@@ -1681,11 +1681,8 @@ void ChannelStrip::populateInputMenu(QMenu* menu) {
     const auto inputDevice = m_controller->currentInputDeviceInfo();
     const int channels = int(inputDevice.inputChannels);
     const auto pick = [this](int first, int count, const QString& label) {
-        m_controller->setTrackInputChannel(m_trackId.toStdString(),
-                                           uint32_t(first));
-        m_controller->setTrackInputChannelCount(m_trackId.toStdString(),
-                                                uint32_t(count));
-        m_controller->setTrackInputEnabled(m_trackId.toStdString(), true);
+        m_controller->setTrackInputRouting(m_trackId.toStdString(),
+                                           uint32_t(first), uint32_t(count), true);
         m_inputButton->setFieldText(label);
         emit edited();
     };
@@ -1814,7 +1811,7 @@ QWidget* ChannelStrip::buildFaderRow() {
                 if (const auto* track = m_controller->project().findTrack(id))
                     m_volumeGestureStart = track->volume;
             }
-            m_controller->setTrackVolumeLive(id, float(g));
+            m_controller->setTrackVolumeGestureSample(id, float(g));
         }
         m_gainLabel->setText(ui::formatGainDb(g));
     });

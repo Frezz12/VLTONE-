@@ -1,0 +1,1352 @@
+COMMAND: ['ctest', '--test-dir', 'build', '-V', '-R', '^(controller_test|recording_preview_test|waveform_paint_test|ui_frame_clock_test|engine_graph_test|platform_test|recording_commit_planner_test|audio_realtime_test|miditools_test)$']
+UpdateCTestConfiguration  from :/Users/nikolay/Documents/code/VLTONE/VLTONE-/build/DartConfiguration.tcl
+Test project /Users/nikolay/Documents/code/VLTONE/VLTONE-/build
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 1
+    Start  1: platform_test
+
+1: Test command: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/bin/platform_test
+1: Working Directory: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/tests
+1: Test timeout computed to be: 10000000
+1: PASS  writes a WAV file
+1: PASS  initializes the realtime WAV recorder
+1: PASS  starts a realtime WAV capture
+1: PASS  in-flight accounting is capture-only, not a durability claim
+1: PASS  Stop confirms exact captured/written/dropped frame accounting
+1: PASS  libsndfile decodes the WAV
+1: PASS  decoded channel count is correct
+1: PASS  decoded sample rate is correct
+1: PASS  decoded frame count is correct
+1: PASS  decoded L and R are opposite as written
+1: PASS  decoded audio is non-trivial
+1: PASS  sample buffer built from the decoder output
+1: PASS  sample buffer keeps the file's geometry
+1: PASS  sample buffer keeps the file's rate
+1: PASS  sample buffer carries the tone
+1: PASS  accepts .wav
+1: PASS  accepts .flac
+1: PASS  accepts .aiff
+1: PASS  accepts .m4a through native codecs
+1: PASS  accepts .mp4a alias
+1: PASS  rejects .txt
+1: PASS  the decodable list is not empty
+1: PASS  every listed extension is accepted by the predicate
+1: PASS  probing a WAV succeeds
+1: PASS  the probe reports the file's geometry
+1: PASS  and its duration
+1: PASS  probing a file that is not there fails rather than guessing
+1: PASS  libsndfile writes probe.caf
+1: PASS  and decodes probe.caf — so the shared list may offer it
+1: PASS  libsndfile writes probe.w64
+1: PASS  and decodes probe.w64 — so the shared list may offer it
+1: INFO  PortAudio sees 0 output, 0 input device(s)
+1: PASS  enumerating devices does not crash
+1:
+1: ALL PASSED
+1/9 Test  #1: platform_test ....................   Passed    1.74 sec
+test 8
+    Start  8: controller_test
+
+8: Test command: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/bin/controller_test
+8: Working Directory: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/tests
+8: Test timeout computed to be: 10000000
+8: PASS  empty routing ID is master, not a track
+8: PASS  track index handles known and missing IDs
+8: PASS  track index detects indexed reorder
+8: PASS  batch ID replacement invalidates the track lookup index
+8: PASS  track deletion invalidates index size
+8: PASS  managed structure cache exposes expanded child
+8: PASS  structure revision invalidates folded rows
+8: PASS  editable document copies do not inherit a managed cache contract
+8: PASS  metadata snapshots do not copy tracks
+8: PASS  controller initialises offline
+8: PASS  audio configuration changes while playing
+8: PASS  audio configuration preserves playback
+8: PASS  buffer change does not rebuild the audio graph
+8: PASS  audio buffer restores after playback-preservation check
+8: PASS  new tracks use the configured theme accent
+8: PASS  a new project's default audio track uses the theme accent
+8: PASS  adds an audio track
+8: PASS  track is realised as engine nodes
+8: PASS  imports an audio clip
+8: PASS  clip is attached to the track
+8: PASS  clip duration is derived from the file
+8: PASS  timeline duration spans start + clip length
+8: PASS  downloaded audio creates an accent-coloured track at the playhead
+8: PASS  new-track audio import records one undo entry
+8: PASS  one undo removes the downloaded track and clip
+8: PASS  one redo restores the downloaded track and clip
+8: PASS  failed new-track import reports failure
+8: PASS  failed new-track import leaves no track or undo entry
+8: PASS  audio import refuses a non-audio track
+8: PASS  volume change applies
+8: PASS  undo restores previous volume
+8: PASS  redo re-applies volume
+8: PASS  exports a mixdown
+8: PASS  export file exists
+8: PASS  exported file decodes
+8: PASS  exported mixdown spans the full timeline
+8: PASS  mixdown is silent before the clip
+8: PASS  mixdown carries the clip audio after 1s
+8: PASS  saves the project package
+8: PASS  same-named project manifest written
+8: PASS  referenced audio copied into Content/
+8: PASS  VLT package includes the plugin State folder
+8: PASS  worker prepares document, samples and waveform peaks
+8: PASS  reopens the prepared project
+8: PASS  cancelled project preparation publishes no partial document
+8: PASS  track survives the round-trip
+8: PASS  clip survives the round-trip
+8: PASS  project name round-trips
+8: PASS  reloaded timeline duration matches
+8: PASS  reloaded track is re-realised in the engine
+8: PASS  a Pattern is a serialisable summing container
+8: PASS  dropping a sample creates a child Sampler instrument
+8: PASS  the Sampler lane uses the file name and starts with a MIDI clip
+8: PASS  the child keeps its own channel and routes into the Pattern bus
+8: PASS  undoing a Pattern sample removes its child lane
+8: PASS  redo restores Pattern parenting, routing and clip membership
+8: PASS  duplicating a Pattern clones its sources and plugin slots
+8: PASS  a duplicated Pattern keeps the loaded sample and reroutes it
+8: PASS  Pattern duplication is one undoable action
+8: PASS  undo removes the duplicated Pattern and all of its sources
+8: PASS  redo relinks a duplicated Pattern source and republishes its notes
+8: PASS  collapsing a Pattern hides its source lanes
+8: PASS  a Pattern project saves
+8: PASS  a Pattern project reopens
+8: PASS  Pattern clip ownership, collapse state and source parenting round-trip
+8: PASS  Sampler source is copied into Content and loads from the package
+8: PASS  a copied VLT package opens from its new location
+8: PASS  the copied VLT resolves Sampler audio inside its own Content folder
+8: PASS  new Pattern instruments stay inside the contiguous child block
+8: PASS  undo removes the newly inserted Pattern instrument
+8: PASS  redo restores the Pattern child before later root tracks
+8: PASS  extending a Pattern republishes linked children, not the project
+8: PASS  Pattern extension undo republishes only linked children
+8: PASS  Pattern extension redo republishes only linked children
+8: PASS  Pattern boundary follows a linked MIDI drag live
+8: PASS  Pattern boundary uses the final linked MIDI position
+8: PASS  moving Pattern MIDI undoes its position and owner boundary together
+8: PASS  moving Pattern MIDI redoes its owner extension together
+8: PASS  copying Pattern MIDI extends the same owner clip
+8: PASS  copy undo restores the previous Pattern boundary
+8: PASS  copy redo restores the extended Pattern boundary
+8: PASS  removing a Pattern removes its child MIDI endpoint
+8: PASS  Pattern-track undo restores child membership, routing and notes
+8: PASS  Pattern-track redo removes the complete object again
+8: PASS  new Pattern MIDI inherits the current Pattern length
+8: PASS  a Pattern owns a persistent arrangement clip
+8: PASS  a child MIDI clip records which Pattern clip owns it
+8: PASS  a Pattern clip splits on the arrangement
+8: PASS  splitting a Pattern cuts a crossing child note into both halves
+8: PASS  the whole nested split is one undo action
+8: PASS  a Pattern clip duplicates like a MIDI clip
+8: PASS  duplicating a Pattern copies and relinks all child MIDI data
+8: PASS  moving a Pattern clip moves its child MIDI clips immediately
+8: PASS  deleting a Pattern clip removes its linked MIDI data
+8: PASS  undo restores a deleted Pattern clip atomically
+8: PASS  Pattern split captures only crossing clips and scalar right-member ownership
+8: PASS  Pattern split undo restores exact owner/member order without copying scalar members
+8: PASS  Pattern split undo preserves dense unrelated live state and schedule
+8: PASS  Pattern split redo restores deterministic ids, ownership, and order
+8: PASS  Pattern split redo leaves the unrelated 100k-note payload untouched
+8: PASS  Pattern mute updates only parent/member booleans
+8: PASS  Pattern mute undo restores individual states and preserves unrelated live edits
+8: PASS  Pattern mute redo republishes only its member tracks
+8: PASS  Pattern copy records only its minted parent/member clips
+8: PASS  Pattern copy undo removes captured ids and keeps later live tails in order
+8: PASS  Pattern copy undo preserves unrelated dense payload and schedule
+8: PASS  Pattern copy redo restores exact ids before later live tails
+8: PASS  Pattern copy redo does not publish or copy the unrelated MIDI track
+8: PASS  Pattern remove erases only its captured parent/member ids
+8: PASS  Pattern remove undo restores exact indexed clips around live tails
+8: PASS  Pattern remove undo preserves unrelated post-remove live state
+8: PASS  Pattern remove redo is an affected-only delta with targeted publication
+8: PASS  same-named media files package successfully
+8: PASS  same-named media project reloads
+8: PASS  same-named sources remain distinct packaged files
+8: PASS  saving reports missing referenced media
+8: PASS  import warms the waveform cache
+8: PASS  waveform has buckets
+8: PASS  waveform duration matches the file
+8: PASS  waveform envelope tracks the 0.5-amplitude tone
+8: PASS  waveform budget fixture decodes
+8: PASS  waveform cache evicts the least-recent envelope over budget
+8: PASS  a project owns warmed waveform entries
+8: PASS  new project releases its waveform cache
+8: PASS  application new project starts with one clean audio track
+8: PASS  track output can target a bus
+8: PASS  send added to the bus
+8: PASS  compiled graph is published
+8: PASS  both tracks have engine nodes
+8: PASS  clips feed the fader
+8: PASS  fader feeds the meter
+8: PASS  a bus that is routed into has a merge point
+8: PASS  a track nothing is routed into pays for no merge node
+8: PASS  the track's output lands on the bus ahead of its inserts
+8: PASS  and reaches the bus fader through the (here empty) insert chain
+8: PASS  the send became a node
+8: PASS  a post-fader send taps after the fader
+8: PASS  the send feeds the bus ahead of its inserts
+8: PASS  graph has a sink
+8: PASS  the master fader is fed by the master sum
+8: PASS  the bus feeds the master
+8: PASS  a feedback loop is rejected
+8: PASS  rejected routing leaves the old destination in place
+8: PASS  removing a bus clears edges that pointed at it
+8: PASS  the bus's nodes are gone too
+8: PASS  Send is a non-recordable aux-return channel
+8: PASS  Send does not own arrangement clips
+8: PASS  Bus remains available as a main output
+8: PASS  a source can feed the dedicated Send return
+8: PASS  Send cannot be armed or input-monitored
+8: PASS  clip imported
+8: PASS  timeline length follows the clip
+8: PASS  mixdown renders
+8: PASS  mixdown is readable
+8: PASS  mixdown has the expected length
+8: PASS  rendered peak matches the 0.5-amplitude tone
+8: PASS  muted mixdown renders
+8: PASS  a muted track renders silence
+8: PASS  half-gain mixdown renders
+8: PASS  the fader scales the rendered mix
+8: PASS  monitoring starts off
+8: PASS  monitoring follows a track
+8: PASS  monitoring stays on while another track listens
+8: PASS  monitoring switches off with the last track
+8: PASS  track moves to the top
+8: PASS  document order follows the move
+8: PASS  tracks pack into a folder
+8: PASS  packed tracks are parented to the folder
+8: PASS  folder reports both children
+8: PASS  child depth is 1
+8: PASS  expanded folder shows its children
+8: PASS  collapsed folder hides its children
+8: PASS  a folder cannot be dropped into its own child
+8: PASS  a folder cannot contain itself
+8: PASS  folder moves to the end
+8: PASS  the folder's subtree moves with it
+8: PASS  track leaves the folder
+8: PASS  track is unparented after leaving
+8: PASS  undo puts the track back into the folder
+8: PASS  left-only clip imported
+8: PASS  stereo mixdown renders
+8: PASS  stereo keeps the left-channel tone
+8: PASS  stereo keeps the right channel empty
+8: PASS  mono mixdown renders
+8: PASS  mono makes both channels equal
+8: PASS  mono spreads the left tone at half amplitude
+8: PASS  new tracks default to stereo
+8: PASS  mono flag applies
+8: PASS  undo restores the stereo flag
+8: PASS  project with mono flag saves
+8: PASS  project with mono flag reopens
+8: PASS  mono flag round-trips
+8: PASS  clip to split imported
+8: PASS  split returns a new clip id
+8: PASS  split yields two clips
+8: PASS  both halves exist
+8: PASS  left half ends at the cut
+8: PASS  right half starts at the cut
+8: PASS  right half reads on from the cut in the source
+8: PASS  halves are contiguous
+8: PASS  the two halves cover the original length
+8: PASS  a cut past the clip end is rejected
+8: PASS  undo re-joins the clip
+8: PASS  undo restores the original length
+8: PASS  redo splits again
+8: PASS  clip for property edits imported
+8: PASS  a fresh clip is unmuted
+8: PASS  clip mutes
+8: PASS  undo unmutes the clip
+8: PASS  redo re-mutes the clip
+8: PASS  clip renames
+8: PASS  undo restores the clip name
+8: PASS  track recolours
+8: PASS  the track's clips follow its colour
+8: PASS  duplicate returns a fresh id
+8: PASS  duplicate adds a clip
+8: PASS  the copy butts up against the end of the original
+8: PASS  the copy keeps the original's length
+8: PASS  undo removes the duplicate
+8: PASS  redo re-adds the duplicate
+8: PASS  an exact-position duplicate preserves group repeat spacing
+8: PASS  project with clip props saves
+8: PASS  project with clip props reopens
+8: PASS  clip mute round-trips through the project file
+8: PASS  a straddling clip splits into three
+8: PASS  deleting the inner piece leaves the outers
+8: PASS  outer fragments still span the full clip
+8: PASS  the region piece moves to the new time
+8: PASS  outer fragments stay in place
+8: PASS  trim sets start, offset and length together
+8: PASS  trim clamps to the source length
+8: PASS  trim keeps a minimum length
+8: PASS  audio trim records one scalar delta and invalidates analysis
+8: PASS  trim undo restores analysis without rolling back mixer state
+8: PASS  trim redo reapplies geometry without a project snapshot
+8: PASS  setClipFade stores head/tail fades
+8: PASS  fade curves and tape modes are stored independently
+8: PASS  undo restores the previous fade mode
+8: PASS  fades clamp so they don't cross over
+8: PASS  a live fade gesture commits one scalar history entry
+8: PASS  fade delta undo restores both ramp lengths
+8: PASS  fade delta redo restores the live endpoint
+8: PASS  a fade-curve drag commits one scalar history entry
+8: PASS  fade-curve delta undo restores the press value
+8: PASS  fade-curve delta redo restores the release value
+8: PASS  import records the source channel count
+8: PASS  a fresh track is not folded to mono
+8: PASS  the mono clip renders
+8: PASS  a mono clip is heard on the left
+8: PASS  a mono clip is heard on the right too
+8: PASS  and at the same level on both — it is centred, not panned hard
+8: PASS  and panning a mono clip hard left still empties the right
+8: PASS  a track listens to one input channel unless told otherwise
+8: PASS  a mono take starts
+8: PASS  and writes one channel, not a pair with a silent side
+8: PASS  a stereo take starts
+8: PASS  while a track pointed at a pair still captures both
+8: PASS  a new project is not cycling
+8: PASS  and has no region yet
+8: PASS  a region is set in seconds
+8: PASS  playing from before the cycle jumps into it
+8: PASS  and so does playing from past it
+8: PASS  while playing from inside it starts where it stood
+8: PASS  with the cycle off, play starts where the playhead is
+8: PASS  a project with a cycle saves
+8: PASS  and reopens
+8: PASS  with the same region
+8: PASS  still armed
+8: PASS  doubling the tempo halves the cycle's length in seconds
+8: PASS  an automation lane is created
+8: PASS  and it is an automation lane
+8: PASS  which carries no signal of its own
+8: PASS  so the engine builds it no channel
+8: PASS  it is filed under the track it drives
+8: PASS  and that track is opened so the lane can be seen
+8: PASS  the track reports its lane
+8: PASS  a curve is created on the lane
+8: PASS  the clip is an automation clip
+8: PASS  and it spans at least the content on the timeline
+8: PASS  a fresh curve starts where the control already stands
+8: PASS  a fresh curve has only passive start and end points
+8: PASS  an untouched curve follows the fader without driving it
+8: PASS  the first point edit activates the curve
+8: PASS  undoing the first edit makes the curve passive again
+8: PASS  redoing the first edit activates it again
+8: PASS  an automation lane takes automation clips
+8: PASS  and nothing else swaps places with them
+8: PASS  automation left trim hides points before its new head
+8: PASS  dragging an automation trim back restores points from baseline
+8: PASS  automation trim endpoint records one curve-aware delta
+8: PASS  automation trim undo restores the curve, not unrelated live state
+8: PASS  automation trim redo restores the final rebased curve
+8: PASS  a straight segment reads half way at half way
+8: PASS  before the first point the curve holds its default, not its first value
+8: PASS  and past the last point it holds that
+8: PASS  a hold segment does not move until the next point
+8: PASS  and then it steps
+8: PASS  bending one way lifts the middle of the segment
+8: PASS  and bending the other drops it
+8: PASS  a bend never moves the points it runs between
+8: PASS  an automation clip splits
+8: PASS  both halves are there
+8: PASS  the left half still holds the value it had at the cut
+8: PASS  and the right half opens on it rather than on a default
+8: PASS  undo puts the whole curve back
+8: PASS  a project with a curve saves
+8: PASS  and reopens
+8: PASS  the clip comes back as an automation clip
+8: PASS  active, with every point
+8: PASS  and every shape and bend
+8: PASS  pointed at what it was pointed at
+8: PASS  doubling the tempo halves where the curve sits in seconds
+8: PASS  a curve duplicates
+8: PASS  the copy carries the same shape
+8: PASS  with an id of its own
+8: PASS  and can be pointed at another channel
+8: PASS  without its shape being touched — the whole point of copying it
+8: PASS  and the original still drives what it did
+8: PASS  one lane carries both
+8: PASS  the automated mix renders
+8: PASS  and is long enough to look at
+8: PASS  the curve starts near unity
+8: PASS  and the fader really does come down across the clip
+8: PASS  the strip can read automated pan at the playhead
+8: PASS  an automation edit invalidates the strip readout cache
+8: PASS  the automated pan renders
+8: PASS  and produces a stereo result
+8: PASS  the left side stays open
+8: PASS  while pan automation closes the right side
+8: PASS  a plain folder is a folder that does not sum
+8: PASS  a summing folder is a folder that does
+8: PASS  a plain folder has no channel at all
+8: PASS  a summing folder does have one
+8: PASS  so the engine builds no strip for a plain folder
+8: PASS  and does build one for a summing folder
+8: PASS  a plain folder does not touch its children's routing
+8: PASS  a summing folder routes its children into itself
+8: PASS  and lets go when the track leaves
+8: PASS  the track is routed by hand
+8: PASS  filing it into a summing folder leaves that routing alone
+8: PASS  the child starts out feeding the master
+8: PASS  turning summing on pulls the child into the new bus
+8: PASS  and the folder grows a channel
+8: PASS  turning it off puts the child back on the master
+8: PASS  and takes the channel away
+8: PASS  exports through the summing folder
+8: PASS  the group passes its track to the master
+8: PASS  and pulling the group's fader down silences everything in it
+8: PASS  soloing a plain folder keeps the track inside it audible
+8: PASS  and soloing something else does silence the folder's contents
+8: PASS  recolouring a folder recolours the folders inside it
+8: PASS  and every track below them, however deep
+8: PASS  clips included, like any other recolour
+8: PASS  and nothing outside it changes
+8: PASS  project with folders saves
+8: PASS  and reloads
+8: PASS  the plain folder comes back plain
+8: PASS  and the summing folder comes back summing
+8: PASS  with its child still routed into it
+8: PASS  and only one of them holding a channel
+8: PASS  packs a selection into a summing folder
+8: PASS  the chosen tracks are inside it
+8: PASS  and the one that was not chosen is not
+8: PASS  packing routes them into the new bus
+8: PASS  undo removes the folder
+8: PASS  and puts its tracks back where they were
+8: PASS  moveClipToTrack moves the clip between audio tracks
+8: PASS  moved clip keeps its timeline position
+8: PASS  moveClipToTrack refuses non-audio destinations
+8: PASS  save project with fades
+8: PASS  reopen project with fades
+8: PASS  fades round-trip through save/reload
+8: PASS  two clips from one WAV keep independent stretch settings
+8: PASS  clip pitch changes independently of its timeline duration
+8: PASS  one clip-editor gesture is one undo operation
+8: PASS  redo restores the per-clip formant edit
+8: PASS  a looped clip can extend beyond the source duration
+8: PASS  clip processing produces editor/playback sample data
+8: PASS  save project with per-clip editor state
+8: PASS  reopen project with per-clip editor state
+8: PASS  v4 save/reload preserves distinct edits for identical source media
+8: PASS  playback controls reuse the clip's rendered sample
+8: PASS  and a precomputed one renders a new sample
+8: PASS  identical clips share one precomputed audio buffer
+8: PASS  the stretch knob is pulled onto a nearby grid line
+8: PASS  and left alone between them
+8: PASS  with snapping off it never moves
+8: PASS  a grid finer than the detent leaves most of the travel free
+8: PASS  and the result stays inside the knob's range
+8: PASS  deferred-bake mixdown renders
+8: PASS  deferred-bake mixdown decodes
+8: PASS  an export renders the pending bake instead of the old sample
+8: PASS  duplicateTrack adds a track
+8: PASS  duplicate copies clips with fresh ids
+8: PASS  duplicate keeps inserts by default
+8: PASS  duplicate without plugins drops the inserts
+8: PASS  clip-free duplicate keeps the channel and plugins but no clips
+8: PASS  duplicate is undoable
+8: PASS  duplicating a folder copies its complete nested hierarchy
+8: PASS  folder duplicate remaps parents/routing and honors clip-free mode
+8: PASS  folder duplicate lands after the complete source subtree
+8: PASS  one undo removes the complete duplicated folder
+8: PASS  one redo restores the complete duplicated folder
+8: PASS  enabled clip mode copies folder audio and MIDI with fresh ids
+8: PASS  content-bearing folder duplicate remains one undo action
+8: PASS  setTrackHeight applies
+8: PASS  track height clamps to a sane minimum
+8: PASS  metronome starts off
+8: PASS  metronome toggles on
+8: PASS  a custom metronome sample can be loaded
+8: PASS  a bad custom click leaves the working choice in place
+8: PASS  clearing the custom click restores the built-in knock
+8: PASS  metronome mixdown renders
+8: PASS  metronome mixdown decodes
+8: PASS  metronome writes a click on the beat
+8: PASS  nothing is auditioning to begin with
+8: PASS  a file can be auditioned
+8: PASS  and it says which one
+8: PASS  with the file's own length
+8: PASS  a file that will not decode is refused, not silently ignored
+8: PASS  auditioning holds on to nothing
+8: PASS  the audition position is readable while stopped
+8: PASS  starting playback stops an audition
+8: PASS  playback defaults to resume
+8: PASS  pause holds the playhead in place
+8: PASS  restart mode returns to the run start on play
+8: PASS  a seek while paused re-anchors the restart
+8: PASS  resume mode continues from the paused position
+8: PASS  recording starts in restart mode
+8: PASS  a recording owns the playhead until it is stopped
+8: PASS  a second recording starts while rolling
+8: PASS  restart mode returns recording to the run start
+8: PASS  recording starts in resume mode
+8: PASS  resume mode records from the current playhead
+8: PASS  a MIDI edit publishes an initial engine note snapshot
+8: PASS  add-note undo republishes only its MIDI track
+8: PASS  add-note redo republishes only its MIDI track
+8: PASS  removing a note publishes only its MIDI track
+8: PASS  remove-note undo republishes only its MIDI track
+8: PASS  remove-note redo republishes only its MIDI track
+8: PASS  remove-note restoration leaves unrelated schedules intact
+8: PASS  a selection-only note gesture publishes and records nothing
+8: PASS  a deferred note drag invalidates preview without publishing
+8: PASS  velocity mouse moves defer playback without invalidating geometry
+8: PASS  ending a note gesture publishes its final state once
+8: PASS  the deferred gesture keeps one complete undo snapshot
+8: PASS  undo publishes the restored note gesture to realtime playback
+8: PASS  redo republishes the note gesture endpoint to realtime playback
+8: PASS  a singleton note edit outside a gesture still publishes immediately
+8: PASS  a singleton pan edit publishes its audible per-note pan
+8: PASS  a live pan drag defers its realtime publication
+8: PASS  a pan gesture publishes once and remains undoable
+8: PASS  undo restores the pan gesture's lazily captured state
+8: PASS  pan-gesture undo republishes the restored stereo position
+8: PASS  pan-gesture redo republishes the final stereo position
+8: PASS  setClipNotes publishes only its affected MIDI track
+8: PASS  setClipNotes undo republishes only its MIDI track
+8: PASS  setClipNotes redo republishes only its MIDI track
+8: PASS  pan-only setClipNotes publishes its audible note pan
+8: PASS  pan-only setClipNotes undo republishes the old note pan
+8: PASS  pan-only setClipNotes redo republishes only its MIDI track
+8: PASS  geometry-only setClipNotes invalidates preview without playback
+8: PASS  geometry-only setClipNotes undo invalidates preview
+8: PASS  geometry-only setClipNotes redo invalidates preview
+8: PASS  geometry-only structural gesture invalidates preview live
+8: PASS  geometry-only structural undo invalidates preview
+8: PASS  geometry-only structural redo invalidates preview
+8: PASS  non-note undo/redo performs no project-wide MIDI publication
+8: PASS  a 100k-note gesture builds one lazy id index and keeps storage stable
+8: PASS  dense geometry samples update preview without publishing realtime
+8: PASS  dense property gesture records one delta and publishes one endpoint
+8: PASS  ending a dense property gesture does not copy its note vector
+8: PASS  note-delta undo preserves unrelated edits made after the gesture
+8: PASS  note-delta redo preserves storage and unrelated live state
+8: PASS  velocity samples reuse the index without invalidating geometry or playback
+8: PASS  velocity gesture coalesces publication without rebuilding geometry
+8: PASS  trimming a MIDI clip publishes its live realtime endpoint only
+8: PASS  muting a MIDI clip publishes only its lane
+8: PASS  MIDI clip-mute undo leaves unrelated schedules intact
+8: PASS  MIDI clip-mute redo leaves unrelated schedules intact
+8: PASS  duplicating a MIDI clip publishes only its lane
+8: PASS  MIDI duplicate undo leaves unrelated schedules intact
+8: PASS  MIDI duplicate redo leaves unrelated schedules intact
+8: PASS  splitting a MIDI clip publishes only its lane
+8: PASS  MIDI split undo leaves unrelated schedules intact
+8: PASS  MIDI split redo leaves unrelated schedules intact
+8: PASS  removing a MIDI clip publishes only its lane
+8: PASS  MIDI clip-removal undo leaves unrelated schedules intact
+8: PASS  MIDI clip-removal redo leaves unrelated schedules intact
+8: PASS  adding a MIDI clip publishes only its lane
+8: PASS  MIDI clip-add undo leaves unrelated schedules intact
+8: PASS  MIDI clip-add redo leaves unrelated schedules intact
+8: PASS  the controller-lane publication fixture loads its instrument
+8: PASS  the lane fixture loads an unrelated control instrument
+8: PASS  adding a plain CC lane publishes no plugin automation
+8: PASS  a plain CC stroke does not republish unused plugin automation
+8: PASS  the controller-lane publication fixture has a plugin parameter
+8: PASS  retargeting a lane publishes only its track's plugin curves
+8: PASS  retarget undo clears the old plugin target
+8: PASS  retarget undo does not publish unrelated plugin curves
+8: PASS  retarget redo restores the new plugin target
+8: PASS  retarget redo does not publish unrelated plugin curves
+8: PASS  a plugin-target lane publishes its live endpoint
+8: PASS  controller-lane undo republishes the restored plugin curve
+8: PASS  controller-lane redo republishes the plugin curve endpoint
+8: PASS  removing a plugin-target lane clears its realtime curve
+8: PASS  plugin-lane removal does not publish unrelated plugin curves
+8: PASS  undoing plugin-lane removal republishes its curve
+8: PASS  redoing plugin-lane removal clears its curve again
+8: PASS  CC-lane removal records the expected history entry
+8: PASS  removing a CC lane updates its document model
+8: PASS  undo restores the removed CC lane in the document
+8: PASS  redo removes the CC lane from the document again
+8: PASS  removing a CC lane publishes no plugin automation
+8: PASS  undoing a CC-lane removal publishes no plugin automation
+8: PASS  redoing a CC-lane removal publishes no plugin automation
+8: PASS  audio gesture publishes its first position live
+8: PASS  audio gesture release publishes the exact final position
+8: PASS  audio position undo republishes the previous endpoint
+8: PASS  cancelled audio displacement flushes without an undo delta
+8: PASS  a grouped clip drag updates document geometry live
+8: PASS  its first mouse move publishes no MIDI and scans no duration
+8: PASS  later mouse moves keep the same schedule and duration cache
+8: PASS  gesture end publishes the grouped MIDI endpoint once
+8: PASS  gesture end refreshes the project duration endpoint
+8: PASS  one undo restores a coalesced grouped position gesture
+8: PASS  a lane-crossing drag updates ownership and geometry live
+8: PASS  lane crossing leaves both realtime schedules untouched mid-drag
+8: PASS  release clears the old lane and publishes the final new-lane position
+8: PASS  one undo restores a cross-track position gesture
+8: PASS  a clip-position call outside a gesture still publishes immediately
+8: PASS  labelled position end records one same-lane delta entry
+8: PASS  moving a 100k-note clip does not copy its ClipModel payload
+8: PASS  same-lane position publication leaves unrelated MIDI untouched
+8: PASS  same-lane delta undo restores only the start scalar
+8: PASS  same-lane delta undo does not publish unrelated MIDI
+8: PASS  same-lane delta redo preserves dense note storage
+8: PASS  live lane crossing moves rather than copies a dense ClipModel
+8: PASS  lane crossing and final position commit as one delta entry
+8: PASS  group lane crossing captures deterministic final clip order
+8: PASS  cross-lane delta undo restores owner/start without payload copies
+8: PASS  cross-lane delta undo restores original order for a clip group
+8: PASS  position undo preserves unrelated state changed after the move
+8: PASS  cross-lane delta redo moves the original dense ClipModel back
+8: PASS  cross-lane delta redo restores final group order deterministically
+8: PASS  position redo also preserves unrelated post-move state
+8: PASS  100k-note trim changes geometry/revision without copying or publishing
+8: PASS  trim end publishes one dense MIDI endpoint and one delta history entry
+8: PASS  dense MIDI trim undo preserves payload and unrelated live state
+8: PASS  dense MIDI trim redo reapplies only scalar geometry
+8: PASS  mixed selected clips trim in one transaction
+8: PASS  one undo restores every clip in a group trim
+8: PASS  group trim redo restores the mixed endpoint
+8: PASS  Pattern position gesture carries linked child geometry live
+8: PASS  Pattern owner and generated child moves share one history entry
+8: PASS  Pattern delta undo restores owner and child without MIDI copies
+8: PASS  Pattern delta redo reapplies owner and child placements together
+8: PASS  Pattern trim invalidates linked preview without publishing mid-drag
+8: PASS  Pattern trim release publishes linked members once
+8: PASS  Pattern trim undo restores only owner geometry
+8: PASS  Pattern trim redo keeps child MIDI payload in place
+8: PASS  addMidiClip creates a clip on a MIDI track
+8: PASS  addMidiClip refuses an audio track
+8: PASS  a new MIDI clip is marked as MIDI
+8: PASS  a new MIDI clip is one bar long at 4/4, 120 bpm
+8: PASS  a MIDI clip extends the timeline duration
+8: PASS  addNote appends a note
+8: PASS  setNote moves and resizes a note
+8: PASS  setNote clamps pitch, start and length
+8: PASS  setNoteVelocity clamps to 127
+8: PASS  undo removes the added note — live edits aren't recorded
+8: PASS  redo restores the note under the same id
+8: PASS  redo replays the note as created, not as later dragged
+8: PASS  removeNote
+8: PASS  undo restores the note's exact state
+8: PASS  a live multi-note edit updates the selection together
+8: PASS  a multi-note eraser removes the stroke in one mutation
+8: PASS  one undo restores a batched eraser stroke
+8: PASS  a multi-clip drag applies every start in one transaction
+8: PASS  a MIDI clip can't move to an audio lane
+8: PASS  a MIDI clip moves between MIDI lanes
+8: PASS  a MIDI clip splits
+8: PASS  the left half keeps only the notes before the cut
+8: PASS  the right half's notes are rebased to its own start
+8: PASS  the two halves don't share note ids
+8: PASS  undoing a split puts every note back on one clip
+8: PASS  redoing a split divides them again
+8: PASS  a new MIDI track has no instrument
+8: PASS  setTrackInstrument assigns
+8: PASS  an assigned instrument gets a slot id
+8: PASS  swapping the instrument keeps the slot id
+8: PASS  an audio track refuses an instrument
+8: PASS  undo restores the previous instrument
+8: PASS  redo re-applies it
+8: PASS  an empty name clears the slot
+8: PASS  a project with MIDI saves
+8: PASS  a project with MIDI loads
+8: PASS  the MIDI clip survives a reload
+8: PASS  the instrument slot survives a reload
+8: PASS  the clip reloads as MIDI
+8: PASS  its note survives
+8: PASS  every note field round-trips exactly
+8: PASS  the earlier audio-only project still loads
+8: PASS  audio clips reload as audio with no notes
+8: PASS  a clip with takes is layered
+8: PASS  takes are findable by id
+8: PASS  an unknown take id finds nothing
+8: PASS  selecting a take covers the whole clip
+8: PASS  the comp plays that take
+8: PASS  a swipe splits the segment it lands in
+8: PASS  comp splits preserve one identity and pre-create two new ids
+8: PASS  the swept stretch plays the brushed take, the rest is unchanged
+8: PASS  an adjoining swipe of the same take merges into one segment
+8: PASS  a right-to-left swipe paints the same range
+8: PASS  a swipe past both ends is clamped to the clip
+8: PASS  a segment naming a missing take is dropped
+8: PASS  a plain clip is not layered
+8: PASS  promoting keeps the clip's own audio as its first take
+8: PASS  the promoted take is what the comp plays
+8: PASS  promoting twice adds nothing
+8: PASS  a project with takes saves
+8: PASS  a project with takes loads
+8: PASS  both takes survive the round-trip
+8: PASS  take name, gain and colour round-trip
+8: PASS  take audio is copied into the package and resolves
+8: PASS  the comp map round-trips
+8: PASS  the shared comp crossfade round-trips with the clip
+8: PASS  an open comp editor round-trips
+8: PASS  the track's recording mode round-trips
+8: PASS  changing recording defaults does not retune an existing comp
+8: PASS  a swipe through the controller repaints the comp
+8: PASS  one undo takes the whole stroke back
+8: PASS  picking a whole take covers the clip with it
+8: PASS  duplicating a take adds it to the clip
+8: PASS  the copy lands after the original and shares its audio
+8: PASS  reordering moves the take in the stack
+8: PASS  reordering changes nothing about what plays
+8: PASS  unused takes are collected
+8: PASS  the take the comp never plays is the one that went
+8: PASS  the shared audio file is left on disk
+8: PASS  flattening bakes the comp into a new take, keeping the sources
+8: PASS  the baked take has audio on disk
+8: PASS  the baked file spans the clip
+8: PASS  the baked comp carries audio
+8: PASS  committing dissolves the layers
+8: PASS  and the clip can no longer be expanded
+8: PASS  the clip now plays the baked file itself
+8: PASS  undo brings the discarded takes back
+8: PASS  one undo walks the whole gesture back to the baked comp
+8: PASS  the plain clip imports
+8: PASS  an imported clip starts with no layers
+8: PASS  importing a take promotes the clip's own audio to Take 1
+8: PASS  Take 1 is the audio the clip already had
+8: PASS  Take 2 is the file just imported
+8: PASS  the clip now reads as layered
+8: PASS  the newest take is the one that plays
+8: PASS  and the comp is handed to it
+8: PASS  undo returns the clip to a single unlayered take
+8: PASS  a three-beat count-in arms
+8: PASS  and it reports itself as counting in
+8: PASS  nothing is captured while it counts
+8: PASS  three beats are left to count
+8: PASS  the transport stays where it was — no rewind
+8: PASS  one beat down, two to go
+8: PASS  and the count says so
+8: PASS  one second of count-in is left at this tempo
+8: PASS  two down
+8: PASS  the third beat starts the take
+8: PASS  the count-in is over
+8: PASS  and the recording is running
+8: PASS  the take punches in exactly where the playhead was
+8: PASS  a count-in arms at position zero
+8: PASS  with all three beats to count
+8: PASS  the playhead has not moved
+8: PASS  cancelling drops the count-in
+8: PASS  and nothing was recorded
+8: PASS  no count-in starts the take at once
+8: PASS  so it is recording and not counting
+8: PASS  the track starts unmonitored
+8: PASS  a count-in arms
+8: PASS  monitoring opens while it counts
+8: PASS  cancelling puts it back — nothing was recorded, nothing changed
+8: PASS  count in again
+8: PASS  and let it reach the take
+8: PASS  monitoring is still open while recording
+8: PASS  and closes on stop, back to what it was before the count-in
+8: PASS  a count-in arms with auto monitoring off
+8: PASS  and opens nothing
+8: PASS  the take starts
+8: PASS  still silent — nobody asked to be monitored
+8: PASS  and nothing was left switched on
+8: PASS  a hand-opened monitor is left alone during a take
+8: PASS  and is still the user's to close afterwards
+8: PASS  recording starts on the vocal
+8: PASS  an unmonitored input is opened for the performer
+8: PASS  and it is marked as automatic
+8: PASS  an unarmed target is armed
+8: PASS  Return to previous puts the monitor back as it was
+8: PASS  the automatic mark stays after the stop
+8: PASS  a manual click drops the automatic mark
+8: PASS  recording starts on the backing
+8: PASS  a second track on the same input is left alone
+8: PASS  the decision not to open is still automatic
+8: PASS  another input's monitoring is untouched
+8: PASS  Keep on leaves the monitor open
+8: PASS  Auto-disable closes it on stop
+8: PASS  recording starts on two tracks at once
+8: PASS  both targets are capturing
+8: PASS  a capture reports where it began, and only for its own track
+8: PASS  stopping clears both
+8: PASS  exact recording refuses the whole set when one target is invalid
+8: PASS  exact recording refuses duplicate track ids
+8: PASS  an exact preflight failure publishes no partial capture state
+8: PASS  the legacy local start still records its valid subset
+8: PASS  exact recording starts two valid targets atomically
+8: PASS  simultaneous exact recorders close distinct non-empty WAV files
+8: PASS  an exact all-target capture starts when every target is valid
+8: PASS  capture-only finalization returns one closed readable WAV
+8: PASS  the finalized result carries exact file and writer metadata
+8: PASS  recording semantics are frozen at capture start
+8: PASS  frozen loop geometry calculates every recorded pass
+8: PASS  capture-only finalization probes metadata without caching audio and leaves document undo untouched
+8: PASS  local-wrapper test capture starts
+8: PASS  local Stop lands the frozen overwrite capture and returns its path
+8: PASS  local Stop still creates exactly one legacy undo entry
+8: PASS  one undo removes the locally landed recording
+8: PASS  one redo restores the locally landed recording
+8: PASS  layered crossfade capture starts
+8: PASS  local layer landing keeps the crossfade frozen at capture start
+8: PASS  a track on Use Global follows the global mode
+8: PASS  changing the global mode moves it with it
+8: PASS  a track override wins over the global mode, for that track only
+8: PASS  the held invert flips whatever each track resolved to
+8: PASS  releasing the key restores the resolved mode
+8: PASS  clearing the override hands the track back to the global mode
+8: PASS  three edits, three entries
+8: PASS  collapsing folds them into one labelled entry
+8: PASS  one undo reverts all three edits
+8: PASS  and leaves the track itself in place
+8: PASS  one redo replays all three in order
+8: PASS  a mark past the top collapses nothing
+8: PASS  a group of one is left alone, not relabelled
+8: PASS  the small undo fixture reaches its limit
+8: PASS  an open group defers eviction of all primitive entries
+8: PASS  collapse keeps one complete action at the history limit
+8: PASS  one undo reverts every protected primitive in reverse order
+8: PASS  only the one oldest pre-group entry was evicted
+8: PASS  redo replays the complete capacity group
+8: PASS  an empty group closes without changing history
+8: PASS  a group larger than the whole limit remains intact in flight
+8: PASS  an oversized group still collapses to one bounded entry
+8: PASS  oversized group undo restores its exact starting endpoint
+8: PASS  controller history fixture reaches the 100-entry limit
+8: PASS  controller group protects commands beyond the full limit
+8: PASS  controller exposes one labelled entry at capacity
+8: PASS  controller group undo restores levels and removes the MIDI clip
+8: PASS  controller group redo restores the whole MIDI gesture
+8: PASS  live fader samples do not fill the undo stack
+8: PASS  one multi-track fader gesture creates one entry
+8: PASS  one undo restores every fader to its press value
+8: PASS  one redo restores the final fader values
+8: PASS  a pan drag also creates exactly one entry
+8: PASS  one undo restores pan to the gesture start
+8: PASS  redo restores the final pan position
+8: PASS  the master fader gesture is undoable once
+8: PASS  master undo restores the press value
+8: PASS  master redo restores the released value
+8: PASS  a send knob gesture creates one entry
+8: PASS  send undo restores the knob's press value
+8: PASS  send redo restores the knob's released value
+8: PASS  a compound clip drag creates one snapshot entry
+8: PASS  one undo restores the whole clip gesture
+8: PASS  one redo restores the whole clip gesture endpoint
+8: PASS  a clip of each kind is placed
+8: PASS  the audio clip still starts on beat 4, now 4 s in
+8: PASS  and is still exactly as long as the audio it plays
+8: PASS  the MIDI clip still starts on beat 8
+8: PASS  and is still one bar long — its notes are in beats too
+8: PASS  the loop still runs from beat 4 to beat 12
+8: PASS  and the playhead is still parked on beat 4
+8: PASS  undo restores the tempo
+8: PASS  and puts the audio clip back where it was
+8: PASS  and the MIDI clip back to the length it was
+8: PASS  every stretch mode keeps its start beat and musical length across BPM changes
+8: PASS  tempo-follow keeps the same trimmed source and moves fades with the audio
+8: PASS  undo restores audio duration and stretch ratio together
+8: PASS  redo reapplies tempo following exactly once
+8: PASS  save a tempo-following clip
+8: PASS  save/reopen preserves automatic ratios beyond the manual knob range
+8: PASS  every stretch mode keeps its start beat and musical length across BPM changes
+8: PASS  tempo-follow keeps the same trimmed source and moves fades with the audio
+8: PASS  undo restores audio duration and stretch ratio together
+8: PASS  redo reapplies tempo following exactly once
+8: PASS  save a tempo-following clip
+8: PASS  save/reopen preserves automatic ratios beyond the manual knob range
+8: PASS  every stretch mode keeps its start beat and musical length across BPM changes
+8: PASS  tempo-follow keeps the same trimmed source and moves fades with the audio
+8: PASS  undo restores audio duration and stretch ratio together
+8: PASS  redo reapplies tempo following exactly once
+8: PASS  save a tempo-following clip
+8: PASS  save/reopen preserves automatic ratios beyond the manual knob range
+8: PASS  every stretch mode keeps its start beat and musical length across BPM changes
+8: PASS  tempo-follow keeps the same trimmed source and moves fades with the audio
+8: PASS  undo restores audio duration and stretch ratio together
+8: PASS  redo reapplies tempo following exactly once
+8: PASS  save a tempo-following clip
+8: PASS  save/reopen preserves automatic ratios beyond the manual knob range
+8: PASS  create a layered stretch clip
+8: PASS  tempo-follow retimes the comp map and preserves the take's source length
+8: PASS  a stretched comp renders through the real graph
+8: PASS  the second half of a stretched comp remains audible
+8: PASS  a track that is not recording has nothing to draw
+8: PASS  a take starts
+8: PASS  which the arrangement is told about
+8: PASS  one pass, starting at the punch point
+8: PASS  drawn in the track's own colour, not in record red
+8: PASS  and as a clip of its own — nothing was punched into
+8: PASS  there is already a clip to punch into
+8: PASS  a layer take starts over it
+8: PASS  the preview knows it is landing inside a clip
+8: PASS  and which clip that is
+8: PASS  it becomes take 2 — landing promotes the clip's own audio to take 1
+8: PASS  so that is the name it is drawn under
+8: PASS  in the colour that take will wear once it lands
+8: PASS  which is not the track colour — a stack of layers reads as a stack
+8: PASS  a looped take starts
+8: PASS  three passes retain only two visible pieces in the live preview
+8: PASS  the uncovered tail belongs to the last completed pass
+8: PASS  the current pass follows six captured seconds
+8: PASS  the envelope is bucketed in recorded time, not in frames drawn
+8: PASS  every track kind has a distinct default colour
+8: PASS  automation lane and clips inherit owner colour changes
+8: PASS  creating automation reveals its independent disclosure
+8: PASS  hiding automation does not collapse the owner track
+8: PASS  hidden automation lane leaves the owner visible
+8: PASS  settings save
+8: PASS  settings reload round-trips
+8:
+8: ALL PASSED
+2/9 Test  #8: controller_test ..................   Passed    5.51 sec
+test 11
+    Start 11: recording_commit_planner_test
+
+11: Test command: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/bin/recording_commit_planner_test
+11: Working Directory: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/tests
+11: Test timeout computed to be: 10000000
+11: PASS  flat capture passes the pure pre-upload gate
+11: PASS  flat capture plans one canonical recording.commit
+11: PASS  planner is deterministic and emits round-trippable canonical wire
+11: PASS  v3 overlapping new-clip recording plans without a track lease
+11: PASS  v2 keeps the non-empty recording lease contract
+11: PASS  flat landing carries AssetRef channels without local path access
+11: PASS  fresh lease is rejected without authoritative operation absence proof
+11: PASS  wrong-operation and stale-head absence proofs are rejected
+11: PASS  exact authoritative absence proof rebinds and emits only the fresh lease
+11: PASS  layer landing freezes crossfade before takes and forms an unambiguous comp container
+11: PASS  three overlapping trimmed takes produce the newest visible comp pieces
+11: PASS  local auto-expand preference neither blocks nor changes shared commit
+11: PASS  multiple capture assets land atomically on distinct leased tracks
+11: PASS  planner enforces the eight-track recording runtime bound
+11: PASS  recovery-sized loop-pass input fails at the O(1) pass bound before comp planning
+11: PASS  aggregate worst-case command budget fails before pass geometry or asset inputs
+11: PASS  existing punch target fails in preflight before upload
+11: PASS  unknown existing clip extent fails closed
+11: PASS  overwrite that needs deletion of an earlier pass fails closed
+11: PASS  recoveryOnly capture cannot become a shared commit
+11: PASS  lost lease capture cannot become a shared commit
+11: PASS  incomplete migrated recording semantics fail closed
+11: PASS  non-ready capture status fails closed
+11: PASS  pass geometry inconsistent with frozen capture fails closed
+11: PASS  uploaded asset must be a complete immutable audio AssetRef
+11: PASS  asset display name cannot leak a path, URL or control text
+11: PASS  asset display name is bounded to 255 UTF-8 bytes
+11: PASS  non-canonical caller entity UUID fails closed
+11: PASS  caller anchor must exist in the current track
+11: PASS  stale recording base sequence fails before command creation
+11: PASS  clip.setAsset channels are deterministic and inverse-consistent
+3/9 Test #11: recording_commit_planner_test ....   Passed    0.69 sec
+test 24
+    Start 24: engine_graph_test
+
+24: Test command: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/bin/engine_graph_test
+24: Working Directory: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/tests
+24: Test timeout computed to be: 10000000
+24: PASS  wet/dry kernel preserves inclusive endpoints and short blocks
+24: PASS  exact silence accepts both signs of zero
+24: PASS  exact silence wakes on denormals, NaN and SIMD tail input
+24: PASS  Hann table preserves window shape and unity overlap
+24: PASS  a graph with a typed sidechain edge compiles
+24: PASS  the compiled ProcessContext preserves main versus sidechain roles
+24: PASS  connect source → gain
+24: PASS  connect source → gain
+24: PASS  connect source → gain
+24: PASS  connect gain → master
+24: PASS  graph compiles
+24: PASS  parallel process runs
+24: PASS  summed level is correct
+24: PASS  right channel matches
+24: PASS  buffers are recycled rather than one per node
+24: PASS  connect a → b
+24: PASS  connect b → a (accepted as an edge)
+24: PASS  compilation rejects a feedback cycle
+24: PASS  source → plugin
+24: PASS  plugin → bus
+24: PASS  direct → bus
+24: PASS  graph with a latent node compiles
+24: PASS  reported graph latency is the longest path
+24: PASS  a compensation delay was inserted on the early path
+24: PASS  both paths line up after compensation
+24: PASS  64-track graph compiles
+24: PASS  parallel output is bit-identical to serial
+24: PASS  repeated parallel runs are deterministic
+24: PASS  compact slow-root graph compiles
+24: PASS  compiler records the compact graph's wide ready frontier
+24: PASS  compact wide graph selects the adaptive parallel path
+24: PASS  mid-pass fan-out wakes parked helpers, not only the initial pair
+24: PASS  mid-pass waking preserves the graph result
+24:       block 32, slow root -> 24 successors: parallel 16.66 ms, serial 43.48 ms, peak width 4
+24: PASS  serial reference executes the wide stage one node at a time
+24: PASS  compact slow-root graph compiles
+24: PASS  compiler records the compact graph's wide ready frontier
+24: PASS  compact wide graph selects the adaptive parallel path
+24: PASS  mid-pass fan-out wakes parked helpers, not only the initial pair
+24: PASS  mid-pass waking preserves the graph result
+24:       block 64, slow root -> 24 successors: parallel 16.56 ms, serial 43.94 ms, peak width 4
+24: PASS  serial reference executes the wide stage one node at a time
+24: PASS  compact slow-root graph compiles
+24: PASS  compiler records the compact graph's wide ready frontier
+24: PASS  compact wide graph selects the adaptive parallel path
+24: PASS  mid-pass fan-out wakes parked helpers, not only the initial pair
+24: PASS  mid-pass waking preserves the graph result
+24:       block 128, slow root -> 24 successors: parallel 16.35 ms, serial 42.03 ms, peak width 4
+24: PASS  serial reference executes the wide stage one node at a time
+24: PASS  compact slow-root graph compiles
+24: PASS  compiler records the compact graph's wide ready frontier
+24: PASS  compact wide graph selects the adaptive parallel path
+24: PASS  mid-pass fan-out wakes parked helpers, not only the initial pair
+24: PASS  mid-pass waking preserves the graph result
+24:       block 512, slow root -> 24 successors: parallel 13.88 ms, serial 41.86 ms, peak width 4
+24: PASS  serial reference executes the wide stage one node at a time
+24: PASS  1000-track project compiles
+24: PASS  all nodes are scheduled
+24:       buffers for 3033 nodes: 2000
+24:       1000 tracks x (gain + 4-band EQ), 8 workers:
+24:         parallel 3.94 ms/block, serial 21.49 ms/block, speed-up 5.46x (budget 5.33 ms)
+24: PASS  parallel scheduling scales past 2x on 8 workers
+24:       inside the realtime budget on this run
+24: PASS  1000-track parallel mix matches the serial mix
+24: PASS  live graph commits
+24: PASS  a stopped transport renders silence
+24: PASS  a stopped transport stays put
+24: PASS  the playhead advances by one block
+24: PASS  the display playhead interpolates inside an audio block
+24: PASS  nothing plays before the clip starts
+24: PASS  the clip plays once the playhead reaches it
+24: PASS  master metering follows the output
+24: PASS  the loop wraps the playhead
+24: PASS  a positive fade curve reaches level sooner than a linear fade
+24: PASS  Tape Start integrates a 0x-to-1x speed ramp without a source jump
+24: PASS  spectrum test graph commits
+24: PASS  master spectrum work stays gated with no consumer
+24: PASS  a 1 kHz tone raises the middle spectrum bars
+24: PASS  spectrum bands describe frequency, not twelve copies of level
+24: PASS  spectrum releases to silence after transport stops
+24: PASS  removing the last spectrum consumer clears and gates the bands
+24: PASS  graph with a counting node compiles
+24: PASS  a node new to the graph is prepared once
+24: PASS  recompiling with identical settings works
+24: PASS  an unchanged node is NOT re-prepared on recompile
+24: PASS  rebuilt graph compiles
+24: PASS  the prepare stamp survives a whole-graph rebuild
+24: PASS  compiling at a new block size works
+24: PASS  a changed PrepareInfo does re-prepare the node
+24: PASS  compiling never suspends or resumes a node behind its owner's back
+24: PASS  the compensated graph compiles with a delay line
+24: PASS  recompile with a previous snapshot works
+24: PASS  the delay line object itself is carried over
+24: PASS  the compensated path continues without a discontinuity
+24: PASS  a sample-rate change cannot adopt delay history from the old clock
+24: PASS  compiling without a previous snapshot builds a new delay line
+24: PASS  the 80-source graph compiles
+24: PASS  the renderer kept running across 500 rebuilds
+24: PASS  every block summed exactly while graphs were being republished
+24: PASS  engine prepares
+24: PASS  gate-test graph commits
+24: PASS  the node renders normally
+24: PASS  a gated renderer outputs silence
+24: PASS  audio returns once the gate is released
+24: PASS  the renderer kept producing blocks across 200 gate acquisitions
+24: PASS  no block was reconfigured while it was being rendered
+24: PASS  120 BPM at 48 kHz is 24000 samples per beat
+24: PASS  one beat in equals ppq 1.0
+24: PASS  half a beat in equals ppq 0.5
+24: PASS  4/4 is 4 quarters
+24: PASS  3/4 is 3 quarters
+24: PASS  6/8 is 3 quarters, not 6
+24: PASS  ppq at five beats in
+24: PASS  in 4/4, beat five is in the bar starting at ppq 4
+24: PASS  in 3/4, beat five is in the bar starting at ppq 3
+24: PASS  the loop range is reported in quarter notes
+24: PASS  probe graph compiles
+24: PASS  the serial path hands the transport to the node
+24: PASS  the parallel path hands over the same transport
+24: PASS  both paths rendered the same span
+24: PASS  the offline render is bit-identical to the live one
+24: PASS  the metronome actually clicked (a silent match is no match)
+24: PASS  the downbeat accent is louder than an off-beat click
+24: PASS  the metre from the transport decides where the accent falls
+24: PASS  a metronome that is off and parked stays silent
+24: PASS  three count-in clicks are heard although the transport never rolled
+24: PASS  and it goes quiet again afterwards
+24: PASS  a preview node is silent until it is asked
+24: PASS  and audible with the transport stopped, which is what it is for
+24: PASS  the position it publishes is where the audio thread has read to
+24: PASS  the second block still has source left
+24: PASS  a one-shot goes quiet at the end of the file
+24: PASS  and republishes position 0 so a playhead goes home
+24: PASS  a looping preview plays across the seam without a gap
+24: PASS  and nothing at all reaches an offline render
+24: PASS  reset stops it — which is what keeps it out of a mixdown
+24: PASS  a file at another rate is read with a step and ends cleanly
+24: PASS  the preview gain scales the audition
+24: PASS  and a seek near the end still ends where the file does
+24:
+24: ALL PASSED
+4/9 Test #24: engine_graph_test ................   Passed    2.28 sec
+test 26
+    Start 26: miditools_test
+
+26: Test command: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/bin/miditools_test
+26: Working Directory: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/tests
+26: Test timeout computed to be: 10000000
+26: PASS  the preview finds visible notes and an off-screen long note
+26: PASS  a late preview query does not scan the dense MIDI clip
+26: PASS  the preview caches the clip's fitted pitch range
+26: PASS  the preview index accepts unsorted note storage
+26: PASS  C is in C major and C# is not
+26: PASS  an off-scale pitch snaps down to the nearest degree
+26: PASS  the same pitch is in scale once the root moves to C#
+26: PASS  one scale degree up is a tone from C but a semitone from E
+26: PASS  seven degrees is an octave either way
+26: PASS  grid divisions, triplets and dotted values
+26: PASS  full-strength quantize puts every start on the grid
+26: PASS  quantizing starts leaves lengths alone
+26: PASS  half strength moves a note half of the way to the grid
+26: PASS  the dead zone spares a note already close to the grid
+26: PASS  quantizing ends holds the start and rewrites the length
+26: PASS  quantizing the length holds the start
+26: PASS  swing delays the off-beat and leaves the down-beat alone
+26: PASS  preserve order stops same-pitch notes from swapping places
+26: PASS  a groove drags the off-beat behind the grid, repeatably
+26: PASS  the groove's velocity map accents the down-beat
+26: PASS  a 4-beat chord at 1/8 gives eight slots
+26: PASS  Up walks the chord and wraps
+26: PASS  slots land on the rate and the gate sets the length
+26: PASS  arpeggiated notes carry no id, so setClipNotes mints fresh ones
+26: PASS  Down walks the other way
+26: PASS  Up/Down turns around without repeating the top note
+26: PASS  the octave range stacks the chord above itself
+26: PASS  Once plays the pool through exactly once
+26: PASS  Fill runs to the end of the region, not of the chord
+26: PASS  Merge keeps the source chord underneath
+26: PASS  a skipped step drops its slot
+26: PASS  a tied step lengthens the note before it instead of restriking
+26: PASS  Chord mode restrikes the whole chord on every slot
+26: PASS  the same seed gives the same random arpeggio
+26: PASS  Random arpeggiation draws only from the chord sounding at each step
+26: PASS  touching same-pitch notes become one
+26: PASS  the merged note keeps the head's id and runs to the tail's end
+26: PASS  a note past the gap, and one at another pitch, are left alone
+26: PASS  a gap tolerance pulls the straggler into the run
+26: PASS  ignoring pitch merges across pitches too
+26: PASS  legato stretches each note to the next and leaves the last one
+26: PASS  the legato ceiling caps a long stretch
+26: PASS  one selected note stretches to the next note in the clip
+26: PASS  a selection stops at the unselected note in its way
+26: PASS  the clip's last note keeps its length even when selected
+26: PASS  a full gate runs each note into the next
+26: PASS  and the last note keeps the length it had
+26: PASS  half a gate leaves half the gap silent
+26: PASS  amount blends toward the gate instead of jumping to it
+26: PASS  the ceiling caps what the gate would otherwise reach
+26: PASS  Keep leaves every length exactly as it was
+26: PASS  every other note is accented, in time order
+26: PASS  Scale works off the note's own length, not the gap
+26: PASS  rotating right moves everything on, and wraps the last note to the start
+26: PASS  a wrapped note keeps its length
+26: PASS  nothing is created or destroyed, so the selection survives
+26: PASS  rotating left wraps the first note to the end
+26: PASS  rotating one way and back leaves the bar untouched
+26: PASS  a full turn is the identity
+26: PASS  and more than a full turn wraps rather than running away
+26: PASS  the derived cycle is the span from the first start to the last end
+26: PASS  a chord turned by its own cycle stays where it is
+26: PASS  and a chord given a real bar to turn in wraps within that bar
+26: PASS  Up spreads the chord from the bottom note over the span
+26: PASS  a note outside the chord window is not part of the strum
+26: PASS  by default the ends stay put, so the chord finishes together
+26: PASS  adjusting the ends preserves each note's length instead
+26: PASS  Down starts from the top note
+26: PASS  a negative taper fades the strum out across the chord
+26: PASS  randomised velocity moves, and repeats on the seed
+26: PASS  velocity stays inside the requested spread
+26: PASS  scale-aware randomisation never leaves the scale
+26: PASS  preserving the total duration keeps notes inside the clip
+26: PASS  constrain-to-grid rounds the jitter back onto the grid
+26: PASS  humanize nudges the timing
+26: PASS  a major triad is built on the note
+26: PASS  the root keeps its identity and the added voices are new notes
+26: PASS  a seventh chord has four voices
+26: PASS  the first inversion lifts the root an octave
+26: PASS  the bass octave adds a root below the chord
+26: PASS  transpose by semitones
+26: PASS  transpose by scale degrees
+26: PASS  inversion mirrors the pitches about the middle of the selection
+26: PASS  reversing time turns the phrase around inside its own span
+26: PASS  velocity set and offset, clamped at the top
+26: PASS  velocity scaling is proportional
+26: PASS  a velocity ramp runs across the selection in time order
+26: PASS  length set and scale
+26: PASS  nudge shifts in time and never goes negative
+26: PASS  limiting folds by octaves and keeps the pitch class
+26: PASS  splitting at the grid cuts the crossing note and ids only the new piece
+26: PASS  splitting at a point only touches the note that spans it
+26: PASS  mute and toggle
+26: PASS  note colour
+26: PASS  the span covers every note
+26: PASS  pitch naming matches the keyboard (FL numbering: 60 is C5)
+26: PASS  a MIDI clip to edit
+26: PASS  the quantised vector lands in the document
+26: PASS  a note that survived the transform kept its id
+26: PASS  the whole transform is one labelled undo entry
+26: PASS  undo restores every note at once
+26: PASS  redo replays the captured vector, ids included
+26: PASS  setClipNotes mints a unique uuid for every created note
+26: PASS  setClipNotes clamps pitch, velocity and time into range
+26: PASS  a controller lane is created
+26: PASS  the lane lands on the clip with its CC number
+26: PASS  points at the same beat collapse to one
+26: PASS  the curve is sorted and clamped on the way in
+26: PASS  a finished curve gesture is one labelled undo entry
+26: PASS  undo restores the curve as it was before the gesture
+26: PASS  redo puts the curve back
+26: PASS  committing an unchanged curve records nothing
+26: PASS  project saves
+26: PASS  project reloads
+26: PASS  a note's muted flag and colour round-trip through the file
+26: PASS  per-note pan round-trips too
+26: PASS  a controller lane and its curve round-trip through the file
+26: PASS  one harmony segment per bar
+26: PASS  bar 1 reads as A minor
+26: PASS  bar 2 reads as F major
+26: PASS  bar 3 reads as C major
+26: PASS  bar 4 reads as G major
+26: PASS  the lowest sounding note is reported per segment
+26: PASS  segments are one bar long and start on the bar line
+26: PASS  a note sounding through a segment counts in it
+26: PASS  G B D F reads as a dominant seventh, not a G triad
+26: PASS  no notes, no segments
+26: PASS  Am-F-C-G estimates as C major
+26: PASS  pitch classes are named without an octave
+26:
+26: ALL PASSED
+5/9 Test #26: miditools_test ...................   Passed    0.84 sec
+test 46
+    Start 46: audio_realtime_test
+
+46: Test command: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/bin/audio_realtime_test
+46: Working Directory: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/tests
+46: Test timeout computed to be: 60
+46: PASS bounded telemetry drops without overwriting
+46: PASS telemetry preserves FIFO and dropped count
+46: PASS per-block quantiles and budget overruns are exact
+46: PASS lifetime peaks and overruns survive telemetry overflow
+46: PASS PortAudio xrun flags and complete callback are counted even on early return
+46: PASS exact zero remains silent with FTZ
+46: PASS FTZ silence contract preserves subnormals, NaN, infinity and signed zero
+46: PASS warm PCM reads pinned RAM
+46: PASS cold PCM returns silence without reading its mapping
+46: PASS background read resolves a measured PCM miss
+46: PASS PCM cache capacity stays fixed under eviction
+46: PASS concurrent PCM readers do not manufacture cache misses
+46: PASS retired PCM requests cannot alias a new mapping
+46: PASS sampler admission limits playback to one preparation
+46: PASS stopped transport admits two workers and cancels queued destruction
+46: PASS fused, unfused and serial graph outputs agree at 48/96k and small/large buffers
+46: PASS fused, unfused and serial graph outputs agree at 48/96k and small/large buffers
+46: PASS fused, unfused and serial graph outputs agree at 48/96k and small/large buffers
+46: PASS fused, unfused and serial graph outputs agree at 48/96k and small/large buffers
+46: PASS fused, unfused and serial graph outputs agree at 48/96k and small/large buffers
+46: PASS fused, unfused and serial graph outputs agree at 48/96k and small/large buffers
+46: PASS fused, unfused and serial graph outputs agree at 48/96k and small/large buffers
+46: PASS fused, unfused and serial graph outputs agree at 48/96k and small/large buffers
+46: PASS fused, unfused and serial graph outputs agree at 48/96k and small/large buffers
+46: PASS fused, unfused and serial graph outputs agree at 48/96k and small/large buffers
+46: PASS ordinary bounded clips preserve page crossings, trim ends, fades, pan and mono at 8/16/32/256 frames
+46: PASS seek through 100k past clips finds only intersecting material
+46: PASS 3000 overlapping clips preserve exact mixing order without overflow fallback
+46: PASS interval index honours exclusive clip ends on backwards seek
+46: PASS mapped PCM seek is sample-identical in prepared realtime and direct offline paths
+46: PASS RenderGate silence is counted separately
+6/9 Test #46: audio_realtime_test ..............   Passed    0.94 sec
+test 48
+    Start 48: recording_preview_test
+
+48: Test command: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/bin/recording_preview_test
+48: Working Directory: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/tests
+48: Test timeout computed to be: 45
+48: PASS  start delayed-reader capture
+48: PASS  25 ms buckets retain input 3 transients without polling or neighboring-channel leakage
+48: PASS  finalize delayed-reader capture
+48: PASS  mono route is duplicated coherently into the already-open stereo WAV
+48: PASS  start delayed-reader capture
+48: PASS  25 ms buckets retain input 3 transients without polling or neighboring-channel leakage
+48: PASS  finalize delayed-reader capture
+48: PASS  mono route is duplicated coherently into the already-open stereo WAV
+48: PASS  start delayed-reader capture
+48: PASS  25 ms buckets retain input 3 transients without polling or neighboring-channel leakage
+48: PASS  finalize delayed-reader capture
+48: PASS  mono route is duplicated coherently into the already-open stereo WAV
+48: PASS  start delayed-reader capture
+48: PASS  25 ms buckets retain input 3 transients without polling or neighboring-channel leakage
+48: PASS  finalize delayed-reader capture
+48: PASS  mono route is duplicated coherently into the already-open stereo WAV
+48: PASS  concurrent first/count/enabled edits cannot tear a route within an audio block
+48: PASS  real callback and controller use the selected input for preview
+48: PASS  No Input immediately silences an active capture through the controller
+48: PASS  re-enabling the input resumes capture without replacing the recorder
+48: PASS  302 recorded passes occupy at most two live preview spans
+48: PASS  long-loop preview preserves capture-time alignment of the live pass
+48: PASS  bounded live preview still lands every recorded loop take
+48: PASS  302 recorded passes occupy at most two live preview spans
+48: PASS  long-loop preview preserves capture-time alignment of the live pass
+48: PASS  bounded live preview still lands every recorded loop take
+7/9 Test #48: recording_preview_test ...........   Passed    1.16 sec
+test 56
+    Start 56: waveform_paint_test
+
+56: Test command: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/bin/waveform_paint_test
+56: Working Directory: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/app
+56: Environment variables:
+56:  QT_QPA_PLATFORM=offscreen
+56: Test timeout computed to be: 30
+56: PASS  cached/uncached pixels agree across gain, reversal and fractional pan
+56: PASS  fractional tile boundaries have no transparent seams on a solid waveform
+56: PASS  append and partial-bucket growth never reuse an unfinished recording tail
+56: PASS  recording append reuses sealed raster tiles
+56: PASS  compaction/source replacement invalidates cached extrema
+56: PASS  fractional tile boundaries have no transparent seams on a solid waveform
+56: PASS  append and partial-bucket growth never reuse an unfinished recording tail
+56: PASS  recording append reuses sealed raster tiles
+56: PASS  compaction/source replacement invalidates cached extrema
+56: 8 waves 1600x960 dpr=1 pan=0 median=0.446 p95=0.564 max=4.181 ms hits=3776 builds=64 bytes=4463104
+56: PASS  horizontal pan reuses raster tiles inside the memory budget
+56: PASS  long scroll evicts old raster tiles
+56: 8 waves 1600x960 dpr=1 pan=1 median=0.458 p95=0.860 max=3.792 ms hits=3360 builds=64 bytes=4463104
+56: PASS  horizontal pan reuses raster tiles inside the memory budget
+56: PASS  long scroll evicts old raster tiles
+56: 8 waves 1600x960 dpr=2 pan=0 median=2.599 p95=3.525 max=12.362 ms hits=6608 builds=112 bytes=15609216
+56: PASS  horizontal pan reuses raster tiles inside the memory budget
+56: PASS  long scroll evicts old raster tiles
+56: 8 waves 1600x960 dpr=2 pan=1 median=2.580 p95=3.974 max=10.516 ms hits=6352 builds=120 bytes=16724160
+56: PASS  horizontal pan reuses raster tiles inside the memory budget
+56: PASS  long scroll evicts old raster tiles
+8/9 Test #56: waveform_paint_test ..............   Passed    1.60 sec
+test 57
+    Start 57: ui_frame_clock_test
+
+57: Test command: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/bin/ui_frame_clock_test
+57: Working Directory: /Users/nikolay/Documents/code/VLTONE/VLTONE-/build/app
+57: Environment variables:
+57:  QT_QPA_PLATFORM=offscreen
+57: Test timeout computed to be: 15
+57: 60 FPS: 19/19 frames in 0.320959 s
+57: 120 FPS: 22 frames in 0.181914 s
+57: 144 FPS: 27 frames in 0.183164 s
+57: 240 FPS: 26 frames in 0.181514 s
+57: 360 FPS: 26 frames in 0.181109 s
+57: 87 FPS: 16 frames in 0.181723 s
+9/9 Test #57: ui_frame_clock_test ..............   Passed    4.00 sec
+
+The following tests passed:
+	platform_test
+	controller_test
+	recording_commit_planner_test
+	engine_graph_test
+	miditools_test
+	audio_realtime_test
+	recording_preview_test
+	waveform_paint_test
+	ui_frame_clock_test
+
+100% tests passed out of 9
+
+Total Test time (real) =  18.78 sec

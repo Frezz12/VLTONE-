@@ -266,11 +266,11 @@ still preserves the work, which is the property that matters.
 
 ## Project format
 
-`.vlt` is a portable project package. It contains a clickable `Project.vlt`
+A project is a portable folder containing a clickable, same-named `.vlt`
 manifest, `Content/` with copies of every referenced recording/sample, and
-`State/` with plugin state chunks. On macOS the package is presented as one
-document with the application logo; on other systems the inner `Project.vlt`
-can be opened directly. Either entry point restores the same complete project,
-and legacy `.dawp` packages remain readable.
+`State/` with plugin state chunks. On macOS new projects use the visible
+`My Song/My Song.vlt` layout, so recordings and rendered files remain directly
+accessible in Finder. Existing `.vlt` directory packages and legacy `.dawp`
+packages remain readable.
 
 # VLTONE-

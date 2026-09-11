@@ -4,6 +4,7 @@
 #include "plugins/PluginCache.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -56,6 +57,7 @@ public:
         if (&source == this) return;
         const std::scoped_lock lock(m_mutex, source.m_mutex);
         m_cache = source.m_cache;
+        m_catalogueRevision.fetch_add(1, std::memory_order_release);
     }
     bool save() const;
 
@@ -90,6 +92,13 @@ public:
     std::vector<plugins::PluginDescriptor> plugins() const;
     std::vector<plugins::PluginDescriptor> effects() const;
     std::vector<plugins::PluginDescriptor> instruments() const;
+    /// Stable cache identity for UI presentation models. The instance id
+    /// prevents an allocator-reused address from reviving another manager's
+    /// menu, while the revision changes whenever visible catalogue data does.
+    std::uint64_t instanceId() const noexcept { return m_instanceId; }
+    std::uint64_t catalogueRevision() const noexcept {
+        return m_catalogueRevision.load(std::memory_order_acquire);
+    }
     /// Resolved by identity first and path second, so a plugin that moved on
     /// disk still loads from an old project.
     std::optional<plugins::PluginDescriptor> find(plugins::Format format,
@@ -120,6 +129,7 @@ private:
     static std::string defaultScannerPath();
 
     std::string m_cachePath;
+    const std::uint64_t m_instanceId;
     std::string m_scannerPath;
     std::chrono::milliseconds m_timeout{30000};
 
@@ -132,6 +142,7 @@ private:
     std::atomic<bool> m_scanning{false};
     std::atomic<bool> m_cancel{false};
     std::atomic<bool> m_finished{false};
+    std::atomic<std::uint64_t> m_catalogueRevision{0};
     std::atomic<std::uint32_t> m_scanned{0};
     std::atomic<std::uint32_t> m_total{0};
     mutable std::mutex m_currentMutex;

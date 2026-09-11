@@ -67,9 +67,9 @@ constexpr int kBlockRadius = 11;
 // feature, and once as a `font-size` declaration, because the application-wide
 // sheet has a `QWidget { font-size: 12px }` rule and a style sheet always wins
 // over setFont() for the properties it declares.
-constexpr int kPositionFontPx = 25;
-constexpr int kStatsFontPx = 16;
-constexpr int kChipFontPx = 15;
+constexpr int kPositionFontPx = 23;
+constexpr int kStatsFontPx = 14;
+constexpr int kChipFontPx = 13;
 
 QString gridDivisionName(const ui::GridDivision& division) {
     if (division.beats < 0.0)
@@ -119,11 +119,13 @@ protected:
             return;
         }
         bool ok = false;
-        m_startValue = text().replace(',', '.').toDouble(&ok);
-        if (!ok) m_startValue = 120.0;
-        m_startValue = std::round(m_startValue);
-        m_currentValue = m_startValue;
-        m_pressGlobalY = event->globalPosition().y();
+        double startValue = text().replace(',', '.').toDouble(&ok);
+        if (!ok) startValue = 120.0;
+        startValue = std::round(startValue);
+        m_currentValue = startValue;
+        m_rawValue = startValue;
+        m_pendingPixels = 0.0;
+        m_cursorDrag.begin(event->globalPosition());
         m_pressed = true;
         m_dragging = false;
         setCursor(Qt::ClosedHandCursor);
@@ -131,12 +133,26 @@ protected:
     }
 
     void mouseMoveEvent(QMouseEvent* event) override {
-        if (!m_pressed || !(event->buttons() & Qt::LeftButton)) {
+        if (!m_pressed) {
             QLineEdit::mouseMoveEvent(event);
             return;
         }
-        const qreal delta = m_pressGlobalY - event->globalPosition().y();
-        if (!m_dragging && std::abs(delta) < 3.0) {
+        if (!(event->buttons() & Qt::LeftButton)) {
+            m_cursorDrag.cancel();
+            m_pressed = false;
+            setCursor(Qt::SizeVerCursor);
+            if (m_dragging && m_callback) m_callback(m_currentValue, true);
+            m_dragging = false;
+            event->accept();
+            return;
+        }
+        const qreal delta = -m_cursorDrag.takeDelta(event->globalPosition()).y();
+        if (std::abs(delta) < 1.0e-9) {
+            event->accept();
+            return;
+        }
+        m_pendingPixels += delta;
+        if (!m_dragging && std::abs(m_pendingPixels) < 3.0) {
             event->accept();
             return;
         }
@@ -144,8 +160,10 @@ protected:
         // Scrubbing is deliberately quantised to whole BPM. Decimal tempo is
         // still available through the explicit double-click text entry path.
         const double perPixel = event->modifiers() & Qt::ShiftModifier ? 0.08 : 0.25;
-        const double raw = std::clamp(m_startValue + delta * perPixel, 20.0, 300.0);
-        const double value = std::round(raw);
+        m_rawValue = std::clamp(m_rawValue + m_pendingPixels * perPixel,
+                                20.0, 300.0);
+        m_pendingPixels = 0.0;
+        const double value = std::round(m_rawValue);
         if (value != m_currentValue) {
             m_currentValue = value;
             if (m_callback) m_callback(value, false);
@@ -159,6 +177,19 @@ protected:
             return;
         }
         const bool changed = m_dragging;
+        const qreal finalDelta =
+            -m_cursorDrag.finish(event->globalPosition()).y();
+        if (changed && std::abs(finalDelta) > 1.0e-9) {
+            const double perPixel =
+                event->modifiers() & Qt::ShiftModifier ? 0.08 : 0.25;
+            m_rawValue = std::clamp(m_rawValue + finalDelta * perPixel,
+                                    20.0, 300.0);
+            const double value = std::round(m_rawValue);
+            if (value != m_currentValue) {
+                m_currentValue = value;
+                if (m_callback) m_callback(value, false);
+            }
+        }
         m_pressed = false;
         m_dragging = false;
         setCursor(Qt::SizeVerCursor);
@@ -173,6 +204,7 @@ protected:
         }
         m_pressed = false;
         m_dragging = false;
+        m_cursorDrag.cancel();
         m_textBeforeEdit = text();
         setReadOnly(false);
         setFocusPolicy(Qt::StrongFocus);
@@ -201,9 +233,10 @@ protected:
 private:
     ScrubCallback m_callback;
     QString m_textBeforeEdit;
-    qreal m_pressGlobalY = 0.0;
-    double m_startValue = 120.0;
     double m_currentValue = 120.0;
+    double m_rawValue = 120.0;
+    qreal m_pendingPixels = 0.0;
+    ui::LockedCursorDrag m_cursorDrag;
     bool m_pressed = false;
     bool m_dragging = false;
 };
@@ -459,18 +492,28 @@ protected:
 
         QLinearGradient depth(0, cavity.top(), 0, cavity.bottom());
         if (m_plain) {
-            depth.setColorAt(0.0, QColor(3, 3, 3));
-            depth.setColorAt(0.55, QColor(6, 6, 6));
-            depth.setColorAt(1.0, QColor(12, 12, 12));
+            // Monochrome follows the active header instead of forcing a black
+            // LCD into every palette. Its separation comes from a quiet tonal
+            // step and outline; there is no coloured light source.
+            const QColor base = mixColors(theme.headerBackground,
+                                          theme.surfaceElevated,
+                                          theme.dark ? 0.34 : 0.48);
+            depth.setColorAt(0.0,
+                             mixColors(base, theme.background,
+                                       theme.dark ? 0.10 : 0.04));
+            depth.setColorAt(0.55, base);
+            depth.setColorAt(1.0,
+                             mixColors(base, theme.textPrimary,
+                                       theme.dark ? 0.025 : 0.035));
         } else if (m_backlit) {
             // A lit panel is not a darker hole: the glass itself carries the
             // colour, densest at the bottom where it would be thickest.
             depth.setColorAt(0.0, mixColors(theme.well(), theme.accent,
-                                            theme.dark ? 0.14 : 0.08));
+                                            theme.dark ? 0.14 : 0.025));
             depth.setColorAt(0.55, mixColors(theme.well(), theme.accent,
-                                             theme.dark ? 0.18 : 0.10));
+                                             theme.dark ? 0.18 : 0.04));
             depth.setColorAt(1.0, mixColors(theme.well(), theme.accent,
-                                            theme.dark ? 0.24 : 0.13));
+                                            theme.dark ? 0.24 : 0.055));
         } else {
             depth.setColorAt(0.0,
                              mixColors(theme.well(), theme.background, 0.46));
@@ -488,8 +531,8 @@ protected:
         if (!m_plain) {
             QRadialGradient glow(cavity.center(), cavity.width() * 0.68);
             QColor glowCore = theme.accent;
-            glowCore.setAlpha(m_backlit ? (theme.dark ? 70 : 40)
-                                        : (theme.dark ? 34 : 22));
+            glowCore.setAlpha(m_backlit ? (theme.dark ? 70 : 12)
+                                        : (theme.dark ? 34 : 6));
             QColor glowEdge = glowCore;
             glowEdge.setAlpha(0);
             glow.setColorAt(0.0, glowCore);
@@ -499,8 +542,9 @@ protected:
 
         painter.save();
         painter.setClipPath(shape);
-        QColor innerShadow = m_plain ? QColor(Qt::black) : theme.background;
-        innerShadow.setAlpha(m_plain || theme.dark ? 185 : 72);
+        QColor innerShadow = theme.background;
+        innerShadow.setAlpha(m_plain ? (theme.dark ? 92 : 42)
+                                     : (theme.dark ? 185 : 72));
         painter.setPen(QPen(innerShadow, 1.2));
         painter.drawLine(QPointF(cavity.left() + radius, cavity.top() + 1),
                          QPointF(cavity.right() - radius, cavity.top() + 1));
@@ -512,7 +556,8 @@ protected:
         // here drew a second dark line under every well on a light theme,
         // which read as another shadow rather than as a lit lower lip.
         QColor reflection(255, 255, 255);
-        reflection.setAlpha(m_plain || theme.dark ? 22 : 170);
+        reflection.setAlpha(m_plain ? (theme.dark ? 18 : 74)
+                                    : (theme.dark ? 22 : 170));
         painter.setPen(QPen(reflection, 1.0));
         painter.drawLine(QPointF(cavity.left() + radius,
                                  cavity.bottom() - 1),
@@ -539,13 +584,15 @@ protected:
                 std::round(cavity.left() + cavity.width() * m_divider) + 0.5;
             const qreal top = cavity.top() + 5;
             const qreal bottom = cavity.bottom() - 5;
-            QColor groove = m_plain ? QColor(Qt::black) : theme.background;
-            groove.setAlpha(m_plain || theme.dark ? 150 : 90);
+            QColor groove = theme.background;
+            groove.setAlpha(m_plain ? (theme.dark ? 92 : 58)
+                                    : (theme.dark ? 150 : 90));
             painter.setBrush(Qt::NoBrush);
             painter.setPen(QPen(groove, 1.0));
             painter.drawLine(QPointF(x, top), QPointF(x, bottom));
-            QColor lip = m_plain ? QColor(Qt::white) : theme.textPrimary;
-            lip.setAlpha(m_plain || theme.dark ? 18 : 38);
+            QColor lip = theme.textPrimary;
+            lip.setAlpha(m_plain ? (theme.dark ? 20 : 34)
+                                 : (theme.dark ? 18 : 38));
             painter.setPen(QPen(lip, 1.0));
             painter.drawLine(QPointF(x + 1, top), QPointF(x + 1, bottom));
         }
@@ -553,17 +600,18 @@ protected:
 
         painter.setBrush(Qt::NoBrush);
         if (m_plain) {
-            painter.setPen(QPen(QColor(Qt::black), 1.0));
+            painter.setPen(QPen(mixColors(theme.separator(), theme.textPrimary,
+                                         theme.dark ? 0.08 : 0.04), 1.0));
         } else if (m_backlit) {
             // A halo one step outside the ring: the light a lit panel throws
             // back onto the socket it is seated in.
             QColor halo = theme.accent;
-            halo.setAlpha(theme.dark ? 60 : 40);
+            halo.setAlpha(theme.dark ? 60 : 18);
             painter.setPen(QPen(halo, 1.0));
             painter.drawRoundedRect(cavity.adjusted(-1, -1, 1, 1), radius + 1,
                                     radius + 1);
             QColor ring = theme.accent;
-            ring.setAlpha(190);
+            ring.setAlpha(theme.dark ? 190 : 125);
             painter.setPen(QPen(ring, 1.4));
         } else {
             painter.setPen(QPen(mixColors(theme.separator(), theme.background,
@@ -616,13 +664,15 @@ protected:
             p.fillPath(halo, QColor(0, 0, 0, t.dark ? 10 : 7));
         }
 
-        QLinearGradient body(plate.topLeft(), plate.bottomLeft());
-        body.setColorAt(0.0, mixColors(t.headerBackground, t.textPrimary, 0.07));
-        body.setColorAt(1.0, mixColors(t.headerBackground, t.background, 0.12));
+        // Keep the whole connecting plate at the former upper-face colour.
+        // A vertical grade made the three modules look as if they were sitting
+        // on a dark shelf instead of sharing one quiet support.
+        const QColor body =
+            mixColors(t.headerBackground, t.textPrimary, 0.07);
         p.fillPath(shape, body);
 
-        // Two strokes are what make the bezel read as thick: a dark groove one
-        // step in from the edge, and a graded rim over it for the lit face.
+        // Two strokes keep the bezel legible: a dark inner groove and one
+        // uniform light rim, without reintroducing a top-to-bottom gradient.
         p.setBrush(Qt::NoBrush);
         QColor lip = t.background;
         lip.setAlpha(t.dark ? 110 : 60);
@@ -630,17 +680,9 @@ protected:
         p.drawRoundedRect(plate.adjusted(2, 2, -2, -2), kChassisRadius - 2,
                           kChassisRadius - 2);
 
-        QLinearGradient edge(plate.topLeft(), plate.bottomLeft());
-        QColor top = mixColors(QColor(255, 255, 255), t.textPrimary, 0.25);
-        top.setAlphaF(t.dark ? 0.30 : 0.70);
-        QColor mid = t.separator();
-        mid.setAlphaF(0.30);
-        QColor bottom(0, 0, 0);
-        bottom.setAlphaF(t.dark ? 0.42 : 0.22);
-        edge.setColorAt(0.0, top);
-        edge.setColorAt(0.5, mid);
-        edge.setColorAt(1.0, bottom);
-        QPen rim(QBrush(edge), 1.0);
+        QColor edge = mixColors(QColor(255, 255, 255), t.textPrimary, 0.25);
+        edge.setAlphaF(t.dark ? 0.30 : 0.70);
+        QPen rim(edge, 1.0);
         rim.setJoinStyle(Qt::RoundJoin);
         p.setPen(rim);
         p.drawPath(shape);
@@ -1153,7 +1195,7 @@ QWidget* TransportBar::buildPill() {
         auto* cell = new QWidget(statsSection);
         cell->setFixedHeight(19);
         auto* cellRow = new QHBoxLayout(cell);
-        cellRow->setContentsMargins(0, 0, 0, 0);
+        cellRow->setContentsMargins(0, 1, 0, 1);
         cellRow->setSpacing(2);
         icon = new QLabel(cell);
         icon->setFixedSize(16, 16);
@@ -1168,7 +1210,8 @@ QWidget* TransportBar::buildPill() {
     auto* tempoEdit = new TempoScrubEdit(QStringLiteral("120"), statsSection);
     m_tempoEdit = tempoEdit;
     m_tempoEdit->setObjectName(QStringLiteral("TempoField"));
-    m_tempoEdit->setFont(ui::transportDisplayFont(kStatsFontPx));
+    m_tempoEdit->setFont(ui::transportControlFont(kStatsFontPx,
+                                                  QFont::DemiBold));
     m_tempoEdit->setFixedSize(66, 19);
     m_tempoEdit->setFrame(false);
     m_tempoEdit->setAlignment(Qt::AlignCenter);
@@ -1198,7 +1241,8 @@ QWidget* TransportBar::buildPill() {
     m_timeSignatureButton->setCursor(Qt::PointingHandCursor);
     m_timeSignatureButton->setFocusPolicy(Qt::StrongFocus);
     m_timeSignatureButton->setFixedSize(66, 19);
-    m_timeSignatureButton->setFont(ui::transportDisplayFont(kStatsFontPx));
+    m_timeSignatureButton->setFont(ui::transportControlFont(
+        kStatsFontPx, QFont::DemiBold));
     m_timeSignatureButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     m_timeSignatureButton->setAccessibleName(tr("Project time signature"));
     auto* signatureMenu = new QMenu(m_timeSignatureButton);
@@ -1232,7 +1276,7 @@ QWidget* TransportBar::buildPill() {
     m_gridButton->setCursor(Qt::PointingHandCursor);
     m_gridButton->setFocusPolicy(Qt::StrongFocus);
     m_gridButton->setFixedSize(66, 19);
-    m_gridButton->setFont(ui::transportDisplayFont(kChipFontPx));
+    m_gridButton->setFont(ui::transportControlFont(kChipFontPx));
     m_gridButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     auto* gridMenu = new QMenu(m_gridButton);
     auto* gridGroup = new QActionGroup(gridMenu);
@@ -1261,7 +1305,7 @@ QWidget* TransportBar::buildPill() {
     m_timeFormatButton->setCursor(Qt::PointingHandCursor);
     m_timeFormatButton->setFocusPolicy(Qt::StrongFocus);
     m_timeFormatButton->setFixedSize(66, 19);
-    m_timeFormatButton->setFont(ui::transportDisplayFont(kChipFontPx));
+    m_timeFormatButton->setFont(ui::transportControlFont(kChipFontPx));
     m_timeFormatButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     auto* timeMenu = new QMenu(m_timeFormatButton);
     auto* timeGroup = new QActionGroup(timeMenu);
@@ -1520,22 +1564,24 @@ void TransportBar::applyTheme() {
             mixColors(t.surfaceElevated, t.textPrimary, 0.14);
         const QColor fieldHover = mixColors(field, t.textPrimary, 0.10);
         const QColor displayInk = mixColors(
-            t.accent, t.textPrimary, t.dark ? 0.25 : 0.30);
+            t.accent, t.textPrimary, t.dark ? 0.25 : 0.52);
         const QColor focus(t.accent.red(), t.accent.green(), t.accent.blue(),
                            220);
         const QColor accentSoft = mixColors(
-            nested, t.accent, t.dark ? 0.20 : 0.14);
+            nested, t.accent, t.dark ? 0.20 : 0.08);
 
         // Keep the LCD recognisably glass, but calm the theme colour locally.
         // No other GlassPanel in the application is affected.
         if (auto* lcd = qobject_cast<ui::GlassPanel*>(m_lcdScreen))
-            lcd->setAccentColor(
-                m_plainPanelStyle ? QColor(32, 32, 32)
-                                 : mixColors(t.accent, t.surfaceElevated, 0.24));
+            lcd->setAccentColor(m_plainPanelStyle
+                ? mixColors(t.headerBackground, t.surfaceElevated, 0.48)
+                : mixColors(t.accent, t.surfaceElevated,
+                            t.dark ? 0.24 : 0.72));
         for (QWidget* group : {m_transportGroup, m_rightGroup}) {
             if (auto* glass = qobject_cast<ui::GlassPanel*>(group))
                 glass->setAccentColor(
-                    mixColors(t.accent, t.surfaceElevated, 0.55));
+                    mixColors(t.accent, t.surfaceElevated,
+                              t.dark ? 0.55 : 0.80));
         }
 
         // Its own %1..%3, applied separately: adding them to the sheet below
@@ -1559,9 +1605,10 @@ void TransportBar::applyTheme() {
 }
 #BarsPosition, #TempoField, #TimeSignatureButton, #GridChip {
     background: transparent; border: 1px solid transparent; border-radius: 7px;
-    padding: 0 2px; color: %3; selection-background-color: %8;
+    padding: 1px 3px; color: %3; selection-background-color: %8;
 }
-#BarsPosition, #TempoField { padding: 0; font-weight: 700; }
+#BarsPosition { padding: 0 7px; font-weight: 700; }
+#TempoField { font-weight: 600; }
 #BarsPosition:hover, #TempoField:hover, #TimeSignatureButton:hover, #GridChip:hover {
     background: %5;
 }
@@ -1586,21 +1633,33 @@ void TransportBar::applyTheme() {
                   focus.name(QColor::HexArgb), hover.name(), t.accent.name(),
                   accentSoft.name()));
     }
-    // A local sheet keeps the plain readout monochrome in every app theme,
-    // including hover, text selection and keyboard focus.
-    if (m_lcdScreen) m_lcdScreen->setStyleSheet(m_plainPanelStyle
+    // Monochrome uses theme-aware ink so it remains readable on both dark and
+    // light headers. It has no forced black fill and no coloured glow.
+    if (m_lcdScreen) {
+        const QColor monoInk = t.ink();
+        const QColor monoHover = mixColors(t.headerBackground, monoInk, 0.08);
+        const QColor monoFocus = mixColors(t.headerBackground,
+                                           t.surfaceElevated, 0.55);
+        QColor monoOutline = monoInk;
+        monoOutline.setAlpha(t.dark ? 150 : 125);
+        const QColor monoSelection = mixColors(t.headerBackground, monoInk,
+                                               t.dark ? 0.28 : 0.18);
+        m_lcdScreen->setStyleSheet(m_plainPanelStyle
         ? QStringLiteral(R"(
-#LcdScreen QLabel { color: #ffffff; }
+#LcdScreen QLabel { color: %1; }
 #BarsPosition, #TempoField, #TimeSignatureButton, #GridChip {
-    color: #ffffff; selection-color: #ffffff; selection-background-color: #454545;
+    color: %1; selection-color: %1; selection-background-color: %4;
 }
 #BarsPosition:hover, #TempoField:hover, #TimeSignatureButton:hover, #GridChip:hover {
-    background: #202020;
+    background: %2;
 }
 #BarsPosition:focus, #TempoField:focus, #TimeSignatureButton:focus, #GridChip:focus {
-    border-color: #ffffff; background: #141414;
+    border-color: %3; background: %2;
 }
-)") : QString());
+)").arg(monoInk.name(), monoHover.name(QColor::HexArgb),
+         monoOutline.name(QColor::HexArgb), monoSelection.name())
+        : QString());
+    }
     updatePositionStyle();
     // One label per reading in the 2x2 field, so the icons stay put while the
     // values beside them change width.
@@ -1613,7 +1672,7 @@ void TransportBar::applyTheme() {
         if (!label) continue;
         label->setPixmap(
             icons::svgIcon(QLatin1String(file),
-                           m_plainPanelStyle ? QColor(Qt::white) : t.textSecondary, 16)
+                           m_plainPanelStyle ? t.ink() : t.textSecondary, 16)
                 .pixmap(QSize(16, 16)));
     }
     if (m_snapButton)
@@ -1645,19 +1704,22 @@ void TransportBar::applyTheme() {
 void TransportBar::updatePositionStyle() {
     if (!m_positionGroup || !m_positionValue) return;
     const Theme& t = th();
-    const QColor background = m_plainPanelStyle ? QColor(20, 20, 20)
+    const QColor background = m_plainPanelStyle
+        ? mixColors(t.headerBackground, t.surfaceElevated, 0.48)
         : mixColors(t.well(), t.surfaceElevated, 0.26);
     // Brighter than the values around it: this socket is backlit, so its ink
     // has to stay ahead of its own glow.
-    const QColor text = m_plainPanelStyle ? QColor(Qt::white) : m_positionRecording
+    const QColor text = m_plainPanelStyle ? t.ink() : m_positionRecording
                             ? Theme::record()
                             : mixColors(t.accent, t.textPrimary,
                                         t.dark ? 0.10 : 0.34);
-    const QColor hover = m_plainPanelStyle ? QColor(32, 32, 32) : mixColors(
+    const QColor hover = m_plainPanelStyle
+        ? mixColors(background, t.ink(), 0.08) : mixColors(
         background, m_positionRecording ? Theme::record() : t.accent, 0.14);
-    const QColor focus = m_plainPanelStyle ? QColor(Qt::white)
+    const QColor focus = m_plainPanelStyle ? t.ink()
         : m_positionRecording ? Theme::record() : t.accent;
-    const QColor selection = m_plainPanelStyle ? QColor(69, 69, 69) : focus;
+    const QColor selection = m_plainPanelStyle
+        ? mixColors(background, t.ink(), t.dark ? 0.28 : 0.18) : focus;
     const QString style =
         QString("#PositionSection { background: transparent; border: none; "
                 "border-radius: 7px; } "
@@ -1675,6 +1737,10 @@ void TransportBar::updatePositionStyle() {
 
 void TransportBar::paintEvent(QPaintEvent*) {
     QPainter p(this);
+    paintScene(p, QRegion(rect()));
+}
+
+void TransportBar::paintScene(QPainter& p, const QRegion&) {
     p.setRenderHint(QPainter::Antialiasing, true);
     const Theme& t = th();
     // The header has its own colour (per-theme `headerBackground`); compact
@@ -1684,7 +1750,7 @@ void TransportBar::paintEvent(QPaintEvent*) {
         m_backgroundMedia && m_backgroundMedia->hasFrame()) {
         p.setRenderHint(QPainter::SmoothPixmapTransform, true);
         p.setOpacity(double(m_backgroundVisibility) / 100.0);
-        p.drawPixmap(QPoint(0, 0), m_backgroundMedia->frame());
+        m_backgroundMedia->paint(p, QRectF(rect()));
         p.setOpacity(1.0);
     }
 
@@ -1783,6 +1849,12 @@ int TransportBar::minimumResponsiveWidth() const {
     constexpr int kDockGap = 10;
     const int edgeDock = m_rightDock ? widgetWidth(m_rightDock) : 0;
     return 2 * (kOuterMargin + kDockGap + edgeDock) + completeCluster;
+}
+
+QPoint TransportBar::readoutCenterGlobal() const {
+    return m_lcdScreen
+               ? m_lcdScreen->mapToGlobal(m_lcdScreen->rect().center())
+               : mapToGlobal(rect().center());
 }
 
 void TransportBar::updateResponsiveLayout() {
@@ -1893,6 +1965,14 @@ void TransportBar::updateResponsiveLayout() {
     }
     m_pill->setGeometry(x, (height() - m_pill->height()) / 2, pillWidth,
                         m_pill->height());
+    const int readoutCenter =
+        m_lcdScreen
+            ? m_lcdScreen->mapTo(this, m_lcdScreen->rect().center()).x()
+            : width() / 2;
+    if (m_lastReadoutCenterX != readoutCenter) {
+        m_lastReadoutCenterX = readoutCenter;
+        emit readoutGeometryChanged();
+    }
 }
 
 QString TransportBar::positionText() const {

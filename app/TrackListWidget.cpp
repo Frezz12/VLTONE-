@@ -484,6 +484,9 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
     container->installEventFilter(this);
 
     auto* colorBar = new TrackColorRail(color, container);
+    colorBar->setProperty("trackId", id);
+    colorBar->setMouseTracking(true);
+    colorBar->installEventFilter(this);
 
     auto* icon = new TrackIcon(glyphForTrack(track), color, container);
     if (folder) {
@@ -505,6 +508,8 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
     auto* name = new ui::InlineNameEdit(QString::fromStdString(track.name),
                                         container);
     name->setProperty("trackId", id);
+    name->setProperty("trackSelectionOnly", true);
+    name->installEventFilter(this);
     name->setMinimumWidth(40);
     name->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     connect(name, &QLineEdit::editingFinished, this, [this, id, name] {
@@ -601,6 +606,10 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
     }
 
     auto* chips = new QWidget(container);
+    chips->setProperty("trackId", id);
+    chips->setProperty("trackFreeAreaOnly", true);
+    chips->setMouseTracking(true);
+    chips->installEventFilter(this);
     auto* chipRow = new QHBoxLayout(chips);
     chipRow->setContentsMargins(0, 0, 0, 0);
     chipRow->setSpacing(kChipGap);
@@ -683,6 +692,9 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
     // colour rail and the meter stay outside the band, so they run the row's
     // full height and mark the lane rather than the controls.
     auto* band = new QWidget(container);
+    band->setObjectName(QStringLiteral("TrackRowBand"));
+    band->setProperty("trackId", id);
+    band->setMouseTracking(true);
     band->setMaximumHeight(ui::kLaneHeight);
     auto* h = new QHBoxLayout(band);
     h->setContentsMargins(0, 0, 0, 0);
@@ -693,6 +705,9 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
         // Nothing to fade and nothing to pan: the two chips take the place the
         // fader would have had, pinned right and centred on the row.
         auto* count = new QLabel(band);
+        count->setProperty("trackId", id);
+        count->setMouseTracking(true);
+        count->installEventFilter(this);
         count->setObjectName("FolderCount");
         count->setText(QString::number(
             daw::subtreeOf(m_controller->project(), track.id).size()));
@@ -950,11 +965,6 @@ void TrackListWidget::applyRowAdaptivity(const Row& row) {
     const int width = m_rowsHost && m_rowsHost->width() > 0
                           ? m_rowsHost->width()
                           : ui::kTrackHeaderWidth;
-    const int fixed = 4 /*left margin*/ + row.depth * kIndentStep +
-                      6 /*colour rail*/ + kIconSize +
-                      (row.meter ? row.meter->width() : 0) + 4 * kPartGap;
-    const int flexible = width - fixed;
-
     int chipCount = 0;
     for (const QWidget* chip : {static_cast<QWidget*>(row.mute),
                                 static_cast<QWidget*>(row.solo),
@@ -970,6 +980,18 @@ void TrackListWidget::applyRowAdaptivity(const Row& row) {
     // When the normal throw no longer fits, level and pan both stay reachable
     // as a compact pair of round controls.
     constexpr int kCompactFaderSide = 24;
+    const int fixed = 4 /*left margin*/ + 6 /*colour rail*/ + kIconSize +
+                      (row.meter ? row.meter->width() : 0) + 4 * kPartGap;
+    // Deep folder nesting must not push level/pan out of reach. Indentation
+    // gives up space before channel controls do; wider columns restore it.
+    const int compactPair = stackMin + 2 * kPartGap + kCompactFaderSide + kPanWidth;
+    const int indent = std::min(row.depth * kIndentStep, std::max(0, width - fixed - compactPair));
+    if (auto* spacer = row.container->layout()->itemAt(0)->spacerItem();
+        spacer && spacer->sizeHint().width() != indent) {
+        spacer->changeSize(indent, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+        row.container->layout()->invalidate();
+    }
+    const int flexible = width - fixed - indent;
     // Compact before the full throw would squeeze the pan off the row.
     const bool normalFader = flexible >= kFullChipStrip + kPartGap + kFaderMin +
         (row.pan ? kPartGap + kPanWidth : 0);
@@ -1354,6 +1376,46 @@ bool TrackListWidget::checkButtonPaintForTest(QString* error) {
     list.setSelectedTracks({first, second, third}, first);
     list.show();
     QApplication::processEvents();
+
+    // Layout-only space in the centre band used to swallow clicks between the
+    // name/chips and the fader/pan controls. Aim at a point owned by the band
+    // itself and verify that it establishes the row context immediately.
+    QWidget* thirdBand = nullptr;
+    for (QWidget* band : list.findChildren<QWidget*>(
+             QStringLiteral("TrackRowBand"))) {
+        if (band->property("trackId").toString() == third) {
+            thirdBand = band;
+            break;
+        }
+    }
+    QPoint freePoint;
+    bool foundFreePoint = false;
+    if (thirdBand) {
+        for (int y = 1; y < thirdBand->height() && !foundFreePoint; ++y) {
+            for (int x = 1; x < thirdBand->width(); ++x) {
+                if (thirdBand->childAt(x, y)) continue;
+                freePoint = QPoint(x, y);
+                foundFreePoint = true;
+                break;
+            }
+        }
+    }
+    if (!thirdBand || !foundFreePoint)
+        return fail(QStringLiteral("track row has no testable free hit area"));
+    const QPoint freeGlobal = thirdBand->mapToGlobal(freePoint);
+    QMouseEvent selectPress(QEvent::MouseButtonPress, QPointF(freePoint),
+                            QPointF(freeGlobal), Qt::LeftButton,
+                            Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(thirdBand, &selectPress);
+    QMouseEvent selectRelease(QEvent::MouseButtonRelease, QPointF(freePoint),
+                              QPointF(freeGlobal), Qt::LeftButton,
+                              Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(thirdBand, &selectRelease);
+    if (list.selectedTrackId() != third ||
+        list.selectedTrackIds() != QStringList{third}) {
+        return fail(QStringLiteral("free track-row space did not select its track"));
+    }
+    list.setSelectedTracks({first, second, third}, first);
 
     const auto paint = [&](const QString& role, const QString& fromId,
                            const QString& toId) {
@@ -1898,6 +1960,30 @@ bool TrackListWidget::eventFilter(QObject* obj, QEvent* ev) {
     const QVariant id = w->property("trackId");
     if (!id.isValid()) return QWidget::eventFilter(obj, ev);
 
+    // Text entry still owns its caret and selection gestures, but clicking the
+    // track name must first establish the same row context as clicking any
+    // other non-control part of the header.
+    if (w->property("trackSelectionOnly").toBool()) {
+        if (ev->type() == QEvent::MouseButtonPress) {
+            auto* mouse = static_cast<QMouseEvent*>(ev);
+            if (mouse->button() == Qt::LeftButton)
+                clickSelect(id.toString(), mouse->modifiers());
+        }
+        return QWidget::eventFilter(obj, ev);
+    }
+
+    // Mouse events ignored by a real control can bubble into its parent. The
+    // band and chip wrapper should fill only their genuinely empty pixels;
+    // they must never turn a fader/pan/M/S gesture into row selection or drag.
+    if (w->property("trackFreeAreaOnly").toBool() &&
+        ev->type() == QEvent::MouseButtonPress) {
+        const auto* mouse = static_cast<QMouseEvent*>(ev);
+        const QPoint local =
+            w->mapFromGlobal(mouse->globalPosition().toPoint());
+        if (w->childAt(local))
+            return QWidget::eventFilter(obj, ev);
+    }
+
     switch (ev->type()) {
     case QEvent::MouseButtonPress: {
         auto* me = static_cast<QMouseEvent*>(ev);
@@ -2162,10 +2248,11 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
 
     QAction* dup = nullptr;
     QAction* dupNoFx = nullptr;
-    if (!isFolder || isPattern) {
+    {
         dup = menu.addAction(isPattern ? tr("Duplicate Pattern")
-                                       : tr("Duplicate Track"));
-        if (!isPattern) {
+                              : isFolder ? tr("Duplicate Folder")
+                                         : tr("Duplicate Track"));
+        if (!isFolder && !isPattern) {
             dupNoFx =
                 menu.addAction(tr("Duplicate Track (without plugins)"));
         }
@@ -2301,6 +2388,7 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
         emit orderChanged();
         return;
     }
+    std::string duplicatedId;
     if (chosen == del) {
         // A copy: removing tracks rebuilds the column, which rewrites the very
         // list being walked.
@@ -2312,12 +2400,16 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
         m_anchorId.clear();
     } else if (dup && chosen == dup) {
         if (isPattern)
-            m_controller->duplicatePattern(id.toStdString());
+            duplicatedId = m_controller->duplicatePattern(
+                id.toStdString(), ui::duplicateTrackClips());
         else
-            m_controller->duplicateTrack(id.toStdString(),
-                                         /*withInserts=*/true);
+            duplicatedId = m_controller->duplicateTrack(
+                id.toStdString(), /*withInserts=*/true,
+                ui::duplicateTrackClips());
     } else if (dupNoFx && chosen == dupNoFx) {
-        m_controller->duplicateTrack(id.toStdString(), /*withInserts=*/false);
+        duplicatedId = m_controller->duplicateTrack(
+            id.toStdString(), /*withInserts=*/false,
+            ui::duplicateTrackClips());
     } else if (const auto spec = trackKinds.constFind(chosen);
                spec != trackKinds.constEnd()) {
         spec->create(*m_controller);
@@ -2327,4 +2419,9 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
     // The shell rebuilds the header immediately, then refreshes channel strips
     // after Qt has had a chance to paint the new structure.
     emit orderChanged();
+    if (!duplicatedId.empty()) {
+        const QString copyId = QString::fromStdString(duplicatedId);
+        setSelectedTrack(copyId);
+        emitSelection();
+    }
 }

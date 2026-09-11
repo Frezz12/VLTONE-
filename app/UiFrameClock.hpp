@@ -4,6 +4,9 @@
 #include <QPointer>
 #include <QRegion>
 #include <QWidget>
+#include <functional>
+
+class QWindow;
 
 namespace ui {
 enum class FrameMode { Fixed, Display, Unlimited };
@@ -22,6 +25,13 @@ public:
     void activate(FrameTimer* timer);
     void wake();
     double periodSeconds(const QWidget* window) const;
+    // A Quick workspace supplies the window's cadence. Delivery and damage
+    // callbacks run on the GUI thread before the scene graph synchronizes.
+    void setPresenter(QWidget* surface, QObject* owner, QWindow* presentationWindow,
+                      std::function<void()> requestFrame,
+                      std::function<bool(QWidget*, const QRegion&)> damage);
+    void clearPresenter(QWidget* surface, QObject* owner);
+    void presentationFrame(QWidget* surface, QObject* owner);
 
 signals:
     void preferenceChanged();
@@ -32,7 +42,7 @@ private:
     class Driver;
     friend class Driver;
     Driver* driver(QWidget* surface);
-    FrameMode m_mode = FrameMode::Fixed;
+    FrameMode m_mode = FrameMode::Display;
     int m_limit = 60;
     QList<QPointer<FrameTimer>> m_timers;
     QList<QPointer<Driver>> m_drivers;

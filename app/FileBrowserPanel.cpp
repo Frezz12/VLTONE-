@@ -9,6 +9,7 @@
 #include "FileSearchWorker.hpp"
 #include "FileTypes.hpp"
 #include "Icons.hpp"
+#include "MidiPreviewLoader.hpp"
 #include "PreviewLoader.hpp"
 #include "Theme.hpp"
 #include "UiConstants.hpp"
@@ -180,6 +181,36 @@ FileBrowserPanel::FileBrowserPanel(daw::EngineController* controller,
                                        : reason);
             });
 
+    m_midiLoader = new MidiPreviewLoader(this);
+    connect(m_midiLoader, &MidiPreviewLoader::loaded, this,
+            [this](const QString& path,
+                   std::shared_ptr<const daw::midifile::File> file) {
+                if (path != m_selectedPath || !ui::isMidiFile(path)) return;
+                if (!file || file->notes.empty()) {
+                    m_strip->clear(tr("This MIDI file contains no notes"));
+                    return;
+                }
+                m_strip->setMidi(file);
+                const QString details =
+                    tr("MIDI · %1 notes · %2 tracks · %3 beats")
+                        .arg(qulonglong(file->notes.size()))
+                        .arg(file->tracksWithNotes())
+                        .arg(file->lengthBeats, 0, 'f',
+                             file->lengthBeats < 16.0 ? 1 : 0);
+                setFileLabel(QStringLiteral("%1  ·  %2")
+                                 .arg(QFileInfo(path).fileName(), details),
+                             path);
+            });
+    connect(m_midiLoader, &MidiPreviewLoader::failed, this,
+            [this](const QString& path, const QString& reason) {
+                if (path != m_selectedPath || !ui::isMidiFile(path)) return;
+                m_strip->clear(tr("Cannot read this MIDI file"));
+                emit statusMessage(reason.isEmpty()
+                                       ? tr("Cannot read %1")
+                                             .arg(QFileInfo(path).fileName())
+                                       : reason);
+            });
+
     m_playheadTimer = new QTimer(this);
     m_playheadTimer->setTimerType(Qt::PreciseTimer);
     m_playheadTimer->setInterval(kPlayheadPollMs);
@@ -243,6 +274,7 @@ QWidget* FileBrowserPanel::buildHeader() {
 
 QWidget* FileBrowserPanel::buildPreviewBar() {
     auto* bar = new QWidget(this);
+    m_previewBar = bar;
     bar->setObjectName("BrowserPreview");
 
     auto* column = new QVBoxLayout(bar);
@@ -305,7 +337,15 @@ QWidget* FileBrowserPanel::buildPreviewBar() {
     controls->addWidget(m_fileLabel, 1);
 
     column->addWidget(row);
+    bar->hide();
     return bar;
+}
+
+void FileBrowserPanel::setPreviewVisible(bool visible, bool audioControls) {
+    if (m_previewBar) m_previewBar->setVisible(visible);
+    if (m_playButton) m_playButton->setVisible(visible && audioControls);
+    if (m_loopButton) m_loopButton->setVisible(visible && audioControls);
+    if (m_autoButton) m_autoButton->setVisible(visible && audioControls);
 }
 
 void FileBrowserPanel::setFileLabel(const QString& text, const QString& tip) {
@@ -348,13 +388,16 @@ void FileBrowserPanel::applyTheme() {
 #BrowserPreview { background: %TOOLBAR%; border-top: 1px solid %SECTION%; }
 QTreeWidget { background: %SURFACE%; border: none; color: %TEXT1%;
               font-size: %BODYPX%px; }
-QTreeWidget::item { padding: %ROWPADPX%px 2px; }
+QTreeWidget::item { padding: %ROWPADPX%px 3px; margin: 1px 4px 1px 2px;
+                    border-radius: %ROUNDPX%px; }
+QTreeWidget::item:hover:!selected { background: %HOVER%; }
 QTreeWidget::item:selected { background: %SELECT%; color: %TEXT1%; }
 )")
                       .replace("%TITLEPX%", px(10))
                       .replace("%SMALLPX%", px(10))
                       .replace("%BODYPX%", px(11))
                       .replace("%ROWPADPX%", px(2))
+                      .replace("%ROUNDPX%", px(6))
                       .replace("%PADPX%", px(3))
                       .replace("%EDGE%", edge)
                       .replace("%SURFACE%", t.surface.name())
@@ -366,13 +409,15 @@ QTreeWidget::item:selected { background: %SELECT%; color: %TEXT1%; }
                       .replace("%SECTION%", t.sectionDivider().name())
                       .replace("%ACCENT%", t.accent.name())
                       .replace("%SELECT%", t.selection.name())
+                      .replace("%HOVER%", mixColors(t.surface, t.textPrimary,
+                                                     t.dark ? 0.06 : 0.045).name())
                       .replace("%TEXT1%", t.textPrimary.name())
                       .replace("%TEXT2%", t.textSecondary.name()));
     if (m_tree) {
         // The icons and the indent are widget properties, not stylesheet ones,
         // and a 14 px glyph beside a 22 px row is what a zoom that forgot them
         // looks like.
-        const int glyph = std::max(10, int(std::lround(14.0 * m_zoom)));
+        const int glyph = std::max(14, int(std::lround(18.0 * m_zoom)));
         m_tree->setIconSize(QSize(glyph, glyph));
         m_tree->setIndentation(std::max(8, int(std::lround(12.0 * m_zoom))));
     }
@@ -555,18 +600,33 @@ void FileBrowserPanel::searchChanged(const QString& query) {
 void FileBrowserPanel::selectFile(const QString& path) {
     m_selectedPath = path;
     const QFileInfo info(path);
+    const bool audioFile = ui::isAudioFile(path);
+    const bool midiFile = ui::isMidiFile(path);
 
-    if (!ui::isAudioFile(path)) {
-        // MIDI and everything else: no waveform, no audition, but the row is
-        // still selectable and (for MIDI) draggable.
+    if (!audioFile && !midiFile) {
         m_loader->cancel();
+        m_midiLoader->cancel();
         stopPreview();
-        m_strip->clear(ui::isMidiFile(path) ? tr("MIDI file — drag it onto a track")
-                                            : tr("Not an audio file"));
-        setFileLabel(info.fileName(), path);
+        m_strip->clear();
+        setFileLabel({});
+        setPreviewVisible(false, false);
         refreshPreviewState();
         return;
     }
+
+    setPreviewVisible(true, audioFile);
+
+    if (midiFile) {
+        m_loader->cancel();
+        stopPreview();
+        m_strip->clear(tr("Reading MIDI…"));
+        setFileLabel(info.fileName(), path);
+        m_midiLoader->request(path);
+        refreshPreviewState();
+        return;
+    }
+
+    m_midiLoader->cancel();
 
     // The probe is a header read, so the size and shape of a file are known
     // before deciding whether auditioning it is reasonable.
@@ -674,6 +734,21 @@ bool FileBrowserPanel::reloadSelectedPreviewForTest() {
 
 bool FileBrowserPanel::hasPreviewWaveformForTest() const {
     return m_strip && m_strip->hasWaveform();
+}
+
+bool FileBrowserPanel::hasMidiPreviewForTest() const {
+    return m_strip && m_strip->hasMidiPreview();
+}
+
+bool FileBrowserPanel::previewVisibleForTest() const {
+    return m_previewBar && !m_previewBar->isHidden();
+}
+
+bool FileBrowserPanel::clearFileSelectionForTest() {
+    if (!m_tree) return false;
+    m_tree->setCurrentIndex({});
+    QApplication::processEvents(QEventLoop::AllEvents, 10);
+    return !previewVisibleForTest();
 }
 
 QStringList FileBrowserPanel::dragUrlsForTest() const {

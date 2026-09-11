@@ -41,6 +41,9 @@ struct WaveformPeaks {
 /// drawn waveform stays smooth and detailed instead of blocky.
 inline constexpr double kPeakBucketsPerSecond = 1000.0;
 
+/// Shared identity space for immutable files and sealed live envelope prefixes.
+std::uint64_t allocateWaveformGeometryId() noexcept;
+
 /// Build an envelope from audio somebody else decoded.
 ///
 /// Free-standing so a worker thread can produce peaks without going near the

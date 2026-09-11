@@ -1,5 +1,10 @@
 #include "UiFrameClock.hpp"
 #include "UiFrameCadence.hpp"
+#include "UiPerformance.hpp"
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QThread>
 #include <QApplication>
 #include <QEventLoop>
 #include <QElapsedTimer>
@@ -36,6 +41,7 @@ static double run(int ms) {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QTemporaryDir prefs;
+    qputenv("VLT_UI_PROFILE", (prefs.path() + "/frames.json").toUtf8());
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, prefs.path());
     QCoreApplication::setOrganizationName("VltTest");
@@ -81,7 +87,8 @@ int main(int argc, char** argv) {
     first.move(origin); second.move(origin + QPoint(240, 0));
     first.show(); second.show();
     auto& clock = ui::FrameClock::instance();
-    check(clock.mode() == ui::FrameMode::Fixed && clock.limit() == 60, "default is 60 FPS");
+    check(clock.mode() == ui::FrameMode::Display, "new preferences follow the display");
+    clock.setPreference(ui::FrameMode::Fixed, 60);
     ui::FrameTimer a(&first), b(&second);
     int ticksA = 0, ticksB = 0;
     QObject::connect(&a, &ui::FrameTimer::timeout, &first, [&] { ++ticksA; check(a.deltaSeconds() > 0, "positive elapsed time"); });
@@ -148,5 +155,55 @@ int main(int argc, char** argv) {
     timerOnly.start(); run(100); timerOnly.stop(); run(50);
     check(canvas.paints == 0 && sibling.paints == 0,
           "callbacks without damage never trigger a window repaint");
+
+    QObject presenter;
+    int requests = 0;
+    QRegion presented;
+    clock.setPresenter(&window, &presenter, window.windowHandle(), [&] { ++requests; },
+        [&](QWidget* widget, const QRegion& region) {
+            if (widget != &canvas) return false;
+            presented += region; return true;
+        });
+    canvas.reset(); sibling.reset();
+    canvas.update(strip); canvas.update(QRect(45, 10, 5, 100));
+    run(40);
+    check(requests == 1 && canvas.paints == 0 && presented.isEmpty(),
+          "Quick owns one pending frame; QWidget does not consume its cadence");
+    clock.presentationFrame(&window, &presenter);
+    check(presented == (QRegion(strip) | QRect(45, 10, 5, 100)) && canvas.paints == 0,
+          "damage reaches the current Quick frame without a QWidget paint round trip");
+    run(80);
+    check(requests == 1, "a static presented scene requests no successor frame");
+    clock.clearPresenter(&window, &presenter);
+    canvas.update(strip); run(80);
+    check(canvas.paints > 0 && canvas.damage == QRegion(strip),
+          "detaching a presenter restores QWidget scheduling and exact damage");
+
+    auto* shortLived = new QObject;
+    clock.setPresenter(&window, shortLived, window.windowHandle(), [&] { ++requests; },
+        [](QWidget*, const QRegion&) { return true; });
+    canvas.reset(); canvas.update(strip); // destroy before the queued request executes
+    delete shortLived; run(80);
+    check(canvas.paints > 0, "presenter destruction preserves pending damage without a dangling callback");
+    // A blocked GUI really misses frames, even when the pause exceeds the old
+    // 250 ms filter. Hiding/stopping a window is not the same kind of stall.
+    const auto metric = [&](const char* name, const char* field) {
+        ui::perf::flush();
+        QFile file(prefs.path() + "/frames.json");
+        if (!file.open(QIODevice::ReadOnly)) return -1.0;
+        return QJsonDocument::fromJson(file.readAll()).object()[name].toObject()[field].toDouble();
+    };
+    clock.setPreference(ui::FrameMode::Fixed, 60);
+    a.start(); run(100);
+    const double oldStalls = metric("frame.stall.ms", "count");
+    QThread::msleep(320); run(100);
+    check(metric("frame.stall.ms", "count") > oldStalls &&
+          metric("frame.interval.ms", "max") >= 300.0,
+          "a GUI stall over 250 ms remains visible in frame diagnostics");
+    first.hide(); run(60);
+    const double beforeHide = metric("frame.stall.ms", "count");
+    run(350); first.show(); run(100); a.stop();
+    check(metric("frame.stall.ms", "count") == beforeHide,
+          "an intentionally hidden window does not manufacture a stalled frame on resume");
     return failures ? 1 : 0;
 }

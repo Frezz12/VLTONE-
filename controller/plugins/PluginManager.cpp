@@ -26,6 +26,8 @@ using plugins::PluginDescriptor;
 
 namespace {
 
+std::atomic<std::uint64_t> gNextPluginManagerId{0};
+
 bool isExternalFormat(Format format) noexcept {
     return format == Format::Clap || format == Format::Vst3 ||
            format == Format::Vst || format == Format::AudioUnit;
@@ -253,7 +255,10 @@ std::vector<PluginDescriptor> preferredPluginVariants(
 }
 
 PluginManager::PluginManager(std::string cachePath)
-    : m_cachePath(std::move(cachePath)), m_scannerPath(defaultScannerPath()) {}
+    : m_cachePath(std::move(cachePath)),
+      m_instanceId(gNextPluginManagerId.fetch_add(
+                       1, std::memory_order_relaxed) + 1),
+      m_scannerPath(defaultScannerPath()) {}
 
 PluginManager::~PluginManager() {
     cancelScan();
@@ -314,6 +319,7 @@ void PluginManager::load() {
             missing.emplace_back(entry.format, entry.path);
     }
     for (const auto& [format, path] : missing) m_cache.remove(format, path);
+    m_catalogueRevision.fetch_add(1, std::memory_order_release);
 }
 
 bool PluginManager::save() const {
@@ -527,6 +533,7 @@ void PluginManager::scanWorker(bool rescanAll) {
         m_currentPath.clear();
     }
     save();
+    m_catalogueRevision.fetch_add(1, std::memory_order_release);
     m_scanning.store(false, std::memory_order_release);
     m_finished.store(true, std::memory_order_release);
 }
@@ -596,6 +603,7 @@ void PluginManager::unblacklist(Format format, const std::string& path) {
     // Drop the entry outright rather than clearing the flag: the next scan then
     // treats it as never seen and tries it again from scratch.
     m_cache.remove(format, path);
+    m_catalogueRevision.fetch_add(1, std::memory_order_release);
 }
 
 void PluginManager::clearBlacklist() {
@@ -606,6 +614,7 @@ void PluginManager::clearBlacklist() {
     }
     m_cache.clear();
     for (PluginCacheEntry& entry : keep) m_cache.put(std::move(entry));
+    m_catalogueRevision.fetch_add(1, std::memory_order_release);
 }
 
 std::unique_ptr<plugins::PluginInstance> PluginManager::instantiate(

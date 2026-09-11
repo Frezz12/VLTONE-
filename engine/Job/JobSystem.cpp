@@ -34,14 +34,9 @@ inline void pause() noexcept {
 #endif
 }
 
-/// Cores worth putting a realtime pass on — every logical core, including the
-/// efficiency cluster.
-///
-/// Restricting the pool to the performance cores was measured and rejected: on
-/// this 4P+4E machine the 1000-track benchmark went from 3.7 ms to 5.16 ms per
-/// block. A work-stealing scheduler already copes with uneven cores — a slow one
-/// simply steals fewer nodes — so the extra cluster is throughput gained, not
-/// a straggler introduced. Placement is left to the QoS class below.
+/// Allocate for every logical core so offline rendering can use the machine.
+/// Live device workgroups may recommend fewer simultaneous threads; their
+/// limit is applied without recreating this pool or parking on the audio thread.
 unsigned schedulableCores() noexcept {
     return std::max(1u, std::thread::hardware_concurrency());
 }
@@ -68,6 +63,7 @@ constexpr unsigned kSpinsPerClockCheck = 256;
 JobSystem::JobSystem(unsigned threadCount) {
     m_workerCount = threadCount > 0 ? threadCount : schedulableCores();
     m_workerCount = std::clamp(m_workerCount, 1u, 128u);
+    m_activeWorkerCount.store(m_workerCount);
 
     m_workers = std::vector<Worker>(m_workerCount);
     m_profiles = std::make_unique<rt::DiagnosticRing<rt::ProfileEvent, 1024>[]>(m_workerCount);
@@ -82,6 +78,10 @@ JobSystem::~JobSystem() {
     // seq_cst to match the load in park(): the two together decide whether a
     // worker about to sleep notices the shutdown or has to be woken out of it.
     m_running.store(false, std::memory_order_seq_cst);
+    // Workers excluded by a device's parallelism limit wait only for a
+    // configuration change, so they cannot consume an eligible helper's wake.
+    m_configurationEpoch.fetch_add(1, std::memory_order_seq_cst);
+    m_configurationEpoch.notify_all();
     // Bump the generation *and* wake unconditionally: the workers are parked,
     // and a shutdown that skipped the wake would hang in join().
     m_generation.fetch_add(1, std::memory_order_seq_cst);
@@ -103,15 +103,16 @@ void JobSystem::prepare(std::size_t itemCapacity) {
 
 bool JobSystem::acquireItem(unsigned index, std::uint32_t& item) noexcept {
     if (m_workers[index].deque.pop(item)) return true;
-    if (m_workerCount == 1) return false;
+    const unsigned active = workerCount();
+    if (active == 1) return false;
 
     // Work stealing: try a few random victims before giving up for this spin.
     // A few random victims, not a full sweep: idle workers hammering every
     // deque generate more cache traffic than the work they are looking for.
     static thread_local unsigned randomState = 0x9E3779B9u;
-    const unsigned attempts = std::min(m_workerCount, 4u);
+    const unsigned attempts = std::min(active, 4u);
     for (unsigned attempt = 0; attempt < attempts; ++attempt) {
-        const unsigned victim = nextVictim(randomState, m_workerCount);
+        const unsigned victim = nextVictim(randomState, active);
         if (victim == index) continue;
         if (m_workers[victim].deque.steal(item)) return true;
     }
@@ -226,12 +227,18 @@ void JobSystem::workerLoop(unsigned index) {
                 std::lock_guard lock(m_configurationMutex);
                 config = m_configuration;
             }
+            if (index >= workerCount()) config = {};
             const auto status = registration.configure(config);
             if (status & 1) m_realtimeWorkers.fetch_add(1);
             if (status & 2) m_workgroupWorkers.fetch_add(1);
             configurationEpoch = requested;
             m_configurationApplied.fetch_add(1, std::memory_order_release);
             m_configurationApplied.notify_one();
+        }
+        if (!m_running.load(std::memory_order_acquire)) break;
+        if (index >= workerCount()) {
+            m_configurationEpoch.wait(configurationEpoch, std::memory_order_acquire);
+            continue;
         }
         const std::uint64_t generation = m_generation.load(std::memory_order_acquire);
         if (generation == lastGeneration) {
@@ -249,9 +256,13 @@ void JobSystem::configureAudioWorkers(const rt::AudioWorkerConfig& config) {
         std::lock_guard lock(m_configurationMutex);
         m_configuration = config;
     }
+    m_activeWorkerCount.store(config.maxParallelThreads
+        ? std::clamp(config.maxParallelThreads, 1u, m_workerCount) : m_workerCount,
+        std::memory_order_relaxed);
     m_configurationApplied.store(0, std::memory_order_relaxed);
     m_realtimeWorkers.store(0); m_workgroupWorkers.store(0);
     m_configurationEpoch.fetch_add(1, std::memory_order_release);
+    m_configurationEpoch.notify_all();
     m_generation.fetch_add(1, std::memory_order_seq_cst);
     m_generation.notify_all();
     for (;;) {
@@ -266,7 +277,7 @@ void JobSystem::beginPass(std::uint32_t items, unsigned helpers) noexcept {
     m_target.fetch_add(items, std::memory_order_release);
     // Even a caller asking for no helpers opens a new epoch. That keeps pool
     // workers from confusing a later mid-pass wake with the previous pass.
-    if (helpers == 0 || m_workerCount == 1) {
+    if (helpers == 0 || workerCount() == 1) {
         m_generation.fetch_add(1, std::memory_order_seq_cst);
         return;
     }
@@ -274,7 +285,8 @@ void JobSystem::beginPass(std::uint32_t items, unsigned helpers) noexcept {
 }
 
 void JobSystem::wakeHelpers(unsigned helpers) noexcept {
-    if (helpers == 0 || m_workerCount == 1) return;
+    const unsigned active = workerCount();
+    if (helpers == 0 || active == 1) return;
 
     // Publishing a new work epoch opens a pass or announces a newly-ready
     // frontier inside one. There is no condition variable, so neither the
@@ -289,7 +301,7 @@ void JobSystem::wakeHelpers(unsigned helpers) noexcept {
 
     // Only pool workers park; the announcing worker may be worker 0 or one of
     // those pool workers.
-    const unsigned wanted = std::min(helpers, m_workerCount - 1);
+    const unsigned wanted = std::min(helpers, active - 1);
     if (wanted >= parked) {
         m_generation.notify_all();
     } else {
