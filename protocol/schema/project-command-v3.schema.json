@@ -82,7 +82,7 @@
           "then": {
             "oneOf": [
               { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } }, "insert": { "properties": { "uid": { "const": "daw.sampler" } } } } },
-              { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "insert": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity", "daw.graphit"] } } } } }
+              { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "insert": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity", "daw.graphit", "daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser"] } } } } }
             ]
           }
         }
@@ -103,7 +103,7 @@
           "then": {
             "oneOf": [
               { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } }, "replacement": { "properties": { "uid": { "const": "daw.sampler" } } } } },
-              { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "replacement": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity", "daw.graphit"] } } } } }
+              { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "replacement": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity", "daw.graphit", "daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser"] } } } } }
             ]
           }
         }

@@ -206,6 +206,42 @@ func TestMixerPluginAndClipCommandsStayInValidationLockstep(t *testing.T) {
 	}
 }
 
+func TestModulationEffectCommands(t *testing.T) {
+	for _, schemaVersion := range []int{2, 3} {
+		for _, uid := range []string{"daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser"} {
+			for _, chain := range []string{"master", "track", "samplerFx", "clip", "instrument"} {
+				trackID, clipID, insertID := uuid.New(), uuid.Nil, uuid.New()
+				if chain == "master" {
+					trackID = uuid.Nil
+				} else if chain == "clip" {
+					clipID = uuid.New()
+				}
+				location := extensionLocation(chain, trackID, clipID)
+				for _, kind := range []string{"plugin.add", "plugin.replace"} {
+					body := map[string]any{"location": location}
+					if kind == "plugin.add" {
+						body["insert"], body["afterId"] = extensionInsert(insertID, uid, []any{}), ""
+					} else {
+						body["replacement"], body["insertId"] = extensionInsert(insertID, uid, []any{}), insertID.String()
+					}
+					payload, err := json.Marshal(body)
+					if err != nil {
+						t.Fatal(err)
+					}
+					err = validateCommandPayloadShapeForSchema(kind, payload, true, schemaVersion)
+					if chain == "instrument" {
+						if !errors.Is(err, ErrValidation) {
+							t.Fatalf("v%d %s accepted effect %s as an instrument: %v", schemaVersion, kind, uid, err)
+						}
+					} else if err != nil {
+						t.Fatalf("v%d %s rejected %s in %s: %v", schemaVersion, kind, uid, chain, err)
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestExtendedCommandValidationRejectsDivergentPayloads(t *testing.T) {
 	trackID, clipID, insertID := uuid.New(), uuid.New(), uuid.New()
 	validLocation := extensionLocation("track", trackID, uuid.Nil)

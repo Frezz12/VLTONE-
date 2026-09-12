@@ -2916,7 +2916,7 @@ export interface components {
             /** @constant */
             format: "internal";
             /** @enum {unknown} */
-            uid: "daw.sampler" | "daw.equalizer" | "daw.gravity" | "daw.graphit";
+            uid: "daw.sampler" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser";
             vendor: string;
             pluginVersion: string;
             stateSchemaVersion: number;
@@ -3237,7 +3237,7 @@ export interface components {
             };
             insert?: {
                 /** @enum {unknown} */
-                uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit";
+                uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser";
             };
         });
         pluginRefPayload: {
@@ -3274,7 +3274,7 @@ export interface components {
             };
             replacement?: {
                 /** @enum {unknown} */
-                uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit";
+                uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser";
             };
         });
         pluginPropertyPayload: {
@@ -4186,7 +4186,7 @@ export interface components {
                     /** @constant */
                     format: "internal";
                     /** @enum {unknown} */
-                    uid: "daw.sampler" | "daw.equalizer" | "daw.gravity" | "daw.graphit";
+                    uid: "daw.sampler" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser";
                     vendor: string;
                     pluginVersion: string;
                     stateSchemaVersion: number;
@@ -4222,7 +4222,7 @@ export interface components {
                     };
                     insert?: {
                         /** @enum {unknown} */
-                        uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit";
+                        uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser";
                     };
                 });
                 pluginRefPayload: {
@@ -4259,7 +4259,7 @@ export interface components {
                     };
                     replacement?: {
                         /** @enum {unknown} */
-                        uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit";
+                        uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser";
                     };
                 });
                 pluginPropertyPayload: {
