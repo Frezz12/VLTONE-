@@ -1,26 +1,30 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
-import { BookOpenText, Bug, CircleUserRound, PackageOpen } from "lucide-react";
 import { usePathname } from "next/navigation";
+import { BrandMark } from "./brand-mark";
 
 export function Header({ locale }: { locale: string }) {
-  const other = locale === "ru" ? "en" : "ru";
+  const ru = locale === "ru";
+  const other = ru ? "en" : "ru";
   const pathname = usePathname();
   const parts = pathname.split("/");
   parts[1] = other;
   const localeHref = parts.join("/") || `/${other}`;
-  return (
+  return <>
+    <a className="skip-link" href="#main-content">{ru ? "Перейти к содержимому" : "Skip to content"}</a>
     <header className="vlt-topbar">
-      <Link className="vlt-brand" href={`/${locale}`}><Image className="vlt-brand-logo" src="/logo.png" width={40} height={40} alt="VLTONE" priority /><span>VLTONE</span></Link>
-      <nav className="vlt-nav" aria-label={locale === "ru" ? "Навигация сайта" : "Site navigation"}>
-        <Link href={`/${locale}/releases`}><PackageOpen size={16} aria-hidden /> {locale === "ru" ? "Обновления" : "Releases"}</Link>
-        <Link href={`/${locale}/manual`}><BookOpenText size={16} aria-hidden /> {locale === "ru" ? "Инструкция" : "Manual"}</Link>
-        <Link className="vlt-nav-optional" href={`/${locale}/bug-report`}><Bug size={16} aria-hidden /> {locale === "ru" ? "Сообщить о баге" : "Report a bug"}</Link>
-        <Link href={`/${locale}/account`}><CircleUserRound size={16} aria-hidden /> {locale === "ru" ? "Аккаунт" : "Account"}</Link>
-        <Link href={localeHref} hrefLang={other} aria-label={locale === "ru" ? "Open in English" : "Открыть на русском"}>{other.toUpperCase()}</Link>
+      <Link className="vlt-brand" href={`/${locale}`} aria-label="VLTone"><BrandMark /><span>VLTone</span></Link>
+      <nav className="vlt-nav" aria-label={ru ? "Навигация сайта" : "Site navigation"}>
+        <Link href={`/${locale}#overview`}>{ru ? "О программе" : "Overview"}</Link>
+        <Link href={`/${locale}/releases`} aria-current={pathname.includes("/releases") ? "page" : undefined}>{ru ? "Скачать" : "Download"}</Link>
+        <Link href={`/${locale}/manual`} aria-current={pathname.includes("/manual") ? "page" : undefined}>{ru ? "Инструкция" : "Manual"}</Link>
+        <Link href={`/${locale}/account`} aria-current={pathname.includes("/account") ? "page" : undefined}>{ru ? "Аккаунт" : "Account"}</Link>
       </nav>
+      <Link className="locale-link" href={localeHref} hrefLang={other} lang={other} onClick={(event) => {
+        // Preserve the current manual chapter when switching language.
+        if (window.location.hash) { event.preventDefault(); window.location.assign(localeHref + window.location.hash); }
+      }} aria-label={ru ? "Open in English" : "Открыть на русском"}>{other.toUpperCase()}</Link>
     </header>
-  );
+  </>;
 }

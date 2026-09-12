@@ -89,7 +89,7 @@ struct Wander {
         phase = 0;
         from = random() * 2 - 1;
         to = random() * 2 - 1;
-        step = 1.0 / (rate * (2.0 + 4.0 * random()));
+        step = 1.0 / (rate * (.7 + 1.8 * random()));
     }
     double next(double rate) noexcept {
         phase += step;
@@ -97,7 +97,7 @@ struct Wander {
             phase -= 1;
             from = to;
             to = random() * 2 - 1;
-            step = 1.0 / (rate * (2.0 + 4.0 * random()));
+            step = 1.0 / (rate * (.7 + 1.8 * random()));
         }
         // Quintic interpolation: zero velocity and acceleration at each knot.
         const double s = phase * phase * phase * (phase * (phase * 6 - 15) + 10);

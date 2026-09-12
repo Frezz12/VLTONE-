@@ -7,6 +7,53 @@
 #include <random>
 
 namespace daw {
+ClipAudioVersionSource captureClipAudioVersion(const ClipModel& clip) {
+    ClipAudioVersionSource source;
+    source.filePath = clip.filePath;
+    source.asset = clip.asset;
+    source.durationSeconds = clip.durationSeconds;
+    source.offsetSeconds = clip.offsetSeconds;
+    source.fadeInSeconds = clip.fadeInSeconds;
+    source.fadeOutSeconds = clip.fadeOutSeconds;
+    source.fadeInCurve = clip.fadeInCurve;
+    source.fadeOutCurve = clip.fadeOutCurve;
+    source.fadeInMode = clip.fadeInMode;
+    source.fadeOutMode = clip.fadeOutMode;
+    source.gain = clip.gain;
+    source.pan = clip.pan;
+    source.channels = clip.channels;
+    source.takes = clip.takes;
+    source.comp = clip.comp;
+    source.compCrossfadeMs = clip.compCrossfadeMs;
+    source.sampleEdit = clip.sampleEdit;
+    source.musicalAnalysis = clip.musicalAnalysis;
+    source.expanded = clip.expanded;
+    return source;
+}
+
+void applyClipAudioVersion(ClipModel& clip, const ClipAudioVersionSource& source) {
+    clip.filePath = source.filePath;
+    clip.asset = source.asset;
+    clip.durationSeconds = source.durationSeconds;
+    clip.offsetSeconds = source.offsetSeconds;
+    clip.fadeInSeconds = source.fadeInSeconds;
+    clip.fadeOutSeconds = source.fadeOutSeconds;
+    clip.fadeInCurve = source.fadeInCurve;
+    clip.fadeOutCurve = source.fadeOutCurve;
+    clip.fadeInMode = source.fadeInMode;
+    clip.fadeOutMode = source.fadeOutMode;
+    clip.gain = source.gain;
+    clip.pan = source.pan;
+    clip.channels = source.channels;
+    clip.takes = source.takes;
+    clip.comp = source.comp;
+    clip.compCrossfadeMs = source.compCrossfadeMs;
+    clip.sampleEdit = source.sampleEdit;
+    clip.musicalAnalysis = source.musicalAnalysis;
+    clip.expanded = source.expanded;
+    clip.offlineProcess = {};
+}
+
 
 void retimeClipComp(ClipModel& clip, double ratio) {
     for (auto& take : clip.takes) take.clipOffsetSeconds *= ratio;

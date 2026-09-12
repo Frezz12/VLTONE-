@@ -108,6 +108,7 @@ protected:
     void resizeEvent(QResizeEvent*) override;
 
 signals:
+    void sharedPluginsRequested();
     void projectEdited(bool localFileDirty = true);
     /// A continuous control on the panel moved — level, pan, a fade. Emitted on
     /// every step of the drag, not only at the end, so the fader in the mixer

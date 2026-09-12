@@ -1,0 +1,77 @@
+{
+  "sample_rate": 48000,
+  "duration_seconds": 8,
+  "source": "Synthetic vowel/consonant fixture from modulation_test --examples; not a recorded singer",
+  "baseline_commit": "ad610e84674fd646bb64c9ed0cd144d17aa59de9",
+  "method": "RMS-match each output to input, subtract its least-squares projection onto input, measure residual RMS relative to input RMS. Describes signal alteration, not a listening score.",
+  "effects": {
+    "Doubler": {
+      "before": {
+        "rms_level_db": 0.24786890303041417,
+        "matched_residual_db": -12.558967672581044,
+        "correlation": 0.8893647681745992,
+        "peak": 0.49376755952835083,
+        "wav_sha256": "01c4e226c3ecce19b2f4949511e9f9a7bcd2a27ce059db465a9179f06a1b14a7"
+      },
+      "after": {
+        "rms_level_db": 0.5278817225392969,
+        "matched_residual_db": -9.413744566550289,
+        "correlation": 0.7712923002127835,
+        "peak": 0.6454246044158936,
+        "wav_sha256": "a892af9806ef9f1f435e49228c89718be2b48b19e8935711b57374f76e38bd46"
+      },
+      "matched_residual_change_db": 3.1452231060307554
+    },
+    "Chorus": {
+      "before": {
+        "rms_level_db": -1.177453804029144,
+        "matched_residual_db": -21.89711525524808,
+        "correlation": 0.9971093578053764,
+        "peak": 0.39231154322624207,
+        "wav_sha256": "d704212f6e2dfcc733eedf38ffa521a6acf9355a7b3b1680cd78411603115310"
+      },
+      "after": {
+        "rms_level_db": -0.5633459134037978,
+        "matched_residual_db": -9.22522103568635,
+        "correlation": 0.9396613568890442,
+        "peak": 0.49358150362968445,
+        "wav_sha256": "ebd0eaf9401a45a8c3c6e17d0ba57f3481aa2047f39f943984c03fed1a981586"
+      },
+      "matched_residual_change_db": 12.671894219561732
+    },
+    "Flanger": {
+      "before": {
+        "rms_level_db": -0.8189215681029305,
+        "matched_residual_db": -21.7572066723054,
+        "correlation": 0.9966316716066543,
+        "peak": 0.39305126667022705,
+        "wav_sha256": "c19397fd77ec5d32645ba813f5d34e2f3c6666e265a0500c29740a4c661c3ee4"
+      },
+      "after": {
+        "rms_level_db": -0.22643752976330211,
+        "matched_residual_db": -14.34480531285945,
+        "correlation": 0.9815541547448343,
+        "peak": 0.43417906761169434,
+        "wav_sha256": "e582eb23dcdb550ccdba391f0247660cfeeb7b45be331f5bf2efe8ca56825331"
+      },
+      "matched_residual_change_db": 7.412401359445951
+    },
+    "Phaser": {
+      "before": {
+        "rms_level_db": -0.9933195406046813,
+        "matched_residual_db": -19.71253888063661,
+        "correlation": 0.9994218943149513,
+        "peak": 0.37729838490486145,
+        "wav_sha256": "b485d89252d014fbbcf12a7cc889376a23541cdccee533cb547d0a43e8396448"
+      },
+      "after": {
+        "rms_level_db": -0.24963869185107807,
+        "matched_residual_db": -12.53658360506488,
+        "correlation": 0.9805480752044917,
+        "peak": 0.43583542108535767,
+        "wav_sha256": "737051826a51f5935f6325e50c372507f92de1719cbacf56d58ad498daa126d2"
+      },
+      "matched_residual_change_db": 7.175955275571731
+    }
+  }
+}

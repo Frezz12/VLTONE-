@@ -1,0 +1,267 @@
+This plugin does not support raise()
+This plugin does not support grabbing the keyboard
+This plugin does not support raise()
+This plugin does not support grabbing the keyboard
+This plugin does not support raise()
+This plugin does not support grabbing the keyboard
+This plugin does not support raise()
+This plugin does not support grabbing the keyboard
+This plugin does not support raise()
+This plugin does not support grabbing the keyboard
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+GPU workspace fallback: A hardware scene graph is not available.
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support raise()
+This plugin does not support grabbing the keyboard
+This plugin does not support raise()
+This plugin does not support grabbing the keyboard
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+PASS Sampler: all tabs fit at 960/860 px, Clip shell, keyboard, wheel protection, drag and undo
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+PASS Context layout: wide strip shows waveform, track height and zoom in order
+PASS Context layout: narrow bounds contain every surviving action
+PASS Context layout: narrow bounds contain every surviving action
+PASS Context layout: narrow bounds contain every surviving action
+PASS Context layout: narrow bounds contain every surviving action
+PASS Context layout: gain survives after secondary controls disappear
+PASS Context layout: narrow bounds contain every surviving action
+PASS Context layout: narrow bounds contain every surviving action
+PASS Context layout: context stops before the timeline controls at its reserved boundary
+PASS Context layout: crowded waveform control stays hidden
+PASS Context layout: crowded waveform control stays hidden
+PASS Context layout: crowded waveform control stays hidden
+PASS Context layout: crowded waveform control stays hidden
+PASS Context layout: crowded waveform control stays hidden
+PASS Context layout: crowded waveform control stays hidden
+PASS Context layout: crowded waveform control stays hidden
+PASS Context layout: crowded waveform control stays hidden
+PASS Context layout: exhausted strip never falls back across neighbours
+PASS Context layout: widening restores the same controls and waveform button
+PASS Context layout: selected clip follows its left-edge anchor
+PASS Context layout: clip-to-track selection returns under the transport readout
+PASS Context layout: timeline movement cannot move the track context
+PASS Context layout: multiple selected tracks stay under the transport readout
+PASS Context layout: recording stays under the transport readout even with an underlying selected clip
+PASS Context layout: recording context keeps the theme accent
+PASS Context layout: returning to clip tools restores following
+PASS Context layout: audio context keeps the same theme accent
+PASS Context layout: pinned clip context stays under the transport readout
+PASS Context layout: re-enabled clip following restores its anchor
+PASS Context layout: hidden plugin action opens a search that fits the narrow strip
+PASS Context layout: interrupted swap returns under the transport readout
+PASS Context layout: MIDI context fits the same limits
+PASS Context layout: recording context stays under the transport readout
+PASS Context layout: waveform returns when context panel closes
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+PASS Context layout: timeline sliders hide when a widened browser leaves little room
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+PASS Context layout: timeline sliders return after the arrangement widens
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support propagateSizeHints()
+PASS Context layout: browser resizing on either side preserves bounds
+the system MIDI server is not answering; MIDI input stays off until it does. A faulty driver in /Library/Audio/MIDI Drivers can hang it for every application on the machine.
+This plugin does not support raise()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support grabbing the keyboard
+This plugin does not support raise()
+This plugin does not support grabbing the keyboard
+This plugin does not support raise()
+This plugin does not support raise()
+PASS Automation creation: context menu, explicit mode, toggle shortcut and independent Alt/Option
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+PASS Inspector basic settings fit with side margins
+PASS Inspector expanded settings fit with side margins
+PASS Inspector long sample names stay inside the panel
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin numeric field ignores both wheel types
+PASS Inspector thin mode field ignores the wheel
+PASS Inspector thin mode field ignores the wheel
+PASS Inspector thin mode field ignores the wheel
+PASS Inspector wheel over a number scrolls the panel
+PASS Inspector click without dragging leaves the value intact
+PASS Inspector upward drag edits live through model refresh
+PASS Inspector one undo reverses the entire drag
+PASS Inspector downward drag decreases the value
+PASS Inspector Shift refines an ongoing drag without jumping
+PASS Inspector drag respects the upper limit
+PASS Inspector drag reverses immediately after reaching a limit
+PASS Inspector focused text entry survives refresh and both wheel types
+PASS Inspector Enter submits typed value and returns to drag mode
+PASS Inspector one undo reverses typed entry
+PASS Inspector Escape discards unsubmitted text
+PASS Inspector keyboard can start text entry
+PASS Inspector selection change finishes entry against the old clip
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support raise()
+This plugin does not support propagateSizeHints()
+GPUInfo not initialized on GpuInfoUpdate
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+<Unknown File>: QML WebEngineProfile: Please use WebEngineProfilePrototype for profile creation from 6.9, as this function will be deprecated in the future releases
+This plugin does not support raise()
+This plugin does not support setParent!
+This plugin does not support setParent!
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+GPU workspace fallback: An embedded native window requires compatibility rendering.
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support setParent!
+Notebook check failed: notebook disabled the main GPU scene
+QApplication::removeTranslator: Please instantiate the QApplication object first
+QApplication::removeTranslator: Please instantiate the QApplication object first

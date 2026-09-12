@@ -213,6 +213,15 @@ int main() {
                   "audioMasterSizeWindow reaches the editor host");
             effect->closeEditor();
             check(!effect->isEditorOpen(), "effEditClose completes editor lifecycle");
+            bool repeatable = true;
+            for (int i = 0; i < 16; ++i) {
+                repeatable &= effect->openEditor(reinterpret_cast<void*>(1), &editor);
+                effect->pumpMainThread();
+                effect->closeEditor();
+                effect->closeEditor();
+                repeatable &= !effect->isEditorOpen() && editor.resizes == i + 2;
+            }
+            check(repeatable, "one instance supports repeated GUI open/close and idempotent close");
 
             effect->stopProcessing();
             check(!effect->isProcessing(), "effStopProcess leaves processing");

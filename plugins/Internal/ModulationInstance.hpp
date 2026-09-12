@@ -10,8 +10,11 @@
 namespace daw::plugins::modulation {
 static_assert(std::atomic<double>::is_always_lock_free && std::atomic<float>::is_always_lock_free);
 
-enum class Kind { Doubler, Chorus, Flanger, Phaser };
-using Values = std::array<double, 4>;
+enum class Kind { Doubler, Chorus, Flanger, Phaser, DoublerPro };
+inline constexpr std::size_t parameterCapacity = 6;
+inline constexpr int kindCount = 5;
+inline bool isDoubler(Kind kind) noexcept { return kind == Kind::Doubler || kind == Kind::DoublerPro; }
+using Values = std::array<double, parameterCapacity>;
 struct FactoryPreset {
     std::string_view name;
     Values values;
@@ -27,8 +30,8 @@ struct Telemetry {
     std::array<float, 4> positions{};
 };
 
-// Only host plumbing is shared. Each final instance owns its DSP, topology,
-// parameter table and state identity. Qt never enters the processing path.
+// Host plumbing and the Doubler voice core are shared; every effect retains
+// its own topology, parameter table and state identity. No Qt in the audio path.
 class ModulationInstance : public PluginInstance {
   public:
     explicit ModulationInstance(Kind kind);
@@ -74,6 +77,7 @@ class ModulationInstance : public PluginInstance {
     virtual void resetDsp() noexcept = 0;
     virtual std::array<double, 2> sample(double l, double r, bool stereo) noexcept = 0;
     double rate = 48000;
+    double tempo = 120;
     Values smoothed{};
     std::array<float, 4> positions{};
     std::uint32_t controlPhase = 0;
@@ -84,7 +88,7 @@ class ModulationInstance : public PluginInstance {
     PluginListener *m_listener = nullptr;
     PluginBusLayout m_layout{{2}, {2}};
     bool m_active = false, m_processing = false;
-    std::array<std::atomic<double>, 4> m_values{};
+    std::array<std::atomic<double>, parameterCapacity> m_values{};
     Values m_smoothing{};
     double m_meterPole = 0, m_l2 = 0, m_r2 = 0, m_lr = 0;
     std::array<std::atomic<float>, 7> m_meters{};
@@ -92,14 +96,18 @@ class ModulationInstance : public PluginInstance {
     std::string m_presetKind = "factory", m_presetName;
 };
 
-class DoublerInstance final : public ModulationInstance {
+class DoublerInstance : public ModulationInstance {
   public:
     DoublerInstance() : ModulationInstance(Kind::Doubler) {}
 
-  private:
+  protected:
+    explicit DoublerInstance(Kind kind) : ModulationInstance(kind) {}
     void prepareDsp() override;
     void resetDsp() noexcept override;
     std::array<double, 2> sample(double, double, bool) noexcept override;
+    double voiceMid = 0;
+    double transientGain() const noexcept { return m_duck; }
+  private:
     dsp::Delay m_delay;
     std::array<dsp::Wander, 4> m_wander;
     std::array<double, 4> m_reads{};
@@ -108,6 +116,22 @@ class DoublerInstance final : public ModulationInstance {
     double m_fast = 0, m_slow = 0, m_duck = 1;
     double m_energyPole = 0, m_gainAttack = 0, m_gainRelease = 0;
     double m_fastPole = 0, m_slowPole = 0, m_duckRelease = 0;
+};
+
+class DoublerProInstance final : public DoublerInstance {
+  public:
+    DoublerProInstance() : DoublerInstance(Kind::DoublerPro) {}
+  private:
+    void prepareDsp() override;
+    void resetDsp() noexcept override;
+    std::array<double, 2> sample(double, double, bool) noexcept override;
+    dsp::Delay m_pitchDelay;
+    std::array<dsp::Delay, 2> m_echo;
+    dsp::Tone m_bodyTone;
+    std::array<dsp::Tone, 2> m_pitchTone, m_echoTone;
+    std::array<double, 2> m_pitchPhase{}, m_echoFeedback{};
+    double m_echoFrom = 0, m_echoTo = 0, m_echoFade = 1;
+    double m_pitchRatio = 1;
 };
 
 class ChorusInstance final : public ModulationInstance {
@@ -145,7 +169,8 @@ class PhaserInstance final : public ModulationInstance {
     void prepareDsp() override {}
     void resetDsp() noexcept override;
     std::array<double, 2> sample(double, double, bool) noexcept override;
-    std::array<std::array<dsp::Allpass, 6>, 2> m_filters{};
+    std::array<std::array<dsp::Allpass, 8>, 2> m_filters{};
+    std::array<std::array<double, 8>, 2> m_coefficients{}, m_coefficientSteps{};
     std::array<dsp::Tone, 2> m_tones;
     std::array<double, 2> m_feedback{};
     double m_phase = 0;

@@ -45,6 +45,8 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           QTWEBENGINE_DISABLE_SANDBOX: "1"
+          # Offscreen has no hardware scene; GPU behavior has separate tests.
+          VLT_GPU_WORKSPACE: "0"
         run: build/bin/VLTONE --selftest
 
       - name: Preserve private build-ID symbols

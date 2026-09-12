@@ -89,6 +89,11 @@ QImage composeFrame(const QImage& source, const QSize& target,
 
 } // namespace
 
+void finishThemeMediaTasks() {
+    mediaPool().clear();
+    mediaPool().waitForDone();
+}
+
 ThemeMediaBackground::ThemeMediaBackground(QObject* parent) : graphics::QuickVisual(parent) {
     m_gpu = graphics::gpuWorkspaceEnabled();
     m_frameTime.start();

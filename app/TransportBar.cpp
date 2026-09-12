@@ -17,6 +17,8 @@
 #include <QActionGroup>
 #include <QButtonGroup>
 #include <QCoreApplication>
+#include <QCursor>
+#include <QGuiApplication>
 #include <QEasingCurve>
 #include <QEvent>
 #include <QGridLayout>
@@ -35,6 +37,7 @@
 #include <QPixmap>
 #include <QRadialGradient>
 #include <QResizeEvent>
+#include <QScreen>
 #include <QSignalBlocker>
 #include <QShowEvent>
 #include <QStyle>
@@ -121,11 +124,11 @@ protected:
         bool ok = false;
         double startValue = text().replace(',', '.').toDouble(&ok);
         if (!ok) startValue = 120.0;
-        startValue = std::round(startValue);
-        m_currentValue = startValue;
-        m_rawValue = startValue;
+        m_currentValue = std::clamp(startValue, 20.0, 300.0);
         m_pendingPixels = 0.0;
-        m_cursorDrag.begin(event->globalPosition());
+        m_pressPosition = m_lastPosition = event->globalPosition();
+        m_warpPending = false;
+        m_fineMode = event->modifiers() & Qt::ShiftModifier;
         m_pressed = true;
         m_dragging = false;
         setCursor(Qt::ClosedHandCursor);
@@ -138,36 +141,11 @@ protected:
             return;
         }
         if (!(event->buttons() & Qt::LeftButton)) {
-            m_cursorDrag.cancel();
-            m_pressed = false;
-            setCursor(Qt::SizeVerCursor);
-            if (m_dragging && m_callback) m_callback(m_currentValue, true);
-            m_dragging = false;
+            finishDrag();
             event->accept();
             return;
         }
-        const qreal delta = -m_cursorDrag.takeDelta(event->globalPosition()).y();
-        if (std::abs(delta) < 1.0e-9) {
-            event->accept();
-            return;
-        }
-        m_pendingPixels += delta;
-        if (!m_dragging && std::abs(m_pendingPixels) < 3.0) {
-            event->accept();
-            return;
-        }
-        m_dragging = true;
-        // Scrubbing is deliberately quantised to whole BPM. Decimal tempo is
-        // still available through the explicit double-click text entry path.
-        const double perPixel = event->modifiers() & Qt::ShiftModifier ? 0.08 : 0.25;
-        m_rawValue = std::clamp(m_rawValue + m_pendingPixels * perPixel,
-                                20.0, 300.0);
-        m_pendingPixels = 0.0;
-        const double value = std::round(m_rawValue);
-        if (value != m_currentValue) {
-            m_currentValue = value;
-            if (m_callback) m_callback(value, false);
-        }
+        applyDrag(takeDragPixels(event->globalPosition(), true), event->modifiers());
         event->accept();
     }
 
@@ -176,24 +154,8 @@ protected:
             QLineEdit::mouseReleaseEvent(event);
             return;
         }
-        const bool changed = m_dragging;
-        const qreal finalDelta =
-            -m_cursorDrag.finish(event->globalPosition()).y();
-        if (changed && std::abs(finalDelta) > 1.0e-9) {
-            const double perPixel =
-                event->modifiers() & Qt::ShiftModifier ? 0.08 : 0.25;
-            m_rawValue = std::clamp(m_rawValue + finalDelta * perPixel,
-                                    20.0, 300.0);
-            const double value = std::round(m_rawValue);
-            if (value != m_currentValue) {
-                m_currentValue = value;
-                if (m_callback) m_callback(value, false);
-            }
-        }
-        m_pressed = false;
-        m_dragging = false;
-        setCursor(Qt::SizeVerCursor);
-        if (changed && m_callback) m_callback(m_currentValue, true);
+        applyDrag(takeDragPixels(event->globalPosition(), false), event->modifiers());
+        finishDrag();
         event->accept();
     }
 
@@ -204,7 +166,7 @@ protected:
         }
         m_pressed = false;
         m_dragging = false;
-        m_cursorDrag.cancel();
+        m_warpPending = false;
         m_textBeforeEdit = text();
         setReadOnly(false);
         setFocusPolicy(Qt::StrongFocus);
@@ -231,12 +193,75 @@ protected:
     }
 
 private:
+    qreal takeDragPixels(const QPointF& position, bool wrapAtEdge) {
+        if (m_warpPending) {
+            // Discard queued events at the old screen edge until an event
+            // arrives near the recentered pointer. Never count the warp as
+            // a physical move, including on mouse release.
+            if (std::abs(position.y() - m_lastPosition.y()) > m_warpTolerance) return 0.0;
+            if (qFuzzyIsNull(position.y() - m_lastPosition.y())) return 0.0;
+            m_warpPending = false;
+        }
+        const qreal delta = m_lastPosition.y() - position.y();
+        m_lastPosition = position;
+        // Most events use ordinary successive positions, so duplicate or
+        // coalesced move events cannot multiply the same displacement. Only
+        // recenter at screen edges to retain unbounded vertical scrubbing.
+        if (wrapAtEdge && std::abs(delta) > 0.0) {
+            if (const auto* screen = QGuiApplication::screenAt(position.toPoint())) {
+                const QRect bounds = screen->geometry();
+                if ((delta > 0 && position.y() <= bounds.top() + 2) ||
+                    (delta < 0 && position.y() >= bounds.bottom() - 2)) {
+                    m_lastPosition.setY(bounds.center().y());
+                    m_warpTolerance = bounds.height() / 4.0;
+                    m_warpPending = true;
+                    QCursor::setPos(m_lastPosition.toPoint());
+                }
+            }
+        }
+        return delta;
+    }
+
+    void applyDrag(qreal pixels, Qt::KeyboardModifiers modifiers) {
+        const bool fine = modifiers & Qt::ShiftModifier;
+        if (fine != m_fineMode) { m_fineMode = fine; m_pendingPixels = 0.0; }
+        if (qFuzzyIsNull(pixels)) return;
+        if ((m_currentValue >= 300.0 && pixels > 0) ||
+            (m_currentValue <= 20.0 && pixels < 0)) { m_pendingPixels = 0.0; return; }
+        m_pendingPixels += pixels;
+        if (!m_dragging && std::abs(m_pendingPixels) >= 3.0) {
+            m_dragging = true;
+            setCursor(Qt::BlankCursor);
+        }
+        constexpr double pixelsPerStep = 10.0;
+        const double steps = std::trunc(m_pendingPixels / pixelsPerStep);
+        if (steps == 0.0) return;
+        m_pendingPixels -= steps * pixelsPerStep;
+        const double value = std::clamp(std::round(
+            (m_currentValue + steps * (fine ? 0.1 : 1.0)) * 1000.0) / 1000.0, 20.0, 300.0);
+        if (value == 20.0 || value == 300.0) m_pendingPixels = 0.0;
+        if (value == m_currentValue) return;
+        m_currentValue = value;
+        if (m_callback) m_callback(value, false);
+    }
+
+    void finishDrag() {
+        const bool dragged = m_dragging;
+        m_pressed = m_dragging = m_warpPending = false;
+        if (dragged) QCursor::setPos(m_pressPosition.toPoint());
+        setCursor(Qt::SizeVerCursor);
+        if (dragged && m_callback) m_callback(m_currentValue, true);
+    }
+
     ScrubCallback m_callback;
     QString m_textBeforeEdit;
     double m_currentValue = 120.0;
-    double m_rawValue = 120.0;
     qreal m_pendingPixels = 0.0;
-    ui::LockedCursorDrag m_cursorDrag;
+    QPointF m_pressPosition;
+    QPointF m_lastPosition;
+    qreal m_warpTolerance = 0.0;
+    bool m_warpPending = false;
+    bool m_fineMode = false;
     bool m_pressed = false;
     bool m_dragging = false;
 };
@@ -1217,9 +1242,9 @@ QWidget* TransportBar::buildPill() {
     m_tempoEdit->setAlignment(Qt::AlignCenter);
     m_tempoEdit->setAccessibleName(tr("Tempo in BPM"));
     m_tempoEdit->setAccessibleDescription(
-        tr("Drag up or down to change tempo. Double-click to type a value."));
+        tr("Drag up or down to change tempo. Hold Shift for fine adjustment. Double-click to type a value."));
     m_tempoEdit->setToolTip(
-        tr("Drag up/down to change tempo · Double-click to type"));
+        tr("Drag up/down to change tempo · Shift: fine adjustment · Double-click to type"));
     tempoEdit->setScrubCallback([this](double bpm, bool finished) {
         const QString text = tempoText(bpm);
         if (m_tempoEdit->text() != text) m_tempoEdit->setText(text);
@@ -2221,6 +2246,97 @@ void TransportBar::syncTempo() {
     if (!m_tempoEdit) return;
     m_tempoEditing = false;
     m_tempoEdit->setText(tempoText(m_controller->tempo()));
+}
+
+bool TransportBar::checkTempoInteractionForTest() {
+    const auto fail = [](int line) { std::fprintf(stderr, "BPM interaction check failed at line %d\n", line); return false; };
+    daw::EngineController controller;
+    if (!controller.initialize(48000, 256, false)) return fail(__LINE__);
+    QWidget host;
+    host.resize(1200, 600);
+    TransportBar bar(&controller, &host);
+    QObject::connect(&bar, &TransportBar::tempoChanged, &bar,
+                     [&](double bpm) { controller.setTempo(bpm); });
+    bar.resize(1000, bar.sizeHint().height()); bar.move(50, 300);
+    auto* edit = bar.m_tempoEdit;
+    const QPointF local = edit->rect().center();
+    const QPointF origin = edit->mapToGlobal(local.toPoint());
+    const auto send = [&](QEvent::Type type, QPointF global,
+                          Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QMouseEvent event(type, local + global - origin, global,
+            type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, modifiers);
+        QCoreApplication::sendEvent(edit, &event);
+    };
+    const auto reset = [&](double value = 120.0) { controller.setTempo(value); bar.syncTempo(); };
+    const auto near = [&](double value) { return std::abs(controller.tempo() - value) < 1.e-8; };
+    reset();
+    const auto depth = controller.undoDepth();
+    send(QEvent::MouseButtonPress, origin);
+    send(QEvent::MouseMove, origin - QPointF(0, 9));
+    if (!near(120)) return fail(__LINE__); // Minor hand movement does not edit tempo.
+    for (int i = 0; i < 100; ++i) send(QEvent::MouseMove, origin - QPointF(0, 10));
+    if (!near(121)) return fail(__LINE__); // Repeated coordinates do not accelerate.
+    send(QEvent::MouseMove, origin - QPointF(0, 20));
+    if (!near(122)) return fail(__LINE__);
+    send(QEvent::MouseMove, origin - QPointF(0, 10));
+    send(QEvent::MouseButtonRelease, origin - QPointF(0, 10));
+    if (!near(121) || controller.undoDepth() != depth + 1) return fail(__LINE__);
+    controller.undo(); if (!near(120)) return fail(__LINE__);
+    reset(120.5);
+    send(QEvent::MouseButtonPress, origin, Qt::ShiftModifier);
+    send(QEvent::MouseMove, origin - QPointF(0, 10), Qt::ShiftModifier);
+    if (!near(120.6)) return fail(__LINE__);
+    send(QEvent::MouseMove, origin - QPointF(0, 10));
+    if (!near(120.6)) return fail(__LINE__); // Releasing Shift must not jump.
+    send(QEvent::MouseMove, origin - QPointF(0, 20));
+    send(QEvent::MouseButtonRelease, origin - QPointF(0, 20));
+    if (!near(121.6)) return fail(__LINE__);
+    for (int samples : {1, 100}) {
+        reset(); send(QEvent::MouseButtonPress, origin);
+        for (int i = 1; i <= samples; ++i)
+            send(QEvent::MouseMove, origin - QPointF(0, 100.0 * i / samples));
+        send(QEvent::MouseButtonRelease, origin - QPointF(0, 100));
+        if (!near(130)) return fail(__LINE__); // Distance, not event count, sets tempo.
+    }
+    for (double direction : {-1.0, 1.0}) {
+        reset(); send(QEvent::MouseButtonPress, origin);
+        const QPointF limit = origin + QPointF(0, direction * 4000);
+        send(QEvent::MouseMove, limit);
+        if (!near(direction < 0 ? 300 : 20)) return fail(__LINE__);
+        const QPointF reverse = limit - QPointF(0, direction * 10);
+        send(QEvent::MouseMove, reverse);
+        send(QEvent::MouseButtonRelease, reverse);
+        if (!near(direction < 0 ? 299 : 21)) return fail(__LINE__);
+    }
+    if (const auto* screen = QGuiApplication::screenAt(origin.toPoint())) {
+        reset(); send(QEvent::MouseButtonPress, origin);
+        const QPointF edge(origin.x(), screen->geometry().top());
+        send(QEvent::MouseMove, edge);
+        const double atEdge = controller.tempo();
+        for (int i = 0; i < 10; ++i) send(QEvent::MouseMove, edge);
+        if (!near(atEdge)) return fail(__LINE__);
+        const QPointF recentered(origin.x(), screen->geometry().center().y());
+        send(QEvent::MouseMove, recentered);
+        if (!near(atEdge)) return fail(__LINE__);
+        send(QEvent::MouseMove, edge); // A queued old-edge event after the warp acknowledgment.
+        if (!near(atEdge)) return fail(__LINE__);
+        send(QEvent::MouseMove, recentered - QPointF(0, 10));
+        send(QEvent::MouseButtonRelease, recentered - QPointF(0, 10));
+        if (!near(atEdge + 1)) return fail(__LINE__);
+    }
+    reset(137.25);
+    send(QEvent::MouseButtonPress, origin);
+    send(QEvent::MouseButtonRelease, origin);
+    if (!near(137.25)) return fail(__LINE__);
+    send(QEvent::MouseButtonDblClick, origin);
+    if (edit->isReadOnly()) return fail(__LINE__);
+    edit->setText(QStringLiteral("138.5"));
+    QMetaObject::invokeMethod(edit, "textEdited", Qt::DirectConnection, Q_ARG(QString, edit->text()));
+    QMetaObject::invokeMethod(edit, "editingFinished", Qt::DirectConnection);
+    if (!near(138.5) || !edit->isReadOnly()) return fail(__LINE__);
+    std::puts("PASS BPM scrub: distance, duplicate events, Shift precision, bounds, screen wrapping, text entry and one Undo");
+    return true;
 }
 
 void TransportBar::previewTempo(const QString& text) {

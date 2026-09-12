@@ -460,6 +460,38 @@ struct OfflineProcessModel {
     }
 };
 
+/// Audio state captured at an offline-render boundary. Identity, arrangement
+/// position, mute/color and realtime inserts deliberately stay on the clip.
+struct ClipAudioVersionSource {
+    std::string filePath;
+    AssetRef asset;
+    double durationSeconds = 0.0;
+    double offsetSeconds = 0.0;
+    double fadeInSeconds = 0.0;
+    double fadeOutSeconds = 0.0;
+    double fadeInCurve = 0.0;
+    double fadeOutCurve = 0.0;
+    ClipFadeMode fadeInMode = ClipFadeMode::Gain;
+    ClipFadeMode fadeOutMode = ClipFadeMode::Gain;
+    float gain = 1.0f;
+    float pan = 0.0f;
+    int channels = 0;
+    std::vector<TakeModel> takes;
+    std::vector<CompSegment> comp;
+    double compCrossfadeMs = 5.0;
+    ClipSampleEditModel sampleEdit;
+    ClipMusicalAnalysisModel musicalAnalysis;
+    bool expanded = false;
+};
+
+struct OfflineRenderVersion {
+    std::string id;
+    std::string parentId;
+    /// Effect names for the history label, never a live/reopened plugin rack.
+    std::string label;
+    ClipAudioVersionSource source;
+};
+
 struct ClipModel {
     std::string id;
     std::string name;
@@ -514,6 +546,10 @@ struct ClipModel {
     /// Cached direct-offline processing, applied before the ordinary realtime
     /// clip inserts above.
     OfflineProcessModel offlineProcess;
+    /// Original source followed by immutable rendered versions. Rendering an
+    /// older version appends a new child without discarding later versions.
+    std::vector<OfflineRenderVersion> offlineHistory;
+    std::string offlineVersionId;
     /// Semantic graph entry for Bounce in Place audio. Ordinary clips leave it
     /// at None and follow the standard track path.
     PlaybackInjection playbackInjection;
@@ -521,6 +557,9 @@ struct ClipModel {
     bool expanded = false;
     AssetRef asset;               // v6 cloud identity; filePath is legacy/cache
 };
+
+ClipAudioVersionSource captureClipAudioVersion(const ClipModel& clip);
+void applyClipAudioVersion(ClipModel& clip, const ClipAudioVersionSource& source);
 
 /// Shared by local tempo edits and the collaboration reducer. Source offsets
 /// remain source time; musical clip lengths and fades follow the tempo.

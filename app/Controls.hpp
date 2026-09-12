@@ -310,6 +310,8 @@ public:
 
     double gain() const { return m_gain; }
     void setGain(double gain);
+    /// Let a scrollable channel strip keep wheel input for navigation.
+    void setWheelEnabled(bool enabled);
     /// Print the dB scale down the left of the slot. Vertical faders only —
     /// there is nowhere to put it on a horizontal one.
     void setScaleVisible(bool visible);
@@ -371,6 +373,7 @@ private:
     int m_dragStartCoord = 0;
     bool m_dragging = false;
     bool m_wheelEditing = false;
+    bool m_wheelEnabled = true;
     bool m_hovered = false;
     bool m_automatable = false;
     bool m_compactKnob = false;

@@ -22,8 +22,9 @@ public:
     OfflineRenderDialog(
         daw::EngineController& controller,
         std::vector<daw::EngineController::ClipAddress> clips,
-        bool chainsDiffer, QWidget* parent = nullptr);
+        QWidget* parent = nullptr);
     ~OfflineRenderDialog() override;
+    static bool checkForTest(const QString& screenshotPath = {});
 
     bool rendered() const noexcept { return m_rendered; }
     void reject() override;
@@ -35,13 +36,14 @@ private:
     void loadPreset();
     void savePreset();
     void startRender();
+    void updateRenderAvailability();
 
     daw::EngineController& m_controller;
     std::vector<daw::EngineController::ClipAddress> m_clips;
     daw::EngineController m_scratch;
     std::string m_chainTrackId;
 
-    QLabel* m_warning = nullptr;
+    QLabel* m_clipSummary = nullptr;
     QListWidget* m_clipList = nullptr;
     QWidget* m_rackHost = nullptr;
     QVBoxLayout* m_rackLayout = nullptr;

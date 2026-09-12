@@ -28,6 +28,9 @@ if(NOT TARGET Qt6::GuiPrivate)
     # a separate package. Only the transitional path triangulator needs it.
     find_package(Qt6GuiPrivate ${Qt6Gui_VERSION} EXACT REQUIRED CONFIG)
 endif()
+if(NOT TARGET Qt6::WidgetsPrivate)
+    find_package(Qt6WidgetsPrivate ${Qt6Widgets_VERSION} EXACT REQUIRED CONFIG)
+endif()
 if(APPLE AND Qt6Gui_VERSION VERSION_GREATER_EQUAL "6.11.0" AND
              Qt6Gui_VERSION VERSION_LESS "6.11.2")
     message(FATAL_ERROR
@@ -55,11 +58,12 @@ add_library(vlt_gpu_scene STATIC
     graphics/MediaImageItem.cpp graphics/MediaImageItem.hpp
     graphics/AnimatedImageDecoder.cpp graphics/AnimatedImageDecoder.hpp
     graphics/VideoFrameGate.cpp graphics/VideoFrameGate.hpp
-    graphics/SceneRecorder.cpp graphics/SceneRecorder.hpp graphics/SceneSnapshot.hpp)
+    graphics/SceneRecorder.cpp graphics/SceneRecorder.hpp graphics/SceneSnapshot.hpp
+    graphics/WidgetUpdates.cpp graphics/WidgetUpdates.hpp)
 add_library(vlt_ui_frame_clock STATIC UiFrameClock.cpp UiFrameClock.hpp UiPerformance.cpp UiPerformance.hpp)
 target_link_libraries(vlt_ui_frame_clock PUBLIC Qt6::Widgets)
 target_include_directories(vlt_ui_frame_clock PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(vlt_gpu_scene PUBLIC Qt6::Quick Qt6::Widgets Qt6::Multimedia vlt_graphics_preferences vlt_ui_frame_clock PRIVATE Qt6::GuiPrivate)
+target_link_libraries(vlt_gpu_scene PUBLIC Qt6::Quick Qt6::Widgets Qt6::Multimedia vlt_graphics_preferences vlt_ui_frame_clock PRIVATE Qt6::GuiPrivate Qt6::WidgetsPrivate)
 target_include_directories(vlt_gpu_scene PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(vlt_gpu_scene PRIVATE ${PROJECT_SOURCE_DIR}/engine)
 qt_add_resources(vlt_gpu_scene vlt_gpu_media PREFIX "/vlt/graphics" BASE graphics/qml
@@ -220,6 +224,11 @@ list(REMOVE_ITEM DAW_APP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.hpp")
 
 qt_add_executable(daw ${DAW_APP_SOURCES})
+if(DAW_BUILD_TESTS)
+    add_test(NAME plugin_drag_lifecycle_test COMMAND daw --plugin-interaction-check)
+    set_tests_properties(plugin_drag_lifecycle_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 30)
+endif()
 
 # Ship the complete family inside the executable on every platform. No font
 # installation, source checkout or system Inter installation is required.
@@ -294,6 +303,18 @@ if(DAW_BUILD_TESTS)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2" TIMEOUT 90 RUN_SERIAL TRUE)
     add_test(NAME track_creation_ui_test COMMAND $<TARGET_FILE:daw> --trackcreationcheck)
     add_test(NAME plugin_picker_ui_test COMMAND $<TARGET_FILE:daw> --pluginpickercheck)
+    add_test(NAME offline_render_ui_test COMMAND $<TARGET_FILE:daw> --offlinecheck)
+    add_test(NAME plugin_batch_ui_test COMMAND $<TARGET_FILE:daw> --pluginbatchcheck)
+    add_test(NAME tempo_scrub_ui_test COMMAND $<TARGET_FILE:daw> --tempocheck)
+    add_test(NAME mixer_fader_input_test COMMAND $<TARGET_FILE:daw> --mixerwheelcheck)
+    set_tests_properties(mixer_fader_input_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+    set_tests_properties(tempo_scrub_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+    set_tests_properties(plugin_batch_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+    set_tests_properties(offline_render_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
     set_tests_properties(plugin_picker_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
     set_tests_properties(track_creation_ui_test PROPERTIES
@@ -308,7 +329,7 @@ if(DAW_BUILD_TESTS)
         # CTest does not inherit the Qt SDK's bin directory on clean Windows
         # runners. Without this, the loader opens an invisible error dialog for
         # a missing Qt6Core.dll and the headless test appears to time out.
-        set_tests_properties(collaboration_client_selftest track_creation_ui_test plugin_picker_ui_test PROPERTIES
+        set_tests_properties(collaboration_client_selftest track_creation_ui_test plugin_picker_ui_test offline_render_ui_test plugin_batch_ui_test tempo_scrub_ui_test mixer_fader_input_test PROPERTIES
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()

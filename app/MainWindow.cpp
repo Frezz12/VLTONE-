@@ -64,6 +64,7 @@
 #include "ExportDialog.hpp"
 #include "BounceInPlaceDialog.hpp"
 #include "OfflineRenderDialog.hpp"
+#include "PluginBatchDialog.hpp"
 #include "PluginManagerWindow.hpp"
 #include "PluginQuickAdder.hpp"
 #include "PlatformDiagnostics.hpp"
@@ -7325,14 +7326,14 @@ bool MainWindow::checkTempoScrubForTest() {
                              Qt::LeftButton, Qt::NoModifier);
             QApplication::sendEvent(edit, &move);
         }
-        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(start),
-                            QPointF(globalStart), Qt::LeftButton,
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(finish),
+                            QPointF(globalFinish), Qt::LeftButton,
                             Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(edit, &release);
     };
 
     const double original = m_controller.tempo();
-    scrub(-12, 2);  // repeated upward throws keep raising the number
+    scrub(-12, 2);  // Duplicate positions must not count as additional travel.
     const double raised = m_controller.tempo();
     scrub(48);    // downward movement lowers it again
     const double lowered = m_controller.tempo();
@@ -7353,18 +7354,17 @@ bool MainWindow::checkTempoScrubForTest() {
     const bool scrubbed = raised > original && lowered < raised &&
                           raised == std::round(raised) &&
                           lowered == std::round(lowered);
-    const bool repeatedThrowsAccumulated = original > 295.0 ||
-                                           raised >= original + 5.0;
-    if (!scrubbed || !repeatedThrowsAccumulated || !enteredTextMode ||
+    const bool stableDistance = std::abs(raised - std::min(300.0, original + 1.0)) < 1.e-8;
+    if (!scrubbed || !stableDistance || !enteredTextMode ||
         !leftTextMode) {
         std::fprintf(stderr,
                      "tempo scrub failed (%.1f -> %.1f -> %.1f, repeat %d, "
                      "text %d/%d)\n",
                      original, raised, lowered,
-                     int(repeatedThrowsAccumulated), int(enteredTextMode),
+                     int(stableDistance), int(enteredTextMode),
                      int(leftTextMode));
     }
-    return scrubbed && repeatedThrowsAccumulated && enteredTextMode &&
+    return scrubbed && stableDistance && enteredTextMode &&
            leftTextMode;
 }
 
@@ -9018,6 +9018,9 @@ void MainWindow::buildLayout() {
             &MainWindow::onBounceInPlace);
     connect(m_timeline, &TimelineWidget::offlineRenderRequested, this,
             &MainWindow::onOfflineRender);
+    connect(m_timeline, &TimelineWidget::sharedPluginsRequested, this, &MainWindow::onSharedPlugins);
+    connect(m_trackList, &TrackListWidget::sharedPluginsRequested, this, &MainWindow::onSharedPlugins);
+    connect(m_contextPanel, &ContextPanel::sharedPluginsRequested, this, &MainWindow::onSharedPlugins);
     connect(m_timeline, &TimelineWidget::projectEdited, this, [this] {
         m_orphanEditorSweepPending = true;
         markDirty();
@@ -10419,6 +10422,9 @@ void MainWindow::buildMenus() {
         edit, "timeline.offline_render", tr("Offline Render…"), kEdit);
     connect(m_offlineRenderAction, &QAction::triggered, this,
             &MainWindow::onOfflineRender);
+    m_sharedPluginsAction = addCommand(edit, "edit.shared_plugins", tr("Shared Plugins…"), kEdit,
+                                      QKeySequence(QStringLiteral("Ctrl+Shift+P")));
+    connect(m_sharedPluginsAction, &QAction::triggered, this, &MainWindow::onSharedPlugins);
     edit->addSeparator();
     connect(addCommand(edit, "edit.toggleComp", tr("&Expand Take Layers"), kEdit,
                        QKeySequence(Qt::Key_E)),
@@ -10943,13 +10949,19 @@ void MainWindow::openPluginEditor(const QString& channelId, const QString& inser
     // The window deletes itself on close (WA_DeleteOnClose), so the registry
     // has to drop the key or the next open would raise a dangling pointer.
     connect(editor, &PluginEditorWindow::closing, this,
-            [this](const QString& channel, const QString& insert) {
-                m_pluginEditors.remove(channel + '/' + insert);
+            [this, editor, key](const QString&, const QString&) {
+                if (m_pluginEditors.value(key, nullptr) == editor)
+                    m_pluginEditors.remove(key);
                 // A plugin may change opaque preset/MIDI-learn state without a
                 // parameter callback. Capture once after its GUI closes even if
                 // it did not report an ordinary document edit.
                 m_journalStale = true;
             });
+    connect(editor, &QObject::destroyed, this, [this, key, editor] {
+        // Parent teardown need not deliver closeEvent. An old deferred delete
+        // must also never remove a newer window registered under the same key.
+        if (m_pluginEditors.value(key, nullptr) == editor) m_pluginEditors.remove(key);
+    });
     connect(editor, &PluginEditorWindow::nestedPluginEditorRequested, this,
             &MainWindow::openPluginEditor);
     connect(editor, &PluginEditorWindow::projectEdited, this, [this] {
@@ -10987,7 +10999,7 @@ void MainWindow::openPluginEditor(const QString& channelId, const QString& inser
     // signal turn first; then the complete native frame is shown and mapped.
     const QPointer<PluginEditorWindow> guardedEditor(editor);
     QTimer::singleShot(0, this, [this, guardedEditor] {
-        if (!guardedEditor) return;
+        if (!guardedEditor || guardedEditor->isClosing()) return;
         presentInternalWindow(guardedEditor);
         // A second queued boundary lets Cocoa/Win32 finish mapping the freshly
         // shown native ancestor chain before editor initialization begins.
@@ -13128,6 +13140,7 @@ void MainWindow::setCpuStatusBarVisible(bool visible) {
 bool MainWindow::checkProcessingCommandsForTest() const {
     bool bounceFound = false;
     bool offlineFound = false;
+    bool sharedFound = false;
     for (const ShortcutManager::Command& command : m_shortcuts->commands()) {
         if (command.id == QLatin1String("timeline.bounce_in_place")) {
             bounceFound = command.action == m_bounceInPlaceAction &&
@@ -13135,9 +13148,12 @@ bool MainWindow::checkProcessingCommandsForTest() const {
                               QKeySequence(QStringLiteral("Ctrl+Alt+C"));
         } else if (command.id == QLatin1String("timeline.offline_render")) {
             offlineFound = command.action == m_offlineRenderAction;
+        } else if (command.id == QLatin1String("edit.shared_plugins")) {
+            sharedFound = command.action == m_sharedPluginsAction &&
+                m_shortcuts->shortcut(command.id) == QKeySequence(QStringLiteral("Ctrl+Shift+P"));
         }
     }
-    return bounceFound && offlineFound;
+    return bounceFound && offlineFound && sharedFound;
 }
 
 void MainWindow::publishSessionTransport(bool force) {
@@ -16089,6 +16105,22 @@ void MainWindow::updateLocalProcessingActions() {
                                 : tr("Available for audio clips only"));
     }
     if (m_timeline) m_timeline->setLocalProcessingEnabled(localOnlyAvailable);
+    if (m_sharedPluginsAction) {
+        const auto targets = PluginBatchDialog::selectedTargets(m_selection);
+        m_sharedPluginsAction->setEnabled(localOnlyAvailable && !m_controller.isRecording() &&
+            targets.size() >= 2 && m_controller.validatePluginBatch(targets, 1).isOk());
+    }
+}
+
+void MainWindow::onSharedPlugins() {
+    auto targets = PluginBatchDialog::selectedTargets(m_selection);
+    if (targets.size() < 2 || !m_controller.validatePluginBatch(targets, 1) || m_controller.isRecording()) return;
+    PluginBatchDialog dialog(m_controller, std::move(targets), this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    syncViews();
+    m_selection.refresh();
+    markDirty();
+    statusBar()->showMessage(tr("Plugins applied to the selection"), 3000);
 }
 
 void MainWindow::onBounceInPlace() {
@@ -16223,46 +16255,7 @@ void MainWindow::onOfflineRender() {
         return;
     }
 
-    const auto primary = m_controller.offlineProcessChain(clips.front());
-    const auto sameChain = [](const daw::EngineController::ChannelSnapshot& a,
-                              const daw::EngineController::ChannelSnapshot& b) {
-        const auto sameParameters = [](const auto& left, const auto& right) {
-            if (left.size() != right.size()) return false;
-            for (std::size_t i = 0; i < left.size(); ++i) {
-                if (left[i].id != right[i].id ||
-                    left[i].value != right[i].value)
-                    return false;
-            }
-            return true;
-        };
-        if (a.inserts.size() != b.inserts.size()) return false;
-        for (std::size_t i = 0; i < a.inserts.size(); ++i) {
-            const auto& left = a.inserts[i];
-            const auto& right = b.inserts[i];
-            if (left.model.format != right.model.format ||
-                left.model.uid != right.model.uid ||
-                left.model.bypassed != right.model.bypassed ||
-                left.model.mix != right.model.mix ||
-                !sameParameters(left.model.parameters,
-                                right.model.parameters) ||
-                !sameParameters(left.model.rightParameters,
-                                right.model.rightParameters) ||
-                left.state != right.state ||
-                left.rightState != right.rightState) {
-                return false;
-            }
-        }
-        return true;
-    };
-    bool chainsDiffer = false;
-    for (std::size_t i = 1; i < clips.size(); ++i) {
-        if (!sameChain(primary, m_controller.offlineProcessChain(clips[i]))) {
-            chainsDiffer = true;
-            break;
-        }
-    }
-
-    OfflineRenderDialog dialog(m_controller, clips, chainsDiffer, this);
+    OfflineRenderDialog dialog(m_controller, clips, this);
     dialog.exec();
     if (!dialog.rendered()) return;
     syncViews();

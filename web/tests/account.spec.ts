@@ -16,7 +16,7 @@ test("RU/EN pages and registration-to-account flow", async ({ page }) => {
   });
 
   await page.goto("/en");
-  await expect(page.getByRole("heading", { name: "Music under complete control." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /VLTone.*Listen\. Create\. Feel\./ })).toBeVisible();
   await page.goto("/ru/register");
   await page.getByLabel("Почта").fill("tester@example.com");
   await page.getByLabel("Никнейм").fill("Тестировщик");

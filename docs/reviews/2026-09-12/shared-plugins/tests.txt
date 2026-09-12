@@ -1,0 +1,21 @@
+Test project /Users/nikolay/Documents/code/VLTONE/VLTONE-/build
+    Start 73: offline_render_ui_test
+    Start  8: plugin_batch_test
+1/8 Test  #8: plugin_batch_test ................   Passed    1.35 sec
+    Start 19: channel_strip_preset_test
+2/8 Test #19: channel_strip_preset_test ........   Passed    0.76 sec
+    Start 18: processing_render_test
+3/8 Test #73: offline_render_ui_test ...........   Passed    2.43 sec
+    Start 17: render_safety_test
+4/8 Test #17: render_safety_test ...............   Passed    0.89 sec
+    Start 39: track_creation_test
+5/8 Test #39: track_creation_test ..............   Passed    0.53 sec
+    Start 71: track_creation_ui_test
+6/8 Test #18: processing_render_test ...........   Passed    1.95 sec
+    Start 74: plugin_batch_ui_test
+7/8 Test #71: track_creation_ui_test ...........   Passed    0.32 sec
+8/8 Test #74: plugin_batch_ui_test .............   Passed    0.45 sec
+
+100% tests passed out of 8
+
+Total Test time (real) =   4.53 sec

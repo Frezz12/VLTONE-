@@ -686,7 +686,7 @@ bool supportedBuiltin(const InsertModel& insert) {
     return insert.format == PluginFormat::Internal &&
            (insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
             insert.uid == "daw.gravity" || insert.uid == "daw.graphit" ||
-            insert.uid == "daw.doubler" || insert.uid == "daw.chorus" ||
+            insert.uid == "daw.doubler" || insert.uid == "daw.doubler-pro" || insert.uid == "daw.chorus" ||
             insert.uid == "daw.flanger" || insert.uid == "daw.phaser");
 }
 

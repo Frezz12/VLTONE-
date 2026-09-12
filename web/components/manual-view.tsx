@@ -104,7 +104,7 @@ export function ManualView({ locale }: { locale: "ru" | "en" }) {
 
   const toc = query ? visible : categories;
 
-  return <main className="manual-main">
+  return <main id="main-content" className="manual-main">
     <section className="manual-hero" aria-labelledby="manual-title">
       <div>
         <span className="manual-eyebrow">{t("eyebrow")}</span>

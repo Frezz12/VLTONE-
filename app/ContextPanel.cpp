@@ -4,6 +4,7 @@
 #include "Controls.hpp"
 #include "Icons.hpp"
 #include "PluginQuickAdder.hpp"
+#include "PluginBatchDialog.hpp"
 #include "SelectionModel.hpp"
 #include "Theme.hpp"
 
@@ -726,6 +727,16 @@ QWidget* ContextPanel::buildAudioClipMulti() {
     row->addWidget(count);
     row->addWidget(islandDivider(host));
 
+    if (toolEnabled("clip.plugins")) {
+        auto* shared = islandButton(icons::Glyph::Plugin, tr("Shared Plugins…"), host);
+        shared->setObjectName("ContextPanelSharedPlugins");
+        ui::contextPriority(shared, 115);
+        shared->setEnabled(!m_controller->hasCloudProjectBinding() &&
+            m_controller->validatePluginBatch(PluginBatchDialog::selectedTargets(*m_selection), 1).isOk());
+        connect(shared, &QAbstractButton::clicked, this, &ContextPanel::sharedPluginsRequested);
+        row->addWidget(shared);
+    }
+
     if (toolEnabled("clip.level")) {
         // Relative, not absolute: the clips start at different levels and one
         // shared value would flatten them all to the same gain.
@@ -1367,6 +1378,16 @@ QWidget* ContextPanel::buildTrackMulti() {
     bold.setBold(true);
     count->setFont(bold);
     row->addWidget(count);
+
+    if (toolEnabled("track.plugins") &&
+        m_controller->validatePluginBatch(PluginBatchDialog::selectedTargets(*m_selection), 1)) {
+        auto* shared = islandButton(icons::Glyph::Plugin, tr("Shared Plugins…"), host);
+        shared->setObjectName("ContextPanelSharedPlugins");
+        ui::contextPriority(shared, 115);
+        shared->setEnabled(!m_controller->hasCloudProjectBinding());
+        connect(shared, &QAbstractButton::clicked, this, &ContextPanel::sharedPluginsRequested);
+        row->addWidget(shared);
+    }
 
     // Nothing here reads a value back off the tracks, because there is no one
     // value to read: five tracks at five levels have no shared level to show.

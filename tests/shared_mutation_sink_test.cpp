@@ -1257,6 +1257,9 @@ void verifySharedChannelBatchMutators(
     sink.result = result;
     controller.attachSharedMutationSink(sink);
     const bool pasted = controller.pasteChannelInserts(targetId, plugins);
+    std::vector<std::vector<std::string>> batchIds;
+    check(!controller.appendPluginBatch({{targetId, {}}}, plugins, batchIds) && batchIds.empty(),
+          "opaque configured plugin batches remain blocked in cloud projects");
     const bool stripPasted = controller.pasteChannelStrip(targetId, strip);
     const bool presetPasted =
         controller.pasteChannelStripPreset(targetId, strip);
@@ -1342,6 +1345,14 @@ void verifyCapabilityLedger() {
         }
         return MutationCapability::Unclassified;
     };
+    check(capabilityOf("appendPluginBatch") == MutationCapability::BlockedV1 &&
+              capabilityOf("selectOfflineRenderVersion") == MutationCapability::BlockedV1 &&
+              capabilityOf("restoreOfflineRenderOriginal") == MutationCapability::BlockedV1 &&
+              capabilityOf("capturePluginBatchChain") == MutationCapability::LocalOnly &&
+              capabilityOf("createPluginBatchDraft") == MutationCapability::LocalOnly &&
+              capabilityOf("startPluginAudition") == MutationCapability::LocalOnly &&
+              capabilityOf("stopPluginAudition") == MutationCapability::LocalOnly,
+          "offline history and batch edits are gated separately from local audition");
     check(capabilityOf("addPatternInstrument") ==
                   MutationCapability::SharedCommand &&
               capabilityOf("clearSamplerSample") ==

@@ -47,6 +47,7 @@
 #include <QPainter>
 #include <QScreen>
 #include <QScrollBar>
+#include <QScrollArea>
 #include <QTimer>
 #include <QWheelEvent>
 #include <cmath>
@@ -209,6 +210,104 @@ protected:
     }
 };
 }
+bool checkMixerPerformance() {
+    ThemeManager::instance().apply();
+    FrameClock::instance().setPreference(FrameMode::Display, 60);
+    const auto settle = [](int ms) {
+        QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
+    };
+    daw::EngineController controller;
+    if (!controller.initialize(48000, 512, false)) return false;
+    // Real mixer controls with deterministic slots; no device or vendor DSP.
+    auto& project = const_cast<daw::ProjectModel&>(controller.project());
+    project.tracks.clear(); project.invalidateTrackIndex();
+    for (int i = 0; i < 12; ++i) {
+        daw::TrackModel track;
+        track.id = "mixer-perf-" + std::to_string(i);
+        track.name = "Channel " + std::to_string(i + 1);
+        track.kind = daw::TrackKind::Audio;
+        for (int j = 0; j < 8; ++j) {
+            daw::InsertModel insert;
+            insert.id = track.id + "-insert-" + std::to_string(j);
+            insert.name = "Effect " + std::to_string(j + 1);
+            track.inserts.push_back(std::move(insert));
+        }
+        project.tracks.push_back(std::move(track));
+    }
+    MixerWidget mixer(&controller);
+    mixer.resize(1250, 440);
+    auto* surface = graphics::gpuWorkspaceEnabled() ? new graphics::WorkspaceSurface(&mixer) : nullptr;
+    bool failed = false;
+    if (surface) QObject::connect(surface, &graphics::WorkspaceSurface::failed, &mixer,
+        [&](const QString& reason) { failed = true; qWarning() << reason; });
+    mixer.show();
+    mixer.raise();
+    mixer.activateWindow();
+    if (surface) surface->quickWindow()->requestActivate();
+    settle(1800);
+    if (surface && !surface->quickWindow()->isExposed()) {
+        std::fprintf(stderr, "Mixer GPU window is not exposed; benchmark is invalid\n");
+        return false;
+    }
+    if (surface && surface->quickWindow()->grabWindow().isNull()) {
+        std::fprintf(stderr, "Mixer has no GPU frame; benchmark is invalid\n");
+        return false;
+    }
+    QScrollArea* scroll = nullptr;
+    for (auto* area : mixer.findChildren<QScrollArea*>())
+        if (area->verticalScrollBarPolicy() == Qt::ScrollBarAsNeeded) { scroll = area; break; }
+    if (!scroll || scroll->verticalScrollBar()->maximum() < 100 || failed) return false;
+    int frames = 0;
+    if (surface) QObject::connect(surface, &graphics::WorkspaceSurface::frameMeasured, &mixer,
+        [&](double preparation, double sync, double render, double interval, double) {
+            ++frames;
+            perf::sample("mixer.scene.prepare.ms", preparation);
+            perf::sample("mixer.scene.sync.ms", sync);
+            perf::sample("mixer.scene.render.ms", render);
+            if (interval > 0 && frames > 1) perf::sample("mixer.scene.submission.ms", interval);
+        });
+    perf::reset();
+    // Place the pointer in the gutter so the wheel scrolls, never changes a knob.
+    const QPointF position = scroll->viewport()->mapTo(&mixer, QPoint(2, 100));
+    int inputs = 0, scrollChanges = 0;
+    QElapsedTimer elapsed; elapsed.start();
+    QTimer timer;
+    timer.setTimerType(Qt::PreciseTimer);
+    QObject::connect(&timer, &QTimer::timeout, &mixer, [&] {
+        auto* bar = scroll->verticalScrollBar();
+        const int before = bar->value();
+        const double phase = std::fmod(elapsed.elapsed() / 1600., 1.);
+        const int wanted = int((phase < .5 ? phase * 2 : 2 - phase * 2) * bar->maximum());
+        QWheelEvent wheel(position, mixer.mapToGlobal(position), QPoint(0, bar->value() - wanted), {},
+            Qt::NoButton, Qt::NoModifier, Qt::ScrollUpdate, false);
+        perf::Scope inputCost("mixer.wheel.ms");
+        if (surface) QCoreApplication::sendEvent(surface->quickWindow(), &wheel);
+        // In compatibility mode QWidgetWindow performs pixel-wheel translation;
+        // this harness drives the resulting scrollbar movement directly.
+        else bar->setValue(wanted);
+        if (bar->value() != before) ++scrollChanges;
+        ++inputs;
+    });
+    timer.start(8);
+    settle(1600); // warm one complete down/up cycle before measuring
+    const int warmupInputs = inputs;
+    const int warmupChanges = scrollChanges;
+    frames = 0;
+    perf::reset();
+    QElapsedTimer measured; measured.start();
+    settle(4800);
+    timer.stop();
+    perf::flush();
+    std::printf("MIXER_SCROLL backend=%s viewport=%dx%d DPR=%.1f inputs=%d changes=%d frames=%d elapsed_ms=%lld\n",
+        surface ? "gpu" : "widgets", mixer.width(), mixer.height(), mixer.devicePixelRatioF(),
+        inputs - warmupInputs, scrollChanges - warmupChanges, frames, static_cast<long long>(measured.elapsed()));
+    if (const auto shot = qEnvironmentVariable("VLT_SCROLL_SCREENSHOT"); !shot.isEmpty()) {
+        if (surface) surface->quickWindow()->grabWindow().save(shot);
+        else mixer.grab().save(shot);
+    }
+    return !failed && scrollChanges - warmupChanges > 30 && (!surface || frames > 30);
+}
+
 bool checkUiScaling() {
     bool ok = true;
     const auto check = [&](bool result, const char* name) {
@@ -270,8 +369,8 @@ bool checkUiScaling() {
                               Qt::ScrollUpdate, false);
             QApplication::sendEvent(fader, &event);
         }
-        check(fader->gain() > beforeWheel && wheelFinishes == 0,
-              "mixer fader applies high-resolution wheel samples without committing each one");
+        check(fader->gain() == beforeWheel && wheelFinishes == 0,
+              "scrolling over the mixer fader leaves its gain unchanged");
     }
     if (panControl) {
         const double beforeWheel = panControl->pan();
@@ -288,8 +387,8 @@ bool checkUiScaling() {
               "mixer pan applies high-resolution wheel samples without committing each one");
     }
     settle(180);
-    check(wheelFinishes == 1,
-          "mixer fader wheel burst commits as one gesture");
+    check(wheelFinishes == 0,
+          "scrolling over the mixer fader creates no edit");
     check(panWheelFinishes == 1,
           "mixer pan wheel burst commits as one gesture");
     check(tracks.findChildren<FaderWidget*>().size() < 64, "500 track headers create only viewport controls");

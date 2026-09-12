@@ -89,10 +89,10 @@ class ModulationPanel final : public ui::FrameWidget, public ui::graphics::Scene
     QPushButton *m_preset = nullptr;
     QWidget *m_controls = nullptr;
     QGridLayout *m_grid = nullptr;
-    std::array<QWidget *, 4> m_cells{};
-    std::array<ui::Knob *, 4> m_knobs{};
-    std::array<QDoubleSpinBox *, 4> m_numbers{};
-    std::array<std::optional<double>, 4> m_gestures{};
+    std::array<QWidget *, daw::plugins::modulation::parameterCapacity> m_cells{};
+    std::array<ui::Knob *, daw::plugins::modulation::parameterCapacity> m_knobs{};
+    std::array<QDoubleSpinBox *, daw::plugins::modulation::parameterCapacity> m_numbers{};
+    std::array<std::optional<double>, daw::plugins::modulation::parameterCapacity> m_gestures{};
     QTimer *m_refreshTimer = nullptr;
     ui::FrameTimer *m_visualTimer = nullptr;
     std::vector<UserPreset> m_users;

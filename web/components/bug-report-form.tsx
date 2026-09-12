@@ -31,7 +31,7 @@ export function BugReportForm({ locale }: { locale: string }) {
     } catch (reason) { setError((reason as APIError).message); }
     finally { setBusy(false); }
   }
-  return <main className="vlt-main"><section className="vlt-card vlt-card-pad vlt-stack report-card">
+  return <main id="main-content" className="vlt-main"><section className="vlt-card vlt-card-pad vlt-stack report-card">
     <div><h1 className="vlt-title">{t("title")}</h1><p className="vlt-subtitle">{t("subtitle")}</p></div>
     {receipt && <div className="vlt-success" role="status">{t("sent", { number: receipt })}</div>}
     {error && <div className="vlt-error" role="alert">{error}</div>}

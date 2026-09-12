@@ -11,12 +11,13 @@
 namespace daw::cloud {
 namespace {
 
-constexpr std::array<std::string_view, 8> kBuiltinUids{
+constexpr std::array<std::string_view, 9> kBuiltinUids{
     "daw.sampler",
     "daw.equalizer",
     "daw.gravity",
     "daw.graphit",
     "daw.doubler",
+    "daw.doubler-pro",
     "daw.chorus",
     "daw.flanger",
     "daw.phaser",

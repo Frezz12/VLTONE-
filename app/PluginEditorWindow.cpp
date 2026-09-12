@@ -135,7 +135,7 @@ PluginEditorWindow::~PluginEditorWindow() {
 }
 
 void PluginEditorWindow::initializeEditor() {
-    if (m_editorInitialized) return;
+    if (m_editorInitialized || m_closing) return;
     m_editorInitialized = true;
     scheduleEditorInitialization(kPluginSettleMs);
 }
@@ -185,6 +185,7 @@ bool PluginEditorWindow::requiresNativeSurface() const {
 }
 
 void PluginEditorWindow::scheduleEditorInitialization(int delayMs) {
+    if (m_closing) return;
     const std::uint64_t generation = ++m_loadGeneration;
     m_editorReady = false;
     m_pendingEditorPlugin = nullptr;
@@ -454,8 +455,9 @@ void PluginEditorWindow::rebuildEditorContent() {
         m_contentRow->insertWidget(0, panel, 1);
         emit builtInPanelReady(panel, QString::fromStdString(descriptorUid).mid(4));
         const bool doubler = modulation->kind() == daw::plugins::modulation::Kind::Doubler;
-        setMinimumSize(440, doubler ? 499 : 539);
-        m_fallbackContentSize = QSize(560, doubler ? 559 : 579);
+        const bool pro = modulation->kind() == daw::plugins::modulation::Kind::DoublerPro;
+        setMinimumSize(440, pro ? 599 : doubler ? 499 : 539);
+        m_fallbackContentSize = QSize(560, pro ? 639 : doubler ? 559 : 579);
         resize(m_fallbackContentSize);
     } else if (trustedInternal && descriptorUid == "daw.graphit" &&
                dynamic_cast<daw::plugins::graphit::GraphitInstance*>(plugin)) {
@@ -700,11 +702,12 @@ void PluginEditorWindow::detachFromPlugin() {
     // Only the instance the view was opened on may be told to close it. After a
     // Replace the slot holds a different plugin, and `closeEditor` on that one
     // would be a call about a window it never opened.
-    if (daw::plugins::PluginInstance* plugin = instance();
-        plugin && plugin == m_openedOn) {
+    daw::plugins::PluginInstance* plugin = instance();
+    const bool ownsEditor = plugin && plugin == m_openedOn;
+    m_openedOn = nullptr;
+    if (ownsEditor) {
         plugin->closeEditor();
     }
-    m_openedOn = nullptr;
 }
 
 daw::plugins::PluginInstance* PluginEditorWindow::instance() const {
@@ -739,8 +742,15 @@ void PluginEditorWindow::changeEvent(QEvent* event) {
 }
 
 void PluginEditorWindow::closeEvent(QCloseEvent* event) {
-    emit closing(m_channelId, m_insertId);
     QWidget::closeEvent(event);
+    if (!event->isAccepted() || m_closing) return;
+    m_closing = true;
+    m_editorInitialized = false;
+    // WA_DeleteOnClose is deferred and may wait through a native nested event
+    // loop. Release the plugin GUI before the registry permits another open;
+    // otherwise VST refuses it, or AU/CLAP/VST3 reuse the old window's view.
+    detachFromPlugin();
+    emit closing(m_channelId, m_insertId);
 }
 
 void PluginEditorWindow::hideEvent(QHideEvent* event) {
@@ -927,7 +937,10 @@ void PluginEditorWindow::onEditorClosed() noexcept {
     // The plugin closed itself. Tearing the window down from inside a plugin
     // callback would destroy the very object still on the stack, so it is
     // deferred to the event loop.
-    QMetaObject::invokeMethod(this, [this] { close(); }, Qt::QueuedConnection);
+    const auto generation = m_loadGeneration;
+    QMetaObject::invokeMethod(this, [this, generation] {
+        if (!m_closing && generation == m_loadGeneration) close();
+    }, Qt::QueuedConnection);
 }
 
 double PluginEditorWindow::contentScaleFactor() const noexcept {

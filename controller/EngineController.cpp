@@ -431,7 +431,7 @@ bool supportedSharedBuiltin(const InsertModel& insert) {
     return insert.format == PluginFormat::Internal &&
            (insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
             insert.uid == "daw.gravity" || insert.uid == "daw.graphit" ||
-            insert.uid == "daw.doubler" || insert.uid == "daw.chorus" ||
+            insert.uid == "daw.doubler" || insert.uid == "daw.doubler-pro" || insert.uid == "daw.chorus" ||
             insert.uid == "daw.flanger" || insert.uid == "daw.phaser");
 }
 
@@ -1444,6 +1444,7 @@ void EngineController::shutdown() {
         m_devices->shutdown();
         m_deviceOpen = false;
     }
+    stopPluginAudition();
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -3279,6 +3280,15 @@ plugins::PluginNode* EngineController::editorInsertNode(
 // ── Graph construction ─────────────────────────────────────────────────────
 
 audio::Result EngineController::rebuildGraph(bool reconfigurePlugins, bool publish) {
+    if (m_pluginAuditionNode) {
+        auto& graph = m_engine.graph();
+        graph = engine::AudioGraph{};
+        graph.setSink(graph.adoptNode(m_pluginAuditionNode));
+        if (!publish) return audio::Result::ok();
+        const auto result = m_engine.commitGraph();
+        return result ? audio::Result::ok() : audio::Result::fail(
+            audio::EngineError::InvalidArgument, std::string(engine::describe(result.error())));
+    }
     struct FreezeRebuildScope { bool& flag; bool previous; ~FreezeRebuildScope() { flag = previous; } };
     FreezeRebuildScope freezeScope{m_rebuildingFrozenGraph, m_rebuildingFrozenGraph};
     m_rebuildingFrozenGraph = true;
@@ -3805,6 +3815,10 @@ audio::Result EngineController::rebuildGraph(bool reconfigurePlugins, bool publi
     }
     syncAllTrackGains();
 
+    if (!m_pluginAuditionCapture.empty()) {
+        const auto channel = m_channels.find(m_pluginAuditionCapture);
+        if (channel != m_channels.end()) graph.setSink(channel->second.ids.meter);
+    }
     if (!publish) return audio::Result::ok();
     auto committed = m_engine.commitGraph(reconfigurePlugins);
     if (!committed) {
@@ -3842,6 +3856,7 @@ unsigned EngineController::workerCount() const { return m_engine.workerCount(); 
 // ── Document ───────────────────────────────────────────────────────────────
 
 void EngineController::newProject(bool createDefaultAudioTrack) {
+    stopPluginAudition();
     m_project = ProjectModel{};
     m_project.sampleRate = m_sampleRate;
     m_undo.clear();
@@ -4991,6 +5006,11 @@ audio::Result EngineController::prepareProjectOpen(const std::string& packageDir
             if (clip.kind == ClipKind::Audio && !clip.filePath.empty()) paths.insert(clip.filePath);
             if (!clip.offlineProcess.renderedFilePath.empty()) paths.insert(clip.offlineProcess.renderedFilePath);
             for (const auto& take : clip.takes) if (!take.filePath.empty()) paths.insert(take.filePath);
+            for (const auto& version : clip.offlineHistory) {
+                if (!version.source.filePath.empty()) paths.insert(version.source.filePath);
+                for (const auto& take : version.source.takes)
+                    if (!take.filePath.empty()) paths.insert(take.filePath);
+            }
             slots(clip.inserts);
         }
     }
@@ -10219,7 +10239,7 @@ void EngineController::clearSamplerSample(const std::string& channelId,
 }
 
 bool EngineController::pumpPreviewPluginEvents() {
-    if (!m_liveDeviceAllowed && m_previewParameterEditsPending) {
+    if (!m_liveDeviceAllowed && !m_externalPreviewDriven && m_previewParameterEditsPending) {
         m_previewParameterEditsPending = false;
         std::array<float, 256> left{}, right{};
         float* channels[]{left.data(), right.data()};
@@ -17826,6 +17846,12 @@ void EngineController::removeTake(const std::string& trackId,
         for (const auto& track : m_project.tracks) {
             for (const auto& other : track.clips) {
                 if (other.filePath == take.filePath) ++references;
+                if (other.offlineProcess.renderedFilePath == take.filePath) ++references;
+                for (const auto& version : other.offlineHistory) {
+                    if (version.source.filePath == take.filePath) ++references;
+                    for (const auto& historicalTake : version.source.takes)
+                        if (historicalTake.filePath == take.filePath) ++references;
+                }
                 for (const auto& t : other.takes) {
                     if (t.filePath == take.filePath) ++references;
                 }
@@ -18160,6 +18186,13 @@ size_t EngineController::deleteUnusedTakes(bool deleteFiles) {
     for (const auto& track : m_project.tracks) {
         for (const auto& clip : track.clips) {
             if (!clip.filePath.empty()) keptFiles.insert(clip.filePath);
+            if (!clip.offlineProcess.renderedFilePath.empty())
+                keptFiles.insert(clip.offlineProcess.renderedFilePath);
+            for (const auto& version : clip.offlineHistory) {
+                if (!version.source.filePath.empty()) keptFiles.insert(version.source.filePath);
+                for (const auto& take : version.source.takes)
+                    if (!take.filePath.empty()) keptFiles.insert(take.filePath);
+            }
             for (const auto& take : clip.takes) {
                 const bool used = std::any_of(
                     clip.comp.begin(), clip.comp.end(),
@@ -18409,6 +18442,10 @@ audio::Result EngineController::exportMixdown(const std::string& outputPath,
             bool conflict = aliasesOutput(clip.filePath) ||
                             aliasesOutput(clip.offlineProcess.renderedFilePath);
             for (const auto& take : clip.takes) conflict |= aliasesOutput(take.filePath);
+            for (const auto& version : clip.offlineHistory) {
+                conflict |= aliasesOutput(version.source.filePath);
+                for (const auto& take : version.source.takes) conflict |= aliasesOutput(take.filePath);
+            }
             if (conflict) return audio::Result::fail(audio::EngineError::InvalidArgument,
                                                      "output would replace project source audio");
         }

@@ -46,6 +46,8 @@
 #include <QStackedWidget>
 #include <QTabBar>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QWidgetAction>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -1252,7 +1254,7 @@ QWidget* SamplerPanel::buildFxStrip() {
     swatch->setObjectName(QStringLiteral("SamplerAccentBar"));
     swatch->setFixedSize(2, 12);
     auto* stripName = new QLabel(
-        tr("Effects"), strip);
+        m_context == Context::Clip ? tr("Clip FX") : tr("Effects"), strip);
     stripName->setObjectName(QStringLiteral("SamplerStripName"));
     stripHeader->addWidget(swatch);
     stripHeader->addWidget(stripName, 1);
@@ -1268,6 +1270,18 @@ QWidget* SamplerPanel::buildFxStrip() {
     addFx->setButtonSize(14, 14);
     stripHeader->addWidget(addFx);
     column->addLayout(stripHeader);
+    if (m_context == Context::Clip) {
+        m_offlineHistory = new QToolButton(strip);
+        m_offlineHistory->setObjectName(QStringLiteral("SamplerOfflineHistory"));
+        m_offlineHistory->setAccessibleName(tr("Offline render history"));
+        m_offlineHistory->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        m_offlineHistory->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_offlineHistory->setFixedHeight(24);
+        m_offlineHistory->setText(tr("History ▾"));
+        m_offlineHistory->setToolTip(tr("Choose the original audio or an offline-rendered version"));
+        column->addWidget(m_offlineHistory);
+        connect(m_offlineHistory, &QToolButton::clicked, this, &SamplerPanel::showOfflineHistory);
+    }
     connect(addFx, &QAbstractButton::clicked, this, [this] {
         const std::vector<daw::InsertModel>* inserts = nullptr;
         if (m_controller) {
@@ -1402,6 +1416,71 @@ QWidget* SamplerPanel::buildFxStrip() {
     connect(m_fxVolume, &ui::FaderWidget::editFinished, this, finishGesture);
     rebuildFxSlots();
     return strip;
+}
+
+void SamplerPanel::showOfflineHistory() {
+    if (!m_controller || !m_offlineHistory) return;
+    const auto* clip = m_controller->audioClip(m_channelId.toStdString(), m_slotId.toStdString());
+    if (!clip) return;
+    auto* menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    auto* tree = new QTreeWidget(menu);
+    tree->setObjectName(QStringLiteral("OfflineHistoryTree"));
+    tree->setAccessibleName(tr("Offline render versions"));
+    tree->setHeaderHidden(true);
+    tree->setIndentation(14);
+    tree->setUniformRowHeights(true);
+    tree->setMinimumWidth(330);
+    tree->setFixedHeight(std::clamp(int(clip->offlineHistory.size() + 1) * 28, 90, 280));
+    tree->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* root = new QTreeWidgetItem(tree, {tr("Original audio")});
+    root->setSizeHint(0, QSize(0, 26));
+    root->setData(0, Qt::UserRole, QString());
+    if (!clip->offlineHistory.empty()) {
+        root->setData(0, Qt::UserRole, QString::fromStdString(clip->offlineHistory.front().id));
+        for (std::size_t index = 1; index < clip->offlineHistory.size(); ++index) {
+            const auto& version = clip->offlineHistory[index];
+            auto* item = new QTreeWidgetItem(root, {tr("Version %1 · %2").arg(index)
+                .arg(QString::fromStdString(version.label))});
+            item->setSizeHint(0, QSize(0, 26));
+            item->setData(0, Qt::UserRole, QString::fromStdString(version.id));
+            const auto parent = std::find_if(clip->offlineHistory.begin(), clip->offlineHistory.end(),
+                [&](const auto& prior) { return prior.id == version.parentId; });
+            item->setToolTip(0, tr("Based on version %1\n%2")
+                .arg(std::distance(clip->offlineHistory.begin(), parent))
+                .arg(QString::fromStdString(version.label)));
+            if (version.id == clip->offlineVersionId) tree->setCurrentItem(item);
+        }
+        if (clip->offlineVersionId == clip->offlineHistory.front().id) tree->setCurrentItem(root);
+    } else if (!clip->offlineProcess.empty()) {
+        auto* current = new QTreeWidgetItem(root, {tr("Version 1 · Offline Render")});
+        current->setFlags(Qt::NoItemFlags);
+        tree->setCurrentItem(current);
+    }
+    root->setExpanded(true);
+    auto* action = new QWidgetAction(menu);
+    action->setDefaultWidget(tree);
+    menu->addAction(action);
+    const auto choose = [this, menu](QTreeWidgetItem* item) {
+        if (!item || !(item->flags() & Qt::ItemIsEnabled) || menu->property("chosen").toBool()) return;
+        menu->setProperty("chosen", true);
+        const auto id = item->data(0, Qt::UserRole).toString().toStdString();
+        menu->close();
+        const daw::EngineController::ClipAddress address{m_channelId.toStdString(), m_slotId.toStdString()};
+        const auto result = id.empty() ? m_controller->restoreOfflineRenderOriginal(address)
+                                      : m_controller->selectOfflineRenderVersion(address, id);
+        if (!result) {
+            QMessageBox::warning(this, tr("Offline render history"), QString::fromStdString(result.message()));
+            return;
+        }
+        emit projectEdited();
+        refresh();
+    };
+    connect(tree, &QTreeWidget::itemClicked, menu, [choose](QTreeWidgetItem* item, int) { choose(item); });
+    connect(tree, &QTreeWidget::itemActivated, menu, [choose](QTreeWidgetItem* item, int) { choose(item); });
+    menu->popup(m_offlineHistory->mapToGlobal(QPoint(0, m_offlineHistory->height())));
+    tree->setFocus(Qt::PopupFocusReason);
+    if (tree->currentItem()) tree->scrollToItem(tree->currentItem());
 }
 
 void SamplerPanel::rebuildFxSlots() {
@@ -1956,6 +2035,20 @@ QWidget* SamplerPanel::buildWaveformSection() {
 // ── Refresh ──
 
 void SamplerPanel::refresh() {
+    if (m_offlineHistory && m_controller) {
+        const auto* clip = m_controller->audioClip(m_channelId.toStdString(), m_slotId.toStdString());
+        const bool hasHistory = clip && (!clip->offlineHistory.empty() || !clip->offlineProcess.empty());
+        m_offlineHistory->setEnabled(hasHistory && !m_controller->hasCloudProjectBinding() &&
+                                     !m_controller->offlineRenderInProgress());
+        QString caption = tr("History ▾");
+        if (clip && !clip->offlineHistory.empty()) {
+            const auto active = std::find_if(clip->offlineHistory.begin(), clip->offlineHistory.end(),
+                [&](const auto& version) { return version.id == clip->offlineVersionId; });
+            if (active != clip->offlineHistory.end())
+                caption = tr("History · %1 ▾").arg(std::distance(clip->offlineHistory.begin(), active));
+        }
+        m_offlineHistory->setText(caption);
+    }
     sampler::SamplerInstance* instance = sampler();
     std::shared_ptr<const sampler::SampleData> data = currentSample();
 

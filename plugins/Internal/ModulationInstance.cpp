@@ -8,6 +8,17 @@
 namespace daw::plugins::modulation {
 namespace {
 using json = nlohmann::json;
+constexpr std::array<FactoryPreset, 10> doublerProPresets{{
+    {"Velvet Double", {.55, .45, .68, .18, 6, .28}},
+    {"Close Double", {.40, .25, .78, .08, 3, .20}},
+    {"Wide Lead", {.78, .42, .62, .20, 8, .25}},
+    {"Soft Rap", {.48, .28, .72, .28, 4, .32}},
+    {"Warm Stack", {.60, .55, .88, .12, 7, .55}},
+    {"Whisper Halo", {.82, .35, .75, .30, 9, .18}},
+    {"Pop Double", {.66, .58, .58, .24, 11, .42}},
+    {"Tight Rhythm", {.42, .20, .65, .40, 3, .32}},
+    {"Floating Backs", {.90, .75, .80, .35, 13, .45}},
+    {"Dry Double", {.60, .40, .70, 0, 7, .40}}}};
 constexpr std::array<FactoryPreset, 10> doublerPresets{{{"Velvet Lead", {.45, .35, .65}},
                                                         {"Intimate", {.22, .18, .75}},
                                                         {"Silk Air", {.52, .28, .35}},
@@ -76,11 +87,21 @@ std::span<const FactoryPreset> factoryPresets(Kind kind) noexcept {
         return flangerPresets;
     case Kind::Phaser:
         return phaserPresets;
+    case Kind::DoublerPro:
+        return doublerProPresets;
     }
     return {};
 }
 
 std::span<const ParameterInfo> parameterTable(Kind kind) noexcept {
+    static const std::array<ParameterInfo, 6> pro{{
+        {0, "width", "Width", "%", 0, 1, .55, true, false, false},
+        {1, "humanize", "Humanize", "%", 0, 1, .45, true, false, false},
+        {2, "softness", "Softness", "%", 0, 1, .68, true, false, false},
+        {3, "delay", "Delay", "%", 0, 1, .18, true, false, false},
+        {4, "detune", "Detune", "cents", 0, 16, 6, true, false, false},
+        {5, "body", "Body", "%", 0, 1, .28, true, false, false}}};
+    if (kind == Kind::DoublerPro) return pro;
     static const std::array<ParameterInfo, 3> doubler{
         {{0, "width", "Width", "%", 0, 1, .45, true, false, false},
          {1, "humanize", "Humanize", "%", 0, 1, .35, true, false, false},
@@ -105,18 +126,18 @@ std::span<const ParameterInfo> parameterTable(Kind kind) noexcept {
 
 const PluginDescriptor &descriptorFor(Kind kind) noexcept {
     static const auto descriptors = [] {
-        std::array<PluginDescriptor, 4> result;
-        constexpr const char *uids[]{"daw.doubler", "daw.chorus", "daw.flanger", "daw.phaser"};
-        constexpr const char *names[]{"Doubler", "Chorus", "Flanger", "Phaser"};
-        for (int i = 0; i < 4; ++i) {
+        std::array<PluginDescriptor, kindCount> result;
+        constexpr const char *uids[]{"daw.doubler", "daw.chorus", "daw.flanger", "daw.phaser", "daw.doubler-pro"};
+        constexpr const char *names[]{"Doubler", "Chorus", "Flanger", "Phaser", "Doubler Pro"};
+        for (int i = 0; i < kindCount; ++i) {
             auto &d = result[i];
             d.format = Format::Internal;
             d.uid = d.path = uids[i];
             d.name = names[i];
             d.vendor = "VLTONE";
-            d.version = "1.0";
+            d.version = i == int(Kind::DoublerPro) ? "1.0" : "2.0";
             d.stateSchemaVersion = 1;
-            d.category = i == 0 ? "Effect|Modulation|Stereo" : "Effect|Modulation";
+            d.category = isDoubler(Kind(i)) ? "Effect|Modulation|Stereo" : "Effect|Modulation";
             d.mainInputChannels = d.mainOutputChannels = 2;
         }
         return result;
@@ -125,7 +146,7 @@ const PluginDescriptor &descriptorFor(Kind kind) noexcept {
 }
 bool isModulationUid(std::string_view uid) noexcept {
     return uid == "daw.doubler" || uid == "daw.chorus" || uid == "daw.flanger" ||
-           uid == "daw.phaser";
+           uid == "daw.phaser" || uid == "daw.doubler-pro";
 }
 
 ModulationInstance::ModulationInstance(Kind kind) : m_kind(kind) {
@@ -184,6 +205,8 @@ std::string ModulationInstance::parameterText(std::uint32_t index, double value)
     char text[32];
     if (p.id == "rate")
         std::snprintf(text, sizeof(text), "%.3g Hz", value);
+    else if (p.id == "detune")
+        std::snprintf(text, sizeof(text), "%.1f cents", value);
     else
         std::snprintf(text, sizeof(text), "%.0f%%", value * 100);
     return text;
@@ -246,17 +269,19 @@ void ModulationInstance::reset() noexcept {
 std::uint32_t ModulationInstance::tailSamples() const noexcept {
     // Conservative -120 dB bound: longest delay/feedback decay plus the
     // slowest pole in each wet path. No latency is added to the direct path.
-    const double low = m_kind == Kind::Doubler || m_kind == Kind::Chorus ? 100. : 120.;
+    const double low = isDoubler(m_kind) || m_kind == Kind::Chorus ? 100. : 120.;
     const double filterTail = 14.0 / (2 * dsp::pi * low);
     double seconds = filterTail;
     if (m_kind == Kind::Doubler)
-        seconds += .037;
+        seconds += .040;
+    else if (m_kind == Kind::DoublerPro)
+        seconds += .4 * std::ceil(std::log(1.e-6) / std::log(.18)) + .1;
     else if (m_kind == Kind::Chorus)
-        seconds += .032;
+        seconds += .034;
     else if (m_kind == Kind::Flanger)
-        seconds += .0065 * std::ceil(std::log(1.e-6) / std::log(.30));
+        seconds += .0085 * std::ceil(std::log(1.e-6) / std::log(.58));
     else
-        seconds += 6 * 14.0 / (2 * dsp::pi * 120.0);
+        seconds += 8 * 20.0 / (2 * dsp::pi * 120.0) / .6;
     return std::uint32_t(std::ceil(seconds * rate));
 }
 void ModulationInstance::render(const PluginProcessContext &ctx, std::uint32_t begin,
@@ -301,6 +326,8 @@ void ModulationInstance::render(const PluginProcessContext &ctx, std::uint32_t b
 PluginProcessDisposition ModulationInstance::process(const PluginProcessContext &ctx) noexcept {
     if (!ctx.outputs)
         return PluginProcessDisposition::Continue;
+    tempo = std::isfinite(ctx.transport.tempo) && ctx.transport.tempo > 0
+                ? ctx.transport.tempo : 120.;
     std::uint32_t cursor = 0;
     for (const auto &e : ctx.inputEvents) {
         const auto at = std::clamp(e.frameOffset, cursor, ctx.frames);
@@ -340,26 +367,28 @@ void DoublerInstance::resetDsp() noexcept {
     m_tone.reset();
     m_midEnergy = m_sideEnergy = m_addEnergy = m_gain = m_fast = m_slow = 0;
     m_duck = 1;
-    constexpr double base[]{16, 22, 29, 35};
+    voiceMid = 0;
+    constexpr double base[]{13, 19, 27, 34};
     for (unsigned i = 0; i < 4; ++i) {
         m_wander[i].reset(0x9e3779b9u * (i + 1), rate);
-        m_reads[i] = (base[i] + (.3 + 1.7 * smoothed[1]) * m_wander[i].from) * .001 * rate;
+        m_reads[i] = (base[i] + (.4 + 3.2 * smoothed[1]) * m_wander[i].from) * .001 * rate;
     }
 }
 std::array<double, 2> DoublerInstance::sample(double l, double r, bool stereo) noexcept {
     const double mid = .5 * (l + r), side = .5 * (l - r);
     m_delay.write(mid);
-    constexpr double base[]{16, 22, 29, 35};
-    constexpr double maxStep = 0.004610320423; // 1-2^(-8/1200): conservative in both directions
+    constexpr double base[]{13, 19, 27, 34};
+    constexpr double maxStep = 0.0069075; // no voice exceeds about 12 cents of motion
     double voices[4];
     for (unsigned i = 0; i < 4; ++i) {
         const double movement = m_wander[i].next(rate);
-        const double requested = (base[i] + (.3 + 1.7 * smoothed[1]) * movement) * .001 * rate;
+        const double requested = (base[i] + (.4 + 3.2 * smoothed[1]) * movement) * .001 * rate;
         m_reads[i] += std::clamp(requested - m_reads[i], -maxStep, maxStep);
         voices[i] = m_delay.read(m_reads[i]);
         positions[i] = float(movement);
     }
     m_delay.advance();
+    voiceMid = .25 * (voices[0] + voices[1] + voices[2] + voices[3]);
     if (!controlPhase)
         m_tone.tune(100 + 80 * smoothed[2], 12000 - 7000 * smoothed[2], rate);
     const double addition = m_tone.process(.5 * (voices[0] + voices[2] - voices[1] - voices[3]));
@@ -372,8 +401,9 @@ std::array<double, 2> DoublerInstance::sample(double l, double r, bool stereo) n
     // Triangle inequality reserves room for existing Side, including correlation
     // between it and our addition. Never narrow or repair the original signal.
     const double budget = std::max(0., .7 * std::sqrt(m_midEnergy) - std::sqrt(m_sideEnergy));
-    const double target = std::min(1.4 * smoothed[0],
-                                   smoothed[0] * budget / std::sqrt(std::max(1.e-20, m_addEnergy)));
+    const double width = smoothed[0] * (1.8 - .8 * smoothed[0]);
+    const double target = std::min(2.2 * width,
+                                   width * budget / std::sqrt(std::max(1.e-20, m_addEnergy)));
     const double pole = target < m_gain ? m_gainAttack : m_gainRelease;
     m_gain = target + pole * (m_gain - target);
     m_fast = m_fastPole * m_fast + (1 - m_fastPole) * std::abs(mid);
@@ -384,6 +414,84 @@ std::array<double, 2> DoublerInstance::sample(double l, double r, bool stereo) n
                            : duck + m_duckRelease * (m_duck - duck);
     const double a = stereo && smoothed[0] > 0 ? addition * m_gain * m_duck : 0;
     return {l + a, r - a};
+}
+
+void DoublerProInstance::prepareDsp() {
+    DoublerInstance::prepareDsp();
+    m_pitchDelay.prepare(rate, .08);
+    for (auto &delay : m_echo) delay.prepare(rate, .4);
+}
+void DoublerProInstance::resetDsp() noexcept {
+    DoublerInstance::resetDsp();
+    m_pitchDelay.reset();
+    m_bodyTone.reset();
+    for (auto &delay : m_echo) delay.reset();
+    for (auto &tone : m_pitchTone) tone.reset();
+    for (auto &tone : m_echoTone) tone.reset();
+    m_pitchPhase = {.25, .75};
+    m_echoFeedback = {};
+    m_echoFrom = m_echoTo = 0;
+    m_echoFade = 1;
+    m_pitchRatio = std::exp2(smoothed[4] / 1200.);
+}
+std::array<double, 2> DoublerProInstance::sample(double l, double r, bool stereo) noexcept {
+    auto out = DoublerInstance::sample(l, r, stereo);
+    const double mid = .5 * (l + r);
+    if (!controlPhase) {
+        const double cutoff = 13500 - 8500 * smoothed[2];
+        m_bodyTone.tune(130, cutoff, rate);
+        for (auto &tone : m_pitchTone) tone.tune(150, cutoff, rate);
+        for (auto &tone : m_echoTone) tone.tune(150, cutoff * .85, rate);
+        m_pitchRatio = std::exp2(smoothed[4] / 1200.);
+    }
+    m_pitchDelay.write(mid);
+    double shifted[2];
+    const double span = .04 * rate;
+    for (unsigned ch = 0; ch < 2; ++ch) {
+        // Complementary Hann windows hide each read head's wrap. The delay
+        // slope gives opposite pitch ratios; it never jumps a live read head.
+        const double ratio = ch ? 1 / m_pitchRatio : m_pitchRatio;
+        auto &phase = m_pitchPhase[ch];
+        phase += (1 - ratio) / span;
+        phase -= std::floor(phase);
+        const double other = phase < .5 ? phase + .5 : phase - .5;
+        const double weight = .5 - .5 * std::cos(2 * dsp::pi * phase);
+        const double base = (ch ? .014 : .010) * rate;
+        shifted[ch] = m_pitchTone[ch].process(
+            weight * m_pitchDelay.read(base + phase * span) +
+            (1 - weight) * m_pitchDelay.read(base + other * span));
+    }
+    m_pitchDelay.advance();
+    const double pitchMid = .5 * (shifted[0] + shifted[1]);
+    const double pitchSide = stereo ? .5 * (shifted[0] - shifted[1]) * smoothed[0] : 0;
+    const double pitchAmount = .32 * smoothed[4] / 16.;
+    const double body = .55 * smoothed[5] * m_bodyTone.process(voiceMid);
+
+    // 1/32 of a whole note is 1/8 of a quarter-note beat. Retain the host tempo
+    // while stopped too. Crossfade tempo changes without bending vocal pitch;
+    // another tempo update waits for this short fade, then uses the latest value.
+    // Keep this a short vocal echo even in exceptionally slow projects.
+    const double wanted = std::clamp(7.5 / tempo * rate, 3., .375 * rate);
+    if (m_echoTo == 0) m_echoFrom = m_echoTo = wanted;
+    if (m_echoFade >= 1 && std::abs(wanted - m_echoTo) > .01) {
+        m_echoFrom = m_echoTo;
+        m_echoTo = wanted;
+        m_echoFade = 0;
+    }
+    const double fade = m_echoFade * m_echoFade * (3 - 2 * m_echoFade);
+    const double input[]{l, r};
+    const double duck = transientGain();
+    for (unsigned ch = 0; ch < 2; ++ch) {
+        m_echo[ch].write(input[ch] + .18 * m_echoFeedback[ch]);
+        const double echo = (1 - fade) * m_echo[ch].read(m_echoFrom) +
+                            fade * m_echo[ch].read(m_echoTo);
+        m_echoFeedback[ch] = m_echoTone[ch].process(echo);
+        m_echo[ch].advance();
+        out[ch] += duck * (body + pitchAmount * (pitchMid + (ch ? -pitchSide : pitchSide)) +
+                           .55 * smoothed[3] * m_echoFeedback[ch]);
+    }
+    m_echoFade = std::min(1., m_echoFade + 1 / (.030 * rate));
+    return out;
 }
 
 void ChorusInstance::prepareDsp() {
@@ -399,32 +507,34 @@ void ChorusInstance::resetDsp() noexcept {
     for (unsigned i = 0; i < 4; ++i) {
         m_phases[i] = i * .25;
         m_reads[i] =
-            (base[i] + 3 * smoothed[2] * std::sin(2 * dsp::pi * m_phases[i])) * .001 * rate;
+            (base[i] + 4.5 * smoothed[2] * std::sin(2 * dsp::pi * m_phases[i])) * .001 * rate;
     }
 }
 std::array<double, 2> ChorusInstance::sample(double l, double r, bool stereo) noexcept {
     m_delays[0].write(l);
     m_delays[1].write(r);
-    constexpr double base[]{12, 17, 23, 29}, detune[]{1., 1.037, .973, 1.019};
+    constexpr double base[]{12, 17, 23, 29}, detune[]{1., 1.19, .83, 1.07};
     constexpr double pan[]{.12, .88, .32, .68};
     double wet[2]{};
     for (unsigned i = 0; i < 4; ++i) {
         advancePhase(m_phases[i], smoothed[1] * detune[i] / rate);
         const double wave = std::sin(2 * dsp::pi * m_phases[i]);
-        const double requested = (base[i] + 3 * smoothed[2] * wave) * .001 * rate;
-        m_reads[i] += std::clamp(requested - m_reads[i], -.008626912537, .008626912537);
+        const double requested = (base[i] + 4.5 * smoothed[2] * wave) * .001 * rate;
+        m_reads[i] += std::clamp(requested - m_reads[i], -.0103, .0103);
         // Each channel keeps its own source, with mirrored voice weights.
         wet[0] += m_delays[0].read(m_reads[i]) * (stereo ? 1 - pan[i] : .5) * .5;
         wet[1] += m_delays[1].read(m_reads[i]) * (stereo ? pan[i] : .5) * .5;
         positions[i] = float(wave);
     }
-    const double mix = .5 * smoothed[0];
+    const double mix = .65 * smoothed[0] * (2 - smoothed[0]);
+    const double dryGain = std::cos(.5 * dsp::pi * mix);
+    const double wetGain = 1.4 * std::sin(.5 * dsp::pi * mix);
     double input[]{l, r};
     for (unsigned ch = 0; ch < 2; ++ch) {
         m_delays[ch].advance();
         if (!controlPhase)
             m_tones[ch].tune(100, 14000 - 9000 * smoothed[3], rate);
-        wet[ch] = input[ch] + mix * (m_tones[ch].process(wet[ch]) - input[ch]);
+        wet[ch] = dryGain * input[ch] + wetGain * m_tones[ch].process(wet[ch]);
     }
     return {wet[0], wet[1]};
 }
@@ -445,11 +555,13 @@ void FlangerInstance::resetDsp() noexcept {
 }
 std::array<double, 2> FlangerInstance::sample(double l, double r, bool stereo) noexcept {
     advancePhase(m_phase, smoothed[1] / rate);
-    const double feedback = .30 * smoothed[2] * (1 - .5 * smoothed[3]);
+    const double feedback = .58 * smoothed[2] * (1 - .35 * smoothed[3]);
+    const double mix = .5 * smoothed[0] * (2 - smoothed[0]);
+    const double level = 1 / std::sqrt((1 - mix) * (1 - mix) + mix * mix);
     double input[]{l, r}, output[2];
     for (unsigned ch = 0; ch < 2; ++ch) {
         const double wave = std::sin(2 * dsp::pi * m_phase + (stereo ? ch * dsp::pi / 6 : 0));
-        const double delay = (3.5 + 3 * smoothed[2] * wave) * .001 * rate;
+        const double delay = 1.6 * std::exp2(2.4 * smoothed[2] * wave) * .001 * rate;
         if (!controlPhase) {
             m_tones[ch].tune(0, 12000 - 7500 * smoothed[3], rate);
             m_feedbackTones[ch].tune(120, 12000 - 7500 * smoothed[3], rate);
@@ -457,8 +569,8 @@ std::array<double, 2> FlangerInstance::sample(double l, double r, bool stereo) n
         m_delays[ch].write(input[ch] + feedback * m_feedback[ch]);
         const double delayed = m_delays[ch].read(delay);
         m_feedback[ch] = m_feedbackTones[ch].process(delayed);
-        const double wet = m_tones[ch].process(delayed) * (1 - feedback);
-        output[ch] = input[ch] + .45 * smoothed[0] * (wet - input[ch]);
+        const double wet = m_tones[ch].process(delayed) * std::sqrt(1 - feedback * feedback);
+        output[ch] = level * (input[ch] + mix * (wet - input[ch]));
         m_delays[ch].advance();
         positions[ch] = float(delay / rate * 1000);
     }
@@ -467,6 +579,8 @@ std::array<double, 2> FlangerInstance::sample(double l, double r, bool stereo) n
 
 void PhaserInstance::resetDsp() noexcept {
     m_filters = {};
+    m_coefficients = {};
+    m_coefficientSteps = {};
     m_feedback = {};
     m_phase = 0;
     for (auto &t : m_tones)
@@ -474,25 +588,32 @@ void PhaserInstance::resetDsp() noexcept {
 }
 std::array<double, 2> PhaserInstance::sample(double l, double r, bool stereo) noexcept {
     advancePhase(m_phase, smoothed[1] / rate);
-    const double feedback = .20 * smoothed[2] * (1 - .5 * smoothed[3]);
-    constexpr double offsets[]{-.9, -.54, -.18, .18, .54, .9};
+    const double feedback = .40 * smoothed[2] * (1 - .5 * smoothed[3]);
+    const double mix = .5 * smoothed[0] * (2 - smoothed[0]);
+    const double level = 1 / std::sqrt((1 - mix) * (1 - mix) + mix * mix);
+    constexpr double offsets[]{-1.2, -.85, -.5, -.15, .15, .5, .85, 1.2};
     double input[]{l, r}, output[2];
     for (unsigned ch = 0; ch < 2; ++ch) {
-        const double wave = std::sin(2 * dsp::pi * m_phase + (stereo ? ch * dsp::pi / 9 : 0));
+        const double wave = std::sin(2 * dsp::pi * m_phase + (stereo ? ch * dsp::pi / 6 : 0));
         double x = input[ch] + feedback * m_feedback[ch];
-        for (unsigned i = 0; i < 6; ++i) {
-            const double hz = std::clamp(800 * std::exp2(offsets[i] + 1.5 * smoothed[2] * wave),
-                                         120., std::min(6000., rate * .4));
-            const double g = std::tan(dsp::pi * hz / rate);
-            x = m_filters[ch][i].process(x, (g - 1) / (g + 1));
-            if (ch == 0 && i < 4)
-                positions[i] = float(hz);
+        for (unsigned i = 0; i < 8; ++i) {
+            if (!controlPhase) {
+                const double hz = std::clamp(900 * std::exp2(offsets[i] + 2.2 * smoothed[2] * wave),
+                                             120., std::min(8000., rate * .4));
+                const double g = std::tan(dsp::pi * hz / rate);
+                m_coefficientSteps[ch][i] = ((g - 1) / (g + 1) - m_coefficients[ch][i]) / 16;
+                if (ch == 0 && i % 2 == 0) positions[i / 2] = float(hz);
+            }
+            // Interpolate bounded coefficients instead of calculating sixteen
+            // transcendental pairs at every sample. The sweep stays continuous.
+            m_coefficients[ch][i] += m_coefficientSteps[ch][i];
+            x = m_filters[ch][i].process(x, m_coefficients[ch][i]);
         }
         m_feedback[ch] = x;
         if (!controlPhase)
             m_tones[ch].tune(0, 12000 - 7000 * smoothed[3], rate);
-        const double wet = m_tones[ch].process(x) * (1 - feedback);
-        output[ch] = input[ch] + .45 * smoothed[0] * (wet - input[ch]);
+        const double wet = m_tones[ch].process(x) * std::sqrt(1 - feedback * feedback);
+        output[ch] = level * (input[ch] + mix * (wet - input[ch]));
     }
     return {output[0], output[1]};
 }

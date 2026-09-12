@@ -1,0 +1,163 @@
+Test project /Users/nikolay/Documents/code/VLTONE/VLTONE-/build
+      Start 70: audio_timeline_scroll_test
+ 1/79 Test #70: audio_timeline_scroll_test .........   Passed   20.96 sec
+      Start 79: crash_reporter_test
+      Start  4: audio_analysis_fallback_test
+ 2/79 Test  #4: audio_analysis_fallback_test .......   Passed    6.43 sec
+      Start 67: modulation_ui_test
+ 3/79 Test #67: modulation_ui_test .................   Passed    8.76 sec
+      Start  2: audio_musical_analysis_test
+ 4/79 Test  #2: audio_musical_analysis_test ........   Passed   11.83 sec
+      Start 41: plugin_scan_test
+ 5/79 Test #41: plugin_scan_test ...................   Passed    5.02 sec
+      Start 38: render_integrity_test
+ 6/79 Test #79: crash_reporter_test ................   Passed   35.68 sec
+      Start 22: gravity_test
+ 7/79 Test #22: gravity_test .......................   Passed    1.38 sec
+      Start 37: recovery_test
+ 8/79 Test #38: render_integrity_test ..............   Passed    6.86 sec
+      Start  8: plugin_batch_test
+ 9/79 Test  #8: plugin_batch_test ..................   Passed    1.30 sec
+      Start 53: audio_monitoring_regression_test
+10/79 Test #53: audio_monitoring_regression_test ...   Passed    7.01 sec
+      Start 72: plugin_picker_ui_test
+11/79 Test #72: plugin_picker_ui_test ..............   Passed    2.36 sec
+      Start  7: m4a_import_test
+12/79 Test #37: recovery_test ......................   Passed   12.99 sec
+      Start 31: ai_tools_test
+13/79 Test #31: ai_tools_test ......................   Passed    1.54 sec
+      Start 19: channel_strip_preset_test
+14/79 Test #19: channel_strip_preset_test ..........   Passed    0.72 sec
+      Start 30: midifile_test
+15/79 Test #30: midifile_test ......................   Passed    1.05 sec
+      Start 77: collaboration_client_selftest
+16/79 Test #77: collaboration_client_selftest ......   Passed    1.63 sec
+      Start 24: graphit_test
+17/79 Test  #7: m4a_import_test ....................   Passed    5.71 sec
+      Start 33: content_catalog_test
+18/79 Test #24: graphit_test .......................   Passed    0.95 sec
+      Start 62: telemetry_snapshot_test
+19/79 Test #33: content_catalog_test ...............   Passed    0.77 sec
+      Start 16: render_test
+20/79 Test #62: telemetry_snapshot_test ............   Passed    0.44 sec
+      Start 18: processing_render_test
+21/79 Test #18: processing_render_test .............   Passed    3.69 sec
+      Start 36: music_gen_test
+22/79 Test #16: render_test ........................   Passed    4.53 sec
+      Start 25: modulation_test
+23/79 Test #36: music_gen_test .....................   Passed    0.66 sec
+      Start 15: time_stretch_test
+24/79 Test #25: modulation_test ....................   Passed    3.09 sec
+      Start 34: composition_engine_test
+25/79 Test #34: composition_engine_test ............   Passed    0.39 sec
+      Start 73: offline_render_ui_test
+26/79 Test #15: time_stretch_test ..................   Passed    3.90 sec
+      Start  6: mp3_import_test
+27/79 Test  #6: mp3_import_test ....................   Passed    0.72 sec
+      Start 58: qt_cgimage_lifetime_test
+28/79 Test #73: offline_render_ui_test .............   Passed    1.76 sec
+      Start  3: audio_analysis_contract_test
+29/79 Test #58: qt_cgimage_lifetime_test ...........   Passed    1.03 sec
+      Start 49: track_freeze_test
+30/79 Test #49: track_freeze_test ..................   Passed    1.68 sec
+      Start 23: equalizer_test
+31/79 Test #23: equalizer_test .....................   Passed    0.45 sec
+      Start 35: composition_eval
+32/79 Test  #3: audio_analysis_contract_test .......   Passed    3.05 sec
+      Start 76: mixer_fader_input_test
+33/79 Test #35: composition_eval ...................   Passed    0.37 sec
+      Start 27: meter_node_test
+34/79 Test #76: mixer_fader_input_test .............   Passed    0.36 sec
+      Start 17: render_safety_test
+35/79 Test #27: meter_node_test ....................   Passed    0.42 sec
+      Start 54: audio_device_recovery_test
+36/79 Test #17: render_safety_test .................   Passed    1.03 sec
+      Start 60: browser_navigation_test
+37/79 Test #54: audio_device_recovery_test .........   Passed    3.35 sec
+      Start 29: automation_test
+38/79 Test #60: browser_navigation_test ............   Passed    2.48 sec
+      Start 75: tempo_scrub_ui_test
+39/79 Test #75: tempo_scrub_ui_test ................   Passed    0.38 sec
+      Start 59: theme_package_test
+40/79 Test #29: automation_test ....................   Passed    0.62 sec
+      Start 39: track_creation_test
+41/79 Test #59: theme_package_test .................   Passed    0.62 sec
+      Start 63: account_restore_test
+42/79 Test #39: track_creation_test ................   Passed    1.05 sec
+      Start 74: plugin_batch_ui_test
+43/79 Test #74: plugin_batch_ui_test ...............   Passed    0.75 sec
+      Start 10: shared_mutation_sink_test
+44/79 Test #63: account_restore_test ...............   Passed    2.13 sec
+      Start 71: track_creation_ui_test
+45/79 Test #71: track_creation_ui_test .............   Passed    0.60 sec
+      Start 42: plugin_insert_test
+46/79 Test #10: shared_mutation_sink_test ..........   Passed    3.36 sec
+      Start 32: project_music_context_test
+47/79 Test #32: project_music_context_test .........   Passed    0.47 sec
+      Start  5: rtmidi_failure_test
+48/79 Test  #5: rtmidi_failure_test ................   Passed    0.43 sec
+      Start 13: cloud_project_test
+49/79 Test #13: cloud_project_test .................   Passed    0.72 sec
+      Start 12: recording_commit_planner_test
+50/79 Test #12: recording_commit_planner_test ......   Passed    0.51 sec
+      Start 14: resampler_test
+51/79 Test #14: resampler_test .....................   Passed    0.45 sec
+      Start  9: controller_test
+52/79 Test #42: plugin_insert_test .................   Passed   10.36 sec
+      Start 68: render_ui_test
+53/79 Test #68: render_ui_test .....................   Passed    2.81 sec
+      Start 66: ui_frame_clock_test
+54/79 Test  #9: controller_test ....................   Passed    9.10 sec
+      Start 78: secure_storage_mac_test
+55/79 Test #78: secure_storage_mac_test ............   Passed    0.52 sec
+      Start 28: miditools_test
+56/79 Test #28: miditools_test .....................   Passed    0.67 sec
+      Start 48: audio_realtime_test
+57/79 Test #48: audio_realtime_test ................   Passed    0.61 sec
+      Start 47: plugin_midi_test
+58/79 Test #47: plugin_midi_test ...................   Passed    0.35 sec
+      Start 26: engine_graph_test
+59/79 Test #66: ui_frame_clock_test ................   Passed    4.63 sec
+      Start 61: browser_proxy_test
+60/79 Test #26: engine_graph_test ..................   Passed    2.04 sec
+      Start 57: gpu_media_test
+61/79 Test #57: gpu_media_test .....................   Passed    1.40 sec
+      Start 46: plugin_au_test
+62/79 Test #61: browser_proxy_test .................   Passed    1.45 sec
+      Start 56: gpu_fallback_test
+63/79 Test #46: plugin_au_test .....................   Passed    0.51 sec
+      Start 50: recording_preview_test
+64/79 Test #50: recording_preview_test .............   Passed    1.24 sec
+      Start 11: collaboration_protocol_test
+65/79 Test #11: collaboration_protocol_test ........   Passed    0.57 sec
+      Start 69: plugin_drag_lifecycle_test
+66/79 Test #56: gpu_fallback_test ..................   Passed    2.33 sec
+      Start 21: sampler_test
+67/79 Test #69: plugin_drag_lifecycle_test .........   Passed    0.24 sec
+      Start 64: waveform_paint_test
+68/79 Test #21: sampler_test .......................   Passed    1.38 sec
+      Start 44: plugin_vst_test
+69/79 Test #44: plugin_vst_test ....................   Passed    0.49 sec
+      Start 40: plugin_host_test
+70/79 Test #64: waveform_paint_test ................   Passed    1.83 sec
+      Start 45: au_editor_lifetime_test
+71/79 Test #40: plugin_host_test ...................   Passed    0.33 sec
+      Start  1: platform_test
+72/79 Test #45: au_editor_lifetime_test ............   Passed    0.50 sec
+      Start 43: plugin_vst3_test
+73/79 Test  #1: platform_test ......................   Passed    0.74 sec
+      Start 20: project_template_test
+74/79 Test #43: plugin_vst3_test ...................   Passed    0.93 sec
+      Start 55: gpu_scene_test
+75/79 Test #55: gpu_scene_test .....................   Passed    0.22 sec
+      Start 65: waveform_gpu_test
+76/79 Test #20: project_template_test ..............   Passed    0.91 sec
+      Start 52: audio_presentation_clock_test
+77/79 Test #65: waveform_gpu_test ..................   Passed    0.37 sec
+      Start 51: graphics_quality_test
+78/79 Test #52: audio_presentation_clock_test ......   Passed    0.47 sec
+79/79 Test #51: graphics_quality_test ..............   Passed    1.04 sec
+
+100% tests passed out of 79
+
+Total Test time (real) = 124.17 sec

@@ -536,6 +536,7 @@ private slots:
     void onExport();
     void onBounceInPlace();
     void onOfflineRender();
+    void onSharedPlugins();
     void onNewProject();
     void onNewProjectFromTemplate();
     void onOpenProject();
@@ -934,6 +935,7 @@ private:
     QAction* m_followPlayheadAction = nullptr;
     QAction* m_bounceInPlaceAction = nullptr;
     QAction* m_offlineRenderAction = nullptr;
+    QAction* m_sharedPluginsAction = nullptr;
     QTimer* m_refreshTimer = nullptr;
     /// Lightweight 60-ish Hz cursor clock. It sleeps while transport is still.
     void queueUiChange(const ui::UiChangeSet& change);

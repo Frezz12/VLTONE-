@@ -3,6 +3,10 @@
 #include "CreateTracksDialog.hpp"
 #include "PatternWindow.hpp"
 #include "SamplerPanel.hpp"
+#include "OfflineRenderDialog.hpp"
+#include "PluginBatchDialog.hpp"
+#include "TransportBar.hpp"
+#include "ChannelStrip.hpp"
 #include "InternalEditorFrame.hpp"
 #include "AccountService.hpp"
 #include "AssetCache.hpp"
@@ -62,6 +66,7 @@
 #include "Typography.hpp"
 
 #include <QApplication>
+#include <QScopeGuard>
 #include <QtWebEngineQuick/qtwebenginequickglobal.h>
 #include <QNetworkProxyFactory>
 #include <QDir>
@@ -286,8 +291,14 @@ int main(int argc, char** argv) {
     bool uiPerfCheck = false;
     bool audioScrollCheck = false;
     bool projectScrollCheck = false;
+    bool mixerScrollCheck = false;
+    bool pluginInteractionCheck = false;
     bool patternCheck = false;
     bool samplerCheck = false;
+    bool offlineCheck = false;
+    bool pluginBatchCheck = false;
+    bool tempoCheck = false;
+    bool mixerWheelCheck = false;
     bool editorCheck = false;
     bool collaborationSelftest = false;
     bool updateSelftest = false;
@@ -309,7 +320,13 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--uiperfcheck") == 0) uiPerfCheck = true;
         else if (std::strcmp(argv[i], "--audio-scroll-check") == 0) audioScrollCheck = true;
         else if (std::strcmp(argv[i], "--project-scroll-check") == 0) projectScrollCheck = true;
+        else if (std::strcmp(argv[i], "--mixer-scroll-check") == 0) mixerScrollCheck = true;
+        else if (std::strcmp(argv[i], "--plugin-interaction-check") == 0) pluginInteractionCheck = true;
         else if (std::strcmp(argv[i], "--samplercheck") == 0) samplerCheck = true;
+        else if (std::strcmp(argv[i], "--offlinecheck") == 0) offlineCheck = true;
+        else if (std::strcmp(argv[i], "--pluginbatchcheck") == 0) pluginBatchCheck = true;
+        else if (std::strcmp(argv[i], "--tempocheck") == 0) tempoCheck = true;
+        else if (std::strcmp(argv[i], "--mixerwheelcheck") == 0) mixerWheelCheck = true;
         else if (std::strcmp(argv[i], "--patterncheck") == 0) patternCheck = true;
         else if (std::strcmp(argv[i], "--editorcheck") == 0) editorCheck = true;
         else if (std::strcmp(argv[i], "--trackcreationcheck") == 0) trackCreationCheck = true;
@@ -351,7 +368,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    const bool headless = projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
+    const bool headless = mixerWheelCheck || tempoCheck || pluginBatchCheck || offlineCheck || pluginInteractionCheck || mixerScrollCheck || projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
                           crashtest || recovercheck;
     if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) {
         QByteArray chromiumFlags;
@@ -385,6 +402,9 @@ int main(int argc, char** argv) {
     ui::registerFontUrlScheme();
     QtWebEngineQuick::initialize();
     QApplication app(argc, argv);
+    // Readers may still be decoding a theme image when a window closes. Join
+    // them while Qt's image plugins and queued-call receiver are still alive.
+    const auto mediaTasks = qScopeGuard([] { ui::finishThemeMediaTasks(); });
     // Qt forwards the system proxy configuration (including local VPN proxy
     // endpoints and PAC rules) to Chromium. Tunnel VPNs use OS routing normally.
     QNetworkProxyFactory::setUseSystemConfiguration(true);
@@ -520,6 +540,8 @@ int main(int argc, char** argv) {
     if (uiPerfCheck) return ui::checkUiScaling() ? 0 : 60;
     if (audioScrollCheck) return ui::checkAudioTimelinePerformance() ? 0 : 61;
     if (projectScrollCheck) return ui::checkProjectTimelinePerformance(projectArgument) ? 0 : 62;
+    if (mixerScrollCheck) return ui::checkMixerPerformance() ? 0 : 63;
+    if (pluginInteractionCheck) return ui::checkPluginInteractions() ? 0 : 64;
     if (selftest) {
         QString localizationError;
         if (!ui::LocalizationManager::instance().checkJsonPackForTest(
@@ -551,6 +573,12 @@ int main(int argc, char** argv) {
     }
     if (editorCheck) return InternalEditorFrame::checkPlacementForTest() && PatternWindow::checkEditingForTest() ? 0 : 18;
     if (samplerCheck) return SamplerPanel::checkLayoutForTest() ? 0 : 19;
+    if (offlineCheck) return OfflineRenderDialog::checkForTest(
+        screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString()) ? 0 : 68;
+    if (pluginBatchCheck) return PluginBatchDialog::checkForTest(
+        screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString()) ? 0 : 69;
+    if (tempoCheck) return TransportBar::checkTempoInteractionForTest() ? 0 : 70;
+    if (mixerWheelCheck) return ChannelStrip::checkFaderInputForTest() ? 0 : 71;
     if (patternCheck) return PatternWindow::checkEditingForTest() ? 0 : 19;
     if (selftest) {
         QString fontError;

@@ -59,6 +59,8 @@ std::unique_ptr<ModulationInstance> make(Kind k) {
         return std::make_unique<FlangerInstance>();
     case Kind::Phaser:
         return std::make_unique<PhaserInstance>();
+    case Kind::DoublerPro:
+        return std::make_unique<DoublerProInstance>();
     }
     std::abort();
 }
@@ -74,7 +76,7 @@ struct Audio {
     unsigned size() const { return unsigned(l.size()); }
 };
 void run(ModulationInstance &p, const Audio &in, Audio &out, unsigned block = 257,
-         std::span<const PluginEvent> events = {}) {
+         std::span<const PluginEvent> events = {}, double tempo = 120) {
     for (unsigned at = 0; at < in.size();) {
         const auto count = std::min(block, in.size() - at);
         const float *inputs[]{in.l.data() + at, in.r.data() + at};
@@ -92,6 +94,7 @@ void run(ModulationInstance &p, const Audio &in, Audio &out, unsigned block = 25
         ctx.inputChannels = ctx.outputChannels = 2;
         ctx.frames = count;
         ctx.inputEvents = {local.data(), n};
+        ctx.transport.tempo = tempo;
         counting = true;
         p.process(ctx);
         counting = false;
@@ -197,7 +200,7 @@ void examples(const char *directory) {
         source.l[i] = source.r[i] = float(x * envelope);
     }
     writeWav(std::filesystem::path(directory) / "01-synthetic-dry.wav", source, rate);
-    for (int k = 0; k < 4; ++k) {
+    for (int k = 0; k < kindCount; ++k) {
         auto p = make(Kind(k));
         p->activate({rate, 257, true});
         Audio result(source.size());
@@ -232,7 +235,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     const auto start = std::chrono::steady_clock::now();
-    for (int k = 0; k < 4; ++k) {
+    for (int k = 0; k < kindCount; ++k) {
         const auto kind = Kind(k);
         std::printf("\n%s\n", descriptorFor(kind).name.c_str());
         auto p = make(kind);
@@ -242,7 +245,8 @@ int main(int argc, char **argv) {
         check(std::any_of(builtins.begin(), builtins.end(),
                           [&](const auto &d) { return d.uid == p->descriptor().uid; }),
               "builtin catalogue publishes effect");
-        check(factoryPresets(kind).size() == 10 && p->parameters().size() == (k == 0 ? 3 : 4),
+        check(factoryPresets(kind).size() == 10 && p->parameters().size() ==
+                  (kind == Kind::DoublerPro ? 6 : k == 0 ? 3 : 4),
               "ten presets and minimal stable parameter set");
         PluginBusLayout accepted;
         check(p->setBusLayout({{1}, {1}}, accepted) && p->setBusLayout({{2}, {2}}, accepted) &&
@@ -294,7 +298,8 @@ int main(int argc, char **argv) {
                 deterministic &= difference(actual, reference) < 1.e-7;
                 matrix &= peak(actual) < 4;
             }
-            Audio impulse(unsigned(rate * .8)), response(impulse.size());
+            Audio impulse(std::max(unsigned(rate * .8), p->tailSamples() + unsigned(rate * .2))),
+                  response(impulse.size());
             impulse.l[0] = impulse.r[0] = 1;
             p->reset();
             run(*p, impulse, response);
@@ -335,9 +340,11 @@ int main(int argc, char **argv) {
               "sample-offset automation is independent of block segmentation");
         p = make(kind);
         p->setParameterFromHost(0, 0);
+        if (kind == Kind::DoublerPro)
+            for (unsigned i : {3u, 4u, 5u}) p->setParameterFromHost(i, 0);
         p->activate({48000, 257, true});
         run(*p, input, output = Audio(input.size()));
-        check(difference(input, output) == 0, "zero width/amount is an exact dry pass-through");
+        check(difference(input, output) == 0, "zero effect levels are an exact dry pass-through");
         // A low sine exposes discontinuities which broadband audio can hide.
         Audio smoothInput(48000), transitioned(48000);
         for (unsigned n = 0; n < smoothInput.size(); ++n)
@@ -345,7 +352,7 @@ int main(int argc, char **argv) {
                 float(.3 * std::sin(2 * dsp::pi * 110 * n / 48000.));
         p = make(kind);
         p->activate({48000, 257, true});
-        std::array<PluginEvent, 4> stepEvents{};
+        std::array<PluginEvent, parameterCapacity> stepEvents{};
         for (const auto &info : p->parameters()) {
             stepEvents[info.index].frameOffset = 24000;
             stepEvents[info.index].paramIndex = info.index;
@@ -409,6 +416,88 @@ int main(int argc, char **argv) {
         run(p, input, output);
         check(difference(input, output) == 0,
               "forced mono disables widening without changing the source");
+    }
+    {
+        bool timing = true, proportional = true, independent = true;
+        for (const double rate : {44100., 48000., 96000.}) {
+            for (const double bpm : {5., 20., 60., 90., 120., 240., 999.}) {
+                DoublerProInstance p;
+                for (unsigned i : {0u, 4u, 5u}) p.setParameterFromHost(i, 0);
+                p.setParameterFromHost(3, .25);
+                p.activate({rate, 257, true});
+                Audio impulse(unsigned(rate * .5)), a(impulse.size()), b(impulse.size());
+                impulse.l[0] = impulse.r[0] = 1;
+                run(p, impulse, a, 257, {}, bpm);
+                const double expected = bpm < 20 ? rate * .375 : rate * 7.5 / bpm;
+                unsigned first = 0;
+                for (unsigned i = 1; i < a.size(); ++i)
+                    if (std::abs(a.l[i]) > 1.e-7) { first = i; break; }
+                timing &= first >= unsigned(expected) - 2 && first <= unsigned(expected) + 2;
+                p.setParameterFromHost(3, .75);
+                p.reset();
+                run(p, impulse, b, 64, {}, bpm);
+                for (unsigned i = 1; i < a.size(); ++i)
+                    proportional &= std::abs(b.l[i] - 3 * a.l[i]) < 1.e-6;
+                independent &= a.l[0] == 1 && b.l[0] == 1 && peak(a, 1) > .01;
+            }
+        }
+        check(timing, "Pro echo follows 1/32 note from 20 to 999 BPM, with a 375 ms slow-tempo cap");
+        check(proportional && independent, "Delay scales only its echo and preserves the direct vocal");
+
+        const auto source = fixture(48000, 2);
+        Audio plain(source.size()), detuned(source.size()), body(source.size());
+        DoublerProInstance p;
+        for (unsigned i : {3u, 4u, 5u}) p.setParameterFromHost(i, 0);
+        p.activate({48000, 257, true});
+        run(p, source, plain);
+        p.setParameterFromHost(4, 12);
+        p.reset();
+        run(p, source, detuned);
+        p.setParameterFromHost(4, 0);
+        p.setParameterFromHost(5, .8);
+        p.reset();
+        run(p, source, body);
+        check(difference(plain, detuned) > .01 && difference(plain, body) > .01 &&
+                  difference(detuned, body) > .01,
+              "Detune and Body create distinct audible layers while Delay is off");
+        check(monoError(source, body) > .01, "Body adds a double that survives mono summing");
+        DoublerInstance original;
+        std::vector<std::uint8_t> state;
+        original.saveState(state);
+        check(!p.loadState(state), "Doubler Pro has a separate state identity from the original Doubler");
+
+        p.reset();
+        run(p, source, plain, 257, {}, 120);
+        p.reset();
+        run(p, source, body, 257, {}, std::numeric_limits<double>::quiet_NaN());
+        check(difference(plain, body) == 0, "invalid host tempo uses a deterministic 120 BPM fallback");
+
+        p.setParameterFromHost(3, 1);
+        p.reset();
+        Audio tone(48000), transitioned(48000);
+        for (unsigned n = 0; n < tone.size(); ++n)
+            tone.l[n] = tone.r[n] = float(.3 * std::sin(2 * dsp::pi * 110 * n / 48000.));
+        for (unsigned at = 0; at < tone.size(); at += 240) {
+            const float *input[]{tone.l.data() + at, tone.r.data() + at};
+            float *output[]{transitioned.l.data() + at, transitioned.r.data() + at};
+            PluginProcessContext ctx;
+            ctx.inputs = input; ctx.outputs = output;
+            ctx.frames = 240; ctx.inputChannels = ctx.outputChannels = 2;
+            ctx.transport.tempo = at < 24000 ? 120 : at < 24480 ? 60 : 180;
+            counting = true;
+            p.process(ctx);
+            counting = false;
+        }
+        double jump = 0;
+        for (unsigned n = 23950; n < 29000; ++n)
+            jump = std::max(jump, std::abs(double(transitioned.l[n]) - transitioned.l[n - 1]));
+        check(jump < .025, "tempo changes during an active delay crossfade do not introduce clicks");
+
+        p.reset();
+        Audio impulse(p.tailSamples() + 9600), tail(impulse.size());
+        impulse.l[0] = impulse.r[0] = 1;
+        run(p, impulse, tail, 257, {}, 5);
+        check(peak(tail, p.tailSamples()) < 2.e-6, "Pro tail remains bounded at the longest echo setting");
     }
     check(allocations.load() == 0, "processing and timestamped automation allocate no memory");
     std::printf("Completed in %.2f s; %d failures\n",

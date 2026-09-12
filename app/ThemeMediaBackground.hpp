@@ -103,4 +103,7 @@ private:
 /// Headless branch check for all placement modes.
 bool checkThemeMediaBackgroundForTest(QString* error = nullptr);
 
+/// Call after the UI is destroyed, before QApplication tears down image plugins.
+void finishThemeMediaTasks();
+
 } // namespace ui

@@ -114,6 +114,7 @@ public:
     void setRecordState(bool engaged, const QStringList& targets);
 
 signals:
+    void sharedPluginsRequested();
     void selectionChanged(const QString& trackId);
     /// The whole selection, whenever it changes. `selectionChanged` carries the
     /// primary row for the single-track views; this carries the set.

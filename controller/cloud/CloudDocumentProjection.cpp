@@ -145,6 +145,16 @@ CloudDocumentProjection projectForCloudSnapshotV1(const ProjectModel& source) {
             }
             clip.filePath.clear();
             clip.expanded = false;
+            // Offline history contains local audio paths and has no shared
+            // asset protocol yet. Reject publication instead of uploading
+            // paths or silently discarding the user's original versions.
+            if (!clip.offlineHistory.empty() || !clip.offlineProcess.empty()) {
+                projection.blockers.push_back({CloudProjectionIssueKind::PublishBlocker,
+                    clipLocation + "/offline-history", "Offline Render history is local-only"});
+                clip.offlineHistory.clear();
+                clip.offlineVersionId.clear();
+                clip.offlineProcess = {};
+            }
             sanitizeAsset(clip.asset);
             projectInserts(clip.inserts, clipLocation, projection.blockers);
             for (std::size_t takeIndex = 0; takeIndex < clip.takes.size();
@@ -210,7 +220,8 @@ bool containsLocalPathOrUiState(const ProjectModel& document,
             const ClipModel& clip = track.clips[clipIndex];
             const std::string clipLocation =
                 location + "/clip:" + std::to_string(clipIndex);
-            if (!clip.filePath.empty() || clip.expanded ||
+            if (!clip.filePath.empty() || clip.expanded || !clip.offlineHistory.empty() ||
+                !clip.offlineVersionId.empty() || !clip.offlineProcess.empty() ||
                 inspectInsertsForLeak(clip.inserts, clipLocation,
                                       firstLocation)) {
                 if (firstLocation && firstLocation->empty())

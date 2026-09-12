@@ -1375,7 +1375,16 @@ void FaderWidget::contextMenuEvent(QContextMenuEvent* event) {
     if (automationContextMenu(this, event)) emit automateRequested();
 }
 
+void FaderWidget::setWheelEnabled(bool enabled) {
+    if (!enabled) finishWheelEdit();
+    m_wheelEnabled = enabled;
+}
+
 void FaderWidget::wheelEvent(QWheelEvent* ev) {
+    if (!m_wheelEnabled) {
+        ev->ignore();
+        return;
+    }
     const double step = (ev->modifiers() & Qt::ShiftModifier) ? 0.005 : 0.02;
     const double units = !ev->pixelDelta().isNull()
                              ? ev->pixelDelta().y() / 60.0

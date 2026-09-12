@@ -5,6 +5,9 @@
 #include "UiFrameClock.hpp"
 #include <QApplication>
 #include <QContextMenuEvent>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QPainter>
@@ -14,8 +17,11 @@
 #include <QQuickWindow>
 #include <QTemporaryDir>
 #include <QSettings>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QThread>
 #include <QTimer>
+#include <QToolButton>
 #include <QWidget>
 #include <atomic>
 #include <cmath>
@@ -67,8 +73,31 @@ class PlainControl final : public QWidget {
 public:
     using QWidget::QWidget;
     QColor color = Qt::red;
+    int paints = 0;
 protected:
-    void paintEvent(QPaintEvent*) override { QPainter painter(this); painter.fillRect(rect(), color); }
+    void paintEvent(QPaintEvent*) override { ++paints; QPainter painter(this); painter.fillRect(rect(), color); }
+};
+class HoverRow final : public QWidget {
+public:
+    using QWidget::QWidget;
+    int enters = 0, leaves = 0;
+protected:
+    void enterEvent(QEnterEvent*) override { ++enters; }
+    void leaveEvent(QEvent*) override { ++leaves; }
+};
+class DragControl final : public QWidget {
+public:
+    using QWidget::QWidget;
+    int ungrabs = 0, moves = 0, drops = 0;
+protected:
+    bool event(QEvent* event) override {
+        if (event->type() == QEvent::UngrabMouse) ++ungrabs;
+        return QWidget::event(event);
+    }
+    void mousePressEvent(QMouseEvent* event) override { event->accept(); }
+    void mouseMoveEvent(QMouseEvent* event) override { ++moves; event->accept(); }
+    void dragEnterEvent(QDragEnterEvent* event) override { event->acceptProposedAction(); }
+    void dropEvent(QDropEvent* event) override { ++drops; event->acceptProposedAction(); }
 };
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
@@ -322,6 +351,140 @@ int main(int argc, char** argv) {
         std::cerr << "Ordinary QWidget damage was hidden behind the Quick container\n"; return 1;
     }
     control.hide();
+    HoverRow firstRow(canvas), secondRow(canvas);
+    firstRow.setGeometry(255, 80, 50, 22);
+    secondRow.setGeometry(255, 108, 50, 22);
+    firstRow.show(); secondRow.show();
+    QToolButton first(&firstRow), second(&secondRow);
+    first.setGeometry(firstRow.rect()); second.setGeometry(secondRow.rect());
+    for (auto* button : {&first, &second}) {
+        button->setStyleSheet("QToolButton { background: #204060; border: none; }"
+                             "QToolButton:hover { background: #e08020; }");
+        button->show();
+    }
+    const auto moveTo = [&](const QPointF& position) {
+        QMouseEvent move(QEvent::MouseMove, position, canvas->mapToGlobal(position),
+                         Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(surface->quickWindow(), &move);
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    };
+    moveTo(QPointF(270, 90));
+    const auto firstHover = surface->quickWindow()->grabWindow();
+    moveTo(QPointF(270, 118));
+    const auto secondHover = surface->quickWindow()->grabWindow();
+    if (firstRow.enters != 1 || firstRow.leaves != 1 || secondRow.enters != 1) {
+        std::cerr << "Slot rows did not receive their child's hover boundary events\n"; return 1;
+    }
+    if (firstHover.pixelColor(int(270*dpr), int(90*dpr)) != QColor("#e08020") ||
+        secondHover.pixelColor(int(270*dpr), int(90*dpr)) != QColor("#204060") ||
+        secondHover.pixelColor(int(270*dpr), int(118*dpr)) != QColor("#e08020")) {
+        std::cerr << "Moving between slots left stale hover pixels in the GPU scene\n";
+        return 1;
+    }
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(surface->quickWindow(), &leave);
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    if (surface->quickWindow()->grabWindow().pixelColor(int(270*dpr), int(118*dpr)) != QColor("#204060")) {
+        std::cerr << "Leaving the workspace retained a slot highlight\n"; return 1;
+    }
+    firstRow.hide(); secondRow.hide();
+
+    QScrollArea scroll(canvas);
+    scroll.setFrameShape(QFrame::NoFrame);
+    scroll.setGeometry(10, 10, 200, 100);
+    scroll.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* page = new PlainControl;
+    page->color = QColor("#203040");
+    page->setFixedSize(180, 240);
+    auto* tile = new PlainControl(page);
+    tile->setGeometry(10, 45, 80, 60);
+    scroll.setWidget(page);
+    page->setAutoFillBackground(false); // same transparent content page as the mixer
+    scroll.show();
+    QTimer::singleShot(150, &loop, &QEventLoop::quit); loop.exec();
+    page->paints = tile->paints = 0;
+    scroll.verticalScrollBar()->setValue(20);
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    if (page->paints || tile->paints) {
+        std::cerr << "Scrolling rerecorded unchanged widget content: page=" << page->paints
+                  << " tile=" << tile->paints << '\n'; return 1;
+    }
+    const auto scrolled = surface->quickWindow()->grabWindow();
+    // The tile's bottom was clipped in the previous frame and is now visible.
+    const QPoint revealed = tile->mapTo(canvas, QPoint(20, 58));
+    if (scrolled.pixelColor(int(revealed.x()*dpr), int(revealed.y()*dpr)) != QColor(Qt::red)) {
+        std::cerr << "Scrolling did not update the retained layer's clip\n"; return 1;
+    }
+    tile->color = Qt::blue;
+    tile->update();
+    scroll.verticalScrollBar()->setValue(30);
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    const QPoint changed = tile->mapTo(canvas, QPoint(20, 20));
+    if (!tile->paints || surface->quickWindow()->grabWindow().pixelColor(
+            int(changed.x()*dpr), int(changed.y()*dpr)) != QColor(Qt::blue)) {
+        std::cerr << "An explicit widget update was lost during scrolling\n"; return 1;
+    }
+    // Parent update() must also preserve custom children depending on it.
+    tile->color = Qt::green;
+    page->update();
+    scroll.verticalScrollBar()->setValue(40);
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    const QPoint childChanged = tile->mapTo(canvas, QPoint(20, 20));
+    if (surface->quickWindow()->grabWindow().pixelColor(
+            int(childChanged.x()*dpr), int(childChanged.y()*dpr)) != QColor(Qt::green)) {
+        std::cerr << "A parent update lost its child's changed content during scrolling\n"; return 1;
+    }
+    tile->paints = 0;
+    scroll.verticalScrollBar()->setValue(80);
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    const auto clipped = surface->quickWindow()->grabWindow();
+    const auto top = scroll.viewport()->mapTo(canvas, QPoint(30, 1));
+    if (tile->paints || clipped.pixelColor(int(top.x()*dpr), int(top.y()*dpr)) != QColor(Qt::green) ||
+        clipped.pixelColor(int(top.x()*dpr), int((top.y()-3)*dpr)) == QColor(Qt::green)) {
+        std::cerr << "A retained layer escaped its new viewport clip\n"; return 1;
+    }
+
+    // Wheel navigation must update hover even without a new mouse movement.
+    QToolButton upper(page), lower(page);
+    upper.setGeometry(100, 100, 60, 20); lower.setGeometry(100, 130, 60, 20);
+    upper.show(); lower.show();
+    const QPointF hoverPoint = upper.mapTo(canvas, QPoint(10, 10));
+    moveTo(hoverPoint);
+    if (!upper.underMouse()) { std::cerr << "Scroll hover fixture was not entered\n"; return 1; }
+    QWheelEvent hoverWheel(hoverPoint, canvas->mapToGlobal(hoverPoint), QPoint(0, -30), {},
+                          Qt::NoButton, Qt::NoModifier, Qt::ScrollUpdate, false);
+    QCoreApplication::sendEvent(surface->quickWindow(), &hoverWheel);
+    if (upper.underMouse() || !lower.underMouse()) {
+        std::cerr << "Scrolling retained hover on the slot that moved away\n"; return 1;
+    }
+    scroll.hide();
+    DragControl dragSource(canvas), dropTarget(canvas);
+    dragSource.setGeometry(5, 5, 60, 35);
+    dropTarget.setGeometry(70, 5, 60, 35);
+    dropTarget.setAcceptDrops(true);
+    dragSource.show(); dropTarget.show();
+    const QPointF start = dragSource.mapTo(canvas, QPoint(10, 10));
+    const QPointF end = dropTarget.mapTo(canvas, QPoint(10, 10));
+    QMouseEvent dragPress(QEvent::MouseButtonPress, start, canvas->mapToGlobal(start),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(surface->quickWindow(), &dragPress);
+    QMimeData payload;
+    payload.setText("insert");
+    QDragEnterEvent enterDrop(end.toPoint(), Qt::MoveAction, &payload,
+                              Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(surface->quickWindow(), &enterDrop);
+    QDropEvent finishDrop(end, Qt::MoveAction, &payload, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(surface->quickWindow(), &finishDrop);
+    // Native drag consumes the release; Qt can still deliver a queued move
+    // with the old button flags. It must not return to the former source.
+    QMouseEvent trailingMove(QEvent::MouseMove, end, canvas->mapToGlobal(end),
+                             Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(surface->quickWindow(), &trailingMove);
+    if (!finishDrop.isAccepted() || dropTarget.drops != 1 ||
+        dragSource.ungrabs != 1 || dragSource.moves != 0 || dropTarget.moves != 1) {
+        std::cerr << "Native drop retained the source's implicit mouse capture\n"; return 1;
+    }
+    dragSource.hide(); dropTarget.hide();
     QWidget nativeEditor(canvas);
     nativeEditor.setGeometry(260, 90, 40, 30);
     nativeEditor.setProperty("vlt.foreignSurface", true);

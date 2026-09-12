@@ -2738,6 +2738,10 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <source>Count-in beats: %1, then record</source>
         <translation>Долей отсчёта: %1, затем запись</translation>
     </message>
+    <message>
+        <source>Shared Plugins…</source>
+        <translation>Общие плагины…</translation>
+    </message>
 </context>
 <context>
     <name>ContextPanelPage</name>
@@ -7567,6 +7571,14 @@ The current project has not been changed.</source>
         <translation>VLTONE не может открыть файл этого типа:
 %1</translation>
     </message>
+    <message>
+        <source>Shared Plugins…</source>
+        <translation>Общие плагины…</translation>
+    </message>
+    <message>
+        <source>Plugins applied to the selection</source>
+        <translation>Плагины добавлены ко всему выделению</translation>
+    </message>
 </context>
 <context>
     <name>MixerWidget</name>
@@ -8072,7 +8084,7 @@ The current project has not been changed.</source>
     <name>OfflineRenderDialog</name>
     <message>
         <source>Offline Render</source>
-        <translation type="unfinished"></translation>
+        <translation>Offline Render</translation>
     </message>
     <message>
         <source>The original clip audio is preserved. This chain is rendered into a managed cache; realtime Clip FX remain live.</source>
@@ -8092,11 +8104,11 @@ The current project has not been changed.</source>
     </message>
     <message>
         <source>Clips to process</source>
-        <translation type="unfinished"></translation>
+        <translation>Клипы для обработки</translation>
     </message>
     <message>
         <source>Audio clip</source>
-        <translation type="unfinished">Аудиоклип</translation>
+        <translation>Аудиоклип</translation>
     </message>
     <message>
         <source>%1 — %2  (%3–%4 s)</source>
@@ -8105,95 +8117,96 @@ The current project has not been changed.</source>
     <message>
         <source>Track: %1
 Clip: %2</source>
-        <translation type="unfinished"></translation>
+        <translation>Дорожка: %1
+Клип: %2</translation>
     </message>
     <message>
         <source>Offline processing inserts</source>
-        <translation type="unfinished"></translation>
+        <translation>Инсерты офлайн-обработки</translation>
     </message>
     <message>
         <source>Chain preset</source>
-        <translation type="unfinished"></translation>
+        <translation>Шаблон цепочки</translation>
     </message>
     <message>
         <source>Offline processing preset</source>
-        <translation type="unfinished"></translation>
+        <translation>Шаблон офлайн-обработки</translation>
     </message>
     <message>
         <source>Load</source>
-        <translation type="unfinished"></translation>
+        <translation>Загрузить</translation>
     </message>
     <message>
         <source>Save As…</source>
-        <translation type="unfinished"></translation>
+        <translation>Сохранить как…</translation>
     </message>
     <message>
         <source>Include Tail</source>
-        <translation type="unfinished"></translation>
+        <translation>Сохранить хвост эффектов</translation>
     </message>
     <message>
         <source>Ready</source>
-        <translation type="unfinished">Готово</translation>
+        <translation>Готово</translation>
     </message>
     <message>
         <source>Offline render status</source>
-        <translation type="unfinished"></translation>
+        <translation>Состояние рендера</translation>
     </message>
     <message>
         <source>Offline render progress</source>
-        <translation type="unfinished"></translation>
+        <translation>Ход рендера</translation>
     </message>
     <message>
         <source>Render Offline</source>
-        <translation type="unfinished"></translation>
+        <translation>Рендер</translation>
     </message>
     <message>
         <source>Could not create the offline plugin rack</source>
-        <translation type="unfinished"></translation>
+        <translation>Не удалось создать цепочку плагинов</translation>
     </message>
     <message>
         <source>This plugin is not available.</source>
-        <translation type="unfinished">Этот плагин недоступен.</translation>
+        <translation>Этот плагин недоступен.</translation>
     </message>
     <message>
         <source>Load preset</source>
-        <translation type="unfinished"></translation>
+        <translation>Загрузить шаблон</translation>
     </message>
     <message>
         <source>Save offline chain</source>
-        <translation type="unfinished"></translation>
+        <translation>Сохранить цепочку</translation>
     </message>
     <message>
         <source>Preset name</source>
-        <translation type="unfinished"></translation>
+        <translation>Название шаблона</translation>
     </message>
     <message>
         <source>Save preset</source>
-        <translation type="unfinished"></translation>
+        <translation>Сохранить шаблон</translation>
     </message>
     <message>
         <source>Enter a valid preset name.</source>
-        <translation type="unfinished"></translation>
+        <translation>Введите название шаблона.</translation>
     </message>
     <message>
         <source>Rendering…</source>
-        <translation type="unfinished">Рендеринг…</translation>
+        <translation>Рендеринг…</translation>
     </message>
     <message>
         <source>Rendering %1 of %2 seconds</source>
-        <translation type="unfinished"></translation>
+        <translation>Рендер: %1 из %2 секунд</translation>
     </message>
     <message>
         <source>Cancelled — the project was not changed</source>
-        <translation type="unfinished"></translation>
+        <translation>Отменено — проект не изменён</translation>
     </message>
     <message>
         <source>Offline render failed</source>
-        <translation type="unfinished"></translation>
+        <translation>Ошибка рендера</translation>
     </message>
     <message>
         <source>Offline render complete</source>
-        <translation type="unfinished"></translation>
+        <translation>Рендер завершён</translation>
     </message>
     <message>
         <source>Preparing audio and plugins…</source>
@@ -8202,6 +8215,48 @@ Clip: %2</source>
     <message>
         <source>Warming up effects: %1 of %2 seconds</source>
         <translation>Прогрев эффектов: %1 из %2 секунд</translation>
+    </message>
+    <message>
+        <source>Add effects to the current audio. Render replaces the checked clips and saves a new version in Sampler → Clip FX → History.</source>
+        <translation>Добавьте эффекты к текущему звуку. Рендер заменит отмеченные клипы и сохранит новую версию в сэмплере: Clip FX → История.</translation>
+    </message>
+    <message>
+        <source>Clips to render</source>
+        <translation>Клипы для рендера</translation>
+    </message>
+    <message>
+        <source>Render selection</source>
+        <translation>Выбор клипов</translation>
+    </message>
+    <message>
+        <source>%1
+%2 · %3–%4 s</source>
+        <translation>%1
+%2 · %3–%4 с</translation>
+    </message>
+    <message>
+        <source>%1 of %2 selected</source>
+        <translation>Выбрано: %1 из %2</translation>
+    </message>
+    <message>
+        <source>Render %1 clips</source>
+        <translation>Рендер клипов: %1</translation>
+    </message>
+    <message>
+        <source>Check the clips to render</source>
+        <translation>Отметьте клипы для рендера</translation>
+    </message>
+    <message>
+        <source>Ready — a new version will be saved</source>
+        <translation>Готово — будет сохранена новая версия</translation>
+    </message>
+    <message>
+        <source>Add or enable an effect to render</source>
+        <translation>Добавьте или включите эффект для рендера</translation>
+    </message>
+    <message>
+        <source>Rendering clip %1 of %2</source>
+        <translation>Рендер клипа %1 из %2</translation>
     </message>
 </context>
 <context>
@@ -11024,6 +11079,48 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <source>Keyboard</source>
         <translation>Клавиатура</translation>
     </message>
+    <message>
+        <source>Clip FX</source>
+        <translation>Clip FX</translation>
+    </message>
+    <message>
+        <source>History ▾</source>
+        <translation>История ▾</translation>
+    </message>
+    <message>
+        <source>History · %1 ▾</source>
+        <translation>История · %1 ▾</translation>
+    </message>
+    <message>
+        <source>Offline render history</source>
+        <translation>История офлайн-рендера</translation>
+    </message>
+    <message>
+        <source>Choose the original audio or an offline-rendered version</source>
+        <translation>Выбрать исходный звук или версию после офлайн-рендера</translation>
+    </message>
+    <message>
+        <source>Offline render versions</source>
+        <translation>Версии офлайн-рендера</translation>
+    </message>
+    <message>
+        <source>Original audio</source>
+        <translation>Исходный звук</translation>
+    </message>
+    <message>
+        <source>Version %1 · %2</source>
+        <translation>Версия %1 · %2</translation>
+    </message>
+    <message>
+        <source>Based on version %1
+%2</source>
+        <translation>На основе версии %1
+%2</translation>
+    </message>
+    <message>
+        <source>Version 1 · Offline Render</source>
+        <translation>Версия 1 · Offline Render</translation>
+    </message>
 </context>
 <context>
     <name>SamplerWaveform</name>
@@ -12871,6 +12968,22 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <source>Pending upload</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Restore Original Audio</source>
+        <translation>Вернуть исходное состояние</translation>
+    </message>
+    <message>
+        <source>Return this clip to its first version before Offline Render</source>
+        <translation>Вернуть первую версию клипа до офлайн-рендера</translation>
+    </message>
+    <message>
+        <source>Offline render history</source>
+        <translation>История офлайн-рендера</translation>
+    </message>
+    <message>
+        <source>Shared Plugins…</source>
+        <translation>Общие плагины…</translation>
+    </message>
 </context>
 <context>
     <name>ToolDialog</name>
@@ -13144,6 +13257,10 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <source>Track Colour</source>
         <translation>Цвет дорожки</translation>
     </message>
+    <message>
+        <source>Shared Plugins…</source>
+        <translation>Общие плагины…</translation>
+    </message>
 </context>
 <context>
     <name>TransportBar</name>
@@ -13280,12 +13397,12 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <translation>Темп в BPM</translation>
     </message>
     <message>
-        <source>Drag up or down to change tempo. Double-click to type a value.</source>
-        <translation>Перетащите вверх или вниз, чтобы изменить темп. Дважды щелкните, чтобы ввести значение.</translation>
+        <source>Drag up or down to change tempo. Hold Shift for fine adjustment. Double-click to type a value.</source>
+        <translation>Перетаскивайте вверх или вниз для изменения темпа. Удерживайте Shift для точной настройки. Двойной щелчок — ввод числа.</translation>
     </message>
     <message>
-        <source>Drag up/down to change tempo · Double-click to type</source>
-        <translation>Перетащить вверх/вниз для изменения темпа · Дважды щелкнуть для ввода</translation>
+        <source>Drag up/down to change tempo · Shift: fine adjustment · Double-click to type</source>
+        <translation>Вверх/вниз — изменить темп · Shift — точная настройка · Двойной щелчок — ввод числа</translation>
     </message>
     <message>
         <source>%1 tool — on the pointer. 1…7 switch it.</source>
@@ -15085,6 +15202,21 @@ Use File → Save as Template… to create one.</source>
 
 <context>
     <name>ModulationPanel</name>
+    <message><source>Delay</source><translation>Дилей</translation></message>
+    <message><source>Delay · 1/32</source><translation>Дилей · 1/32</translation></message>
+    <message><source>Detune</source><translation>Расстройка</translation></message>
+    <message><source>Body</source><translation>Плотность</translation></message>
+    <message><source>%1 cents</source><translation>%1 цт</translation></message>
+    <message><source> ct</source><translation> цт</translation></message>
+    <message><source>Spread the doubles around the original vocal. Zero keeps the widening off.</source><translation>Расположить дубли по сторонам от исходного вокала. При нуле расширение отключено.</translation></message>
+    <message><source>Add natural variations in the doubles' timing and pitch.</source><translation>Добавить естественные отклонения времени и высоты дублей.</translation></message>
+    <message><source>Soften the added voices and tame bright consonants.</source><translation>Смягчить добавленные голоса и приглушить резкие согласные.</translation></message>
+    <message><source>Blend a short echo synced to 1/32 note of the project tempo, up to 375 ms. Zero removes the echo.</source><translation>Добавить короткое эхо длиной 1/32 ноты в темпе проекта, не более 375 мс. При нуле эхо отключено.</translation></message>
+    <message><source>Add opposite pitch offsets to the doubles, up to 16 cents each side. Zero removes this layer.</source><translation>Развести высоту дублей в противоположные стороны, до 16 центов на сторону. При нуле этот слой отключён.</translation></message>
+    <message><source>Add a soft double in the centre for more vocal density, including in mono.</source><translation>Добавить мягкий дубль по центру для плотности вокала, в том числе в моно.</translation></message>
+    <message><source>Set how quickly the effect moves.</source><translation>Задать скорость движения эффекта.</translation></message>
+    <message><source>Set the range of pitch or filter movement.</source><translation>Задать размах изменения высоты или движения фильтров.</translation></message>
+    <message><source>Blend the effect with the original signal.</source><translation>Подмешать эффект к исходному сигналу.</translation></message>
     <message><source>Signal level %1 dBFS</source><translation>Уровень сигнала %1 dBFS</translation></message>
     <message>
         <source>Width</source>
@@ -15229,6 +15361,93 @@ Use File → Save as Template… to create one.</source>
     <message>
         <source>Reduce motion</source>
         <translation>Уменьшить движение</translation>
+    </message>
+</context>
+<context>
+    <name>PluginBatchDialog</name>
+    <message>
+        <source>Shared Plugins</source>
+        <translation>Общие плагины</translation>
+    </message>
+    <message>
+        <source>Clip FX · %1 clips</source>
+        <translation>Clip FX · клипов: %1</translation>
+    </message>
+    <message>
+        <source>Inserts · %1 tracks</source>
+        <translation>Inserts · дорожек: %1</translation>
+    </message>
+    <message>
+        <source>Listen to one source and configure the new effects. Apply independent copies to the entire selection.</source>
+        <translation>Настройте новые эффекты на одном источнике. Примените независимые копии ко всему выделению.</translation>
+    </message>
+    <message>
+        <source>Source for listening</source>
+        <translation>Источник для прослушивания</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>Недоступен</translation>
+    </message>
+    <message>
+        <source>Listen</source>
+        <translation>Слушать</translation>
+    </message>
+    <message>
+        <source>Stop</source>
+        <translation>Стоп</translation>
+    </message>
+    <message>
+        <source>New effects</source>
+        <translation>Новые эффекты</translation>
+    </message>
+    <message>
+        <source>Add plugin…</source>
+        <translation>Добавить плагин…</translation>
+    </message>
+    <message>
+        <source>Existing effects are kept. Cancel leaves the project unchanged.</source>
+        <translation>Существующие эффекты сохраняются. Отмена оставит проект без изменений.</translation>
+    </message>
+    <message>
+        <source>Apply to all (%1)</source>
+        <translation>Применить ко всем (%1)</translation>
+    </message>
+    <message>
+        <source>Select at least two compatible tracks or audio clips.</source>
+        <translation>Выберите не менее двух совместимых дорожек или аудиоклипов.</translation>
+    </message>
+    <message>
+        <source>Shared Plugins are available in local projects.</source>
+        <translation>Общие плагины доступны в локальных проектах.</translation>
+    </message>
+    <message>
+        <source>Could not prepare this source: %1</source>
+        <translation>Не удалось подготовить источник: %1</translation>
+    </message>
+    <message>
+        <source>Add an effect to start</source>
+        <translation>Добавьте эффект, чтобы начать</translation>
+    </message>
+    <message>
+        <source>Enable effect</source>
+        <translation>Включить эффект</translation>
+    </message>
+    <message>
+        <source>Open plugin settings</source>
+        <translation>Открыть настройки плагина</translation>
+    </message>
+    <message>
+        <source>Remove effect</source>
+        <translation>Удалить эффект</translation>
+    </message>
+    <message>
+        <source>This plugin could not be loaded.</source>
+        <translation>Не удалось загрузить плагин.</translation>
+    </message>
+    <message>
+        <source>Could not apply plugins: %1</source>
+        <translation>Не удалось применить плагины: %1</translation>
     </message>
 </context>
 </TS>

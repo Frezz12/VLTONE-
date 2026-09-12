@@ -66,7 +66,22 @@ QString caption(const std::string &id) {
         return ModulationPanel::tr("Rate");
     if (id == "depth")
         return ModulationPanel::tr("Depth");
+    if (id == "delay") return ModulationPanel::tr("Delay");
+    if (id == "detune") return ModulationPanel::tr("Detune");
+    if (id == "body") return ModulationPanel::tr("Body");
     return ModulationPanel::tr("Amount");
+}
+double displayScale(const std::string &id) { return id == "rate" || id == "detune" ? 1 : 100; }
+QString help(const std::string &id) {
+    if (id == "width") return ModulationPanel::tr("Spread the doubles around the original vocal. Zero keeps the widening off.");
+    if (id == "humanize") return ModulationPanel::tr("Add natural variations in the doubles' timing and pitch.");
+    if (id == "softness") return ModulationPanel::tr("Soften the added voices and tame bright consonants.");
+    if (id == "delay") return ModulationPanel::tr("Blend a short echo synced to 1/32 note of the project tempo, up to 375 ms. Zero removes the echo.");
+    if (id == "detune") return ModulationPanel::tr("Add opposite pitch offsets to the doubles, up to 16 cents each side. Zero removes this layer.");
+    if (id == "body") return ModulationPanel::tr("Add a soft double in the centre for more vocal density, including in mono.");
+    if (id == "rate") return ModulationPanel::tr("Set how quickly the effect moves.");
+    if (id == "depth") return ModulationPanel::tr("Set the range of pitch or filter movement.");
+    return ModulationPanel::tr("Blend the effect with the original signal.");
 }
 } // namespace
 
@@ -74,7 +89,7 @@ ModulationField::ModulationField(mod::Kind kind, QWidget *parent)
     : FrameWidget(parent), m_kind(kind) {
     setObjectName(QStringLiteral("ModulationField"));
     setAccessibleName(ModulationPanel::tr("Modulation visualization"));
-    setMinimumHeight(kind == mod::Kind::Doubler ? 170 : 92);
+    setMinimumHeight(kind == mod::Kind::Doubler ? 170 : kind == mod::Kind::DoublerPro ? 110 : 92);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 }
 void ModulationField::present(const mod::Telemetry &t, double dt, bool reduced) {
@@ -109,7 +124,7 @@ void ModulationField::paintScene(QPainter &p, const QRegion &) {
     const double w = field.width() * .43, h = field.height() * .36;
     p.setPen(QPen(alpha(th.textSecondary, 35), 1));
     p.setBrush(Qt::NoBrush);
-    if (m_kind == mod::Kind::Doubler) {
+    if (mod::isDoubler(m_kind)) {
         for (int i = 1; i <= 3; ++i)
             p.drawEllipse(c, w * i / 3, h * i / 3);
         p.drawLine(QPointF(c.x(), c.y() - h - 10), QPointF(c.x(), c.y() + h + 10));
@@ -156,7 +171,7 @@ void ModulationField::paintScene(QPainter &p, const QRegion &) {
         }
         for (unsigned i = 0; i < 2; ++i) {
             const double x =
-                c.x() - w + 2 * w * std::clamp(double(m_reading.positions[i]) / 7., 0., 1.);
+                c.x() - w + 2 * w * std::clamp(double(m_reading.positions[i]) / 8.5, 0., 1.);
             p.setPen(QPen(alpha(th.accent, 65 + int(170 * m_level)), i ? 2 : 3));
             p.drawLine(QPointF(x, c.y() - h), QPointF(x, c.y() + h));
         }
@@ -173,7 +188,7 @@ void ModulationField::paintScene(QPainter &p, const QRegion &) {
     p.restore();
     p.setPen(th.textSecondary);
     p.drawText(field.adjusted(14, 10, -14, -10), Qt::AlignLeft | Qt::AlignBottom,
-               m_kind == mod::Kind::Doubler ? ModulationPanel::tr("Vocal width")
+               mod::isDoubler(m_kind) ? ModulationPanel::tr("Vocal width")
                                             : ModulationPanel::tr("Motion"));
 }
 
@@ -182,7 +197,7 @@ ModulationPanel::ModulationPanel(daw::EngineController *controller, QString chan
     : FrameWidget(parent), m_controller(controller), m_channel(channel.toStdString()),
       m_insert(insert.toStdString()), m_kind(kind) {
     setObjectName(QStringLiteral("ModulationPanel"));
-    setMinimumSize(440, kind == Kind::Doubler ? 460 : 500);
+    setMinimumSize(440, kind == Kind::DoublerPro ? 560 : kind == Kind::Doubler ? 460 : 500);
     auto *column = new QVBoxLayout(this);
     column->setContentsMargins(20, 14, 20, 16);
     column->setSpacing(10);
@@ -225,15 +240,17 @@ ModulationPanel::ModulationPanel(daw::EngineController *controller, QString chan
         auto *layout = new QVBoxLayout(cell);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(3);
-        auto *label = new QLabel(caption(info.id), cell);
+        auto *label = new QLabel(info.id == "delay" ? tr("Delay · 1/32") : caption(info.id), cell);
+        cell->setToolTip(help(info.id));
         label->setAlignment(Qt::AlignCenter);
         layout->addWidget(label);
         auto *knob = new ui::Knob({}, cell);
         m_knobs[i] = knob;
         knob->setObjectName(QString::fromStdString("ModulationKnob_" + info.id));
         knob->setAccessibleName(caption(info.id));
+        knob->setAccessibleDescription(help(info.id));
         knob->setVisualStyle(ui::Knob::VisualStyle::Graphite);
-        knob->setBare(98);
+        knob->setBare(kind == Kind::DoublerPro ? 86 : 98);
         knob->setRange(info.minValue, info.maxValue);
         knob->setDefaultValue(info.defaultValue);
         knob->setLogarithmic(info.id == "rate");
@@ -241,6 +258,7 @@ ModulationPanel::ModulationPanel(daw::EngineController *controller, QString chan
         knob->setFormatter([kind, i](double value) {
             const auto &p = mod::parameterTable(kind)[i];
             return p.id == "rate" ? tr("%1 Hz").arg(value, 0, 'g', 3)
+                   : p.id == "detune" ? tr("%1 cents").arg(value, 0, 'f', 1)
                                   : tr("%1%").arg(value * 100, 0, 'f', 0);
         });
         layout->addWidget(knob, 0, Qt::AlignCenter);
@@ -248,11 +266,12 @@ ModulationPanel::ModulationPanel(daw::EngineController *controller, QString chan
         m_numbers[i] = number;
         number->setObjectName(QString::fromStdString("ModulationValue_" + info.id));
         number->setAccessibleName(caption(info.id));
-        const double scale = info.id == "rate" ? 1 : 100;
+        number->setAccessibleDescription(help(info.id));
+        const double scale = displayScale(info.id);
         number->setRange(info.minValue * scale, info.maxValue * scale);
-        number->setDecimals(scale == 1 ? 3 : 1);
-        number->setSingleStep(scale == 1 ? .01 : 1);
-        number->setSuffix(scale == 1 ? tr(" Hz") : QStringLiteral("%"));
+        number->setDecimals(info.id == "rate" ? 3 : 1);
+        number->setSingleStep(info.id == "rate" ? .01 : info.id == "detune" ? .1 : 1);
+        number->setSuffix(info.id == "rate" ? tr(" Hz") : info.id == "detune" ? tr(" ct") : QStringLiteral("%"));
         number->setButtonSymbols(QAbstractSpinBox::NoButtons);
         number->setAlignment(Qt::AlignCenter);
         number->setFixedWidth(86);
@@ -288,7 +307,7 @@ ModulationPanel::ModulationPanel(daw::EngineController *controller, QString chan
     refresh();
 }
 ModulationPanel::~ModulationPanel() {
-    for (unsigned i = 0; i < 4; ++i)
+    for (unsigned i = 0; i < m_gestures.size(); ++i)
         finishGesture(i);
 }
 mod::ModulationInstance *ModulationPanel::instance() const {
@@ -331,7 +350,7 @@ void ModulationPanel::finishGesture(unsigned i) {
 void ModulationPanel::applyValues(const Values &v, const QString &kind, const QString &name) {
     if (!instance())
         return;
-    for (unsigned i = 0; i < 4; ++i)
+    for (unsigned i = 0; i < m_gestures.size(); ++i)
         finishGesture(i);
     const auto group = m_controller->beginUndoGroup();
     for (const auto &p : mod::parameterTable(m_kind)) {
@@ -373,7 +392,7 @@ void ModulationPanel::refresh() {
         }
         if (!m_numbers[i]->hasFocus()) {
             QSignalBlocker b(m_numbers[i]);
-            m_numbers[i]->setValue(current[i] * (p.id == "rate" ? 1 : 100));
+            m_numbers[i]->setValue(current[i] * displayScale(p.id));
         }
     }
     const auto reference = plugin->presetReference();
@@ -413,7 +432,7 @@ void ModulationPanel::refresh() {
             }
     m_preset->setText((m_selectedName.isEmpty() ? tr("Custom") : m_selectedName) +
                       (exact ? QString() : QStringLiteral(" *")) + QString::fromUtf8("  ▾"));
-    m_mono->setVisible(m_kind == Kind::Doubler && plugin->busLayout().outputs.front() == 1);
+    m_mono->setVisible(mod::isDoubler(m_kind) && plugin->busLayout().outputs.front() == 1);
     m_refreshing = false;
 }
 void ModulationPanel::refreshVisual() {
@@ -436,7 +455,7 @@ void ModulationPanel::refreshVisual() {
             .arg(t.level > 1.e-6f ? 20 * std::log10(t.level) : -120., 0, 'f', 1));
     const bool reduced = m_reduced || qApp->property("vlt.modulationReduceMotion").toBool();
     m_field->present(t, m_visualTimer->deltaSeconds(), reduced);
-    m_meter->setText(m_kind == Kind::Doubler ? tr("Width %1%   ·   Correlation %2")
+    m_meter->setText(mod::isDoubler(m_kind) ? tr("Width %1%   ·   Correlation %2")
                                                    .arg(std::min(999, int(t.width * 100)))
                                                    .arg(t.correlation, 0, 'f', 2)
                                              : tr("Soft modulation"));
@@ -456,7 +475,7 @@ void ModulationPanel::showEvent(QShowEvent *e) {
         m_visualTimer->start();
 }
 void ModulationPanel::hideEvent(QHideEvent *e) {
-    for (unsigned i = 0; i < 4; ++i)
+    for (unsigned i = 0; i < m_gestures.size(); ++i)
         finishGesture(i);
     m_refreshTimer->stop();
     m_visualTimer->stop();
@@ -468,7 +487,7 @@ void ModulationPanel::resizeEvent(QResizeEvent *e) {
 }
 void ModulationPanel::arrangeControls() {
     const int count = int(mod::parameterTable(m_kind).size()),
-              columns = count == 4 && width() < 500 ? 2 : count;
+              columns = count > 4 ? 3 : count == 4 && width() < 500 ? 2 : count;
     if (columns == m_columns)
         return;
     m_columns = columns;

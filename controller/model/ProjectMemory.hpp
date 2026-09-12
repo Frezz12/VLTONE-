@@ -40,6 +40,15 @@ inline std::size_t estimatedProjectBytes(const ProjectModel& project) {
                 bytes += lane.points.capacity() * sizeof(AutomationPoint);
             for (const auto& take : clip.takes)
                 bytes += take.notes.capacity() * sizeof(NoteModel) + take.filePath.size() + take.name.size();
+            bytes += clip.offlineHistory.capacity() * sizeof(OfflineRenderVersion) + clip.offlineVersionId.size();
+            for (const auto& version : clip.offlineHistory) {
+                bytes += version.id.size() + version.parentId.size() + version.label.size() +
+                    version.source.filePath.size() +
+                    version.source.takes.capacity() * sizeof(TakeModel) +
+                    version.source.comp.capacity() * sizeof(CompSegment);
+                for (const auto& take : version.source.takes)
+                    bytes += take.notes.capacity() * sizeof(NoteModel) + take.filePath.size() + take.name.size();
+            }
         }
     }
     return bytes * 2;

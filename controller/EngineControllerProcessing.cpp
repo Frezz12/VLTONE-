@@ -5,6 +5,7 @@
 #include "platform/PathUtils.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <map>
 #include <unordered_set>
@@ -42,6 +43,41 @@ struct BounceJob {
     std::string file;
     double renderedSeconds = 0.0;
 };
+
+ClipAudioVersionSource renderedSource(const std::string& path, double seconds) {
+    ClipAudioVersionSource source;
+    source.filePath = path;
+    source.durationSeconds = seconds;
+    source.channels = 2;
+    return source;
+}
+
+std::string effectNames(const std::vector<InsertModel>& chain) {
+    std::string label;
+    for (const auto& slot : chain) {
+        if (slot.bypassed) continue;
+        if (!label.empty()) label += " · ";
+        label += slot.name;
+    }
+    return label;
+}
+
+// Upgrade the old single-cache representation on the first history operation.
+// Merely opening an old project remains read-only and plays exactly as before.
+void ensureOfflineHistory(ClipModel& clip, bool legacyValid) {
+    if (!clip.offlineHistory.empty()) return;
+    clip.offlineHistory.push_back({newUuid(), {}, {}, captureClipAudioVersion(clip)});
+    clip.offlineVersionId = clip.offlineHistory.front().id;
+    if (legacyValid) {
+        auto source = renderedSource(clip.offlineProcess.renderedFilePath,
+                                      clip.offlineProcess.renderedDurationSeconds);
+        clip.offlineHistory.push_back({newUuid(), clip.offlineVersionId,
+                                       effectNames(clip.offlineProcess.chain), source});
+        clip.offlineVersionId = clip.offlineHistory.back().id;
+        applyClipAudioVersion(clip, source);
+    }
+    clip.offlineProcess = {};
+}
 
 } // namespace
 
@@ -435,78 +471,113 @@ audio::Result EngineController::renderClipsOffline(
     const std::function<bool(const rendering::Progress&)>& onProgress,
     OfflineRenderReport& out) {
     out = {};
-    if (cloudProjectBound()) {
+    if (cloudProjectBound() || m_exportInProgress) {
         return audio::Result::fail(audio::EngineError::InvalidArgument,
-                                   "Offline Render is local-only");
+                                   "Offline Render is unavailable in this project state");
     }
-    if (addresses.empty()) {
-        return audio::Result::fail(audio::EngineError::InvalidArgument,
-                                   "no audio clips selected");
-    }
-    for (const ClipAddress& address : addresses) {
-        const TrackModel* track = m_project.findTrack(address.trackId);
-        if (!track) {
-            return audio::Result::fail(audio::EngineError::InvalidArgument,
-                                       "Offline Render requires audio clips");
-        }
-        const auto clip = std::find_if(
-            track->clips.begin(), track->clips.end(),
-            [&](const ClipModel& item) { return item.id == address.clipId; });
-        if (clip == track->clips.end() || clip->kind != ClipKind::Audio) {
-            return audio::Result::fail(audio::EngineError::InvalidArgument,
-                                       "Offline Render requires audio clips");
-        }
-    }
-    for (const ChainSlotSnapshot& slot : chain.inserts) {
-        if (slot.model.bypassed) continue;
-        if (!m_pluginManager.find(toHostFormat(slot.model.format),
-                                  slot.model.uid)) {
-            return audio::Result::fail(
-                audio::EngineError::FileNotFound,
-                "plugin is not available: " + slot.model.name);
-        }
+    if (addresses.empty())
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "no audio clips selected");
+
+    ChannelSnapshot enabledChain = chain;
+    std::erase_if(enabledChain.inserts, [](const auto& slot) { return slot.model.bypassed; });
+    if (enabledChain.inserts.empty())
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "add or enable an offline effect");
+    for (const auto& slot : enabledChain.inserts) {
+        if (!m_pluginManager.find(toHostFormat(slot.model.format), slot.model.uid))
+            return audio::Result::fail(audio::EngineError::FileNotFound,
+                                       "plugin is not available: " + slot.model.name);
     }
 
-    const auto sourceRevision = projectRevision();
-    const bool hasEnabled = std::any_of(
-        chain.inserts.begin(), chain.inserts.end(),
-        [](const ChainSlotSnapshot& slot) { return !slot.model.bypassed; });
-    std::vector<std::string> staged;
-    std::vector<double> durations;
-    if (hasEnabled) {
+    struct StagedFiles {
+        std::vector<std::string> files;
+        bool committed = false;
+        ~StagedFiles() { if (!committed) removeFiles(files); }
+    } staged;
+    struct BusyScope {
+        bool& flag;
+        explicit BusyScope(bool& value) : flag(value) { flag = true; }
+        ~BusyScope() { flag = false; }
+    } busy(m_exportInProgress);
+
+    ProjectModel before;
+    bool committing = false;
+    try {
+        const auto sourceRevision = projectRevision();
+        before = m_project;
+        std::vector<ClipAddress> clips;
+        std::vector<ClipModel> sources;
+        std::unordered_set<std::string> seen;
+        for (const auto& address : addresses) {
+            const auto* source = audioClip(address.trackId, address.clipId);
+            if (!source)
+                return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                           "Offline Render requires audio clips");
+            if (!seen.insert(address.trackId + "/" + address.clipId).second) continue;
+            ClipModel copy = *source;
+            ensureOfflineHistory(copy, offlineProcessCacheValid(address));
+            const double duration = effectiveClipLength(copy);
+            if (!std::isfinite(duration) || duration <= 0.0)
+                return audio::Result::fail(audio::EngineError::InvalidArgument, "audio clip has no duration");
+            copy.durationSeconds = duration;
+            const auto readable = [this](const std::string& path) {
+                std::error_code error;
+                if (!fs::is_regular_file(platform::pathFromUtf8(path), error) || error) return false;
+                const auto samples = loadSamples(path);
+                return samples && samples->frames() > 0;
+            };
+            if (copy.takes.empty()) {
+                if (!readable(copy.filePath))
+                    return audio::Result::fail(audio::EngineError::FileNotFound,
+                                               "clip audio is unavailable: " + copy.filePath);
+            } else {
+                for (const auto& segment : copy.comp) {
+                    const auto take = std::find_if(copy.takes.begin(), copy.takes.end(),
+                        [&](const auto& item) { return item.id == segment.takeId; });
+                    if (take == copy.takes.end() || !readable(take->filePath))
+                        return audio::Result::fail(audio::EngineError::FileNotFound,
+                                                   "a comp source is unavailable");
+                }
+            }
+            clips.push_back(address);
+            sources.push_back(std::move(copy));
+        }
+        out.clipCount = clips.size();
+
         EngineController scratch;
-        audio::Result ready =
-            scratch.initialize(m_sampleRate, m_bufferSize, false);
-        if (!ready) return ready;
-
-        for (std::size_t index = 0; index < addresses.size(); ++index) {
-            const ClipAddress& address = addresses[index];
-            const TrackModel* sourceTrack = m_project.findTrack(address.trackId);
-            const auto source = std::find_if(
-                sourceTrack->clips.begin(), sourceTrack->clips.end(),
-                [&](const ClipModel& clip) { return clip.id == address.clipId; });
-
+        if (const auto ready = scratch.initialize(m_sampleRate, m_bufferSize, false); !ready)
+            return ready;
+        std::vector<double> durations;
+        for (std::size_t index = 0; index < clips.size(); ++index) {
+            out.clipIndex = index;
             ProjectModel project;
             project.sampleRate = m_sampleRate;
+            project.tempo = before.tempo;
+            project.timeSigNumerator = before.timeSigNumerator;
+            project.timeSigDenominator = before.timeSigDenominator;
+            project.keyRoot = before.keyRoot;
+            project.scale = before.scale;
             TrackModel track;
             track.id = newUuid();
             track.kind = TrackKind::Audio;
-            track.name = source->name;
-            ClipModel clip = *source;
+            track.name = sources[index].name;
+            ClipModel clip = sources[index];
             clip.id = newUuid();
-            clip.startSeconds = 0.0;
             clip.muted = false;
             clip.inserts.clear();
             clip.offlineProcess = {};
+            clip.offlineHistory.clear();
+            clip.offlineVersionId.clear();
             clip.playbackInjection = {};
             track.clips.push_back(std::move(clip));
             project.tracks.push_back(std::move(track));
             scratch.restoreProject(project, "Offline source");
-            if (!scratch.pasteChannelInserts(project.tracks.front().id, chain)) {
-                scratch.shutdown();
-                removeFiles(staged);
+            if (!scratch.pasteChannelInserts(project.tracks.front().id, enabledChain))
                 return audio::Result::fail(audio::EngineError::InvalidArgument,
                                            "could not prepare offline chain");
+            for (const auto& slot : *scratch.channelInserts(project.tracks.front().id)) {
+                if (!scratch.insertInstance(project.tracks.front().id, slot.id))
+                    return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                               "could not load offline plugin: " + slot.name);
             }
 
             rendering::Spec spec;
@@ -515,64 +586,143 @@ audio::Result EngineController::renderClipsOffline(
             spec.file.container = audio::platform::Container::Wav;
             spec.file.encoding = audio::platform::Encoding::Float32;
             spec.range = rendering::Range::Custom;
-            spec.customEndSeconds = source->durationSeconds;
-            spec.tail = includeTail ? rendering::Tail::UntilSilence
-                                    : rendering::Tail::None;
+            // Keep musical position and tempo for synced/time-aware plugins.
+            spec.customStartSeconds = sources[index].startSeconds;
+            spec.customEndSeconds = spec.customStartSeconds + sources[index].durationSeconds;
+            spec.tail = includeTail ? rendering::Tail::UntilSilence : rendering::Tail::None;
             spec.tailSilenceDb = -96.0;
             spec.tailHoldSeconds = 0.3;
             spec.tailMaxSeconds = 30.0;
             rendering::Report rendered;
             const auto progress = [&](const rendering::Progress& one) {
-                if (!onProgress) return true;
                 rendering::Progress total = one;
-                total.fraction =
-                    (double(index) + one.fraction) / double(addresses.size());
-                total.renderedSeconds =
-                    double(index) * one.totalSeconds + one.renderedSeconds;
-                total.totalSeconds =
-                    double(addresses.size()) * one.totalSeconds;
-                const bool proceed = onProgress(total);
+                total.fraction = (double(index) + one.fraction) / double(clips.size());
+                const bool proceed = !onProgress || onProgress(total);
                 return proceed && projectRevision() == sourceRevision;
             };
-            audio::Result result = scratch.renderProject(spec, progress, rendered);
-            if (!result || rendered.cancelled || rendered.files.size() != 1) {
-                scratch.shutdown();
-                removeFiles(staged);
-                out.cancelled = rendered.cancelled;
-                if (rendered.cancelled) return audio::Result::ok();
-                if (!result) return result;
-                return audio::Result::fail(
-                    audio::EngineError::FileWriteError,
-                    "offline processing produced no audio file");
+            const auto result = scratch.renderProject(spec, progress, rendered);
+            staged.files.insert(staged.files.end(), rendered.files.begin(), rendered.files.end());
+            if (!result) return result;
+            if (rendered.cancelled || projectRevision() != sourceRevision) {
+                out.cancelled = true;
+                return audio::Result::ok();
             }
-            staged.push_back(rendered.files.front());
+            if (rendered.files.size() != 1 || !(rendered.renderedSeconds > 0.0))
+                return audio::Result::fail(audio::EngineError::FileWriteError,
+                                           "offline processing produced no audio file");
             durations.push_back(rendered.renderedSeconds);
         }
         scratch.shutdown();
-    }
-
-    const ProjectModel before = m_project;
-    for (std::size_t index = 0; index < addresses.size(); ++index) {
-        ClipModel* clip = findClip(addresses[index].trackId,
-                                   addresses[index].clipId);
-        if (!clip) continue;
-        const std::string fingerprint = offlineSourceFingerprint(*clip);
-        OfflineProcessModel process;
-        process.chain = cacheOfflineChain(chain.inserts);
-        process.sourceFingerprint = fingerprint;
-        process.sourceDurationSeconds = clip->durationSeconds;
-        process.includeTail = includeTail;
-        if (hasEnabled) {
-            process.renderedFilePath = staged[index];
-            process.renderedDurationSeconds = durations[index];
-            out.files.push_back(staged[index]);
+        // No project mutation is allowed between validation and this commit.
+        if (projectRevision() != sourceRevision) {
+            out.cancelled = true;
+            return audio::Result::ok();
         }
-        clip->offlineProcess = std::move(process);
+        std::vector<InsertModel> models;
+        for (const auto& slot : enabledChain.inserts) models.push_back(slot.model);
+        const auto label = effectNames(models);
+        committing = true;
+        for (std::size_t index = 0; index < clips.size(); ++index) {
+            auto* clip = findClip(clips[index].trackId, clips[index].clipId);
+            // Use the snapshotted history, including any legacy migration.
+            clip->offlineHistory = sources[index].offlineHistory;
+            const auto source = renderedSource(staged.files[index], durations[index]);
+            clip->offlineHistory.push_back({newUuid(), sources[index].offlineVersionId, label, source});
+            clip->offlineVersionId = clip->offlineHistory.back().id;
+            applyClipAudioVersion(*clip, source);
+        }
+        m_exportInProgress = false;
+        if (const auto rebuilt = rebuildGraph(); !rebuilt) {
+            m_project = before;
+            (void)rebuildGraph();
+            updateTimelineDuration();
+            committing = false;
+            return rebuilt;
+        }
+        updateTimelineDuration();
+        pushProjectSnapshotUndo(before, "Render Offline");
+        out.files = staged.files;
+        staged.committed = true;
+        committing = false;
+        return audio::Result::ok();
+    } catch (const std::exception& error) {
+        if (committing) {
+            m_project = std::move(before);
+            m_exportInProgress = false;
+            (void)rebuildGraph();
+            updateTimelineDuration();
+        }
+        return audio::Result::fail(audio::EngineError::Unknown, error.what());
+    } catch (...) {
+        if (committing) {
+            m_project = std::move(before);
+            m_exportInProgress = false;
+            (void)rebuildGraph();
+            updateTimelineDuration();
+        }
+        return audio::Result::fail(audio::EngineError::Unknown, "offline processing failed");
     }
-    (void)rebuildGraph();
+}
+
+audio::Result EngineController::selectOfflineRenderVersion(
+    const ClipAddress& address, const std::string& versionId) {
+    if (cloudProjectBound() || m_exportInProgress)
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "offline history is unavailable");
+    auto* clip = findClip(address.trackId, address.clipId);
+    if (!clip || clip->kind != ClipKind::Audio)
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "audio clip not found");
+    const auto found = std::find_if(clip->offlineHistory.begin(), clip->offlineHistory.end(),
+        [&](const auto& version) { return version.id == versionId; });
+    if (found == clip->offlineHistory.end())
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "offline version not found");
+    // Missing history media must never replace a playable version with silence.
+    const auto available = [this](const std::string& path) {
+        std::error_code error;
+        if (!fs::is_regular_file(platform::pathFromUtf8(path), error) || error) return false;
+        const auto samples = loadSamples(path);
+        return samples && samples->frames() > 0;
+    };
+    if (found->source.takes.empty()) {
+        if (!available(found->source.filePath))
+            return audio::Result::fail(audio::EngineError::FileNotFound, "version audio is unavailable");
+    } else {
+        for (const auto& segment : found->source.comp) {
+            const auto take = std::find_if(found->source.takes.begin(), found->source.takes.end(),
+                [&](const auto& item) { return item.id == segment.takeId; });
+            if (take == found->source.takes.end() || !available(take->filePath))
+                return audio::Result::fail(audio::EngineError::FileNotFound, "version comp audio is unavailable");
+        }
+    }
+    const ProjectModel before = m_project;
+    const auto source = found->source;
+    applyClipAudioVersion(*clip, source);
+    clip->offlineVersionId = versionId;
+    if (const auto rebuilt = rebuildGraph(); !rebuilt) {
+        m_project = before;
+        (void)rebuildGraph();
+        return rebuilt;
+    }
     updateTimelineDuration();
-    pushProjectSnapshotUndo(before, "Render Offline");
+    pushProjectSnapshotUndo(before, "Change Offline Render Version");
     return audio::Result::ok();
+}
+
+audio::Result EngineController::restoreOfflineRenderOriginal(const ClipAddress& address) {
+    if (cloudProjectBound() || m_exportInProgress)
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "offline history is unavailable");
+    auto* clip = findClip(address.trackId, address.clipId);
+    if (!clip || clip->kind != ClipKind::Audio)
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "audio clip not found");
+    if (!clip->offlineHistory.empty())
+        return selectOfflineRenderVersion(address, clip->offlineHistory.front().id);
+    if (clip->offlineProcess.empty()) return audio::Result::ok();
+    const ProjectModel before = m_project;
+    ensureOfflineHistory(*clip, offlineProcessCacheValid(address));
+    const auto result = selectOfflineRenderVersion(address, clip->offlineHistory.front().id);
+    if (!result) { m_project = before; return result; }
+    // selectOfflineRenderVersion's undo retains the migrated history, which
+    // preserves both the original and the previous rendered audio.
+    return result;
 }
 
 } // namespace daw

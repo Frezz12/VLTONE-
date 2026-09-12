@@ -74,6 +74,10 @@ if(APPLE OR WIN32)
 endif()
 
 add_executable(controller_test controller_test.cpp)
+add_executable(plugin_batch_test plugin_batch_test.cpp)
+target_link_libraries(plugin_batch_test PRIVATE daw_controller)
+add_test(NAME plugin_batch_test COMMAND plugin_batch_test)
+set_tests_properties(plugin_batch_test PROPERTIES TIMEOUT 90)
 target_link_libraries(controller_test PRIVATE daw_controller)
 
 add_test(NAME controller_test COMMAND controller_test)
@@ -149,7 +153,7 @@ set_tests_properties(render_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 
 # Destructive-looking but non-destructive clip processing: atomic bounce,
-# direct-offline caches, invalidation, missing plugins, undo and v8 persistence.
+# offline-render layers/history, missing plugins, undo and portable persistence.
 add_executable(processing_render_test processing_render_test.cpp)
 target_link_libraries(processing_render_test PRIVATE daw_controller)
 

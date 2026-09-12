@@ -419,9 +419,10 @@ bool VstInstance::openEditor(void* parentHandle, PluginEditorHost* host) {
 
 void VstInstance::closeEditor() {
     if (!m_effect || !m_editorOpen) return;
-    m_effect->dispatcher(m_effect, effEditClose, 0, 0, nullptr, 0.0f);
     m_editorOpen = false;
     m_editorHost = nullptr;
+    // Vendor teardown can call back into the host or re-enter closeEditor.
+    m_effect->dispatcher(m_effect, effEditClose, 0, 0, nullptr, 0.0f);
 }
 
 bool VstInstance::editorSize(std::uint32_t& width,

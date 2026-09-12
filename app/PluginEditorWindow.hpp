@@ -67,6 +67,7 @@ public:
     void prepareNativeHostHierarchy();
     void initializeEditor();
     bool isEditorInitialized() const { return m_editorReady; }
+    bool isClosing() const { return m_closing; }
 
     /// Let go of the plugin's view *now*, because the plugin itself is about to
     /// be destroyed — a Replace, a Remove, an undo, a project being closed.
@@ -230,6 +231,7 @@ private:
     /// for, so retain the request until the host frame applies it.
     QSize m_fallbackContentSize;
     bool m_editorInitialized = false;
+    bool m_closing = false;
     /// `initializeEditor()` means loading has been requested; readiness means
     /// the vendor view (or a usable generic fallback) is actually on screen.
     bool m_editorReady = false;

@@ -6918,6 +6918,21 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
         offline->setToolTip(!m_localProcessingEnabled
                                 ? tr("Local-only in v1")
                                 : tr("Available for audio clips only"));
+        QAction* restoreOffline = nullptr;
+        QAction* sharedPlugins = nullptr;
+        if (m_selection.size() > 1 && isClipSelected(hit.clipId) && offlineEligible) {
+            std::vector<daw::EngineController::PluginBatchTarget> targets;
+            for (const auto& selected : m_selection)
+                targets.push_back({selected.trackId.toStdString(), selected.clipId.toStdString()});
+            sharedPlugins = menu.addAction(tr("Shared Plugins…"));
+            sharedPlugins->setEnabled(m_localProcessingEnabled && m_controller->validatePluginBatch(targets, 1).isOk());
+        }
+        if (clip && clip->kind == daw::ClipKind::Audio &&
+            (!clip->offlineHistory.empty() || !clip->offlineProcess.empty())) {
+            restoreOffline = menu.addAction(tr("Restore Original Audio"));
+            restoreOffline->setEnabled(m_localProcessingEnabled);
+            restoreOffline->setToolTip(tr("Return this clip to its first version before Offline Render"));
+        }
         menu.addSeparator();
         QAction* repeat = menu.addAction(tr("Repeat Clip"));
         QAction* muteClip = menu.addAction(
@@ -6943,6 +6958,16 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
                 emit bounceInPlaceRequested();
             else
                 emit offlineRenderRequested();
+        } else if (sharedPlugins && chosen == sharedPlugins) {
+            emit sharedPluginsRequested();
+        } else if (restoreOffline && chosen == restoreOffline) {
+            const auto result = m_controller->restoreOfflineRenderOriginal({trackId, clipId});
+            if (!result)
+                QMessageBox::warning(this, tr("Offline render history"), QString::fromStdString(result.message()));
+            else {
+                emit projectEdited();
+                update();
+            }
         } else if (chosen == gainFade && gainFade) {
             m_controller->setClipFadeMode(trackId, clipId,
                                           menuFade == Fade::In,

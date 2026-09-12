@@ -80,7 +80,7 @@ int main(int argc, char **argv) {
         screenshotDir = QString::fromLocal8Bit(argv[2]);
         QDir().mkpath(screenshotDir);
     }
-    for (int k = 0; k < 4; ++k) {
+    for (int k = 0; k < kindCount; ++k) {
         const auto kind = Kind(k);
         const auto &desc = descriptorFor(kind);
         std::printf("\n%s\n", desc.name.c_str());
@@ -132,6 +132,33 @@ int main(int argc, char **argv) {
             QString::fromStdString("ModulationValue_" + table[0].id));
         numeric->setValue(37);
         events();
+        if (kind == Kind::DoublerPro) {
+            auto *delay = panel->findChild<QDoubleSpinBox *>("ModulationValue_delay");
+            auto *detune = panel->findChild<QDoubleSpinBox *>("ModulationValue_detune");
+            auto *body = panel->findChild<QDoubleSpinBox *>("ModulationValue_body");
+            check(delay && detune && body && panel->findChildren<ui::Knob *>().size() == 6,
+                  "Pro exposes six knobs with independent Delay, Detune and Body controls");
+            if (delay && detune && body) {
+                delay->setValue(73);
+                detune->setValue(9.5);
+                body->setValue(61);
+                events();
+                check(std::abs(controller.insertParameter(track, insert, "delay") - .73) < 1.e-6 &&
+                          std::abs(controller.insertParameter(track, insert, "detune") - 9.5) < 1.e-6 &&
+                          std::abs(controller.insertParameter(track, insert, "body") - .61) < 1.e-6,
+                      "Pro numerical entry preserves cents and percentage units");
+                QStringList routed;
+                const auto connection = QObject::connect(panel.get(), &ModulationPanel::automationRequested,
+                                                          [&](const QString &id) { routed.append(id); });
+                for (const auto *id : {"delay", "detune", "body"}) {
+                    auto *control = panel->findChild<ui::Knob *>(QString("ModulationKnob_%1").arg(id));
+                    if (control) QMetaObject::invokeMethod(control, "automateRequested", Qt::DirectConnection);
+                }
+                QObject::disconnect(connection);
+                check(routed == QStringList{"delay", "detune", "body"},
+                      "each new Pro knob routes its own automation parameter ID");
+            }
+        }
         check(std::abs(controller.insertParameter(track, insert, table[0].id) - .37) < 1.e-6,
               "numeric input uses percentage units");
         chooseMenu(preset, QString::fromUtf8("Save preset…"), QStringLiteral("My soft preset"));
@@ -172,8 +199,11 @@ int main(int argc, char **argv) {
         restored.initialize(48000, 257, false);
         check(bool(restored.openProject(package)), "project reopens with built-in modulation");
         auto *recalled = dynamic_cast<ModulationInstance *>(restored.insertInstance(track, insert));
-        check(recalled && recalled->presetReference() == chosen &&
-                  std::abs(restored.insertParameter(track, insert, table[0].id) - .37) < 1.e-6,
+        bool restoredValues = recalled && recalled->presetReference() == chosen;
+        for (const auto &parameter : table)
+            restoredValues &= std::abs(restored.insertParameter(track, insert, parameter.id) -
+                                        controller.insertParameter(track, insert, parameter.id)) < 1.e-6;
+        check(restoredValues,
               "parameters and preset reference survive project round trip");
         chooseMenu(preset, QString::fromUtf8("Delete preset…"));
         check(std::abs(controller.insertParameter(track, insert, table[0].id) - .37) < 1.e-6,

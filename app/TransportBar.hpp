@@ -32,6 +32,7 @@ public:
     void refreshPosition();
     /// Re-read tempo after a project load / undo.
     void syncTempo();
+    static bool checkTempoInteractionForTest();
     /// Re-open the local header image/GIF/video selected in Themes settings.
     void reloadBackgroundSettings();
     /// Apply the saved top readout style immediately.

@@ -35,6 +35,7 @@
 #include <QToolButton>
 #include <QToolTip>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -114,6 +115,47 @@ QString payloadOf(const QMimeData* mime, const char* type) {
     return QString::fromUtf8(mime->data(key));
 }
 
+// QDrag owns the native gesture and can consume its release. A MouseMove with
+// LeftButton is therefore insufficient to start another drag, especially when
+// a drop rebuilt the row beneath the pointer. Consume each press exactly once.
+class SlotDragGesture {
+public:
+    bool update(QEvent* event) {
+        switch (event->type()) {
+        case QEvent::MouseButtonPress: {
+            auto* mouse = static_cast<QMouseEvent*>(event);
+            m_armed = !m_active && mouse->button() == Qt::LeftButton;
+            m_press = mouse->pos();
+            break;
+        }
+        case QEvent::MouseMove: {
+            auto* mouse = static_cast<QMouseEvent*>(event);
+            if (!(mouse->buttons() & Qt::LeftButton)) m_armed = false;
+            if (!m_armed || m_active ||
+                (mouse->pos() - m_press).manhattanLength() < QApplication::startDragDistance())
+                break;
+            m_armed = false;
+            m_active = true;
+            return true;
+        }
+        case QEvent::MouseButtonRelease:
+        case QEvent::UngrabMouse:
+        case QEvent::Hide:
+        case QEvent::WindowDeactivate:
+            m_armed = false;
+            break;
+        default: break;
+        }
+        return false;
+    }
+    QPoint pressPosition() const { return m_press; }
+    void finish() { m_active = false; m_armed = false; }
+private:
+    QPoint m_press;
+    bool m_armed = false;
+    bool m_active = false;
+};
+
 /// A section title you can pick up. Dragging "AUDIO FX" or "SENDS" onto another
 /// strip takes what is under that title with it — the whole point being that
 /// the thing you grab is the thing that moves.
@@ -127,30 +169,27 @@ public:
     }
 
 protected:
-    void mousePressEvent(QMouseEvent* ev) override {
-        if (ev->button() == Qt::LeftButton) m_press = ev->pos();
-        QLabel::mousePressEvent(ev);
-    }
-    void mouseMoveEvent(QMouseEvent* ev) override {
-        if (!(ev->buttons() & Qt::LeftButton) || m_payload.isEmpty()) return;
-        if ((ev->pos() - m_press).manhattanLength() <
-            QApplication::startDragDistance())
-            return;
+    bool event(QEvent* ev) override {
+        if (m_payload.isEmpty() || !m_dragGesture.update(ev)) return QLabel::event(ev);
+        const QPointer<DragTitle> guard(this);
+        const auto finished = m_dragFinished;
         auto* drag = new QDrag(this);
         drag->setMimeData(dragPayload(m_mime, m_payload));
         // A successful drop rebuilds the strip. Announce it only after exec()
         // returns so the drag source cannot be deleted from its own event stack.
-        if (drag->exec(Qt::MoveAction | Qt::CopyAction, Qt::MoveAction) !=
-                Qt::IgnoreAction &&
-            m_dragFinished)
-            m_dragFinished();
+        const auto action = drag->exec(Qt::MoveAction | Qt::CopyAction, Qt::MoveAction);
+        if (guard) {
+            m_dragGesture.finish();
+            if (action != Qt::IgnoreAction && finished) finished();
+        }
+        return true;
     }
 
 private:
     const char* m_mime;
     QString m_payload;
     std::function<void()> m_dragFinished;
-    QPoint m_press;
+    SlotDragGesture m_dragGesture;
 };
 
 /// One slot row: the name button, plus the actions that show only while the
@@ -245,16 +284,9 @@ protected:
         // The name button fills the row, so a drag has to start from *its*
         // events; the row itself never sees them.
         if (watched == m_slot && !m_dragPayload.isEmpty()) {
-            if (ev->type() == QEvent::MouseButtonPress) {
-                m_press = static_cast<QMouseEvent*>(ev)->pos();
-            } else if (ev->type() == QEvent::MouseMove) {
-                auto* me = static_cast<QMouseEvent*>(ev);
-                if ((me->buttons() & Qt::LeftButton) &&
-                    (me->pos() - m_press).manhattanLength() >=
-                        QApplication::startDragDistance()) {
-                    startDrag();
-                    return true;    // this move belongs to the drag, not the button
-                }
+            if (m_dragGesture.update(ev)) {
+                startDrag();
+                return true;    // this move belongs to the drag, not the button
             }
         }
         return false;   // never consume; the child still gets its event
@@ -298,16 +330,19 @@ private:
         // The button keeps the mouse grab through the drag and would otherwise
         // come back pressed — and fire a click nobody asked for.
         m_slot->setDown(false);
+        const QPointer<SlotRow> guard(this);
+        const auto finished = m_dragFinished;
         auto* drag = new QDrag(this);
         drag->setMimeData(dragPayload(m_dragMime, m_dragPayload));
         drag->setPixmap(grab());
-        drag->setHotSpot(m_press);
+        drag->setHotSpot(m_dragGesture.pressPosition());
         // The target mutates the model; the source safely requests the shared
         // rebuild once Qt has finished dispatching the drag.
-        if (drag->exec(Qt::MoveAction | Qt::CopyAction, Qt::MoveAction) !=
-                Qt::IgnoreAction &&
-            m_dragFinished)
-            m_dragFinished();
+        const auto action = drag->exec(Qt::MoveAction | Qt::CopyAction, Qt::MoveAction);
+        if (guard) {
+            m_dragGesture.finish();
+            if (action != Qt::IgnoreAction && finished) finished();
+        }
     }
 
     void refreshHover() {
@@ -422,7 +457,7 @@ private:
     const char* m_dragMime = nullptr;
     QString m_dragPayload;
     std::function<void()> m_dragFinished;
-    QPoint m_press;
+    SlotDragGesture m_dragGesture;
     /// Drop target: what it takes, and what to do with it.
     const char* m_dropMime = nullptr;
     std::function<void(const QString&, Qt::KeyboardModifiers)> m_onDrop;
@@ -433,6 +468,121 @@ private:
 };
 
 } // namespace
+
+bool ChannelStrip::checkDragLifecycleForTest() {
+    // The offscreen platform cancels QDrag::exec immediately. That lets us
+    // deliver the trailing moves of a cancelled/missed-release native drag
+    // deterministically, including moves to a freshly rebuilt row.
+    bool ok = true;
+    const auto check = [&](bool passed, const char* label) {
+        std::fprintf(stderr, "%s drag: %s\n", passed ? "PASS" : "FAIL", label);
+        ok &= passed;
+    };
+    QWidget host;
+    auto* button = new QToolButton(&host);
+    SlotRow row(button, &host);
+    row.setDragPayload(kInsertMime, QStringLiteral("channel\tslot"), {});
+    DragTitle title(QStringLiteral("Audio FX"), kInsertMime,
+                    QStringLiteral("channel\tslot"), {}, &host);
+    for (const auto source : {std::pair<QWidget*, QWidget*>{button, &row},
+                              std::pair<QWidget*, QWidget*>{&title, &title}}) {
+        auto send = [&](QEvent::Type type, QPoint position, Qt::MouseButton changed,
+                        Qt::MouseButtons buttons) {
+            QMouseEvent event(type, position, position, changed, buttons, Qt::NoModifier);
+            QApplication::sendEvent(source.first, &event);
+        };
+        const QPoint press(3, 3), moved(3, 3 + QApplication::startDragDistance() + 10);
+        const auto count = [&] { return source.second->findChildren<QDrag*>().size(); };
+        send(QEvent::MouseMove, moved, Qt::NoButton, Qt::LeftButton);
+        check(count() == 0, "a row without a press cannot start a drag");
+        send(QEvent::MouseButtonPress, press, Qt::RightButton, Qt::RightButton);
+        send(QEvent::MouseMove, moved, Qt::NoButton, Qt::LeftButton);
+        check(count() == 0, "a secondary press cannot arm an insert drag");
+        const auto before = count();
+        send(QEvent::MouseButtonPress, press, Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseMove, press + QPoint(0, 1), Qt::NoButton, Qt::LeftButton);
+        check(count() == before, "small motion preserves an ordinary click");
+        send(QEvent::MouseMove, moved, Qt::NoButton, Qt::LeftButton);
+        check(count() == before + 1, "one deliberate gesture starts one drag");
+        for (int i = 0; i < 20; ++i)
+            send(QEvent::MouseMove, moved + QPoint(i, i), Qt::NoButton, Qt::LeftButton);
+        check(count() == before + 1, "trailing pressed moves cannot restart the completed drag");
+        send(QEvent::MouseButtonPress, press, Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, press, Qt::LeftButton, Qt::NoButton);
+        send(QEvent::MouseMove, moved, Qt::NoButton, Qt::LeftButton);
+        check(count() == before + 1, "a release disarms dragging");
+        send(QEvent::MouseButtonPress, press, Qt::LeftButton, Qt::LeftButton);
+        QEvent ungrab(QEvent::UngrabMouse);
+        QApplication::sendEvent(source.first, &ungrab);
+        send(QEvent::MouseMove, moved, Qt::NoButton, Qt::LeftButton);
+        check(count() == before + 1, "losing capture disarms dragging");
+        send(QEvent::MouseButtonPress, press, Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseMove, moved, Qt::NoButton, Qt::LeftButton);
+        check(count() == before + 2, "a new press can start the next drag");
+    }
+    return ok;
+}
+
+bool ChannelStrip::checkFaderInputForTest() {
+    daw::EngineController controller;
+    if (!controller.initialize(48000, 256, false)) return false;
+    const auto trackId = controller.addTrack(daw::TrackKind::Audio, "Fader input");
+    bool ok = true;
+    const auto check = [&](bool passed, const char* label) {
+        std::fprintf(stderr, "%s fader: %s\n", passed ? "PASS" : "FAIL", label);
+        ok &= passed;
+    };
+    for (const bool master : {false, true}) {
+        ChannelStrip strip(&controller, master ? QString{} : QString::fromStdString(trackId), master);
+        auto* fader = strip.m_fader;
+        fader->resize(40, 160);
+        const auto volume = [&] {
+            return master ? controller.masterVolume() : controller.project().findTrack(trackId)->volume;
+        };
+        const auto initial = volume();
+        const auto depth = controller.undoDepth();
+        int changes = 0, finishes = 0;
+        QObject::connect(fader, &ui::FaderWidget::gainChanged, &strip, [&](double) { ++changes; });
+        QObject::connect(fader, &ui::FaderWidget::editFinished, &strip, [&] { ++finishes; });
+        const QPointF point(20, 80);
+        for (const bool pixels : {false, true}) {
+            for (const auto modifiers : {Qt::NoModifier, Qt::ShiftModifier}) {
+                for (const int direction : {-1, 1}) {
+                    QWheelEvent wheel(point, fader->mapToGlobal(point),
+                        pixels ? QPoint(0, direction * 60) : QPoint{},
+                        pixels ? QPoint{} : QPoint(0, direction * 120),
+                        Qt::NoButton, modifiers, Qt::ScrollUpdate, false);
+                    QApplication::sendEvent(fader, &wheel);
+                    check(!wheel.isAccepted(), "wheel input remains available to the scroll area");
+                }
+            }
+        }
+        QWheelEvent end(point, fader->mapToGlobal(point), {}, {},
+                        Qt::NoButton, Qt::NoModifier, Qt::ScrollEnd, false);
+        QApplication::sendEvent(fader, &end);
+        check(volume() == initial && fader->gain() == initial &&
+              changes == 0 && finishes == 0 && !fader->isEditing() &&
+              controller.undoDepth() == depth,
+              master ? "scrolling preserves master volume and Undo" : "scrolling preserves track volume and Undo");
+        const auto sendMouse = [&](QEvent::Type type, QPointF position) {
+            QMouseEvent event(type, position, fader->mapToGlobal(position),
+                type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+                Qt::NoModifier);
+            QApplication::sendEvent(fader, &event);
+        };
+        sendMouse(QEvent::MouseButtonPress, point);
+        sendMouse(QEvent::MouseMove, point - QPointF(0, 20));
+        sendMouse(QEvent::MouseButtonRelease, point - QPointF(0, 20));
+        check(volume() > initial && changes == 1 && finishes == 1 &&
+              controller.undoDepth() == depth + 1,
+              master ? "manual master drag creates one edit" : "manual track drag creates one edit");
+        controller.undo();
+        strip.syncFromModel();
+        check(volume() == initial && fader->gain() == initial, "Undo restores the manually edited gain");
+    }
+    return ok;
+}
 
 /// One I/O plate: a recessed field with a micro-caption on the left, the
 /// destination named across the middle and a caret at the right.
@@ -1794,6 +1944,7 @@ QWidget* ChannelStrip::buildFaderRow() {
     m_meter->setMinimumHeight(60);
     m_meter->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
     m_fader = new ui::FaderWidget(box);
+    m_fader->setWheelEnabled(false);
     m_fader->setMinimumHeight(60);
     // The dB scale is printed down the fader's left, with the meter on its
     // right — the reading order of every console: numbers, cap, level.

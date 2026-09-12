@@ -57,6 +57,8 @@ public:
     /// What the strip's fader is *showing*, for the headless check that a level
     /// changed elsewhere reaches it.
     double faderGainForTest() const;
+    static bool checkDragLifecycleForTest();
+    static bool checkFaderInputForTest();
     /// Re-read volume/pan/flags from the document (after undo, load, …).
     void syncFromModel();
     bool hasActiveGesture() const;

@@ -664,6 +664,27 @@ public:
     audio::Result createTracks(const TrackCreationRequest& request,
                                std::vector<std::string>& createdIds);
 
+    /// Empty clipId addresses track inserts; otherwise audio-clip FX. A batch
+    /// may contain only one of these target kinds. Existing inserts are kept.
+    struct PluginBatchTarget {
+        std::string trackId;
+        std::string clipId;
+    };
+    audio::Result validatePluginBatch(const std::vector<PluginBatchTarget>& targets,
+                                     std::size_t addedSlots = 0) const;
+    audio::Result appendPluginBatch(const std::vector<PluginBatchTarget>& targets,
+                                   const ChannelSnapshot& chain,
+                                   std::vector<std::vector<std::string>>& addedIds);
+    audio::Result capturePluginBatchChain(const PluginBatchTarget& target,
+                                         const std::vector<std::string>& slotIds,
+                                         ChannelSnapshot& chain);
+    /// An isolated project/engine copy for listening while editing. It never
+    /// opens another device or changes the original project's document/undo.
+    audio::Result createPluginBatchDraft(const PluginBatchTarget& source,
+                                        std::shared_ptr<EngineController>& draft);
+    audio::Result startPluginAudition(std::shared_ptr<EngineController> draft);
+    void stopPluginAudition();
+
     /// Render selected arrangement material and insert the generated audio as
     /// one undoable local edit. Files are staged before the document changes.
     audio::Result bounceInPlace(
@@ -682,6 +703,10 @@ public:
     /// from the controller's content-addressed state cache.
     ChannelSnapshot offlineProcessChain(const ClipAddress& clip) const;
     bool offlineProcessCacheValid(const ClipAddress& clip) const;
+    /// Switch only offline-render audio state; arrangement and live FX remain.
+    audio::Result selectOfflineRenderVersion(const ClipAddress& clip,
+                                             const std::string& versionId);
+    audio::Result restoreOfflineRenderOriginal(const ClipAddress& clip);
     double clipPlaybackDuration(const ClipModel& clip) const;
     /// Paint/hit-test views of the last validated playback source: no file I/O.
     double clipDisplayDuration(const ClipModel& clip) const;
@@ -691,6 +716,8 @@ public:
     struct OfflineRenderReport {
         std::vector<std::string> files;
         bool cancelled = false;
+        std::size_t clipIndex = 0;
+        std::size_t clipCount = 0;
     };
     audio::Result renderClipsOffline(
         const std::vector<ClipAddress>& clips, const ChannelSnapshot& chain,
@@ -2005,6 +2032,11 @@ private:
     void applyTransportStartPolicy();
 
     engine::RealtimeEngine m_engine;
+    class PluginAuditionNode;
+    std::shared_ptr<engine::Node> m_pluginAuditionNode;
+    std::shared_ptr<EngineController> m_pluginAuditionOwner;
+    std::string m_pluginAuditionCapture;
+    bool m_externalPreviewDriven = false;
     std::unique_ptr<audio::AudioDeviceManager> m_devices;
     /// Utility recorder — owns nothing that is being captured; it exists for
     /// `writeWAVFile`, which the offline export and the comp flatten both use.

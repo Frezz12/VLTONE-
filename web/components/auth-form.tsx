@@ -28,8 +28,8 @@ export function AuthForm({ locale, mode }: { locale: string; mode: "login" | "re
     finally { setBusy(false); }
   }
   const register = mode === "register";
-  return <main className="vlt-auth-wrap"><section className="vlt-card vlt-card-pad vlt-auth-card vlt-stack">
-    <div><h1 className="vlt-title">{t(register ? "registerTitle" : "loginTitle")}</h1></div>
+  return <main id="main-content" className="vlt-auth-wrap"><section className="vlt-card vlt-card-pad vlt-auth-card vlt-stack">
+    <div><span className="section-label">VLTone</span><h1 className="vlt-title">{t(register ? "registerTitle" : "loginTitle")}</h1><p className="vlt-subtitle">{t(register ? "registerCopy" : "loginCopy")}</p></div>
     <form className="vlt-stack" onSubmit={submit}>
       <label className="vlt-label">{t("email")}<input className="vlt-input" name="email" type="email" autoComplete="email" required /></label>
       {register && <label className="vlt-label">{t("nickname")}<input className="vlt-input" name="nickname" minLength={3} maxLength={32} autoComplete="nickname" required /></label>}

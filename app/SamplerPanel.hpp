@@ -12,6 +12,7 @@
 class QComboBox;
 class QLabel;
 class QTimer;
+class QToolButton;
 class QVBoxLayout;
 
 namespace ui {
@@ -162,6 +163,7 @@ private:
     QWidget* buildToolSection();
     QWidget* buildWaveformSection();
     void rebuildFxSlots();
+    void showOfflineHistory();
     void showFxMenu(int index, const QString& replaceId = {});
     void showFxContext(const QString& insertId, int index, const QPoint& globalPos);
 
@@ -208,6 +210,7 @@ private:
     QVBoxLayout* m_fxSlotsLayout = nullptr;
     ui::PanKnob* m_fxPan = nullptr;
     ui::IconButton* m_fxBypass = nullptr;
+    QToolButton* m_offlineHistory = nullptr;
     ui::FaderWidget* m_fxVolume = nullptr;
     ui::LevelMeter* m_fxMeter = nullptr;
     QLabel* m_fxPanLabel = nullptr;

@@ -2,6 +2,7 @@
 #include "UiFrameClock.hpp"
 #include <QElapsedTimer>
 #include "MixerWidget.hpp"
+#include "graphics/GraphicsPreferences.hpp"
 #include "ChannelViewState.hpp"
 #include <QApplication>
 #include <QEvent>
@@ -84,6 +85,9 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
 
     m_scroll = new QScrollArea(body);
     m_scroll->setWidget(m_stripsHost);
+    // The viewport supplies the background. Keeping the page transparent also
+    // avoids raster backing-store blits under the retained GPU scene.
+    if (ui::graphics::gpuWorkspaceEnabled()) m_stripsHost->setAutoFillBackground(false);
     m_scroll->setWidgetResizable(true);
     m_scroll->setFrameShape(QFrame::NoFrame);
     m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -98,6 +102,7 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     // channel area, so both stay vertically in step when the pane is short.
     auto* masterScroll = new QScrollArea(body);
     masterScroll->setWidget(m_masterHost);
+    if (ui::graphics::gpuWorkspaceEnabled()) m_masterHost->setAutoFillBackground(false);
     masterScroll->setWidgetResizable(true);
     masterScroll->setFrameShape(QFrame::NoFrame);
     masterScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);

@@ -2,12 +2,12 @@ import { expect, test } from "@playwright/test";
 
 test("manual navigation, search, deep links, and locale switch", async ({ page }) => {
   await page.goto("/ru/manual");
-  await expect(page.getByRole("heading", { name: "Инструкция VLTONE" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Инструкция VLTone" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Инструкция" })).toHaveAttribute("href", "/ru/manual");
 
   await page.getByRole("link", { name: "Open in English" }).click();
   await expect(page).toHaveURL(/\/en\/manual$/);
-  await expect(page.getByRole("heading", { name: "VLTONE Manual" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "VLTone Manual" })).toBeVisible();
 
   const firstTab = page.getByRole("tab", { name: "Getting started" });
   await firstTab.focus();
@@ -31,12 +31,12 @@ test("manual navigation, search, deep links, and locale switch", async ({ page }
 test("manual screenshot opens in a native dialog and closes with Escape", async ({ page }) => {
   await page.goto("/en/manual");
   await expect(page.getByRole("tablist", { name: "Manual categories" })).toBeVisible();
-  await expect(page.getByAltText("VLTONE startup window scanning plugins")).toBeVisible();
+  await expect(page.getByAltText("VLTone startup window scanning plugins")).toBeVisible();
   await expect(page.getByText("The startup window reports the current loading stage and plugin scan progress.", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /Enlarge: VLTONE startup/ }).click();
+  await page.getByRole("button", { name: /Enlarge: VLTone startup/ }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByAltText("VLTONE startup window scanning plugins")).toBeVisible();
+  await expect(dialog.getByAltText("VLTone startup window scanning plugins")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).not.toBeVisible();
 });

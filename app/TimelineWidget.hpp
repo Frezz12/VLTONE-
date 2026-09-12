@@ -283,6 +283,7 @@ signals:
     void clipSelected(const QString& trackId, const QString& clipId);
     void bounceInPlaceRequested();
     void offlineRenderRequested();
+    void sharedPluginsRequested();
     /// The cycle region was dragged out or moved. The window persists it and
     /// keeps the transport's Cycle button in step.
     void loopRangeChanged();

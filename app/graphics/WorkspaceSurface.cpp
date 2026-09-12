@@ -2,6 +2,7 @@
 #include "SceneItem.hpp"
 #include "SceneRecorder.hpp"
 #include "ScenePaintSource.hpp"
+#include "WidgetUpdates.hpp"
 #include "QuickVisual.hpp"
 #include "GraphicsPreferences.hpp"
 #include "UiFrameClock.hpp"
@@ -414,8 +415,8 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
     if (visible.isEmpty()) return;
     wanted.insert(id);
     auto found = m_layers.find(id);
-    const bool rebuild = found == m_layers.end() || !found->second.widget || m_dirty.contains(widget) ||
-        found->second.layer->clip != QRectF(visible.translated(-origin));
+    const QRectF clip = visible.translated(-origin);
+    const bool rebuild = found == m_layers.end() || !found->second.widget || m_dirty.contains(widget);
     if (rebuild) {
         ui::perf::Scope layerCost(nativeControlAsset(widget) && !dynamic_cast<ScenePaintSource*>(widget)
             ? "gpu.scene.native.control.ms" : "gpu.scene.vector.layer.ms");
@@ -462,9 +463,15 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
         }
         layer->clipRequired = requiresLayerClip(*layer);
         m_layers[id] = {widget, layer, std::move(recording)};
-    } else if (found->second.layer->origin != origin) {
+    } else if (found->second.layer->origin != origin || found->second.layer->clip != clip) {
         auto moved = std::make_shared<SceneLayer>(*found->second.layer);
         moved->origin = origin;
+        // Recording always covers the widget's full local rect. Scrolling
+        // changes visibility, not its pixels or geometry.
+        if (moved->clip != clip) {
+            moved->clip = clip;
+            moved->clipRequired = requiresLayerClip(*moved);
+        }
         found->second.layer = std::move(moved);
     }
     snapshot->layers.push_back(m_layers[id].layer);
@@ -486,6 +493,8 @@ void WorkspaceSurface::capture() {
         if (!wanted.contains(it->first)) it = m_layers.erase(it); else ++it;
     }
     m_dirty.clear();
+    m_scrollExposure.clear();
+    m_collectedScrollUpdates = false;
     m_capturing = false;
     m_window->setProperty("vlt.sceneLayers", int(snapshot->layers.size()));
     int meshCount = 0;
@@ -593,8 +602,67 @@ void WorkspaceSurface::present(std::shared_ptr<const SceneSnapshot> snapshot) {
         it = m_visuals.erase(it);
     }
 }
+void WorkspaceSurface::updateHover(QWidget* target, const QPointF& globalPosition,
+                                   Qt::KeyboardModifiers modifiers, const QPointingDevice* device) {
+    if (m_hover == target) return;
+    // Enter/Leave alone do not repaint stylesheet hover states. Match the
+    // QWidget boundary protocol, including HoverEnter/HoverLeave and ancestors
+    // up to the common parent. Crossing a slot's action must not leave its row.
+    std::vector<QPointer<QWidget>> leaving, entering;
+    const auto path = [this](QWidget* leaf, auto& widgets) {
+        for (auto* widget = leaf; widget; widget = widget->parentWidget()) {
+            widgets.push_back(widget);
+            if (widget == m_source) break;
+        }
+    };
+    path(m_hover, leaving);
+    path(target, entering);
+    while (!leaving.empty() && !entering.empty() && leaving.back() == entering.back()) {
+        leaving.pop_back(); entering.pop_back();
+    }
+    m_hover = target;
+    if (!device) device = QPointingDevice::primaryPointingDevice();
+    for (const auto& widget : leaving) {
+        if (!widget) continue;
+        QEvent leave(QEvent::Leave);
+        QCoreApplication::sendEvent(widget, &leave);
+        if (widget && widget->testAttribute(Qt::WA_Hover)) {
+            QHoverEvent hover(QEvent::HoverLeave, QPointF(-1, -1), globalPosition,
+                              widget->mapFromGlobal(globalPosition), modifiers, device);
+            QCoreApplication::sendEvent(widget, &hover);
+        }
+        if (widget) m_dirty.insert(widget);
+    }
+    for (auto it = entering.rbegin(); it != entering.rend(); ++it) {
+        const auto& widget = *it;
+        if (!widget) continue;
+        const auto local = widget->mapFromGlobal(globalPosition);
+        QEnterEvent enter(local, widget->window()->mapFromGlobal(globalPosition), globalPosition, device);
+        QCoreApplication::sendEvent(widget, &enter);
+        if (widget && widget->testAttribute(Qt::WA_Hover)) {
+            QHoverEvent hover(QEvent::HoverEnter, local, globalPosition, QPointF(-1, -1), modifiers, device);
+            QCoreApplication::sendEvent(widget, &hover);
+        }
+        if (widget) m_dirty.insert(widget);
+    }
+    requestCapture();
+}
 bool WorkspaceSurface::forwardInput(QEvent* event) {
     if (!m_source) return false;
+    if (event->type() == QEvent::DragEnter || event->type() == QEvent::UngrabMouse ||
+        event->type() == QEvent::WindowDeactivate) {
+        // Native QDrag takes over the gesture and consumes the release. The
+        // compatibility widget must lose its implicit grab too; otherwise a
+        // queued pressed move after the drop goes back to the old insert.
+        const QPointer<QWidget> pressed = m_pressed;
+        m_pressed = nullptr;
+        m_quickGrabVisual = 0;
+        if (pressed) {
+            QEvent ungrab(QEvent::UngrabMouse);
+            QCoreApplication::sendEvent(pressed, &ungrab);
+        }
+        if (event->type() == QEvent::DragEnter) updateHover(nullptr, QCursor::pos());
+    }
     if (auto* mouse = dynamic_cast<QMouseEvent*>(event);
         mouse && startsFreshPointerRoute(mouse->type(), mouse->buttons())) {
         // Repair grabs before deciding whether an interactive Quick child owns
@@ -651,7 +719,7 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
         auto* widgetFocus = QApplication::focusWidget();
         const bool ownsFocus = owner && owner == widgetFocus;
         if (inVisual || (keyboard && ownsFocus && focus && (focus == visual.item || visual.item->isAncestorOf(focus)))) {
-            if (m_hover) { QEvent leave(QEvent::Leave); QCoreApplication::sendEvent(m_hover, &leave); m_hover = nullptr; }
+            updateHover(nullptr, QCursor::pos());
             if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick) {
                 m_quickGrabVisual = id;
                 m_container->setFocusProxy(owner);
@@ -667,9 +735,8 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
         return target && target != m_container ? target : m_source.data();
     };
     switch (event->type()) {
-    case QEvent::Leave: {
-        if (m_hover) { QEvent leave(QEvent::Leave); QCoreApplication::sendEvent(m_hover, &leave); }
-        m_hover = nullptr;
+    case QEvent::Leave: case QEvent::WindowDeactivate: {
+        updateHover(nullptr, QCursor::pos());
         return false;
     }
     case QEvent::MouseButtonPress: case QEvent::MouseButtonDblClick:
@@ -677,13 +744,7 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
         auto* mouse = static_cast<QMouseEvent*>(event);
         QPointer<QWidget> target = pointerTarget(m_pressed, mouse->type(), mouse->buttons(),
                                                  targetAt(mouse->position()));
-        if (!m_pressed && m_hover != target) {
-            if (m_hover) { QEvent leave(QEvent::Leave); QCoreApplication::sendEvent(m_hover, &leave); }
-            m_hover = target;
-            QEnterEvent enter(target->mapFrom(m_source, mouse->position()),
-                target->window()->mapFromGlobal(mouse->globalPosition()), mouse->globalPosition(), mouse->pointingDevice());
-            QCoreApplication::sendEvent(target, &enter);
-        }
+        if (!m_pressed) updateHover(target, mouse->globalPosition(), mouse->modifiers(), mouse->pointingDevice());
         if (!target) return true;
         if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick) {
             m_pressed = target;
@@ -721,13 +782,20 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
         }
         m_lastHoverPosition = mouse->position();
         if (target) m_window->setCursor(target->cursor());
-        if (event->type() == QEvent::MouseButtonRelease && mouse->buttons() == Qt::NoButton) m_pressed = nullptr;
+        if (event->type() == QEvent::MouseButtonRelease && mouse->buttons() == Qt::NoButton) {
+            m_pressed = nullptr;
+            updateHover(m_source->rect().contains(mouse->position().toPoint()) ? targetAt(mouse->position()) : nullptr,
+                        mouse->globalPosition(), mouse->modifiers(), mouse->pointingDevice());
+        }
         return true;
     }
     case QEvent::Wheel: {
         auto* wheel = static_cast<QWheelEvent*>(event);
         auto* target = targetAt(wheel->position());
         event->setAccepted(routeWheelThroughWidgets(m_source, target, wheel));
+        // The content can move under a stationary pointer during scrolling.
+        if (!m_pressed) updateHover(targetAt(wheel->position()), wheel->globalPosition(),
+                                   wheel->modifiers(), wheel->pointingDevice());
         return true;
     }
     case QEvent::ContextMenu: {
@@ -827,6 +895,8 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
 }
 bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
     if (m_stopping || m_capturing || !m_source) return false;
+    if (event->type() == QEvent::UpdateRequest && object == m_source->window() && !m_scrollExposure.isEmpty())
+        m_collectedScrollUpdates = collectWidgetUpdates(m_source, m_dirty);
     if ((object == m_window || object == m_source) && event->type() == QEvent::DevicePixelRatioChange)
         invalidate();
     if (object == m_window || object == m_container) return forwardInput(event);
@@ -846,11 +916,27 @@ bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
         GraphicsPreferences::instance().reportFrame(inactive);
     }
     if (event->type() == QEvent::Paint) {
-        m_dirty.insert(widget);
+        bool exposureOnly = false;
+        if (m_collectedScrollUpdates) {
+            for (const auto& page : m_scrollExposure)
+                if (page && (widget == page || page->isAncestorOf(widget))) { exposureOnly = true; break; }
+        }
+        if (!exposureOnly) m_dirty.insert(widget);
         requestCapture();
         return true; // vector recording occurs outside QWidget's active paint stack
     }
-    if (event->type() == QEvent::Destroy) { m_dirty.remove(widget); m_layers.erase(reinterpret_cast<quintptr>(widget)); }
+    if (event->type() == QEvent::Destroy) {
+        m_dirty.remove(widget); m_scrollExposure.removeAll(widget);
+        m_layers.erase(reinterpret_cast<quintptr>(widget));
+    }
+    if (event->type() == QEvent::Move) {
+        auto* viewport = widget->parentWidget();
+        auto* scroll = viewport ? qobject_cast<QScrollArea*>(viewport->parentWidget()) : nullptr;
+        if (scroll && scroll->widget() == widget) {
+            if (!m_scrollExposure.contains(widget)) m_scrollExposure.append(widget);
+            m_collectedScrollUpdates = false;
+        }
+    }
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange) {
         const auto found = m_layers.find(reinterpret_cast<quintptr>(widget));
         if (found != m_layers.end() && found->second.recording) found->second.recording->sections.clear();

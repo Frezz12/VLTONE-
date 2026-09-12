@@ -1,25 +1,116 @@
 {
   "Home": {
-    "kicker": "DEMO • EARLY ACCESS",
-    "title": "Music under complete control.",
-    "copy": "VLTONE brings recording, arranging, plugins, and an AI assistant into one fast workspace. Create an account and join the Demo.",
-    "create": "Create account",
-    "login": "Sign in",
-    "factTokens": "AI tokens every month",
-    "factAccess": "Indefinite Demo access",
-    "factRecovery": "Automatic project recovery",
-    "featuresTitle": "Built for creative momentum.",
-    "featuresCopy": "Fewer windows and less technical busywork — more attention for the music, the project, and the next great take.",
-    "featureDawTitle": "Complete DAW",
-    "featureDawCopy": "Audio and MIDI, mixing, automation, plugins, and export stay together in one uninterrupted project workflow.",
-    "featureAiTitle": "AI inside the session",
-    "featureAiCopy": "The assistant uses the same safe commands as the interface. Every change remains undoable.",
-    "featureRecoveryTitle": "Your work stays safe",
-    "featureRecoveryCopy": "The project journal saves changes in the background and restores the session after an unexpected exit.",
-    "featureControlTitle": "Data under control",
-    "featureControlCopy": "Your account shows active devices and AI usage, with one-click access revocation when you need it.",
-    "ctaTitle": "Your next track starts here.",
-    "footer": "Windows + macOS / Account platform"
+    "metaTitle": "VLTone — Music creation software · Open beta",
+    "metaDescription": "VLTone is a digital audio workstation for Windows and macOS. Record audio, write MIDI, arrange, mix, use plugins and an AI assistant. Join the open beta.",
+    "betaTag": "Open beta",
+    "announcement": "Your next track starts here",
+    "kicker": "Music creation software",
+    "title": "Listen. Create. Feel.",
+    "copy": "From a first idea to a finished track. Recording, arranging, mixing, and an AI assistant — in one space for your music.",
+    "create": "Join the beta",
+    "discover": "Discover VLTone",
+    "heroCaption": "Less between you and your music.",
+    "overviewLabel": "Overview",
+    "overviewTitle": "Everything an idea\nneeds to become music.",
+    "overviewCopy": "VLTone is a digital audio workstation (DAW) for Windows and macOS. Record vocals and instruments, arrange audio and MIDI, shape your sound in the mixer, and export your music.",
+    "audienceCopy": "For musicians, beatmakers, producers, and anyone ready to bring a musical idea to life. From a home demo to a multitrack production, the whole process lives in one application.",
+    "manual": "Explore the guide",
+    "featuresLabel": "Capabilities",
+    "featuresTitle": "From the first take to the final mix.",
+    "featuresCopy": "Tools that follow your workflow and leave room for creativity.",
+    "features": {
+      "recording": {
+        "title": "Capture the moment.",
+        "copy": "Record vocals and live instruments. Work with takes, edit audio clips, and find the right sound in your arrangement.",
+        "tag": "Audio",
+        "anchor": "recording"
+      },
+      "midi": {
+        "title": "Give your idea a shape.",
+        "copy": "Write melodies in the piano roll, program rhythms, and play with a MIDI keyboard. Build parts with the sampler and your instruments.",
+        "tag": "MIDI",
+        "anchor": "piano-roll"
+      },
+      "mixing": {
+        "title": "Hear every detail.",
+        "copy": "Adjust levels, pan, and effects in the mixer. Automate parameters, then export your finished mix or individual tracks.",
+        "tag": "Mixing",
+        "anchor": "mixer"
+      },
+      "plugins": {
+        "title": "Your sound. Your tools.",
+        "copy": "Bring your favourite VST, VST3, and CLAP plugins, plus Audio Units on macOS. Use built-in effects and your own sample library.",
+        "tag": "Plugins",
+        "anchor": "plugin-manager"
+      },
+      "ai": {
+        "title": "Describe it. Try it.",
+        "copy": "Ask the AI assistant to create tracks, write a MIDI part, or adjust effects. Changes stay in your project and can be undone.",
+        "tag": "AI assistant",
+        "anchor": "ai-assistant"
+      },
+      "recovery": {
+        "title": "Return to your idea.",
+        "copy": "A background change journal helps recover your project after an unexpected exit. Save your projects and pick up where you left off.",
+        "tag": "Recovery",
+        "anchor": "recovery"
+      }
+    },
+    "betaLabel": "Get started",
+    "betaTitle": "An open beta.\nAn open invitation.",
+    "betaCopy": "VLTone is ready to try. No invitation or application required — just an account. Three simple steps to your first project.",
+    "steps": {
+      "register": {
+        "title": "Create an account.",
+        "copy": "Register on the website with your email, nickname, and password. You will use the same account to sign in to VLTone.",
+        "link": "Register"
+      },
+      "download": {
+        "title": "Download the app.",
+        "copy": "Open downloads, choose the latest version and the file for your system. Download the installer and install VLTone.",
+        "link": "Go to downloads"
+      },
+      "signin": {
+        "title": "Sign in. Start creating.",
+        "copy": "Launch VLTone and sign in with the email and password you used on the website. You are ready to open your first project.",
+        "link": "First launch guide"
+      }
+    },
+    "betaNote": "This is a beta: we are developing the app and fixing issues. Your reports help make VLTone better.",
+    "reportBug": "Report a bug",
+    "faqLabel": "Good to know",
+    "faqTitle": "Before you begin.",
+    "faq": {
+      "what": {
+        "question": "What is VLTone?",
+        "answer": "VLTone is music creation software for your computer, also called a DAW. It brings together audio recording, MIDI editing, arranging, mixing, effects, and export. An AI assistant helps you take actions directly in your project."
+      },
+      "who": {
+        "question": "Who is it for?",
+        "answer": "Musicians, vocalists, beatmakers, and producers. Use VLTone to record vocals, build a beat, write an instrumental piece, or mix a multitrack project. The guide walks you through the essentials."
+      },
+      "beta": {
+        "question": "How do I join the open beta?",
+        "answer": "Register on the website, download an installer, install the application, and sign in with the same account. There is no additional application or invitation."
+      },
+      "start": {
+        "question": "Do I need a separate account for the app?",
+        "answer": "No. Sign in to VLTone with the same email and password you registered on the website. Your account page shows connected devices and your available AI quota."
+      },
+      "platforms": {
+        "question": "Which systems does VLTone support?",
+        "answer": "The main platforms are Windows and macOS. Each release page lists its available installers. Choose the file for your operating system and follow the instructions shown when downloading."
+      },
+      "feedback": {
+        "question": "Where can I report an issue?",
+        "answer": "Open Report a bug on the website and sign in. Describe what happened and how to reproduce it. Add screenshots if they help explain the issue."
+      }
+    },
+    "ctaLabel": "Take the first step",
+    "ctaTitle": "Your music starts with you.",
+    "download": "Download VLTone",
+    "productAlt": "VLTone workspace with audio tracks, arrangement, and mixer",
+    "productCaption": "VLTone / The workspace"
   },
   "Auth": {
     "email": "Email",
@@ -34,7 +125,9 @@
     "noAccount": "No account yet?",
     "hasAccount": "Already registered?",
     "consent": "I accept the privacy policy and indefinite diagnostic-data retention, version {version}.",
-    "working": "Please wait…"
+    "working": "Please wait…",
+    "registerCopy": "Create your open beta account. Then download VLTone and sign in to the app with the same email and password.",
+    "loginCopy": "Sign in to your VLTone account. Use the same email and password in the app."
   },
   "Account": {
     "title": "Your account",
@@ -64,10 +157,10 @@
     "invalidAttachment": "Only JPEG, PNG, and WebP images up to 10 MB each are allowed."
   },
   "Manual": {
-    "metaTitle": "Manual — VLTONE",
-    "metaDescription": "Complete guide to recording, arranging, MIDI, plugins, automation, AI, and export in VLTONE.",
-    "eyebrow": "Documentation / Demo",
-    "title": "VLTONE Manual",
+    "metaTitle": "Manual — VLTone",
+    "metaDescription": "Complete guide to recording, arranging, MIDI, plugins, automation, AI, and export in VLTone.",
+    "eyebrow": "Documentation / Open beta",
+    "title": "VLTone Manual",
     "intro": "From first launch to a finished master: every workspace, real production workflows, and fixes for common problems in one guide.",
     "searchLabel": "Search the manual",
     "searchPlaceholder": "Try recording, piano roll, plugins…",
@@ -95,10 +188,10 @@
           {
             "id": "first-launch",
             "title": "First launch",
-            "intro": "VLTONE verifies your account, audio system, and available plugins before opening the main workspace.",
+            "intro": "VLTone verifies your account, audio system, and available plugins before opening the main workspace.",
             "preparation": "Connect your audio interface before launch and make sure the internet is available for Demo entitlement verification.",
             "steps": [
-              "Sign in to your VLTONE account if the saved session cannot be restored.",
+              "Sign in to your VLTone account if the saved session cannot be restored.",
               "Wait for safe plugin scanning; the current file and total progress appear in the startup window.",
               "Open an empty project or a previously saved session.",
               "Open Settings → Audio and verify the device, sample rate, and buffer size."
@@ -116,7 +209,7 @@
             "figures": [
               {
                 "slug": "startup",
-                "alt": "VLTONE startup window scanning plugins",
+                "alt": "VLTone startup window scanning plugins",
                 "caption": "The startup window reports the current loading stage and plugin scan progress.",
                 "ratio": "4 / 3"
               }
@@ -708,7 +801,7 @@
             "figures": [
               {
                 "slug": "mixer",
-                "alt": "VLTONE Mixer with plugins and level meters",
+                "alt": "VLTone Mixer with plugins and level meters",
                 "caption": "Each strip combines plugins, sends, pan, fader, and track states."
               }
             ]
@@ -772,10 +865,10 @@
           },
           {
             "id": "vlt-equalizer",
-            "title": "VLTONE Equalizer",
-            "intro": "VLTONE Equalizer is the built-in 24-band parametric and dynamic EQ for corrective, creative, and mastering work, with Zero Latency, Analog Phase, and Linear Phase processing.",
+            "title": "VLTone Equalizer",
+            "intro": "VLTone Equalizer is the built-in 24-band parametric and dynamic EQ for corrective, creative, and mastering work, with Zero Latency, Analog Phase, and Linear Phase processing.",
             "steps": [
-              "Add VLTONE Equalizer to an audio insert and open its editor.",
+              "Add VLTone Equalizer to an audio insert and open its editor.",
               "Double-click the logarithmic graph to create a band. Drag to change frequency and gain, use the mouse wheel for Q, or enter values in the selected-band controls.",
               "Choose the filter type, slope, and Stereo, Left, Right, Mid, or Side placement. Ctrl/Cmd-click selects several bands for grouped movement.",
               "For Bell, Shelf, or Tilt, enable Dynamics and set range, threshold, attack, release, and the internal or external detector range.",
@@ -819,7 +912,7 @@
             "figures": [
               {
                 "slug": "equalizer",
-                "alt": "VLTONE Equalizer editor with a vocal cleanup curve",
+                "alt": "VLTone Equalizer editor with a vocal cleanup curve",
                 "caption": "The resizable editor combines the response graph, direct band controls, phase mode, presets, A/B, and analyzer options."
               }
             ]
@@ -934,7 +1027,7 @@
           {
             "id": "ai-setup",
             "title": "Set up AI",
-            "intro": "AI uses models supplied by your VLTONE account or a custom OpenAI-compatible connection from Settings → AI.",
+            "intro": "AI uses models supplied by your VLTone account or a custom OpenAI-compatible connection from Settings → AI.",
             "steps": [
               "Open Settings → AI and refresh models.",
               "Choose a managed model or add endpoint, model id, and key.",
@@ -1027,7 +1120,7 @@
               }
             ],
             "notes": [
-              "The browser uses system proxy settings and VPN routes. If a VPN exposes only a local proxy, enable its System proxy mode. Reload the tab after changing connectivity, or restart VLTONE if needed.",
+              "The browser uses system proxy settings and VPN routes. If a VPN exposes only a local proxy, enable its System proxy mode. Reload the tab after changing connectivity, or restart VLTone if needed.",
               "After a network error, Reload retries the original address. Include the URL and error code when reporting a problem."
             ]
           },

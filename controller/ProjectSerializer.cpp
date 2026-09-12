@@ -454,7 +454,7 @@ ClipMusicalAnalysisModel musicalAnalysisFromJson(const json& j) {
     return analysis;
 }
 
-json clipToJson(const ClipModel& c, MediaPaths media) {
+json clipToJson(const ClipModel& c, MediaPaths media, bool withHistory = true) {
     std::string name = mediaReference(c.filePath, media);
     json notes = reservedArray(c.notes.size());
     for (const auto& n : c.notes) notes.push_back(noteToJson(n));
@@ -531,10 +531,23 @@ json clipToJson(const ClipModel& c, MediaPaths media) {
         }
         result["offlineProcess"] = std::move(offline);
     }
+    if (withHistory && !c.offlineHistory.empty()) {
+        auto versions = json::array();
+        for (const auto& version : c.offlineHistory) {
+            ClipModel audio;
+            applyClipAudioVersion(audio, version.source);
+            versions.push_back({{"id", version.id}, {"parentId", version.parentId},
+                                {"label", version.label},
+                                {"source", clipToJson(audio, media, false)}});
+        }
+        result["offlineHistory"] = std::move(versions);
+        result["offlineVersionId"] = c.offlineVersionId;
+    }
     return result;
 }
 
-ClipModel clipFromJson(const json& j, const std::string& mediaDir) {
+ClipModel clipFromJson(const json& j, const std::string& mediaDir,
+                       bool withHistory = true) {
     ClipModel c;
     c.id = j.value("id", newUuid());
     c.name = j.value("name", "");
@@ -648,6 +661,27 @@ ClipModel clipFromJson(const json& j, const std::string& mediaDir) {
     // Repairs a comp that names a take the file no longer has, so a
     // hand-edited or half-written project can't produce silent segments.
     normalizeComp(c);
+    if (withHistory && j.contains("offlineHistory") && j.at("offlineHistory").is_array()) {
+        for (const auto& entry : j.at("offlineHistory")) {
+            if (!entry.is_object() || !entry.contains("source") ||
+                !entry.at("source").is_object()) continue;
+            OfflineRenderVersion version;
+            version.id = entry.value("id", newUuid());
+            if (version.id.empty() || std::any_of(c.offlineHistory.begin(), c.offlineHistory.end(),
+                    [&](const auto& prior) { return prior.id == version.id; })) continue;
+            version.parentId = entry.value("parentId", std::string());
+            if (std::none_of(c.offlineHistory.begin(), c.offlineHistory.end(),
+                    [&](const auto& prior) { return prior.id == version.parentId; }))
+                version.parentId.clear();
+            version.label = entry.value("label", std::string());
+            version.source = captureClipAudioVersion(clipFromJson(entry.at("source"), mediaDir, false));
+            c.offlineHistory.push_back(std::move(version));
+        }
+        c.offlineVersionId = j.value("offlineVersionId", std::string());
+        if (std::none_of(c.offlineHistory.begin(), c.offlineHistory.end(),
+                [&](const auto& version) { return version.id == c.offlineVersionId; }))
+            c.offlineVersionId.clear();
+    }
     return c;
 }
 
@@ -1191,6 +1225,10 @@ audio::Result ProjectSerializer::save(const ProjectModel& project,
             copyMedia(c.filePath);
             copyMedia(c.offlineProcess.renderedFilePath);
             for (auto& take : c.takes) copyMedia(take.filePath);
+            for (auto& version : c.offlineHistory) {
+                copyMedia(version.source.filePath);
+                for (auto& take : version.source.takes) copyMedia(take.filePath);
+            }
         }
     }
     for (auto& track : persisted.tracks) copyMedia(track.freeze.filePath);

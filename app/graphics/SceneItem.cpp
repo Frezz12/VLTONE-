@@ -192,8 +192,7 @@ bool updateMesh(MeshNode* node, const SceneMesh& mesh, QQuickWindow* window, Tex
     node->previous = mesh;
     return true;
 }
-bool populate(LayerNode* node, const SceneLayer& layer, QQuickWindow* window, TextureStore& textures) {
-    node->revision = layer.revision;
+void updateLayerClip(LayerNode* node, const SceneLayer& layer) {
     if (layer.clipRequired && !node->clip) {
         node->clip = new QSGClipNode;
         node->clip->setIsRectangular(true);
@@ -212,6 +211,9 @@ bool populate(LayerNode* node, const SceneLayer& layer, QQuickWindow* window, Te
         QSGGeometry::updateRectGeometry(node->clip->geometry(), layer.clip);
         node->clip->markDirty(QSGNode::DirtyGeometry);
     }
+}
+bool populate(LayerNode* node, const SceneLayer& layer, QQuickWindow* window, TextureStore& textures) {
+    node->revision = layer.revision;
     while (node->meshes.size() > layer.meshes.size()) {
         delete node->meshes.back(); node->meshes.pop_back();
     }
@@ -252,6 +254,7 @@ QSGNode* SceneItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) {
             node = new LayerNode;
             root->layers[layer->id] = node;
         }
+        updateLayerClip(node, *layer);
         if (node->revision != layer->revision && !populate(node, *layer, window(), *root->textures)) {
             // Do not leave a material pointing at an unavailable texture.
             delete node; root->layers.erase(layer->id);

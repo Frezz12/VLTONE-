@@ -70,6 +70,7 @@ std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& 
         return std::make_unique<graphit::GraphitInstance>();
     }
     if (descriptor.uid == "daw.doubler") return std::make_unique<modulation::DoublerInstance>();
+    if (descriptor.uid == "daw.doubler-pro") return std::make_unique<modulation::DoublerProInstance>();
     if (descriptor.uid == "daw.chorus") return std::make_unique<modulation::ChorusInstance>();
     if (descriptor.uid == "daw.flanger") return std::make_unique<modulation::FlangerInstance>();
     if (descriptor.uid == "daw.phaser") return std::make_unique<modulation::PhaserInstance>();
@@ -85,6 +86,7 @@ std::vector<PluginDescriptor> builtinPlugins() {
             gravity::GravityInstance::staticDescriptor(),
             graphit::GraphitInstance::staticDescriptor(),
             modulation::descriptorFor(modulation::Kind::Doubler),
+            modulation::descriptorFor(modulation::Kind::DoublerPro),
             modulation::descriptorFor(modulation::Kind::Chorus),
             modulation::descriptorFor(modulation::Kind::Flanger),
             modulation::descriptorFor(modulation::Kind::Phaser)};

@@ -2,6 +2,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QSet>
+#include <QList>
 #include <QElapsedTimer>
 #include <QPoint>
 #include <QTimer>
@@ -16,6 +17,7 @@ class QQuickWindow;
 class QQuickItem;
 class QQmlEngine;
 class QEvent;
+class QPointingDevice;
 namespace ui::graphics {
 class SceneItem;
 class QuickVisual;
@@ -46,6 +48,9 @@ private:
     void present(std::shared_ptr<const SceneSnapshot>);
     void visit(QWidget*, std::shared_ptr<SceneSnapshot>&, QSet<quintptr>&);
     bool forwardInput(QEvent*);
+    void updateHover(QWidget* target, const QPointF& globalPosition,
+                     Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+                     const QPointingDevice* device = nullptr);
     void resizeSurface();
     void fail(const QString& reason);
     QPointer<QWidget> m_source, m_container, m_pressed, m_hover, m_dragTarget;
@@ -61,6 +66,8 @@ private:
     };
     std::unordered_map<quint64, VisualItem> m_visuals;
     QSet<QWidget*> m_dirty;
+    QList<QPointer<QWidget>> m_scrollExposure;
+    bool m_collectedScrollUpdates = false;
     struct CachedLayer {
         QPointer<QWidget> widget;
         std::shared_ptr<const SceneLayer> layer;

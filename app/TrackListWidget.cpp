@@ -2204,6 +2204,16 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
     const int selected = int(m_selectedIds.size());
 
     QMenu menu(this);
+    QAction* sharedPlugins = nullptr;
+    if (selected > 1 && m_selectedIds.contains(id)) {
+        std::vector<daw::EngineController::PluginBatchTarget> targets;
+        for (const auto& selectedId : m_selectedIds) targets.push_back({selectedId.toStdString(), {}});
+        if (m_controller->validatePluginBatch(targets, 1)) {
+            sharedPlugins = menu.addAction(tr("Shared Plugins…"));
+            sharedPlugins->setEnabled(!m_controller->hasCloudProjectBinding() && !m_controller->isRecording());
+            menu.addSeparator();
+        }
+    }
     QAction* automationVolume = nullptr;
     QAction* automationPan = nullptr;
     QAction* automationMute = nullptr;
@@ -2317,6 +2327,7 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
     const auto trackKinds = ui::addTrackKindItems(menu);
 
     QAction* chosen = menu.exec(globalPos);
+    if (sharedPlugins && chosen == sharedPlugins) { emit sharedPluginsRequested(); return; }
     if (freeze && chosen == freeze) {
         if (frozen) m_controller->unfreezeTrack(id.toStdString());
         else {
