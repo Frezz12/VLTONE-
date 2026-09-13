@@ -27,6 +27,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
+#include <QStyleHints>
 #include <QSurfaceFormat>
 #include <QWheelEvent>
 #include <QWidget>
@@ -480,6 +481,7 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
 }
 void WorkspaceSurface::capture() {
     if (!m_source || !m_source->isVisible() || m_stopping) return;
+    ui::perf::Scope captureCost("gpu.scene.capture.ms");
     m_capturePending = false;
     m_capturing = true;
     QElapsedTimer prepare; prepare.start();
@@ -493,8 +495,6 @@ void WorkspaceSurface::capture() {
         if (!wanted.contains(it->first)) it = m_layers.erase(it); else ++it;
     }
     m_dirty.clear();
-    m_scrollExposure.clear();
-    m_collectedScrollUpdates = false;
     m_capturing = false;
     m_window->setProperty("vlt.sceneLayers", int(snapshot->layers.size()));
     int meshCount = 0;
@@ -758,14 +758,12 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
             mouse->button(), mouse->buttons(), mouse->modifiers(), mouse->source(), mouse->pointingDevice());
         forwarded.setTimestamp(mouse->timestamp());
         QCoreApplication::sendEvent(target, &forwarded);
-#ifdef Q_OS_MACOS
-        // A native QWidget window normally turns a secondary-button press into
-        // QContextMenuEvent.  The Quick window is now the native receiver, so
-        // forwarding only QMouseEvent silently skips that platform synthesis.
-        // Deliver the context event at the same point and remember it so a
-        // platform-generated duplicate can be discarded below.
-        if (target && event->type() == QEvent::MouseButtonPress &&
-            mouse->button() == Qt::RightButton) {
+        // Forwarding from Quick bypasses QWidget's native context-menu synthesis.
+        // Respect the platform trigger (Windows: release, macOS: press), and
+        // remember the event so a native duplicate can be discarded below.
+        if (target && mouse->button() == Qt::RightButton &&
+            event->type() == (qApp->styleHints()->contextMenuTrigger() == Qt::ContextMenuTrigger::Press
+                ? QEvent::MouseButtonPress : QEvent::MouseButtonRelease)) {
             const QPoint global = mouse->globalPosition().toPoint();
             m_pressed = nullptr;
             m_syntheticContextMenuGlobal = global;
@@ -774,7 +772,6 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
                                       global, mouse->modifiers());
             QCoreApplication::sendEvent(target, &context);
         }
-#endif
         if (target && event->type() == QEvent::MouseMove && target->testAttribute(Qt::WA_Hover)) {
             QHoverEvent hover(QEvent::HoverMove, local, mouse->globalPosition(),
                 target->mapFrom(m_source, m_lastHoverPosition), mouse->modifiers(), mouse->pointingDevice());
@@ -800,7 +797,6 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
     }
     case QEvent::ContextMenu: {
         auto* menu = static_cast<QContextMenuEvent*>(event);
-#ifdef Q_OS_MACOS
         if (menu->reason() == QContextMenuEvent::Mouse &&
             m_syntheticContextMenuClock.isValid() &&
             m_syntheticContextMenuClock.elapsed() < 1000 &&
@@ -809,7 +805,6 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
             return true;
         }
         m_syntheticContextMenuClock.invalidate();
-#endif
         auto* target = targetAt(menu->pos());
         QContextMenuEvent forwarded(menu->reason(), target->mapFrom(m_source, menu->pos()), menu->globalPos(), menu->modifiers());
         QCoreApplication::sendEvent(target, &forwarded); return true;
@@ -895,13 +890,28 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
 }
 bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
     if (m_stopping || m_capturing || !m_source) return false;
-    if (event->type() == QEvent::UpdateRequest && object == m_source->window() && !m_scrollExposure.isEmpty())
-        m_collectedScrollUpdates = collectWidgetUpdates(m_source, m_dirty);
+    if (event->type() == QEvent::UpdateRequest && object == m_source->window()) {
+        m_collectedGeometryUpdates = m_geometryExposure && collectWidgetUpdates(m_source, m_dirty);
+        // Geometry damage belongs to Qt's next backing-store update, not the
+        // next Quick frame. Quick can capture before that queued update arrives.
+        m_geometryExposure = false;
+    }
     if ((object == m_window || object == m_source) && event->type() == QEvent::DevicePixelRatioChange)
         invalidate();
     if (object == m_window || object == m_container) return forwardInput(event);
     auto* widget = qobject_cast<QWidget*>(object);
     if (!widget || widget == m_container || (widget != m_source && !m_source->isAncestorOf(widget))) return false;
+    // Moving/resizing a child exposes unchanged siblings and ancestors in the
+    // QWidget backing store. Our retained scene already has those pixels. Read
+    // explicit updates before Qt paints, then change only layer transforms and
+    // clips. This includes native plugin frames moving over the Quick surface.
+    if (widget->window() == m_source->window() &&
+        (event->type() == QEvent::Move || event->type() == QEvent::Resize ||
+         event->type() == QEvent::Show || event->type() == QEvent::Hide ||
+         event->type() == QEvent::ZOrderChange)) {
+        m_geometryExposure = true;
+        m_collectedGeometryUpdates = false;
+    }
     // These widgets paint and receive input through their real native child
     // view. Consuming Paint here would leave the embedded plugin transparent.
     if (belongsToNativeOverlay(widget, m_source)) return false;
@@ -916,26 +926,13 @@ bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
         GraphicsPreferences::instance().reportFrame(inactive);
     }
     if (event->type() == QEvent::Paint) {
-        bool exposureOnly = false;
-        if (m_collectedScrollUpdates) {
-            for (const auto& page : m_scrollExposure)
-                if (page && (widget == page || page->isAncestorOf(widget))) { exposureOnly = true; break; }
-        }
-        if (!exposureOnly) m_dirty.insert(widget);
+        if (!m_collectedGeometryUpdates) m_dirty.insert(widget);
         requestCapture();
         return true; // vector recording occurs outside QWidget's active paint stack
     }
     if (event->type() == QEvent::Destroy) {
-        m_dirty.remove(widget); m_scrollExposure.removeAll(widget);
+        m_dirty.remove(widget);
         m_layers.erase(reinterpret_cast<quintptr>(widget));
-    }
-    if (event->type() == QEvent::Move) {
-        auto* viewport = widget->parentWidget();
-        auto* scroll = viewport ? qobject_cast<QScrollArea*>(viewport->parentWidget()) : nullptr;
-        if (scroll && scroll->widget() == widget) {
-            if (!m_scrollExposure.contains(widget)) m_scrollExposure.append(widget);
-            m_collectedScrollUpdates = false;
-        }
     }
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange) {
         const auto found = m_layers.find(reinterpret_cast<quintptr>(widget));

@@ -11,7 +11,9 @@
 class QLabel;
 class QHBoxLayout;
 class QLineEdit;
+class QMenu;
 class QProgressBar;
+class QPushButton;
 class QResizeEvent;
 class QShortcut;
 class QStackedWidget;
@@ -80,6 +82,7 @@ private:
 
     QWidget* buildTabStrip();
     QWidget* buildToolbar();
+    QWidget* buildSidebar();
     QWidget* buildBookmarksBar();
     QWidget* buildFindBar();
     QWidget* buildDownloadBar();
@@ -112,6 +115,9 @@ private:
     QString currentPageUrl() const;
 
     void toggleCurrentBookmark();
+    void addBookmark();
+    void openHistoryMenu(QWidget* anchor);
+    void populateHistoryMenu(QMenu* menu);
     void updateBookmarkState();
     void rebuildBookmarksBar(bool refreshStartPage = true);
     void showBookmarkContextMenu(int bookmarkIndex, const QPoint& globalPos);
@@ -144,7 +150,7 @@ private:
     ui::IconButton* m_forward = nullptr;
     ui::IconButton* m_reloadStop = nullptr;
     ui::IconButton* m_bookmark = nullptr;
-    ui::IconButton* m_menu = nullptr;
+    QPushButton* m_menu = nullptr;
     QProgressBar* m_pageProgress = nullptr;
 
     QWidget* m_bookmarksBar = nullptr;

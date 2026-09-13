@@ -793,17 +793,23 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         break;
     }
     case Glyph::Knife: {
-        // Plain chef's knife: handle on the left, pointed blade on the right.
+        // A straight scalpel, aligned handle-to-tip so the tool never reads as
+        // bent when it becomes the arrangement cursor.
+        p.save();
+        p.translate(12, 12);
+        p.rotate(45);
         p.setPen(Qt::NoPen);
         p.setBrush(c);
-        p.drawRoundedRect(QRectF(3.0, 12.0, 8.5, 4.5), 1.8, 1.8);
+        p.drawRoundedRect(QRectF(-3.0, -10.0, 6.0, 11.0), 1.6, 1.6);
         QPainterPath blade;
-        blade.moveTo(10.0, 9.5);
-        blade.lineTo(21.0, 6.0);
-        blade.lineTo(18.4, 12.8);
-        blade.quadTo(15.2, 16.0, 10.0, 15.0);
+        blade.moveTo(-2.5, 0.0);
+        blade.lineTo(2.5, 0.0);
+        blade.lineTo(2.5, 5.8);
+        blade.lineTo(0.0, 10.0);
+        blade.lineTo(-2.5, 5.8);
         blade.closeSubpath();
         p.drawPath(blade);
+        p.restore();
         break;
     }
     case Glyph::Eraser: {

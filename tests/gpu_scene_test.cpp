@@ -19,6 +19,7 @@
 #include <QSettings>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QStyleHints>
 #include <QThread>
 #include <QTimer>
 #include <QToolButton>
@@ -34,6 +35,7 @@ public:
     QPoint wheelPixels;
     QPoint contextPosition;
     int contextMenus = 0;
+    int paints = 0;
     Qt::ScrollPhase wheelPhase = Qt::NoScrollPhase;
     ulong inputTimestamp = 0;
     bool overflow = false;
@@ -46,6 +48,7 @@ protected:
         event->accept();
     }
     void paintEvent(QPaintEvent*) override {
+        ++paints;
         QPainter p(this);
         auto* scene = ui::graphics::sceneGeometrySink(p);
         if (!scene || scene->beginRetainedSection(101, false)) {
@@ -99,6 +102,44 @@ protected:
     void dragEnterEvent(QDragEnterEvent* event) override { event->acceptProposedAction(); }
     void dropEvent(QDropEvent* event) override { ++drops; event->acceptProposedAction(); }
 };
+bool checkContextMenuRouting(Qt::ContextMenuTrigger trigger) {
+    QWidget window;
+    window.resize(320, 140);
+    Canvas canvas(&window);
+    canvas.setGeometry(17, 23, 200, 100);
+    canvas.show();
+    ui::graphics::WorkspaceSurface surface(&window);
+    const QPointF point(38.25, 40.5);
+    const QPointF position = canvas.mapTo(&window, point);
+    const QPointF global = canvas.mapToGlobal(point);
+    for (const auto button : {Qt::LeftButton, Qt::RightButton}) {
+        QMouseEvent press(QEvent::MouseButtonPress, position, global,
+            button, button, Qt::NoModifier);
+        QCoreApplication::sendEvent(surface.quickWindow(), &press);
+        const int expectedAtPress = button == Qt::RightButton && trigger == Qt::ContextMenuTrigger::Press;
+        if (canvas.contextMenus != expectedAtPress || canvas.lastMouse != point) {
+            std::cerr << "Context menu press timing or target coordinates are incorrect\n"; return false;
+        }
+        QMouseEvent release(QEvent::MouseButtonRelease, position, global,
+            button, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(surface.quickWindow(), &release);
+        if (canvas.contextMenus != (button == Qt::RightButton ? 1 : 0)) {
+            std::cerr << "Secondary click did not deliver exactly one context menu\n"; return false;
+        }
+    }
+    if (canvas.contextPosition != point.toPoint()) return false;
+    QContextMenuEvent duplicate(QContextMenuEvent::Mouse, position.toPoint(), global.toPoint());
+    QCoreApplication::sendEvent(surface.quickWindow(), &duplicate);
+    if (canvas.contextMenus != 1) {
+        std::cerr << "Secondary click generated a duplicate context menu\n"; return false;
+    }
+    QContextMenuEvent keyboard(QContextMenuEvent::Keyboard, position.toPoint(), global.toPoint());
+    QCoreApplication::sendEvent(surface.quickWindow(), &keyboard);
+    if (canvas.contextMenus != 2) {
+        std::cerr << "Keyboard context menu was discarded\n"; return false;
+    }
+    return true;
+}
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QTemporaryDir preferences;
@@ -231,6 +272,13 @@ int main(int argc, char** argv) {
         tiles.paint(p, 123, QSize(320, 140), {}, [](QPainter& tile) { tile.fillRect(QRect(0, 0, 20, 20), Qt::red); });
     }
     if (rebuilt.takeMeshes().front().group == firstGroup || tiles.builds() != 2) return 1;
+    const auto nativeTrigger = app.styleHints()->contextMenuTrigger();
+    for (const auto trigger : {Qt::ContextMenuTrigger::Release, Qt::ContextMenuTrigger::Press}) {
+        app.styleHints()->setContextMenuTrigger(trigger);
+        const bool routed = checkContextMenuRouting(trigger);
+        app.styleHints()->setContextMenuTrigger(nativeTrigger);
+        if (!routed) return 1;
+    }
     const bool softwareFallback = app.arguments().contains("--software-fallback");
     if (!app.arguments().contains("--hardware") && !softwareFallback) return 0;
     QWidget window;
@@ -294,20 +342,6 @@ int main(int argc, char** argv) {
         canvas->wheelPixels != QPoint(-7, 3) || canvas->wheelPhase != Qt::ScrollMomentum) {
         std::cerr << "Input coordinates, timestamp or scroll phase changed\n"; return 1;
     }
-#ifdef Q_OS_MACOS
-    QMouseEvent secondaryPress(QEvent::MouseButtonPress, point, canvas->mapToGlobal(point),
-        Qt::RightButton, Qt::RightButton, Qt::NoModifier);
-    QCoreApplication::sendEvent(surface->quickWindow(), &secondaryPress);
-    if (canvas->contextMenus != 1 || canvas->contextPosition != point.toPoint()) {
-        std::cerr << "Secondary click did not reach the QWidget context menu\n"; return 1;
-    }
-    QContextMenuEvent duplicate(QContextMenuEvent::Mouse, point.toPoint(),
-        canvas->mapToGlobal(point).toPoint());
-    QCoreApplication::sendEvent(surface->quickWindow(), &duplicate);
-    if (canvas->contextMenus != 1) {
-        std::cerr << "Secondary click generated a duplicate context menu\n"; return 1;
-    }
-#endif
     canvas->update();
     QTimer::singleShot(150, &loop, &QEventLoop::quit); loop.exec();
     if (surface->quickWindow()->grabWindow() != frame) {
@@ -458,6 +492,41 @@ int main(int argc, char** argv) {
         std::cerr << "Scrolling retained hover on the slot that moved away\n"; return 1;
     }
     scroll.hide();
+    // Moving an editor or resizing a mixer exposes QWidget backing-store
+    // regions, but must not rerecord unchanged layers in the retained scene.
+    PlainControl floating(canvas), child(&floating), stationary(canvas);
+    floating.setGeometry(10, 10, 70, 45); floating.color = Qt::cyan;
+    child.setGeometry(15, 15, 15, 15); child.color = Qt::magenta;
+    stationary.setGeometry(110, 15, 30, 30); stationary.color = Qt::yellow;
+    floating.show(); child.show(); stationary.show();
+    QTimer::singleShot(150, &loop, &QEventLoop::quit); loop.exec();
+    canvas->paints = floating.paints = child.paints = stationary.paints = 0;
+    floating.move(20, 20);
+    // The Quick frame may precede Qt's lower-priority backing-store update.
+    // Consuming a frame must not forget the still-pending exposure damage.
+    QMetaObject::invokeMethod(surface->quickWindow(), "afterAnimating", Qt::DirectConnection);
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    const auto movedFrame = surface->quickWindow()->grabWindow();
+    if (canvas->paints || floating.paints || child.paints || stationary.paints ||
+        movedFrame.pixelColor(int(25*dpr), int(25*dpr)) != QColor(Qt::cyan) ||
+        movedFrame.pixelColor(int(40*dpr), int(40*dpr)) != QColor(Qt::magenta)) {
+        std::cerr << "Moving an editor rerecorded unchanged layers or lost its transform\n"; return 1;
+    }
+    floating.resize(80, 50);
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    if (!floating.paints || child.paints || stationary.paints || canvas->paints ||
+        surface->quickWindow()->grabWindow().pixelColor(int(95*dpr), int(65*dpr)) != QColor(Qt::cyan)) {
+        std::cerr << "Resizing an overlay repainted unaffected widgets or lost new content\n"; return 1;
+    }
+    stationary.color = Qt::green;
+    stationary.update();
+    floating.move(25, 25);
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    if (!stationary.paints || surface->quickWindow()->grabWindow().pixelColor(
+        int(120*dpr), int(25*dpr)) != QColor(Qt::green)) {
+        std::cerr << "An explicit update was lost while moving an overlay\n"; return 1;
+    }
+    floating.hide(); stationary.hide();
     DragControl dragSource(canvas), dropTarget(canvas);
     dragSource.setGeometry(5, 5, 60, 35);
     dropTarget.setGeometry(70, 5, 60, 35);

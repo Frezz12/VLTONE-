@@ -316,6 +316,9 @@ private:
 
 ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     setObjectName("ToolPanel");
+    // Child QWidget backgrounds are not stylesheet-painted consistently by
+    // the Windows backend unless the styled-background attribute is explicit.
+    setAttribute(Qt::WA_StyledBackground, true);
     // Keep the context panel's existing animation envelope so switching
     // contexts never changes the surrounding workspace geometry.
     setFixedHeight(44);

@@ -26,8 +26,10 @@ BrowserProfile::BrowserProfile(QObject* owner, QWebEngineProfile* supplied, bool
     // An explicitly supplied profile is a compatibility/test profile. Otherwise
     // exactly one backend opens the existing storage directories.
     if (!supplied && gpuWorkspaceEnabled()) {
-        quick = persistent ? new QQuickWebEngineProfile(QStringLiteral("VLTStudioWeb"), this) : new QQuickWebEngineProfile(this);
+        quick = new QQuickWebEngineProfile(this);
         if (persistent) {
+            quick->setStorageName(QStringLiteral("VLTStudioWeb"));
+            quick->setOffTheRecord(false);
             quick->setPersistentStoragePath(webprefs::profileStoragePath());
             quick->setCachePath(webprefs::profileCachePath());
             quick->setPersistentCookiesPolicy(QQuickWebEngineProfile::ForcePersistentCookies);

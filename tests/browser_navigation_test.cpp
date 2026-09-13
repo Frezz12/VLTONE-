@@ -12,7 +12,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QLineEdit>
+#include <QMenu>
 #include <QListWidget>
+#include <QDialogButtonBox>
 #include <QNetworkProxy>
 #include <QNetworkProxyFactory>
 #include <QPushButton>
@@ -22,6 +25,7 @@
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
 #include <QWebEnginePage>
 #include <QWebEngineProfile>
 #include <QWebEngineView>
@@ -152,7 +156,9 @@ int main(int argc, char** argv) {
                 "--disable-gpu --disable-features=WebGPU");
     ui::registerFontUrlScheme();
     QApplication app(argc, argv);
+    ui::initializeApplicationFonts();
     QTemporaryDir settings;
+    app.setProperty("dawHeadlessDataRoot", settings.path());
     QCoreApplication::setOrganizationName("VLTBrowserRegression");
     QCoreApplication::setApplicationName("BrowserRegression-" +
                                          settings.path().section('/', -1));
@@ -194,6 +200,101 @@ int main(int argc, char** argv) {
         WebBrowserPanel panel(nullptr, &profile);
         panel.resize(900, 700);
         panel.show();
+        auto* surface = panel.findChild<ui::graphics::BrowserSurface*>();
+        auto js = [&](const QString& source) {
+            auto result = std::make_shared<QVariant>();
+            auto done = std::make_shared<bool>(false);
+            surface->page()->runJavaScript(source, [result, done](const QVariant& value) {
+                *result = value;
+                *done = true;
+            });
+            check(waitFor([&] { return *done; }), "start page JavaScript callback");
+            return *result;
+        };
+        panel.openUrlForTest(ui::webprefs::kStartUrl);
+        if (!check(waitFor([&] { return panel.startPageReadyForTest(); }), "new start page loads offline"))
+            return 1;
+        check(js("[...document.querySelectorAll('.shortcut .name')].map(e => e.textContent).join(',')")
+                  .toString() == "YouTube,SoundCloud,Splice,Spotify",
+              "start page contains exactly the four requested pinned sites");
+        check(js("document.querySelectorAll('.discover,.categories,.story').length").toInt() == 0,
+              "discovery block and sample recommendations removed");
+        check(js("document.querySelector('img.brand').naturalWidth === 112").toBool(),
+              "bundled VLTONE logo loads offline");
+        for (auto* rail : panel.findChildren<QPushButton*>())
+            check(rail->property("railRole").toString() != "samples", "sample sidebar button removed");
+        for (const int width : {900, 520, 320}) {
+            panel.resize(width, 760);
+            check(waitFor([&] {
+                return js("innerWidth").toInt() == surface->width();
+            }), "browser viewport follows panel resize");
+            check(js("document.documentElement.scrollWidth <= innerWidth").toBool(),
+                  "start page fits without horizontal scrolling");
+            check(js("[...document.querySelectorAll('.shortcut,.search')].every(e => "
+                     "e.getBoundingClientRect().right <= innerWidth && e.getBoundingClientRect().left >= 0)").toBool(),
+                  "search and pinned sites fit at every panel width");
+            if (app.arguments().contains("--capture")) {
+                const auto folder = qEnvironmentVariable("VLT_BROWSER_CAPTURE_DIR", QDir::tempPath());
+                QDir().mkpath(folder);
+                QElapsedTimer paint;
+                paint.start();
+                waitFor([&] { return paint.elapsed() >= 250; });
+                check(panel.grab().save(QDir(folder).filePath(QString("browser-%1.png").arg(width))),
+                      "browser screenshot saved");
+            }
+        }
+        panel.resize(900, 700);
+        bool settingsRequested = false;
+        QObject::connect(&panel, &WebBrowserPanel::settingsRequested, &panel,
+                         [&] { settingsRequested = true; });
+        for (auto* rail : panel.findChildren<QPushButton*>())
+            if (rail->property("railRole").toString() == "settings") rail->click();
+        check(settingsRequested, "sidebar settings button invokes the existing settings flow");
+
+        bool shortcutDialog = false;
+        bool invalidAddressRejected = false;
+        QTimer dialogDriver;
+        QObject::connect(&dialogDriver, &QTimer::timeout, &panel, [&] {
+            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dialog || !dialog->findChild<QLineEdit*>("WebShortcutAddress")) return;
+            dialogDriver.stop();
+            shortcutDialog = true;
+            auto* address = dialog->findChild<QLineEdit*>("WebShortcutAddress");
+            auto* buttons = dialog->findChild<QDialogButtonBox*>();
+            address->setText("javascript:alert(1)");
+            buttons->button(QDialogButtonBox::Save)->click();
+            invalidAddressRejected = dialog->isVisible() && ui::webprefs::bookmarks().isEmpty();
+            dialog->findChild<QLineEdit*>("WebShortcutTitle")->setText("Local & <sample>");
+            address->setText(server.url("/ready").toString());
+            buttons->button(QDialogButtonBox::Save)->click();
+        });
+        dialogDriver.start(25);
+        QTimer::singleShot(0, &panel, [&] {
+            auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (!menu) return;
+            auto* add = menu->findChild<QAction*>("WebAddBookmark");
+            menu->close();
+            if (add) add->trigger();
+        });
+        for (auto* rail : panel.findChildren<QPushButton*>())
+            if (rail->property("railRole").toString() == "bookmarks") rail->click();
+        check(waitFor([&] { return shortcutDialog; }), "bookmarks menu opens the native editor");
+        dialogDriver.stop();
+        check(invalidAddressRejected, "shortcut editor rejects executable addresses");
+        check(ui::webprefs::isBookmarked(server.url("/ready").toString()), "shortcut persists as a real bookmark");
+        check(waitFor([&] { return panel.startPageReadyForTest(); }), "start page refreshes after saving shortcut");
+        check(js("document.querySelectorAll('.shortcut').length === 4 && "
+                 "document.querySelector('.shortcut .name').textContent === 'YouTube'").toBool(),
+              "saved bookmarks do not replace the four pinned sites");
+        bool searchSubmitted = false;
+        const auto navigationPolicy = surface->page()->navigationPolicy;
+        surface->page()->navigationPolicy = [&](const QUrl& url, bool) {
+            searchSubmitted = url.host() == "duckduckgo.com" && url.query().contains("q=ambient");
+            return false; // Inspect the real form submission without reaching the internet.
+        };
+        js("document.getElementById('web-query').value='ambient';document.querySelector('.search').requestSubmit()");
+        check(waitFor([&] { return searchSubmitted; }), "search button submits the query to the existing search engine");
+        surface->page()->navigationPolicy = navigationPolicy;
         panel.openUrlForTest(server.url("/ready").toString());
         auto* view = panel.findChild<QWebEngineView*>();
         check(waitFor([&] { return view->title() == "Ready"; }),
@@ -210,6 +311,9 @@ int main(int argc, char** argv) {
         panel.openUrlForTest(server.url("/popup").toString());
         check(waitFor([&] { return view->title() == "Popup host"; }),
               "popup host loads");
+        check(waitFor([&] {
+                  return js("document.readyState === 'complete' && document.forms.length === 1").toBool();
+              }), "popup fixture form is ready before submitting");
         view->page()->runJavaScript("blank()");
         check(waitFor([&] {
                   return panel.tabCountForTest() == 2 &&
@@ -218,11 +322,14 @@ int main(int argc, char** argv) {
               "window.open empty URL preserves writable window context");
         panel.closeCurrentTabForTest();
         view->page()->runJavaScript("post()");
-        check(waitFor([&] {
+        const bool posted = check(waitFor([&] {
                   return server.postReceived &&
                          panel.tabTitlesForTest().contains("POST preserved");
               }),
               "target blank preserves POST body");
+        if (!posted)
+            std::fprintf(stderr, "POST received=%d; tabs=%s\n", server.postReceived,
+                         panel.tabTitlesForTest().join(" | ").toUtf8().constData());
         panel.closeCurrentTabForTest();
         QTcpServer unused;
         unused.listen(QHostAddress::LocalHost);

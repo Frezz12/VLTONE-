@@ -66,8 +66,8 @@ private:
     };
     std::unordered_map<quint64, VisualItem> m_visuals;
     QSet<QWidget*> m_dirty;
-    QList<QPointer<QWidget>> m_scrollExposure;
-    bool m_collectedScrollUpdates = false;
+    bool m_geometryExposure = false;
+    bool m_collectedGeometryUpdates = false;
     struct CachedLayer {
         QPointer<QWidget> widget;
         std::shared_ptr<const SceneLayer> layer;

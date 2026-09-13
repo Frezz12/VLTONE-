@@ -184,7 +184,7 @@ const QCursor& arrangementToolCursor(icons::Glyph glyph) {
     painter.end();
 
     const QPoint hot = glyph == icons::Glyph::Brush   ? QPoint(6, 18)
-                     : glyph == icons::Glyph::Knife   ? QPoint(12, 18)
+                     : glyph == icons::Glyph::Knife   ? QPoint(5, 19)
                      : glyph == icons::Glyph::Pointer ? QPoint(6, 4)
                                                       : QPoint(12, 12);
     return *cache.insert(int(glyph),
@@ -1310,35 +1310,14 @@ void TimelineWidget::drawKnifeGuide(QPainter& p) {
         m_snapEnabled &&
         !(QApplication::keyboardModifiers() & Qt::AltModifier);
     const double at = snap(xToSeconds(pos.x()), snapOn);
-    const Theme& t = th();
+    const daw::ClipModel* clip = findClipModel(hit.trackId, hit.clipId);
+    if (!clip || at <= clip->startSeconds + 1e-9 ||
+        at >= clip->startSeconds + clip->durationSeconds - 1e-9)
+        return;
 
-    const auto drawFor = [&](const QString& trackId, const QString& clipId) {
-        const daw::ClipModel* clip = findClipModel(trackId, clipId);
-        const int lane = laneForTrackId(trackId);
-        if (!clip || lane < 0 ||
-            at <= clip->startSeconds + 1e-9 ||
-            at >= clip->startSeconds + clip->durationSeconds - 1e-9) {
-            return;
-        }
-        const QRectF body = clipRect(lane, *clip);
-        if (body.isEmpty()) return;
-        const qreal x = secondsToX(at) + 0.5;
-        const qreal top = body.top() + 1.0;
-        const qreal bottom = body.bottom() - 1.0;
-        p.setPen(QPen(mixColors(t.background, t.accent, 0.25), 3.5,
-                      Qt::SolidLine, Qt::FlatCap));
-        p.drawLine(QPointF(x, top), QPointF(x, bottom));
-        p.setPen(QPen(mixColors(t.accent, t.textPrimary, 0.25), 1.5,
-                      Qt::SolidLine, Qt::FlatCap));
-        p.drawLine(QPointF(x, top), QPointF(x, bottom));
-    };
-
-    if (m_selection.size() > 1 && isClipSelected(hit.clipId)) {
-        for (const ClipRef& ref : std::as_const(m_selection))
-            drawFor(ref.trackId, ref.clipId);
-    } else {
-        drawFor(hit.trackId, hit.clipId);
-    }
+    const qreal x = secondsToX(at) + 0.5;
+    p.setPen(QPen(Qt::white, 1.0, Qt::SolidLine, Qt::FlatCap));
+    p.drawLine(QPointF(x, 0.0), QPointF(x, height()));
 }
 
 void TimelineWidget::setTool(Tool tool) {
@@ -1792,7 +1771,14 @@ void TimelineWidget::setBottomInset(int px) {
     m_bottomInset = value;
     layoutNavigationControls();
     clampVerticalScroll();
-    update();
+    // The mixer changes the viewport clip, not the tracks. Keep the GPU lane
+    // tiles and lane index; only a real scroll clamp above invalidates them.
+    if (m_lastPaintWasScene) {
+        m_playbackOnlyDirty = {};
+        m_recordingOnlyDirty = {};
+        m_backgroundFrameRepaint = false;
+        ui::FrameClock::instance().request(this, rect());
+    } else update(rect());
 }
 
 void TimelineWidget::ensureLaneVisible(int lane) {
@@ -4882,7 +4868,8 @@ void TimelineWidget::drawStaticFrame(QPainter& p,
         }
 
         // The mixer is an opaque overlay over the lower part of this widget. Do
-        // not traverse or render lanes that cannot be seen beneath it.
+        // not render lanes beneath it. Retained tiles include the full height
+        // so resizing the mixer changes their clip without rebuilding them.
         const int laneViewportBottom = std::max(
             0, height() - m_bottomInset - kTimelineScrollExtent);
         const QRegion laneRegion =
@@ -4904,8 +4891,10 @@ void TimelineWidget::drawStaticFrame(QPainter& p,
                         [&](QPainter& local) {
                             QScopedValueRollback<double> scroll(m_scrollSeconds, left / m_pixelsPerSecond);
                             local.setRenderHint(QPainter::Antialiasing, true);
+                            // Retain the whole on-screen height once. The outer
+                            // laneRegion clips it as the mixer covers/reveals it.
                             local.setClipRect(QRect(0, ui::kRulerHeight, tileWidth,
-                                std::max(0, laneViewportBottom - ui::kRulerHeight)));
+                                std::max(0, height() - kTimelineScrollExtent - ui::kRulerHeight)));
                             drawLanes(local);
                         });
                 }
@@ -5988,8 +5977,18 @@ QRegion TimelineWidget::gestureDamage() const {
     if (!m_fadeClipId.isEmpty()) { selected.insert(m_fadeClipId); tracks.insert(m_fadeTrackId); }
     if (tool() == Tool::Knife) {
         ClipHit hit;
-        if (hitTestClip(mapFromGlobal(QCursor::pos()), hit)) {
-            selected.insert(hit.clipId); tracks.insert(hit.trackId);
+        const QPoint pos = mapFromGlobal(QCursor::pos());
+        if (hitTestClip(pos, hit)) {
+            const daw::ClipModel* clip = findClipModel(hit.trackId, hit.clipId);
+            const bool snapOn =
+                m_snapEnabled &&
+                !(QApplication::keyboardModifiers() & Qt::AltModifier);
+            const double at = snap(xToSeconds(pos.x()), snapOn);
+            if (clip && at > clip->startSeconds + 1e-9 &&
+                at < clip->startSeconds + clip->durationSeconds - 1e-9) {
+                result += QRect(int(std::floor(secondsToX(at))) - 1, 0, 4,
+                                height()).intersected(rect());
+            }
         }
     }
     const auto& project = m_controller->project();

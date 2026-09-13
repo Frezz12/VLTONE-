@@ -6057,9 +6057,11 @@ bool MainWindow::checkTrackRowHeightsForTest() {
         m_arrangementHost->height() > 80) {
         const bool mixerWasShown = !m_mixer->isHidden();
         const QSize hostSize = m_arrangementHost->size();
+        const int mixerHeightWas = m_mixerHeight;
         const auto restoreMixer = [&] {
             if (m_mixerWindow) onDockMixer();
             m_arrangementHost->resize(hostSize);
+            m_mixerHeight = mixerHeightWas;
             setMixerVisible(mixerWasShown);
             layoutMixer();
             QApplication::processEvents();
@@ -6084,6 +6086,30 @@ bool MainWindow::checkTrackRowHeightsForTest() {
             restoreMixer();
             std::fprintf(stderr,
                          "shown mixer geometry and timeline cover disagree\n");
+            return false;
+        }
+
+        // The bottom edge is a real dismissal target, not a 140 px clamp.
+        auto* mixerResize = qobject_cast<ui::ResizeHandle*>(m_mixerHandle);
+        if (!mixerResize || !mixerResize->onDragStart || !mixerResize->onDrag) {
+            restoreMixer();
+            std::fprintf(stderr, "mixer resize handle is not wired\n");
+            return false;
+        }
+        mixerResize->onDragStart();
+        mixerResize->onDrag(m_mixerDragStartHeight);
+        QApplication::processEvents();
+        if (!m_mixer->isHidden() || m_timeline->bottomInsetForTest() != 0) {
+            restoreMixer();
+            std::fprintf(stderr, "dragging the mixer to the bottom did not close it\n");
+            return false;
+        }
+        setMixerVisible(true);
+        QApplication::processEvents();
+        if (m_mixer->isHidden() || m_timeline->bottomInsetForTest() <= 0 ||
+            m_mixerHeight != mixerHeightWas) {
+            restoreMixer();
+            std::fprintf(stderr, "drag-dismissed mixer did not reopen at its prior height\n");
             return false;
         }
 
@@ -8698,10 +8724,17 @@ void MainWindow::buildLayout() {
         // to come from the height at that moment. Applying it to the running
         // height made every move event compound and the panel jump.
         const int hostH = m_arrangementHost->height();
-        m_mixerHeight = std::clamp(m_mixerDragStartHeight - deltaY,
-                                   m_mixer->minimumHeight(),
-                                   std::max(m_mixer->minimumHeight(),
-                                            hostH));
+        const int wanted = std::clamp(m_mixerDragStartHeight - deltaY, 0,
+                                      std::max(m_mixer->minimumHeight(), hostH));
+        // Follow the pointer below the mixer's content minimum by clipping the
+        // body at the window edge. Reaching the edge dismisses it; reopening
+        // restores the useful height from before the gesture.
+        if (wanted <= 20) {
+            m_mixerHeight = m_mixerDragStartHeight;
+            setMixerVisible(false);
+            return;
+        }
+        m_mixerHeight = wanted;
         layoutMixer();
     };
     m_mixerHandle = handle;
@@ -10109,7 +10142,8 @@ void MainWindow::layoutMixer() {
     constexpr int kMinArrangementReveal = 60;
     const int bodyH = std::max(minH, m_mixerHeight);
     const int visibleBodyH = std::min(
-        bodyH, std::max(0, hostH - kMinArrangementReveal));
+        std::max(0, m_mixerHeight),
+        std::max(0, hostH - kMinArrangementReveal));
     const int mixerY = std::max(0, hostH - visibleBodyH);
     const int w = m_arrangementHost->width();
     m_mixer->setGeometry(0, mixerY, w, bodyH);

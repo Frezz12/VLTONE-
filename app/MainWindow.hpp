@@ -400,6 +400,7 @@ public:
     /// moves both time and the track stack without an edit tool being involved.
     bool checkTimelinePanForTest();
     bool checkProjectScrollForTest(const QString& path);
+    bool checkWorkspaceMotionForTest();
     /// Exercise multi-lane clip movement, Shift-add/duplicate and marquee
     /// auto-scroll with real mouse events.
     bool checkTimelineClipGesturesForTest();

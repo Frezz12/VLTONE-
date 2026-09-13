@@ -292,6 +292,7 @@ int main(int argc, char** argv) {
     bool audioScrollCheck = false;
     bool projectScrollCheck = false;
     bool mixerScrollCheck = false;
+    bool workspaceMotionCheck = false;
     bool pluginInteractionCheck = false;
     bool patternCheck = false;
     bool samplerCheck = false;
@@ -321,6 +322,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--audio-scroll-check") == 0) audioScrollCheck = true;
         else if (std::strcmp(argv[i], "--project-scroll-check") == 0) projectScrollCheck = true;
         else if (std::strcmp(argv[i], "--mixer-scroll-check") == 0) mixerScrollCheck = true;
+        else if (std::strcmp(argv[i], "--workspace-motion-check") == 0) workspaceMotionCheck = true;
         else if (std::strcmp(argv[i], "--plugin-interaction-check") == 0) pluginInteractionCheck = true;
         else if (std::strcmp(argv[i], "--samplercheck") == 0) samplerCheck = true;
         else if (std::strcmp(argv[i], "--offlinecheck") == 0) offlineCheck = true;
@@ -368,7 +370,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    const bool headless = mixerWheelCheck || tempoCheck || pluginBatchCheck || offlineCheck || pluginInteractionCheck || mixerScrollCheck || projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
+    const bool headless = workspaceMotionCheck || mixerWheelCheck || tempoCheck || pluginBatchCheck || offlineCheck || pluginInteractionCheck || mixerScrollCheck || projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
                           crashtest || recovercheck;
     if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) {
         QByteArray chromiumFlags;
@@ -541,6 +543,7 @@ int main(int argc, char** argv) {
     if (audioScrollCheck) return ui::checkAudioTimelinePerformance() ? 0 : 61;
     if (projectScrollCheck) return ui::checkProjectTimelinePerformance(projectArgument) ? 0 : 62;
     if (mixerScrollCheck) return ui::checkMixerPerformance() ? 0 : 63;
+    if (workspaceMotionCheck) return ui::checkWorkspaceMotionPerformance() ? 0 : 65;
     if (pluginInteractionCheck) return ui::checkPluginInteractions() ? 0 : 64;
     if (selftest) {
         QString localizationError;

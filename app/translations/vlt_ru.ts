@@ -14251,6 +14251,114 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <source>The web page process stopped (%1). Reload the tab to try again.</source>
         <translation>Процесс веб-страницы остановился (%1). Перезагрузите вкладку.</translation>
     </message>
+    <message>
+        <source>Add shortcut</source>
+        <translation>Добавить сайт</translation>
+    </message>
+    <message>
+        <source>Quick access</source>
+        <translation>Быстрый доступ</translation>
+    </message>
+    <message>
+        <source>What are you looking for today?</source>
+        <translation>Что будем искать сегодня?</translation>
+    </message>
+    <message>
+        <source>Discover music</source>
+        <translation>Мир музыки</translation>
+    </message>
+    <message>
+        <source>Resource categories</source>
+        <translation>Категории ресурсов</translation>
+    </message>
+    <message>
+        <source>All</source>
+        <translation>Все</translation>
+    </message>
+    <message>
+        <source>Samples</source>
+        <translation>Сэмплы</translation>
+    </message>
+    <message>
+        <source>Instruments</source>
+        <translation>Инструменты</translation>
+    </message>
+    <message>
+        <source>Learn</source>
+        <translation>Обучение</translation>
+    </message>
+    <message>
+        <source>Recent</source>
+        <translation>Недавние</translation>
+    </message>
+    <message>
+        <source>Your bookmarks</source>
+        <translation>Ваши закладки</translation>
+    </message>
+    <message>
+        <source>Audio import</source>
+        <translation>Импорт аудио</translation>
+    </message>
+    <message>
+        <source>Find your next sound</source>
+        <translation>Найдите своё звучание</translation>
+    </message>
+    <message>
+        <source>Explore samples, textures and field recordings.</source>
+        <translation>Сэмплы, текстуры и полевые записи.</translation>
+    </message>
+    <message>
+        <source>A new color for your music</source>
+        <translation>Новые краски для музыки</translation>
+    </message>
+    <message>
+        <source>Discover instruments and audio effects.</source>
+        <translation>Инструменты и звуковые эффекты.</translation>
+    </message>
+    <message>
+        <source>Make room for inspiration</source>
+        <translation>Время для вдохновения</translation>
+    </message>
+    <message>
+        <source>Explore rhythm, melody and harmony.</source>
+        <translation>Ритм, мелодия и гармония.</translation>
+    </message>
+    <message>
+        <source>Download audio to bring it into your project</source>
+        <translation>Скачивайте аудио и добавляйте его в проект</translation>
+    </message>
+    <message>
+        <source>Pages you visit will appear here.</source>
+        <translation>Здесь появятся страницы, которые вы посетили.</translation>
+    </message>
+    <message>
+        <source>Find samples</source>
+        <translation>Найти сэмплы</translation>
+    </message>
+    <message>
+        <source>Open downloads folder</source>
+        <translation>Открыть папку загрузок</translation>
+    </message>
+    <message>
+        <source>Could not open the downloads folder</source>
+        <translation>Не удалось открыть папку загрузок</translation>
+    </message>
+    <message>
+        <source>Enter a valid http or https address.</source>
+        <translation>Введите корректный адрес http или https.</translation>
+    </message>
+    <message>
+        <source>This shortcut is already saved or the bookmark list is full.</source>
+        <translation>Этот сайт уже сохранён или список закладок заполнен.</translation>
+    </message>
+    <message>
+        <source>No recent pages</source>
+        <translation>Нет недавних страниц</translation>
+    </message>
+    <message>
+        <source>Add bookmark</source>
+        <translation>Добавить закладку</translation>
+    </message>
 </context>
 <context>
     <name>account::Service</name>

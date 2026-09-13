@@ -238,6 +238,14 @@ qt_add_resources(daw "vltone_fonts"
     PREFIX "/fonts"
     BASE "${CMAKE_SOURCE_DIR}/fonts"
     FILES ${VLTONE_UI_FONTS} "${CMAKE_SOURCE_DIR}/fonts/OFL.txt")
+if(TARGET browser_navigation_test)
+    qt_add_resources(browser_navigation_test "browser_test_fonts"
+        PREFIX "/fonts" BASE "${CMAKE_SOURCE_DIR}/fonts"
+        FILES ${VLTONE_UI_FONTS})
+    qt_add_resources(browser_navigation_test "browser_test_brand"
+        PREFIX "/vlt" BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources"
+        FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon-1024.png")
+endif()
 
 if(MSVC)
     # MainWindow hosts the feature-gated desktop composition root and its Qt

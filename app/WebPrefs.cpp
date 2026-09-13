@@ -249,7 +249,7 @@ bool moveBookmark(int from, int to) {
 }
 
 bool bookmarksBarVisible() {
-    return QSettings().value(key("bookmarksBarVisible"), true).toBool();
+    return QSettings().value(key("bookmarksBarVisible"), false).toBool();
 }
 
 void setBookmarksBarVisible(bool visible) {

@@ -28,6 +28,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#undef near
 #endif
 #if defined(__APPLE__)
 #include <libproc.h>
@@ -728,7 +729,7 @@ bool checkUiScaling() {
 } // namespace ui
 
 bool ui::checkAudioTimelinePerformance() {
-    std::setvbuf(stdout, nullptr, _IOLBF, 0);
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     bool ok = true;
     const auto check = [&](bool value, const char* name) {
         std::printf("%s  %s\n", value ? "PASS" : "FAIL", name); ok &= value;
@@ -935,6 +936,134 @@ bool TimelineWidget::checkScrollCacheForTest() {
     }
     setRightCornerRadius(savedRadius);setHorizontalScroll(savedScroll);update();
     return ok;
+}
+
+bool ui::checkWorkspaceMotionPerformance() {
+    MainWindow window(false);
+    const bool passed = window.checkWorkspaceMotionForTest();
+    window.endRecoverySessionForTest();
+    return passed;
+}
+
+bool MainWindow::checkWorkspaceMotionForTest() {
+    const QString targetName = qEnvironmentVariable("VLT_MOTION_TARGET", "sampler");
+    if (targetName != "sampler" && targetName != "native" && targetName != "mixer") return false;
+    const auto settle = [](int ms) {
+        QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
+    };
+    m_controller.addTrack(daw::TrackKind::Midi);
+    if (!openDemoSampler({})) return false;
+    // Heavy UI, without an audio device or hundreds of vendor DSP instances.
+    auto& project = const_cast<daw::ProjectModel&>(m_controller.project());
+    for (int t = 1; t < 500; ++t) {
+        daw::TrackModel track;
+        track.id = "motion-track-" + std::to_string(t);
+        track.name = "Track " + std::to_string(t);
+        track.kind = daw::TrackKind::Midi;
+        for (int c = 0; c < 40; ++c) {
+            daw::ClipModel clip;
+            clip.id = track.id + "-clip-" + std::to_string(c);
+            clip.kind = daw::ClipKind::Midi;
+            clip.startSeconds = c * 2.; clip.durationSeconds = 1.5;
+            clip.notes.resize(5);
+            track.clips.push_back(std::move(clip));
+        }
+        project.tracks.push_back(std::move(track));
+    }
+    project.invalidateTrackIndex();
+    syncViews();
+    resize(1600, 960);
+    setMixerVisible(true);
+    m_mixerHeight = 320; layoutMixer();
+    show(); raise(); activateWindow();
+    ui::FrameClock::instance().setPreference(ui::FrameMode::Display, 60);
+    settle(1800);
+    auto* editor = m_pluginEditors.isEmpty() ? nullptr : m_pluginEditors.begin().value();
+    auto* frame = editor ? m_internalEditorFrames.value(editor, nullptr) : nullptr;
+    if (!frame || !editor->isEditorInitialized()) return false;
+    if (targetName == "mixer") hideInternalWindow(editor);
+    else {
+        // The native case exercises the same HWND host as vendor editors; the
+        // content remains the deterministic built-in Sampler, not vendor DSP.
+        if (targetName == "native") frame->prepareForNativeSurface();
+        frame->setGeometry(100, 130, 780, 520);
+        frame->present();
+    }
+    QPointer<ui::graphics::WorkspaceSurface> surface = findChild<ui::graphics::WorkspaceSurface*>();
+    if (ui::graphics::gpuWorkspaceEnabled() && !surface) return false;
+    bool failed = false;
+    int frames = 0;
+    QObject measurementContext;
+    if (surface) {
+        connect(surface, &ui::graphics::WorkspaceSurface::failed, &measurementContext, [&](const QString&) { failed = true; });
+        connect(surface, &ui::graphics::WorkspaceSurface::frameMeasured, &measurementContext,
+            [&](double prep, double sync, double render, double interval, double) {
+                ++frames;
+                ui::perf::sample("motion.scene.prepare.ms", prep);
+                ui::perf::sample("motion.scene.sync.ms", sync);
+                ui::perf::sample("motion.scene.render.ms", render);
+                if (interval > 0 && frames > 1) ui::perf::sample("motion.scene.submission.ms", interval);
+            });
+    }
+    settle(500);
+    if (surface && (!surface->quickWindow()->isExposed() || surface->quickWindow()->grabWindow().isNull())) return false;
+    QWidget* target = targetName == "mixer" ? m_mixerHandle : frame->findChild<QWidget*>("InternalEditorTitleBar");
+    if (!target || failed) return false;
+    const QPointF anchor = target->mapToGlobal(QPoint(120, 2 + (targetName == "mixer" ? 0 : 16)));
+    QPointF lastGlobal = anchor;
+    const auto sendMouse = [&](QEvent::Type type, QPointF global) {
+        // Native plugin frames receive QWidget input directly; other content
+        // exercises the Quick-to-Widgets bridge used by the actual workspace.
+        const bool throughQuick = surface && targetName != "native";
+        const QPointF local = throughQuick ? surface->quickWindow()->mapFromGlobal(global) : target->mapFromGlobal(global);
+        QMouseEvent event(type, local, global,
+            type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(throughQuick ? static_cast<QObject*>(surface->quickWindow()) : target, &event);
+    };
+    sendMouse(QEvent::MouseButtonPress, anchor);
+    QElapsedTimer travel; travel.start();
+    int inputs = 0, changes = 0;
+    QTimer gesture;
+    gesture.setTimerType(Qt::PreciseTimer);
+    connect(&gesture, &QTimer::timeout, this, [&] {
+        const double phase = travel.elapsed() * 6.283185307179586 / 1600.;
+        lastGlobal = anchor + (targetName == "mixer" ? QPointF(0, std::sin(phase) * 100)
+            : QPointF(220 * (1 - std::cos(phase)), 60 * std::sin(phase)));
+        const QRect before = targetName == "mixer" ? m_mixer->geometry() : frame->geometry();
+        ui::perf::Scope cost("motion.input.ms");
+        sendMouse(QEvent::MouseMove, lastGlobal);
+        if (before != (targetName == "mixer" ? m_mixer->geometry() : frame->geometry())) ++changes;
+        ++inputs;
+    });
+    gesture.start(8); settle(1600);
+    frames = inputs = changes = 0;
+    ui::perf::reset();
+    const auto staticBefore = m_timeline->staticFramePaintCountForTest();
+    QElapsedTimer measured; measured.start();
+    settle(4800);
+    gesture.stop(); sendMouse(QEvent::MouseButtonRelease, lastGlobal);
+    const auto elapsed = measured.elapsed();
+    ui::perf::flush();
+    std::printf("WORKSPACE_MOTION target=%s backend=%s tracks=%zu inputs=%d changes=%d frames=%d elapsed_ms=%lld timeline_static_paints=%llu\n",
+        targetName.toUtf8().constData(), surface ? "gpu" : "widgets", project.tracks.size(), inputs, changes, frames,
+        static_cast<long long>(elapsed), static_cast<unsigned long long>(m_timeline->staticFramePaintCountForTest() - staticBefore));
+    if (const auto shot = qEnvironmentVariable("VLT_MOTION_SCREENSHOT"); !shot.isEmpty()) {
+        if (surface && !failed) surface->quickWindow()->grabWindow().save(shot);
+        else centralWidget()->grab().save(shot);
+    }
+    if (surface && !failed && targetName == "mixer") {
+        // Reveal lanes covered when the retained tiles were built, then compare
+        // with a forced full rebuild at exactly the same geometry.
+        m_mixerHeight = 180; layoutMixer(); settle(150);
+        const QImage retained = surface->quickWindow()->grabWindow();
+        m_timeline->update(); settle(150);
+        if (retained != surface->quickWindow()->grabWindow()) {
+            std::fprintf(stderr, "Mixer reveal differs from freshly rendered timeline\n");
+            return false;
+        }
+    }
+    return !failed && changes > 20 && (!surface || frames > 20);
 }
 
 // Real-project fixture, using the complete workspace. It never opens a device

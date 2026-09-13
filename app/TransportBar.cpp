@@ -411,7 +411,6 @@ QString translatedToolName(int index) {
 
 QIcon toolIcon(int index, const QColor& color, int size) {
     if (index == 0) return icons::svgIcon(QStringLiteral("cursor.svg"), color, size);
-    if (index == 1) return icons::svgIcon(QStringLiteral("knife.svg"), color, size);
     return icons::icon(kTools[index].glyph, color, size);
 }
 
