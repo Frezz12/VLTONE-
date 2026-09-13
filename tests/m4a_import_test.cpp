@@ -67,6 +67,17 @@ int main() {
         for (unsigned i = 2048 * 2; i < block.size(); ++i)
             error = std::max(error, std::abs(double(block[i] - reference.interleaved[position * 2 + i])));
         check(error < 0.002, "seek returns audio at the requested frame");
+        // Exercise packet boundaries and a backward seek on the same decoder.
+        for (const unsigned target : {1024u, 17321u, 1u}) {
+            checkResult(reader.seek(target), "repeat forward/backward seek");
+            check(reader.read(block.data(), 4096) == 4096, "read repeated seek");
+            checkResult(reader.readStatus(), "repeated seek read succeeds");
+            double repeatedError = 0;
+            for (unsigned i = 2048 * 2; i < block.size(); ++i)
+                repeatedError = std::max(repeatedError,
+                    std::abs(double(block[i] - reference.interleaved[target * 2 + i])));
+            check(repeatedError < 0.002, "repeated seeks preserve sample alignment");
+        }
         ap::AudioFileReader moved(std::move(reader));
         check(!reader.isOpen() && moved.isOpen(), "moving reader transfers native ownership");
         checkResult(moved.seek(0), "rewind native reader");

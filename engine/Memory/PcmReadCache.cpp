@@ -79,7 +79,7 @@ std::size_t PcmReadCache::pin(std::uint64_t source, std::uint64_t page) noexcept
             continue;
         }
         if (slot.source.load(std::memory_order_relaxed) == source && slot.page.load(std::memory_order_relaxed) == page) {
-            slot.used.store(m_clock.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            slot.used.store(m_useClock.load(std::memory_order_relaxed), std::memory_order_relaxed);
             return i;
         }
         slot.readers.fetch_sub(1, std::memory_order_release);
@@ -123,7 +123,11 @@ void PcmReadCache::fill(std::uint64_t id, std::uint64_t page, const Source& sour
     std::copy_n(source.data + start, count, destination);
     std::fill(destination + count, destination + kPageSamples, 0.f);
     slot.source.store(id, std::memory_order_relaxed); slot.page.store(page, std::memory_order_relaxed);
-    slot.used.store(m_clock.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    // A warm-up can fill many pages within one worker tick. Giving them the
+    // same age repeatedly selected the same tied victim, evicting pages that
+    // had just been warmed instead of the older residents.
+    slot.used.store(m_useClock.fetch_add(1, std::memory_order_relaxed) + 1,
+                    std::memory_order_relaxed);
     slot.prefetched.store(false, std::memory_order_relaxed);
     slot.readers.fetch_sub(Slot::kWriter, std::memory_order_release);
 }
@@ -163,7 +167,7 @@ PcmReadCache::Counters PcmReadCache::counters() const noexcept {
         m_locked ? m_count * kPageSamples * sizeof(float) : 0};
 }
 PcmReadScope::PcmReadScope(bool realtime) noexcept : m_previous(s_current) { s_current = realtime ? this : nullptr; }
-PcmReadScope::~PcmReadScope() { for (auto& pin : m_pins) release(pin); s_current = m_previous; }
+PcmReadScope::~PcmReadScope() { for (unsigned i = 0; i < m_pinCount; ++i) release(m_pins[i]); s_current = m_previous; }
 void PcmReadScope::release(Pin& pin) noexcept {
     if (pin.cache && pin.slot < pin.cache->m_count) pin.cache->m_slots[pin.slot].readers.fetch_sub(1, std::memory_order_release);
     pin = {};
@@ -172,12 +176,16 @@ std::span<const float> PcmReadScope::view(PcmReadCache& cache, std::uint64_t sou
                                        std::size_t sample, std::size_t count) noexcept {
     const auto page = sample / PcmReadCache::kPageSamples;
     auto matches = [&](const Pin& pin) { return pin.cache == &cache && pin.source == source && pin.page == page; };
-    if (!matches(m_pins[m_last])) {
-        unsigned found = unsigned(m_pins.size());
-        for (unsigned i = 0; i < m_pins.size(); ++i) if (matches(m_pins[i])) { found = i; break; }
-        if (found == m_pins.size()) {
-            found = m_next++ % unsigned(m_pins.size());
-            auto& pin = m_pins[found]; release(pin);
+    if (m_pinCount == 0 || !matches(m_pins[m_last])) {
+        unsigned found = m_pinCount;
+        for (unsigned i = 0; i < m_pinCount; ++i) if (matches(m_pins[i])) { found = i; break; }
+        if (found == m_pinCount) {
+            if (m_pinCount < m_pins.size()) found = m_pinCount++;
+            else {
+                found = m_next++ % unsigned(m_pins.size());
+                release(m_pins[found]);
+            }
+            auto& pin = m_pins[found];
             const auto slot = cache.pin(source, page);
             pin = {&cache, source, page, slot, slot < cache.m_count ? cache.m_pcm.get() + slot * PcmReadCache::kPageSamples : s_silence.data()};
             if (slot == cache.m_count) { cache.m_misses.fetch_add(1, std::memory_order_relaxed); cache.request(source, page); }

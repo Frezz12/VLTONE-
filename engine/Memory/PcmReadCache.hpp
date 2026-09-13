@@ -51,6 +51,9 @@ private:
     std::unordered_map<std::uint64_t, Source> m_sources;
     std::uint64_t m_nextSource = 1;
     std::atomic<std::uint64_t> m_epoch{1}, m_clock{1}, m_misses{0}, m_dropped{0}, m_stale{0};
+    // Replacement age advances per fill, independently of the prefetch tick.
+    // RT readers only load it; successful fills advance it off the RT thread.
+    std::atomic<std::uint64_t> m_useClock{0};
     std::atomic<bool> m_running{true};
     std::thread m_worker;
     static inline std::atomic<PcmReadCache*> s_instance{nullptr};
@@ -62,14 +65,18 @@ class PcmReadScope {
 public:
     explicit PcmReadScope(bool realtime) noexcept;
     ~PcmReadScope();
+    PcmReadScope(const PcmReadScope&) = delete;
+    PcmReadScope& operator=(const PcmReadScope&) = delete;
     static PcmReadScope* current() noexcept { return s_current; }
     std::span<const float> view(PcmReadCache& cache, std::uint64_t source,
                                 std::size_t sample, std::size_t count) noexcept;
 private:
-    struct Pin { PcmReadCache* cache = nullptr; std::uint64_t source = 0, page = 0; std::size_t slot = 0; const float* data = nullptr; };
+    struct Pin { PcmReadCache* cache; std::uint64_t source, page; std::size_t slot; const float* data; };
     void release(Pin& pin) noexcept;
-    std::array<Pin, 8> m_pins{};
-    unsigned m_last = 0, m_next = 0;
+    // Only the initialized prefix is inspected/released. Ordinary DSP nodes
+    // never read PCM, and must not clear eight cursor records on every block.
+    std::array<Pin, 8> m_pins;
+    unsigned m_pinCount = 0, m_last = 0, m_next = 0;
     PcmReadScope* m_previous;
     static inline thread_local PcmReadScope* s_current = nullptr;
     static inline const std::array<float, PcmReadCache::kPageSamples> s_silence{};

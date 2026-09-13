@@ -73,12 +73,17 @@ public:
     }
 
     Reader read() noexcept {
-        const T* snapshot = nullptr;
-        do {
-            snapshot = m_raw.load(std::memory_order_seq_cst);
+        // An unpublished snapshot protects no object, so it needs neither a
+        // hazard publication nor a locked RMW. Nonempty reads keep the same
+        // publication/validation barriers without an extra initial load.
+        const T* snapshot = m_raw.load(std::memory_order_seq_cst);
+        if (!snapshot) return {};
+        for (;;) {
             m_hazard.store(snapshot, std::memory_order_seq_cst);
-        } while (snapshot != m_raw.load(std::memory_order_seq_cst));
-        return Reader(this, snapshot);
+            const T* current = m_raw.load(std::memory_order_seq_cst);
+            if (snapshot == current) return Reader(this, snapshot);
+            snapshot = current;
+        }
     }
 
     std::shared_ptr<const T> controlCopy() const {

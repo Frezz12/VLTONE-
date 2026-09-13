@@ -35,6 +35,82 @@ struct Source : Node {
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     {
+        WorkStealingDeque queue; queue.reserve(64);
+        std::uint32_t item = 0;
+        bool correct = true;
+        for (unsigned pass = 0; pass < 10000; ++pass) {
+            correct &= !queue.pop(item);
+            queue.push(pass);
+            correct &= queue.steal(item) && item == pass && !queue.pop(item);
+            queue.push(pass + 1);
+            correct &= queue.pop(item) && item == pass + 1 && !queue.steal(item);
+        }
+        check(correct, "empty deque fast path survives last-item steals and repeated reuse");
+    }
+    {
+        constexpr unsigned batches = 512, batchSize = 128, count = batches * batchSize;
+        WorkStealingDeque queue; queue.reserve(256);
+        auto seen = std::make_unique<std::atomic<unsigned>[]>(count);
+        std::atomic<unsigned> consumed{0};
+        std::atomic<bool> done{false}, valid{true};
+        const auto record = [&](std::uint32_t item) {
+            if (item >= count || seen[item].fetch_add(1, std::memory_order_relaxed) != 0)
+                valid.store(false, std::memory_order_relaxed);
+            consumed.fetch_add(1, std::memory_order_release);
+        };
+        std::array<std::thread, 3> thieves;
+        for (auto& thief : thieves) thief = std::thread([&] {
+            while (!done.load(std::memory_order_acquire)) {
+                std::uint32_t item;
+                if (queue.steal(item)) record(item);
+                else std::this_thread::yield();
+            }
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        for (unsigned batch = 0; batch < batches && valid.load(); ++batch) {
+            for (unsigned i = 0; i < batchSize; ++i) queue.push(batch * batchSize + i);
+            while (consumed.load(std::memory_order_acquire) < (batch + 1) * batchSize) {
+                std::uint32_t item;
+                if (queue.pop(item)) record(item);
+                else std::this_thread::yield();
+                if (std::chrono::steady_clock::now() > deadline) { valid = false; break; }
+            }
+        }
+        done.store(true, std::memory_order_release);
+        for (auto& thief : thieves) thief.join();
+        for (unsigned i = 0; i < count; ++i) valid = valid.load() && seen[i].load() == 1;
+        check(valid && consumed == count,
+              "owner and concurrent thieves deliver every task once across empty/refill cycles");
+    }
+    {
+        RealtimeSnapshot<std::array<unsigned, 2>> snapshot;
+        check(!snapshot.read(), "an unpublished snapshot has an empty reader");
+        auto value = std::make_shared<const std::array<unsigned, 2>>(std::array{7u, ~7u});
+        std::weak_ptr<const std::array<unsigned, 2>> lifetime = value;
+        snapshot.publish(value); value.reset();
+        {
+            auto reader = snapshot.read();
+            snapshot.publish({});
+            check(!lifetime.expired() && (*reader)[0] == 7,
+                  "clearing a snapshot preserves an outstanding reader");
+        }
+        snapshot.publish({});
+        check(lifetime.expired() && !snapshot.read(), "released snapshots are reclaimed off the reader thread");
+        std::atomic<bool> done{false}, consistent{true};
+        std::thread reader([&] {
+            while (!done.load(std::memory_order_acquire)) {
+                auto current = snapshot.read();
+                if (current && (*current)[1] != ~(*current)[0]) consistent = false;
+            }
+        });
+        for (unsigned i = 0; i < 10000; ++i) {
+            snapshot.publish(std::make_shared<const std::array<unsigned, 2>>(std::array{i, ~i}));
+            snapshot.publish({});
+        }
+        done.store(true, std::memory_order_release); reader.join();
+        check(consistent, "empty/nonempty snapshot publication stays coherent with a concurrent reader");
+    }
+    {
         daw::rt::DiagnosticRing<daw::rt::BlockTiming, 4> ring;
         check(ring.push({1}) && ring.push({2}) && ring.push({3}) && !ring.push({4}), "bounded telemetry drops without overwriting");
         daw::rt::BlockTiming event;
@@ -104,6 +180,48 @@ int main() {
         const auto other = cache.addSource(original.data(), original.size());
         check(other != source, "retired PCM requests cannot alias a new mapping");
         cache.removeSource(other);
+    }
+    {
+        auto cache = std::make_unique<PcmReadCache>(8 * PcmReadCache::kPageSamples * sizeof(float));
+        std::vector<float> original(24 * PcmReadCache::kPageSamples, .625f);
+        const auto source = cache->addSource(original.data(), original.size());
+        bool ready = true;
+        for (unsigned round = 0; round < 512; ++round) {
+            const auto firstPage = (round % 3) * 8;
+            cache->invalidateRequests();
+            cache->warm(source, firstPage * PcmReadCache::kPageSamples,
+                        4 * PcmReadCache::kPageSamples);
+            PcmReadScope scope(true);
+            for (unsigned page = firstPage; page < firstPage + 4; ++page)
+                ready &= scope.view(*cache, source, page * PcmReadCache::kPageSamples, 1).front() == .625f;
+        }
+        check(ready && cache->counters().misses == 0,
+              "warming a page range does not evict earlier pages in the same warm-up");
+        cache->removeSource(source);
+    }
+    {
+        auto cache = std::make_unique<PcmReadCache>(128 * PcmReadCache::kPageSamples * sizeof(float));
+        std::vector<float> original(12 * PcmReadCache::kPageSamples);
+        for (unsigned page = 0; page < 12; ++page)
+            std::fill_n(original.data() + page * PcmReadCache::kPageSamples,
+                        PcmReadCache::kPageSamples, float(page + 1));
+        const auto source = cache->addSource(original.data(), original.size());
+        cache->warm(source, 0, original.size());
+        bool correct = PcmReadScope::current() == nullptr;
+        {
+            PcmReadScope scope(true);
+            { PcmReadScope offline(false); correct &= PcmReadScope::current() == nullptr; }
+            correct &= PcmReadScope::current() == &scope;
+            // Fill, reuse, then replace all eight lazily initialized cursors.
+            for (unsigned round = 0; round < 3; ++round) for (unsigned page = 0; page < 12; ++page) {
+                const auto first = page * PcmReadCache::kPageSamples;
+                correct &= scope.view(*cache, source, first, 7).front() == float(page + 1);
+                correct &= scope.view(*cache, source, first + 3, 2).back() == float(page + 1);
+            }
+        }
+        check(correct && !PcmReadScope::current() && cache->counters().misses == 0,
+              "lazy PCM cursors preserve hits, replacement and nested realtime/offline scopes");
+        cache->removeSource(source);
     }
     {
         auto& pool = BackgroundExecutor::instance();

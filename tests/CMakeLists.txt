@@ -79,6 +79,11 @@ target_link_libraries(plugin_batch_test PRIVATE daw_controller)
 add_test(NAME plugin_batch_test COMMAND plugin_batch_test)
 set_tests_properties(plugin_batch_test PROPERTIES TIMEOUT 90)
 target_link_libraries(controller_test PRIVATE daw_controller)
+if(MSVC)
+    # This monolithic test keeps over 100 controller fixtures in one main()
+    # stack frame. Its reserve must not constrain the shipped application.
+    target_link_options(controller_test PRIVATE /STACK:67108864)
+endif()
 
 add_test(NAME controller_test COMMAND controller_test)
 set_tests_properties(controller_test PROPERTIES
@@ -499,7 +504,7 @@ add_test(NAME track_freeze_test COMMAND track_freeze_test)
 set_tests_properties(track_freeze_test PROPERTIES TIMEOUT 120)
 
 add_executable(audio_engine_bench EXCLUDE_FROM_ALL audio_engine_bench.cpp)
-target_link_libraries(audio_engine_bench PRIVATE daw_engine)
+target_link_libraries(audio_engine_bench PRIVATE daw_pluginhost)
 
 # Capture channel publication and timestamped live waveform history.
 add_executable(recording_preview_test recording_preview_test.cpp)

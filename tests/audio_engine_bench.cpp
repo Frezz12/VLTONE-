@@ -6,13 +6,30 @@
 #include "Nodes/PlaybackNodes.hpp"
 #include "RealtimeMetrics.hpp"
 #include "Job/AudioWorkerRegistration.hpp"
+#include "Host/PluginNode.hpp"
+#ifdef DAW_ENABLE_VST3
+#include "Vst3/Vst3Factory.hpp"
+#endif
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <chrono>
 #include <ctime>
 #include <thread>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 using namespace daw::engine;
+static double processCpuMs() {
+#ifdef _WIN32
+    FILETIME created{}, ended{}, kernel{}, user{};
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &ended, &kernel, &user)) return -1;
+    const auto ticks = [](FILETIME t) { return (std::uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime; };
+    return double(ticks(kernel) + ticks(user)) / 10000.;
+#else
+    return 1000. * std::clock() / CLOCKS_PER_SEC;
+#endif
+}
 struct Tone final : Node {
     std::string_view name() const noexcept override { return "source"; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
@@ -23,6 +40,8 @@ struct Tone final : Node {
 };
 int main(int argc, char** argv) {
     unsigned tracks = 1000, frames = 256, workers = 0, blocks = 300, rounds = 3;
+    unsigned plugins = 0;
+    std::string pluginPath;
     double rate = 48000;
     bool heavy = false, paced = false, realtimeWorkers = false, serial = false, clips = false;
     for (int i = 1; i < argc; ++i) {
@@ -39,10 +58,28 @@ int main(int argc, char** argv) {
             else if (!std::strcmp(option, "--blocks")) blocks = std::atoi(value);
             else if (!std::strcmp(option, "--rounds")) rounds = std::atoi(value);
             else if (!std::strcmp(option, "--rate")) rate = std::atof(value);
+            else if (!std::strcmp(option, "--plugins")) plugins = std::atoi(value);
+            else if (!std::strcmp(option, "--vst3")) pluginPath = value;
             else return 2;
         } else return 2;
     }
     if (!tracks || tracks > 10000 || !frames || frames > 8192 || !blocks || blocks > 1000000 || !rounds || rounds > 100 || rate < 8000 || rate > 384000) return 2;
+    if (plugins > 32 || (plugins != 0) != !pluginPath.empty()) return 2;
+    std::unique_ptr<daw::plugins::PluginFactory> factory;
+    daw::plugins::PluginDescriptor descriptor;
+    if (plugins) {
+#ifdef DAW_ENABLE_VST3
+        factory = std::make_unique<daw::plugins::Vst3Factory>();
+        const auto candidates = factory->inspect(pluginPath);
+        const auto effect = std::find_if(candidates.begin(), candidates.end(),
+            [](const auto& d) { return !d.isInstrument; });
+        if (effect == candidates.end()) return 2;
+        descriptor = *effect;
+        std::printf("plugin=%s instances=%u\n", descriptor.name.c_str(), tracks * plugins);
+#else
+        return 2;
+#endif
+    }
     AudioGraph graph;
     auto master = graph.addNode(std::make_unique<SumNode>("master")); graph.setSink(master);
     for (unsigned track = 0; track < tracks; ++track) {
@@ -67,6 +104,13 @@ int main(int argc, char** argv) {
         if (heavy) {
             const auto eq = graph.addNode(std::make_unique<BiquadNode>("EQ", 4));
             graph.connect(previous, eq); previous = eq;
+        }
+        for (unsigned i = 0; i < plugins; ++i) {
+            auto instance = factory->create(descriptor);
+            if (!instance) return 1;
+            const auto next = graph.addNode(std::make_unique<daw::plugins::PluginNode>(
+                descriptor.name, std::move(instance)));
+            graph.connect(previous, next); previous = next;
         }
         for (unsigned i = 0; i < 3; ++i) {
             const auto next = graph.addNode(std::make_unique<GainNode>("gain"));
@@ -103,7 +147,7 @@ int main(int argc, char** argv) {
         auto metrics = std::make_unique<daw::rt::BlockMetrics>(); daw::rt::TimingAccumulator samples;
         const auto* cache = PcmReadCache::existing();
         const auto missesBefore = cache ? cache->counters().misses : 0;
-        const auto cpuStart = std::clock();
+        const auto cpuStart = processCpuMs();
         for (unsigned i = 0; i < blocks; ++i) {
             const auto deadline = std::chrono::steady_clock::now() + period;
             const auto start = daw::rt::nowNanos(); if (!render(i)) return 1;
@@ -113,7 +157,8 @@ int main(int argc, char** argv) {
             // latency hidden by throughput loops; it is not a hardware xrun test.
             if (paced) std::this_thread::sleep_until(deadline);
         }
-        const double cpuMs = 1000. * (std::clock() - cpuStart) / CLOCKS_PER_SEC / blocks;
+        const auto cpuEnd = processCpuMs();
+        const double cpuMs = cpuStart >= 0 && cpuEnd >= 0 ? (cpuEnd - cpuStart) / blocks : -1;
         const auto misses = cache ? cache->counters().misses - missesBefore : 0;
         const auto s = samples.summary();
         std::printf("%u,%u,%.4f,%.4f,%.4f,%.4f,%.4f,%llu,%.4f,%llu\n", round, fusion, s.meanMs, s.p95Ms, s.p99Ms, s.p999Ms, s.maximumMs, (unsigned long long)s.overruns, cpuMs, (unsigned long long)misses);

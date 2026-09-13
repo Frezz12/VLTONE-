@@ -39,6 +39,7 @@ struct NativeAudioFileReader::Impl {
     std::size_t offset = 0;
     bool eof = false;
     FrameCount seekTarget = 0;
+    FrameCount decodedFrames = 0;
     bool seeking = false;
 #endif
 };
@@ -141,12 +142,17 @@ Result NativeAudioFileReader::seek(FrameCount frame) {
     PROPVARIANT position;
     PropVariantInit(&position);
     position.vt = VT_I8;
-    position.hVal.QuadPart = LONGLONG(static_cast<long double>(frame) * 10000000.0L / m_impl->info.sampleRate);
+    // Media Foundation AAC timestamps after a random seek do not account for
+    // decoder priming consistently. Count decoded PCM from the stream origin
+    // instead, so frame positions match a complete decode without a 1024-frame
+    // offset. Discarding stays bounded to one decoded block at a time.
+    position.hVal.QuadPart = 0;
     const HRESULT hr = m_impl->reader->SetCurrentPosition(GUID_NULL, position);
     m_impl->status = SUCCEEDED(hr) ? Result::ok() : failure("Cannot seek audio", hr);
     if (SUCCEEDED(hr)) {
         m_impl->pending.clear(); m_impl->offset = 0; m_impl->eof = false;
         m_impl->seekTarget = frame; m_impl->seeking = true;
+        m_impl->decodedFrames = 0;
     }
 #else
     m_impl->status = failure("Cannot seek audio", -1);
@@ -205,11 +211,12 @@ FrameCount NativeAudioFileReader::read(float* destination, FrameCount frames) {
         buffer->Unlock();
         m_impl->offset = 0;
         if (m_impl->seeking) {
-            const auto start = std::llround(static_cast<long double>(timestamp) * m_impl->info.sampleRate / 10000000.0L);
-            const auto skip = std::max<long long>(0, static_cast<long long>(m_impl->seekTarget) - start);
+            const auto skip = m_impl->seekTarget > m_impl->decodedFrames
+                ? m_impl->seekTarget - m_impl->decodedFrames : 0;
             m_impl->offset = std::min<std::size_t>(skip, m_impl->pending.size() / channels) * channels;
             if (m_impl->offset < m_impl->pending.size()) m_impl->seeking = false;
         }
+        m_impl->decodedFrames += m_impl->pending.size() / channels;
     }
     return written;
 #else

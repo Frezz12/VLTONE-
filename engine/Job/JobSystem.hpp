@@ -44,7 +44,11 @@ public:
 
     /// Owner only. Returns false when the deque is empty.
     bool pop(std::uint32_t& out) noexcept {
-        std::int64_t bottom = m_bottom.load(std::memory_order_relaxed) - 1;
+        std::int64_t bottom = m_bottom.load(std::memory_order_relaxed);
+        // Only this owner can push. Thieves can only advance top, so an
+        // already-empty deque needs no bottom write or full memory fence.
+        if (bottom <= m_top.load(std::memory_order_acquire)) return false;
+        --bottom;
         m_bottom.store(bottom, std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_seq_cst);
         std::int64_t top = m_top.load(std::memory_order_relaxed);
