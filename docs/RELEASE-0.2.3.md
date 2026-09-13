@@ -1,0 +1,142 @@
+# VLTONE 0.2.3
+
+Cumulative release since published 0.1.6. Windows x64, local projects; multiplayer is excluded at compile time.
+
+## Build
+
+```powershell
+packaging/windows/build.ps1 -QtRoot .cache/qt/6.8.3/msvc2022_64 -VcpkgRoot build-windows/_deps/vcpkg -DisableCollaboration
+```
+
+The switch configures both `DAW_ENABLE_COLLABORATION=OFF` and `DAW_ENFORCE_COLLABORATION_RELEASE_GATES=OFF`. The main application does not construct collaboration services, the session strip or the Session menu in this configuration. Account sign-in is independent. Windows CI uses the same switch so its installer also excludes multiplayer.
+
+## Release description
+
+The bilingual, machine-readable description is [admin/release-template.json](../admin/release-template.json). It covers commits after `ffac0a4` (0.1.6), including 0.1.7, 0.1.9, 0.2.0, 0.2.1, 0.2.2 and the current changes. No separate 0.1.8 history entry is invented.
+
+### Русский
+
+VLTONE 0.2.3 объединяет изменения после опубликованной версии 0.1.6: заморозку дорожек, новые инструменты обработки и анализа аудио, расширенный Pattern Editor, встроенные эффекты модуляции, обновлённый браузер и улучшения быстродействия. Переработаны рендер, запись, работа с плагинами и сохранённый вход. Эта Windows-сборка предназначена для локальной работы: мультиплеер отключён при компиляции, создание совместных сессий и подключение к ним недоступны.
+
+#### Новые функции
+
+- Freeze / Unfreeze для аудио-, MIDI- и инструментальных дорожек: независимая заморозка, отмена действия и сохранение состояния в проекте.
+- Offline Render обрабатывает выбранные аудиоклипы и заменяет их готовыми файлами. Исходник и последующие результаты сохраняются в истории сэмплера; к исходному звуку можно вернуться через Clip FX.
+- «Общие плагины» применяют настроенную цепочку к нескольким дорожкам или аудиоклипам. Источник прослушивания выбирается из выделения, а каждый получатель получает независимые экземпляры эффектов. Открытие — из контекстного меню или Ctrl+Shift+P.
+- Новые профили растяжения аудио Stretch, Loop, Vocal и Complex с сохранением музыкальной позиции при изменении темпа проекта.
+- Локальный анализ темпа и тональности: гибридные алгоритмы, дробный BPM, альтернативные варианты темпа и отображение неоднозначных результатов. Анализ работает на CPU и не требует отправки аудио на сервер.
+- Встроенные эффекты Doubler / Doubler Pro, Chorus, Flanger и Phaser: собственные панели, заводские и пользовательские пресеты, автоматизация параметров и сохранение настроек в проекте.
+- Pattern Editor: заполнение ритма, замена содержимого перетаскиванием MIDI, автоматические ghost notes и режим Cut Itself у сэмплера.
+- Новый встроенный браузер: тёмная стартовая страница с логотипом VLTONE, поиском и четырьмя закреплёнными сервисами — YouTube, SoundCloud, Splice и Spotify.
+- В боковой панели браузера доступны главная страница, закладки, история, загрузки и настройки. Вкладки, восстановление сессии и импорт аудио связаны с существующими функциями программы.
+- Фоны браузера из коллекции, локальных изображений, GIF и видео; поддержка видеофона таймлайна.
+- Notebook с форматированием текста, отдельным окном и текстом, привязанным ко времени проекта.
+- Опциональная GPU-отрисовка рабочего пространства, таймлайна, микшера и графических панелей. Режим совместимости и сохранённая настройка пользователя остаются доступными.
+- Расширенные средства диагностики аудиоустройств, записи и сбоев плагинов; обновлённые инструкции на русском и английском языках.
+
+#### Изменения
+
+- Мультиплеер не входит в эту Windows-сборку 0.2.3: интерфейс совместных сессий и подключение сетевых сервисов отключены при компиляции. Локальные проекты и обычные функции аккаунта доступны.
+- Сэмплер и редактор аудио стали компактнее: волновая форма расположена над вкладками Playback, Envelope и Processing.
+- Обновлены контекстная панель, обзорная полоса, сетка и работа с автоматизацией; режим создания автоматизации двойным щелчком выбирается явно.
+- BPM меняется перетаскиванием: 10 пикселей на 1 BPM, с Shift — на 0,1 BPM. Двойной щелчок открывает числовой ввод, один жест создаёт один шаг Undo.
+- Микшер можно закрыть перетаскиванием к нижнему краю. При повторном открытии восстанавливается высота, которая была до этого жеста.
+- Обновлены значок и курсор инструмента разрезания; линия позиции разреза проходит через таймлайн для точного совмещения.
+- Ускорены подготовка сэмплов, чтение PCM и работа с плотными проектами. Снижены лишние операции планировщика и затраты движка на малых аудиобуферах.
+- В GPU-режиме перемещение окон редакторов и изменение высоты микшера больше не вызывают лишнюю перерисовку статического таймлайна.
+- Из стартовой страницы браузера удалены Discover Music и карточки ресурсов. Сохранённые пользователем закладки доступны в меню; в закреплённой области остаются только четыре выбранных сервиса.
+- Обновлены дизайн сайта и админки, фирменные значки, страницы релизов, входа и аккаунта. Язык сайта сохраняется в настройке браузера, а прежние ссылки с /ru и /en продолжают работать.
+- Расширены управление фонами, история диагностики и инструменты подготовки релизов в админке.
+
+#### Исправления
+
+- Ошибки DSP и отсутствующие активные плагины больше не приводят к молчаливому успешному экспорту. Неудачный проход сохраняет предыдущие результаты и удаляет временные файлы.
+- Исправлены компенсация задержек после подготовки offline-плагинов, обработка их запросов перенастройки и завершение экспорта с хвостами эффектов.
+- Улучшена устойчивость Windows-рендера сторонних плагинов, включая увеличенный резерв стека для offline-обработки.
+- Исправлены проблемы маршрутизации входов, мониторинга, многоканальной записи и восстановления аудиоустройства; выбор устройства использует устойчивые системные идентификаторы.
+- Снижены помехи для живого ввода от фонового сохранения состояний плагинов. Улучшены диагностика остановившихся callbacks и обработка ошибок аудиографа.
+- Улучшены жизненный цикл окон плагинов, перетаскивание Inserts и создание инструментальных дорожек; исправлены связанные ошибки при закрытии и восстановлении интерфейса.
+- Колесо мыши и прокрутка трекпада над фейдерами каналов и мастера больше не меняют громкость. Устранены случайные изменения параметров при прокрутке над инспектором и сэмплером.
+- Исправлены сохранение, Undo / Redo и повторное открытие проектов со stretch и freeze; улучшена устойчивость восстановления проекта после сбоя.
+- Сохранённый вход восстанавливается через системное хранилище учётных данных; повторное обновление сессии устойчивее к сетевым сбоям и потерянному ответу сервера.
+- Исправлены отменённая навигация, всплывающие окна, восстановление после сетевых ошибок и закрытие вкладок браузера; учтены системный прокси и VPN.
+- Исправлена настройка постоянного профиля GPU-браузера для поддерживаемой версии Qt; сохранение cookies и кэша использует заданные каталоги профиля.
+- Исправлено вытеснение только что загруженных страниц из PCM-кэша при прогреве диапазона и добавлены проверки конкурентного доступа к аудиоданным.
+- Завершение приложения дожидается фонового чтения изображений темы перед освобождением графических плагинов Qt; исправлено отображение фона контекстной панели в Windows.
+- Улучшены сообщения об ошибках и загрузка файлов релиза в админке; устранены проблемы совместимости Qt 6.8 и зависимостей Windows-сборки.
+- Исправлена точность перемотки M4A / AAC в Windows: после перехода к выбранному сэмплу звук совпадает с полным декодированием, без смещения на один AAC-пакет.
+
+### English
+
+VLTONE 0.2.3 brings together the changes since published version 0.1.6: track freezing, new audio processing and analysis tools, an expanded Pattern Editor, built-in modulation effects, a redesigned browser and performance improvements. Rendering, recording, plugin handling and saved sign-in have been improved. This Windows build is for local projects: multiplayer is disabled at compile time, so creating and joining collaborative sessions is unavailable.
+
+#### New features
+
+- Freeze / Unfreeze for audio, MIDI and instrument tracks, with independent freezing, undo and project-state persistence.
+- Offline Render processes selected audio clips and replaces them with rendered files. The original and subsequent results remain in sampler history, with restoration available through Clip FX.
+- Shared Plugins applies one configured chain to multiple tracks or audio clips. Auditioning uses a source from the selection, and each destination receives independent effect instances. Open it from the context menu or with Ctrl+Shift+P.
+- New Stretch, Loop, Vocal and Complex audio-stretch profiles preserve musical positions when the project tempo changes.
+- Local tempo and key analysis with hybrid algorithms, fractional BPM, alternative tempo candidates and explicit ambiguous results. Analysis runs on the CPU without sending audio to a server.
+- Built-in Doubler / Doubler Pro, Chorus, Flanger and Phaser effects with dedicated panels, factory and user presets, parameter automation and project-state persistence.
+- Pattern Editor rhythm filling, MIDI drag-and-drop replacement, automatic ghost notes and the sampler's Cut Itself mode.
+- Redesigned integrated browser with a dark start page, VLTONE branding, search and four pinned services: YouTube, SoundCloud, Splice and Spotify.
+- The browser sidebar provides Home, bookmarks, history, downloads and settings. Tabs, session restoration and audio import remain connected to the application's existing features.
+- Browser backgrounds from a collection, local images, GIFs and videos, plus timeline video-background support.
+- Notebook with rich-text formatting, a separate window and text linked to project time.
+- Optional GPU rendering for the workspace, timeline, mixer and graphical panels. Compatibility mode and the user's saved setting remain available.
+- Expanded audio-device, recording and plugin-failure diagnostics, with updated Russian and English manuals.
+
+#### Changes
+
+- Multiplayer is excluded from this Windows 0.2.3 build: collaborative-session UI and networking-service injection are disabled at compile time. Local projects and regular account features remain available.
+- The sampler and audio editor use a more compact layout, with the waveform above the Playback, Envelope and Processing tabs.
+- Updated context panel, overview strip, grid and automation workflow, including an explicit mode for creating automation by double-clicking.
+- Drag tempo at 10 pixels per BPM, or 0.1 BPM with Shift. Double-click for numeric entry; each gesture creates a single undo step.
+- Drag the mixer to the bottom edge to close it. Reopening restores its height from before the gesture.
+- Updated cutting-tool icon and cursor, with a cut-position guide across the timeline for precise alignment.
+- Improved sample preparation, PCM reading and dense-project handling. Reduced unnecessary scheduler operations and engine overhead at small audio buffers.
+- In GPU mode, moving editor windows and resizing the mixer no longer trigger unnecessary redraws of the static timeline.
+- Removed Discover Music and resource cards from the browser start page. Saved bookmarks remain available in the menu; the pinned area contains only the four selected services.
+- Refreshed website and admin design, brand icons, release pages, sign-in and account pages. The website remembers the selected language, and previous /ru and /en links continue to work.
+- Expanded background management, diagnostic history and release-preparation tools in the admin panel.
+
+#### Fixes
+
+- DSP failures and missing active plugins no longer result in a silently successful export. Failed passes preserve previous results and remove temporary files.
+- Fixed latency compensation after offline plugin preparation, handling of plugin reconfiguration requests and export completion with effect tails.
+- Improved third-party plugin rendering stability on Windows, including a larger stack reserve for offline processing.
+- Fixed input routing, monitoring, multichannel recording and audio-device recovery issues. Device selection uses stable system identifiers.
+- Reduced interference with live input from background plugin-state saving. Improved stalled-callback diagnostics and audio-graph error handling.
+- Improved plugin-window lifetimes, insert drag-and-drop and instrument-track creation, with fixes for closing and restoring editors.
+- Mouse-wheel and trackpad scrolling over channel and master faders no longer change volume. Fixed accidental parameter changes while scrolling over the inspector and sampler.
+- Fixed saving, undo / redo and reopening projects using stretch and freeze, with more resilient project recovery after crashes.
+- Saved sign-in recovers through the system credential vault. Session-refresh retries better tolerate network failures and lost server responses.
+- Fixed cancelled navigation, popup handling, network-error recovery and browser-tab teardown, including system proxy and VPN support.
+- Fixed persistent GPU-browser profile setup for the supported Qt version, using the configured profile directories for cookies and cache.
+- Fixed eviction of freshly loaded PCM pages while warming an audio range, with added concurrent audio-data access checks.
+- Application shutdown waits for background theme-image reads before Qt releases its graphics plugins. Fixed context-panel background painting on Windows.
+- Improved admin release-upload handling and error messages, and resolved Qt 6.8 compatibility and Windows build-dependency issues.
+- Fixed sample-accurate M4A / AAC seeking on Windows: audio at the requested position matches a complete decode without a one-packet AAC offset.
+
+## Windows validation fixes
+
+- The monolithic controller test places over 100 fixtures in its main stack frame. Its executable now reserves 64 MiB; this does not change the application's 8 MiB reserve.
+- The timeline performance check uses unbuffered stdout instead of a zero-size line buffer rejected by the Windows CRT.
+- Build-tree CTest uses QML modules from the selected Qt toolchain; the override is restored before deployed-runtime verification.
+- Windows native AAC seeks count decoded PCM from the origin instead of assuming random-seek timestamps account for priming. The existing test reproduced a 1024-frame offset; repeated forward/backward seeks and packet boundaries are covered. This uses bounded memory but seek work grows with the decoded prefix, outside realtime playback. See [Microsoft's seek contract](https://learn.microsoft.com/en-us/windows/win32/api/mfreadwrite/nf-mfreadwrite-imfsourcereader-setcurrentposition).
+
+## Server draft
+
+Saved in the existing backend release store as draft `f14ba36a-022c-431b-ba25-a9431f3ff6a1`. Publication and installer uploads are left to the owner. Earlier releases are unchanged.
+
+## Verification on 13 September 2026
+
+- All 73 registered Windows CTest checks passed in 171.69 seconds: [test log](reviews/2026-09-13/release-0.2.3/ctest.txt).
+- Production website and admin builds and TypeScript checks passed. Playwright: 23 website tests and 14 admin tests passed; the release form was rechecked after the final AAC note was added.
+- Runtime dependency validation passed for 86 PE files in the deployment.
+- The deployed application's English and Russian self-tests passed from a directory containing Cyrillic characters. These offscreen checks use the packaging script's test-only Chromium sandbox setting; shipped browser settings are unchanged.
+- The media/QML smoke test passed against the deployed runtime with development Qt paths removed from the environment.
+- CMake cache and the actual main.cpp compile command confirm multiplayer is disabled. The application PE file and product versions are `0.2.3.0`.
+- No signing certificate was supplied; the Windows artifacts are unsigned.
+- Inno Setup 6.7.1 produced `VLTONE-0.2.3-x64-Setup.exe` (234,822,594 bytes). The ZIP's executable matches the tested deployment. Artifact hashes and build settings are recorded in [artifacts.json](reviews/2026-09-13/release-0.2.3/artifacts.json).
+- The server draft's canonical bilingual content matches `admin/release-template.json` (SHA-256 `9b9e51cc7e251a7e5534abbd169bf8a3ad99541858cfe4f70b6337444da62953`). It has zero artifacts, no publication timestamp, and its public endpoint returns 404.

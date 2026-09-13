@@ -1,0 +1,19 @@
+{
+  "version": "0.2.3",
+  "platform": "windows",
+  "architecture": "x64",
+  "multiplayer": false,
+  "signature": "NotSigned",
+  "ctest_passed": 73,
+  "ctest_failed": 0,
+  "installer": {
+    "file": "VLTONE-0.2.3-x64-Setup.exe",
+    "bytes": 234822594,
+    "sha256": "292eef740ea45640390b38836ee6abf562245afc276fc5c1e0b24a88576042bf"
+  },
+  "zip": {
+    "file": "VLTONE-0.2.3-windows-x64.zip",
+    "bytes": 266713952,
+    "sha256": "1d263b2d6a9b23485a6440b70ec9c456f148b0de3e5597a2b3d79b5db4c27819"
+  }
+}

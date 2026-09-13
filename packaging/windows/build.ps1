@@ -9,6 +9,7 @@ param(
     [string] $MsvcToolset = "14.44",
     [string] $WindowsSdkVersion = "10.0.26100.0",
     [string] $SignPfxPath = "",
+    [switch] $DisableCollaboration,
     [switch] $RequireSignature,
     [switch] $SkipTests,
     [switch] $SkipInstaller
@@ -209,8 +210,11 @@ if (-not (Test-Path -LiteralPath $dumpbinPath -PathType Leaf)) {
     throw "dumpbin.exe was not found in the activated MSVC toolset."
 }
 Resolve-QtRoot
-# Validate controller coverage before spending time on native dependencies.
-Invoke-Checked cmake -P (Join-Path $repository "cmake\CheckCollaborationMutationCoverage.cmake")
+$collaboration = if ($DisableCollaboration) { "OFF" } else { "ON" }
+# Coverage is a release gate only when collaboration is included.
+if (-not $DisableCollaboration) {
+    Invoke-Checked cmake -P (Join-Path $repository "cmake\CheckCollaborationMutationCoverage.cmake")
+}
 New-Item -ItemType Directory -Force -Path $BuildDirectory | Out-Null
 Resolve-VcpkgRoot
 
@@ -219,8 +223,9 @@ Invoke-Checked cmake --preset windows-vcpkg -B $BuildDirectory `
     "-DCMAKE_BUILD_TYPE=$Configuration" `
     "-DCMAKE_INSTALL_PREFIX:PATH=$stageDirectory" `
     "-DCMAKE_PREFIX_PATH:PATH=$QtRoot" `
-    "-DDAW_ENABLE_COLLABORATION=ON" `
-    "-DDAW_ENFORCE_COLLABORATION_RELEASE_GATES=ON" `
+    "-DDAW_ENABLE_COLLABORATION=$collaboration" `
+    "-DDAW_ENFORCE_COLLABORATION_RELEASE_GATES=$collaboration" `
+    "-DVLTONE_RELEASE_CHANNEL=" `
     "-DVLT_DEFAULT_API_ORIGIN=$ApiOrigin" `
     "-DCMAKE_SYSTEM_VERSION=$WindowsSdkVersion"
 # Catch Qt binary/header incompatibilities before compiling the full engine.
@@ -230,8 +235,17 @@ Invoke-Checked cmake --build $BuildDirectory --config $Configuration --parallel
 if (-not $SkipTests) {
     # Run every registered test; adding tests must not break packaging just
     # because a duplicated hard-coded count was not updated.
-    Invoke-Checked ctest --test-dir $BuildDirectory -C $Configuration `
-        --output-on-failure --no-tests=error
+    $oldQmlImportPath = $env:QML_IMPORT_PATH
+    try {
+        # Build-tree DLLs can sit beside an older qt.conf. Use this toolchain's
+        # QML modules for CTest, then remove the override before deployment QA.
+        $env:QML_IMPORT_PATH = Join-Path $QtRoot "qml"
+        Invoke-Checked ctest --test-dir $BuildDirectory -C $Configuration `
+            --output-on-failure --no-tests=error
+    } finally {
+        if ($null -eq $oldQmlImportPath) { Remove-Item Env:QML_IMPORT_PATH -ErrorAction SilentlyContinue }
+        else { $env:QML_IMPORT_PATH = $oldQmlImportPath }
+    }
 }
 
 if (Test-Path -LiteralPath $stageDirectory) {
