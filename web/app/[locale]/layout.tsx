@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { locales } from "@/i18n/request";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
+import { MotionEffects } from "@/components/motion-effects";
 import localFont from "next/font/local";
 import { siteUrl } from "@/lib/seo";
 import "../globals.css";
@@ -14,7 +15,7 @@ const inter = localFont({ src: [
   { path: "../../fonts/Inter-Regular.ttf", weight: "400", style: "normal" },
 ], display: "swap", variable: "--font-vltone" });
 
-export const metadata: Metadata = { metadataBase: new URL(siteUrl), title: { default: "VLTone", template: "%s — VLTone" }, applicationName: "VLTone", icons: { icon: "/favicon.svg", apple: "/apple-icon.png" } };
+export const metadata: Metadata = { metadataBase: new URL(siteUrl), title: { default: "VLTone", template: "%s — VLTone" }, applicationName: "VLTone", icons: { icon: "/icon.png", shortcut: "/icon.png", apple: "/apple-icon.png" } };
 export function generateStaticParams() { return locales.map((locale) => ({ locale })); }
 
 export default async function LocaleLayout({ children, params }: Readonly<{ children: React.ReactNode; params: Promise<{ locale: string }> }>) {
@@ -26,6 +27,7 @@ export default async function LocaleLayout({ children, params }: Readonly<{ chil
     <html lang={locale}>
       <body className={inter.variable}>
         <NextIntlClientProvider messages={messages}>
+          <MotionEffects />
           <div className="vlt-shell"><Header locale={locale} />{children}<Footer locale={locale} /></div>
         </NextIntlClientProvider>
       </body>

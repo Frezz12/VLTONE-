@@ -5,7 +5,6 @@ import { api } from "@vlt/api-client";
 import { Laptop, LogOut, RefreshCw, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 export function AccountPanel({ locale }: { locale: string }) {
@@ -23,7 +22,7 @@ export function AccountPanel({ locale }: { locale: string }) {
       setAccount(next); setDevices(list.devices.filter((device) => !device.revoked_at));
     } catch (reason) {
       const apiError = reason as APIError;
-      if (apiError.code === "authentication_required" || apiError.code === "session_expired") router.replace(`/${locale}/login`);
+      if (apiError.code === "authentication_required" || apiError.code === "session_expired") router.replace("/login");
       else setError(apiError.message);
     }
   }
@@ -34,7 +33,7 @@ export function AccountPanel({ locale }: { locale: string }) {
       setError("");
     } catch (reason) {
       const apiError = reason as APIError;
-      if (apiError.code === "authentication_required" || apiError.code === "session_expired") router.replace(`/${locale}/login`);
+      if (apiError.code === "authentication_required" || apiError.code === "session_expired") router.replace("/login");
       else setError(apiError.message);
     }
   }
@@ -53,13 +52,13 @@ export function AccountPanel({ locale }: { locale: string }) {
   }
   async function logout() {
     await api.request("/v1/web/auth/logout", { method: "POST", headers: { "X-CSRF-Token": account!.csrf_token } });
-    router.replace(`/${locale}/login`); router.refresh();
+    router.replace("/login"); router.refresh();
   }
   const number = new Intl.NumberFormat(locale);
   return <main id="main-content" className="vlt-main account-layout">
     <div className="vlt-row vlt-between"><div><h1 className="vlt-title">{t("title")}</h1><p className="vlt-subtitle">{account.user.nickname} · {account.user.email}</p></div><button className="vlt-button vlt-button-secondary" onClick={logout}><LogOut size={16} aria-hidden /> {t("logout")}</button></div>
     {error && <div className="vlt-error" role="alert">{error}</div>}
-    <section className="vlt-card vlt-card-pad account-next"><div><span className="section-label">{locale === "ru" ? "Открытая бета · Следующий шаг" : "Open beta · Next step"}</span><h2>{locale === "ru" ? "Аккаунт готов. Теперь — к музыке." : "Your account is ready. Time to make music."}</h2><p>{locale === "ru" ? "Скачайте и установите VLTone. При первом запуске войдите с той же почтой и паролем, что на сайте." : "Download and install VLTone. On first launch, sign in with the same email and password you use on this website."}</p></div><Link className="vlt-button" href={`/${locale}/releases`}>{locale === "ru" ? "Скачать VLTone" : "Download VLTone"}</Link></section>
+    <section className="vlt-card vlt-card-pad account-next"><div><span className="section-label">{locale === "ru" ? "Открытая бета · Следующий шаг" : "Open beta · Next step"}</span><h2>{locale === "ru" ? "Аккаунт готов. Теперь — к музыке." : "Your account is ready. Time to make music."}</h2><p>{locale === "ru" ? "Скачайте и установите VLTone. При первом запуске войдите с той же почтой и паролем, что на сайте." : "Download and install VLTone. On first launch, sign in with the same email and password you use on this website."}</p></div><a className="vlt-button" href="/releases">{locale === "ru" ? "Скачать VLTone" : "Download VLTone"}</a></section>
     <div className="vlt-grid vlt-grid-2">
       <section className="vlt-card vlt-card-pad vlt-stack"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">{t("plan")}</h2><span className="vlt-badge vlt-badge-accent">Demo</span></div><div><strong>{locale === "ru" ? "Все функции доступны" : "All features enabled"}</strong><p className="vlt-subtitle">{locale === "ru" ? "Бессрочный тестовый доступ" : "Indefinite tester access"}</p></div></section>
       <section className="vlt-card vlt-card-pad vlt-stack"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">{t("tokens")}</h2><RefreshCw size={16} className="vlt-muted" aria-hidden /></div><div><div className="quota-line"><span>{t("used")}: <span className="vlt-code">{number.format(account.quota.used_tokens)}</span></span><span>{t("remaining")}: <span className="vlt-code">{number.format(account.quota.remaining_tokens)}</span></span></div><div className="vlt-progress" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${percent}%` }} /></div><p className="vlt-subtitle">{t("reset", { date: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(account.quota.ends_at)) })} UTC</p></div></section>

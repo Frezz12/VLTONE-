@@ -16,15 +16,16 @@ test("RU/EN pages and registration-to-account flow", async ({ page }) => {
   });
 
   await page.goto("/en");
-  await expect(page.getByRole("heading", { name: /VLTone.*Listen\. Create\. Feel\./ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /VLTone.*Recording, MIDI, and mixing\./ })).toBeVisible();
   await page.goto("/ru/register");
+  await expect(page).toHaveURL(/\/register$/);
   await page.getByLabel("Почта").fill("tester@example.com");
   await page.getByLabel("Никнейм").fill("Тестировщик");
   await page.getByLabel("Пароль", { exact: true }).fill("correct horse battery staple");
   await page.getByLabel("Повторите пароль").fill("correct horse battery staple");
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Зарегистрироваться" }).click();
-  await expect(page).toHaveURL(/\/ru\/account$/);
+  await expect(page).toHaveURL(/\/account$/);
   await expect(page.getByText("18 000 000")).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "20");
@@ -39,7 +40,8 @@ test("bug report rejects more than five attachments before upload", async ({ pag
     if (path.endsWith("/me")) return route.fulfill({ json: account });
     return route.fulfill({ status: 204 });
   });
-  await page.goto("/ru/bug-report");
+  await page.context().addCookies([{ name: "vlt-locale", value: "ru", url: "http://127.0.0.1:3100" }]);
+  await page.goto("/bug-report");
   await page.getByLabel("Краткий заголовок").fill("Ошибка экспорта");
   await page.getByLabel("Описание").fill("Экспорт останавливается после запуска");
   await page.getByLabel(/До 5 изображений/).setInputFiles(Array.from({ length: 6 }, (_, index) => ({

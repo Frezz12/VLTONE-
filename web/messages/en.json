@@ -3,83 +3,83 @@
     "metaTitle": "VLTone — Music creation software · Open beta",
     "metaDescription": "VLTone is a digital audio workstation for Windows and macOS. Record audio, write MIDI, arrange, mix, use plugins and an AI assistant. Join the open beta.",
     "betaTag": "Open beta",
-    "announcement": "Your next track starts here",
+    "announcement": "Available for Windows and macOS",
     "kicker": "Music creation software",
-    "title": "Listen. Create. Feel.",
-    "copy": "From a first idea to a finished track. Recording, arranging, mixing, and an AI assistant — in one space for your music.",
-    "create": "Join the beta",
-    "discover": "Discover VLTone",
-    "heroCaption": "Less between you and your music.",
+    "title": "Recording, MIDI, and mixing.",
+    "copy": "A DAW for Windows and macOS with audio recording, MIDI, plugins, mixing, export, and an AI assistant.",
+    "create": "Create an account",
+    "discover": "View features",
+    "heroCaption": "Audio · MIDI · plugins · AI",
     "overviewLabel": "Overview",
-    "overviewTitle": "Everything an idea\nneeds to become music.",
-    "overviewCopy": "VLTone is a digital audio workstation (DAW) for Windows and macOS. Record vocals and instruments, arrange audio and MIDI, shape your sound in the mixer, and export your music.",
-    "audienceCopy": "For musicians, beatmakers, producers, and anyone ready to bring a musical idea to life. From a home demo to a multitrack production, the whole process lives in one application.",
+    "overviewTitle": "The complete project\nin one application.",
+    "overviewCopy": "Record vocals and instruments, arrange audio and MIDI, and shape the result in the mixer.",
+    "audienceCopy": "Use VST, VST3, CLAP, and Audio Units on macOS. Export the full mix or separate tracks.",
     "manual": "Explore the guide",
     "featuresLabel": "Capabilities",
-    "featuresTitle": "From the first take to the final mix.",
-    "featuresCopy": "Tools that follow your workflow and leave room for creativity.",
+    "featuresTitle": "Core features",
+    "featuresCopy": "The tools you need from recording to export.",
     "features": {
       "recording": {
-        "title": "Capture the moment.",
-        "copy": "Record vocals and live instruments. Work with takes, edit audio clips, and find the right sound in your arrangement.",
+        "title": "Audio recording",
+        "copy": "Record vocals and instruments, manage takes, and edit audio clips.",
         "tag": "Audio",
         "anchor": "recording"
       },
       "midi": {
-        "title": "Give your idea a shape.",
-        "copy": "Write melodies in the piano roll, program rhythms, and play with a MIDI keyboard. Build parts with the sampler and your instruments.",
+        "title": "MIDI and instruments",
+        "copy": "Piano roll, MIDI keyboards, a built-in sampler, and rhythm programming.",
         "tag": "MIDI",
         "anchor": "piano-roll"
       },
       "mixing": {
-        "title": "Hear every detail.",
-        "copy": "Adjust levels, pan, and effects in the mixer. Automate parameters, then export your finished mix or individual tracks.",
+        "title": "Mixer and export",
+        "copy": "Levels, pan, effects, automation, and full-mix or multitrack export.",
         "tag": "Mixing",
         "anchor": "mixer"
       },
       "plugins": {
-        "title": "Your sound. Your tools.",
-        "copy": "Bring your favourite VST, VST3, and CLAP plugins, plus Audio Units on macOS. Use built-in effects and your own sample library.",
+        "title": "Plugins",
+        "copy": "VST, VST3, CLAP, Audio Units on macOS, built-in effects, and sample libraries.",
         "tag": "Plugins",
         "anchor": "plugin-manager"
       },
       "ai": {
-        "title": "Describe it. Try it.",
-        "copy": "Ask the AI assistant to create tracks, write a MIDI part, or adjust effects. Changes stay in your project and can be undone.",
+        "title": "AI assistant",
+        "copy": "Commands for tracks, MIDI, and effects. Every change remains in project history.",
         "tag": "AI assistant",
         "anchor": "ai-assistant"
       },
       "recovery": {
-        "title": "Return to your idea.",
-        "copy": "A background change journal helps recover your project after an unexpected exit. Save your projects and pick up where you left off.",
+        "title": "Autosave",
+        "copy": "A background change journal helps recover the project after an unexpected exit.",
         "tag": "Recovery",
         "anchor": "recovery"
       }
     },
     "betaLabel": "Get started",
-    "betaTitle": "An open beta.\nAn open invitation.",
-    "betaCopy": "VLTone is ready to try. No invitation or application required — just an account. Three simple steps to your first project.",
+    "betaTitle": "Start in three steps.",
+    "betaCopy": "Create an account, download VLTone, and sign in. No invitation is required.",
     "steps": {
       "register": {
-        "title": "Create an account.",
-        "copy": "Register on the website with your email, nickname, and password. You will use the same account to sign in to VLTone.",
+        "title": "Create an account",
+        "copy": "Enter an email, nickname, and password. Use the same account in VLTone.",
         "link": "Register"
       },
       "download": {
-        "title": "Download the app.",
-        "copy": "Open downloads, choose the latest version and the file for your system. Download the installer and install VLTone.",
+        "title": "Download the app",
+        "copy": "Choose the current release and installer for Windows or macOS.",
         "link": "Go to downloads"
       },
       "signin": {
-        "title": "Sign in. Start creating.",
-        "copy": "Launch VLTone and sign in with the email and password you used on the website. You are ready to open your first project.",
+        "title": "Sign in to VLTone",
+        "copy": "Use your website email and password, then open or create a project.",
         "link": "First launch guide"
       }
     },
     "betaNote": "This is a beta: we are developing the app and fixing issues. Your reports help make VLTone better.",
     "reportBug": "Report a bug",
     "faqLabel": "Good to know",
-    "faqTitle": "Before you begin.",
+    "faqTitle": "VLTone, briefly",
     "faq": {
       "what": {
         "question": "What is VLTone?",
@@ -106,8 +106,8 @@
         "answer": "Open Report a bug on the website and sign in. Describe what happened and how to reproduce it. Add screenshots if they help explain the issue."
       }
     },
-    "ctaLabel": "Take the first step",
-    "ctaTitle": "Your music starts with you.",
+    "ctaLabel": "VLTone",
+    "ctaTitle": "Download and start",
     "download": "Download VLTone",
     "productAlt": "VLTone workspace with audio tracks, arrangement, and mixer",
     "productCaption": "VLTone / The workspace"

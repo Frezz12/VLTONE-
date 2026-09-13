@@ -14,7 +14,7 @@ export function BugReportForm({ locale }: { locale: string }) {
   const [error, setError] = useState("");
   const [receipt, setReceipt] = useState<number>();
   const [busy, setBusy] = useState(false);
-  useEffect(() => { api.request<AccountSession>("/v1/me").then(setSession).catch(() => router.replace(`/${locale}/login`)); }, []);
+  useEffect(() => { api.request<AccountSession>("/v1/me").then(setSession).catch(() => router.replace("/login")); }, []);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!session) return;
     const formElement = event.currentTarget;

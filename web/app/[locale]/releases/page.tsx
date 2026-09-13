@@ -1,11 +1,14 @@
+import Image from "next/image";
 import Link from "next/link";
-import { ArrowRight, CalendarDays, PackageOpen } from "lucide-react";
+import { ArrowRight, CalendarDays, PackageOpen, Sparkles } from "lucide-react";
+import { ReleaseDownloads } from "@/components/release-downloads";
+import { ReleaseNotes } from "@/components/release-notes";
 import { getReleases } from "@/lib/releases";
 import { siteMetadata } from "@/lib/seo";
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;
-  return siteMetadata(locale, "/releases", locale === "ru" ? "Скачать VLTone — открытая бета и обновления" : "Download VLTone — open beta and releases", locale === "ru" ? "Скачайте VLTone для своей системы. Актуальные установщики, новые возможности и исправления музыкальной программы. После установки войдите в аккаунт." : "Download VLTone for your system. Available installers, new features, and fixes for the music creation app. Sign in to your account after installation.");
+  return siteMetadata(locale, "/releases", locale === "ru" ? "Скачать VLTone — последняя версия" : "Download VLTone — latest version", locale === "ru" ? "Скачайте последнюю версию VLTone для своей системы и посмотрите список изменений." : "Download the latest VLTone version for your system and read the release notes.");
 }
 
 export const dynamic = "force-dynamic";
@@ -14,8 +17,36 @@ export default async function ReleasesPage({ params }: { params: Promise<{ local
   const { locale } = await params;
   const releases = await getReleases(locale);
   const ru = locale === "ru";
+  const latest = releases[0];
   return <main id="main-content" className="releases-main">
-    <header className="releases-hero"><span className="pill-tag">{ru ? "VLTone · Открытая бета" : "VLTone · Open beta"}</span><h1>{ru ? "Обновления" : "Releases"}</h1><p>{ru ? "Выберите версию и скачайте установщик для своей системы. Установите VLTone, затем войдите в программе с почтой и паролем от аккаунта на сайте." : "Choose a version and download the installer for your system. Install VLTone, then sign in to the app with your website account email and password."}</p><Link className="text-link" href={`/${locale}/register`}>{ru ? "Нет аккаунта? Зарегистрироваться" : "Need an account? Register"}<ArrowRight size={14} aria-hidden /></Link></header>
-    {releases.length === 0 ? <section className="releases-empty"><PackageOpen size={28} aria-hidden /><h2>{ru ? "Релизов пока нет" : "No releases yet"}</h2><p>{ru ? "Первая опубликованная версия появится здесь." : "The first published version will appear here."}</p></section> : <div className="release-timeline">{releases.map((release, index) => <article className="release-summary-card" key={release.id}><span className="release-index">{String(index + 1).padStart(2, "0")}</span><div><div className="release-summary-meta"><strong>v{release.version}</strong><span><CalendarDays size={14} aria-hidden />{new Intl.DateTimeFormat(locale, { dateStyle: "long" }).format(new Date(release.published_at))}</span></div><h2>{release.summary}</h2><div className="release-platforms">{[...new Set(release.artifacts.map((item) => item.platform))].map((platform) => <span className="vlt-badge" key={platform}>{platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</span>)}</div></div><Link className="release-open" href={`/${locale}/releases/${release.version}`} aria-label={`${ru ? "Открыть версию" : "Open version"} ${release.version}`}><ArrowRight size={20} aria-hidden /></Link></article>)}</div>}
+    {!latest ? <section className="releases-empty"><PackageOpen size={28} aria-hidden /><h1>{ru ? "Релизов пока нет" : "No releases yet"}</h1><p>{ru ? "Первая опубликованная версия появится здесь." : "The first published version will appear here."}</p></section> : <>
+      <header className="download-hero" data-reveal>
+        <div className="download-hero-copy">
+          <span className="release-eyebrow"><Sparkles size={15} aria-hidden />{ru ? `Последняя версия · ${latest.version}` : `Latest version · ${latest.version}`}</span>
+          <h1>{ru ? "Скачать VLTone" : "Download VLTone"}</h1>
+          <p>{latest.summary}</p>
+          <span className="release-date"><CalendarDays size={15} aria-hidden />{new Intl.DateTimeFormat(locale, { dateStyle: "long" }).format(new Date(latest.published_at))}</span>
+          <div className="download-actions"><ReleaseDownloads artifacts={latest.artifacts} locale={locale} /></div>
+          <p className="download-account-note">{ru ? "После установки войдите с аккаунтом VLTone." : "Sign in with your VLTone account after installation."} <Link href="/register">{ru ? "Создать аккаунт" : "Create an account"}<ArrowRight size={13} aria-hidden /></Link></p>
+        </div>
+        <figure className="download-preview">
+          <div className="download-signal" aria-hidden="true">{[0, 1, 2, 3, 4, 5, 6].map((index) => <span key={index} />)}</div>
+          <Image src={`/images/workspace-dark-${locale}.png`} width={1600} height={1000} sizes="(max-width: 900px) 94vw, 54vw" priority alt={ru ? "Интерфейс VLTone" : "VLTone interface"} />
+          <figcaption>VLTone · Windows · macOS</figcaption>
+        </figure>
+      </header>
+
+      <ReleaseNotes release={latest} locale={locale} />
+
+      <section className="release-archive" aria-labelledby="release-archive-title">
+        <header data-reveal><div><span className="section-label">{ru ? "Архив" : "Archive"}</span><h2 id="release-archive-title">{ru ? "Выбрать версию" : "Choose a version"}</h2></div><p>{ru ? "Откройте нужную версию, чтобы скачать её установщики и посмотреть полный список изменений." : "Open any version to download its installers and see the complete release notes."}</p></header>
+        <div className="release-version-list">{releases.map((release, index) => <a className="release-version-row" href={`/releases/${release.version}`} key={release.id} data-reveal={String(index * 45)}>
+          <span className="release-index">{String(index + 1).padStart(2, "0")}</span>
+          <div><div className="release-summary-meta"><strong>v{release.version}</strong>{index === 0 && <span className="vlt-badge vlt-badge-accent">{ru ? "Последняя" : "Latest"}</span>}</div><h3>{release.summary}</h3></div>
+          <span className="release-version-date"><CalendarDays size={14} aria-hidden />{new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(release.published_at))}</span>
+          <span className="release-open" aria-hidden="true"><ArrowRight size={19} /></span>
+        </a>)}</div>
+      </section>
+    </>}
   </main>;
 }

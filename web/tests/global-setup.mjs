@@ -17,7 +17,7 @@ export default async function globalSetup() {
       name: "web standalone server",
       cwd: appRoot,
       args: [path.join(repositoryRoot, "scripts", "run-next-standalone.mjs"), "web", "3100"],
-      url: "http://127.0.0.1:3100/ru",
+      url: "http://127.0.0.1:3100/",
       env: { VLT_API_ORIGIN: "http://127.0.0.1:8099/v1" },
     });
   } catch (error) {

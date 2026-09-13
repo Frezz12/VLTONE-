@@ -9,7 +9,7 @@ const artifacts = [
 ];
 function release(locale) {
   const ru = locale === "ru";
-  return { id: "20000000-0000-4000-8000-000000000001", version: "0.1.2", summary: ru ? "Новый микшер и исправления" : "New mixer and fixes", features: [ru ? "Добавлен новый микшер" : "Added a new mixer"], changes: [], fixes: [ru ? "Исправлен запуск" : "Fixed startup"], artifacts, screenshots: [{ id: "30000000-0000-4000-8000-000000000001", caption: ru ? "Обновлённый микшер" : "Updated mixer", sort_order: 10, width: 1, height: 1, sha256: "e".repeat(64), url: "/v1/releases/0.1.2/screenshots/30000000-0000-4000-8000-000000000001" }], page_url: `http://127.0.0.1:3100/${locale}/releases/0.1.2`, published_at: "2026-08-29T10:00:00Z" };
+  return { id: "20000000-0000-4000-8000-000000000001", version: "0.1.2", summary: ru ? "Новый микшер и исправления" : "New mixer and fixes", features: [ru ? "Добавлен новый микшер" : "Added a new mixer"], changes: [], fixes: [ru ? "Исправлен запуск" : "Fixed startup"], artifacts, screenshots: [{ id: "30000000-0000-4000-8000-000000000001", caption: ru ? "Обновлённый микшер" : "Updated mixer", sort_order: 10, width: 1, height: 1, sha256: "e".repeat(64), url: "/v1/releases/0.1.2/screenshots/30000000-0000-4000-8000-000000000001" }], page_url: "http://127.0.0.1:3100/releases/0.1.2", published_at: "2026-08-29T10:00:00Z" };
 }
 
 createServer((request, response) => {

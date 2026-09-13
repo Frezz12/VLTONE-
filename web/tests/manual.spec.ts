@@ -1,13 +1,15 @@
 import { expect, test } from "@playwright/test";
 
 test("manual navigation, search, deep links, and locale switch", async ({ page }) => {
-  await page.goto("/ru/manual");
+  await page.context().addCookies([{ name: "vlt-locale", value: "ru", url: "http://127.0.0.1:3100" }]);
+  await page.goto("/manual");
   await expect(page.getByRole("heading", { name: "Инструкция VLTone" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Инструкция" })).toHaveAttribute("href", "/ru/manual");
+  await expect(page.getByRole("link", { name: "Инструкция" })).toHaveAttribute("href", "/manual");
 
-  await page.getByRole("link", { name: "Open in English" }).click();
-  await expect(page).toHaveURL(/\/en\/manual$/);
+  await page.getByRole("button", { name: "Open in English" }).click();
+  await expect(page).toHaveURL(/\/manual$/);
   await expect(page.getByRole("heading", { name: "VLTone Manual" })).toBeVisible();
+  await page.waitForLoadState("networkidle");
 
   const firstTab = page.getByRole("tab", { name: "Getting started" });
   await firstTab.focus();
@@ -15,7 +17,7 @@ test("manual navigation, search, deep links, and locale switch", async ({ page }
   await expect(page.getByRole("tab", { name: "Project and arrangement" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "Create and save projects" })).toBeVisible();
 
-  await page.goto("/en/manual#piano-roll");
+  await page.goto("/manual#piano-roll");
   await expect(page.getByRole("tab", { name: "MIDI and instruments" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "Piano roll" })).toBeVisible();
 
@@ -29,7 +31,8 @@ test("manual navigation, search, deep links, and locale switch", async ({ page }
 });
 
 test("manual screenshot opens in a native dialog and closes with Escape", async ({ page }) => {
-  await page.goto("/en/manual");
+  await page.context().addCookies([{ name: "vlt-locale", value: "en", url: "http://127.0.0.1:3100" }]);
+  await page.goto("/manual");
   await expect(page.getByRole("tablist", { name: "Manual categories" })).toBeVisible();
   await expect(page.getByAltText("VLTone startup window scanning plugins")).toBeVisible();
   await expect(page.getByText("The startup window reports the current loading stage and plugin scan progress.", { exact: true })).toBeVisible();
@@ -42,10 +45,11 @@ test("manual screenshot opens in a native dialog and closes with Escape", async 
 });
 
 test("manual sidebar opens a chapter from another category", async ({ page }) => {
-  await page.goto("/en/manual");
+  await page.context().addCookies([{ name: "vlt-locale", value: "en", url: "http://127.0.0.1:3100" }]);
+  await page.goto("/manual");
   const sidebar = page.getByRole("complementary", { name: "On this page" });
   await sidebar.getByRole("link", { name: "Piano roll" }).click();
-  await expect(page).toHaveURL(/\/en\/manual#piano-roll$/);
+  await expect(page).toHaveURL(/\/manual#piano-roll$/);
   await expect(page.getByRole("tab", { name: "MIDI and instruments" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "Piano roll" })).toBeInViewport();
 });
@@ -58,7 +62,8 @@ for (const viewport of [
 ]) {
   test(`manual has no page-level horizontal scroll at ${viewport.width}px`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto("/ru/manual");
+    await page.context().addCookies([{ name: "vlt-locale", value: "ru", url: "http://127.0.0.1:3100" }]);
+    await page.goto("/manual");
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow).toBeLessThanOrEqual(1);
   });
@@ -71,7 +76,8 @@ for (const [locale, query, title] of [
   ["en", "Ctrl+Shift+U", "Automation"],
 ]) {
   test(`updated manual documents ${query} in ${locale}`, async ({ page }) => {
-    await page.goto(`/${locale}/manual`);
+    await page.context().addCookies([{ name: "vlt-locale", value: locale, url: "http://127.0.0.1:3100" }]);
+    await page.goto("/manual");
     await page.getByRole("searchbox").fill(query);
     await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
   });

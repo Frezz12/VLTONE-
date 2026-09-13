@@ -23,7 +23,7 @@ export function AuthForm({ locale, mode }: { locale: string; mode: "login" | "re
         Object.assign(payload, { locale, consent_accepted: form.get("consent_accepted") === "on", consent_version: consentVersion });
       }
       await api.json<AccountSession>(`/v1/web/auth/${mode === "login" ? "login" : "register"}`, "POST", payload);
-      router.push(`/${locale}/account`); router.refresh();
+      router.push("/account"); router.refresh();
     } catch (reason) { setError((reason as APIError).message ?? "Request failed"); }
     finally { setBusy(false); }
   }
@@ -39,7 +39,7 @@ export function AuthForm({ locale, mode }: { locale: string; mode: "login" | "re
       {error && <div className="vlt-error" role="alert">{error}</div>}
       <button className="vlt-button" disabled={busy}>{busy ? t("working") : t(register ? "register" : "login")}</button>
     </form>
-    {!register && <Link className="vlt-link" href={`/${locale}/forgot-password`}>{t("forgot")}</Link>}
-    <div className="auth-foot">{t(register ? "hasAccount" : "noAccount")} <Link className="vlt-link" href={`/${locale}/${register ? "login" : "register"}`}>{t(register ? "login" : "register")}</Link></div>
+    {!register && <Link className="vlt-link" href="/forgot-password">{t("forgot")}</Link>}
+    <div className="auth-foot">{t(register ? "hasAccount" : "noAccount")} <Link className="vlt-link" href={register ? "/login" : "/register"}>{t(register ? "login" : "register")}</Link></div>
   </section></main>;
 }

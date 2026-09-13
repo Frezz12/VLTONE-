@@ -2,16 +2,17 @@
 
 import { api } from "@vlt/api-client";
 import { Activity, BellRing, Bot, Bug, CircleGauge, Files, Image, MessageSquareText, PackageOpen, ShieldCheck, Users, X } from "lucide-react";
+import NextImage from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import appIcon from "@/app/icon.png";
 import { adminPollingAllowed, markAdminActivity } from "./admin-activity";
 
-const links = [
-  ["/", "Обзор", CircleGauge], ["/users", "Пользователи", Users], ["/bugs", "Баги", Bug],
-  ["/crashes", "Краши", Activity], ["/models", "Модели AI", Bot], ["/prompts", "Промпты", MessageSquareText],
-  ["/releases", "Релизы", PackageOpen], ["/browser-backgrounds", "Фоны браузера", Image],
-  ["/audit", "Аудит", Files],
+const navigation = [
+  { label: "Мониторинг", links: [["/", "Обзор", CircleGauge], ["/users", "Пользователи", Users], ["/bugs", "Баги", Bug], ["/crashes", "Краши", Activity]] },
+  { label: "Управление", links: [["/models", "Модели AI", Bot], ["/prompts", "Промпты", MessageSquareText], ["/releases", "Релизы", PackageOpen], ["/browser-backgrounds", "Фоны браузера", Image]] },
+  { label: "Система", links: [["/audit", "Аудит", Files]] },
 ] as const;
 
 type CrashSummary = { id: string; app_version: string; platform: string; reason: string; occurred_at: string };
@@ -72,14 +73,23 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   return <div className="admin-shell">
     <a className="admin-skip-link" href="#admin-main">К основному содержимому</a>
     <aside className="admin-side">
-      <Link className="vlt-brand" href="/"><span className="vlt-brand-mark" aria-hidden>V</span><span>VLTONE Control</span></Link>
-      <nav className="admin-nav" aria-label="Администрирование">{links.map(([href, label, Icon]) => {
-        const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
-        return <Link href={href} className={active ? "active" : undefined} aria-current={active ? "page" : undefined} key={href}><Icon size={16} aria-hidden />{label}</Link>;
-      })}</nav>
+      <div className="admin-brand-row">
+        <Link className="vlt-brand" href="/">
+          <span className="admin-brand-icon"><NextImage src={appIcon} width={36} height={36} alt="" priority /></span>
+          <span className="admin-brand-copy"><strong>VLTONE</strong><small>Control center</small></span>
+        </Link>
+        <span className="admin-environment"><span className="status-dot" />Live</span>
+      </div>
+      <nav className="admin-nav" aria-label="Администрирование">{navigation.map((group) => <div className="admin-nav-group" key={group.label}>
+        <span className="admin-nav-label">{group.label}</span>
+        {group.links.map(([href, label, Icon]) => {
+          const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+          return <Link href={href} className={active ? "active" : undefined} aria-current={active ? "page" : undefined} key={href}><Icon size={17} strokeWidth={1.8} aria-hidden /><span>{label}</span></Link>;
+        })}
+      </div>)}</nav>
       <div className="admin-side-foot">
         <button className="admin-notification-button" onClick={() => void enableNotifications()} disabled={notificationPermission === "granted" || notificationPermission === "denied"}><BellRing size={16} aria-hidden />{notificationPermission === "granted" ? "Уведомления включены" : notificationPermission === "denied" ? "Уведомления запрещены" : "Включить уведомления"}</button>
-        <div className="vlt-muted"><ShieldCheck size={16} aria-hidden /> Защищённая зона</div>
+        <div className="admin-security-state"><ShieldCheck size={16} aria-hidden /><span><strong>Защищённая зона</strong><small>Действия записываются в аудит</small></span></div>
       </div>
     </aside>
     <main className="admin-main" id="admin-main" tabIndex={-1}>
