@@ -1,152 +1,322 @@
 Internal ctest changing into directory: D:/Code/DAW/build-windows
 Test project D:/Code/DAW/build-windows
       Start  1: platform_test
- 1/73 Test  #1: platform_test ......................   Passed    0.49 sec
+ 1/74 Test  #1: platform_test ......................   Passed    0.58 sec
       Start  2: audio_musical_analysis_test
- 2/73 Test  #2: audio_musical_analysis_test ........   Passed    8.13 sec
+ 2/74 Test  #2: audio_musical_analysis_test ........   Passed   15.41 sec
       Start  3: audio_analysis_contract_test
- 3/73 Test  #3: audio_analysis_contract_test .......   Passed    1.54 sec
+ 3/74 Test  #3: audio_analysis_contract_test .......   Passed    2.36 sec
       Start  4: audio_analysis_fallback_test
- 4/73 Test  #4: audio_analysis_fallback_test .......   Passed    4.67 sec
+ 4/74 Test  #4: audio_analysis_fallback_test .......   Passed    7.59 sec
       Start  5: mp3_import_test
- 5/73 Test  #5: mp3_import_test ....................   Passed    0.20 sec
+ 5/74 Test  #5: mp3_import_test ....................   Passed    0.31 sec
       Start  6: m4a_import_test
- 6/73 Test  #6: m4a_import_test ....................   Passed    0.18 sec
+ 6/74 Test  #6: m4a_import_test ....................   Passed    0.48 sec
       Start  7: plugin_batch_test
- 7/73 Test  #7: plugin_batch_test ..................   Passed    0.83 sec
+ 7/74 Test  #7: plugin_batch_test ..................   Passed    1.22 sec
       Start  8: controller_test
- 8/73 Test  #8: controller_test ....................   Passed    3.74 sec
+ 8/74 Test  #8: controller_test ....................   Passed    6.66 sec
       Start  9: shared_mutation_sink_test
- 9/73 Test  #9: shared_mutation_sink_test ..........   Passed    1.39 sec
+ 9/74 Test  #9: shared_mutation_sink_test ..........   Passed    2.65 sec
       Start 10: collaboration_protocol_test
-10/73 Test #10: collaboration_protocol_test ........   Passed    0.06 sec
+10/74 Test #10: collaboration_protocol_test ........   Passed    0.07 sec
       Start 11: recording_commit_planner_test
-11/73 Test #11: recording_commit_planner_test ......   Passed    0.01 sec
+11/74 Test #11: recording_commit_planner_test ......   Passed    0.02 sec
       Start 12: cloud_project_test
-12/73 Test #12: cloud_project_test .................   Passed    0.10 sec
+12/74 Test #12: cloud_project_test .................   Passed    0.16 sec
       Start 13: resampler_test
-13/73 Test #13: resampler_test .....................   Passed    0.05 sec
+13/74 Test #13: resampler_test .....................   Passed    0.05 sec
       Start 14: time_stretch_test
-14/73 Test #14: time_stretch_test ..................   Passed    2.63 sec
+14/74 Test #14: time_stretch_test ..................   Passed    4.83 sec
       Start 15: render_test
-15/73 Test #15: render_test ........................   Passed    1.94 sec
+15/74 Test #15: render_test ........................   Passed    2.95 sec
       Start 16: render_safety_test
-16/73 Test #16: render_safety_test .................   Passed    0.32 sec
+16/74 Test #16: render_safety_test .................   Passed    0.36 sec
       Start 17: processing_render_test
-17/73 Test #17: processing_render_test .............   Passed    1.44 sec
+17/74 Test #17: processing_render_test .............   Passed    2.47 sec
       Start 18: channel_strip_preset_test
-18/73 Test #18: channel_strip_preset_test ..........   Passed    0.17 sec
+18/74 Test #18: channel_strip_preset_test ..........   Passed    0.10 sec
       Start 19: project_template_test
-19/73 Test #19: project_template_test ..............   Passed    0.24 sec
+19/74 Test #19: project_template_test ..............   Passed    0.34 sec
       Start 20: sampler_test
-20/73 Test #20: sampler_test .......................   Passed    0.84 sec
+20/74 Test #20: sampler_test .......................   Passed    1.31 sec
       Start 21: gravity_test
-21/73 Test #21: gravity_test .......................   Passed    0.43 sec
+21/74 Test #21: gravity_test .......................   Passed    0.82 sec
       Start 22: equalizer_test
-22/73 Test #22: equalizer_test .....................   Passed    0.08 sec
+22/74 Test #22: equalizer_test .....................   Passed    0.08 sec
       Start 23: graphit_test
-23/73 Test #23: graphit_test .......................   Passed    0.11 sec
+23/74 Test #23: graphit_test .......................   Passed    0.19 sec
       Start 24: modulation_test
-24/73 Test #24: modulation_test ....................   Passed    1.60 sec
+24/74 Test #24: modulation_test ....................   Passed    2.72 sec
       Start 25: engine_graph_test
-25/73 Test #25: engine_graph_test ..................   Passed    2.53 sec
+25/74 Test #25: engine_graph_test ..................   Passed    2.90 sec
       Start 26: meter_node_test
-26/73 Test #26: meter_node_test ....................   Passed    0.09 sec
+26/74 Test #26: meter_node_test ....................   Passed    0.10 sec
       Start 27: miditools_test
-27/73 Test #27: miditools_test .....................   Passed    0.06 sec
+27/74 Test #27: miditools_test .....................   Passed    0.10 sec
       Start 28: automation_test
-28/73 Test #28: automation_test ....................   Passed    0.05 sec
+28/74 Test #28: automation_test ....................   Passed    0.09 sec
       Start 29: midifile_test
-29/73 Test #29: midifile_test ......................   Passed    0.29 sec
+29/74 Test #29: midifile_test ......................   Passed    0.52 sec
       Start 30: ai_tools_test
-30/73 Test #30: ai_tools_test ......................   Passed    0.54 sec
+30/74 Test #30: ai_tools_test ......................   Passed    0.94 sec
       Start 31: project_music_context_test
-31/73 Test #31: project_music_context_test .........   Passed    0.01 sec
+31/74 Test #31: project_music_context_test .........   Passed    0.02 sec
       Start 32: content_catalog_test
-32/73 Test #32: content_catalog_test ...............   Passed    4.77 sec
+32/74 Test #32: content_catalog_test ...............   Passed    0.31 sec
       Start 33: composition_engine_test
-33/73 Test #33: composition_engine_test ............   Passed    0.01 sec
+33/74 Test #33: composition_engine_test ............   Passed    0.01 sec
       Start 34: composition_eval
-34/73 Test #34: composition_eval ...................   Passed    0.01 sec
+34/74 Test #34: composition_eval ...................   Passed    0.01 sec
       Start 35: music_gen_test
-35/73 Test #35: music_gen_test .....................   Passed    0.02 sec
+35/74 Test #35: music_gen_test .....................   Passed    0.03 sec
       Start 36: recovery_test
-36/73 Test #36: recovery_test ......................   Passed    7.22 sec
+36/74 Test #36: recovery_test ......................   Passed    7.39 sec
       Start 37: render_integrity_test
-37/73 Test #37: render_integrity_test ..............   Passed   14.13 sec
+37/74 Test #37: render_integrity_test ..............   Passed   16.21 sec
       Start 38: track_creation_test
-38/73 Test #38: track_creation_test ................   Passed    0.09 sec
+38/74 Test #38: track_creation_test ................   Passed    0.15 sec
       Start 39: plugin_host_test
-39/73 Test #39: plugin_host_test ...................   Passed    0.03 sec
+39/74 Test #39: plugin_host_test ...................   Passed    0.03 sec
       Start 40: plugin_scan_test
-40/73 Test #40: plugin_scan_test ...................   Passed    0.83 sec
+40/74 Test #40: plugin_scan_test ...................   Passed    0.85 sec
       Start 41: plugin_insert_test
-41/73 Test #41: plugin_insert_test .................   Passed    3.18 sec
+41/74 Test #41: plugin_insert_test .................   Passed    7.60 sec
       Start 42: plugin_vst3_test
-42/73 Test #42: plugin_vst3_test ...................   Passed    0.18 sec
+42/74 Test #42: plugin_vst3_test ...................   Passed    0.32 sec
       Start 43: plugin_vst_test
-43/73 Test #43: plugin_vst_test ....................   Passed    0.14 sec
+43/74 Test #43: plugin_vst_test ....................   Passed    0.15 sec
       Start 44: plugin_midi_test
-44/73 Test #44: plugin_midi_test ...................   Passed    0.02 sec
+44/74 Test #44: plugin_midi_test ...................   Passed    0.08 sec
       Start 45: audio_realtime_test
-45/73 Test #45: audio_realtime_test ................   Passed    0.40 sec
+45/74 Test #45: audio_realtime_test ................   Passed    0.47 sec
       Start 46: track_freeze_test
-46/73 Test #46: track_freeze_test ..................   Passed    0.57 sec
+46/74 Test #46: track_freeze_test ..................   Passed    0.90 sec
       Start 47: recording_preview_test
-47/73 Test #47: recording_preview_test .............   Passed    0.30 sec
+47/74 Test #47: recording_preview_test .............   Passed    0.39 sec
       Start 48: graphics_quality_test
-48/73 Test #48: graphics_quality_test ..............   Passed    0.01 sec
+48/74 Test #48: graphics_quality_test ..............   Passed    0.01 sec
       Start 49: audio_presentation_clock_test
-49/73 Test #49: audio_presentation_clock_test ......   Passed    0.01 sec
+49/74 Test #49: audio_presentation_clock_test ......   Passed    0.01 sec
       Start 50: audio_monitoring_regression_test
-50/73 Test #50: audio_monitoring_regression_test ...   Passed    6.47 sec
+50/74 Test #50: audio_monitoring_regression_test ...   Passed    6.61 sec
       Start 51: gpu_scene_test
-51/73 Test #51: gpu_scene_test .....................   Passed    0.15 sec
+51/74 Test #51: gpu_scene_test .....................   Passed    0.05 sec
       Start 52: gpu_fallback_test
-52/73 Test #52: gpu_fallback_test ..................   Passed   18.05 sec
+52/74 Test #52: gpu_fallback_test ..................   Passed   20.05 sec
       Start 53: gpu_media_test
-53/73 Test #53: gpu_media_test .....................   Passed    0.92 sec
+53/74 Test #53: gpu_media_test .....................   Passed    1.07 sec
       Start 54: theme_package_test
-54/73 Test #54: theme_package_test .................   Passed    0.17 sec
+54/74 Test #54: theme_package_test .................   Passed    0.16 sec
       Start 55: browser_navigation_test
-55/73 Test #55: browser_navigation_test ............   Passed    4.04 sec
-      Start 56: browser_proxy_test
-56/73 Test #56: browser_proxy_test .................   Passed    0.36 sec
-      Start 57: telemetry_snapshot_test
-57/73 Test #57: telemetry_snapshot_test ............   Passed    0.05 sec
-      Start 58: account_restore_test
-58/73 Test #58: account_restore_test ...............   Passed    2.85 sec
-      Start 59: waveform_paint_test
-59/73 Test #59: waveform_paint_test ................   Passed    1.24 sec
-      Start 60: waveform_gpu_test
-60/73 Test #60: waveform_gpu_test ..................   Passed    0.03 sec
-      Start 61: ui_frame_clock_test
-61/73 Test #61: ui_frame_clock_test ................   Passed    4.21 sec
-      Start 62: modulation_ui_test
-62/73 Test #62: modulation_ui_test .................   Passed    7.76 sec
-      Start 63: render_ui_test
-63/73 Test #63: render_ui_test .....................   Passed    0.88 sec
-      Start 64: plugin_drag_lifecycle_test
-64/73 Test #64: plugin_drag_lifecycle_test .........   Passed    0.19 sec
-      Start 65: audio_timeline_scroll_test
-65/73 Test #65: audio_timeline_scroll_test .........   Passed   19.64 sec
-      Start 66: track_creation_ui_test
-66/73 Test #66: track_creation_ui_test .............   Passed    0.38 sec
-      Start 67: plugin_picker_ui_test
-67/73 Test #67: plugin_picker_ui_test ..............   Passed    0.51 sec
-      Start 68: offline_render_ui_test
-68/73 Test #68: offline_render_ui_test .............   Passed    0.39 sec
-      Start 69: plugin_batch_ui_test
-69/73 Test #69: plugin_batch_ui_test ...............   Passed    0.40 sec
-      Start 70: tempo_scrub_ui_test
-70/73 Test #70: tempo_scrub_ui_test ................   Passed    0.18 sec
-      Start 71: mixer_fader_input_test
-71/73 Test #71: mixer_fader_input_test .............   Passed    0.28 sec
-      Start 72: collaboration_client_selftest
-72/73 Test #72: collaboration_client_selftest ......   Passed    0.53 sec
-      Start 73: crash_reporter_test
-73/73 Test #73: crash_reporter_test ................   Passed   35.27 sec
+55/74 Test #55: browser_navigation_test ............   Passed    5.43 sec
+      Start 56: browser_quick_navigation_test
+56/74 Test #56: browser_quick_navigation_test ......   Passed    4.35 sec
+      Start 57: browser_proxy_test
+57/74 Test #57: browser_proxy_test .................   Passed    0.61 sec
+      Start 58: telemetry_snapshot_test
+58/74 Test #58: telemetry_snapshot_test ............   Passed    0.11 sec
+      Start 59: account_restore_test
+59/74 Test #59: account_restore_test ...............   Passed    2.93 sec
+      Start 60: waveform_paint_test
+60/74 Test #60: waveform_paint_test ................   Passed    1.61 sec
+      Start 61: waveform_gpu_test
+61/74 Test #61: waveform_gpu_test ..................   Passed    0.03 sec
+      Start 62: ui_frame_clock_test
+62/74 Test #62: ui_frame_clock_test ................   Passed    4.45 sec
+      Start 63: modulation_ui_test
+63/74 Test #63: modulation_ui_test .................   Passed    9.14 sec
+      Start 64: render_ui_test
+64/74 Test #64: render_ui_test .....................   Passed    1.46 sec
+      Start 65: plugin_drag_lifecycle_test
+65/74 Test #65: plugin_drag_lifecycle_test .........   Passed    0.21 sec
+      Start 66: audio_timeline_scroll_test
+66/74 Test #66: audio_timeline_scroll_test .........***Failed   21.12 sec
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  live audio/recording frames reuse the static arrangement plate
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=32 recording=0 DPR=2.0 realtime_helpers=23 realtime_caller=1 inputs=89 paints=82 paint_ms[p50,p95,max]=7.436,18.315,25.331 interval_ms=18.429,31.072,48.247 callback_ms=0.024,0.043,0.092 over_budget=0/122
+SCROLL_CPU backend=widgets frames=32 recording=0 gui_ms=531.250 process_ms=1517.000 render_ms=0.000 render_frames=0 viewport=1600x960
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  shifted plate matches full rendering across pan reversal, fractional motion and rounded corners
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  start real live waveform capture
+PASS  live audio/recording frames reuse the static arrangement plate
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=32 recording=1 DPR=2.0 realtime_helpers=23 realtime_caller=1 inputs=89 paints=82 paint_ms[p50,p95,max]=8.340,17.482,27.005 interval_ms=17.379,28.506,40.437 callback_ms=0.026,0.044,0.058 over_budget=0/122
+SCROLL_CPU backend=widgets frames=32 recording=1 gui_ms=1015.625 process_ms=1506.000 render_ms=0.000 render_frames=0 viewport=1600x960
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  shifted plate matches full rendering across pan reversal, fractional motion and rounded corners
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  live audio/recording frames reuse the static arrangement plate
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=64 recording=0 DPR=2.0 realtime_helpers=23 realtime_caller=1 inputs=153 paints=90 paint_ms[p50,p95,max]=6.759,7.965,16.915 interval_ms=15.238,21.642,35.761 callback_ms=0.013,0.022,0.052 over_budget=0/653
+SCROLL_CPU backend=widgets frames=64 recording=0 gui_ms=812.500 process_ms=1500.000 render_ms=0.000 render_frames=0 viewport=1600x960
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  start real live waveform capture
+PASS  live audio/recording frames reuse the static arrangement plate
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=64 recording=1 DPR=2.0 realtime_helpers=23 realtime_caller=1 inputs=146 paints=90 paint_ms[p50,p95,max]=7.266,8.695,18.693 interval_ms=15.757,22.289,31.682 callback_ms=0.013,0.026,0.100 over_budget=0/643
+SCROLL_CPU backend=widgets frames=64 recording=1 gui_ms=906.250 process_ms=1502.000 render_ms=0.000 render_frames=0 viewport=1600x960
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  live audio/recording frames reuse the static arrangement plate
+SLOW_SCROLL paint=32.311 ms cpu=15.625 ms process_pageins=nan frame=59 static=1 tile_builds=0 tile_hits=112 raster_bytes=66924600 scroll=1.18750
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=128 recording=0 DPR=2.0 realtime_helpers=23 realtime_caller=1 inputs=123 paints=84 paint_ms[p50,p95,max]=7.126,20.890,32.311 interval_ms=15.873,30.636,47.557 callback_ms=0.017,0.039,0.098 over_budget=0/363
+SCROLL_CPU backend=widgets frames=128 recording=0 gui_ms=734.375 process_ms=1506.000 render_ms=0.000 render_frames=0 viewport=1600x960
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  start real live waveform capture
+PASS  live audio/recording frames reuse the static arrangement plate
+SLOW_SCROLL paint=36.419 ms cpu=0.000 ms process_pageins=nan frame=3 static=1 tile_builds=1 tile_hits=105 raster_bytes=66924600 scroll=0.15000
+SLOW_SCROLL paint=33.531 ms cpu=15.625 ms process_pageins=nan frame=10 static=1 tile_builds=8 tile_hits=106 raster_bytes=66924600 scroll=0.93750
+SLOW_SCROLL paint=32.983 ms cpu=15.625 ms process_pageins=nan frame=14 static=1 tile_builds=1 tile_hits=113 raster_bytes=66924600 scroll=1.53750
+SLOW_SCROLL paint=36.890 ms cpu=31.250 ms process_pageins=nan frame=61 static=1 tile_builds=1 tile_hits=105 raster_bytes=66924600 scroll=0.72500
+SLOW_SCROLL paint=37.414 ms cpu=15.625 ms process_pageins=nan frame=69 static=1 tile_builds=1 tile_hits=105 raster_bytes=66924600 scroll=0.15000
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=128 recording=1 DPR=2.0 realtime_helpers=23 realtime_caller=1 inputs=75 paints=69 paint_ms[p50,p95,max]=14.376,33.531,37.414 interval_ms=21.274,49.146,57.283 callback_ms=0.037,0.057,0.109 over_budget=0/122
+SCROLL_CPU backend=widgets frames=128 recording=1 gui_ms=765.625 process_ms=1517.000 render_ms=0.000 render_frames=0 viewport=1600x960
+FAIL  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  live audio/recording frames reuse the static arrangement plate
+SLOW_SCROLL paint=31.682 ms cpu=46.875 ms process_pageins=nan frame=13 static=1 tile_builds=0 tile_hits=112 raster_bytes=66924600 scroll=1.16250
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=512 recording=0 DPR=2.0 realtime_helpers=23 realtime_caller=1 inputs=83 paints=76 paint_ms[p50,p95,max]=12.943,19.465,31.682 interval_ms=18.896,29.603,52.998 callback_ms=0.055,0.081,0.126 over_budget=0/121
+SCROLL_CPU backend=widgets frames=512 recording=0 gui_ms=1078.125 process_ms=1506.000 render_ms=0.000 render_frames=0 viewport=1600x960
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  audio benchmark imports playable PCM
+PASS  start real live waveform capture
+PASS  live audio/recording frames reuse the static arrangement plate
+SLOW_SCROLL paint=35.810 ms cpu=31.250 ms process_pageins=nan frame=3 static=1 tile_builds=1 tile_hits=105 raster_bytes=66924600 scroll=0.15000
+SLOW_SCROLL paint=34.941 ms cpu=31.250 ms process_pageins=nan frame=23 static=1 tile_builds=1 tile_hits=113 raster_bytes=66924600 scroll=1.31250
+SLOW_SCROLL paint=32.197 ms cpu=15.625 ms process_pageins=nan frame=42 static=1 tile_builds=1 tile_hits=105 raster_bytes=66924600 scroll=0.78750
+PASS  Follow cannot pull back a manually scrolled viewport
+PASS  explicit recenter resumes cursor navigation
+AUDIO_SCROLL frames=512 recording=1 DPR=2.0 realtime_helpers=23 realtime_caller=1 inputs=73 paints=69 paint_ms[p50,p95,max]=15.166,28.569,35.810 interval_ms=21.853,45.905,51.620 callback_ms=0.059,0.095,0.159 over_budget=0/123
+SCROLL_CPU backend=widgets frames=512 recording=1 gui_ms=984.375 process_ms=1529.000 render_ms=0.000 render_frames=0 viewport=1600x960
+PASS  scroll paint p95 stays below the regression ceiling (configurable per performance runner)
+PASS  continuous scroll delivers frames alongside the real audio callback
 
-100% tests passed, 0 tests failed out of 73
+      Start 67: track_creation_ui_test
+67/74 Test #67: track_creation_ui_test .............   Passed    0.48 sec
+      Start 68: plugin_picker_ui_test
+68/74 Test #68: plugin_picker_ui_test ..............   Passed    0.92 sec
+      Start 69: offline_render_ui_test
+69/74 Test #69: offline_render_ui_test .............   Passed    0.59 sec
+      Start 70: plugin_batch_ui_test
+70/74 Test #70: plugin_batch_ui_test ...............   Passed    0.55 sec
+      Start 71: tempo_scrub_ui_test
+71/74 Test #71: tempo_scrub_ui_test ................   Passed    0.30 sec
+      Start 72: mixer_fader_input_test
+72/74 Test #72: mixer_fader_input_test .............   Passed    0.30 sec
+      Start 73: collaboration_client_selftest
+73/74 Test #73: collaboration_client_selftest ......   Passed    0.96 sec
+      Start 74: crash_reporter_test
+74/74 Test #74: crash_reporter_test ................   Passed   35.33 sec
 
-Total Test time (real) = 171.69 sec
+99% tests passed, 1 tests failed out of 74
+
+Total Test time (real) = 212.31 sec
+
+The following tests FAILED:
+	 66 - audio_timeline_scroll_test (Failed)
+Errors while running CTest
+
+Focused rerun with the same threshold:
+Test project D:/Code/DAW/build-windows
+    Start 66: audio_timeline_scroll_test
+1/1 Test #66: audio_timeline_scroll_test .......   Passed   21.51 sec
+
+100% tests passed out of 1
+
+Total Test time (real) =  21.52 sec
+
+Final browser regression after the address-field correction:
+Test project D:/Code/DAW/build-windows
+    Start 55: browser_navigation_test
+1/3 Test #55: browser_navigation_test ..........   Passed    4.65 sec
+    Start 56: browser_quick_navigation_test
+2/3 Test #56: browser_quick_navigation_test ....   Passed    4.30 sec
+    Start 57: browser_proxy_test
+3/3 Test #57: browser_proxy_test ...............   Passed    0.58 sec
+
+100% tests passed out of 3
+
+Total Test time (real) =   9.54 sec
+
+Deployed runtime checks:
+PASS deployed en selftest from Unicode directory
+PASS deployed ru selftest from Unicode directory
+PASS deployed GPU notebook selftest

@@ -1,0 +1,19 @@
+# Browser navigation crash and pinned VLT Studio tab
+
+The 0.2.3 Windows crash report described an access violation when searching or opening a link. The matching minidump placed the fault in the Qt Quick WebEngine/QML value conversion path. The local navigation fixture reproduced the same `0xc0000005` exit before any search provider or audio processing was involved; Qt logged that it could not construct `QWebEngineFrame` without a default constructor.
+
+`BrowserView.qml` passed `mainFrame` to a C++ invokable on every loading notification. The shared browser component now calls WebEngineView's JavaScript API directly and returns script results through request-specific callbacks. Loading notifications copy their existing Qt value through `QJSValue`, avoiding a second unsupported default-construction conversion. Closing a page discards pending callbacks. This also fixes the same bridge used by Notebook; GPU rendering remains available.
+
+The navigation suite now runs against both Widgets and Quick, checking search submission, redirects, cancellation, writable popups, POST requests, error recovery, and tab teardown. It also checks structured JavaScript results and concurrent callbacks. The Quick variant reproduced the crash before the fix and passes after it.
+
+VLT Studio opens in one pinned tab at the front. It uses the bundled logo, survives close commands, stays in front when tabs are reordered, and is restored without duplicating it or changing the selected ordinary tab. Home and address-bar navigation open an ordinary tab when the pinned site is selected. The four start-page tiles remain YouTube, SoundCloud, Splice, and Spotify.
+
+Native Windows verification passed for the GPU browser's rendering, keyboard input, focus, hide/show lifetime, window transfer, and compatibility fallback. Its fixture now sets the same native-sibling window attribute as the application. The application also passed `--selftest` with `VLT_GPU_WORKSPACE=1` and `DAW_SELFTEST_NOTEBOOK_ONLY=1`, using isolated preferences and no real audio device.
+
+One Widgets POST-popup assertion timed out while the release linker was consuming CPU; the isolated rerun passed. The release build runs the full suite after compilation has finished.
+
+The first full CTest run passed 73/74 checks; the audio timeline benchmark exceeded its 33.4 ms paint-p95 ceiling when it inherited the user's appearance settings. A focused rerun reproduced this. Both the previous release and the corrected executable passed with clean preferences at the same 200% scale. The benchmark now creates an unseeded temporary preference store by default, while explicit `DAW_PREF_DIR` overrides remain available for custom-profile measurements. The timing threshold and benchmark workload are unchanged. Private crash reports and minidumps are not included in this review.
+
+After that isolation change, the full run passed 73/74 tests; one recording scenario measured 33.531 ms against the unchanged 33.4 ms ceiling. A focused CTest rerun passed in 21.52 seconds. All 74 checks therefore passed across the full run and focused rerun; the wall-clock performance assertion remains sensitive to runner load. Packaging resumes without repeating CTest, then runs the deployed English/Russian self-tests and native GPU Notebook check separately.
+
+The deployed application self-test caught delayed address-field updates when a search opened a regular tab from the pinned site. Opening a URL now updates the active address field immediately, with a regression assertion in both browser backends. All three browser CTest checks passed again (9.54 seconds). The final deployed English and Russian self-tests and the native GPU Notebook check passed from the Unicode directory, with development Qt paths removed. The final archive is checked against the executable hash captured after those checks.

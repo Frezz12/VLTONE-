@@ -131,12 +131,13 @@ Saved in the existing backend release store as draft `f14ba36a-022c-431b-ba25-a9
 
 ## Verification on 13 September 2026
 
-- All 73 registered Windows CTest checks passed in 171.69 seconds: [test log](reviews/2026-09-13/release-0.2.3/ctest.txt).
+- The corrected browser build passed all 74 registered Windows checks across the full CTest run and a focused rerun. The full run passed 73/74 in 212.31 seconds; the timing-sensitive audio scroll benchmark passed its unchanged threshold on the 21.52-second rerun: [test log](reviews/2026-09-13/release-0.2.3/ctest.txt).
+- Fixed the Qt Quick WebEngine value-conversion crash triggered by navigation and searching; the shared Notebook JavaScript bridge is covered too. VLT Studio now opens as a pinned tab, with saved-session migration and close/reorder protection. The four start-page services remain unchanged. See [diagnosis and verification](reviews/2026-09-13/release-0.2.3/browser-fix.md).
 - Production website and admin builds and TypeScript checks passed. Playwright: 23 website tests and 14 admin tests passed; the release form was rechecked after the final AAC note was added.
 - Runtime dependency validation passed for 86 PE files in the deployment.
 - The deployed application's English and Russian self-tests passed from a directory containing Cyrillic characters. These offscreen checks use the packaging script's test-only Chromium sandbox setting; shipped browser settings are unchanged.
 - The media/QML smoke test passed against the deployed runtime with development Qt paths removed from the environment.
 - CMake cache and the actual main.cpp compile command confirm multiplayer is disabled. The application PE file and product versions are `0.2.3.0`.
 - No signing certificate was supplied; the Windows artifacts are unsigned.
-- Inno Setup 6.7.1 produced `VLTONE-0.2.3-x64-Setup.exe` (234,822,594 bytes). The ZIP's executable matches the tested deployment. Artifact hashes and build settings are recorded in [artifacts.json](reviews/2026-09-13/release-0.2.3/artifacts.json).
+- Inno Setup 6.7.1 produced the corrected `VLTONE-0.2.3-x64-Setup.exe`. The ZIP's executable matches the tested deployment. Current artifact sizes, hashes and build settings are recorded in [artifacts.json](reviews/2026-09-13/release-0.2.3/artifacts.json).
 - The server draft's canonical bilingual content matches `admin/release-template.json` (SHA-256 `9b9e51cc7e251a7e5534abbd169bf8a3ad99541858cfe4f70b6337444da62953`). It has zero artifacts, no publication timestamp, and its public endpoint returns 404.

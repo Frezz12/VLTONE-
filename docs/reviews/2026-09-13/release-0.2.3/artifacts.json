@@ -4,16 +4,25 @@
   "architecture": "x64",
   "multiplayer": false,
   "signature": "NotSigned",
-  "ctest_passed": 73,
+  "source_commit": "8bcaeaabf7f0878a93a6098567ac2683491336d9",
+  "ctest_passed": 74,
   "ctest_failed": 0,
+  "ctest_full_run_passed": 73,
+  "ctest_focused_rerun": "audio_timeline_scroll_test",
+  "deployed_selftests": [
+    "en",
+    "ru",
+    "gpu-notebook"
+  ],
   "installer": {
     "file": "VLTONE-0.2.3-x64-Setup.exe",
-    "bytes": 234822594,
-    "sha256": "292eef740ea45640390b38836ee6abf562245afc276fc5c1e0b24a88576042bf"
+    "bytes": 234818823,
+    "sha256": "bff146202b1b7b76f9416f225f8afec139eba56865aa2ad8146585ccbb069df8"
   },
   "zip": {
     "file": "VLTONE-0.2.3-windows-x64.zip",
-    "bytes": 266713952,
-    "sha256": "1d263b2d6a9b23485a6440b70ec9c456f148b0de3e5597a2b3d79b5db4c27819"
-  }
+    "bytes": 266722418,
+    "sha256": "15d68a99b67c87ceeee8695febce44b57e07c19ff1cafdda011650a88eca4da6"
+  },
+  "application_sha256": "95ded454a4e6a4f1ed81dd282ffe1efae248c6df14e482301ab567b6b975e3c8"
 }
