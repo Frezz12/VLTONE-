@@ -491,7 +491,10 @@ int main(int argc, char** argv) {
             QDir::tempPath() +
             QStringLiteral("/daw-prefs-%1")
                 .arg(QCoreApplication::applicationPid());
-        prefs.redirect(headlessPrefsDir, /*seed=*/true, /*owned=*/true);
+        // The scroll benchmark needs the same baseline theme on every runner.
+        // Screenshots and other UI checks still copy the user's preferences;
+        // an explicit DAW_PREF_DIR can benchmark a custom configuration.
+        prefs.redirect(headlessPrefsDir, /*seed=*/!audioScrollCheck, /*owned=*/true);
     }
     if (headless) {
         if (headlessPrefsDir.isEmpty()) {

@@ -19,6 +19,13 @@ WebEngineView {
     function edit(name) { triggerWebAction(WebEngineView[name]) }
     function find(text, backwards) { findText(text, backwards ? WebEngineView.FindBackward : 0) }
     function acceptWindow(request) { acceptAsNewWindow(request) }
+    function evaluate(script, requestId) {
+        if (!requestId) { runJavaScript(script); return }
+        const receiver = bridge
+        runJavaScript(script, function(result) {
+            if (receiver) receiver.completeJavaScript(requestId, result)
+        })
+    }
     function downloadFile(url, name) {
         runJavaScript("(()=>{const a=document.createElement('a');a.href=" + JSON.stringify(url.toString())
                       + ";a.download=" + JSON.stringify(name) + ";document.body.appendChild(a);a.click();a.remove()})()")
@@ -27,7 +34,7 @@ WebEngineView {
     onTitleChanged: bridge.notifyTitle()
     onLoadProgressChanged: bridge.notifyProgress()
     onIconChanged: bridge.notifyIcon()
-    onLoadingChanged: function(info) { bridge.receiveFrame(mainFrame); bridge.notifyLoading(info) }
+    onLoadingChanged: function(info) { bridge.notifyLoading(info) }
     onNavigationRequested: function(request) {
         if (!bridge.allowNavigation(request.url, request.isMainFrame)) request.reject()
     }

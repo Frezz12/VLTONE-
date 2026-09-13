@@ -7,6 +7,7 @@
 /// `browserprefs`: that namespace describes the local sample/preset browser,
 /// while this one owns a Chromium profile and ordinary web navigation.
 namespace ui::webprefs {
+inline constexpr char kStudioUrl[] = "https://vltstudio.ru/";
 
 struct Bookmark {
     QString title;

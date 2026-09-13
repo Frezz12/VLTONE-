@@ -15483,8 +15483,7 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
     // ── Tabs ──
     //
     // Opening, switching and closing, plus the rule that the panel always has
-    // a tab: closing the last one leaves a fresh start page rather than a dead
-    // toolbar over an empty rectangle.
+    // a tab: closing ordinary tabs leaves the pinned VLT Studio site available.
     const int tabsBefore = m_webPanel->tabCountForTest();
     m_webPanel->openTabForTest(QStringLiteral("vlt:start"));
     m_webPanel->openTabForTest(QStringLiteral("vlt:start"));
@@ -15509,8 +15508,8 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
     QApplication::processEvents(QEventLoop::AllEvents, 10);
     if (m_webPanel->tabCountForTest() != 1) {
         std::fprintf(stderr,
-                     "web self-test tabs: closing the last one left %d, not a "
-                     "fresh one\n", m_webPanel->tabCountForTest());
+                     "web self-test tabs: closing ordinary tabs left %d instead of the pinned site\n",
+                     m_webPanel->tabCountForTest());
         return false;
     }
     // And it reopens: the address of a closed tab is remembered.

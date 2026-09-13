@@ -16,6 +16,7 @@
 
 int main(int argc, char** argv) {
     qputenv("VLT_GPU_WORKSPACE", "1");
+    QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
     ui::registerFontUrlScheme();
     QtWebEngineQuick::initialize();
     QApplication app(argc, argv);
@@ -43,11 +44,9 @@ int main(int argc, char** argv) {
     const auto settle = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
     for (int i = 0; i < 50 && !loaded && !failed; ++i) settle(100);
     if (!loaded || failed || view.title() != "GPU browser fixture") return 1;
-    const auto frame = view.page()->mainFrame();
-    if (!frame || !frame->isValid()) { std::puts("Quick mainFrame was not exposed"); return 2; }
     int answer = 0;
-    auto readable = *frame;
-    readable.runJavaScript("window.answer", [&answer](const QVariant& value) { answer = value.toInt(); });
+    auto* readable = view.page();
+    readable->runJavaScript("window.answer", [&answer](const QVariant& value) { answer = value.toInt(); });
     for (int i = 0; i < 20 && !answer; ++i) settle(50);
     if (answer != 42) return 3;
     const auto click = [&](QPointF point) {
@@ -59,7 +58,7 @@ int main(int argc, char** argv) {
     click(QPointF(40, 18)); settle(100);
     QTest::keyClick(surface->quickWindow(), Qt::Key_A); settle(100);
     QString entered;
-    readable.runJavaScript("document.getElementById('entry').value", [&entered](const QVariant& value) { entered = value.toString(); });
+    readable->runJavaScript("document.getElementById('entry').value", [&entered](const QVariant& value) { entered = value.toString(); });
     for (int i = 0; i < 20 && entered.isEmpty(); ++i) settle(50);
     if (entered != "a") {
         qWarning() << "Quick keyboard input failed" << entered << QApplication::focusWidget()
@@ -69,7 +68,7 @@ int main(int argc, char** argv) {
             for (auto* child : item->childItems()) dump(child, depth + 1);
         };
         dump(surface->quickWindow()->contentItem(), 0);
-        readable.runJavaScript("JSON.stringify({active:document.activeElement.id,rect:document.getElementById('entry').getBoundingClientRect().toJSON(),focused:document.hasFocus(),events})",
+        readable->runJavaScript("JSON.stringify({active:document.activeElement.id,rect:document.getElementById('entry').getBoundingClientRect().toJSON(),focused:document.hasFocus(),events})",
                                [](const QVariant& value) { qWarning() << value; });
         settle(100);
         return 9;
@@ -84,7 +83,7 @@ int main(int argc, char** argv) {
     if (!view.ownsQuickFocus()) return 11;
     QTest::keyClick(surface->quickWindow(), Qt::Key_B); settle(100);
     entered.clear();
-    readable.runJavaScript("document.getElementById('entry').value", [&entered](const QVariant& value) { entered = value.toString(); });
+    readable->runJavaScript("document.getElementById('entry').value", [&entered](const QVariant& value) { entered = value.toString(); });
     for (int i = 0; i < 20 && entered.isEmpty(); ++i) settle(50);
     if (entered != "ab" || overlay.text() != "a") return 12;
     overlay.hide();
@@ -94,7 +93,7 @@ int main(int argc, char** argv) {
     // Hide/reopen retains the actual page and its Javascript state/history.
     view.hide(); settle(100); view.show(); settle(300);
     answer = 0;
-    readable.runJavaScript("window.answer", [&answer](const QVariant& value) { answer = value.toInt(); });
+    readable->runJavaScript("window.answer", [&answer](const QVariant& value) { answer = value.toInt(); });
     for (int i = 0; i < 20 && !answer; ++i) settle(50);
     if (answer != 42 || failed) return 5;
     // Force the new window to claim the persistent page before the old window
@@ -115,9 +114,9 @@ int main(int argc, char** argv) {
     if (fallbackFrame.isNull() || fallbackFrame.pixelColor(fallbackFrame.width() / 2, fallbackFrame.height() / 2).red() < 220)
         return 8;
     answer = 0;
-    readable.runJavaScript("window.answer", [&answer](const QVariant& value) { answer = value.toInt(); });
+    readable->runJavaScript("window.answer", [&answer](const QVariant& value) { answer = value.toInt(); });
     for (int i = 0; i < 20 && !answer; ++i) settle(50);
     if (answer != 42) return 7;
-    std::puts("Quick browser: frame API, composition, focus, hidden-page lifetime, window transfer and compatibility fallback passed");
+    std::puts("Quick browser: JavaScript bridge, composition, focus, hidden-page lifetime, window transfer and compatibility fallback passed");
     return 0;
 }

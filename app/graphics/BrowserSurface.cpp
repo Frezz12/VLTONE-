@@ -88,6 +88,7 @@ BrowserPage::BrowserPage(BrowserProfile* profile, QObject* owner) : QuickVisual(
 }
 BrowserPage::~BrowserPage() {
     navigationRejected = {}; internalNavigationAllowed = {};
+    m_scriptCallbacks.clear();
     delete m_quick.data();
     delete m_legacy; m_legacy = nullptr;
 }
@@ -168,11 +169,28 @@ void BrowserPage::openRequest(QWebEngineNewWindowRequest& request) {
     if (m_legacy) request.openIn(m_legacy);
     else call("acceptWindow", QVariant::fromValue(&request));
 }
-std::optional<QWebEngineFrame> BrowserPage::mainFrame() const { return m_legacy ? std::optional(m_legacy->mainFrame()) : m_frame; }
 void BrowserPage::runJavaScript(const QString& script, std::function<void(const QVariant&)> callback) {
-    if (auto frame = mainFrame(); frame && frame->isValid()) {
-        frame->runJavaScript(script, std::move(callback));
-    } else if (callback) QTimer::singleShot(0, this, [callback = std::move(callback)] { callback({}); });
+    if (m_legacy) { m_legacy->runJavaScript(script, std::move(callback)); return; }
+    auto* item = quickItem();
+    if (!item) {
+        if (callback) QTimer::singleShot(0, this, [callback = std::move(callback)] { callback({}); });
+        return;
+    }
+    // Qt 6.8 cannot safely construct the QML mainFrame value. Keep frame
+    // access inside WebEngineView and pass only the script's result to C++.
+    quint32 requestId = 0;
+    if (callback) {
+        do { ++m_scriptRequestId; } while (!m_scriptRequestId || m_scriptCallbacks.contains(m_scriptRequestId));
+        requestId = m_scriptRequestId;
+        m_scriptCallbacks.insert(requestId, std::move(callback));
+    }
+    if (!QMetaObject::invokeMethod(item, "evaluate", Q_ARG(QVariant, script), Q_ARG(QVariant, requestId))) {
+        if (auto pending = m_scriptCallbacks.take(requestId))
+            QTimer::singleShot(0, this, [pending = std::move(pending)] { pending({}); });
+    }
+}
+void BrowserPage::completeJavaScript(quint32 requestId, const QJSValue& result) {
+    if (auto callback = m_scriptCallbacks.take(requestId)) callback(result.toVariant());
 }
 void BrowserPage::attachWebChannel(QWebChannel* channel) {
     m_channel = channel;
@@ -191,7 +209,13 @@ bool BrowserPage::allowNavigation(const QUrl& url, bool main) {
     if (navigationRejected) navigationRejected(url);
     return false;
 }
-void BrowserPage::notifyLoading(const QWebEngineLoadingInfo& info) {
+void BrowserPage::notifyLoading(const QJSValue& value) {
+    // Copy the existing gadget instead of asking QML to default-construct a
+    // QWebEngineLoadingInfo argument (which Qt 6.8 does not support either).
+    const QVariant payload = value.toVariant();
+    const auto* loading = get_if<QWebEngineLoadingInfo>(&payload);
+    if (!loading) return;
+    const auto& info = *loading;
     emit loadingChanged(info);
     if (info.status() == QWebEngineLoadingInfo::LoadStartedStatus) emit loadStarted();
     if (info.status() == QWebEngineLoadingInfo::LoadSucceededStatus || info.status() == QWebEngineLoadingInfo::LoadFailedStatus)

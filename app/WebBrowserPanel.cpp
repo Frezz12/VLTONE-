@@ -40,6 +40,7 @@
 #include <QInputDialog>
 #include <QShortcut>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QStringListModel>
 #include <QTabBar>
@@ -251,6 +252,7 @@ struct WebBrowserPanel::Tab {
     bool showingErrorPage = false;
     bool loading = false;
     bool userStoppedLoading = false;
+    bool pinned = false;
 };
 
 WebBrowserPanel::Tab* WebBrowserPanel::currentTab() const {
@@ -394,7 +396,7 @@ QWidget* WebBrowserPanel::buildTabStrip() {
     m_tabBar->setDrawBase(false);
     m_tabBar->setExpanding(false);
     m_tabBar->setMovable(true);
-    m_tabBar->setTabsClosable(true);
+    m_tabBar->setTabsClosable(false); // Each ordinary tab supplies its own close button.
     m_tabBar->setElideMode(Qt::ElideRight);
     m_tabBar->setUsesScrollButtons(true);
     m_tabBar->setFocusPolicy(Qt::NoFocus);
@@ -423,6 +425,11 @@ QWidget* WebBrowserPanel::buildTabStrip() {
     connect(m_tabBar, &QTabBar::tabMoved, this, [this](int from, int to) {
         if (from < 0 || to < 0 || from >= m_tabs.size() || to >= m_tabs.size())
             return;
+        if (m_tabs.at(from)->pinned || m_tabs.at(to)->pinned) {
+            const QSignalBlocker blocker(m_tabBar);
+            m_tabBar->moveTab(to, from);
+            return;
+        }
         m_tabs.move(from, to);
         scheduleSessionSave();
     });
@@ -437,8 +444,9 @@ QWidget* WebBrowserPanel::buildTabStrip() {
     return m_tabStrip;
 }
 
-int WebBrowserPanel::openTab(const QString& url, bool activate, bool navigateNow) {
+int WebBrowserPanel::openTab(const QString& url, bool activate, bool navigateNow, bool pinned) {
     auto* tab = new Tab;
+    tab->pinned = pinned;
     tab->view = new BrowserSurface(m_profile, m_stack);
     tab->view->setObjectName(QStringLiteral("WebBrowserView"));
     tab->view->setProperty("dawWebInput", true);
@@ -481,16 +489,18 @@ int WebBrowserPanel::openTab(const QString& url, bool activate, bool navigateNow
     // The close button is ours rather than the style's: a stylesheet can only
     // give QTabBar's built-in one an image from a file, and every other button
     // in the program is drawn from the same glyph set.
-    auto* close = new ui::IconButton(icons::Glyph::Close, tr("Close tab"), m_tabBar);
-    close->setButtonSize(24, 24);
-    close->setFocusPolicy(Qt::NoFocus);
-    close->setIdleColor(browserMuted);
-    close->setAccessibleName(tr("Close tab"));
-    connect(close, &QAbstractButton::clicked, this, [this, tab] {
-        const int at = indexOfTab(tab);
-        if (at >= 0) closeTab(at);
-    });
-    m_tabBar->setTabButton(index, QTabBar::RightSide, close);
+    if (!pinned) {
+        auto* close = new ui::IconButton(icons::Glyph::Close, tr("Close tab"), m_tabBar);
+        close->setButtonSize(24, 24);
+        close->setFocusPolicy(Qt::NoFocus);
+        close->setIdleColor(browserMuted);
+        close->setAccessibleName(tr("Close tab"));
+        connect(close, &QAbstractButton::clicked, this, [this, tab] {
+            const int at = indexOfTab(tab);
+            if (at >= 0) closeTab(at);
+        });
+        m_tabBar->setTabButton(index, QTabBar::RightSide, close);
+    }
     wireTab(tab);
 
     if (activate) {
@@ -513,6 +523,7 @@ int WebBrowserPanel::openTab(const QString& url, bool activate, bool navigateNow
         }
     } else if (const QUrl target = ordinaryUrlFromInput(destination);
                allowedMainFrameUrl(target)) {
+        if (activate && m_address) m_address->setText(target.toDisplayString());
         tab->view->setUrl(target);
     } else {
         tab->showingStartPage = true;
@@ -536,6 +547,7 @@ int WebBrowserPanel::openTab(const QString& url, bool activate, bool navigateNow
 void WebBrowserPanel::closeTab(int index) {
     if (index < 0 || index >= m_tabs.size()) return;
     Tab* tab = m_tabs.at(index);
+    if (tab->pinned) return;
 
     // Remembered before it goes, so Ctrl+Shift+T has something to reopen.
     const QString address = tab->showingStartPage
@@ -657,7 +669,7 @@ void WebBrowserPanel::wireTab(Tab* tab) {
     connect(target, &BrowserSurface::iconChanged, this,
             [this, tab](const QIcon& icon) {
                 const int index = indexOfTab(tab);
-                if (index >= 0) {
+                if (index >= 0 && !tab->pinned) {
                     m_tabBar->setTabIcon(
                         index, icon.isNull()
                                    ? icons::icon(icons::Glyph::Globe,
@@ -716,6 +728,12 @@ void WebBrowserPanel::wireTab(Tab* tab) {
 void WebBrowserPanel::updateTabLabel(Tab* tab) {
     const int index = indexOfTab(tab);
     if (index < 0) return;
+    if (tab->pinned) {
+        m_tabBar->setTabText(index, QStringLiteral("VLT Studio"));
+        m_tabBar->setTabIcon(index, QIcon(QStringLiteral(":/vlt/icon-1024.png")));
+        m_tabBar->setTabToolTip(index, QLatin1String(ui::webprefs::kStudioUrl));
+        return;
+    }
     QString label = tab->view->title().trimmed();
     if (tab->showingStartPage) {
         label = tr("New tab");
@@ -774,10 +792,12 @@ void WebBrowserPanel::showTabContextMenu(int index, const QPoint& globalPos) {
         });
         menu.addSeparator();
         QAction* close = menu.addAction(tr("Close tab"));
+        close->setEnabled(!tab->pinned);
         connect(close, &QAction::triggered, this,
                 [this, index] { closeTab(index); });
         QAction* others = menu.addAction(tr("Close other tabs"));
-        others->setEnabled(m_tabs.size() > 1);
+        others->setEnabled(std::any_of(m_tabs.cbegin(), m_tabs.cend(),
+                                      [tab](const Tab* other) { return other != tab && !other->pinned; }));
         connect(others, &QAction::triggered, this, [this, tab] {
             for (int i = m_tabs.size() - 1; i >= 0; --i) {
                 if (m_tabs.at(i) != tab) closeTab(i);
@@ -799,9 +819,12 @@ void WebBrowserPanel::restoreSession() {
         // would have opened, so an existing install does not lose its place.
         urls.push_back(ui::webprefs::lastUrl());
     }
+    int active = std::clamp(ui::webprefs::sessionActiveTab(), 0, int(urls.size()) - 1);
+    const int studio = urls.indexOf(QLatin1String(ui::webprefs::kStudioUrl));
+    if (studio >= 0) urls.removeAt(studio);
+    active = studio == active ? 0 : active + (studio < 0 || studio > active ? 1 : 0);
+    openTab(QLatin1String(ui::webprefs::kStudioUrl), false, true, true);
     for (const QString& url : std::as_const(urls)) openTab(url, /*activate=*/false);
-    const int active =
-        std::clamp(ui::webprefs::sessionActiveTab(), 0, int(m_tabs.size()) - 1);
     m_tabBar->setCurrentIndex(active);
     if (m_stack && active >= 0 && active < m_tabs.size())
         m_stack->setCurrentWidget(m_tabs.at(active)->view);
@@ -818,7 +841,7 @@ void WebBrowserPanel::saveSession() {
     QStringList urls;
     urls.reserve(m_tabs.size());
     for (const Tab* tab : std::as_const(m_tabs)) {
-        urls.push_back(tab->showingStartPage
+        urls.push_back(tab->pinned ? QLatin1String(ui::webprefs::kStudioUrl) : tab->showingStartPage
                            ? QLatin1String(ui::webprefs::kStartUrl)
                            : tab->showingErrorPage ? tab->failedUrl : tab->view->url().toString());
     }
@@ -1182,6 +1205,10 @@ void WebBrowserPanel::navigate(const QString& text) {
     }
     Tab* tab = currentTab();
     if (!tab) return;
+    if (tab->pinned && url != QUrl(QLatin1String(ui::webprefs::kStudioUrl))) {
+        openTab(url.toString());
+        return;
+    }
     tab->showingStartPage = false;
     tab->showingErrorPage = false;
     tab->failedUrl.clear();
@@ -1282,6 +1309,7 @@ QUrl WebBrowserPanel::startPageBaseUrl() const {
 void WebBrowserPanel::showStartPage() {
     Tab* tab = currentTab();
     if (!tab) return;
+    if (tab->pinned) { openTab(QLatin1String(ui::webprefs::kStartUrl)); return; }
     tab->showingStartPage = true;
     tab->showingErrorPage = false;
     tab->failedUrl.clear();

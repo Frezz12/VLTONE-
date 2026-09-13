@@ -95,7 +95,7 @@ private:
     int indexOfTab(const Tab* tab) const;
     /// Open a tab on `url` and return its index. `activate` false opens it in
     /// the background, which is what a middle-clicked link wants.
-    int openTab(const QString& url, bool activate = true, bool navigate = true);
+    int openTab(const QString& url, bool activate = true, bool navigate = true, bool pinned = false);
     void closeTab(int index);
     void reopenClosedTab();
     void wireTab(Tab* tab);

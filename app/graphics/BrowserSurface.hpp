@@ -5,12 +5,11 @@
 #include <QWebEnginePage>
 #include <QWebChannel>
 #include <QWebEngineSettings>
-#include <QWebEngineFrame>
+#include <QJSValue>
 #include <QWebEngineLoadingInfo>
 #include <QWebEngineNewWindowRequest>
 #include <QWebEngineHistory>
 #include <QIcon>
-#include <optional>
 #include <functional>
 
 class QWebEngineProfile;
@@ -63,7 +62,6 @@ public:
     void findText(const QString&, QWebEnginePage::FindFlags = {});
     void download(const QUrl&, const QString&);
     void openRequest(QWebEngineNewWindowRequest&);
-    std::optional<QWebEngineFrame> mainFrame() const;
     void runJavaScript(const QString&, std::function<void(const QVariant&)> callback = {});
     void setWebChannelObject(const QString& name, QObject* object);
     // Local app documents supply their own stricter main-frame policy.
@@ -72,14 +70,14 @@ public:
     std::function<bool(const QUrl&)> internalNavigationAllowed;
 
     Q_INVOKABLE bool allowNavigation(const QUrl& url, bool mainFrame);
-    Q_INVOKABLE void notifyLoading(const QWebEngineLoadingInfo&);
+    Q_INVOKABLE void notifyLoading(const QJSValue&);
     Q_INVOKABLE void notifyUrl();
     Q_INVOKABLE void notifyTitle();
     Q_INVOKABLE void notifyProgress();
     Q_INVOKABLE void notifyIcon();
     Q_INVOKABLE void notifyNewWindow(QWebEngineNewWindowRequest* request);
     Q_INVOKABLE void notifyTerminated(int status, int code);
-    Q_INVOKABLE void receiveFrame(const QWebEngineFrame& frame) { m_frame = frame; }
+    Q_INVOKABLE void completeJavaScript(quint32 requestId, const QJSValue& result);
     Q_INVOKABLE void attachWebChannel(QWebChannel*);
 signals:
     void loadStarted();
@@ -98,7 +96,8 @@ private:
     QHash<QString, QPointer<QObject>> m_channelObjects;
     QWebEnginePage* m_legacy = nullptr;
     QPointer<QQuickItem> m_quick;
-    std::optional<QWebEngineFrame> m_frame;
+    QHash<quint32, std::function<void(const QVariant&)>> m_scriptCallbacks;
+    quint32 m_scriptRequestId = 0;
 };
 
 class BrowserSurface : public QWidget, public ScenePaintSource {

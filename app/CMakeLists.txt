@@ -148,11 +148,12 @@ if(DAW_BUILD_TESTS)
     target_link_libraries(browser_navigation_test PRIVATE
         daw_controller vlt_browser_surface vlt_gpu_scene vlt_graphics_preferences vlt_ui_frame_clock Qt6::Widgets Qt6::WebEngineWidgets Qt6::Multimedia Qt6::Network Qt6::Svg)
     add_test(NAME browser_navigation_test COMMAND browser_navigation_test)
+    add_test(NAME browser_quick_navigation_test COMMAND browser_navigation_test --quick)
     add_test(NAME browser_proxy_test COMMAND browser_navigation_test --proxy)
-    set_tests_properties(browser_navigation_test browser_proxy_test PROPERTIES TIMEOUT 120
+    set_tests_properties(browser_navigation_test browser_quick_navigation_test browser_proxy_test PROPERTIES TIMEOUT 120
         ENVIRONMENT "QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu --disable-features=WebGPU")
     if(WIN32)
-        set_tests_properties(browser_navigation_test browser_proxy_test PROPERTIES ENVIRONMENT_MODIFICATION
+        set_tests_properties(browser_navigation_test browser_quick_navigation_test browser_proxy_test PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
     qt_add_executable(telemetry_snapshot_test ../tests/telemetry_snapshot_test.cpp)

@@ -29,6 +29,9 @@
 #include <QWebEnginePage>
 #include <QWebEngineProfile>
 #include <QWebEngineView>
+#include <QtWebEngineQuick/qtwebenginequickglobal.h>
+#include <QStackedWidget>
+#include <QTabBar>
 #include <cstdio>
 #include <functional>
 #include <memory>
@@ -150,6 +153,14 @@ QPushButton* button(QWidget& owner, const QString& text) {
 }
 } // namespace
 int main(int argc, char** argv) {
+    bool quick = false;
+    for (int i = 1; i < argc; ++i)
+        if (QByteArray(argv[i]) == "--quick") quick = true;
+    qputenv("VLT_GPU_WORKSPACE", quick ? "1" : "0");
+    if (quick) {
+        qputenv("QT_QUICK_BACKEND", "software");
+        QtWebEngineQuick::initialize();
+    }
     qputenv("QT_QPA_PLATFORM", "offscreen");
     if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS"))
         qputenv("QTWEBENGINE_CHROMIUM_FLAGS",
@@ -184,7 +195,7 @@ int main(int argc, char** argv) {
         QNetworkProxy::setApplicationProxy(QNetworkProxy(
             QNetworkProxy::HttpProxy, "127.0.0.1", server.serverPort()));
         QWebEngineProfile profile;
-        WebBrowserPanel panel(nullptr, &profile);
+        WebBrowserPanel panel(nullptr, quick ? nullptr : &profile);
         panel.show();
         panel.openUrlForTest("http://proxy-check.invalid/ready");
         const bool ok =
@@ -197,10 +208,12 @@ int main(int argc, char** argv) {
     }
     QWebEngineProfile profile;
     {
-        WebBrowserPanel panel(nullptr, &profile);
+        WebBrowserPanel panel(nullptr, quick ? nullptr : &profile);
         panel.resize(900, 700);
         panel.show();
-        auto* surface = panel.findChild<ui::graphics::BrowserSurface*>();
+        auto* stack = panel.findChild<QStackedWidget*>("WebViewStack");
+        auto* surface = qobject_cast<ui::graphics::BrowserSurface*>(stack->currentWidget());
+        check(surface->page()->isQuick() == quick, "requested browser backend is active");
         auto js = [&](const QString& source) {
             auto result = std::make_shared<QVariant>();
             auto done = std::make_shared<bool>(false);
@@ -214,6 +227,16 @@ int main(int argc, char** argv) {
         panel.openUrlForTest(ui::webprefs::kStartUrl);
         if (!check(waitFor([&] { return panel.startPageReadyForTest(); }), "new start page loads offline"))
             return 1;
+        const auto document = js("({text:'Notebook',cues:[{seconds:12.25,text:'First cue'}],enabled:true})").toMap();
+        check(document.value("text").toString() == "Notebook" && document.value("enabled").toBool() &&
+                  document.value("cues").toList().value(0).toMap().value("seconds").toDouble() == 12.25,
+              "JavaScript returns structured document data to C++");
+        auto replies = std::make_shared<QStringList>();
+        for (const auto& value : {QStringLiteral("first"), QStringLiteral("second")})
+            surface->page()->runJavaScript("'" + value + "'", [replies, value](const QVariant& result) {
+                if (result.toString() == value) replies->append(value);
+            });
+        check(waitFor([&] { return replies->size() == 2; }), "concurrent scripts deliver results to their own callbacks");
         check(js("[...document.querySelectorAll('.shortcut .name')].map(e => e.textContent).join(',')")
                   .toString() == "YouTube,SoundCloud,Splice,Spotify",
               "start page contains exactly the four requested pinned sites");
@@ -296,7 +319,7 @@ int main(int argc, char** argv) {
         check(waitFor([&] { return searchSubmitted; }), "search button submits the query to the existing search engine");
         surface->page()->navigationPolicy = navigationPolicy;
         panel.openUrlForTest(server.url("/ready").toString());
-        auto* view = panel.findChild<QWebEngineView*>();
+        auto* view = surface;
         check(waitFor([&] { return view->title() == "Ready"; }),
               "ordinary page loads");
         panel.openUrlForTest(server.url("/slow").toString());
@@ -316,7 +339,7 @@ int main(int argc, char** argv) {
               }), "popup fixture form is ready before submitting");
         view->page()->runJavaScript("blank()");
         check(waitFor([&] {
-                  return panel.tabCountForTest() == 2 &&
+                  return panel.tabCountForTest() == 3 &&
                          panel.tabTitlesForTest().contains("Blank popup");
               }),
               "window.open empty URL preserves writable window context");
@@ -354,6 +377,43 @@ int main(int argc, char** argv) {
             panel.closeCurrentTabForTest();
         }
         QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+    // Upgrade an existing session, then reopen the saved session: the built-in
+    // site occupies one stable tab without duplicating it or losing selection.
+    ui::webprefs::setSessionTabs({server.url("/ready").toString(), ui::webprefs::kStartUrl});
+    ui::webprefs::setSessionActiveTab(0);
+    for (int launch = 0; launch < 2; ++launch) {
+        WebBrowserPanel panel(nullptr, quick ? nullptr : &profile);
+        panel.show();
+        auto* tabs = panel.findChild<QTabBar*>("WebTabBar");
+        auto* stack = panel.findChild<QStackedWidget*>("WebViewStack");
+        check(tabs->count() == 3 && tabs->tabText(0) == "VLT Studio" &&
+                  tabs->tabToolTip(0) == ui::webprefs::kStudioUrl && !tabs->tabIcon(0).isNull(),
+              "VLT Studio opens once as the first tab alongside the saved session");
+        check(tabs->currentIndex() == 1, "session restoration preserves the selected ordinary tab");
+        check(!tabs->tabButton(0, QTabBar::RightSide), "pinned site has no close button");
+        tabs->setCurrentIndex(0);
+        panel.closeCurrentTabForTest();
+        check(tabs->count() == 3, "close shortcut cannot remove the pinned site");
+        tabs->moveTab(0, 2);
+        tabs->moveTab(2, 0);
+        check(tabs->tabText(0) == "VLT Studio" && tabs->currentIndex() == 0 &&
+                  stack->currentWidget() == stack->widget(0),
+              "tab reordering keeps the pinned site and selection at the front");
+        panel.openUrlForTest(ui::webprefs::kStartUrl);
+        check(tabs->count() == 4 && tabs->currentIndex() == 3 && tabs->tabText(0) == "VLT Studio",
+              "Home opens an ordinary tab without replacing the pinned site");
+        panel.closeCurrentTabForTest();
+        tabs->setCurrentIndex(0);
+        panel.openUrlForTest(server.url("/ready").toString());
+        check(tabs->count() == 4 && panel.findChild<QLineEdit*>("WebAddress")->text() == server.url("/ready").toDisplayString(),
+              "address navigation from the pinned site updates the new tab's address immediately");
+        panel.closeCurrentTabForTest();
+        tabs->setCurrentIndex(1);
+        check(waitFor([&] { return ui::webprefs::sessionTabs().size() == 3 &&
+                                  ui::webprefs::sessionTabs().first() == ui::webprefs::kStudioUrl &&
+                                  ui::webprefs::sessionActiveTab() == 1; }),
+              "session saves one pinned site and the selected ordinary tab");
     }
     {
         BrowserBackgroundDialog dialog(server.url("/v1"));
