@@ -369,7 +369,7 @@ public:
             p.drawText(-bounds.topLeft(), item.text()); p.end();
             glyphAssets.insert(key, new GlyphAsset{glyphs, bounds}, int(glyphs.sizeInBytes() / 1024 + 1));
         }
-        drawImage(QRectF(baseline + bounds.topLeft(), glyphs.size() / dpr), glyphs,
+        drawImage(QRectF(baseline + bounds.topLeft(), glyphs.deviceIndependentSize()), glyphs,
                   glyphs.rect(), Qt::AutoColor);
     }
     std::vector<SceneMesh> meshes;

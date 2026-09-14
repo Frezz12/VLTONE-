@@ -3,7 +3,7 @@
   <assemblyIdentity
       type="win32"
       name="VLTONE.VLTONE"
-      version="@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@.@PROJECT_VERSION_PATCH@.0"
+      version="@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@.@PROJECT_VERSION_PATCH@.@VLTONE_BUILD_NUMBER@"
       processorArchitecture="amd64" />
   <description>VLTONE digital audio workstation</description>
 

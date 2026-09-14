@@ -63,12 +63,14 @@ public:
     ///   Select       — move clips, trim by their edges, fade by their top
     ///                  corners, adjust gain by the handle at the bottom.
     ///   Knife        — click a clip to split it (all selected clips, if several).
+    ///   Glue         — join selected clips, or the clicked clip and its nearest
+    ///                  compatible neighbour.
     ///   Eraser       — click (or drag across) clips to delete them.
     ///   SelectRegion — drag a time region; delete or drag its contents.
     /// Appended, never inserted: the transport's chip menu addresses a tool by its
 /// index and stores that index, so renumbering one would silently change
 /// everybody's chosen tool.
-enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
+enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue };
 
     explicit TimelineWidget(daw::EngineController* controller,
                             QWidget* parent = nullptr);
@@ -243,6 +245,9 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch };
     /// column is in step with the lanes.
     bool checkClipIndexForTest() const;
     bool checkAdaptiveGridForTest();
+    bool checkGestureGridStabilityForTest();
+    bool checkMoveGuidePaintForTest();
+    bool checkBottomInsetInvalidationForTest();
     bool checkScrollCacheForTest();
     int laneTopForTest(int lane) const { return laneTop(lane); }
     int bottomInsetForTest() const { return m_bottomInset; }
@@ -301,6 +306,8 @@ signals:
     /// The lanes scrolled vertically; the header column moves with them.
     void verticalScrollChanged(int y);
     void projectEdited();
+    /// Short, non-modal feedback for an arrangement action that cannot run.
+    void operationStatus(const QString& message);
     /// The arrangement sought the shared transport. Editors repaint their
     /// local playhead immediately even when playback is stopped.
     void playheadMoved();
@@ -862,14 +869,10 @@ private:
     // its lane spacing while the live document moves underneath it.
     QVector<DragOrigin> m_dragOrigins;
     // The original horizontal extent of the dragged selection. These two
-    // boundaries stay put as quiet alignment guides while the contents move.
+    // boundaries stay put as alignment guides while the contents move.
     bool m_moveGuidesActive = false;
     double m_moveGuideStart = 0.0;
     double m_moveGuideEnd = 0.0;
-    int m_moveGuideLaneA = -1;
-    int m_moveGuideLaneB = -1;
-    int m_moveGuideTargetLaneA = -1;
-    int m_moveGuideTargetLaneB = -1;
 
     // Trim (edge-drag) state, captured at press so the whole gesture stays
     // relative to the clip's original geometry.

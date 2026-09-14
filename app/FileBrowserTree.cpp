@@ -355,7 +355,8 @@ QTreeWidgetItem* FileBrowserTree::makeItem(const QString& path, bool isDirectory
     item->setData(0, kKindRole, int(kind));
     item->setIcon(0, browserIcon(kind));
 
-    Qt::ItemFlags flags = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+    Qt::ItemFlags flags = Qt::ItemIsEnabled;
+    if (!isContainer(kind)) flags |= Qt::ItemIsSelectable;
     if (draggable(kind)) flags |= Qt::ItemIsDragEnabled;
     item->setFlags(flags);
 
@@ -385,7 +386,9 @@ QTreeWidgetItem* FileBrowserTree::makeItem(const QString& path, bool isDirectory
         item->setData(0, kUnreadRole, true);
         // A placeholder child is what draws the expander arrow before the
         // folder has been read.
-        item->addChild(new QTreeWidgetItem(QStringList(QStringLiteral("…"))));
+        auto* placeholder = new QTreeWidgetItem(QStringList(QStringLiteral("…")));
+        placeholder->setFlags(Qt::ItemIsEnabled);
+        item->addChild(placeholder);
     }
     return item;
 }
@@ -586,6 +589,18 @@ int FileBrowserTree::pluginRowCountForTest() const {
         if (Kind((*it)->data(0, kKindRole).toInt()) == Kind::Plugin) ++count;
     }
     return count;
+}
+
+bool FileBrowserTree::containersAreNavigationOnlyForTest() const {
+    bool found = false;
+    QTreeWidgetItemIterator it(const_cast<FileBrowserTree*>(this));
+    for (; *it; ++it) {
+        const Kind kind = Kind((*it)->data(0, kKindRole).toInt());
+        if (!isContainer(kind)) continue;
+        found = true;
+        if ((*it)->flags().testFlag(Qt::ItemIsSelectable)) return false;
+    }
+    return found;
 }
 
 bool FileBrowserTree::selectedProjectTemplateForTest() const {

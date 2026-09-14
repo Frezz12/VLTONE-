@@ -93,6 +93,10 @@ public:
     /// state. Control thread only, with graph processing parked by RenderGate.
     void discardPendingEvents() noexcept { m_inbound.clear(); }
 
+    /// Copy unprocessed host parameter edits without consuming the live queue.
+    /// Control thread only, with graph processing parked by RenderGate.
+    std::vector<PluginEvent> pendingParameterEvents();
+
     /// One automated parameter: breakpoints in **beats** from the start of the
     /// timeline, kept sorted.
     ///
@@ -149,6 +153,16 @@ public:
     void onReloadRequested() noexcept override;
 
 private:
+    struct OfflineConfiguration {
+        engine::FrameCount latency = 0;
+        std::uint64_t tail = 0;
+        std::uint16_t inputs = 0;
+        std::uint16_t sidechain = 0;
+        std::uint16_t outputs = 0;
+
+        bool operator==(const OfflineConfiguration&) const = default;
+    };
+
     void requestMainThreadPump() noexcept;
     void rememberMidiOutput(const engine::MidiEvent& event) noexcept;
     void releaseHeldMidi(engine::MidiBuffer* output) noexcept;
@@ -214,7 +228,8 @@ private:
     const AutomationCurves* m_curveCursorFor = nullptr;
     double m_lastBlockStartBeats = 0.0;
 
-    engine::LockFreeSPSCQueue<PluginEvent, 2048> m_inbound;
+    static constexpr std::size_t kEventQueueCapacity = 2048;
+    engine::LockFreeSPSCQueue<PluginEvent, kEventQueueCapacity> m_inbound;
     engine::LockFreeMPSCQueue<PluginEvent, 512> m_outbound;
 
     std::atomic<engine::FrameCount> m_latency{0};
@@ -226,6 +241,8 @@ private:
     std::atomic<bool> m_mainThreadWorkPending{false};
     std::atomic<bool> m_ready{false};
     std::atomic<bool> m_processFailed{false};
+    OfflineConfiguration m_lastOfflineConfiguration{};
+    bool m_hasLastOfflineConfiguration = false;
     /// Ramps 1 → 0 when bypass engages and back when it lifts, so the switch
     /// is a short crossfade instead of a discontinuity.
     float m_wet = 1.0f;

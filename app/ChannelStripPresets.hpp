@@ -26,5 +26,6 @@ QString displayName(const QString& filePath);
 QString filePathForName(const QString& name);
 
 bool isPresetFile(const QString& path);
+bool isOfflineFile(const QString& path);
 
 } // namespace ui::channelstrippresets

@@ -45,9 +45,10 @@ std::string uniquePath(const std::string& dir, const std::string& stem,
         std::string name = attempt == 1
                                ? stem
                                : stem + " (" + std::to_string(attempt) + ")";
+        const fs::path fileName = platform::pathFromUtf8(
+            name + "." + std::string(extension));
         std::string path = platform::pathToUtf8(
-            platform::pathFromUtf8(dir) /
-            (name + "." + std::string(extension)));
+            platform::pathFromUtf8(dir) / fileName);
         std::string key = path;
         std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) {
             return char(std::tolower(c));

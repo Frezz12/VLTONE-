@@ -78,6 +78,9 @@ public:
     bool selectFirstPluginForTest();
     /// How many plugin rows are listed, for the same check.
     int pluginRowCountForTest() const;
+    /// Folder and plugin-group rows navigate the tree but never become a
+    /// highlighted content selection.
+    bool containersAreNavigationOnlyForTest() const;
     bool selectedProjectTemplateForTest() const;
     bool activateSelectedProjectTemplateForTest();
 

@@ -659,7 +659,8 @@ void AutomationCurveView::mousePressEvent(QMouseEvent* ev) {
     // putting it where you meant is one gesture rather than two.
     beginGesture();
     const double beats = snap(xToBeats(pos.x()));
-    points.push_back({beats, yToValue(pos.y()), m_newShape, 0.0});
+    points.push_back(
+        {beats, yToValue(pos.y()), m_newShape, 0.0, daw::newUuid()});
     daw::normalizeAutomation(points);
     m_dragPoints = points;
     pushLive(points);

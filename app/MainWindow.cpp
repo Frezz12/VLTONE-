@@ -133,6 +133,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSlider>
+#include <QStackedWidget>
 #include <QSet>
 #include <QUuid>
 #include <QScreen>
@@ -159,7 +160,6 @@
 #include <QShortcut>
 #include <QSettings>
 #include <QStatusBar>
-#include <QTabWidget>
 #include <QTimer>
 #include <QUuid>
 #include <QThread>
@@ -7179,20 +7179,45 @@ bool MainWindow::checkSettingsViewportForTest() {
     if (!m_settingsWindow) return false;
     QApplication::processEvents();   // runs the post-show native-frame clamp
 
-    auto* tabs = m_settingsWindow->findChild<QTabWidget*>();
+    auto* pages = m_settingsWindow->findChild<QStackedWidget*>(
+        QStringLiteral("SettingsPages"));
+    auto* navigation = m_settingsWindow->findChild<QTreeWidget*>(
+        QStringLiteral("SettingsNavigation"));
     auto* startupTemplate = m_settingsWindow->findChild<QComboBox*>(
         QStringLiteral("StartupProjectTemplate"));
     const bool startupTemplateControl =
         startupTemplate && startupTemplate->count() >= 1 &&
         startupTemplate->itemData(0).toString().isEmpty() &&
         !startupTemplate->accessibleName().isEmpty();
-    bool scrollable = tabs && tabs->count() == SettingsWindow::kInterfaceTab + 1 &&
+    QSet<int> navigationPages;
+    bool groupedNavigation = navigation && navigation->topLevelItemCount() == 5;
+    if (navigation) {
+        for (int group = 0; group < navigation->topLevelItemCount(); ++group) {
+            QTreeWidgetItem* category = navigation->topLevelItem(group);
+            groupedNavigation = groupedNavigation && category &&
+                                category->childCount() >= 2;
+            for (int row = 0; category && row < category->childCount(); ++row) {
+                bool valid = false;
+                const int page = category->child(row)
+                                     ->data(0, Qt::UserRole)
+                                     .toInt(&valid);
+                groupedNavigation = groupedNavigation && valid && page >= 0 &&
+                                    page <= SettingsWindow::kInterfaceTab &&
+                                    !navigationPages.contains(page);
+                if (valid) navigationPages.insert(page);
+            }
+        }
+        groupedNavigation = groupedNavigation &&
+                            navigationPages.size() == SettingsWindow::kInterfaceTab + 1;
+    }
+    bool scrollable = pages && pages->count() == SettingsWindow::kInterfaceTab + 1 &&
+                      groupedNavigation &&
                       m_settingsWindow->checkAudioPageForTest() &&
                       SettingsWindow::checkWheelRoutingForTest() &&
                       startupTemplateControl;
-    if (tabs) {
-        for (int i = 0; i < tabs->count(); ++i) {
-            auto* scroll = qobject_cast<QScrollArea*>(tabs->widget(i));
+    if (pages) {
+        for (int i = 0; i < pages->count(); ++i) {
+            auto* scroll = qobject_cast<QScrollArea*>(pages->widget(i));
             scrollable = scrollable && scroll && scroll->widgetResizable() &&
                          scroll->verticalScrollBarPolicy() == Qt::ScrollBarAsNeeded &&
                          scroll->horizontalScrollBarPolicy() ==
@@ -7205,12 +7230,12 @@ bool MainWindow::checkSettingsViewportForTest() {
     // compatibility mode it lands on the child control. Both mouse-wheel and
     // precision trackpad deltas must scroll without changing the slider.
     bool liveWheelRouting = false;
-    if (tabs && tabs->count() > SettingsWindow::kThemesTab) {
-        const int previousTab = tabs->currentIndex();
-        tabs->setCurrentIndex(SettingsWindow::kThemesTab);
+    if (pages && pages->count() > SettingsWindow::kThemesTab) {
+        const int previousPage = pages->currentIndex();
+        m_settingsWindow->showTab(SettingsWindow::kThemesTab);
         QApplication::processEvents();
         auto* themeScroll = qobject_cast<QScrollArea*>(
-            tabs->widget(SettingsWindow::kThemesTab));
+            pages->widget(SettingsWindow::kThemesTab));
         QSlider* target = nullptr;
         if (themeScroll && themeScroll->widget()) {
             const auto sliders = themeScroll->widget()->findChildren<QSlider*>();
@@ -7269,7 +7294,7 @@ bool MainWindow::checkSettingsViewportForTest() {
                 int(themeScroll != nullptr), int(target != nullptr),
                 themeScroll ? themeScroll->verticalScrollBar()->maximum() : -1);
         }
-        tabs->setCurrentIndex(previousTab);
+        m_settingsWindow->showTab(previousPage);
         QApplication::processEvents();
     }
     scrollable = scrollable && liveWheelRouting;
@@ -7586,6 +7611,11 @@ bool MainWindow::checkAuxiliaryWindowPolicyForTest() {
     QApplication::processEvents();
     const bool transportReturnedFocus = m_pianoRollFrame->isVisible() &&
         !m_pianoRollFrame->isEditorActive();
+    const bool hadVisiblePluginEditor = std::any_of(
+        m_pluginEditors.cbegin(), m_pluginEditors.cend(),
+        [](const PluginEditorWindow* editor) {
+            return editor && editor->isVisible();
+        });
 
     const QPoint timelineAt(std::max(8, m_timeline->width() / 3), 4);
     QMouseEvent timelinePress(
@@ -7601,6 +7631,11 @@ bool MainWindow::checkAuxiliaryWindowPolicyForTest() {
     QApplication::processEvents();
     const bool inactiveButOpen = !m_pianoRollFrame->isEditorActive() &&
                                  m_pianoRollFrame->isVisible();
+    const bool pluginEditorsClosed = hadVisiblePluginEditor && std::none_of(
+        m_pluginEditors.cbegin(), m_pluginEditors.cend(),
+        [](const PluginEditorWindow* editor) {
+            return editor && editor->isVisible();
+        });
 
     openPianoRoll(trackId, clipId);
     QApplication::processEvents();
@@ -7647,19 +7682,20 @@ bool MainWindow::checkAuxiliaryWindowPolicyForTest() {
     const bool ok = internal && bounded && maximizedInsideHost &&
         aboveHeader && parkedSafely && broughtBack &&
         restoredAfterMaximize && transportReturnedFocus &&
-        inactiveButOpen && reopened && trackInactiveButOpen && reopenedAfterTrack &&
+        inactiveButOpen && pluginEditorsClosed && reopened &&
+        trackInactiveButOpen && reopenedAfterTrack &&
         allModelessInternal;
     if (!ok) {
         std::fprintf(stderr, "editor movement: header=%d parked=%d return=%d\n",
                      int(aboveHeader), int(parkedSafely), int(broughtBack));
         std::fprintf(stderr,
                      "internal editor policy: internal=%d bounded=%d "
-                     "max=%d restore=%d transport=%d timeline=%d reopen=%d "
-                     "track=%d trackReopen=%d allInternal=%d\n",
+                     "max=%d restore=%d transport=%d timeline=%d plugins=%d "
+                     "reopen=%d track=%d trackReopen=%d allInternal=%d\n",
                      int(internal), int(bounded), int(maximizedInsideHost),
                      int(restoredAfterMaximize),
                      int(transportReturnedFocus), int(inactiveButOpen),
-                     int(reopened), int(trackInactiveButOpen),
+                     int(pluginEditorsClosed), int(reopened), int(trackInactiveButOpen),
                      int(reopenedAfterTrack), int(allModelessInternal));
     }
     return ok;
@@ -9044,6 +9080,10 @@ void MainWindow::buildLayout() {
                     tr("%1 added to %2").arg(plugin, target), 3000);
                 syncViews();
                 markDirty();
+            });
+    connect(m_timeline, &TimelineWidget::operationStatus, this,
+            [this](const QString& message) {
+                statusBar()->showMessage(message, 5000);
             });
     connect(m_timeline, &TimelineWidget::pluginEditorRequested, this,
             &MainWindow::openPluginEditor);
@@ -10863,6 +10903,9 @@ void MainWindow::buildMenus() {
     connect(addCommand(tools, "tool.stretch", tr("Stretch Tool"), kTools,
                        QKeySequence(Qt::Key_7)),
             &QAction::triggered, this, [this] { setEditTool(6); });
+    connect(addCommand(tools, "tool.glue", tr("Glue Tool"), kTools,
+                       QKeySequence(Qt::Key_8)),
+            &QAction::triggered, this, [this] { setEditTool(7); });
     tools->addSeparator();
     m_typingKeyboardAction = addCommand(tools, "tool.typingKeyboard",
                                         tr("Typing &Keyboard"), kTools,
@@ -10874,7 +10917,7 @@ void MainWindow::buildMenus() {
     auto* settings = menuBar()->addMenu(tr("&Settings"));
     connect(addCommand(settings, "app.settings", tr("&Settings…"), kApp,
                        QKeySequence(QKeySequence::Preferences)),
-            &QAction::triggered, this, [this] { openSettings(SettingsWindow::kAudioTab); });
+            &QAction::triggered, this, [this] { openSettings(); });
     connect(addCommand(settings, "app.plugins", tr("&Plugin Manager…"), kApp),
             &QAction::triggered, this, &MainWindow::openPluginManager);
 }
@@ -11997,6 +12040,8 @@ bool MainWindow::checkBrowser(const QString& folder, const QString& audioFile,
     if (!m_browser) return fail("panel was not constructed");
     if (!openDemoBrowser(folder, audioFile))
         return fail("demo file was not found in the tree");
+    if (!m_browser->containersAreNavigationOnlyForTest())
+        return fail("folder rows can still become highlighted selections");
 
     // Selecting the file decodes it on a worker thread; the audition and the
     // waveform both arrive by queued signal, so the loop below is the honest
@@ -12807,7 +12852,7 @@ void MainWindow::openSettings(int tab) {
                     }
                 });
     }
-    m_settingsWindow->showTab(tab);
+    if (tab >= 0) m_settingsWindow->showTab(tab);
     presentInternalWindow(m_settingsWindow);
 }
 
@@ -13683,6 +13728,17 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* ev) {
             const bool onTrackList =
                 m_trackList &&
                 (target == m_trackList || m_trackList->isAncestorOf(target));
+            if (onTimeline) {
+                // A plugin editor is transient editing UI. Deactivating its
+                // native frame can put it underneath the GPU workspace while
+                // leaving the slot registered as open. Follow the exact close
+                // path used by its X button instead.
+                const QList<PluginEditorWindow*> editors =
+                    m_pluginEditors.values();
+                for (PluginEditorWindow* editor : editors) {
+                    if (editor && editor->isVisible()) editor->close();
+                }
+            }
             if (onTimeline || onTrackList) {
                 lowerAuxiliaryWindowsForWorkspace();
             } else if (!m_auxiliaryLowered && !m_auxiliaryRaiseQueued) {

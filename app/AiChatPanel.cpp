@@ -39,7 +39,6 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QFontMetrics>
-#include <QConicalGradient>
 #include <QMenu>
 #include <QToolButton>
 #include <QMessageBox>
@@ -54,9 +53,9 @@
 #include <QSet>
 #include <QShowEvent>
 #include <QStackedWidget>
+#include <QStyle>
 #include <QTimer>
 #include <QUrl>
-#include <QVariantAnimation>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -87,8 +86,9 @@ bool commandAllowsMode(const ShortcutManager::Metadata& metadata,
     return metadata.modes.testFlag(required);
 }
 
-// Three rows: the title strip, the model line, and the mode switch.
-constexpr int kHeaderHeight = 88;
+// Compact enough to leave the transcript in charge, with one quiet metadata
+// line for the model and the project-aware library state.
+constexpr int kHeaderHeight = 68;
 constexpr int kAttachmentsMaxHeight = 70;
 
 // ── Transcript furniture, shared by both modes ───────────────────────────────
@@ -285,6 +285,10 @@ AiChatPanel::AiChatPanel(daw::EngineController* controller, QWidget* parent)
     : ui::GlassPanel(parent), m_controller(controller) {
     setObjectName("AiPanel");
     setAttribute(Qt::WA_StyledBackground, true);
+    // The pane paints every pixel itself. This prevents the host palette from
+    // flashing through as a white rectangle while it opens or resizes.
+    setAttribute(Qt::WA_OpaquePaintEvent, true);
+    setAutoFillBackground(false);
     setMinimumWidth(240);
     setAcceptDrops(true);
     setCornerRadius(22);
@@ -308,9 +312,13 @@ AiChatPanel::AiChatPanel(daw::EngineController* controller, QWidget* parent)
     column->addWidget(buildHeader());
 
     m_stack = new QStackedWidget(this);
+    m_stack->setObjectName("AiStack");
+    m_stack->setAttribute(Qt::WA_StyledBackground, true);
     column->addWidget(m_stack, 1);
 
     auto* chat = new QWidget(m_stack);
+    chat->setObjectName("AiChatPage");
+    chat->setAttribute(Qt::WA_StyledBackground, true);
     auto* chatColumn = new QVBoxLayout(chat);
     chatColumn->setContentsMargins(0, 0, 0, 0);
     chatColumn->setSpacing(0);
@@ -362,22 +370,8 @@ AiChatPanel::AiChatPanel(daw::EngineController* controller, QWidget* parent)
                 &AiChatPanel::updateUsageLabel);
     }
 
-    // A very slow spectral pass around the rim is the panel's one deliberate
-    // piece of motion. It keeps the assistant feeling alive without animating
-    // content or competing with the playhead. Reduced-transparency mode is
-    // also the quiet-motion fallback.
-    m_edgeAnimation = new QVariantAnimation(this);
-    m_edgeAnimation->setDuration(12000);
-    m_edgeAnimation->setLoopCount(-1);
-    m_edgeAnimation->setStartValue(0.0);
-    m_edgeAnimation->setEndValue(1.0);
-    connect(m_edgeAnimation, &QVariantAnimation::valueChanged, this,
-            [this](const QVariant& value) {
-                m_edgePhase = value.toDouble();
-                // Fifteen visual frames a second is ample for a twelve-second
-                // light pass and keeps the full-height surface cheap in a DAW.
-                if ((++m_edgeFrame % 4) == 0) update();
-            });
+    // Chat is a high-frequency editing surface. Nothing in its chrome moves
+    // unless a response itself is changing.
     applyTheme();
     // The remembered mode is restored without the switch travelling: nothing
     // the user did not just do should appear to move.
@@ -422,7 +416,7 @@ QWidget* AiChatPanel::buildHeader() {
     mark->setFixedSize(27, 27);
     row->addWidget(mark);
 
-    m_titleLabel = new QLabel(tr("AI CHAT"), header);
+    m_titleLabel = new QLabel(tr("New AI chat"), header);
     m_titleLabel->setObjectName("AiTitle");
     row->addWidget(m_titleLabel);
     row->addStretch(1);
@@ -493,6 +487,8 @@ QWidget* AiChatPanel::buildHeader() {
 QWidget* AiChatPanel::buildComposer() {
     auto* composer = new QWidget(this);
     composer->setObjectName("AiComposer");
+    composer->setProperty("inputFocused", false);
+    composer->setAttribute(Qt::WA_StyledBackground, true);
     auto* column = new QVBoxLayout(composer);
     column->setContentsMargins(10, 8, 10, 9);
     column->setSpacing(6);
@@ -501,6 +497,7 @@ QWidget* AiChatPanel::buildComposer() {
                               composer);
     m_attachHint->setObjectName("AiHint");
     m_attachHint->setWordWrap(true);
+    m_attachHint->hide();
     column->addWidget(m_attachHint);
 
     m_attachments = new QListWidget(composer);
@@ -517,10 +514,14 @@ QWidget* AiChatPanel::buildComposer() {
     m_input->setObjectName("AiInput");
     m_input->setPlaceholderText(
         tr("Make a piano part, write the chords, mix the channel…"));
-    m_input->setFixedHeight(82);
-    // Nothing may hold the keyboard until it is clicked, or the transport keys
-    // stop working — the same rule the tempo field follows.
-    m_input->setFocusPolicy(Qt::ClickFocus);
+    m_input->setFixedHeight(72);
+    m_input->setFrameShape(QFrame::NoFrame);
+    m_input->setFocusPolicy(Qt::StrongFocus);
+    m_input->setTabChangesFocus(true);
+    m_input->setInputMethodHints(Qt::ImhMultiLine);
+    m_input->setAccessibleName(tr("Message to the AI assistant"));
+    m_input->setAccessibleDescription(
+        tr("Type a request. Enter sends; Shift+Enter inserts a new line."));
     m_input->installEventFilter(this);
     column->addWidget(m_input);
 
@@ -575,30 +576,32 @@ QWidget* AiChatPanel::buildComposer() {
 
 QWidget* AiChatPanel::buildEmptyState() {
     auto* page = new QWidget(m_stack);
+    page->setObjectName("AiEmptyPage");
+    page->setAttribute(Qt::WA_StyledBackground, true);
     auto* column = new QVBoxLayout(page);
-    column->setContentsMargins(16, 24, 16, 16);
-    column->setSpacing(10);
-    column->addStretch(2);
+    column->setContentsMargins(22, 22, 22, 18);
+    column->setSpacing(9);
+    column->addStretch(3);
 
     auto* mark = new QLabel(QStringLiteral("AI"), page);
     mark->setObjectName("AiEmptyMark");
     mark->setAlignment(Qt::AlignCenter);
-    mark->setFixedSize(58, 58);
+    mark->setFixedSize(42, 42);
     column->addWidget(mark, 0, Qt::AlignCenter);
 
-    auto* kicker = new QLabel(tr("STUDIO INTELLIGENCE"), page);
+    auto* kicker = new QLabel(tr("VLT AI"), page);
     kicker->setObjectName("AiEmptyKicker");
     kicker->setAlignment(Qt::AlignCenter);
     column->addWidget(kicker);
 
-    auto* headline = new QLabel(tr("Choose an AI model"), page);
+    auto* headline = new QLabel(tr("Connect an AI model"), page);
     headline->setObjectName("AiEmptyTitle");
     headline->setAlignment(Qt::AlignCenter);
     column->addWidget(headline);
 
     auto* blurb = new QLabel(
-        tr("Use a model provided with VLTONE, or add your own compatible "
-           "endpoint in AI Settings."),
+        tr("Choose a VLT model or add a compatible endpoint. You can keep "
+           "drafting your request below while settings are open."),
         page);
     blurb->setObjectName("AiHint");
     blurb->setWordWrap(true);
@@ -610,16 +613,14 @@ QWidget* AiChatPanel::buildEmptyState() {
     connect(open, &QAbstractButton::clicked, this,
             &AiChatPanel::settingsRequested);
     column->addWidget(open, 0, Qt::AlignCenter);
-    auto* capabilities = new QLabel(tr("CREATE  ·  ARRANGE  ·  MIX"), page);
-    capabilities->setObjectName("AiEmptyKicker");
-    capabilities->setAlignment(Qt::AlignCenter);
-    column->addWidget(capabilities);
-    column->addStretch(3);
+    column->addStretch(4);
     return page;
 }
 
 QWidget* AiChatPanel::buildMusicPage() {
     auto* page = new QWidget(m_stack);
+    page->setObjectName("AiMusicPage");
+    page->setAttribute(Qt::WA_StyledBackground, true);
     auto* column = new QVBoxLayout(page);
     column->setContentsMargins(0, 0, 0, 0);
     column->setSpacing(0);
@@ -645,38 +646,32 @@ QWidget* AiChatPanel::buildMusicPage() {
 void AiChatPanel::applyTheme() {
     const Theme& t = th();
     setAccentColor(t.accentHighlight);
-    if (ui::GlassPanel::reduceTransparency()) m_edgePhase = 0.0;
-    syncEdgeAnimation();
 
     auto css = [](QColor color) {
         return QStringLiteral("rgba(%1,%2,%3,%4)")
             .arg(color.red()).arg(color.green()).arg(color.blue())
             .arg(QString::number(color.alphaF(), 'f', 3));
     };
-    QColor headerLine = mixColors(t.separator(), t.accent, 0.32);
-    headerLine.setAlphaF(t.dark ? 0.62 : 0.48);
     QColor markFill = t.accent;
-    markFill.setAlphaF(t.dark ? 0.18 : 0.12);
+    markFill.setAlphaF(t.dark ? 0.16 : 0.10);
     QColor modelFill = t.surfaceElevated;
-    modelFill.setAlphaF(t.dark ? 0.48 : 0.64);
-    QColor composerFill = t.surfaceElevated;
-    composerFill.setAlphaF(t.dark ? 0.58 : 0.76);
+    modelFill.setAlphaF(t.dark ? 0.78 : 0.88);
+    QColor composerFill = mixColors(t.surfaceElevated, t.background, 0.16);
+    composerFill.setAlphaF(1.0);
     QColor inputFill = t.well();
-    inputFill.setAlphaF(t.dark ? 0.72 : 0.80);
+    inputFill.setAlphaF(t.dark ? 0.78 : 0.86);
     QColor inputBorder = mixColors(t.separator(), t.accent, 0.20);
-    inputBorder.setAlphaF(0.78);
+    inputBorder.setAlphaF(t.dark ? 0.68 : 0.54);
     QColor userTop = mixColors(t.surfaceElevated, t.accent, 0.25);
-    userTop.setAlphaF(t.dark ? 0.90 : 0.82);
+    userTop.setAlphaF(t.dark ? 0.88 : 0.82);
     QColor userBottom = mixColors(t.surface, t.accent, 0.14);
-    userBottom.setAlphaF(t.dark ? 0.86 : 0.78);
+    userBottom.setAlphaF(t.dark ? 0.82 : 0.76);
     QColor userBorder = mixColors(t.separator(), t.accentHighlight, 0.58);
-    userBorder.setAlphaF(0.90);
+    userBorder.setAlphaF(t.dark ? 0.52 : 0.42);
     QColor assistantTop = t.surfaceElevated;
-    assistantTop.setAlphaF(t.dark ? 0.72 : 0.84);
-    QColor assistantBottom = mixColors(t.surfaceElevated, t.background, 0.22);
-    assistantBottom.setAlphaF(t.dark ? 0.66 : 0.80);
+    assistantTop.setAlphaF(t.dark ? 0.54 : 0.68);
     QColor assistantBorder = mixColors(t.separator(), t.accent, 0.26);
-    assistantBorder.setAlphaF(0.78);
+    assistantBorder.setAlphaF(t.dark ? 0.42 : 0.34);
     QColor actionTop = mixColors(t.well(), t.accent, 0.08);
     actionTop.setAlphaF(t.dark ? 0.90 : 0.82);
     QColor actionBottom = t.well();
@@ -698,44 +693,44 @@ void AiChatPanel::applyTheme() {
 
     setStyleSheet(QString(R"(
 #AiPanel { background: transparent; }
-#AiHeader { background: transparent; border-bottom: 1px solid %HEADER_LINE%; }
+#AiStack, #AiChatPage, #AiEmptyPage, #AiMusicPage,
+#AiTranscript, #AiTranscriptBody, #AiMessageRow {
+    background: transparent; border: none;
+}
+#AiHeader { background: transparent; border: none; }
 #AiMark { background: %MARK_FILL%; border: 1px solid %ACCENT_SOFT%;
           border-radius: 9px; color: %TEXT1%; font-size: 10px;
-          font-weight: 800; letter-spacing: 0.8px; }
-#AiTitle { color: %TEXT1%; font-size: 12px; font-weight: 750;
-           letter-spacing: 1.1px; }
+          font-weight: 750; }
+#AiTitle { color: %TEXT1%; font-size: 12px; font-weight: 650; }
 /* Room on the right for the menu caret QToolButton draws itself, or it lands
    on the last letter of the model's name. */
 #AiModel { background: %MODEL_FILL%; border: 1px solid %SEP%;
-           border-radius: 6px; color: %TEXT2%; font-size: 9px;
-           padding: 1px 16px 1px 7px; }
+           border-radius: 8px; color: %TEXT2%; font-size: 10px;
+           padding: 2px 16px 2px 8px; }
 #AiModel:hover { border-color: %ACCENT_SOFT%; color: %TEXT1%; }
 #AiModel::menu-indicator { subcontrol-position: right center;
                            subcontrol-origin: padding; right: 4px; }
-#AiUsage { color: %TEXT2%; font-size: 9px; }
-#AiIndexStatus { color: %TEXT2%; font-size: 9px; font-weight: 650; }
-#AiHint { color: %TEXT2%; font-size: 10px; }
+#AiUsage { color: %TEXT2%; font-size: 10px; }
+#AiIndexStatus { color: %TEXT2%; font-size: 10px; font-weight: 600; }
+#AiHint { color: %TEXT2%; font-size: 11px; }
 #AiEmptyMark { background: %MARK_FILL%; border: 1px solid %ACCENT_SOFT%;
-               border-radius: 29px; color: %TEXT1%; font-size: 15px;
-               font-weight: 800; letter-spacing: 1px; }
-#AiEmptyKicker { color: %ACCENT_SOFT%; font-size: 9px; font-weight: 700;
-                 letter-spacing: 1.3px; }
-#AiEmptyTitle { color: %TEXT1%; font-size: 14px; font-weight: 650; }
+               border-radius: 21px; color: %TEXT1%; font-size: 12px;
+               font-weight: 750; }
+#AiEmptyKicker { color: %ACCENT_SOFT%; font-size: 10px; font-weight: 650; }
+#AiEmptyTitle { color: %TEXT1%; font-size: 13px; font-weight: 650; }
 #AiOpenSettings { background: %MARK_FILL%; border: 1px solid %ACCENT_SOFT%;
                   border-radius: 9px; color: %TEXT1%; padding: 6px 14px; }
 #AiOpenSettings:hover { background: %MODEL_FILL%; }
-#AiComposer { background: %COMPOSER_FILL%; border: 1px solid %HEADER_LINE%;
-              border-radius: 14px; }
-#AiTranscript, #AiTranscriptBody { background: transparent; border: none; }
+#AiComposer { background: %COMPOSER_FILL%; border: 2px solid %INPUT_BORDER%;
+              border-radius: 17px; }
+#AiComposer[inputFocused="true"] { border: 2px solid %ACCENT_SOFT%; }
 #AiUserCard {
     background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
                                 stop:0 %USER_TOP%, stop:1 %USER_BOTTOM%);
-    border: 1px solid %USER_BORDER%; border-radius: 15px;
+    border: 1px solid %USER_BORDER%; border-radius: 14px;
 }
 #AiAssistantCard, #AiLiveCard {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                                stop:0 %ASSISTANT_TOP%, stop:1 %ASSISTANT_BOTTOM%);
-    border: 1px solid %ASSISTANT_BORDER%; border-radius: 15px;
+    background: transparent; border: none; border-radius: 0px;
 }
 #AiActionCard {
     background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
@@ -744,12 +739,12 @@ void AiChatPanel::applyTheme() {
 }
 #AiErrorCard { background: %ERROR_FILL%; border: 1px solid %ERROR%;
                border-radius: 12px; }
-#AiThinkingCard { background: %MARK_FILL%; border: 1px solid %USER_BORDER%;
+#AiThinkingCard { background: %MARK_FILL%; border: 1px solid %ASSISTANT_BORDER%;
                   border-radius: 12px; }
-#AiMessageText { color: %TEXT1%; font-size: 11px; }
-#AiMessageSecondary { color: %TEXT2%; font-size: 10px; }
+#AiMessageText { color: %TEXT1%; font-size: 12px; }
+#AiMessageSecondary { color: %TEXT2%; font-size: 11px; }
 #AiUserRole, #AiAssistantRole, #AiActionRole, #AiLiveRole {
-    font-size: 8px; font-weight: 750; letter-spacing: 1.1px;
+    font-size: 10px; font-weight: 650;
 }
 #AiUserRole { color: %TEXT2%; }
 #AiAssistantRole, #AiLiveRole { color: %ACCENT_SOFT%; }
@@ -771,18 +766,32 @@ void AiChatPanel::applyTheme() {
                      border-radius: 6px; color: %TEXT1%; font-size: 8px;
                      font-weight: 700; padding: 3px 7px; }
 #AiCandidateButton:hover { background: %MODEL_FILL%; }
+#AiSuggestionPanel { background: %ASSISTANT_TOP%; border: 1px solid %ASSISTANT_BORDER%;
+                     border-radius: 13px; }
+#AiSuggestionTitle { color: %TEXT2%; font-size: 10px; font-weight: 650; }
+#AiSuggestionButton { background: transparent; border: none; border-radius: 7px;
+                      color: %TEXT1%; font-size: 11px; padding: 7px 8px;
+                      text-align: left; }
+#AiSuggestionButton:hover, #AiSuggestionButton:focus {
+    background: %MARK_FILL%; color: %TEXT1%;
+}
 #AiRevertButton { background: transparent; border: none; color: %TEXT2%;
-                  font-size: 8px; font-weight: 700; letter-spacing: 0.7px;
+                  font-size: 9px; font-weight: 650;
                   padding: 2px 0; text-align: left; }
 #AiRevertButton:hover { color: %ACCENT_SOFT%; }
-#AiInput, #AiAttachments { background: %INPUT_FILL%; border: 1px solid %INPUT_BORDER%;
-                           border-radius: 10px; color: %TEXT1%;
-                           font-size: 11px; padding: 7px; }
-#AiInput:focus { border: 1px solid %ACCENT_SOFT%; }
+#AiInput { background: transparent; border: none; color: %TEXT1%;
+           font-size: 12px; padding: 2px; selection-background-color: %SELECT%; }
+#AiInput:focus { border: none; }
+#AiAttachments { background: %INPUT_FILL%; border: 1px solid %INPUT_BORDER%;
+                 border-radius: 10px; color: %TEXT1%; font-size: 11px; padding: 7px; }
 #AiAttachments::item:selected { background: %SELECT%; color: %TEXT1%; }
+#AiTranscript QScrollBar:vertical { background: transparent; width: 7px; margin: 4px 0; }
+#AiTranscript QScrollBar::handle:vertical { background: %SEP%; min-height: 28px;
+                                            border-radius: 3px; }
+#AiTranscript QScrollBar::add-line:vertical,
+#AiTranscript QScrollBar::sub-line:vertical { height: 0px; }
 )")
                       .replace("%MONO%", fixedFamily)
-                      .replace("%HEADER_LINE%", css(headerLine))
                       .replace("%MARK_FILL%", css(markFill))
                       .replace("%MODEL_FILL%", css(modelFill))
                       .replace("%COMPOSER_FILL%", css(composerFill))
@@ -792,7 +801,6 @@ void AiChatPanel::applyTheme() {
                       .replace("%USER_BOTTOM%", css(userBottom))
                       .replace("%USER_BORDER%", css(userBorder))
                       .replace("%ASSISTANT_TOP%", css(assistantTop))
-                      .replace("%ASSISTANT_BOTTOM%", css(assistantBottom))
                       .replace("%ASSISTANT_BORDER%", css(assistantBorder))
                       .replace("%ACTION_TOP%", css(actionTop))
                       .replace("%ACTION_BOTTOM%", css(actionBottom))
@@ -815,21 +823,8 @@ void AiChatPanel::onReduceTransparencyChanged() {
     applyTheme();
 }
 
-void AiChatPanel::syncEdgeAnimation() {
-    if (!m_edgeAnimation) return;
-    const bool shouldRun = isVisible() &&
-                           !ui::GlassPanel::reduceTransparency();
-    if (shouldRun) {
-        if (m_edgeAnimation->state() != QAbstractAnimation::Running)
-            m_edgeAnimation->start();
-    } else if (m_edgeAnimation->state() != QAbstractAnimation::Stopped) {
-        m_edgeAnimation->stop();
-    }
-}
-
 void AiChatPanel::showEvent(QShowEvent* event) {
     ui::GlassPanel::showEvent(event);
-    syncEdgeAnimation();
     startContentIndex(/*force=*/false);
     // A generation may have continued while the panel was hidden. Refresh
     // its one live field immediately without recreating the transcript.
@@ -898,109 +893,42 @@ void AiChatPanel::updateContentIndexStatus() {
 }
 
 void AiChatPanel::hideEvent(QHideEvent* event) {
-    // Do not rely on the visibility flag's exact update order around a Qt hide
-    // event: this path must unconditionally silence the perpetual animation.
-    if (m_edgeAnimation &&
-        m_edgeAnimation->state() != QAbstractAnimation::Stopped)
-        m_edgeAnimation->stop();
     ui::GlassPanel::hideEvent(event);
 }
 
 QRect AiChatPanel::plateRect() const {
-    // A docked pane still needs room for its luminous left edge, but it should
-    // visually belong to the window on the other three sides. The small right
-    // inset preserves the glow without leaving the old floating-card gutter.
-    return rect().adjusted(7, 3, -2, -3);
+    return rect().adjusted(4, 4, -4, -4);
 }
 
 QPainterPath AiChatPanel::plateShape() const {
     const QRectF r = QRectF(plateRect()).adjusted(0.5, 0.5, -0.5, -0.5);
     if (r.isEmpty()) return {};
-
-    // The timeline-facing corners are generous and welcoming; the window-edge
-    // corners are tighter, which is what makes the surface read as docked
-    // rather than as a card that happens to be cropped by the application.
-    const qreal leftRadius = std::min<qreal>(20.0, r.height() / 2.0);
-    const qreal rightRadius = std::min<qreal>(7.0, r.height() / 2.0);
     QPainterPath path;
-    path.moveTo(r.left() + leftRadius, r.top());
-    path.lineTo(r.right() - rightRadius, r.top());
-    path.quadTo(r.right(), r.top(), r.right(), r.top() + rightRadius);
-    path.lineTo(r.right(), r.bottom() - rightRadius);
-    path.quadTo(r.right(), r.bottom(), r.right() - rightRadius, r.bottom());
-    path.lineTo(r.left() + leftRadius, r.bottom());
-    path.quadTo(r.left(), r.bottom(), r.left(), r.bottom() - leftRadius);
-    path.lineTo(r.left(), r.top() + leftRadius);
-    path.quadTo(r.left(), r.top(), r.left() + leftRadius, r.top());
-    path.closeSubpath();
+    const qreal radius = std::min<qreal>(20.0, r.height() / 2.0);
+    path.addRoundedRect(r, radius, radius);
     return path;
 }
 
 void AiChatPanel::paintEvent(QPaintEvent* event) {
-    ui::GlassPanel::paintEvent(event);
-    if (ui::GlassPanel::reduceTransparency()) return;
-
+    Q_UNUSED(event);
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     const Theme& t = th();
-    const QRectF plate = QRectF(plateRect()).adjusted(1.25, 1.25, -1.25, -1.25);
     const QPainterPath shape = plateShape();
+    QColor behind = mixColors(t.background, QColor(8, 9, 12),
+                              t.dark ? 0.20 : 0.04);
+    behind.setAlpha(255);
+    painter.fillRect(rect(), behind);
 
-    // Spectral light travels around the edge rather than washing the whole
-    // panel in one brand colour. The glass stays legible; only its thickness
-    // catches cyan, violet and the active theme accent.
-    QColor cyan = mixColors(t.accentHighlight, QColor(80, 224, 255), 0.62);
-    QColor violet = mixColors(t.accent, QColor(176, 104, 255), 0.58);
-    QColor clear = t.textPrimary;
-    cyan.setAlphaF(t.dark ? 0.82 : 0.52);
-    violet.setAlphaF(t.dark ? 0.72 : 0.44);
-    clear.setAlphaF(t.dark ? 0.44 : 0.58);
+    QColor surface = mixColors(t.surface, t.background, t.dark ? 0.20 : 0.08);
+    surface.setAlpha(255);
+    painter.fillPath(shape, surface);
 
-    QConicalGradient spectrum(plate.center(), 360.0 * m_edgePhase);
-    spectrum.setColorAt(0.00, cyan);
-    spectrum.setColorAt(0.22, clear);
-    spectrum.setColorAt(0.45, violet);
-    spectrum.setColorAt(0.70, QColor(cyan.red(), cyan.green(), cyan.blue(), 46));
-    spectrum.setColorAt(1.00, cyan);
+    QColor edge = mixColors(t.separator(), t.accentHighlight, 0.12);
+    edge.setAlphaF(t.dark ? 0.72 : 0.52);
     painter.setBrush(Qt::NoBrush);
-
-    // Wide low-opacity passes are the halo; the final narrow pass is the
-    // actual glass rim. All three share one rotating spectrum, so the light
-    // travels continuously around the whole panel rather than pulsing corners.
-    painter.setOpacity(t.dark ? 0.11 : 0.08);
-    painter.setPen(QPen(QBrush(spectrum), 9.0, Qt::SolidLine, Qt::RoundCap,
-                        Qt::RoundJoin));
+    painter.setPen(QPen(edge, 1.0));
     painter.drawPath(shape);
-    painter.setOpacity(t.dark ? 0.24 : 0.17);
-    painter.setPen(QPen(QBrush(spectrum), 4.0, Qt::SolidLine, Qt::RoundCap,
-                        Qt::RoundJoin));
-    painter.drawPath(shape);
-    painter.setOpacity(1.0);
-    painter.setPen(QPen(QBrush(spectrum), 1.45, Qt::SolidLine, Qt::RoundCap,
-                        Qt::RoundJoin));
-    painter.drawPath(shape);
-
-    // Two diffused reflections make the pane feel lit from outside the app,
-    // not filled with a flat gradient. They remain inside the clipping path.
-    painter.save();
-    painter.setClipPath(shape);
-    QRadialGradient upper(plate.topRight() + QPointF(-18, 18), plate.width() * 0.70);
-    QColor glow = cyan;
-    glow.setAlphaF(0.13);
-    upper.setColorAt(0.0, glow);
-    glow.setAlphaF(0.0);
-    upper.setColorAt(1.0, glow);
-    painter.fillRect(plate, upper);
-
-    QRadialGradient lower(plate.bottomLeft() + QPointF(24, -24),
-                          plate.width() * 0.82);
-    glow = violet;
-    glow.setAlphaF(0.10);
-    lower.setColorAt(0.0, glow);
-    glow.setAlphaF(0.0);
-    lower.setColorAt(1.0, glow);
-    painter.fillRect(plate, lower);
-    painter.restore();
 }
 
 // ── Settings ────────────────────────────────────────────────────────────────
@@ -1139,6 +1067,7 @@ void AiChatPanel::updateReadiness() {
     if (m_mode == Mode::Music) {
         m_stack->setCurrentIndex(2);
         if (m_composer) m_composer->show();
+        if (m_input) m_input->setEnabled(true);
         return;
     }
     // The scripted stand-in has no key by design, so a headless run must not be
@@ -1146,8 +1075,10 @@ void AiChatPanel::updateReadiness() {
     const bool scripted = dynamic_cast<ScriptedClient*>(m_client.get()) != nullptr;
     const bool ready = hasKey() || scripted;
     m_stack->setCurrentIndex(ready ? 0 : 1);
-    // Nothing to type into until there is somewhere to send it.
-    if (m_composer) m_composer->setVisible(ready);
+    // The composer is still useful before a model is connected: the user can
+    // draft or paste a request, then connect a model without losing it.
+    if (m_composer) m_composer->show();
+    if (m_input) m_input->setEnabled(true);
 }
 
 // ── Attachments ─────────────────────────────────────────────────────────────
@@ -1181,7 +1112,9 @@ void AiChatPanel::addAttachment(const QString& path) {
 void AiChatPanel::refreshAttachments() {
     const bool any = m_attachments->count() > 0;
     m_attachments->setVisible(any);
-    m_attachHint->setVisible(!any);
+    // The plus control and drag tooltip carry this affordance without keeping
+    // a permanent instruction line above every message.
+    m_attachHint->hide();
 }
 
 void AiChatPanel::dragEnterEvent(QDragEnterEvent* event) {
@@ -1196,13 +1129,29 @@ void AiChatPanel::dropEvent(QDropEvent* event) {
 }
 
 bool AiChatPanel::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == m_input && event->type() == QEvent::KeyPress) {
-        auto* key = static_cast<QKeyEvent*>(event);
-        const bool enter =
-            key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter;
-        if (enter && !(key->modifiers() & Qt::ShiftModifier)) {
-            send();
-            return true;
+    if (watched == m_input) {
+        if (event->type() == QEvent::FocusIn ||
+            event->type() == QEvent::FocusOut) {
+            const bool focused = event->type() == QEvent::FocusIn;
+            if (m_composer &&
+                m_composer->property("inputFocused").toBool() != focused) {
+                m_composer->setProperty("inputFocused", focused);
+                m_composer->style()->unpolish(m_composer);
+                m_composer->style()->polish(m_composer);
+                m_composer->update();
+            }
+        } else if (event->type() == QEvent::ShortcutOverride) {
+            auto* key = static_cast<QKeyEvent*>(event);
+            if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter)
+                event->accept();
+        } else if (event->type() == QEvent::KeyPress) {
+            auto* key = static_cast<QKeyEvent*>(event);
+            const bool enter =
+                key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter;
+            if (enter && !(key->modifiers() & Qt::ShiftModifier)) {
+                send();
+                return true;
+            }
         }
     }
     if (watched == m_attachments && event->type() == QEvent::KeyPress) {
@@ -1223,9 +1172,15 @@ void AiChatPanel::send() {
         sendMusic();
         return;
     }
-    if (m_session->running() || !m_client) return;
+    if (m_session->running()) return;
     const QString text = m_input->toPlainText().trimmed();
     if (text.isEmpty()) return;
+    const bool scripted = dynamic_cast<ScriptedClient*>(m_client.get()) != nullptr;
+    if (!m_client || (!hasKey() && !scripted)) {
+        emit statusMessage(tr("Connect an AI model to send this request"));
+        emit settingsRequested();
+        return;
+    }
 
     if (auto* account = account::Service::instance(); account &&
         m_client->config().accessToken != account->accessToken()) {
@@ -1479,7 +1434,9 @@ void AiChatPanel::updateBusyState() {
                                                : m_session->running();
     m_sendButton->setVisible(!running);
     m_stopButton->setVisible(running);
-    m_input->setEnabled(!running);
+    // Keep the editor live so a follow-up can be drafted or pasted while the
+    // response runs. The Stop button replaces Send until this turn finishes.
+    m_input->setEnabled(true);
     if (m_modelLabel) m_modelLabel->setEnabled(!running);
 }
 
@@ -1514,10 +1471,10 @@ void AiChatPanel::setMode(Mode mode, bool persist) {
 
 void AiChatPanel::applyModeToComposer() {
     const bool music = m_mode == Mode::Music;
-    if (m_titleLabel) m_titleLabel->setText(music ? tr("AI MUSIC") : tr("AI CHAT"));
+    if (m_titleLabel)
+        m_titleLabel->setText(music ? tr("New AI music") : tr("New AI chat"));
     if (m_instrumentalButton) m_instrumentalButton->setVisible(music);
-    if (m_attachHint) m_attachHint->setVisible(!music && m_attachments &&
-                                               m_attachments->count() == 0);
+    if (m_attachHint) m_attachHint->hide();
     if (m_attachments) m_attachments->setVisible(!music &&
                                                  m_attachments->count() > 0);
     if (m_promptsButton) m_promptsButton->setVisible(!music);
@@ -1800,11 +1757,11 @@ void AiChatPanel::renderTranscript() {
                         ai::inferInteractionMode(message.text)));
                 auto card = messageCard(
                     m_transcriptBody, "AiUserCard",
-                    tr("YOU / %1").arg(mode), "AiUserRole");
+                    tr("You · %1").arg(mode), "AiUserRole");
                 card.second->addWidget(cardText(m_transcriptBody, 
                     QString::fromStdString(message.text), "AiMessageText"));
                 if (revertable.contains(qulonglong(at))) {
-                    auto* revert = new QPushButton(tr("REVERT REQUEST"), card.first);
+                    auto* revert = new QPushButton(tr("Revert request"), card.first);
                     revert->setObjectName("AiRevertButton");
                     revert->setEnabled(!m_session->running());
                     revert->setCursor(Qt::PointingHandCursor);
@@ -1819,7 +1776,7 @@ void AiChatPanel::renderTranscript() {
 
             case ai::Role::Assistant: {
                 if (!message.text.empty()) {
-                    auto card = messageCard(m_transcriptBody, "AiAssistantCard", tr("AI / RESPONSE"),
+                    auto card = messageCard(m_transcriptBody, "AiAssistantCard", tr("VLT AI"),
                                          "AiAssistantRole");
                     card.second->addWidget(cardText(m_transcriptBody, 
                         QString::fromStdString(message.text), "AiMessageText"));
@@ -1829,7 +1786,7 @@ void AiChatPanel::renderTranscript() {
             }
 
             case ai::Role::Tool: {
-                auto card = messageCard(m_transcriptBody, "AiActionCard", tr("AI / ACTIONS"),
+                auto card = messageCard(m_transcriptBody, "AiActionCard", tr("Actions"),
                                      "AiActionRole");
                 // A model run often sends one tool result per wire message.
                 // Consecutive results are one visible activity, so collect
@@ -1859,8 +1816,8 @@ void AiChatPanel::renderTranscript() {
                             resultError.find("project changed") !=
                             std::string::npos;
                         auto* status = new QLabel(
-                            out.ok ? tr("DONE")
-                                   : replan ? tr("REPLAN") : tr("ERROR"),
+                            out.ok ? tr("Done")
+                                   : replan ? tr("Replan") : tr("Error"),
                             actionRow);
                         status->setObjectName(
                             out.ok ? "AiActionStatusOk"
@@ -1979,7 +1936,7 @@ void AiChatPanel::renderTranscript() {
     }
 
     if (!m_session->lastError().empty()) {
-        auto card = messageCard(m_transcriptBody, "AiErrorCard", tr("AI / ERROR"),
+        auto card = messageCard(m_transcriptBody, "AiErrorCard", tr("VLT AI · Error"),
                              "AiActionStatusError");
         card.second->addWidget(cardText(m_transcriptBody, 
             QString::fromStdString(m_session->lastError()), "AiMessageText"));
@@ -1987,14 +1944,14 @@ void AiChatPanel::renderTranscript() {
     }
 
     if (!m_streaming.isEmpty()) {
-        auto card = messageCard(m_transcriptBody, "AiLiveCard", tr("AI / LIVE"), "AiLiveRole");
+        auto card = messageCard(m_transcriptBody, "AiLiveCard", tr("VLT AI · Writing"), "AiLiveRole");
         m_streamingLabel = cardText(m_transcriptBody, m_streaming, "AiMessageText");
         card.second->addWidget(m_streamingLabel);
         wrapRow(m_transcriptLayout, m_transcriptBody, card.first, 0, 10, 1);
     }
 
     if (m_session->running()) {
-        auto card = messageCard(m_transcriptBody, "AiThinkingCard", tr("AI / THINKING"),
+        auto card = messageCard(m_transcriptBody, "AiThinkingCard", tr("VLT AI"),
                              "AiAssistantRole");
         card.second->addWidget(cardText(m_transcriptBody, tr("Working…"), "AiMessageSecondary",
                                         true));
@@ -2002,13 +1959,40 @@ void AiChatPanel::renderTranscript() {
     }
 
     if (m_session->messages().empty()) {
-        auto card = messageCard(m_transcriptBody, "AiAssistantCard", tr("STUDIO COPILOT"),
+        auto card = messageCard(m_transcriptBody, "AiAssistantCard", tr("VLT AI"),
                              "AiAssistantRole");
         card.second->addWidget(cardText(m_transcriptBody, 
-            tr("Ask for a part and it gets made: \"make a piano, write the "
-               "chords, process the channel\"."),
+            tr("Ask me to create, arrange, edit or explain anything in the open project."),
             "AiMessageSecondary", true));
         wrapRow(m_transcriptLayout, m_transcriptBody, card.first, 0, 10, 1);
+
+        auto* suggestions = new QWidget(m_transcriptBody);
+        suggestions->setObjectName("AiSuggestionPanel");
+        suggestions->setAttribute(Qt::WA_StyledBackground, true);
+        auto* suggestionLayout = new QVBoxLayout(suggestions);
+        suggestionLayout->setContentsMargins(7, 7, 7, 7);
+        suggestionLayout->setSpacing(2);
+        auto* suggestionTitle = new QLabel(tr("Try a project-aware prompt"),
+                                           suggestions);
+        suggestionTitle->setObjectName("AiSuggestionTitle");
+        suggestionLayout->addWidget(suggestionTitle);
+        const QStringList prompts{
+            tr("Create a four-bar piano progression"),
+            tr("Balance the selected track in the mix"),
+            tr("Explain what is selected right now")};
+        for (const QString& prompt : prompts) {
+            auto* button = new QPushButton(prompt, suggestions);
+            button->setObjectName("AiSuggestionButton");
+            button->setCursor(Qt::PointingHandCursor);
+            button->setFocusPolicy(Qt::StrongFocus);
+            connect(button, &QAbstractButton::clicked, this,
+                    [this, prompt] {
+                        m_input->setPlainText(prompt);
+                        m_input->setFocus(Qt::ShortcutFocusReason);
+                    });
+            suggestionLayout->addWidget(button);
+        }
+        wrapRow(m_transcriptLayout, m_transcriptBody, suggestions, 0, 10, 1);
     }
 
     m_transcriptLayout->addStretch(1);
@@ -2106,11 +2090,28 @@ bool AiChatPanel::checkAgentForTest() {
     m_client.reset(new ScriptedClient(this));
     updateReadiness();
 
+    // Exercise the actual editor path, not just setPlainText(): this catches a
+    // disabled composer or a key filter that steals normal text/newlines.
+    if (!m_composer || m_composer->isHidden() || !m_input->isEnabled() ||
+        m_input->focusPolicy() != Qt::StrongFocus) {
+        return false;
+    }
+    m_input->clear();
+    QKeyEvent letter(QEvent::KeyPress, Qt::Key_V, Qt::NoModifier,
+                     QStringLiteral("v"));
+    QApplication::sendEvent(m_input, &letter);
+    QKeyEvent newline(QEvent::KeyPress, Qt::Key_Return, Qt::ShiftModifier,
+                      QStringLiteral("\r"));
+    QApplication::sendEvent(m_input, &newline);
+    if (m_input->toPlainText() != QStringLiteral("v\n")) return false;
+    m_input->clear();
+
     const std::size_t mark = m_controller->undoDepth();
     const std::size_t tracksBefore = m_controller->project().tracks.size();
 
     m_input->setPlainText(QStringLiteral("make a piano part"));
     send();
+    if (!m_input->isEnabled()) return false;
 
     // The scripted client answers through the event loop, so the run needs the
     // loop pumped rather than a wait.

@@ -8,12 +8,12 @@ import (
 )
 
 func TestReleaseVersionAndArtifactValidation(t *testing.T) {
-	for _, version := range []string{"0.0.1", "1.2.3", "2147483647.0.9"} {
+	for _, version := range []string{"0.0.1", "1.2.3", "1.2.3 Alpha 1", "1.2.3 Build 27", "2147483647.0.9"} {
 		if _, ok := parseReleaseVersion(version); !ok {
 			t.Fatalf("valid version rejected: %s", version)
 		}
 	}
-	for _, version := range []string{"", "1", "1.2", "1.2.3.4", "01.2.3", "1.02.3", "1.2-beta", "2147483648.0.0"} {
+	for _, version := range []string{"", "1", "1.2", "1.2.3.4", "01.2.3", "1.02.3", "1.2-beta", "1.2.3 Alpha/1", "1.2.3 #1", "2147483648.0.0"} {
 		if _, ok := parseReleaseVersion(version); ok {
 			t.Fatalf("invalid version accepted: %s", version)
 		}

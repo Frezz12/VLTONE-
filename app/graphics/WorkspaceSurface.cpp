@@ -79,6 +79,10 @@ bool startsFreshPointerRoute(QEvent::Type type, Qt::MouseButtons buttons) {
     return type == QEvent::MouseButtonPress || type == QEvent::MouseButtonDblClick ||
            (type == QEvent::MouseMove && buttons == Qt::NoButton);
 }
+bool isScrollViewport(QWidget* widget) {
+    auto* scroll = widget ? qobject_cast<QAbstractScrollArea*>(widget->parentWidget()) : nullptr;
+    return scroll && scroll->viewport() == widget;
+}
 QWidget* pointerTarget(QPointer<QWidget>& pressed, QEvent::Type type,
                        Qt::MouseButtons buttons, QWidget* hit) {
     // A combo box/menu popup is a separate native window. Its release can be
@@ -174,8 +178,10 @@ bool WorkspaceSurface::checkPointerRoutingForTest() {
     const bool pixelsRouted = routeWheelThroughWidgets(&scroll, leaf, &pixelWheel);
     const bool wheelClimbsToScroller = angleRouted && pixelsRouted &&
         afterAngle > 0 && scroll.verticalScrollBar()->value() > afterAngle;
+    const bool scrollViewportRecognized = isScrollViewport(scroll.viewport()) &&
+        !isScrollViewport(page);
     return freshPress && staleReleaseHeals && activeDragKeepsGrab &&
-           wheelClimbsToScroller;
+           wheelClimbsToScroller && scrollViewportRecognized;
 }
 WorkspaceSurface::WorkspaceSurface(QWidget* source) : QObject(source), m_source(source),
     m_frameMailbox(std::make_shared<FrameMailbox>()) {
@@ -926,7 +932,10 @@ bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
         GraphicsPreferences::instance().reportFrame(inactive);
     }
     if (event->type() == QEvent::Paint) {
-        if (!m_collectedGeometryUpdates) m_dirty.insert(widget);
+        // Item views paint their labels into the viewport but move embedded
+        // editors as child widgets. A scroll therefore changes both pixels and
+        // geometry, so never discard the viewport's paint as geometry-only.
+        if (!m_collectedGeometryUpdates || isScrollViewport(widget)) m_dirty.insert(widget);
         requestCapture();
         return true; // vector recording occurs outside QWidget's active paint stack
     }

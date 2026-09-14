@@ -11,8 +11,11 @@ import { siteUrl } from "@/lib/seo";
 import "../globals.css";
 
 const inter = localFont({ src: [
-  { path: "../../fonts/Inter-Light.ttf", weight: "350", style: "normal" },
-  { path: "../../fonts/Inter-Regular.ttf", weight: "400", style: "normal" },
+  { path: "../../../fonts/Inter-Light.ttf", weight: "300", style: "normal" },
+  { path: "../../../fonts/Inter-Regular.ttf", weight: "400", style: "normal" },
+  { path: "../../../fonts/Inter-Medium.ttf", weight: "500", style: "normal" },
+  { path: "../../../fonts/Inter-SemiBold.ttf", weight: "600", style: "normal" },
+  { path: "../../../fonts/Inter-Bold.ttf", weight: "700", style: "normal" },
 ], display: "swap", variable: "--font-vltone" });
 
 export const metadata: Metadata = { metadataBase: new URL(siteUrl), title: { default: "VLTone", template: "%s — VLTone" }, applicationName: "VLTone", icons: { icon: "/icon.png", shortcut: "/icon.png", apple: "/apple-icon.png" } };

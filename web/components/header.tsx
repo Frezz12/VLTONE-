@@ -19,7 +19,7 @@ export function Header({ locale }: { locale: string }) {
     <header className="vlt-topbar">
       <Link className="vlt-brand" href="/" aria-label="VLTone"><BrandMark /><span>VLTone</span></Link>
       <nav className="vlt-nav" aria-label={ru ? "Навигация сайта" : "Site navigation"}>
-        <Link href="/#overview">{ru ? "О программе" : "Overview"}</Link>
+        <Link href="/capabilities" aria-current={pathname.includes("/capabilities") ? "page" : undefined}>{ru ? "Возможности" : "Capabilities"}</Link>
         <a href="/releases" aria-current={pathname.includes("/releases") ? "page" : undefined}>{ru ? "Скачать" : "Download"}</a>
         <Link href="/manual" aria-current={pathname.includes("/manual") ? "page" : undefined}>{ru ? "Инструкция" : "Manual"}</Link>
         <Link href="/account" aria-current={pathname.includes("/account") ? "page" : undefined}>{ru ? "Аккаунт" : "Account"}</Link>

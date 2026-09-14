@@ -15,17 +15,18 @@ export function MotionEffects() {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
         const element = entry.target as HTMLElement;
+        const requestedDelay = Number(element.dataset.reveal);
         element.animate(
           reducedMotion ? [
             { opacity: 0 },
             { opacity: 1 },
           ] : [
-            { opacity: 0, transform: "translateY(22px) scale(.985)" },
+            { opacity: 0, transform: "translateY(16px) scale(.992)" },
             { opacity: 1, transform: "translateY(0) scale(1)" },
           ],
           {
-            duration: reducedMotion ? 180 : 520,
-            delay: reducedMotion ? 0 : Number(element.dataset.reveal || 0),
+            duration: reducedMotion ? 160 : 420,
+            delay: reducedMotion || !Number.isFinite(requestedDelay) ? 0 : requestedDelay,
             easing: "cubic-bezier(.23, 1, .32, 1)",
             fill: "backwards",
           },

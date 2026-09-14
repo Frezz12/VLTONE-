@@ -22,12 +22,13 @@ type aiLeaseRequest struct {
 }
 
 type aiLeasePayload struct {
-	ReservationID  uuid.UUID `json:"reservation_id"`
-	ReservedTokens int64     `json:"reserved_tokens"`
-	Provider       string    `json:"provider"`
-	Model          string    `json:"model"`
-	EndpointURL    string    `json:"endpoint_url"`
-	APIKey         string    `json:"api_key"`
+	ReservationID  *uuid.UUID `json:"reservation_id,omitempty"`
+	ReservedTokens int64      `json:"reserved_tokens"`
+	IsFree         bool       `json:"is_free"`
+	Provider       string     `json:"provider"`
+	Model          string     `json:"model"`
+	EndpointURL    string     `json:"endpoint_url"`
+	APIKey         string     `json:"api_key"`
 }
 
 type aiSettlementRequest struct {
@@ -76,25 +77,31 @@ func (s *Server) leaseAIModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reserved := input.InputBytes + input.MaxOutputTokens
-	reservation, err := s.Quota.Reserve(userFrom(r).ID, connection.Provider, connection.ModelName, reserved, time.Now().UTC())
-	if errors.Is(err, quota.ErrExhausted) {
-		writeError(w, r, http.StatusPaymentRequired, "ai_quota_exhausted", "Your monthly AI quota is exhausted. The rest of VLTONE remains available.", nil)
-		return
-	}
-	if errors.Is(err, quota.ErrGlobalExhausted) {
-		writeError(w, r, http.StatusServiceUnavailable, "ai_global_budget_exhausted", "The monthly AI service budget is exhausted.", nil)
-		return
-	}
-	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, "ai_quota_unavailable", "AI quota could not be reserved.", nil)
-		return
+	var reservationID *uuid.UUID
+	var reservedTokens int64
+	if !connection.IsFree {
+		reserved := input.InputBytes + input.MaxOutputTokens
+		reservation, reserveErr := s.Quota.Reserve(userFrom(r).ID, connection.Provider, connection.ModelName, reserved, time.Now().UTC())
+		if errors.Is(reserveErr, quota.ErrExhausted) {
+			writeError(w, r, http.StatusPaymentRequired, "ai_quota_exhausted", "Your monthly AI quota is exhausted. The rest of VLTONE remains available.", nil)
+			return
+		}
+		if errors.Is(reserveErr, quota.ErrGlobalExhausted) {
+			writeError(w, r, http.StatusServiceUnavailable, "ai_global_budget_exhausted", "The monthly AI service budget is exhausted.", nil)
+			return
+		}
+		if reserveErr != nil {
+			writeError(w, r, http.StatusInternalServerError, "ai_quota_unavailable", "AI quota could not be reserved.", nil)
+			return
+		}
+		reservationID, reservedTokens = &reservation.ID, reservation.Reserved
 	}
 
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	writeJSON(w, http.StatusCreated, aiLeasePayload{
-		ReservationID:  reservation.ID,
-		ReservedTokens: reservation.Reserved,
+		ReservationID:  reservationID,
+		ReservedTokens: reservedTokens,
+		IsFree:         connection.IsFree,
 		Provider:       connection.Provider,
 		Model:          connection.ModelName,
 		EndpointURL:    endpoint,

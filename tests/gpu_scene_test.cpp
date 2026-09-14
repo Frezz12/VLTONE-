@@ -169,6 +169,32 @@ int main(int argc, char** argv) {
     }
     const auto meshes = recorder.takeMeshes();
     if (meshes.empty() || !recorder.supported() || meshes.front().vertices.isEmpty() || !meshes.front().texture.isNull()) return 1;
+    // A glyph atlas is already rasterized at the target DPI. Its scene quad
+    // must keep the exact logical size; rounding it stretches the texture and
+    // makes all GPU-workspace text soft at fractional Windows scaling.
+    constexpr qreal textDpr = 1.25;
+    ui::graphics::SceneRecorder fractionalText(QSize(320, 140), textDpr);
+    {
+        QPainter p(&fractionalText);
+        p.setPen(Qt::white);
+        p.drawText(QPointF(5, 70), QStringLiteral("Pattern 01"));
+    }
+    const auto textMeshes = fractionalText.takeMeshes();
+    // Qt's offscreen platform can omit glyph runs entirely. The native
+    // Windows/macOS run covers the fractional-DPI geometry when fonts exist.
+    if (!textMeshes.empty()) {
+        if (textMeshes.size() != 1 || textMeshes.front().texture.isNull() ||
+            textMeshes.front().vertices.size() < 3) return 1;
+        const auto& glyph = textMeshes.front();
+        const QSizeF expected = glyph.texture.deviceIndependentSize();
+        const qreal width = glyph.vertices[1].x - glyph.vertices[0].x;
+        const qreal height = glyph.vertices[2].y - glyph.vertices[0].y;
+        if (std::abs(width - expected.width()) > 0.001 ||
+            std::abs(height - expected.height()) > 0.001) {
+            std::cerr << "Fractional-DPI text texture was rescaled in the scene\n";
+            return 1;
+        }
+    }
     ui::graphics::SceneRecorder hidden(QSize(320, 140), 2);
     {
         QPainter p(&hidden);

@@ -10,6 +10,21 @@ if(DAW_ENABLE_VST)
     add_subdirectory(fixtures/test_vst)
 endif()
 
+# Native presets and queued edits must survive the controller's render clone
+# for every enabled format, including Apple's system Audio Unit on macOS.
+add_executable(plugin_render_state_test plugin_render_state_test.cpp)
+target_link_libraries(plugin_render_state_test PRIVATE daw_controller)
+if(DAW_ENABLE_CLAP)
+    target_compile_definitions(plugin_render_state_test PRIVATE DAW_TEST_CLAP_PATH="${DAW_TEST_CLAP_PATH}")
+    add_dependencies(plugin_render_state_test daw_test_clap)
+endif()
+if(DAW_ENABLE_VST3)
+    target_compile_definitions(plugin_render_state_test PRIVATE DAW_TEST_VST3_PATH="${DAW_TEST_VST3_PATH}")
+    add_dependencies(plugin_render_state_test daw_test_vst3)
+endif()
+add_test(NAME plugin_render_state_test COMMAND plugin_render_state_test)
+set_tests_properties(plugin_render_state_test PROPERTIES TIMEOUT 60)
+
 # Phase-1: the portable device/decode paths (libsndfile + PortAudio).
 add_executable(platform_test platform_test.cpp)
 target_link_libraries(platform_test PRIVATE daw_core daw_engine)

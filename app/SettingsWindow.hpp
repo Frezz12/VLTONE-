@@ -13,8 +13,10 @@ class AudioSettingsPage;
 class QuickImportSettingsPage;
 class NotebookSettingsPage;
 class ShortcutManager;
-class QTabWidget;
 class QListWidget;
+class QStackedWidget;
+class QTreeWidget;
+class QTreeWidgetItem;
 class QKeySequenceEdit;
 class QPushButton;
 class QLineEdit;
@@ -37,8 +39,8 @@ public:
                    QWidget* parent = nullptr);
     void refreshTimelineBackgroundSource();
 
-    /// The tabs, by name. They used to be addressed by bare number, and the
-    /// comment saying which was which had already gone stale twice.
+    /// The settings pages, by name. Contextual entry points use these stable
+    /// IDs even though the sidebar presents them in semantic groups.
     enum Tab {
         kAudioTab = 0,
         kQuickImportTab,
@@ -57,7 +59,7 @@ public:
         kInterfaceTab,
     };
 
-    /// Bring a specific tab to the front.
+    /// Bring a specific settings page to the front.
     void showTab(int index);
 
     /// Re-read the recording preferences. The mode also changes from the
@@ -124,7 +126,9 @@ private:
 
     daw::EngineController* m_controller = nullptr;
     ShortcutManager* m_shortcuts = nullptr;
-    QTabWidget* m_tabs = nullptr;
+    QTreeWidget* m_navigation = nullptr;
+    QStackedWidget* m_pages = nullptr;
+    QHash<int, QTreeWidgetItem*> m_navigationItems;
     RecordingSettingsPage* m_recordingPage = nullptr;
     AudioSettingsPage* m_audioPage = nullptr;
     QuickImportSettingsPage* m_quickImportPage = nullptr;

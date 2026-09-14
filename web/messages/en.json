@@ -11,47 +11,63 @@
     "discover": "View features",
     "heroCaption": "Audio · MIDI · plugins · AI",
     "overviewLabel": "Overview",
-    "overviewTitle": "The complete project\nin one application.",
-    "overviewCopy": "Record vocals and instruments, arrange audio and MIDI, and shape the result in the mixer.",
-    "audienceCopy": "Use VST, VST3, CLAP, and Audio Units on macOS. Export the full mix or separate tracks.",
+    "overviewTitle": "One flow.\nFrom idea to export.",
+    "overviewCopy": "VLTone brings recording, MIDI, arrangement, and mixing into one focused workspace. Start with an empty track and finish with a complete mix without breaking your creative flow.",
+    "audienceCopy": "Use your familiar VST, VST3, CLAP, and Audio Units on macOS. Export the full project or prepare separate tracks for the next stage.",
+    "overviewMoments": {
+      "capture": {
+        "title": "Capture the foundation",
+        "copy": "Vocals, live instruments, and MIDI become part of the project without unnecessary setup."
+      },
+      "arrange": {
+        "title": "Build the arrangement",
+        "copy": "Edit clips, program parts, and shape the composition in one continuous timeline."
+      },
+      "finish": {
+        "title": "Finish the sound",
+        "copy": "Set the balance, effects, and automation, then export the result in the format you need."
+      }
+    },
     "manual": "Explore the guide",
     "featuresLabel": "Capabilities",
-    "featuresTitle": "Core features",
-    "featuresCopy": "The tools you need from recording to export.",
+    "featuresTitle": "What VLTone can do today",
+    "featuresCopy": "Every part of the application works inside one project. Open the complete overview for details and direct links to the manual.",
+    "featuresMore": "Explore every capability",
+    "featuresBeta": "VLTone is in open beta. We improve it every day by refining existing tools, fixing issues, and adding new production workflows.",
     "features": {
       "recording": {
         "title": "Audio recording",
-        "copy": "Record vocals and instruments, manage takes, and edit audio clips.",
+        "copy": "Record vocals and instruments, combine the best parts of multiple takes, import files, and edit audio clips directly on the timeline.",
         "tag": "Audio",
         "anchor": "recording"
       },
       "midi": {
         "title": "MIDI and instruments",
-        "copy": "Piano roll, MIDI keyboards, a built-in sampler, and rhythm programming.",
+        "copy": "Create parts in the Piano Roll, connect a MIDI keyboard, program rhythms, and turn your own samples into instruments.",
         "tag": "MIDI",
         "anchor": "piano-roll"
       },
       "mixing": {
         "title": "Mixer and export",
-        "copy": "Levels, pan, effects, automation, and full-mix or multitrack export.",
+        "copy": "Control balance, pan, sends, effects, and automation. Export a finished mix or render separate tracks for the next stage.",
         "tag": "Mixing",
         "anchor": "mixer"
       },
       "plugins": {
         "title": "Plugins",
-        "copy": "VST, VST3, CLAP, Audio Units on macOS, built-in effects, and sample libraries.",
+        "copy": "Use VST, VST3, CLAP, and Audio Units on macOS, manage scanning, and expand the project with built-in effects and samples.",
         "tag": "Plugins",
         "anchor": "plugin-manager"
       },
       "ai": {
         "title": "AI assistant",
-        "copy": "Commands for tracks, MIDI, and effects. Every change remains in project history.",
+        "copy": "Describe an action in everyday language: the assistant helps with tracks, MIDI, and effects while changes remain in project history.",
         "tag": "AI assistant",
         "anchor": "ai-assistant"
       },
       "recovery": {
-        "title": "Autosave",
-        "copy": "A background change journal helps recover the project after an unexpected exit.",
+        "title": "Projects and recovery",
+        "copy": "Save portable projects, undo edits, and recover work from the background journal after an unexpected exit.",
         "tag": "Recovery",
         "anchor": "recovery"
       }
@@ -111,6 +127,97 @@
     "download": "Download VLTone",
     "productAlt": "VLTone workspace with audio tracks, arrangement, and mixer",
     "productCaption": "VLTone / The workspace"
+  },
+  "Capabilities": {
+    "metaTitle": "VLTone capabilities — recording, MIDI, mixing, plugins, and AI",
+    "metaDescription": "A complete overview of VLTone capabilities: audio recording and editing, MIDI, instruments, mixing, automation, plugins, AI, export, and project recovery.",
+    "eyebrow": "VLTone capabilities",
+    "title": "Everything for music. One continuous flow.",
+    "intro": "VLTone takes a project from the first recording to the finished file. Below is a detailed, honest overview of the tools already available in the current open beta.",
+    "join": "Join the beta",
+    "explore": "Explore capabilities",
+    "statusLabel": "Open beta",
+    "statusTitle": "The application gets better every day.",
+    "statusCopy": "We release updates regularly, fix issues, and refine workflows from musician feedback. The capabilities below work today, but the interface and individual details may evolve throughout the beta.",
+    "releases": "Release history",
+    "directoryLabel": "Inside VLTone",
+    "directoryTitle": "From recording to the finished file.",
+    "directoryCopy": "Each section explains what a capability is for, lists the tools available today, and links directly to the relevant chapter of the complete manual.",
+    "contentsLabel": "Capability contents",
+    "manualLink": "Open this manual section",
+    "items": {
+      "recording": {
+        "tag": "Audio",
+        "title": "Audio recording and editing",
+        "lead": "Record vocals and live instruments directly into the arrangement, preserve useful takes, and shape the material without leaving the project.",
+        "points": [
+          "Select an input, arm and monitor the required track, and record against the metronome and project tempo.",
+          "Layer multiple takes while keeping the source material available so you can build the strongest performance.",
+          "Import and preview samples, trim and move clips, and use Stretch, Loop, Vocal, Complex, or Resample modes."
+        ],
+        "manualAnchor": "recording"
+      },
+      "midi": {
+        "tag": "MIDI",
+        "title": "MIDI, Piano Roll, and instruments",
+        "lead": "Create melodies, chords, and rhythmic parts with the mouse, computer keyboard, or an external MIDI controller.",
+        "points": [
+          "Use the Piano Roll to create, select, move, and edit notes inside a MIDI clip.",
+          "Program rhythms in the Pattern editor and manage sound sources directly from each row.",
+          "Turn an audio file into a playable instrument with the built-in sampler while preserving its connection to project MIDI."
+        ],
+        "manualAnchor": "piano-roll"
+      },
+      "mixing": {
+        "tag": "Mix",
+        "title": "Mixer, routing, and export",
+        "lead": "Balance a multitrack project, organize shared processing, and prepare the material for release or the next production stage.",
+        "points": [
+          "Channel strips include gain, inserts, sends, pan, fader, meters, mute, solo, record, and monitoring states.",
+          "Bus and Send tracks plus summing folders support group and parallel processing without duplicating identical chains.",
+          "Automate volume, pan, and plugin parameters, then export a full mix or stems with format, sample rate, bit depth, and channel controls."
+        ],
+        "manualAnchor": "mixer"
+      },
+      "plugins": {
+        "tag": "Plugins",
+        "title": "Plugins and built-in processing",
+        "lead": "Expand a project with familiar instruments and effects while isolating problematic plugins until they can be checked again.",
+        "points": [
+          "Use CLAP, VST, and VST3 plugins; Audio Unit is also available on macOS.",
+          "Plugin Manager controls search paths, scanning, rescanning, and the blacklist for unstable modules.",
+          "Find and replace plugins from the channel strip, automate exposed parameters, and shape sound with the built-in VLTone Equalizer."
+        ],
+        "manualAnchor": "plugin-manager"
+      },
+      "ai": {
+        "tag": "AI",
+        "title": "Project AI assistant",
+        "lead": "Describe a goal in everyday language and the assistant uses permitted project context to run controlled interface commands.",
+        "points": [
+          "Chat can explain the project and perform available actions involving tracks, clips, MIDI, and processing.",
+          "Results and errors remain in the transcript, while completed operations stay visible in history and support Undo.",
+          "Choose a VLTone account model or configure an OpenAI-compatible connection; exhausting AI quota never blocks normal production tools."
+        ],
+        "manualAnchor": "ai-assistant"
+      },
+      "recovery": {
+        "tag": "Reliability",
+        "title": "Projects, Undo, and recovery",
+        "lead": "VLTone preserves project structure and helps you return to work when the application exits unexpectedly.",
+        "points": [
+          "A project stores tracks, clips, MIDI, automation, routing, and plugin state, with structural edits participating in Undo.",
+          "The background recovery journal captures state regularly and offers restoration on the next launch after a failure.",
+          "An exported project collects its document and associated media into a portable structure for another computer."
+        ],
+        "manualAnchor": "recovery"
+      }
+    },
+    "ctaLabel": "Try VLTone",
+    "ctaTitle": "Start with the current beta.",
+    "ctaCopy": "Install the latest release, build your first project, and tell us what should improve next.",
+    "download": "Download VLTone",
+    "guide": "Complete manual"
   },
   "Auth": {
     "email": "Email",

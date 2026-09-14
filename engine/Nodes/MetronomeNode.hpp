@@ -14,7 +14,7 @@
 namespace daw::engine {
 
 /// A click track locked to the transport. It is a source node summed into the
-/// master, generating a short sine "tick" at every beat — a brighter, louder
+/// master, generating a short bright "tick" at every beat — a higher, louder
 /// accent on the bar's downbeat.
 ///
 /// Tempo and time signature come from `context.transport`, not from setters:
@@ -40,7 +40,7 @@ public:
     }
 
     /// Publish an immutable custom click. A null buffer restores the built-in
-    /// muted knock. Publication and reclamation stay off the audio thread.
+    /// bright click. Publication and reclamation stay off the audio thread.
     void setSample(std::shared_ptr<const SampleBuffer> sample) {
         m_sample.publish(std::move(sample));
     }
@@ -146,18 +146,18 @@ private:
                 continue;
             }
 
-            // A short low body plus a very quiet woody transient reads as a
-            // muted stick/knock, not the bright sine beep this replaced.
-            const double bodyHz = accent ? 185.0 : 132.0;
+            // The ear is most sensitive around this upper-mid band, so the
+            // click remains clear over bass, drums and a dense arrangement.
+            const double bodyHz = accent ? 1568.0 : 1046.5;
             const double phase = 2.0 * std::numbers::pi_v<double> *
                                  (bodyHz * tt + 34.0 * tt * tt);
             const float body = std::sin(float(phase)) *
-                               std::exp(float(-tt) * 54.0f);
+                               std::exp(float(-tt) * 105.0f);
             const float transient =
-                std::sin(float(2.0 * std::numbers::pi_v<double> * 620.0 * tt)) *
-                std::exp(float(-tt) * 145.0f);
+                std::sin(float(2.0 * std::numbers::pi_v<double> * 4186.0 * tt)) *
+                std::exp(float(-tt) * 240.0f);
             const float value = (accent ? 0.42f : 0.29f) *
-                                (0.86f * body + 0.14f * transient);
+                                (0.70f * body + 0.30f * transient);
             for (ChannelCount ch = 0; ch < channels; ++ch)
                 context.output.data(ch)[idx] += value;
         }

@@ -62,10 +62,11 @@
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSizePolicy>
-#include <QTabWidget>
+#include <QStackedWidget>
 #include <QTableWidget>
 #include <QTimer>
 #include <QThreadPool>
+#include <QTreeWidget>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -447,56 +448,118 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
                                ShortcutManager* shortcuts, QWidget* parent)
     : QDialog(parent, Qt::Widget), m_controller(controller), m_shortcuts(shortcuts) {
     setWindowTitle(tr("Settings — %1").arg(QApplication::applicationDisplayName()));
-    resize(640, 560);
+    resize(780, 560);
     setSizeGripEnabled(false);
 
-    m_tabs = new QTabWidget(this);
-    m_tabs->setMinimumSize(0, 0);
-    m_tabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
-    const auto addPage = [this](QWidget* page, const QString& label) {
-        m_tabs->addTab(scrollablePage(page), label);
+    m_pages = new QStackedWidget(this);
+    m_pages->setObjectName(QStringLiteral("SettingsPages"));
+    m_pages->setMinimumSize(0, 0);
+    m_pages->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
+    const auto addPage = [this](QWidget* page) {
+        m_pages->addWidget(scrollablePage(page));
     };
 
     m_audioPage = new AudioSettingsPage(m_controller, this);
     connect(m_audioPage, &AudioSettingsPage::cpuStatusBarVisibilityChanged,
             this, &SettingsWindow::cpuStatusBarVisibilityChanged);
-    addPage(m_audioPage, tr("Audio"));
+    addPage(m_audioPage);
     m_quickImportPage = new QuickImportSettingsPage(this);
-    addPage(m_quickImportPage, tr("Quick Import"));
+    addPage(m_quickImportPage);
     auto* transportPage = new TransportSettingsPage(m_controller, this);
-    addPage(transportPage, tr("Transport"));
+    addPage(transportPage);
     connect(transportPage, &TransportSettingsPage::panelStyleChanged, this,
             &SettingsWindow::transportPanelStyleChanged);
     m_recordingPage = new RecordingSettingsPage(m_controller, this);
     connect(m_recordingPage, &RecordingSettingsPage::recordModeChanged, this,
             &SettingsWindow::recordModeChanged);
-    addPage(m_recordingPage, tr("Recording"));
+    addPage(m_recordingPage);
     auto* contextPage = new ContextPanelPage(this);
     connect(contextPage, &ContextPanelPage::changed, this,
             &SettingsWindow::contextPanelSettingsChanged);
-    addPage(contextPage, tr("Context Panel"));
+    addPage(contextPage);
     auto* browserPage = new BrowserSettingsPage(this);
     connect(browserPage, &BrowserSettingsPage::changed, this,
             &SettingsWindow::browserSettingsChanged);
-    addPage(browserPage, tr("Browser"));
+    addPage(browserPage);
     m_notebookPage = new NotebookSettingsPage(this);
     connect(m_notebookPage, &NotebookSettingsPage::changed, this,
             &SettingsWindow::notebookSettingsChanged);
-    addPage(m_notebookPage, tr("Notebook"));
+    addPage(m_notebookPage);
     auto* aiPage = new AiSettingsPage(this);
     connect(aiPage, &AiSettingsPage::changed, this,
             &SettingsWindow::aiSettingsChanged);
-    addPage(aiPage, tr("AI"));
+    addPage(aiPage);
     auto* accountPage = new AccountSettingsPage(this);
     connect(accountPage, &AccountSettingsPage::logoutRequested, this,
             &SettingsWindow::accountLogoutRequested);
-    addPage(accountPage, tr("Account"));
-    addPage(buildLanguageTab(), tr("Language"));
-    addPage(new RecoverySettingsPage(this), tr("Recovery"));
-    addPage(buildThemesTab(), tr("Themes"));
-    addPage(buildThemeEditorTab(), tr("Theme Editor"));
-    addPage(buildShortcutsTab(), tr("Keyboard Shortcuts"));
-    addPage(buildInterfaceTab(), tr("Interface"));
+    addPage(accountPage);
+    addPage(buildLanguageTab());
+    addPage(new RecoverySettingsPage(this));
+    addPage(buildThemesTab());
+    addPage(buildThemeEditorTab());
+    addPage(buildShortcutsTab());
+    addPage(buildInterfaceTab());
+
+    m_navigation = new QTreeWidget(this);
+    m_navigation->setObjectName(QStringLiteral("SettingsNavigation"));
+    m_navigation->setAccessibleName(tr("Settings sections"));
+    m_navigation->setHeaderHidden(true);
+    m_navigation->setRootIsDecorated(false);
+    m_navigation->setItemsExpandable(false);
+    m_navigation->setUniformRowHeights(true);
+    m_navigation->setIndentation(12);
+    m_navigation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_navigation->setMinimumWidth(176);
+    m_navigation->setMaximumWidth(196);
+    const auto addGroup = [this](
+                              const QString& title,
+                              std::initializer_list<std::pair<QString, Tab>> pages) {
+        auto* group = new QTreeWidgetItem(m_navigation, QStringList{title});
+        group->setFlags(Qt::ItemIsEnabled);
+        QFont font = group->font(0);
+        font.setBold(true);
+        group->setFont(0, font);
+        group->setSizeHint(0, QSize(0, 26));
+        for (const auto& [label, page] : pages) {
+            auto* item = new QTreeWidgetItem(group, QStringList{label});
+            item->setData(0, Qt::UserRole, int(page));
+            item->setSizeHint(0, QSize(0, 30));
+            m_navigationItems.insert(int(page), item);
+        }
+    };
+    addGroup(tr("Application"),
+             {{tr("General"), kInterfaceTab},
+              {tr("Language"), kLanguageTab},
+              {tr("Keyboard Shortcuts"), kShortcutsTab},
+              {tr("Recovery"), kRecoveryTab}});
+    addGroup(tr("Audio & Recording"),
+             {{tr("Audio"), kAudioTab},
+              {tr("Recording"), kRecordingTab},
+              {tr("Transport"), kTransportTab}});
+    addGroup(tr("Workspace"),
+             {{tr("Browser"), kBrowserTab},
+              {tr("Quick Import"), kQuickImportTab},
+              {tr("Context Panel"), kContextPanelTab},
+              {tr("Notebook"), kNotebookTab}});
+    addGroup(tr("Appearance"),
+             {{tr("Themes"), kThemesTab},
+              {tr("Theme Editor"), kThemeEditorTab}});
+    addGroup(tr("Account & AI"),
+             {{tr("Account"), kAccountTab},
+              {tr("AI"), kAiTab}});
+    m_navigation->expandAll();
+    connect(m_navigation, &QTreeWidget::currentItemChanged, this,
+            [this](QTreeWidgetItem* current) {
+                if (!current) return;
+                bool valid = false;
+                const int page = current->data(0, Qt::UserRole).toInt(&valid);
+                if (!valid || page < 0 || page >= m_pages->count()) return;
+                m_pages->setCurrentIndex(page);
+                setWindowTitle(tr("Settings — %1 · %2")
+                                   .arg(QApplication::applicationDisplayName(),
+                                        current->text(0)));
+                QSettings().setValue(QStringLiteral("ui/settingsPage"), page);
+            });
 
     const auto markThemeModified = [this] {
         if (m_applyingInstalledTheme) return;
@@ -515,9 +578,19 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
 
+    auto* body = new QHBoxLayout;
+    body->setSpacing(10);
+    body->addWidget(m_navigation);
+    body->addWidget(ui::separatorLine(Qt::Vertical, 1, this));
+    body->addWidget(m_pages, 1);
+
     auto* col = new QVBoxLayout(this);
-    col->addWidget(m_tabs, 1);
+    col->addLayout(body, 1);
     col->addWidget(buttons);
+
+    const int savedPage = QSettings().value(
+        QStringLiteral("ui/settingsPage"), int(kInterfaceTab)).toInt();
+    showTab(std::clamp(savedPage, 0, int(kInterfaceTab)));
 
     constrainToScreen();
 }
@@ -588,7 +661,15 @@ void SettingsWindow::constrainToScreen() {
 }
 
 void SettingsWindow::showTab(int index) {
-    if (m_tabs) m_tabs->setCurrentIndex(index);
+    if (!m_pages || index < 0 || index >= m_pages->count()) return;
+    m_pages->setCurrentIndex(index);
+    if (QTreeWidgetItem* item = m_navigationItems.value(index)) {
+        m_navigation->setCurrentItem(item);
+        m_navigation->scrollToItem(item);
+        setWindowTitle(tr("Settings — %1 · %2")
+                           .arg(QApplication::applicationDisplayName(),
+                                item->text(0)));
+    }
 }
 
 void SettingsWindow::reloadRecordingPage() {
@@ -1590,7 +1671,7 @@ bool SettingsWindow::applyInstalledTheme(const QString& filePath,
 
 void SettingsWindow::saveCurrentThemeToLibrary() {
     QString name;
-    if (m_tabs && m_tabs->currentIndex() == kThemeEditorTab &&
+    if (m_pages && m_pages->currentIndex() == kThemeEditorTab &&
         m_themeNameEdit) {
         name = m_themeNameEdit->text().trimmed();
         if (name.isEmpty()) {

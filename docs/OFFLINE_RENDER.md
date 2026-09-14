@@ -9,11 +9,17 @@ positions, mute/color, realtime inserts and downstream mixer routing remain.
 
 1. Select audio clips and open Offline Render from Edit or a clip's context menu.
 2. Check the clips to process. Each row identifies the clip, track and time range.
-3. Add/configure effects in the compact mixer insert rack, or load a chain template.
+3. Add/configure effects in the compact Audio FX rack. Offline-only presets appear
+   as cards directly below it; click a card or drag it onto Audio FX to replace the
+   draft plugin chain. A custom preset name is shown when present, otherwise the
+   first plugin names the card. Channel-strip settings are never applied here.
    Every new dialog starts empty, including when opening a previously rendered clip.
-4. Render. All selected outputs are prepared before any clip changes. Cancel,
+4. Turn on **Auto Render** to render as soon as the draft chain changes, or use
+   **Render to Clips** manually. Progress and an exact percentage remain visible at
+   the top. All selected outputs are prepared before any clip changes; cancellation,
    plugin failure or a project edit during progress discards the staged batch.
-5. Open the clip in the sampler and use **Clip FX → History** to choose the original
+5. A completed render leaves the window open for another pass. Open the clip in the
+   sampler and use **Clip FX → History** to choose the original
    or any rendered version. The context action **Restore Original Audio** returns
    that clip to its first version. Both operations support Undo/Redo.
 
@@ -50,9 +56,11 @@ earlier-version rendering, tails, portable saves, recovery, invalid/missing medi
 cancel/failure/reentrant edits and comp history protected from take cleanup.
 
 `offline_render_ui_test` (`VLTONE --offlinecheck`) checks selection checkboxes,
-empty-rack gating, template round-trip, compact geometry, the next empty dialog
-and sampler history activation. Add `--theme dark --language ru --screenshot PATH`
-to capture the dialog, sampler and history popup.
+empty-rack gating, preset cards and drag/drop, plugin-only preset application,
+detached plugin editors, Auto Render progress, the persistent dialog, compact
+geometry, the next empty dialog and sampler history activation. Add
+`--theme dark --language ru --screenshot PATH` to capture the dialog, sampler and
+history popup.
 
 Related regression checks: `render_test`, `render_safety_test`,
 `channel_strip_preset_test`, `cloud_project_test` and `VLTONE --samplercheck`.

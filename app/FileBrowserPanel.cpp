@@ -495,6 +495,10 @@ bool FileBrowserPanel::showPluginsForTest() {
     return m_tree && m_tree->selectFirstPluginForTest();
 }
 
+bool FileBrowserPanel::containersAreNavigationOnlyForTest() const {
+    return m_tree && m_tree->containersAreNavigationOnlyForTest();
+}
+
 void FileBrowserPanel::reloadPlugins() {
     if (!m_tree || !m_controller) return;
     QVector<FileBrowserTree::PluginEntry> entries;

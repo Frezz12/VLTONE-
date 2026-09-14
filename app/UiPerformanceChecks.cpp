@@ -4,6 +4,7 @@
 #include "InternalEditorFrame.hpp"
 #include "PluginEditorWindow.hpp"
 #include "graphics/GraphicsPreferences.hpp"
+#include "graphics/SceneRecorder.hpp"
 #include "TrackListWidget.hpp"
 #include "MixerWidget.hpp"
 #include "ChannelStrip.hpp"
@@ -40,6 +41,7 @@
 #include <QCursor>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QImage>
 #include <QMouseEvent>
 #include <QNativeGestureEvent>
 #include <QPointer>
@@ -128,6 +130,99 @@ bool TimelineWidget::checkAdaptiveGridForTest() {
     project.tempo = savedTempo; project.timeSigNumerator = savedNumerator;
     project.timeSigDenominator = savedDenominator;
     if (!ok) std::fprintf(stderr, "adaptive grid spacing, raster alignment or snap check failed\n");
+    return ok;
+}
+
+bool TimelineWidget::checkBottomInsetInvalidationForTest() {
+    const int savedInset = m_bottomInset;
+    const bool savedScenePaint = m_lastPaintWasScene;
+    const QRegion savedPlaybackDirty = m_playbackOnlyDirty;
+    const QRegion savedRecordingDirty = m_recordingOnlyDirty;
+    const bool savedBackgroundRepaint = m_backgroundFrameRepaint;
+
+    // Reproduce the retained-scene ordering behind the intermittent black
+    // reveal: the mixer changes its clip, then a playhead frame arrives before
+    // the next scene capture. Static damage must survive that later frame.
+    m_lastPaintWasScene = true;
+    m_staticDirty = {};
+    setBottomInset(savedInset == 0 ? 32 : 0);
+    m_playbackOnlyDirty += rect();
+    const bool invalidated =
+        m_staticDirty.intersected(rect()) == QRegion(rect());
+
+    m_bottomInset = savedInset;
+    m_lastPaintWasScene = savedScenePaint;
+    m_playbackOnlyDirty = savedPlaybackDirty;
+    m_recordingOnlyDirty = savedRecordingDirty;
+    m_backgroundFrameRepaint = savedBackgroundRepaint;
+    layoutNavigationControls();
+    clampVerticalScroll();
+    update(rect());
+    if (!invalidated)
+        std::fprintf(stderr,
+                     "mixer reveal did not invalidate the retained timeline\n");
+    return invalidated;
+}
+
+bool TimelineWidget::checkGestureGridStabilityForTest() {
+    const bool savedGesture = m_projectGestureActive;
+    const quint64 buildsBefore = m_gpuLaneTiles.builds();
+    m_projectGestureActive = true;
+    ui::graphics::SceneRecorder recorder(size(), 1.0);
+    {
+        QPainter painter(&recorder);
+        drawStaticFrame(painter, QRegion(rect()));
+    }
+    m_projectGestureActive = savedGesture;
+    const bool tiled = recorder.supported() &&
+                       m_gpuLaneTiles.builds() > buildsBefore;
+    m_gpuLaneTiles.clear();
+    if (!tiled)
+        std::fprintf(stderr,
+                     "clip gesture switched away from the stable grid tiles\n");
+    return tiled;
+}
+
+bool TimelineWidget::checkMoveGuidePaintForTest() {
+    const bool savedActive = m_moveGuidesActive;
+    const double savedStart = m_moveGuideStart;
+    const double savedEnd = m_moveGuideEnd;
+    const double savedScale = m_pixelsPerSecond;
+    const double savedScroll = m_scrollSeconds;
+
+    m_moveGuidesActive = true;
+    m_moveGuideStart = 0.25;
+    m_moveGuideEnd = 1.25;
+    m_pixelsPerSecond = 80.0;
+    m_scrollSeconds = 0.0;
+
+    QImage image(160, 80, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    {
+        QPainter painter(&image);
+        drawMoveGuides(painter);
+    }
+    const auto opaqueWhite = [&](int x, int y) {
+        const QColor pixel = image.pixelColor(x, y);
+        return pixel.alpha() == 255 && pixel.red() == 255 &&
+               pixel.green() == 255 && pixel.blue() == 255;
+    };
+    const int insideAlpha = image.pixelColor(60, 40).alpha();
+    const QRegion damage = gestureDamage();
+    const bool ok = opaqueWhite(20, 1) && opaqueWhite(20, 78) &&
+                    opaqueWhite(100, 1) && opaqueWhite(100, 78) &&
+                    insideAlpha > 0 && insideAlpha < 255 &&
+                    image.pixelColor(120, 40).alpha() == 0 &&
+                    damage.contains(QPoint(60, 40));
+
+    m_moveGuidesActive = savedActive;
+    m_moveGuideStart = savedStart;
+    m_moveGuideEnd = savedEnd;
+    m_pixelsPerSecond = savedScale;
+    m_scrollSeconds = savedScroll;
+    if (!ok)
+        std::fprintf(stderr,
+                     "clip move origin is not a fixed full-height outlined band\n");
     return ok;
 }
 
@@ -317,6 +412,12 @@ bool checkUiScaling() {
     const auto settle = [](int ms = 80) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
     daw::EngineController controller;
     controller.initialize(48000.0, 512, false);
+    TimelineWidget gridProbe(&controller);
+    gridProbe.resize(200, 120);
+    check(gridProbe.checkGestureGridStabilityForTest(),
+          "clip gestures keep the grid on its stable retained-tile origin");
+    check(gridProbe.checkMoveGuidePaintForTest(),
+          "clip move origin stays fixed with full-height edges and a light fill");
     check(GlassSlider::checkInteractionForTest(),
           "glass sliders jump, capture, drag beyond bounds and accept trackpad pixels");
     check(graphics::WorkspaceSurface::checkPointerRoutingForTest(),
@@ -346,6 +447,8 @@ bool checkUiScaling() {
     tracks.rebuild(); tracks.show(); mixer.show(); timeline.show(); settle();
     check(timeline.checkAdaptiveGridForTest(),
           "adaptive overview uses sparse whole-bar groups, aligned snapping and correct meters");
+    check(timeline.checkBottomInsetInvalidationForTest(),
+          "mixer reveal invalidates the retained timeline before playback repaint");
     const QString first = QString::fromStdString(project.tracks.front().id);
     const QPointer<FaderWidget> rowFader = tracks.rowFaderForTest(first);
     ChannelStrip* mixerStrip = nullptr;

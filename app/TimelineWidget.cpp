@@ -555,8 +555,6 @@ void TimelineWidget::captureClipDragOrigins() {
     m_moveGuidesActive = false;
     m_moveGuideStart = std::numeric_limits<double>::max();
     m_moveGuideEnd = std::numeric_limits<double>::lowest();
-    m_moveGuideLaneA = std::numeric_limits<int>::max();
-    m_moveGuideLaneB = -1;
 
     const auto& project = m_controller->project();
     for (const auto& ref : m_selection) {
@@ -571,16 +569,9 @@ void TimelineWidget::captureClipDragOrigins() {
             m_moveGuideEnd = std::max(
                 m_moveGuideEnd,
                 clip.startSeconds + m_controller->clipDisplayDuration(clip));
-            if (lane >= 0) {
-                m_moveGuideLaneA = std::min(m_moveGuideLaneA, lane);
-                m_moveGuideLaneB = std::max(m_moveGuideLaneB, lane);
-            }
             break;
         }
     }
-    if (m_moveGuideLaneB < 0) m_moveGuideLaneA = m_moveGuideLaneB = 0;
-    m_moveGuideTargetLaneA = m_moveGuideLaneA;
-    m_moveGuideTargetLaneB = m_moveGuideLaneB;
 }
 
 bool TimelineWidget::duplicateClipDrag() {
@@ -658,8 +649,6 @@ void TimelineWidget::moveClipDragToLane(int grabbedLane) {
         if (selected->clipId == m_dragClipId) m_dragTrackId = targets[i];
     }
     m_dragLaneOffset = offset;
-    m_moveGuideTargetLaneA = m_moveGuideLaneA + offset;
-    m_moveGuideTargetLaneB = m_moveGuideLaneB + offset;
 }
 
 void TimelineWidget::autoScrollMarquee(const QPoint& pointer) {
@@ -1246,25 +1235,22 @@ void TimelineWidget::drawRegion(QPainter& p) {
 }
 
 void TimelineWidget::drawMoveGuides(QPainter& p) {
-    if (!m_moveGuidesActive || m_moveGuideLaneA < 0 ||
-        m_moveGuideLaneB < m_moveGuideLaneA) {
-        return;
-    }
+    if (!m_moveGuidesActive) return;
 
-    const int laneA = std::min(m_moveGuideLaneA, m_moveGuideTargetLaneA);
-    const int laneB = std::max(m_moveGuideLaneB, m_moveGuideTargetLaneB);
-    const int top = laneTop(laneA) + 2;
-    const int bottom = std::min(laneTop(laneB + 1) - 2,
-                                height() - m_bottomInset);
-    if (bottom <= top) return;
+    const qreal first = secondsToX(m_moveGuideStart) + 0.5;
+    const qreal second = secondsToX(m_moveGuideEnd) + 0.5;
+    const qreal left = std::min(first, second);
+    const qreal right = std::max(first, second);
 
-    QPen guide(th().ink(72), 1.0, Qt::CustomDashLine, Qt::FlatCap);
-    guide.setDashPattern({2.0, 4.0});
-    p.setPen(guide);
-    for (double seconds : {m_moveGuideStart, m_moveGuideEnd}) {
-        const qreal x = secondsToX(seconds) + 0.5;
-        p.drawLine(QPointF(x, top), QPointF(x, bottom));
-    }
+    QColor destination = mixColors(th().accent, Qt::white, 0.35);
+    destination.setAlpha(th().dark ? 26 : 18);
+    p.fillRect(QRectF(left, 0.0, right - left, height()), destination);
+
+    // Match the knife guide: crisp solid white edges across the whole
+    // arrangement make the exact insertion interval unambiguous.
+    p.setPen(QPen(Qt::white, 1.0, Qt::SolidLine, Qt::FlatCap));
+    p.drawLine(QPointF(left, 0.0), QPointF(left, height()));
+    p.drawLine(QPointF(right, 0.0), QPointF(right, height()));
 }
 
 QStringList TimelineWidget::regionTrackIds() const {
@@ -1771,14 +1757,9 @@ void TimelineWidget::setBottomInset(int px) {
     m_bottomInset = value;
     layoutNavigationControls();
     clampVerticalScroll();
-    // The mixer changes the viewport clip, not the tracks. Keep the GPU lane
-    // tiles and lane index; only a real scroll clamp above invalidates them.
-    if (m_lastPaintWasScene) {
-        m_playbackOnlyDirty = {};
-        m_recordingOnlyDirty = {};
-        m_backgroundFrameRepaint = false;
-        ui::FrameClock::instance().request(this, rect());
-    } else update(rect());
+    // The mixer changes the viewport clip. Mark the static layer dirty so a
+    // playhead frame arriving before paint cannot reuse the old covered clip.
+    update(rect());
 }
 
 void TimelineWidget::ensureLaneVisible(int lane) {
@@ -4877,10 +4858,11 @@ void TimelineWidget::drawStaticFrame(QPainter& p,
         if (!laneRegion.isEmpty()) {
             p.save();
             p.setClipRegion(laneRegion, Qt::IntersectClip);
-            if (ui::graphics::isSceneRecording(p) && !m_projectGestureActive) {
+            if (ui::graphics::isSceneRecording(p)) {
                 // The time origin of each tile is stable. Wheel input updates
-                // only its scene-graph transform; existing clips/notes/grid do
-                // not get tessellated again on direction changes.
+                // only its scene-graph transform. Keep this same origin during
+                // clip gestures too, so selecting, cutting or moving a clip
+                // cannot shift the grid onto a different pixel phase.
                 const int tileWidth = std::max(1, std::min(512, width()));
                 const double offset = m_scrollSeconds * m_pixelsPerSecond;
                 const qint64 first = qint64(std::floor(offset / tileWidth));
@@ -5184,6 +5166,9 @@ void TimelineWidget::updateCursor(const QPoint& pos) {
         case Tool::Knife:
             setCursor(arrangementToolCursor(icons::Glyph::Knife));
             return;
+        case Tool::Glue:
+            setCursor(arrangementToolCursor(icons::Glyph::Glue));
+            return;
         case Tool::Eraser:
             setCursor(arrangementToolCursor(icons::Glyph::Eraser));
             return;
@@ -5376,7 +5361,8 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
     // drives: return to that target's neutral/factory position. It is handled
     // before the ordinary point press so the gesture cannot accidentally move
     // or add a handle on its second click.
-    if (ev->type() == QEvent::MouseButtonDblClick && hit.edge == Edge::None) {
+    if ((tool() == Tool::Select || tool() == Tool::Draw) &&
+        ev->type() == QEvent::MouseButtonDblClick && hit.edge == Edge::None) {
         PointHit point;
         if (hitTestAutomationPoint(pos, point) && point.index >= 0) {
             const daw::ClipModel* clip =
@@ -5407,7 +5393,8 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
     // curves: on one, the pointer is always editing a curve and never cutting,
     // erasing or muting a clip. The clip itself is still grabbed by its edges
     // and its name strip, which `hitTestClip` reports as before.
-    if (PointHit point; hit.edge == Edge::None &&
+    if (PointHit point; (tool() == Tool::Select || tool() == Tool::Draw) &&
+                        hit.edge == Edge::None &&
                         hitTestAutomationPoint(pos, point)) {
         const daw::ClipModel* clip =
             findClipModel(point.trackId, point.clipId);
@@ -5466,6 +5453,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
                             points[std::size_t(point.segment)].curve;
                     }
                 }
+                added.id = daw::newUuid();
                 points.push_back(added);
                 daw::normalizeAutomation(points);
                 m_controller->setAutomationPoints(point.trackId.toStdString(),
@@ -5786,6 +5774,82 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         return;
     }
 
+    // Glue: use an explicit multi-selection when the clicked clip belongs to
+    // it; otherwise join the clicked clip with its nearest compatible neighbour
+    // on the lane. One click is enough for the common cut-then-glue repair,
+    // while arbitrary same-type selections remain possible.
+    if (tool() == Tool::Glue) {
+        if (!over) return;
+        std::vector<daw::EngineController::ClipAddress> addresses;
+        if (m_selection.size() > 1 && isClipSelected(hit.clipId)) {
+            addresses.reserve(std::size_t(m_selection.size()));
+            for (const ClipRef& ref : std::as_const(m_selection)) {
+                addresses.push_back({ref.trackId.toStdString(),
+                                     ref.clipId.toStdString()});
+            }
+        } else {
+            const auto* track = m_controller->project().findTrack(
+                hit.trackId.toStdString());
+            const daw::ClipModel* clicked =
+                findClipModel(hit.trackId, hit.clipId);
+            const daw::ClipModel* nearest = nullptr;
+            double nearestDistance = std::numeric_limits<double>::max();
+            if (track && clicked) {
+                const double clickedEnd = clicked->startSeconds +
+                    m_controller->clipPlaybackDuration(*clicked);
+                for (const daw::ClipModel& candidate : track->clips) {
+                    if (candidate.id == clicked->id ||
+                        candidate.kind != clicked->kind) {
+                        continue;
+                    }
+                    const double candidateEnd = candidate.startSeconds +
+                        m_controller->clipPlaybackDuration(candidate);
+                    const double distance = candidate.startSeconds >= clickedEnd
+                        ? candidate.startSeconds - clickedEnd
+                        : clicked->startSeconds >= candidateEnd
+                            ? clicked->startSeconds - candidateEnd
+                            : 0.0;
+                    const bool candidateOnRight =
+                        candidate.startSeconds >= clicked->startSeconds;
+                    const bool nearestOnRight = nearest &&
+                        nearest->startSeconds >= clicked->startSeconds;
+                    if (distance < nearestDistance ||
+                        (distance == nearestDistance && candidateOnRight &&
+                         !nearestOnRight)) {
+                        nearest = &candidate;
+                        nearestDistance = distance;
+                    }
+                }
+            }
+            if (!clicked || !nearest) {
+                emit operationStatus(
+                    tr("No compatible clip next to this one."));
+                return;
+            }
+            addresses = {{hit.trackId.toStdString(), clicked->id},
+                         {hit.trackId.toStdString(), nearest->id}};
+        }
+
+        std::string resultId;
+        const audio::Result result =
+            m_controller->glueClips(addresses, resultId);
+        if (!result) {
+            emit operationStatus(
+                tr("Could not glue clips: %1")
+                    .arg(QString::fromStdString(result.message())));
+            return;
+        }
+        const QString glued = QString::fromStdString(resultId);
+        m_selection = {ClipRef{hit.trackId, glued}};
+        m_selectedClipId = glued;
+        m_selectedTrackId = hit.trackId;
+        publishSelection();
+        emit clipSelected(hit.trackId, glued);
+        emit projectEdited();
+        update();
+        return;
+    }
+
     // Eraser: delete the clip under the pointer (drag to delete more).
     if (tool() == Tool::Eraser) {
         beginProjectGesture(tr("Erase Clips"));
@@ -6006,8 +6070,11 @@ QRegion TimelineWidget::gestureDamage() const {
         }
     }
     if (m_moveGuidesActive) {
-        for (double seconds : {m_moveGuideStart, m_moveGuideEnd})
-            result += QRect(secondsToX(seconds) - 3, 0, 7, height()).intersected(rect());
+        const int first = secondsToX(m_moveGuideStart);
+        const int second = secondsToX(m_moveGuideEnd);
+        const int left = std::min(first, second) - 3;
+        const int right = std::max(first, second) + 3;
+        result += QRect(left, 0, right - left + 1, height()).intersected(rect());
     }
     return result;
 }
@@ -6236,10 +6303,6 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
                 m_moveGuidesActive = true;
                 m_moveGuideStart = m_regionMoveOrigStart;
                 m_moveGuideEnd = m_regionMoveOrigEnd;
-                m_moveGuideLaneA = m_regionMoveOrigLaneA;
-                m_moveGuideLaneB = m_regionMoveOrigLaneB;
-                m_moveGuideTargetLaneA = m_regionMoveOrigLaneA;
-                m_moveGuideTargetLaneB = m_regionMoveOrigLaneB;
                 if (!m_regionPieces.empty()) markProjectGestureChanged();
             }
             update();
@@ -6289,8 +6352,6 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
                         m_regionMoveLaneOffset = wantedOffset;
                         m_regionLaneA = m_regionMoveOrigLaneA + wantedOffset;
                         m_regionLaneB = m_regionMoveOrigLaneB + wantedOffset;
-                        m_moveGuideTargetLaneA = m_regionLaneA;
-                        m_moveGuideTargetLaneB = m_regionLaneB;
                     }
                 }
             }
@@ -6840,7 +6901,7 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
         } else if (hit.kind == daw::ClipKind::Audio) {
             detectBpm = menu.addAction(tr("Detect BPM…"));
             detectKey = menu.addAction(tr("Detect Key…"));
-            detectBoth = menu.addAction(tr("Detect BPM & Key…"));
+            detectBoth = menu.addAction(tr("Detect BPM && Key…"));
             menu.addSeparator();
         }
 

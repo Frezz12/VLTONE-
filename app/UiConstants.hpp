@@ -118,7 +118,7 @@ inline constexpr const char* kMetronomeSampleSetting =
     "transport/metronomeSample";
 /// The timeline's grid division, as an index into `gridDivisions()`.
 inline constexpr const char* kGridIndexSetting = "transport/gridIndex";
-/// The selected edit tool, as an index (0 Select, 1 Knife, 2 Eraser, 3 Region).
+/// The selected edit tool, as an index (0 Select … 7 Glue).
 inline constexpr const char* kEditToolSetting = "transport/editTool";
 /// The tool Alt/Option borrows while it is held. Same indices as above.
 inline constexpr const char* kAltEditToolSetting = "transport/editToolAlt";

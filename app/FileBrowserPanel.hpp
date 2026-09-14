@@ -68,6 +68,7 @@ public:
     /// Headless check only: open the plugin folders and select the first
     /// plugin, so a grab shows the listing. False when none are scanned.
     bool showPluginsForTest();
+    bool containersAreNavigationOnlyForTest() const;
     /// Headless check only: has a decode landed and drawn a waveform? The
     /// audition itself cannot be observed without an audio device, so this is
     /// what says the worker → strip → engine chain ran.

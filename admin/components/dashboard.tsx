@@ -2,6 +2,7 @@
 
 import { api } from "@vlt/api-client";
 import { Activity, Bug, Cpu, Users } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { AdminShell } from "./admin-shell";
@@ -10,7 +11,8 @@ import { useAdmin } from "./use-admin";
 
 type ActivityPoint = { bucket: string; sessions: number; crashes: number };
 type AIPoint = { bucket: string; tokens: number };
-type DashboardData = { users: number; active_sessions: number; crashes_24h: number; open_bugs: number; ai_tokens_month: number; generated_at: string; activity?: ActivityPoint[]; ai_daily?: AIPoint[] };
+type OnlineUser = { user_id: string; nickname: string; last_seen_at: string; sessions: number };
+type DashboardData = { users: number; active_sessions: number; crashes_24h: number; open_bugs: number; ai_tokens_month: number; generated_at: string; activity?: ActivityPoint[]; ai_daily?: AIPoint[]; online_users?: OnlineUser[] };
 const chartText = { fill: "var(--vlt-text-muted)", fontSize: 11 };
 const tooltipStyle = { color: "var(--vlt-text)", background: "var(--vlt-surface-raised)", border: "1px solid var(--vlt-border)", borderRadius: 9 };
 
@@ -36,6 +38,10 @@ export function Dashboard() {
         <section className="vlt-card vlt-card-pad vlt-stack" aria-label="График запусков и крашей за 24 часа"><h2 className="vlt-section-title">Запуски и краши · 24 часа</h2><div className="chart-frame"><ResponsiveContainer width="100%" height="100%"><AreaChart data={activity}><defs><linearGradient id="activityFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--vlt-accent)" stopOpacity={0.28} /><stop offset="100%" stopColor="var(--vlt-accent)" stopOpacity={0.01} /></linearGradient></defs><CartesianGrid stroke="var(--vlt-border-muted)" vertical={false} /><XAxis dataKey="label" tick={chartText} minTickGap={24} /><YAxis tick={chartText} allowDecimals={false} width={30} /><Tooltip contentStyle={tooltipStyle} /><Area type="monotone" dataKey="sessions" name="Запуски" stroke="var(--vlt-accent)" strokeWidth={2} fill="url(#activityFill)" /><Area type="monotone" dataKey="crashes" name="Краши" stroke="var(--vlt-danger)" strokeWidth={2} fill="transparent" /></AreaChart></ResponsiveContainer></div></section>
         <section className="vlt-card vlt-card-pad vlt-stack" aria-label="График расхода AI токенов за месяц"><h2 className="vlt-section-title">AI-расход · текущий UTC-месяц</h2><div className="chart-frame"><ResponsiveContainer width="100%" height="100%"><BarChart data={ai}><CartesianGrid stroke="var(--vlt-border-muted)" vertical={false} /><XAxis dataKey="label" tick={chartText} minTickGap={20} /><YAxis tick={chartText} width={52} tickFormatter={(value) => new Intl.NumberFormat("ru", { notation: "compact" }).format(Number(value))} /><Tooltip contentStyle={tooltipStyle} formatter={(value) => new Intl.NumberFormat("ru").format(Number(value))} /><Bar dataKey="tokens" name="Токены" fill="var(--vlt-accent)" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div></section>
       </div>
+      <section className="vlt-card vlt-card-pad vlt-stack online-users" aria-labelledby="online-users-title">
+        <div className="vlt-row vlt-between"><div><h2 className="vlt-section-title" id="online-users-title">Сейчас онлайн</h2><p className="vlt-subtitle">Пользователи с активностью за последние 10 минут.</p></div><span className="vlt-badge"><span className="status-dot" />{data.online_users?.length ?? 0}</span></div>
+        {data.online_users?.length ? <ul>{data.online_users.map((user) => <li key={user.user_id}><span className="status-dot" aria-hidden /><span><Link className="vlt-link" href={`/users/${user.user_id}`}>{user.nickname}</Link><small>Активных сессий: {user.sessions} · обновлён {new Date(user.last_seen_at).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}</small></span></li>)}</ul> : <p className="vlt-muted">Сейчас никого нет онлайн.</p>}
+      </section>
       <section className="vlt-card vlt-card-pad vlt-stack" style={{ marginTop: 16 }}><h2 className="vlt-section-title">Состояние тестирования</h2><div className="vlt-grid vlt-grid-2"><div><span className="vlt-muted">Крашей за 24 часа</span><div className="vlt-stat-value">{data.crashes_24h}</div></div><div><span className="vlt-muted">Глобальный AI kill switch</span><div style={{ marginTop: 8 }}><span className="vlt-badge vlt-badge-accent">Управляется сервером</span></div></div></div></section>
     </>}
   </AdminShell>;

@@ -9,6 +9,15 @@ project(VLTONE
     DESCRIPTION "VLTONE digital audio workstation"
     LANGUAGES CXX)
 
+set(VLTONE_BUILD_NUMBER "0" CACHE STRING
+    "Numeric build revision stored in Windows file metadata")
+if(NOT VLTONE_BUILD_NUMBER MATCHES "^[0-9]+$")
+    message(FATAL_ERROR "VLTONE_BUILD_NUMBER must be an integer")
+endif()
+if(VLTONE_BUILD_NUMBER GREATER 65535)
+    message(FATAL_ERROR "VLTONE_BUILD_NUMBER must fit the Windows version field")
+endif()
+
 include(cmake/WindowsResources.cmake)
 
 # vcpkg requires its own version field, but CMake remains the release version
@@ -24,6 +33,9 @@ endif()
 set(VLTONE_RELEASE_CHANNEL "" CACHE STRING
     "Optional prerelease channel shown after the numeric application version")
 set(VLTONE_DISPLAY_VERSION "${PROJECT_VERSION}")
+if(VLTONE_BUILD_NUMBER GREATER 0)
+    string(APPEND VLTONE_DISPLAY_VERSION " Build ${VLTONE_BUILD_NUMBER}")
+endif()
 if(NOT VLTONE_RELEASE_CHANNEL STREQUAL "")
     string(APPEND VLTONE_DISPLAY_VERSION " ${VLTONE_RELEASE_CHANNEL}")
 endif()

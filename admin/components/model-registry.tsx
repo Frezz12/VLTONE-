@@ -16,6 +16,7 @@ type AIModel = {
   endpoint_url: string;
   has_api_key: boolean;
   enabled: boolean;
+  is_free: boolean;
   sort_order: number;
 };
 
@@ -24,7 +25,7 @@ type Draft = Omit<AIModel, "id" | "has_api_key"> & { id?: string; api_key: strin
 const emptyDraft = (): Draft => ({
   display_name: "", provider: "openai", model: "",
   endpoint_url: "https://api.openai.com/v1",
-  api_key: "", enabled: true, sort_order: 0,
+  api_key: "", enabled: true, is_free: false, sort_order: 0,
 });
 
 export function ModelRegistry() {
@@ -75,7 +76,8 @@ export function ModelRegistry() {
       const payload = {
         display_name: draft.display_name, provider: draft.provider, model: draft.model,
         endpoint_url: draft.endpoint_url, api_key: draft.api_key,
-        enabled: draft.enabled, sort_order: Number(draft.sort_order) || 0,
+        enabled: draft.enabled, is_free: draft.is_free,
+        sort_order: Number(draft.sort_order) || 0,
       };
       const saved = draft.id
         ? await api.json<AIModel>(`/v1/admin/ai/models/${draft.id}`, "PUT", payload, session.csrf_token)
@@ -139,7 +141,7 @@ export function ModelRegistry() {
                 aria-pressed={draft.id === model.id}
               >
                 <Bot size={18} aria-hidden />
-                <span><strong>{model.display_name}</strong><small>{model.model}</small></span>
+                <span><strong>{model.display_name}</strong><small>{model.model}{model.is_free ? " · бесплатно" : ""}</small></span>
                 <span className="vlt-badge"><span className={`status-dot ${model.enabled ? "" : "off"}`} />{model.enabled ? "вкл." : "выкл."}</span>
               </button>
             ))}
@@ -183,6 +185,7 @@ export function ModelRegistry() {
               <input className="vlt-input" type="number" value={draft.sort_order} onChange={(event) => setDraft({ ...draft, sort_order: Number(event.target.value) })} />
             </label>
             <label className="vlt-checkbox"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />Показывать модель пользователям</label>
+            <label className="vlt-checkbox model-billing-setting"><input type="checkbox" checked={draft.is_free} onChange={(event) => setDraft({ ...draft, is_free: event.target.checked })} /><span><strong>Бесплатная модель</strong><small>Запросы не расходуют лимит пользователя и общий AI-бюджет.</small></span></label>
           </div>
           <div className="vlt-row model-form-actions">
             <button className="vlt-button" onClick={() => void save()} disabled={busy}><Save size={16} aria-hidden /> {busy ? "Сохранение…" : "Сохранить"}</button>

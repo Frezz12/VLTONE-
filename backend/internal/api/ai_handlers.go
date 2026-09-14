@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/datatypes"
 
 	"vltstudio/backend/internal/quota"
@@ -74,18 +75,22 @@ func (s *Server) aiProxy(w http.ResponseWriter, r *http.Request) {
 	// and provider tokenizers. The unused part is released on settlement.
 	estimatedInput := int64(len(upstreamBody))
 	reserved := estimatedInput + maxOutput
-	reservation, err := s.Quota.Reserve(userFrom(r).ID, provider, modelName, reserved, time.Now().UTC())
-	if errors.Is(err, quota.ErrExhausted) {
-		writeError(w, r, http.StatusPaymentRequired, "ai_quota_exhausted", "Your monthly AI quota is exhausted. The rest of VLTONE remains available.", nil)
-		return
-	}
-	if errors.Is(err, quota.ErrGlobalExhausted) {
-		writeError(w, r, http.StatusServiceUnavailable, "ai_global_budget_exhausted", "The monthly AI service budget is exhausted.", nil)
-		return
-	}
-	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, "ai_quota_unavailable", "AI quota could not be reserved.", nil)
-		return
+	var reservationID uuid.UUID
+	if !connection.IsFree {
+		reservation, reserveErr := s.Quota.Reserve(userFrom(r).ID, provider, modelName, reserved, time.Now().UTC())
+		if errors.Is(reserveErr, quota.ErrExhausted) {
+			writeError(w, r, http.StatusPaymentRequired, "ai_quota_exhausted", "Your monthly AI quota is exhausted. The rest of VLTONE remains available.", nil)
+			return
+		}
+		if errors.Is(reserveErr, quota.ErrGlobalExhausted) {
+			writeError(w, r, http.StatusServiceUnavailable, "ai_global_budget_exhausted", "The monthly AI service budget is exhausted.", nil)
+			return
+		}
+		if reserveErr != nil {
+			writeError(w, r, http.StatusInternalServerError, "ai_quota_unavailable", "AI quota could not be reserved.", nil)
+			return
+		}
+		reservationID = reservation.ID
 	}
 
 	actual, completed := int64(0), false
@@ -95,8 +100,11 @@ func (s *Server) aiProxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		settled = true
+		if connection.IsFree {
+			return
+		}
 		metadata, _ := json.Marshal(map[string]any{"provider": provider, "model": modelName, "settlement": reason})
-		if err := s.Quota.Settle(reservation.ID, amount, datatypes.JSON(metadata), time.Now().UTC()); err != nil {
+		if err := s.Quota.Settle(reservationID, amount, datatypes.JSON(metadata), time.Now().UTC()); err != nil {
 			// The reservation deliberately remains held if settlement fails. This fails closed.
 			return
 		}

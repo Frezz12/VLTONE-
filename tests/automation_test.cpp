@@ -7,11 +7,13 @@
 // lands all of them through.
 #include "AutomationTools.hpp"
 #include "EngineController.hpp"
+#include "Internal/EqualizerInstance.hpp"
 
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <string>
+#include <unordered_set>
 
 namespace at = daw::autotools;
 using daw::AutomationPoint;
@@ -26,6 +28,26 @@ static bool check(bool cond, const char* what) {
 
 static bool near(double a, double b, double tolerance = 1e-6) {
     return std::abs(a - b) <= tolerance;
+}
+
+static bool sameCurve(const std::vector<AutomationPoint>& a,
+                      const std::vector<AutomationPoint>& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (!near(a[i].beats, b[i].beats) ||
+            !near(a[i].value, b[i].value) || a[i].shape != b[i].shape ||
+            !near(a[i].curve, b[i].curve))
+            return false;
+    }
+    return true;
+}
+
+static bool uniquePointIds(const std::vector<AutomationPoint>& points) {
+    std::unordered_set<std::string> ids;
+    for (const AutomationPoint& point : points) {
+        if (point.id.empty() || !ids.insert(point.id).second) return false;
+    }
+    return true;
 }
 
 /// The clip with the given id on the given track, or null.
@@ -341,6 +363,8 @@ int main() {
         controller.setAutomationPoints(laneId, clipId, drawn);
         check(controller.undoDepth() == undoDepth,
               "a live edit costs nothing on the undo stack");
+        check(uniquePointIds(findClip(controller, laneId, clipId)->automation.points),
+              "new automation points receive unique collaboration ids");
         controller.setAutomationPoints(laneId, clipId, at::invert(drawn));
         controller.commitAutomationEdit(laneId, clipId, before, "LFO",
                                         activeBefore);
@@ -348,7 +372,7 @@ int main() {
               "however many live steps it took, letting go is one entry");
 
         clip = findClip(controller, laneId, clipId);
-        check(clip && clip->automation.points == at::invert(drawn),
+        check(clip && sameCurve(clip->automation.points, at::invert(drawn)),
               "and the curve the transform produced is what the clip holds");
 
         controller.undo();
@@ -356,6 +380,153 @@ int main() {
         check(clip && clip->automation.points == before &&
                   !clip->automation.active,
               "one undo puts the whole gesture back and makes it passive");
+
+        const std::string midiTrack =
+            controller.addTrack(daw::TrackKind::Midi, "Controller IDs");
+        const std::string midiClip =
+            controller.addMidiClip(midiTrack, 0.0, 2.0);
+        const std::string controllerLane =
+            controller.addControllerLane(midiTrack, midiClip, "Modulation", 1);
+        controller.setLanePoints(midiTrack, midiClip, controllerLane,
+                                 {pt(0.0, 0.2), pt(1.0, 0.8)});
+        const daw::ClipModel* midi = findClip(controller, midiTrack, midiClip);
+        const auto lane = midi
+            ? std::find_if(midi->lanes.begin(), midi->lanes.end(),
+                           [&](const auto& item) {
+                               return item.id == controllerLane;
+                           })
+            : std::vector<daw::ControllerLane>::const_iterator{};
+        check(midi && lane != midi->lanes.end() && uniquePointIds(lane->points),
+              "controller-lane points receive unique collaboration ids");
+        controller.shutdown();
+    }
+
+    // ── Realtime compilation and history ───────────────────────────────────
+    {
+        daw::EngineController controller;
+        controller.initialize(48000, 512, /*openDevice=*/false);
+        controller.setTempo(120.0);
+        const std::string track =
+            controller.addTrack(daw::TrackKind::Audio, "Step target");
+        daw::AutomationTarget target;
+        target.kind = daw::AutomationTargetKind::TrackPan;
+        target.channelId = track;
+        const std::string lane = controller.addAutomationLane(track, target);
+        const std::string clip =
+            controller.addAutomationClip(lane, target, 0.0, 2.0);
+        controller.setAutomationPoints(
+            lane, clip,
+            {pt(0.0, 0.0, AutomationSegment::Hold), pt(1.0, 1.0)});
+        controller.seekSeconds(0.25);  // beat 0.5, still before the step
+        const auto held = controller.automationValueAtPlayhead(target);
+        check(held && near(*held, -1.0),
+              "a Hold segment stays stepped in the compiled realtime curve");
+        controller.shutdown();
+    }
+    {
+        daw::EngineController controller;
+        controller.initialize(48000, 512, /*openDevice=*/false);
+        const std::string track =
+            controller.addTrack(daw::TrackKind::Audio, "Undo target");
+        daw::AutomationTarget target;
+        target.kind = daw::AutomationTargetKind::TrackVolume;
+        target.channelId = track;
+        const auto [lane, clip] = controller.ensureAutomation(target);
+        check(!lane.empty() && !clip.empty(),
+              "automation creation produces a lane and clip");
+        controller.undo();
+        check(!controller.project().findTrack(lane) &&
+                  !controller.project().findTrack(track)->automationExpanded,
+              "creation undo removes the lane and restores disclosure state");
+        controller.redo();
+        check(controller.project().findTrack(lane) &&
+                  findClip(controller, lane, clip),
+              "creation redo restores the same lane and clip identities");
+        controller.undo();
+        check(!controller.project().findTrack(lane),
+              "the restored automation can be undone again");
+        controller.shutdown();
+    }
+    {
+        daw::EngineController controller;
+        controller.initialize(48000, 512, /*openDevice=*/false);
+        const std::string first =
+            controller.addTrack(daw::TrackKind::Audio, "First");
+        const std::string second =
+            controller.addTrack(daw::TrackKind::Audio, "Second");
+        controller.setTrackVolumeLive(first, 0.25f);
+        daw::AutomationTarget volume;
+        volume.kind = daw::AutomationTargetKind::TrackVolume;
+        volume.channelId = first;
+        const std::string lane = controller.addAutomationLane(first, volume);
+        const std::string clip =
+            controller.addAutomationClip(lane, volume, 0.0, 2.0);
+        const daw::ClipModel before = *findClip(controller, lane, clip);
+
+        daw::AutomationTarget pan;
+        pan.kind = daw::AutomationTargetKind::TrackPan;
+        pan.channelId = second;
+        controller.setAutomationTarget(lane, clip, pan);
+        const daw::ClipModel after = *findClip(controller, lane, clip);
+        controller.setTrackVolumeLive(first, 0.8f);
+        controller.undo();
+        const daw::ClipModel* restored = findClip(controller, lane, clip);
+        check(restored && restored->name == before.name &&
+                  restored->automation.target == before.automation.target &&
+                  near(restored->automation.defaultValue,
+                       before.automation.defaultValue) &&
+                  restored->automation.points == before.automation.points,
+              "retarget undo restores the exact passive curve and name");
+        controller.redo();
+        restored = findClip(controller, lane, clip);
+        check(restored && restored->name == after.name &&
+                  restored->automation.target == after.automation.target &&
+                  near(restored->automation.defaultValue,
+                       after.automation.defaultValue) &&
+                  restored->automation.points == after.automation.points,
+              "retarget redo restores the exact replacement state");
+        controller.shutdown();
+    }
+    {
+        daw::EngineController controller;
+        controller.initialize(48000, 512, /*openDevice=*/false);
+        controller.setTempo(120.0);
+        const std::string track =
+            controller.addTrack(daw::TrackKind::Audio, "Plugin target");
+        const std::string slot = controller.addInsert(
+            track,
+            daw::plugins::equalizer::EqualizerInstance::staticDescriptor());
+        const auto parameters = controller.insertParameters(track, slot);
+        const auto parameter = std::find_if(
+            parameters.begin(), parameters.end(),
+            [](const auto& info) { return info.isAutomatable; });
+        bool merged = false;
+        if (!slot.empty() && parameter != parameters.end()) {
+            daw::AutomationTarget target;
+            target.kind = daw::AutomationTargetKind::PluginParameter;
+            target.channelId = track;
+            target.slotId = slot;
+            target.parameterId = parameter->id;
+            const std::string lane = controller.addAutomationLane(track, target);
+            const std::string clip =
+                controller.addAutomationClip(lane, target, 0.0, 2.0);
+            controller.setAutomationPoints(lane, clip,
+                                           {pt(0.0, 0.2), pt(4.0, 0.8)});
+            const std::string right = controller.splitClip(lane, clip, 1.0);
+            const auto graph = controller.routingGraph();
+            const auto* nodes = controller.trackNodes(track);
+            if (!right.empty() && graph && nodes && !nodes->inserts.empty()) {
+                for (const auto& entry : graph->nodes) {
+                    if (entry.id != nodes->inserts.front()) continue;
+                    const auto* plugin =
+                        dynamic_cast<const daw::plugins::PluginNode*>(entry.node);
+                    const auto curves = plugin ? plugin->automation() : nullptr;
+                    merged = curves && curves->size() == 1;
+                }
+            }
+        }
+        check(merged,
+              "split clips targeting one plugin parameter compile as one curve");
         controller.shutdown();
     }
 

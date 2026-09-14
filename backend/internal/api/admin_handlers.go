@@ -102,6 +102,22 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	var activity []activityPoint
 	var aiDaily []aiPoint
+	type onlineUser struct {
+		UserID     uuid.UUID `json:"user_id"`
+		Nickname   string    `json:"nickname"`
+		LastSeenAt time.Time `json:"last_seen_at"`
+		Sessions   int64     `json:"sessions"`
+	}
+	onlineUsers := make([]onlineUser, 0)
+	if err := s.DB.Table("telemetry_sessions AS sessions").
+		Select("users.id AS user_id, users.nickname, MAX(sessions.last_seen_at) AS last_seen_at, COUNT(*) AS sessions").
+		Joins("JOIN users ON users.id = sessions.user_id").
+		Where("sessions.last_seen_at >= ? AND sessions.ended_at IS NULL", now.Add(-10*time.Minute)).
+		Group("users.id, users.nickname").Order("last_seen_at DESC").Limit(100).
+		Scan(&onlineUsers).Error; err != nil {
+		writeError(w, r, http.StatusInternalServerError, "dashboard_unavailable", "Online users are unavailable.", nil)
+		return
+	}
 	if err := s.DB.Raw(`
         WITH hours AS (
             SELECT generate_series(date_trunc('hour', ?::timestamptz) - interval '23 hours',
@@ -130,7 +146,7 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"users": users, "active_sessions": activeSessions, "crashes_24h": crashes,
 		"open_bugs": bugs, "ai_tokens_month": aiUsed, "generated_at": now,
-		"activity": activity, "ai_daily": aiDaily,
+		"activity": activity, "ai_daily": aiDaily, "online_users": onlineUsers,
 	})
 }
 

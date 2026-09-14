@@ -17,6 +17,7 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
   const t = await getTranslations("Home");
   const features = ["recording", "midi", "mixing", "plugins", "ai", "recovery"] as const;
   const featureIcons = { recording: Mic2, midi: Piano, mixing: SlidersHorizontal, plugins: PlugZap, ai: Sparkles, recovery: History };
+  const overviewMoments = ["capture", "arrange", "finish"] as const;
   const steps = ["register", "download", "signin"] as const;
   const stepLinks = ["/register", "/releases", "/manual#first-launch"] as const;
   const questions = ["what", "who", "beta", "start", "platforms", "feedback"] as const;
@@ -52,39 +53,54 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
     </section>
 
     <section id="overview" className="home-section overview-section" aria-labelledby="overview-title" data-reveal>
-      <span className="section-label">01 / {t("overviewLabel")}</span>
-      <div><h2 id="overview-title">{t("overviewTitle")}</h2><Link className="text-link" href="/manual">{t("manual")}<ArrowUpRight size={14} aria-hidden /></Link></div>
-      <div className="overview-copy"><p>{t("overviewCopy")}</p><p>{t("audienceCopy")}</p></div>
+      <header className="overview-intro">
+        <span className="section-label">{t("overviewLabel")}</span>
+        <h2 id="overview-title">{t("overviewTitle")}</h2>
+        <p>{t("overviewCopy")}</p>
+      </header>
+      <div className="overview-detail">
+        <p>{t("audienceCopy")}</p>
+        <Link className="text-link" href="/manual">{t("manual")}<ArrowUpRight size={14} aria-hidden /></Link>
+      </div>
+      <div className="overview-flow">
+        {overviewMoments.map((key) => <article key={key}>
+          <h3>{t(`overviewMoments.${key}.title`)}</h3>
+          <p>{t(`overviewMoments.${key}.copy`)}</p>
+        </article>)}
+      </div>
     </section>
 
     <section id="features" className="home-section" aria-labelledby="features-title">
-      <header className="section-heading" data-reveal><div><span className="section-label">02 / {t("featuresLabel")}</span><h2 id="features-title">{t("featuresTitle")}</h2></div><p>{t("featuresCopy")}</p></header>
-      <div className="feature-grid">{features.map((key, index) => {
+      <header className="section-heading" data-reveal>
+        <div><span className="section-label">{t("featuresLabel")}</span><h2 id="features-title">{t("featuresTitle")}</h2></div>
+        <div className="section-heading-copy"><p>{t("featuresCopy")}</p><Link className="text-link" href="/capabilities">{t("featuresMore")}<ArrowUpRight size={14} aria-hidden /></Link></div>
+      </header>
+      <div className="feature-directory">{features.map((key, index) => {
         const FeatureIcon = featureIcons[key];
-        return <article className="feature-card" key={key} data-reveal={String(index * 55)}>
-        <div className="feature-card-top"><span className="feature-icon"><FeatureIcon size={22} strokeWidth={1.6} aria-hidden /></span><span className="feature-index">0{index + 1}</span></div>
-        <h3>{t(`features.${key}.title`)}</h3><p>{t(`features.${key}.copy`)}</p>
-        <Link className="feature-link" href={`/manual#${t(`features.${key}.anchor`)}`}><span className="pill-tag">{t(`features.${key}.tag`)}</span><ArrowUpRight size={14} aria-hidden /><span className="sr-only"> — {t(`features.${key}.title`)}</span></Link>
-      </article>;
+        return <Link className="feature-entry" href={`/capabilities#${key}`} key={key} data-reveal={String(index * 45)}>
+          <span className="feature-icon"><FeatureIcon size={27} strokeWidth={1.45} aria-hidden /></span>
+          <span className="feature-entry-copy"><span className="pill-tag">{t(`features.${key}.tag`)}</span><strong>{t(`features.${key}.title`)}</strong><span>{t(`features.${key}.copy`)}</span></span>
+          <ArrowUpRight size={17} aria-hidden />
+        </Link>;
       })}</div>
+      <div className="features-beta-note" data-reveal><span className="pill-tag">{t("betaTag")}</span><p>{t("featuresBeta")}</p><Link className="text-link" href="/capabilities">{t("featuresMore")}<ArrowUpRight size={14} aria-hidden /></Link></div>
     </section>
 
     <section id="beta" className="home-section beta-section" aria-labelledby="beta-title">
-      <div className="beta-intro" data-reveal><span className="section-label">03 / {t("betaLabel")}</span><span className="pill-tag">{t("betaTag")}</span><h2 id="beta-title">{t("betaTitle")}</h2><p>{t("betaCopy")}</p></div>
+      <div className="beta-intro" data-reveal><span className="section-label">{t("betaLabel")}</span><span className="pill-tag">{t("betaTag")}</span><h2 id="beta-title">{t("betaTitle")}</h2><p>{t("betaCopy")}</p></div>
       <ol className="beta-steps">{steps.map((key, index) => <li key={key} data-reveal={String(index * 70)}>
-        <span className="step-number">0{index + 1}</span><h3>{t(`steps.${key}.title`)}</h3><p>{t(`steps.${key}.copy`)}</p>
+        <h3>{t(`steps.${key}.title`)}</h3><p>{t(`steps.${key}.copy`)}</p>
         <a className="text-link" href={stepLinks[index]}>{t(`steps.${key}.link`)}<ArrowUpRight size={14} aria-hidden /></a>
       </li>)}</ol>
       <div className="beta-note" data-reveal><p>{t("betaNote")}</p><Link className="text-link" href="/bug-report">{t("reportBug")}<ArrowUpRight size={14} aria-hidden /></Link></div>
     </section>
 
     <section id="faq" className="home-section faq-section" aria-labelledby="faq-title">
-      <div data-reveal><span className="section-label">04 / {t("faqLabel")}</span><h2 id="faq-title">{t("faqTitle")}</h2></div>
+      <div data-reveal><span className="section-label">{t("faqLabel")}</span><h2 id="faq-title">{t("faqTitle")}</h2></div>
       <div className="faq-list">{questions.map((key, index) => <details key={key} data-reveal={String(index * 45)}><summary>{t(`faq.${key}.question`)}<Plus size={17} aria-hidden /></summary><p>{t(`faq.${key}.answer`)}</p></details>)}</div>
     </section>
 
     <section className="home-section home-cta" aria-labelledby="cta-title" data-reveal>
-      <div className="cta-sound" aria-hidden="true"><span /><span /><span /><span /><i /></div>
       <span className="section-label">{t("ctaLabel")}</span><h2 id="cta-title">{t("ctaTitle")}</h2><div className="hero-actions"><Link className="vlt-button" href="/register"><ArrowUpRight size={15} aria-hidden />{t("create")}</Link><a className="text-link" href="/releases">{t("download")}<ArrowUpRight size={14} aria-hidden /></a></div>
     </section>
   </main>;

@@ -23,7 +23,6 @@ class QShowEvent;
 class QStackedWidget;
 class QTimer;
 class QVBoxLayout;
-class QVariantAnimation;
 class ShortcutManager;
 namespace ui {
 class IconButton;
@@ -155,8 +154,6 @@ private:
     /// Update the only changing field of a pending music turn without
     /// rebuilding every card in the history.
     void updateMusicElapsedLabel();
-    /// The spectral rim is useful only while the panel can actually paint.
-    void syncEdgeAnimation();
     /// True while a music request is in flight.
     bool musicPending() const;
     /// Placeholder, hints and the instrumental switch follow the mode.
@@ -229,7 +226,4 @@ private:
     ui::IconButton* m_promptsButton = nullptr;
     ui::IconButton* m_sendButton = nullptr;
     ui::IconButton* m_stopButton = nullptr;
-    QVariantAnimation* m_edgeAnimation = nullptr;
-    double m_edgePhase = 0.0;
-    int m_edgeFrame = 0;
 };

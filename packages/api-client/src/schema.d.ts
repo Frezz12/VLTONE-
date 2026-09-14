@@ -2350,6 +2350,7 @@ export interface components {
         PublicRelease: {
             /** Format: uuid */
             id: string;
+            /** @description X.Y.Z with an optional label such as Alpha 1 or Build 1 */
             version: string;
             summary: string;
             features: string[];
@@ -2386,6 +2387,7 @@ export interface components {
             updated_at: string;
         };
         ReleaseWrite: {
+            /** @description X.Y.Z with an optional label such as Alpha 1 or Build 1 */
             version: string;
             summary_ru: string;
             summary_en: string;
@@ -2402,7 +2404,10 @@ export interface components {
             sort_order: number;
         };
         LatestRelease: {
+            /** @description Numeric X.Y.Z used by desktop update comparison */
             version: string;
+            /** @description Full version label shown on the release page */
+            display_version?: string;
             /** Format: date-time */
             published_at: string;
             /** Format: uri */
@@ -2415,12 +2420,15 @@ export interface components {
             /** @enum {string} */
             provider: "openai" | "anthropic";
             model: string;
+            /** @description Requests do not consume user or global token quota */
+            is_free: boolean;
         };
         AIModelLease: {
             /** Format: uuid */
-            reservation_id: string;
+            reservation_id?: string;
             /** Format: int64 */
             reserved_tokens: number;
+            is_free: boolean;
             /** @enum {string} */
             provider: "openai" | "anthropic";
             model: string;
@@ -2445,6 +2453,7 @@ export interface components {
             endpoint_url: string;
             api_key: string;
             enabled: boolean;
+            is_free: boolean;
             sort_order: number;
         };
         Meta: {

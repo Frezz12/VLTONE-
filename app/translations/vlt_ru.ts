@@ -5337,6 +5337,10 @@ Up to 10 MB</source>
         <translation>Инструмент растягивания</translation>
     </message>
     <message>
+        <source>Glue Tool</source>
+        <translation>Инструмент «Клей»</translation>
+    </message>
+    <message>
         <source>Saved audio device could not be opened; using the system output. Your saved choice was kept.</source>
         <translation>Не удалось открыть сохраненное аудиоустройство; используется системный вывод. Ваш сохраненный выбор сохранен.</translation>
     </message>
@@ -8257,6 +8261,70 @@ Clip: %2</source>
     <message>
         <source>Rendering clip %1 of %2</source>
         <translation>Рендер клипа %1 из %2</translation>
+    </message>
+    <message>
+        <source>Offline render percentage</source>
+        <translation>Процент офлайн-рендера</translation>
+    </message>
+    <message>
+        <source>Presets</source>
+        <translation>Пресеты</translation>
+    </message>
+    <message>
+        <source>Save…</source>
+        <translation>Сохранить…</translation>
+    </message>
+    <message>
+        <source>Offline render presets</source>
+        <translation>Пресеты офлайн-рендера</translation>
+    </message>
+    <message>
+        <source>Auto Render</source>
+        <translation>Авто-рендер</translation>
+    </message>
+    <message>
+        <source>Render the selected clips whenever the offline effect chain changes</source>
+        <translation>Рендерить выбранные клипы при каждом изменении цепочки офлайн-эффектов</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Закрыть</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Render to Clips</source>
+        <translation>Рендер в клипы</translation>
+    </message>
+    <message>
+        <source>Render to Clips — %1 selected</source>
+        <translation>Рендер в клипы — выбрано: %1</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>Плагин</translation>
+    </message>
+    <message>
+        <source>Click to load. Drag onto Audio FX.</source>
+        <translation>Нажмите для загрузки или перетащите на Audio FX.</translation>
+    </message>
+    <message>
+        <source>%1
+
+Click to load. Drag onto Audio FX.</source>
+        <translation>%1
+
+Нажмите для загрузки или перетащите на Audio FX.</translation>
+    </message>
+    <message>
+        <source>No saved presets</source>
+        <translation>Нет сохранённых пресетов</translation>
+    </message>
+    <message>
+        <source>This preset has no plugins to load.</source>
+        <translation>В этом пресете нет плагинов.</translation>
     </message>
 </context>
 <context>
@@ -11351,6 +11419,38 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Настройки — %1</translation>
     </message>
     <message>
+        <source>Settings — %1 · %2</source>
+        <translation>Настройки — %1 · %2</translation>
+    </message>
+    <message>
+        <source>Settings sections</source>
+        <translation>Разделы настроек</translation>
+    </message>
+    <message>
+        <source>Application</source>
+        <translation>Приложение</translation>
+    </message>
+    <message>
+        <source>General</source>
+        <translation>Основные</translation>
+    </message>
+    <message>
+        <source>Audio &amp; Recording</source>
+        <translation>Аудио и запись</translation>
+    </message>
+    <message>
+        <source>Workspace</source>
+        <translation>Рабочее пространство</translation>
+    </message>
+    <message>
+        <source>Appearance</source>
+        <translation>Оформление</translation>
+    </message>
+    <message>
+        <source>Account &amp; AI</source>
+        <translation>Аккаунт и ИИ</translation>
+    </message>
+    <message>
         <source>Audio</source>
         <translation>Аудио</translation>
     </message>
@@ -12643,6 +12743,14 @@ Reassign it to &quot;%3&quot;?</source>
         <translation>Растянуть клип</translation>
     </message>
     <message>
+        <source>No compatible clip next to this one.</source>
+        <translation>Рядом нет совместимого клипа.</translation>
+    </message>
+    <message>
+        <source>Could not glue clips: %1</source>
+        <translation>Не удалось склеить клипы: %1</translation>
+    </message>
+    <message>
         <source>Rename Take</source>
         <translation>Переименовать дубль</translation>
     </message>
@@ -12815,7 +12923,7 @@ Reassign it to &quot;%3&quot;?</source>
         <translation>Определение тональности…</translation>
     </message>
     <message>
-        <source>Detect BPM &amp; Key…</source>
+        <source>Detect BPM &amp;&amp; Key…</source>
         <translation>Определение BPM и тональности…</translation>
     </message>
     <message>
@@ -13269,6 +13377,10 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <translation>Растягивание</translation>
     </message>
     <message>
+        <source>Glue</source>
+        <translation>Клей</translation>
+    </message>
+    <message>
         <source>Workspace controls</source>
         <translation>Элементы управления рабочим пространством</translation>
     </message>
@@ -13405,8 +13517,8 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <translation>Вверх/вниз — изменить темп · Shift — точная настройка · Двойной щелчок — ввод числа</translation>
     </message>
     <message>
-        <source>%1 tool — on the pointer. 1…7 switch it.</source>
-        <translation>Инструмент %1 — на указателе. Переключите с помощью 1…7.</translation>
+        <source>%1 tool — on the pointer. 1…8 switch it.</source>
+        <translation>Инструмент %1 — на указателе. Переключите с помощью 1…8.</translation>
     </message>
     <message>
         <source>%1 tool — while %2 is held.</source>

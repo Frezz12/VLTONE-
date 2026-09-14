@@ -218,6 +218,10 @@ public:
             std::uint32_t(BounceFxLayer::Track) |
             std::uint32_t(BounceFxLayer::Summing);
         BounceDestination destination = BounceDestination::Replace;
+        /// Optional presentation overrides used by operations built on bounce
+        /// (for example arrangement Glue). Empty keeps the ordinary defaults.
+        std::string outputName;
+        std::string undoLabel;
     };
 
     struct BounceOutput {
@@ -305,6 +309,8 @@ public:
     /// Limit opaque plugin serialization when polling native editors. Cached
     /// state chunks are reused for instances outside this tick's budget; the
     /// default still captures every live instance synchronously.
+    /// Parameter values come from the live plugin plus unprocessed host edits,
+    /// so a native preset cannot be overwritten by a stale document fallback.
     recovery::RecoverySnapshot captureRecoverySnapshot(
         std::size_t maxPluginStateCaptures =
             std::numeric_limits<std::size_t>::max());
@@ -1093,6 +1099,11 @@ public:
     /// new right-hand clip, or empty when the cut is outside the clip. Undoable.
     std::string splitClip(const std::string& trackId, const std::string& clipId,
                           double atSeconds);
+    /// Join two or more clips into one. Clips must share a track and kind;
+    /// relative MIDI/automation data and Pattern ownership are preserved.
+    /// Returns a rich failure reason and writes the resulting clip id on success.
+    audio::Result glueClips(const std::vector<ClipAddress>& clips,
+                            std::string& gluedClipId);
     void removeClip(const std::string& trackId, const std::string& clipId);
 
     /// Silence a clip without removing it. Discrete, so undoable.

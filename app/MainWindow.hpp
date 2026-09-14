@@ -311,10 +311,11 @@ public:
     /// `persist` exists: a headless grab must not rewrite the user's settings.
     void setBrowserOnLeft(bool onLeft, bool persist = true);
 
-    /// Open the unified settings window on the given tab (see
-    /// `SettingsWindow::Tab`), reusing the single instance. Public so the
-    /// headless runs can build every page.
-    void openSettings(int tab = 0);
+    /// Open the unified settings window, optionally on a contextual page (see
+    /// `SettingsWindow::Tab`), reusing the single instance. Without a page it
+    /// keeps the user's last selection. Public so headless runs can build all
+    /// pages.
+    void openSettings(int tab = -1);
 
     /// Headless check only: point the browser at `folder` and select
     /// `selectFile` inside it, so a screenshot shows a real tree and a real
@@ -698,7 +699,7 @@ private:
     void openPattern(const QString& patternId);
     bool canOpenSelectedEditor() const;
     void openSelectedEditor();
-    /// Set the arrangement edit tool (0 Select, 1 Knife, 2 Eraser, 3 Region)
+    /// Set the arrangement edit tool (0 Select … 7 Glue)
     /// and keep the transport chip in sync — used by the tool keyboard
     /// shortcuts.
     void setEditTool(int index);

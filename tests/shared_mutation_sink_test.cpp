@@ -1113,6 +1113,7 @@ void verifyScratchBatchMutators(daw::collab::SharedMutationResult result) {
     const std::string midi =
         controller.addTrack(daw::TrackKind::Midi, "MIDI");
     const std::string clip = controller.addMidiClip(midi, 0.0, 1.0);
+    controller.setClipFade(midi, clip, 0.2, 0.3);
     const std::string pattern = controller.addPattern("Pattern");
     const double patternDuration =
         controller.project().findTrack(pattern)->clips.front().durationSeconds;
@@ -1175,6 +1176,27 @@ void verifyScratchBatchMutators(daw::collab::SharedMutationResult result) {
 
     check(sink.genericCalls == 8 && allBatches(sink, 0),
           "each scratch-planned gesture submits one non-nested outer batch");
+    const auto* splitBatch = sink.genericBodies.size() > 5
+        ? std::get_if<std::shared_ptr<daw::collab::BatchCommand>>(
+              &sink.genericBodies[5])
+        : nullptr;
+    const daw::collab::SetClipFade* leftFade = nullptr;
+    const daw::collab::SetClipFade* rightFade = nullptr;
+    if (splitBatch && *splitBatch) {
+        for (const auto& command : (*splitBatch)->commands) {
+            const auto* fade =
+                std::get_if<daw::collab::SetClipFade>(&command.body);
+            if (!fade) continue;
+            if (fade->clipId == clip) leftFade = fade;
+            else rightFade = fade;
+        }
+    }
+    check(leftFade && rightFade &&
+              std::fabs(leftFade->fadeInSeconds - 0.2) < 1e-9 &&
+              leftFade->fadeOutSeconds == 0.0 &&
+              rightFade->fadeInSeconds == 0.0 &&
+              std::fabs(rightFade->fadeOutSeconds - 0.3) < 1e-9,
+          "shared split keeps the new seam free of automatic fades");
     check((submitted ? !trackCopy.empty() : trackCopy.empty()) &&
               (submitted ? !patternCopy.empty() : patternCopy.empty()) &&
               (submitted ? !folder.empty() : folder.empty()) &&

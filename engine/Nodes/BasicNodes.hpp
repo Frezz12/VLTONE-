@@ -289,6 +289,9 @@ public:
     bool canFuseTask() const noexcept override { return true; }
 
     void setLevel(float level) noexcept { m_level.store(level, std::memory_order_relaxed); }
+    void setEnabled(bool enabled) noexcept {
+        m_enabled.store(enabled, std::memory_order_relaxed);
+    }
     /// A curve for the send amount, on the same terms as `GainNode`'s.
     void setAutomation(std::shared_ptr<const LevelCurve> curve) {
         m_automation.publish(std::move(curve));
@@ -297,7 +300,10 @@ public:
     void process(const ProcessContext& context) override {
         float level = m_level.load(std::memory_order_relaxed);
         auto reader = m_automation.read();
-        if (const LevelCurve* curve = reader.get(); curve && curve->active) {
+        if (!m_enabled.load(std::memory_order_relaxed)) {
+            level = 0.0f;
+        } else if (const LevelCurve* curve = reader.get();
+                   curve && curve->active) {
             if (curve != m_automationFor ||
                 context.transport.ppqPosition < m_lastBlockBeats) {
                 m_cursor = 0;
@@ -306,12 +312,10 @@ public:
             m_lastBlockBeats = context.transport.ppqPosition;
             // One value for the block. A send is a tap, not the signal path —
             // its own ramp would only smooth what the destination bus already
-            // smooths, and a disabled send is still held at zero by the level
-            // the control thread pushed.
-            if (level > 0.0f) {
-                level = float(levelAt(*curve, context.transport.ppqPosition,
-                                      m_cursor));
-            }
+            // smooths. Enabled is separate from level so automation can raise
+            // a send whose stored knob happens to be at zero.
+            level = float(levelAt(*curve, context.transport.ppqPosition,
+                                  m_cursor));
         }
         for (ChannelCount ch = 0; ch < context.output.numChannels(); ++ch) {
             const std::span<float> destination = context.output.channel(ch);
@@ -334,6 +338,7 @@ public:
 private:
     std::string m_name;
     std::atomic<float> m_level{0.5f};
+    std::atomic<bool> m_enabled{true};
 
     RealtimeSnapshot<LevelCurve> m_automation;
     const LevelCurve* m_automationFor = nullptr;

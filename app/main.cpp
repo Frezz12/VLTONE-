@@ -1318,7 +1318,7 @@ int main(int argc, char** argv) {
         // DAW_SHOT_AI photographs the independent workspace | Web | AI layout.
         if (std::getenv("DAW_SHOT_WEB")) window.openWebBrowserForShot();
         if (std::getenv("DAW_SHOT_NOTEBOOK")) window.openNotebookForShot();
-        // DAW_SHOT_SETTINGS is a settings tab index, so each page can be
+        // DAW_SHOT_SETTINGS is a settings page index, so each pane can be
         // grabbed on its own.
         const char* shotSettings = std::getenv("DAW_SHOT_SETTINGS");
         const bool shootSettings = shotSettings != nullptr;
@@ -1592,6 +1592,13 @@ int main(int argc, char** argv) {
             }
             std::fprintf(stderr,
                          "PASS Browser: rounded rows, audio/MIDI previews and empty selection\n");
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_AI_ONLY")) {
+            window.populateDemo();
+            if (!window.checkAiAssistant()) {
+                std::fprintf(stderr, "focused AI assistant selftest failed\n");
+                return 6;
+            }
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
         } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_NOTEBOOK_ONLY")) {
             if (!window.checkNotebookForTest()) return 41;

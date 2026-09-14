@@ -30,7 +30,6 @@ export default async function ReleasesPage({ params }: { params: Promise<{ local
           <p className="download-account-note">{ru ? "После установки войдите с аккаунтом VLTone." : "Sign in with your VLTone account after installation."} <Link href="/register">{ru ? "Создать аккаунт" : "Create an account"}<ArrowRight size={13} aria-hidden /></Link></p>
         </div>
         <figure className="download-preview">
-          <div className="download-signal" aria-hidden="true">{[0, 1, 2, 3, 4, 5, 6].map((index) => <span key={index} />)}</div>
           <Image src={`/images/workspace-dark-${locale}.png`} width={1600} height={1000} sizes="(max-width: 900px) 94vw, 54vw" priority alt={ru ? "Интерфейс VLTone" : "VLTone interface"} />
           <figcaption>VLTone · Windows · macOS</figcaption>
         </figure>
@@ -40,8 +39,7 @@ export default async function ReleasesPage({ params }: { params: Promise<{ local
 
       <section className="release-archive" aria-labelledby="release-archive-title">
         <header data-reveal><div><span className="section-label">{ru ? "Архив" : "Archive"}</span><h2 id="release-archive-title">{ru ? "Выбрать версию" : "Choose a version"}</h2></div><p>{ru ? "Откройте нужную версию, чтобы скачать её установщики и посмотреть полный список изменений." : "Open any version to download its installers and see the complete release notes."}</p></header>
-        <div className="release-version-list">{releases.map((release, index) => <a className="release-version-row" href={`/releases/${release.version}`} key={release.id} data-reveal={String(index * 45)}>
-          <span className="release-index">{String(index + 1).padStart(2, "0")}</span>
+        <div className="release-version-list">{releases.map((release, index) => <a className="release-version-row" href={`/releases/${encodeURIComponent(release.version)}`} key={release.id} data-reveal={String(index * 45)}>
           <div><div className="release-summary-meta"><strong>v{release.version}</strong>{index === 0 && <span className="vlt-badge vlt-badge-accent">{ru ? "Последняя" : "Latest"}</span>}</div><h3>{release.summary}</h3></div>
           <span className="release-version-date"><CalendarDays size={14} aria-hidden />{new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(release.published_at))}</span>
           <span className="release-open" aria-hidden="true"><ArrowRight size={19} /></span>

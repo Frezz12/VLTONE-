@@ -34,8 +34,24 @@ PluginNode::~PluginNode() {
     if (m_instance) m_instance->setListener(nullptr);
 }
 
+std::vector<PluginEvent> PluginNode::pendingParameterEvents() {
+    if (m_inbound.empty()) return {};
+    std::vector<PluginEvent> events;
+    // Allocate before touching the queue: even an allocation failure must
+    // leave the live session's parameters and MIDI exactly as they were.
+    events.reserve(kEventQueueCapacity);
+    PluginEvent event;
+    while (m_inbound.pop(event)) events.push_back(event);
+    for (const auto& pending : events) (void)m_inbound.push(pending);
+    std::erase_if(events, [](const PluginEvent& pending) {
+        return pending.kind != PluginEvent::Kind::ParamValue;
+    });
+    return events;
+}
+
 void PluginNode::prepare(const engine::PrepareInfo& info) {
     m_processFailed.store(false, std::memory_order_relaxed);
+    if (!info.offline) m_hasLastOfflineConfiguration = false;
     // These requests are satisfied by this activation. New requests arriving
     // during it remain pending, except latency which is read below.
     m_restartRequested.store(false, std::memory_order_release);
@@ -149,8 +165,27 @@ engine::Status PluginNode::serviceOffline() {
         return engine::fail(engine::EngineError::RenderConfigurationChanged);
     const bool latencyChanged = takeLatencyChanged();
     const bool restartRequested = takeRestartRequested();
-    const bool needsPrepare = restartRequested && m_instance->serviceOfflineRestart();
-    if (latencyChanged || needsPrepare) invalidatePrepare();
+    const bool restartNeedsPrepare =
+        restartRequested && m_instance->serviceOfflineRestart();
+    const bool reportedLatencyChanged = latencyChanged &&
+        m_instance->latencySamples() !=
+            m_latency.load(std::memory_order_relaxed);
+    if (restartNeedsPrepare || reportedLatencyChanged) {
+        const OfflineConfiguration current{
+            m_instance->latencySamples(), m_instance->tailSamples(),
+            m_pluginInputChannels, m_pluginSidechainChannels,
+            m_pluginOutputChannels};
+        // Some processors emit the same structural notification after every
+        // activation. Honour it once, then keep the replacement pass when the
+        // host-visible configuration is unchanged; a real change still gets a
+        // fresh pass and remains protected by the controller's retry limit.
+        if (!m_hasLastOfflineConfiguration ||
+            current != m_lastOfflineConfiguration) {
+            m_lastOfflineConfiguration = current;
+            m_hasLastOfflineConfiguration = true;
+            invalidatePrepare();
+        }
+    }
     return {};
 }
 

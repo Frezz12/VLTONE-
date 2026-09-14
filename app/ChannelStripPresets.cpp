@@ -75,6 +75,12 @@ bool isPresetFile(const QString& path) {
                                             Qt::CaseInsensitive) == 0;
 }
 
+bool isOfflineFile(const QString& path) {
+    return isPresetFile(path) &&
+           QDir(QFileInfo(path).absolutePath()).absolutePath() ==
+               QDir(offlineFolder()).absolutePath();
+}
+
 QStringList files() {
     return presetFiles(stripFolder());
 }

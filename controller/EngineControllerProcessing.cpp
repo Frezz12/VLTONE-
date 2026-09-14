@@ -422,8 +422,10 @@ audio::Result EngineController::bounceInPlace(
                 committed = false;
                 break;
             }
-            bounced->name = sourceName.empty() ? "Bounce"
-                                                : sourceName + " Bounce";
+            bounced->name = request.outputName.empty()
+                                ? (sourceName.empty() ? "Bounce"
+                                                      : sourceName + " Bounce")
+                                : request.outputName;
             bounced->gain = 1.0f;
             bounced->pan = 0.0f;
             bounced->fadeInSeconds = 0.0;
@@ -461,7 +463,9 @@ audio::Result EngineController::bounceInPlace(
         return audio::Result::fail(audio::EngineError::FileWriteError,
                                    "could not insert bounced audio");
     }
-    pushProjectSnapshotUndo(before, "Bounce in Place");
+    pushProjectSnapshotUndo(
+        before, request.undoLabel.empty() ? "Bounce in Place"
+                                          : request.undoLabel);
     return audio::Result::ok();
 }
 

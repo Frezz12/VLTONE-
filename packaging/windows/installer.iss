@@ -7,6 +7,9 @@
 #ifndef AppVersion
   #error AppVersion must match the CMake project version
 #endif
+#ifndef AppBuild
+  #define AppBuild 0
+#endif
 #ifndef VcRedist
   #error VcRedist must point at vc_redist.x64.exe
 #endif
@@ -17,8 +20,12 @@
 [Setup]
 AppId={{C4B1512F-06CD-48F5-AF80-63DB4C6969F2}
 AppName=VLTONE
-AppVersion={#AppVersion}
+AppVersion={#AppVersion}.{#AppBuild}
+#if Int(AppBuild) > 0
+AppVerName=VLTONE {#AppVersion} Build {#AppBuild}
+#else
 AppVerName=VLTONE {#AppVersion}
+#endif
 AppPublisher=VLTONE
 DefaultDirName={autopf}\VLTONE
 DefaultGroupName=VLTONE
@@ -35,15 +42,19 @@ UsePreviousAppDir=yes
 UninstallDisplayIcon={app}\bin\VLTONE.exe
 SetupIconFile={#IconFile}
 OutputDir={#OutputDir}
+#if Int(AppBuild) > 0
+OutputBaseFilename=VLTONE-{#AppVersion}-Build-{#AppBuild}-x64-Setup
+#else
 OutputBaseFilename=VLTONE-{#AppVersion}-x64-Setup
+#endif
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-VersionInfoVersion={#AppVersion}.0
+VersionInfoVersion={#AppVersion}.{#AppBuild}
 VersionInfoCompany=VLTONE
 VersionInfoDescription=VLTONE installer
 VersionInfoProductName=VLTONE
-VersionInfoProductVersion={#AppVersion}.0
+VersionInfoProductVersion={#AppVersion}.{#AppBuild}
 VersionInfoCopyright=Copyright (C) 2026 VLTONE. All rights reserved.
 
 [Tasks]

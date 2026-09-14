@@ -1183,7 +1183,7 @@ components:
     AttachmentId: { name: attachmentId, in: path, required: true, schema: { type: string, format: uuid } }
     CrashId: { name: crashId, in: path, required: true, schema: { type: string, format: uuid } }
     ReleaseId: { name: releaseId, in: path, required: true, schema: { type: string, format: uuid } }
-    ReleaseVersion: { name: version, in: path, required: true, schema: { type: string, pattern: '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' } }
+    ReleaseVersion: { name: version, in: path, required: true, schema: { type: string, maxLength: 80, pattern: '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)( [^/?#]+)?$' } }
     ScreenshotId: { name: screenshotId, in: path, required: true, schema: { type: string, format: uuid } }
     ArtifactKind: { name: kind, in: path, required: true, schema: { $ref: "#/components/schemas/ArtifactKind" } }
     Platform: { name: platform, in: query, required: true, schema: { type: string, enum: [windows, macos, linux] } }
@@ -1796,7 +1796,7 @@ components:
       required: [id, version, summary, features, changes, fixes, artifacts, screenshots, page_url, published_at]
       properties:
         id: { type: string, format: uuid }
-        version: { type: string }
+        version: { type: string, maxLength: 80, description: X.Y.Z with an optional label such as Alpha 1 or Build 1 }
         summary: { type: string }
         features: { type: array, items: { type: string } }
         changes: { type: array, items: { type: string } }
@@ -1830,7 +1830,7 @@ components:
       additionalProperties: false
       required: [version, summary_ru, summary_en, features_ru, features_en, changes_ru, changes_en, fixes_ru, fixes_en]
       properties:
-        version: { type: string }
+        version: { type: string, maxLength: 80, description: X.Y.Z with an optional label such as Alpha 1 or Build 1 }
         summary_ru: { type: string, maxLength: 4000 }
         summary_en: { type: string, maxLength: 4000 }
         features_ru: { type: array, maxItems: 100, items: { type: string, maxLength: 1000 } }
@@ -1851,25 +1851,28 @@ components:
       type: object
       required: [version, published_at, page_url]
       properties:
-        version: { type: string }
+        version: { type: string, description: Numeric X.Y.Z used by desktop update comparison }
+        display_version: { type: string, description: Full version label shown on the release page }
         published_at: { type: string, format: date-time }
         page_url: { type: string, format: uri }
     DesktopAIModel:
       type: object
       additionalProperties: false
-      required: [id, display_name, provider, model]
+      required: [id, display_name, provider, model, is_free]
       properties:
         id: { type: string, format: uuid }
         display_name: { type: string }
         provider: { type: string, enum: [openai, anthropic] }
         model: { type: string }
+        is_free: { type: boolean, description: Requests do not consume user or global token quota }
     AIModelLease:
       type: object
       additionalProperties: false
-      required: [reservation_id, reserved_tokens, provider, model, endpoint_url, api_key]
+      required: [reserved_tokens, is_free, provider, model, endpoint_url, api_key]
       properties:
         reservation_id: { type: string, format: uuid }
         reserved_tokens: { type: integer, format: int64 }
+        is_free: { type: boolean }
         provider: { type: string, enum: [openai, anthropic] }
         model: { type: string }
         endpoint_url: { type: string, format: uri }
@@ -1887,7 +1890,7 @@ components:
     AIModelWrite:
       type: object
       additionalProperties: false
-      required: [display_name, provider, model, endpoint_url, api_key, enabled, sort_order]
+      required: [display_name, provider, model, endpoint_url, api_key, enabled, is_free, sort_order]
       properties:
         display_name: { type: string, minLength: 1, maxLength: 80 }
         provider: { type: string, enum: [openai, anthropic] }
@@ -1895,6 +1898,7 @@ components:
         endpoint_url: { type: string, format: uri }
         api_key: { type: string, writeOnly: true, maxLength: 16384 }
         enabled: { type: boolean }
+        is_free: { type: boolean }
         sort_order: { type: integer }
     Meta:
       type: object

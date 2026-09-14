@@ -28,13 +28,14 @@ test("administrator adds a managed model connection", async ({ page }) => {
   await page.getByLabel("Название в программе").fill("VLT Assistant");
   await page.getByLabel("ID модели у провайдера").fill("gpt-4.1");
   await page.getByRole("textbox", { name: "API-ключ", exact: true }).fill("secret-provider-key");
+  await page.getByLabel("Бесплатная модель").check();
   await page.getByRole("button", { name: "Сохранить" }).click();
 
   await expect.poll(() => submitted?.display_name).toBe("VLT Assistant");
   expect(submitted).toMatchObject({
     provider: "openai", model: "gpt-4.1",
     endpoint_url: "https://api.openai.com/v1",
-    api_key: "secret-provider-key", enabled: true,
+    api_key: "secret-provider-key", enabled: true, is_free: true,
   });
   await expect(page.getByText("Модель сохранена и доступна программе.")).toBeVisible();
   await expect(page.getByRole("button", { name: /VLT Assistant/ })).toBeVisible();

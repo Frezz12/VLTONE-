@@ -176,21 +176,35 @@ void inheritAutomationLaneColors(ProjectModel& project) {
 /// sound, and the value is held from the clip's start to its first point.
 template <typename ToPlain>
 void appendCurvePoints(std::vector<std::pair<double, double>>& out,
-                       const ClipModel& clip, double beatsPerSecond,
-                       const ToPlain& toPlain) {
-    const double startBeats = clip.startSeconds * beatsPerSecond;
-    const double lengthBeats = clip.durationSeconds * beatsPerSecond;
-    const auto& points = clip.automation.points;
+                       const std::vector<AutomationPoint>& points,
+                       double defaultValue, double startBeats,
+                       double lengthBeats, const ToPlain& toPlain) {
 
     // The clip's own edge, so a curve stops driving where the clip stops and
     // whatever follows it takes over cleanly.
     out.emplace_back(startBeats,
-                     toPlain(automationValueAt(points, 0.0,
-                                               clip.automation.defaultValue)));
+                      toPlain(automationValueAt(points, 0.0,
+                                                defaultValue)));
 
     for (std::size_t i = 0; i < points.size(); ++i) {
         const AutomationPoint& point = points[i];
         if (point.beats > lengthBeats) break;
+
+        // Linear-only realtime readers need an explicit point immediately
+        // before a discontinuity. Without it, both the initial default hold
+        // and a Hold segment turn into a ramp to the next breakpoint.
+        const bool holdsIntoPoint =
+            (i == 0 && point.beats > 0.0) ||
+            (i > 0 && points[i - 1].shape == AutomationSegment::Hold);
+        if (holdsIntoPoint) {
+            const double from = i == 0 ? 0.0 : points[i - 1].beats;
+            const double before = std::nextafter(point.beats, from);
+            if (before > from) {
+                const double held = i == 0 ? defaultValue
+                                            : points[i - 1].value;
+                out.emplace_back(startBeats + before, toPlain(held));
+            }
+        }
         out.emplace_back(startBeats + point.beats, toPlain(point.value));
 
         if (i + 1 >= points.size()) continue;
@@ -203,8 +217,8 @@ void appendCurvePoints(std::vector<std::pair<double, double>>& out,
             const double at = point.beats + span * double(step) / double(steps);
             if (at > lengthBeats) break;
             out.emplace_back(startBeats + at,
-                             toPlain(automationValueAt(points, at,
-                                                       clip.automation.defaultValue)));
+                              toPlain(automationValueAt(points, at,
+                                                        defaultValue)));
         }
     }
 
@@ -212,9 +226,19 @@ void appendCurvePoints(std::vector<std::pair<double, double>>& out,
     // to its last breakpoint.
     if (lengthBeats > 0.0) {
         out.emplace_back(startBeats + lengthBeats,
-                         toPlain(automationValueAt(points, lengthBeats,
-                                                   clip.automation.defaultValue)));
+                          toPlain(automationValueAt(points, lengthBeats,
+                                                    defaultValue)));
     }
+}
+
+template <typename ToPlain>
+void appendCurvePoints(std::vector<std::pair<double, double>>& out,
+                       const ClipModel& clip, double beatsPerSecond,
+                       const ToPlain& toPlain) {
+    appendCurvePoints(out, clip.automation.points,
+                      clip.automation.defaultValue,
+                      clip.startSeconds * beatsPerSecond,
+                      clip.durationSeconds * beatsPerSecond, toPlain);
 }
 
 /// A track a recording can land on. A summing folder has a channel — it is a
@@ -2420,6 +2444,18 @@ void EngineController::syncTrackAutomation(const TrackModel& track) {
         }
         return entry;
     };
+    auto curveFor = [&](plugins::PluginNode* node, std::uint32_t parameter,
+                        double defaultValue)
+        -> plugins::PluginNode::AutomationCurve& {
+        auto curves = ensure(node);
+        const auto found = std::find_if(
+            curves->begin(), curves->end(), [&](const auto& curve) {
+                return curve.parameterIndex == parameter;
+            });
+        if (found != curves->end()) return *found;
+        curves->push_back({parameter, defaultValue, {}});
+        return curves->back();
+    };
     // Every loaded plugin gets an entry even when nothing automates it, so a
     // lane the user deleted stops driving the parameter instead of leaving the
     // last curve in place forever.
@@ -2467,17 +2503,11 @@ void EngineController::syncTrackAutomation(const TrackModel& track) {
                 return info.minValue + span * std::clamp(normalized, 0.0, 1.0);
             };
 
-            plugins::PluginNode::AutomationCurve curve;
-            curve.parameterIndex = std::uint32_t(index);
-            curve.defaultValue = toPlain(lane.defaultValue);
-            curve.points.reserve(lane.points.size());
-            for (const AutomationPoint& point : lane.points) {
-                curve.points.emplace_back(clipStartBeats + point.beats,
-                                          toPlain(point.value));
-            }
-            std::sort(curve.points.begin(), curve.points.end(),
-                      [](const auto& a, const auto& b) { return a.first < b.first; });
-            ensure(node)->push_back(std::move(curve));
+            auto& curve = curveFor(node, std::uint32_t(index),
+                                   toPlain(lane.defaultValue));
+            appendCurvePoints(curve.points, lane.points, lane.defaultValue,
+                              clipStartBeats,
+                              clip.durationSeconds * beatsPerSecond, toPlain);
         }
     }
 
@@ -2510,16 +2540,18 @@ void EngineController::syncTrackAutomation(const TrackModel& track) {
                 return info.minValue + span * std::clamp(normalized, 0.0, 1.0);
             };
 
-            plugins::PluginNode::AutomationCurve curve;
-            curve.parameterIndex = std::uint32_t(index);
-            curve.defaultValue = toPlain(clip.automation.defaultValue);
+            auto& curve = curveFor(node, std::uint32_t(index),
+                                   toPlain(clip.automation.defaultValue));
             appendCurvePoints(curve.points, clip, beatsPerSecond, toPlain);
-            std::sort(curve.points.begin(), curve.points.end(),
-                      [](const auto& a, const auto& b) { return a.first < b.first; });
-            ensure(node)->push_back(std::move(curve));
     }
 
     for (auto& [node, curves] : built) {
+        for (auto& curve : *curves) {
+            std::stable_sort(curve.points.begin(), curve.points.end(),
+                             [](const auto& a, const auto& b) {
+                                 return a.first < b.first;
+                             });
+        }
         // A curve writes its parameter on *every* block, so a lane pointing at
         // the wrong parameter — or holding a default the user never chose —
         // looks exactly like a knob that will not stay where it is put.
@@ -2590,8 +2622,10 @@ void EngineController::syncTrackLevelAutomation(const TrackModel& track) {
 
     const auto tidy = [](engine::LevelCurve& curve) {
         if (!curve.active) return;
-        std::sort(curve.points.begin(), curve.points.end(),
-                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        std::stable_sort(curve.points.begin(), curve.points.end(),
+                         [](const auto& a, const auto& b) {
+                             return a.first < b.first;
+                         });
     };
     tidy(levels->gain);
     tidy(levels->pan);
@@ -3733,7 +3767,8 @@ audio::Result EngineController::rebuildGraph(bool reconfigurePlugins, bool publi
                 channel.sends[i] =
                     std::make_shared<engine::SendNode>(track.name + " Send");
             }
-            channel.sends[i]->setLevel(send.enabled ? send.level : 0.0f);
+            channel.sends[i]->setLevel(send.level);
+            channel.sends[i]->setEnabled(send.enabled);
             const engine::NodeId sendId = graph.adoptNode(channel.sends[i]);
             channel.ids.sends.push_back(sendId);
 
@@ -4385,11 +4420,30 @@ recovery::RecoverySnapshot EngineController::captureRecoverySnapshot(
     snapshot.project = m_project;
     snapshot.project.sampleRate = m_sampleRate;
 
-    auto collectInstance = [&](plugins::PluginInstance* instance,
+    auto collectInstance = [&](plugins::PluginNode* node,
                                const std::string& stem, std::string& stateFile,
                                std::vector<InsertParameter>& parameters) {
-        if (!instance) return;
+        if (!node || !node->instance()) return;
+        const engine::RealtimeEngine::RenderGate gate(m_engine);
+        auto* instance = node->instance();
+        // Native presets (including AU class info) can change the sound
+        // without updating every document parameter. Replaying that old
+        // fallback after loadState would undo the preset in the render clone.
+        parameters.clear();
         snapshotParameters(*instance, parameters);
+        // AU/CLAP apply host edits on the next audio block; VST3 can also
+        // still have an edit queued for its processor. Keep those newer edits
+        // without rolling any other preset values back to the document.
+        const auto pending = node->pendingParameterEvents();
+        const auto descriptors = instance->parameters();
+        for (const auto& event : pending) {
+            if (event.paramIndex >= descriptors.size() || !std::isfinite(event.value)) continue;
+            const auto& id = descriptors[event.paramIndex].id;
+            const auto found = std::find_if(parameters.begin(), parameters.end(),
+                [&](const InsertParameter& parameter) { return parameter.id == id; });
+            if (found != parameters.end()) found->value = event.value;
+            else if (!id.empty()) parameters.push_back({id, event.value});
+        }
         const auto cached = m_recoveryPluginStateCache.find(stem);
         if (cached == m_recoveryPluginStateCache.end()) return;
         stateFile = cached->second->fileName;
@@ -4397,12 +4451,10 @@ recovery::RecoverySnapshot EngineController::captureRecoverySnapshot(
     };
     auto collectSlot = [&](const std::string& channelId, InsertModel& slot) {
         InsertSlot* live = liveInsertSlot(channelId, slot.id);
-        collectInstance(live && live->node ? live->node->instance() : nullptr,
+        collectInstance(live ? live->node.get() : nullptr,
                         slot.id, slot.stateFile, slot.parameters);
         if (slot.channelMode == PluginChannelMode::DualMono) {
-            collectInstance(live && live->rightNode
-                                ? live->rightNode->instance()
-                                : nullptr,
+            collectInstance(live ? live->rightNode.get() : nullptr,
                             slot.id + "-right", slot.rightStateFile,
                             slot.rightParameters);
         }
@@ -5409,8 +5461,8 @@ audio::Result EngineController::projectCollaborationChange(
                 for (std::size_t index = 0; index < sendCount; ++index) {
                     if (live->second.sends[index]) {
                         const SendModel& send = track->sends[index];
-                        live->second.sends[index]->setLevel(
-                            send.enabled ? send.level : 0.0f);
+                        live->second.sends[index]->setLevel(send.level);
+                        live->second.sends[index]->setEnabled(send.enabled);
                     }
                 }
                 if (live->second.samplerFader) {
@@ -8286,7 +8338,8 @@ void EngineController::setSendLevel(const std::string& trackId,
     if (found == m_channels.end()) return;
     const size_t index = size_t(send - track->sends.data());
     if (index >= found->second.sends.size() || !found->second.sends[index]) return;
-    found->second.sends[index]->setLevel(send->enabled ? send->level : 0.0f);
+    found->second.sends[index]->setLevel(send->level);
+    found->second.sends[index]->setEnabled(send->enabled);
 }
 
 void EngineController::commitSendLevelEdit(const std::string& trackId,
@@ -12186,6 +12239,14 @@ void appendUniqueTrack(std::vector<std::string>& tracks,
         tracks.push_back(trackId);
 }
 
+void clearSplitSeamFades(ClipModel& left, ClipModel& right) {
+    left.fadeInSeconds = std::min(left.fadeInSeconds, left.durationSeconds);
+    left.fadeOutSeconds = 0.0;
+    right.fadeInSeconds = 0.0;
+    right.fadeOutSeconds =
+        std::min(right.fadeOutSeconds, right.durationSeconds);
+}
+
 } // namespace
 
 std::string EngineController::splitClip(const std::string& trackId,
@@ -12218,17 +12279,23 @@ std::string EngineController::splitClip(const std::string& trackId,
             }
 
             const double leftDuration = atSeconds - original.startSeconds;
+            ClipModel leftPattern = original;
+            leftPattern.durationSeconds = leftDuration;
             ClipModel rightPattern = original;
             rightPattern.startSeconds = atSeconds;
             rightPattern.durationSeconds = clipEnd - atSeconds;
             rightPattern.offsetSeconds = original.offsetSeconds + leftDuration;
             rightPattern.patternClipId.clear();
+            clearSplitSeamFades(leftPattern, rightPattern);
             mintClipIdentities(rightPattern, {}, true);
 
             auto batch = std::make_shared<collab::BatchCommand>();
             appendCommand(batch, collab::SetClipProperty{
                 trackId, clipId, collab::ClipProperty::DurationSeconds,
                 leftDuration});
+            appendCommand(batch, collab::SetClipFade{
+                trackId, clipId, leftPattern.fadeInSeconds,
+                leftPattern.fadeOutSeconds});
             if (!appendSharedClip(
                     batch, trackId, rightPattern,
                     track->clips.empty() ? std::string()
@@ -12308,12 +12375,17 @@ std::string EngineController::splitClip(const std::string& trackId,
                     rightMember.offsetSeconds = member.offsetSeconds +
                         memberLeftDuration /
                             std::max(member.sampleEdit.stretchTime, 0.001);
+                    clearSplitSeamFades(leftMember, rightMember);
                     mintClipIdentities(rightMember, {}, true);
 
                     appendCommand(batch, collab::SetClipProperty{
                         memberTrack.id, member.id,
                         collab::ClipProperty::DurationSeconds,
                         memberLeftDuration});
+                    appendCommand(batch, collab::SetClipFade{
+                        memberTrack.id, member.id,
+                        leftMember.fadeInSeconds,
+                        leftMember.fadeOutSeconds});
                     if (!appendMidiClipContentsDiff(
                             batch, memberTrack.id, member, leftMember) ||
                         !appendSharedClip(batch, memberTrack.id, rightMember,
@@ -12358,6 +12430,7 @@ std::string EngineController::splitClip(const std::string& trackId,
             left.musicalAnalysis = {};
             right.musicalAnalysis = {};
         }
+        clearSplitSeamFades(left, right);
 
         if (original.kind == ClipKind::Midi) {
             const double cutBeats =
@@ -12439,6 +12512,8 @@ std::string EngineController::splitClip(const std::string& trackId,
         appendCommand(batch, collab::SetClipProperty{
             trackId, clipId, collab::ClipProperty::DurationSeconds,
             leftDuration});
+        appendCommand(batch, collab::SetClipFade{
+            trackId, clipId, left.fadeInSeconds, left.fadeOutSeconds});
         if (original.kind == ClipKind::Audio) {
             appendCommand(batch, collab::SetClipMusicalAnalysis{
                 trackId, clipId, {}});
@@ -12553,6 +12628,7 @@ std::string EngineController::splitClip(const std::string& trackId,
         rightPattern.startSeconds = atSeconds;
         rightPattern.durationSeconds = clipEnd - atSeconds;
         rightPattern.offsetSeconds = original.offsetSeconds + leftDuration;
+        clearSplitSeamFades(leftPattern, rightPattern);
         for (InsertModel& insert : rightPattern.inserts) insert.id = newUuid();
         *patternIt = leftPattern;
         track->clips.push_back(rightPattern);
@@ -12650,6 +12726,7 @@ std::string EngineController::splitClip(const std::string& trackId,
                 leftMember.durationSeconds = memberLeftDuration;
                 leftMember.notes = std::move(leftNotes);
                 leftMember.lanes = std::move(leftLanes);
+                clearSplitSeamFades(leftMember, rightMember);
                 member = leftMember;
                 const std::size_t rightIndex = memberTrack.clips.size();
                 memberTrack.clips.push_back(rightMember);
@@ -12836,12 +12913,14 @@ std::string EngineController::splitClip(const std::string& trackId,
             normalizeAutomation(right.automation.points);
         }
 
-        track->clips[i].durationSeconds = leftDuration;
-        if (original.kind == ClipKind::Audio)
-            track->clips[i].musicalAnalysis = {};
-        track->clips[i].notes = leftNotes;
-        track->clips[i].lanes = leftLanes;
-        track->clips[i].automation = leftAutomation;
+        ClipModel left = original;
+        left.durationSeconds = leftDuration;
+        if (original.kind == ClipKind::Audio) left.musicalAnalysis = {};
+        left.notes = leftNotes;
+        left.lanes = leftLanes;
+        left.automation = leftAutomation;
+        clearSplitSeamFades(left, right);
+        track->clips[i] = left;
         track->clips.push_back(right);
         if (original.inserts.empty()) syncTrackClips(*track);
         else rebuildGraph();
@@ -12876,19 +12955,11 @@ std::string EngineController::splitClip(const std::string& trackId,
                     updateTimelineDuration();
                 }
             },
-            [this, trackId, original, right, leftDuration, leftNotes, leftLanes,
-             leftAutomation] {
+            [this, trackId, original, left, right] {
                 if (auto* t = m_project.findTrack(trackId)) {
                     bool haveRight = false;
                     for (auto& c : t->clips) {
-                        if (c.id == original.id) {
-                            c.durationSeconds = leftDuration;
-                            // Undo restored every note to the left half; the
-                            // re-cut has to take the right half's back out.
-                            c.notes = leftNotes;
-                            c.lanes = leftLanes;
-                            c.automation = leftAutomation;
-                        }
+                        if (c.id == original.id) c = left;
                         if (c.id == right.id) haveRight = true;
                     }
                     if (!haveRight) t->clips.push_back(right);
@@ -12905,6 +12976,310 @@ std::string EngineController::splitClip(const std::string& trackId,
         return rightId;
     }
     return {};
+}
+
+audio::Result EngineController::glueClips(
+    const std::vector<ClipAddress>& addresses, std::string& gluedClipId) {
+    gluedClipId.clear();
+    if (addresses.size() < 2) {
+        return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                   "select at least two clips");
+    }
+
+    struct SourceClip {
+        std::size_t index = 0;
+        ClipModel clip;
+    };
+    std::vector<SourceClip> sources;
+    std::unordered_set<std::string> ids;
+    std::string trackId;
+    TrackModel* track = nullptr;
+    for (const ClipAddress& address : addresses) {
+        if (!ids.insert(address.trackId + '\n' + address.clipId).second)
+            continue;
+        if (trackId.empty()) {
+            trackId = address.trackId;
+            track = m_project.findTrack(trackId);
+        }
+        if (!track || address.trackId != trackId) {
+            return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                       "clips must be on the same track");
+        }
+        const auto found = std::find_if(
+            track->clips.begin(), track->clips.end(),
+            [&](const ClipModel& clip) { return clip.id == address.clipId; });
+        if (found == track->clips.end()) {
+            return audio::Result::fail(audio::EngineError::ClipNotFound,
+                                       "one of the clips no longer exists");
+        }
+        sources.push_back({std::size_t(found - track->clips.begin()), *found});
+    }
+    if (sources.size() < 2) {
+        return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                   "select at least two different clips");
+    }
+    const ClipKind kind = sources.front().clip.kind;
+    if (std::any_of(sources.begin(), sources.end(), [&](const SourceClip& source) {
+            return source.clip.kind != kind;
+        })) {
+        return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                   "clips must be of the same type");
+    }
+    if (kind == ClipKind::Midi) {
+        const std::string& owner = sources.front().clip.patternClipId;
+        if (std::any_of(sources.begin(), sources.end(), [&](const SourceClip& source) {
+                return source.clip.patternClipId != owner;
+            })) {
+            return audio::Result::fail(
+                audio::EngineError::InvalidArgument,
+                "MIDI clips must belong to the same Pattern instance");
+        }
+    }
+    if (kind == ClipKind::Automation) {
+        const AutomationTarget& target = sources.front().clip.automation.target;
+        if (std::any_of(sources.begin(), sources.end(), [&](const SourceClip& source) {
+                return source.clip.automation.target != target;
+            })) {
+            return audio::Result::fail(
+                audio::EngineError::InvalidArgument,
+                "automation clips must control the same target");
+        }
+    }
+
+    std::stable_sort(sources.begin(), sources.end(),
+                     [](const SourceClip& a, const SourceClip& b) {
+                         if (a.clip.startSeconds != b.clip.startSeconds)
+                             return a.clip.startSeconds < b.clip.startSeconds;
+                         return a.index < b.index;
+                     });
+    const double start = sources.front().clip.startSeconds;
+    double end = start;
+    for (const SourceClip& source : sources) {
+        end = std::max(end, source.clip.startSeconds +
+                               clipPlaybackDuration(source.clip));
+    }
+    if (!(end > start)) {
+        return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                   "the selected clips have no duration");
+    }
+
+    // Audio clips may refer to different files, edits and private effects. The
+    // existing source-isolated bounce is the one representation that preserves
+    // all of them, including gaps and overlaps, in one ordinary audio clip.
+    if (kind == ClipKind::Audio) {
+        BounceRequest request;
+        request.startSeconds = start;
+        request.endSeconds = end;
+        request.preRollSeconds = 0.0;
+        request.tail = rendering::Tail::None;
+        request.fxLayers = std::uint32_t(BounceFxLayer::Clip);
+        request.destination = BounceDestination::Replace;
+        request.outputName = sources.front().clip.name;
+        request.undoLabel = "Glue Clips";
+        request.clips.reserve(sources.size());
+        for (const SourceClip& source : sources)
+            request.clips.push_back({trackId, source.clip.id});
+        BounceReport report;
+        audio::Result result = bounceInPlace(request, {}, report);
+        if (!result) return result;
+        if (report.outputs.size() != 1) {
+            return audio::Result::fail(audio::EngineError::Unknown,
+                                       "glue produced no clip");
+        }
+        gluedClipId = report.outputs.front().clipId;
+        return audio::Result::ok();
+    }
+
+    const bool anyUnmuted = std::any_of(
+        sources.begin(), sources.end(),
+        [](const SourceClip& source) { return !source.clip.muted; });
+    const auto contributes = [&](const SourceClip& source) {
+        return !anyUnmuted || !source.clip.muted;
+    };
+    ClipModel merged = sources.front().clip;
+    merged.startSeconds = start;
+    merged.durationSeconds = end - start;
+    merged.muted = !anyUnmuted;
+
+    auto putPoint = [](std::vector<AutomationPoint>& points,
+                       AutomationPoint point) {
+        constexpr double kSameTime = 1.0e-9;
+        std::erase_if(points, [&](const AutomationPoint& existing) {
+            return std::abs(existing.beats - point.beats) <= kSameTime;
+        });
+        points.push_back(std::move(point));
+    };
+    auto appendCurve = [&](std::vector<AutomationPoint>& destination,
+                           const std::vector<AutomationPoint>& source,
+                           double defaultValue, double shiftBeats,
+                           double lengthBeats) {
+        AutomationPoint head;
+        head.beats = shiftBeats;
+        head.value = automationValueAt(source, 0.0, defaultValue);
+        putPoint(destination, head);
+        for (AutomationPoint point : source) {
+            point.beats += shiftBeats;
+            putPoint(destination, std::move(point));
+        }
+        AutomationPoint tail;
+        tail.beats = shiftBeats + lengthBeats;
+        tail.value = automationValueAt(source, lengthBeats, defaultValue);
+        if (!source.empty()) tail.shape = source.back().shape;
+        putPoint(destination, std::move(tail));
+    };
+
+    if (kind == ClipKind::Midi) {
+        merged.notes.clear();
+        merged.lanes.clear();
+        merged.takes.clear();
+        merged.comp.clear();
+        for (const SourceClip& source : sources) {
+            if (!contributes(source)) continue;
+            const double shift = secondsToBeats(
+                source.clip.startSeconds - start, m_project.tempo);
+            const double length = secondsToBeats(
+                source.clip.durationSeconds, m_project.tempo);
+            for (NoteModel note : source.clip.notes) {
+                note.startBeats += shift;
+                merged.notes.push_back(std::move(note));
+            }
+            for (const ControllerLane& lane : source.clip.lanes) {
+                auto found = std::find_if(
+                    merged.lanes.begin(), merged.lanes.end(),
+                    [&](const ControllerLane& candidate) {
+                        return candidate.cc == lane.cc &&
+                               candidate.parameterId == lane.parameterId &&
+                               candidate.slotId == lane.slotId;
+                    });
+                if (found == merged.lanes.end()) {
+                    merged.lanes.push_back(lane);
+                    found = std::prev(merged.lanes.end());
+                    found->points.clear();
+                }
+                appendCurve(found->points, lane.points, lane.defaultValue,
+                            shift, length);
+            }
+        }
+        std::stable_sort(merged.notes.begin(), merged.notes.end(),
+                         [](const NoteModel& a, const NoteModel& b) {
+                             return a.startBeats < b.startBeats;
+                         });
+        for (ControllerLane& lane : merged.lanes)
+            normalizeAutomation(lane.points);
+    } else if (kind == ClipKind::Automation) {
+        merged.automation.points.clear();
+        const bool anyActive = std::any_of(
+            sources.begin(), sources.end(), [&](const SourceClip& source) {
+                return contributes(source) && source.clip.automation.active;
+            });
+        merged.automation.active = anyActive;
+        bool choseDefault = false;
+        for (const SourceClip& source : sources) {
+            if (!contributes(source) ||
+                (anyActive && !source.clip.automation.active)) {
+                continue;
+            }
+            if (!choseDefault) {
+                merged.automation.defaultValue =
+                    source.clip.automation.defaultValue;
+                choseDefault = true;
+            }
+            const double shift = secondsToBeats(
+                source.clip.startSeconds - start, m_project.tempo);
+            const double length = secondsToBeats(
+                source.clip.durationSeconds, m_project.tempo);
+            appendCurve(merged.automation.points,
+                        source.clip.automation.points,
+                        source.clip.automation.defaultValue, shift, length);
+        }
+        normalizeAutomation(merged.automation.points);
+    }
+    mintClipIdentities(merged, {}, true);
+    merged.patternClipId = kind == ClipKind::Midi
+                               ? sources.front().clip.patternClipId
+                               : std::string{};
+
+    const std::size_t insertIndex = std::min_element(
+        sources.begin(), sources.end(),
+        [](const SourceClip& a, const SourceClip& b) { return a.index < b.index; })
+                                        ->index;
+    std::unordered_set<std::string> sourceIds;
+    for (const SourceClip& source : sources) sourceIds.insert(source.clip.id);
+
+    if (cloudProjectBound()) {
+        auto batch = std::make_shared<collab::BatchCommand>();
+        std::string afterId;
+        for (std::size_t i = insertIndex; i > 0; --i) {
+            if (!sourceIds.contains(track->clips[i - 1].id)) {
+                afterId = track->clips[i - 1].id;
+                break;
+            }
+        }
+        if (!appendSharedClip(batch, trackId, merged, afterId)) {
+            return audio::Result::fail(audio::EngineError::NotSupported,
+                                       "these clips cannot be shared as one clip");
+        }
+        if (kind == ClipKind::Pattern) {
+            for (const TrackModel& memberTrack : m_project.tracks) {
+                for (const ClipModel& member : memberTrack.clips) {
+                    if (!sourceIds.contains(member.patternClipId)) continue;
+                    appendCommand(batch, collab::SetClipPatternOwner{
+                        memberTrack.id, member.id, merged.id});
+                    const auto owner = std::find_if(
+                        sources.begin(), sources.end(), [&](const SourceClip& source) {
+                            return source.clip.id == member.patternClipId;
+                        });
+                    if (owner != sources.end() && owner->clip.muted &&
+                        !merged.muted && !member.muted) {
+                        appendCommand(batch, collab::SetClipProperty{
+                            memberTrack.id, member.id,
+                            collab::ClipProperty::Muted, true});
+                    }
+                }
+            }
+        }
+        for (const SourceClip& source : sources)
+            appendCommand(batch, collab::DeleteClip{trackId, source.clip.id});
+        if (!sharedBatchApplies(m_project, batch)) {
+            return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                       "the clips changed before they could be glued");
+        }
+        const auto result = submitSharedMutation(
+            collab::CommandBody{std::move(batch)}, "Glue Clips");
+        if (result != collab::SharedMutationResult::Submitted) {
+            return audio::Result::fail(audio::EngineError::Unknown,
+                                       "could not submit glue operation");
+        }
+        gluedClipId = merged.id;
+        return audio::Result::ok();
+    }
+
+    const ProjectModel before = m_project;
+    if (kind == ClipKind::Pattern) {
+        for (TrackModel& memberTrack : m_project.tracks) {
+            for (ClipModel& member : memberTrack.clips) {
+                const auto owner = std::find_if(
+                    sources.begin(), sources.end(), [&](const SourceClip& source) {
+                        return source.clip.id == member.patternClipId;
+                    });
+                if (owner == sources.end()) continue;
+                member.patternClipId = merged.id;
+                if (owner->clip.muted && !merged.muted) member.muted = true;
+            }
+        }
+    }
+    std::erase_if(track->clips, [&](const ClipModel& clip) {
+        return sourceIds.contains(clip.id);
+    });
+    track->clips.insert(track->clips.begin() +
+                            std::ptrdiff_t(std::min(insertIndex,
+                                                   track->clips.size())),
+                        merged);
+    (void)rebuildGraph();
+    updateTimelineDuration();
+    pushProjectSnapshotUndo(before, "Glue Clips");
+    gluedClipId = merged.id;
+    return audio::Result::ok();
 }
 
 void EngineController::removeClip(const std::string& trackId,
@@ -15189,13 +15564,23 @@ namespace {
 /// same reason `findMidiClip` is: every entry point below assumes the payload
 /// it is about to touch is the one this clip actually carries.
 ClipModel* findAutomationClip(ProjectModel& project, const std::string& trackId,
-                              const std::string& clipId) {
+                               const std::string& clipId) {
     auto* track = project.findTrack(trackId);
     if (!track) return nullptr;
     for (auto& clip : track->clips) {
         if (clip.id == clipId && clip.kind == ClipKind::Automation) return &clip;
     }
     return nullptr;
+}
+
+void ensureUniqueAutomationPointIds(std::vector<AutomationPoint>& points) {
+    std::unordered_set<std::string> ids;
+    for (AutomationPoint& point : points) {
+        if (!point.id.empty() && ids.insert(point.id).second) continue;
+        do {
+            point.id = newUuid();
+        } while (!ids.insert(point.id).second);
+    }
 }
 } // namespace
 
@@ -15354,10 +15739,10 @@ void EngineController::rebuildAutomationReadoutCache() const {
 
     for (auto& [target, curve] : m_automationReadoutCurves) {
         (void)target;
-        std::sort(curve.points.begin(), curve.points.end(),
-                  [](const auto& a, const auto& b) {
-                      return a.first < b.first;
-                  });
+        std::stable_sort(curve.points.begin(), curve.points.end(),
+                         [](const auto& a, const auto& b) {
+                             return a.first < b.first;
+                         });
     }
     m_automationReadoutCacheDirty = false;
 }
@@ -15437,13 +15822,13 @@ double EngineController::defaultAutomationValue(
     const TrackModel* channel = m_project.findTrack(target.channelId);
     switch (target.kind) {
         case AutomationTargetKind::TrackVolume:
-            return channel ? normalizedFromGain(channel->volume) : 1.0;
+            return normalizedFromGain(channel ? channel->volume : 1.0);
         case AutomationTargetKind::TrackPan:
             return channel ? plainToAutomation(target, channel->pan) : 0.5;
         case AutomationTargetKind::TrackMute:
             return channel && channel->muted ? 1.0 : 0.0;
         case AutomationTargetKind::SendLevel: {
-            if (!channel) return 0.5;
+            if (!channel) return plainToAutomation(target, 0.5);
             for (const SendModel& send : channel->sends) {
                 if (send.id == target.sendId)
                     return plainToAutomation(target, send.level);
@@ -15490,8 +15875,10 @@ std::string EngineController::addAutomationLane(const std::string& trackId,
     // The grip strip along the top costs the curve some of that, so the lane
     // starts a little taller than the curve alone would need.
     model.height = 64.0;
+    bool expandedBefore = false;
     if (const TrackModel* owner = m_project.findTrack(trackId)) {
         model.color = owner->color;
+        expandedBefore = owner->automationExpanded;
     }
 
     const std::string laneId = model.id;
@@ -15516,6 +15903,7 @@ std::string EngineController::addAutomationLane(const std::string& trackId,
         setAutomationExpanded(trackId, true);
         return laneId;
     }
+    const TrackModel created = model;
     m_project.tracks.insert(m_project.tracks.begin() + std::ptrdiff_t(at),
                             std::move(model));
     // A lane nobody can see is not what asking for one means.
@@ -15523,9 +15911,24 @@ std::string EngineController::addAutomationLane(const std::string& trackId,
         owner->automationExpanded = true;
     rebuildGraph();
 
-    m_undo.push("Add Automation Lane",
-                [this, laneId] { removeAutomationLane(laneId); },
-                [this, trackId, target] { addAutomationLane(trackId, target); });
+    m_undo.push(
+        "Add Automation Lane",
+        [this, laneId, trackId, expandedBefore] {
+            removeAutomationLane(laneId);
+            if (auto* owner = m_project.findTrack(trackId)) {
+                owner->automationExpanded = expandedBefore;
+                m_project.invalidateStructure();
+            }
+        },
+        [this, created, at, trackId] {
+            if (m_project.findTrack(created.id)) return;
+            const std::size_t insertAt = std::min(at, m_project.tracks.size());
+            m_project.tracks.insert(
+                m_project.tracks.begin() + std::ptrdiff_t(insertAt), created);
+            if (auto* owner = m_project.findTrack(trackId))
+                owner->automationExpanded = true;
+            rebuildGraph();
+        });
     return laneId;
 }
 
@@ -15646,11 +16049,14 @@ std::pair<std::string, std::string> EngineController::ensureAutomation(
     // A lane of its own rather than another clip on whatever lane is already
     // there: the lane wears the target's name, and two curves sharing one row
     // is a thing the user arranges deliberately, not a default.
-    const std::size_t mark = undoDepth();
+    const UndoGroup group = beginUndoGroup();
     const std::string lane = addAutomationLane(target.channelId, target);
-    if (lane.empty()) return {};
+    if (lane.empty()) {
+        releaseUndoGroup(group);
+        return {};
+    }
     const std::string clip = addAutomationClip(lane, target, 0.0);
-    collapseUndo(mark, "Automate " + automationTargetName(target));
+    collapseUndo(group, "Automate " + automationTargetName(target));
     return {lane, clip};
 }
 
@@ -15659,7 +16065,8 @@ void EngineController::setAutomationTarget(const std::string& trackId,
                                            const AutomationTarget& target) {
     auto* clip = findAutomationClip(m_project, trackId, clipId);
     if (!clip || clip->automation.target == target) return;
-    const AutomationTarget before = clip->automation.target;
+    const ClipAutomationModel beforeAutomation = clip->automation;
+    const AutomationTarget before = beforeAutomation.target;
     const std::string beforeName = clip->name;
     if (cloudProjectBound()) {
         auto batch = std::make_shared<collab::BatchCommand>();
@@ -15700,22 +16107,37 @@ void EngineController::setAutomationTarget(const std::string& trackId,
     syncAutomationTarget(before);
     if (target != before) syncAutomationTarget(target);
 
-    m_undo.push("Retarget Automation",
-                [this, trackId, clipId, before] {
-                    setAutomationTarget(trackId, clipId, before);
-                },
-                [this, trackId, clipId, target] {
-                    setAutomationTarget(trackId, clipId, target);
-                });
-    (void)beforeName;
+    const ClipAutomationModel afterAutomation = clip->automation;
+    const std::string afterName = clip->name;
+    const auto restore = [this, trackId, clipId](
+                             const ClipAutomationModel& automation,
+                             const std::string& name) {
+        auto* current = findAutomationClip(m_project, trackId, clipId);
+        if (!current) return;
+        const AutomationTarget previous = current->automation.target;
+        current->automation = automation;
+        current->name = name;
+        syncAutomationTarget(previous);
+        if (automation.target != previous)
+            syncAutomationTarget(automation.target);
+    };
+    m_undo.push(
+        "Retarget Automation",
+        [restore, beforeAutomation, beforeName] {
+            restore(beforeAutomation, beforeName);
+        },
+        [restore, afterAutomation, afterName] {
+            restore(afterAutomation, afterName);
+        });
 }
 
 void EngineController::setAutomationPoints(const std::string& trackId,
-                                           const std::string& clipId,
-                                           std::vector<AutomationPoint> points,
-                                           bool active) {
+                                            const std::string& clipId,
+                                            std::vector<AutomationPoint> points,
+                                            bool active) {
     auto* clip = findAutomationClip(m_project, trackId, clipId);
     if (!clip) return;
+    ensureUniqueAutomationPointIds(points);
     normalizeAutomation(points);
     // Re-sending the untouched endpoints is not a user edit.
     if (points == clip->automation.points && active && !clip->automation.active)
@@ -15918,11 +16340,12 @@ void EngineController::setLaneTarget(const std::string& trackId,
 }
 
 void EngineController::setLanePoints(const std::string& trackId,
-                                     const std::string& clipId,
-                                     const std::string& laneId,
-                                     std::vector<AutomationPoint> points) {
+                                      const std::string& clipId,
+                                      const std::string& laneId,
+                                      std::vector<AutomationPoint> points) {
     auto* lane = findLane(findMidiClip(m_project, trackId, clipId), laneId);
     if (!lane) return;
+    ensureUniqueAutomationPointIds(points);
     normalizeAutomation(points);
     lane->points = std::move(points);
     // Ordinary CC lanes are document-only until MIDI CC routing is supported;

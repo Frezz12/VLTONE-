@@ -51,7 +51,7 @@ public:
     /// independently selected format.
     void setPositionDisplayBars(bool bars);
 
-    /// Select the edit tool (0 Select through 6 Stretch): updates
+    /// Select the edit tool (0 Select through 7 Glue): updates
     /// the chip and emits toolChanged. Lets keyboard shortcuts drive the tool
     /// selector.
     void setToolIndex(int index);
@@ -116,7 +116,7 @@ signals:
     void timeFormatChanged();
     /// The controller playhead was moved by the compact position editor.
     void positionChanged();
-    void toolChanged(int tool); // 0 Select through 6 Stretch
+    void toolChanged(int tool); // 0 Select through 7 Glue
     /// The tool held under the modifier key changed.
     void secondaryToolChanged(int tool);
     void zoomRequested(int direction);   // −1 out, +1 in, 0 fit
@@ -221,7 +221,7 @@ private:
     /// Both of these are remembered across launches (see UiConstants.hpp);
     /// the initialisers are only the factory defaults.
     int m_gridIndex = 5;      // 1/16
-    int m_toolIndex = 0;      // 0 Select, 1 Knife, 2 Eraser, 3 Region
+    int m_toolIndex = 0;      // 0 Select … 7 Glue
     bool m_snapEnabled = true;
     bool m_showBars = true;
     bool m_positionShowsBars = true;

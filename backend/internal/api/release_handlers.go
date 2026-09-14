@@ -11,11 +11,13 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -117,7 +119,24 @@ type releaseView struct {
 
 func parseReleaseVersion(raw string) ([3]int, bool) {
 	var result [3]int
-	parts := strings.Split(strings.TrimSpace(raw), ".")
+	value := strings.TrimSpace(raw)
+	if value == "" || len([]rune(value)) > 80 {
+		return result, false
+	}
+	core, label, hasLabel := strings.Cut(value, " ")
+	if hasLabel {
+		if label == "" || strings.TrimSpace(label) != label {
+			return result, false
+		}
+		for _, character := range label {
+			if unicode.IsLetter(character) || unicode.IsDigit(character) ||
+				strings.ContainsRune(" ._()-", character) {
+				continue
+			}
+			return result, false
+		}
+	}
+	parts := strings.Split(core, ".")
 	if len(parts) != 3 {
 		return result, false
 	}
@@ -171,7 +190,7 @@ func (s *Server) releaseFromInput(item *model.Release, input releaseInput) map[s
 	} else if version == "" {
 		item.Version, item.VersionMajor, item.VersionMinor, item.VersionPatch = nil, nil, nil, nil
 	} else if parsed, ok := parseReleaseVersion(version); !ok {
-		fields["version"] = "Version must use X.Y.Z without leading zeroes."
+		fields["version"] = "Version must start with X.Y.Z and may end with a label such as Alpha 1 or Build 1."
 	} else {
 		item.Version = &version
 		item.VersionMajor, item.VersionMinor, item.VersionPatch = &parsed[0], &parsed[1], &parsed[2]
@@ -455,12 +474,13 @@ func (s *Server) releaseRelations(releaseID uuid.UUID, version string) ([]releas
 	s.DB.Where("release_id = ?", releaseID).Order("kind").Find(&artifacts)
 	s.DB.Where("release_id = ?", releaseID).Order("sort_order, created_at").Find(&screenshots)
 	artifactViews := make([]releaseArtifactView, 0, len(artifacts))
+	escapedVersion := url.PathEscape(version)
 	for _, item := range artifacts {
 		kind := artifactKinds[item.Kind]
 		artifactViews = append(artifactViews, releaseArtifactView{
 			ID: item.ID, Kind: item.Kind, Platform: kind.platform, Label: kind.label,
 			FileName: item.FileName, Bytes: item.Bytes, SHA256: item.SHA256,
-			DownloadURL: fmt.Sprintf("/v1/releases/%s/download/%s", version, item.Kind), UpdatedAt: item.UpdatedAt,
+			DownloadURL: fmt.Sprintf("/v1/releases/%s/download/%s", escapedVersion, item.Kind), UpdatedAt: item.UpdatedAt,
 		})
 	}
 	shotViews := make([]releaseScreenshotView, 0, len(screenshots))
@@ -468,7 +488,7 @@ func (s *Server) releaseRelations(releaseID uuid.UUID, version string) ([]releas
 		shotViews = append(shotViews, releaseScreenshotView{
 			ID: item.ID, CaptionRU: item.CaptionRU, CaptionEN: item.CaptionEN, SortOrder: item.SortOrder,
 			Width: item.Width, Height: item.Height, SHA256: item.SHA256,
-			URL: fmt.Sprintf("/v1/releases/%s/screenshots/%s", version, item.ID),
+			URL: fmt.Sprintf("/v1/releases/%s/screenshots/%s", escapedVersion, item.ID),
 		})
 	}
 	return artifactViews, shotViews
@@ -490,7 +510,7 @@ func (s *Server) publicReleases(w http.ResponseWriter, r *http.Request) {
 	}
 	var items []model.Release
 	if err := s.DB.Where("status = ?", model.ReleasePublished).
-		Order("version_major DESC, version_minor DESC, version_patch DESC").Find(&items).Error; err != nil {
+		Order("version_major DESC, version_minor DESC, version_patch DESC, published_at DESC").Find(&items).Error; err != nil {
 		writeError(w, r, 500, "releases_unavailable", "Releases are unavailable.", nil)
 		return
 	}
@@ -525,7 +545,7 @@ func (s *Server) publicReleaseView(item model.Release, locale string) releaseVie
 	artifacts, screenshots := s.releaseRelations(item.ID, version)
 	result := releaseView{
 		ID: item.ID, Version: version, Artifacts: artifacts, Screenshots: screenshots,
-		PageURL:     fmt.Sprintf("%s/%s/releases/%s", s.Config.PublicOrigin, locale, version),
+		PageURL:     fmt.Sprintf("%s/%s/releases/%s", s.Config.PublicOrigin, locale, url.PathEscape(version)),
 		PublishedAt: item.PublishedAt,
 	}
 	if locale == "ru" {
@@ -567,7 +587,7 @@ func (s *Server) latestRelease(w http.ResponseWriter, r *http.Request) {
 	err := s.DB.Model(&model.Release{}).Distinct("releases.*").
 		Joins("JOIN release_artifacts ON release_artifacts.release_id = releases.id").
 		Where("releases.status = ? AND release_artifacts.kind IN ?", model.ReleasePublished, kinds).
-		Order("version_major DESC, version_minor DESC, version_patch DESC").First(&item).Error
+		Order("version_major DESC, version_minor DESC, version_patch DESC, published_at DESC").First(&item).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -576,10 +596,15 @@ func (s *Server) latestRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 500, "releases_unavailable", "Releases are unavailable.", nil)
 		return
 	}
-	version := valueOrEmpty(item.Version)
+	displayVersion := valueOrEmpty(item.Version)
+	version := displayVersion
+	if item.VersionMajor != nil && item.VersionMinor != nil && item.VersionPatch != nil {
+		version = fmt.Sprintf("%d.%d.%d", *item.VersionMajor, *item.VersionMinor, *item.VersionPatch)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version": version, "published_at": item.PublishedAt,
-		"page_url": fmt.Sprintf("%s/%s/releases/%s", s.Config.PublicOrigin, locale, version),
+		"display_version": displayVersion,
+		"page_url":        fmt.Sprintf("%s/%s/releases/%s", s.Config.PublicOrigin, locale, url.PathEscape(displayVersion)),
 	})
 }
 
@@ -744,7 +769,7 @@ func (s *Server) adminUploadReleaseArtifact(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, releaseArtifactView{
 		ID: artifact.ID, Kind: kindName, Platform: definition.platform, Label: definition.label,
 		FileName: originalName, Bytes: bytesWritten, SHA256: digest,
-		DownloadURL: fmt.Sprintf("/v1/releases/%s/download/%s", valueOrEmpty(release.Version), kindName), UpdatedAt: now,
+		DownloadURL: fmt.Sprintf("/v1/releases/%s/download/%s", url.PathEscape(valueOrEmpty(release.Version)), kindName), UpdatedAt: now,
 	})
 }
 
@@ -907,7 +932,7 @@ func (s *Server) adminUploadReleaseScreenshot(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusCreated, releaseScreenshotView{
 		ID: id, CaptionRU: item.CaptionRU, CaptionEN: item.CaptionEN, SortOrder: item.SortOrder,
 		Width: item.Width, Height: item.Height, SHA256: item.SHA256,
-		URL: fmt.Sprintf("/v1/releases/%s/screenshots/%s", valueOrEmpty(release.Version), id),
+		URL: fmt.Sprintf("/v1/releases/%s/screenshots/%s", url.PathEscape(valueOrEmpty(release.Version)), id),
 	})
 }
 
@@ -979,7 +1004,7 @@ func (s *Server) adminUpdateReleaseScreenshot(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, releaseScreenshotView{
 		ID: item.ID, CaptionRU: item.CaptionRU, CaptionEN: item.CaptionEN, SortOrder: item.SortOrder,
 		Width: item.Width, Height: item.Height, SHA256: item.SHA256,
-		URL: fmt.Sprintf("/v1/releases/%s/screenshots/%s", valueOrEmpty(release.Version), item.ID),
+		URL: fmt.Sprintf("/v1/releases/%s/screenshots/%s", url.PathEscape(valueOrEmpty(release.Version)), item.ID),
 	})
 }
 

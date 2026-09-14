@@ -378,8 +378,13 @@ int main() {
         check(source.saveProject(package).isOk(), "the tuned preset project saves");
         ProjectModel savedDocument;
         check(ProjectSerializer::load(savedDocument, package).isOk() &&
-                  savedDocument.tracks.front().inserts.front().parameters.front().value == 1.0,
-              "the regression project contains a stale default beside its tuned chunk");
+                  savedDocument.tracks.front().inserts.front().parameters.front().value == 0.5,
+              "saving snapshots the native preset instead of the stale document value");
+        // Older versions wrote stale inline fallbacks. Keep exercising their
+        // chunk-first load path even though new saves no longer create them.
+        savedDocument.tracks.front().inserts.front().parameters.front().value = 1.0;
+        check(ProjectSerializer::save(savedDocument, package).isOk(),
+              "a legacy stale fallback is placed beside the tuned chunk");
 
         const auto processAndReadGain = [&](EngineController& controller) {
             engine::GraphProcessor processor(2);

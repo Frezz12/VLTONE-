@@ -368,6 +368,7 @@ type AIModel struct {
 	EndpointURL      string     `gorm:"not null" json:"-"`
 	APIKeyCiphertext string     `gorm:"not null" json:"-"`
 	Enabled          bool       `gorm:"not null;default:true" json:"enabled"`
+	IsFree           bool       `gorm:"not null;default:false" json:"is_free"`
 	SortOrder        int        `gorm:"not null;default:0" json:"sort_order"`
 	UpdatedBy        *uuid.UUID `gorm:"type:uuid" json:"updated_by,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`

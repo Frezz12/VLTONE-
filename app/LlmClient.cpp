@@ -195,6 +195,9 @@ void LlmClient::requestManagedLease(
 
         m_reservationId = fromJsonString(parsed, "reservation_id");
         m_reservedTokens = fromJsonInteger(parsed, "reserved_tokens");
+        const auto freeValue = parsed.find("is_free");
+        const bool isFree = freeValue != parsed.end() &&
+                            freeValue->is_boolean() && freeValue->get<bool>();
         const QString provider = fromJsonString(parsed, "provider");
         const QString expected = m_provider == Provider::Anthropic
                                      ? QStringLiteral("anthropic")
@@ -203,7 +206,10 @@ void LlmClient::requestManagedLease(
         const QString endpoint = fromJsonString(parsed, "endpoint_url");
         const QString apiKey = fromJsonString(parsed, "api_key");
         const QUrl endpointUrl(endpoint);
-        if (m_reservationId.isEmpty() || m_reservedTokens <= 0 ||
+        const bool quotaAuthorizationValid = isFree
+            ? m_reservationId.isEmpty() && m_reservedTokens == 0
+            : !m_reservationId.isEmpty() && m_reservedTokens > 0;
+        if (!quotaAuthorizationValid ||
             provider != expected || model.isEmpty() || apiKey.isEmpty() ||
             !endpointUrl.isValid() || endpointUrl.host().isEmpty() ||
             (endpointUrl.scheme() != QLatin1String("http") &&

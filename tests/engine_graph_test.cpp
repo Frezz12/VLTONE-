@@ -1145,6 +1145,14 @@ int main() {
             if (sample != 0.0f) anySound = true;
         }
         check(anySound, "the metronome actually clicked (a silent match is no match)");
+        int zeroCrossings = 0;
+        const std::size_t clickSamples = std::min<std::size_t>(live.size(), 864);
+        for (std::size_t i = 1; i < clickSamples; ++i) {
+            if (std::signbit(live[i]) != std::signbit(live[i - 1]))
+                ++zeroCrossings;
+        }
+        check(zeroCrossings >= 20,
+              "the built-in metronome click stays in the audible upper-mid range");
     }
 
     // ── The metronome follows the transport it is given ──

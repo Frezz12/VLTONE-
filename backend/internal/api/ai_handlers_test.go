@@ -130,7 +130,7 @@ func TestAIModelPayloadsNeverExposeCredentialCiphertext(t *testing.T) {
 	stored := model.AIModel{
 		ID: uuid.New(), DisplayName: "Studio Assistant", Provider: "openai",
 		ModelName: "gpt-4.1", EndpointURL: "https://provider.invalid/v1/chat/completions",
-		APIKeyCiphertext: "v1:encrypted-secret", Enabled: true,
+		APIKeyCiphertext: "v1:encrypted-secret", Enabled: true, IsFree: true,
 	}
 	payload, err := json.Marshal(adminAIModel(stored))
 	if err != nil {
@@ -143,6 +143,9 @@ func TestAIModelPayloadsNeverExposeCredentialCiphertext(t *testing.T) {
 	}
 	if !strings.Contains(string(payload), `"has_api_key":true`) {
 		t.Fatalf("admin AI model payload omitted safe key state: %s", payload)
+	}
+	if !strings.Contains(string(payload), `"is_free":true`) {
+		t.Fatalf("admin AI model payload omitted free-model state: %s", payload)
 	}
 }
 

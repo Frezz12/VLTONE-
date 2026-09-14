@@ -130,7 +130,8 @@ int main() try {
 
     // Mode changes and a deferred callback/restart must settle before PDC,
     // pre-roll and output lengths are calculated. Compare every file sample.
-    for (const auto* uid : {"review.latency", "review.prepare", "review.callback"}) {
+    for (const auto* uid : {"review.latency", "review.prepare", "review.callback",
+                            "review.unstable"}) {
         daw::EngineController c;
         require(bool(c.initialize(48000, 64, false)), "initialize");
         const auto a = track(c, source, "Effect");
@@ -149,7 +150,8 @@ int main() try {
     // with new PDC and file windows. Test multiple buffers, a partial custom
     // range and stems; a dropped block, stale delay or append would be audible.
     for (unsigned block : {8u, 64u, 512u, 2048u}) {
-        for (const auto* uid : {"review.audio-latency", "review.once-restart"}) {
+        for (const auto* uid : {"review.audio-latency", "review.once-restart",
+                                "review.redundant-restart"}) {
             daw::EngineController c;
             require(bool(c.initialize(48000, block, false)), "initialize deferred restart");
             const auto a = track(c, source, "Effect");
@@ -183,7 +185,7 @@ int main() try {
     // A successful file is impossible after DSP/configuration failure. The
     // same live controller can immediately retry with an explicit FX bypass.
     for (const auto* uid : {"review.activation", "review.process", "review.clone", "review.dual",
-                            "review.restart", "review.mode", "review.hardware", "review.unstable"}) {
+                            "review.restart", "review.mode", "review.hardware"}) {
         daw::EngineController c;
         require(bool(c.initialize(48000, 64, false)), "initialize failure case");
         const auto a = track(c, source, "Failure source");

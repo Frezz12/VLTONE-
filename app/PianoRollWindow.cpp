@@ -4074,6 +4074,7 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
                 // Clicking empty lane adds a breakpoint and grabs it, so one
                 // gesture both creates and places the point.
                 daw::AutomationPoint added;
+                added.id = daw::newUuid();
                 added.beats = snapBeats(xToBeats(pos.x()), m_snapEnabled);
                 added.value = laneValueAtY(pos.y());
                 m_laneWorkingPoints.push_back(added);

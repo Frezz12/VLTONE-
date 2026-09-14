@@ -1217,6 +1217,28 @@ int main() {
         const float wetPeak = peakOf(wetPath);
         check(wetPeak > 0.1f, "the send alone reaches the master");
 
+        // A zero knob is a valid automation baseline, not the send's on/off
+        // switch. The separate enabled flag must remain the only hard gate.
+        sent.setSendLevel(src, sendId, 0.0f);
+        daw::AutomationTarget sendTarget;
+        sendTarget.kind = daw::AutomationTargetKind::SendLevel;
+        sendTarget.channelId = src;
+        sendTarget.sendId = sendId;
+        const std::string automationLane =
+            sent.addAutomationLane(src, sendTarget);
+        const std::string automationClip = sent.addAutomationClip(
+            automationLane, sendTarget, 0.0, 1.0);
+        const double automatedLevel =
+            sent.plainToAutomation(sendTarget, 1.0);
+        sent.setAutomationPoints(
+            automationLane, automationClip,
+            {{0.0, automatedLevel}, {2.0, automatedLevel}});
+        const std::string automatedPath =
+            (dir / "send-automated-from-zero.wav").string();
+        check(sent.exportMixdown(automatedPath, false).isOk() &&
+                  peakOf(automatedPath) > 0.1f,
+              "send automation can raise an enabled send from a zero knob");
+
         const std::string slot = sent.addInsert(bus, found);
         const auto parameters = sent.insertParameters(bus, slot);
         check(parameters.size() == 2, "the send bus's slot exposes its parameters");

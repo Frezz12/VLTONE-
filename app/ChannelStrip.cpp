@@ -1,6 +1,6 @@
 #include "ChannelStrip.hpp"
 #include "AudioImportPreparation.hpp"
-#include <QPointer>
+#include "ChannelStripPreset.hpp"
 #include "ChannelStripPresets.hpp"
 #include "PluginPickerMenu.hpp"
 #include "Controls.hpp"
@@ -30,6 +30,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QToolButton>
@@ -1273,22 +1274,27 @@ QWidget* ChannelStrip::buildInserts() {
     // Where the bare "+" used to be. Adding a plugin is still the first item,
     // but the chain as a whole is a thing you work with — copy it, paste it,
     // clear it — and a plus sign could only ever say "add".
-    auto* more = new ui::IconButton(icons::Glyph::Gear,
-                                    tr("Plugins and channel strip: add, copy, "
-                                       "paste"), this);
-    more->setButtonSize(16, 14);
-    connect(more, &QAbstractButton::clicked, this, [this, more] {
-        QMenu* menu = buildChainMenu(more);
-        menu->setAttribute(Qt::WA_DeleteOnClose);
-        menu->popup(more->mapToGlobal(QPoint(0, more->height())));
-    });
-    headRow->addWidget(more);
+    if (!m_insertsOnly) {
+        auto* more = new ui::IconButton(
+            icons::Glyph::Gear,
+            tr("Plugins and channel strip: add, copy, paste"), this);
+        more->setObjectName(QStringLiteral("ChannelStripMenu"));
+        more->setButtonSize(16, 14);
+        connect(more, &QAbstractButton::clicked, this, [this, more] {
+            QMenu* menu = buildChainMenu(more);
+            menu->setAttribute(Qt::WA_DeleteOnClose);
+            menu->popup(more->mapToGlobal(QPoint(0, more->height())));
+        });
+        headRow->addWidget(more);
+    }
 
     WellDrag drag;
-    drag.dragMime = kChainMime;
-    drag.dragPayload = channel;
-    drag.titleTip = tr("Drag onto another channel to move these plugins there. "
-                       "Hold Alt to copy them instead.");
+    if (!m_insertsOnly) {
+        drag.dragMime = kChainMime;
+        drag.dragPayload = channel;
+        drag.titleTip = tr("Drag onto another channel to move these plugins there. "
+                           "Hold Alt to copy them instead.");
+    }
     drag.dropMime = kInsertMime;
     // The empty space under the slots is the end of the chain.
     const std::size_t end = loaded;
@@ -2296,6 +2302,8 @@ void ChannelStrip::paintEvent(QPaintEvent*) {
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
 
     QColor fill = m_master ? t.surfaceElevated : t.surface;
+    if (m_insertsOnly)
+        fill = mixColors(t.surface, t.background, t.dark ? 0.10 : 0.04);
     if (m_selected) fill = mixColors(fill, t.accent, 0.16);
     // A chain hovering over the strip lights the whole strip: what is about to
     // change is the channel, not the slot the pointer happens to be over.
@@ -2303,7 +2311,8 @@ void ChannelStrip::paintEvent(QPaintEvent*) {
     p.setBrush(fill);
     p.setPen(QPen(m_dropHighlight || m_selected ? t.accent : t.separator(),
                   m_dropHighlight ? 2.0 : m_selected ? 1.6 : 1.0));
-    p.drawRoundedRect(r, 9, 9);
+    const qreal radius = m_insertsOnly ? 10.0 : 9.0;
+    p.drawRoundedRect(r, radius, radius);
 }
 
 // ── Dragging a whole section from one strip to another ─────────────────────
@@ -2334,7 +2343,9 @@ QString ChannelStrip::presetFromMime(const QMimeData* mime) const {
     if (!mime || !mime->hasUrls()) return {};
     for (const QUrl& url : mime->urls()) {
         const QString path = url.toLocalFile();
-        if (ui::channelstrippresets::isPresetFile(path)) return path;
+        if (!ui::channelstrippresets::isPresetFile(path)) continue;
+        if (!m_insertsOnly || ui::channelstrippresets::isOfflineFile(path))
+            return path;
     }
     return {};
 }
@@ -2349,8 +2360,21 @@ bool ChannelStrip::hasBrowserDrop(const QMimeData* mime) const {
 void ChannelStrip::acceptBrowserDrop(const QMimeData* mime) {
     const QString preset = presetFromMime(mime);
     if (!preset.isEmpty()) {
-        const audio::Result result = m_controller->applyChannelStripPreset(
-            channelId().toStdString(), preset.toStdString());
+        audio::Result result = audio::Result::ok();
+        if (m_insertsOnly) {
+            daw::EngineController::ChannelSnapshot chain;
+            result = daw::ChannelStripPreset::load(chain, preset.toStdString());
+            if (result &&
+                !m_controller->pasteChannelInserts(channelId().toStdString(),
+                                                   chain)) {
+                result = audio::Result::fail(
+                    audio::EngineError::InvalidArgument,
+                    "offline preset has no plugins to apply");
+            }
+        } else {
+            result = m_controller->applyChannelStripPreset(
+                channelId().toStdString(), preset.toStdString());
+        }
         if (!result) {
             QToolTip::showText(
                 QCursor::pos(),

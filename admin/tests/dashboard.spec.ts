@@ -5,7 +5,7 @@ test("administrator signs in and sees operational totals", async ({ page }) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/auth/login")) return route.fulfill({ json: { ok: true } });
     if (path.endsWith("/me")) return route.fulfill({ json: { admin: { id: "1", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2026-08-23T20:00:00Z" } });
-    if (path.endsWith("/dashboard")) return route.fulfill({ json: { users: 42, active_sessions: 7, crashes_24h: 1, open_bugs: 3, ai_tokens_month: 1_250_000, generated_at: "2026-08-23T12:00:00Z", activity: [{ bucket: "2026-08-23T11:00:00Z", sessions: 4, crashes: 1 }], ai_daily: [{ bucket: "2026-08-23T00:00:00Z", tokens: 1_250_000 }] } });
+    if (path.endsWith("/dashboard")) return route.fulfill({ json: { users: 42, active_sessions: 7, crashes_24h: 1, open_bugs: 3, ai_tokens_month: 1_250_000, generated_at: "2026-08-23T12:00:00Z", activity: [{ bucket: "2026-08-23T11:00:00Z", sessions: 4, crashes: 1 }], ai_daily: [{ bucket: "2026-08-23T00:00:00Z", tokens: 1_250_000 }], online_users: [{ user_id: "00000000-0000-4000-8000-000000000101", nickname: "Тестировщик", last_seen_at: "2026-08-23T11:59:00Z", sessions: 2 }] } });
     return route.fulfill({ status: 204 });
   });
   await page.goto("/login");
@@ -17,6 +17,10 @@ test("administrator signs in and sees operational totals", async ({ page }) => {
   await expect(page.getByText("42", { exact: true })).toBeVisible();
   await expect(page.getByText("1 250 000", { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "График запусков и крашей за 24 часа" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Сейчас онлайн" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Тестировщик" })).toHaveAttribute("href", "/users/00000000-0000-4000-8000-000000000101");
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
 test("administrator searches a user and performs protected account actions", async ({ page }) => {

@@ -22,6 +22,7 @@ type aiModelWritePayload struct {
 	EndpointURL string `json:"endpoint_url"`
 	APIKey      string `json:"api_key"`
 	Enabled     *bool  `json:"enabled,omitempty"`
+	IsFree      bool   `json:"is_free"`
 	SortOrder   int    `json:"sort_order"`
 }
 
@@ -33,6 +34,7 @@ type adminAIModelPayload struct {
 	EndpointURL string    `json:"endpoint_url"`
 	HasAPIKey   bool      `json:"has_api_key"`
 	Enabled     bool      `json:"enabled"`
+	IsFree      bool      `json:"is_free"`
 	SortOrder   int       `json:"sort_order"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -43,6 +45,7 @@ type desktopAIModelPayload struct {
 	DisplayName string    `json:"display_name"`
 	Provider    string    `json:"provider"`
 	Model       string    `json:"model"`
+	IsFree      bool      `json:"is_free"`
 }
 
 func adminAIModel(model model.AIModel) adminAIModelPayload {
@@ -50,7 +53,7 @@ func adminAIModel(model model.AIModel) adminAIModelPayload {
 		ID: model.ID, DisplayName: model.DisplayName, Provider: model.Provider,
 		Model: model.ModelName, EndpointURL: model.EndpointURL,
 		HasAPIKey: model.APIKeyCiphertext != "", Enabled: model.Enabled,
-		SortOrder: model.SortOrder, CreatedAt: model.CreatedAt,
+		IsFree: model.IsFree, SortOrder: model.SortOrder, CreatedAt: model.CreatedAt,
 		UpdatedAt: model.UpdatedAt,
 	}
 }
@@ -133,7 +136,7 @@ func (s *Server) desktopAIModels(w http.ResponseWriter, r *http.Request) {
 	for _, item := range stored {
 		models = append(models, desktopAIModelPayload{
 			ID: item.ID, DisplayName: item.DisplayName, Provider: item.Provider,
-			Model: item.ModelName,
+			Model: item.ModelName, IsFree: item.IsFree,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": models})
@@ -184,7 +187,8 @@ func (s *Server) adminCreateAIModel(w http.ResponseWriter, r *http.Request) {
 	stored := model.AIModel{
 		ID: uuid.New(), DisplayName: input.DisplayName, Provider: input.Provider,
 		ModelName: input.Model, EndpointURL: input.EndpointURL,
-		APIKeyCiphertext: ciphertext, Enabled: enabled, SortOrder: input.SortOrder,
+		APIKeyCiphertext: ciphertext, Enabled: enabled, IsFree: input.IsFree,
+		SortOrder: input.SortOrder,
 		UpdatedBy: &admin, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.DB.Transaction(func(tx *gorm.DB) error {
@@ -192,7 +196,8 @@ func (s *Server) adminCreateAIModel(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		return s.audit(tx, r, "ai_model_create", "ai_model", stored.ID,
-			map[string]any{"name": stored.DisplayName, "provider": stored.Provider})
+			map[string]any{"name": stored.DisplayName, "provider": stored.Provider,
+				"is_free": stored.IsFree})
 	}); err != nil {
 		writeError(w, r, http.StatusInternalServerError, "ai_model_not_saved", "The AI model could not be saved.", nil)
 		return
@@ -234,7 +239,8 @@ func (s *Server) adminUpdateAIModel(w http.ResponseWriter, r *http.Request) {
 	updates := map[string]any{
 		"display_name": input.DisplayName, "provider": input.Provider,
 		"model_name": input.Model, "endpoint_url": input.EndpointURL,
-		"sort_order": input.SortOrder, "updated_by": adminFrom(r).ID,
+		"is_free": input.IsFree, "sort_order": input.SortOrder,
+		"updated_by": adminFrom(r).ID,
 		"updated_at": time.Now().UTC(),
 	}
 	if input.Enabled != nil {
@@ -253,7 +259,8 @@ func (s *Server) adminUpdateAIModel(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		return s.audit(tx, r, "ai_model_update", "ai_model", stored.ID,
-			map[string]any{"name": input.DisplayName, "provider": input.Provider, "key_replaced": input.APIKey != ""})
+			map[string]any{"name": input.DisplayName, "provider": input.Provider,
+				"is_free": input.IsFree, "key_replaced": input.APIKey != ""})
 	}); err != nil {
 		writeError(w, r, http.StatusInternalServerError, "ai_model_not_saved", "The AI model could not be saved.", nil)
 		return

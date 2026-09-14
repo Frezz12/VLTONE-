@@ -402,6 +402,7 @@ const ToolDef kTools[] = {
     {icons::Glyph::Brush, QT_TRANSLATE_NOOP("TransportBar", "Draw")},
     {icons::Glyph::ResizeHorizontal,
      QT_TRANSLATE_NOOP("TransportBar", "Stretch")},
+    {icons::Glyph::Glue, QT_TRANSLATE_NOOP("TransportBar", "Glue")},
 };
 constexpr int kToolCount = int(sizeof(kTools) / sizeof(kTools[0]));
 
@@ -1519,7 +1520,7 @@ void TransportBar::setToolIndex(int index) {
     if (m_toolButton) {
         m_toolButton->setIcon(toolChipIcon(index, th().accent));
         const QString description =
-            tr("%1 tool — on the pointer. 1…7 switch it.")
+            tr("%1 tool — on the pointer. 1…8 switch it.")
                 .arg(translatedToolName(index));
         m_toolButton->setToolTip(description);
         m_toolButton->setAccessibleName(description);

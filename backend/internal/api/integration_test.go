@@ -299,7 +299,7 @@ func TestPostgresAccountFlow(t *testing.T) {
 		"203.0.113.23:1234", nil, aiHeaders)
 	if lease.Status != http.StatusCreated || lease.Body["api_key"] != "integration-provider-secret" ||
 		lease.Body["endpoint_url"] != "https://provider.example/v1/chat/completions" ||
-		lease.Body["reserved_tokens"] != float64(200) {
+		lease.Body["reserved_tokens"] != float64(200) || lease.Body["is_free"] != false {
 		t.Fatalf("direct AI lease failed: %d %v", lease.Status, lease.Body)
 	}
 	reservationID, _ := lease.Body["reservation_id"].(string)
@@ -327,6 +327,42 @@ func TestPostgresAccountFlow(t *testing.T) {
 		"203.0.113.23:1234", nil, aiHeaders)
 	if exhausted.Status != http.StatusPaymentRequired || exhausted.Body["code"] != "ai_quota_exhausted" {
 		t.Fatalf("exhausted quota issued a credential: %d %v", exhausted.Status, exhausted.Body)
+	}
+	if err := db.Model(&model.AIModel{}).Where("id = ?", managedModel.ID).Update("is_free", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	freeLease := performJSON(router, http.MethodPost, leasePath,
+		map[string]any{"input_bytes": 120, "max_output_tokens": 80},
+		"203.0.113.23:1234", nil, aiHeaders)
+	if freeLease.Status != http.StatusCreated || freeLease.Body["is_free"] != true ||
+		freeLease.Body["reserved_tokens"] != float64(0) || freeLease.Body["reservation_id"] != nil {
+		t.Fatalf("free AI model consumed quota or failed authorization: %d %v", freeLease.Status, freeLease.Body)
+	}
+	var freeCycle model.TokenCycle
+	if err := db.First(&freeCycle, "id = ?", cycle.ID).Error; err != nil ||
+		freeCycle.UsedTokens != cycle.UsedTokens || freeCycle.ReservedTokens != cycle.ReservedTokens {
+		t.Fatalf("free AI request changed quota: cycle=%+v err=%v", freeCycle, err)
+	}
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[],"usage":{"total_tokens":42}}`))
+	}))
+	defer provider.Close()
+	if err := db.Model(&model.AIModel{}).Where("id = ?", managedModel.ID).Update("endpoint_url", provider.URL).Error; err != nil {
+		t.Fatal(err)
+	}
+	server.Config.AIEnabled = true
+	freeInvoke := performJSON(router, http.MethodPost,
+		"/v1/desktop/ai/models/"+managedModel.ID.String()+"/invoke",
+		map[string]any{"messages": []any{}, "max_tokens": 80},
+		"203.0.113.23:1234", nil, aiHeaders)
+	server.Config.AIEnabled = false
+	if freeInvoke.Status != http.StatusOK {
+		t.Fatalf("free legacy AI proxy failed: %d %v", freeInvoke.Status, freeInvoke.Body)
+	}
+	if err := db.First(&freeCycle, "id = ?", cycle.ID).Error; err != nil ||
+		freeCycle.UsedTokens != cycle.UsedTokens || freeCycle.ReservedTokens != cycle.ReservedTokens {
+		t.Fatalf("free legacy AI proxy changed quota: cycle=%+v err=%v", freeCycle, err)
 	}
 	if err := db.Model(&model.TokenCycle{}).Where("id = ?", cycle.ID).Update("base_limit", model.BaseDemoLimit).Error; err != nil {
 		t.Fatal(err)
@@ -446,7 +482,7 @@ func TestPostgresAccountFlow(t *testing.T) {
 		t.Fatalf("empty release published: %d %v", notReady.Status, notReady.Body)
 	}
 	readyRelease := map[string]any{
-		"version": "0.1.2", "summary_ru": "Новая версия", "summary_en": "New release",
+		"version": "0.1.2 Alpha 1", "summary_ru": "Новая версия", "summary_en": "New release",
 		"features_ru": []string{"Новое"}, "features_en": []string{"New"},
 		"changes_ru": []string{}, "changes_en": []string{}, "fixes_ru": []string{}, "fixes_en": []string{},
 	}
@@ -462,12 +498,13 @@ func TestPostgresAccountFlow(t *testing.T) {
 	if publishedRelease.Status != http.StatusOK || publishedRelease.Body["status"] != model.ReleasePublished {
 		t.Fatalf("release publish failed: %d %v", publishedRelease.Status, publishedRelease.Body)
 	}
-	publicRelease := performJSON(router, http.MethodGet, "/v1/releases/0.1.2?locale=ru", nil, "203.0.113.41:1234", nil, nil)
+	publicRelease := performJSON(router, http.MethodGet, "/v1/releases/"+url.PathEscape("0.1.2 Alpha 1")+"?locale=ru", nil, "203.0.113.41:1234", nil, nil)
 	if publicRelease.Status != http.StatusOK || publicRelease.Body["summary"] != "Новая версия" {
 		t.Fatalf("public release failed: %d %v", publicRelease.Status, publicRelease.Body)
 	}
 	latestWindows := performJSON(router, http.MethodGet, "/v1/releases/latest?platform=windows&locale=ru", nil, "203.0.113.41:1234", nil, nil)
-	if latestWindows.Status != http.StatusOK || latestWindows.Body["version"] != "0.1.2" {
+	if latestWindows.Status != http.StatusOK || latestWindows.Body["version"] != "0.1.2" ||
+		latestWindows.Body["display_version"] != "0.1.2 Alpha 1" {
 		t.Fatalf("latest Windows release failed: %d %v", latestWindows.Status, latestWindows.Body)
 	}
 	latestMac := performJSON(router, http.MethodGet, "/v1/releases/latest?platform=macos&locale=ru", nil, "203.0.113.41:1234", nil, nil)
@@ -500,6 +537,11 @@ func TestPostgresAccountFlow(t *testing.T) {
 	dashboard := performJSON(router, http.MethodGet, "/v1/admin/dashboard", nil, "203.0.113.40:1234", adminLogin.Cookies, nil)
 	if dashboard.Status != http.StatusOK || dashboard.Body["activity"] == nil || dashboard.Body["ai_daily"] == nil {
 		t.Fatalf("admin dashboard aggregates failed: %d %v", dashboard.Status, dashboard.Body)
+	}
+	onlineUsers, _ := dashboard.Body["online_users"].([]any)
+	if len(onlineUsers) != 1 || onlineUsers[0].(map[string]any)["nickname"] != user.Nickname ||
+		onlineUsers[0].(map[string]any)["user_id"] != user.ID.String() {
+		t.Fatalf("admin dashboard online users failed: %v", dashboard.Body["online_users"])
 	}
 	t.Run("refresh retry after restart", func(t *testing.T) {
 		login := deviceLogin(secondID, "203.0.113.65:1234")

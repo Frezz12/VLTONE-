@@ -248,7 +248,12 @@ public:
     void requestProcessWake() noexcept {
         processWakeRequested.store(true, std::memory_order_release);
     }
-    std::uint32_t latencySamples() const noexcept override { return 0; }
+    void setLatency(std::uint32_t latency) noexcept {
+        m_latency.store(latency, std::memory_order_relaxed);
+    }
+    std::uint32_t latencySamples() const noexcept override {
+        return m_latency.load(std::memory_order_relaxed);
+    }
     std::uint32_t tailSamples() const noexcept override { return 0; }
 
     std::atomic<unsigned> processCalls{0};
@@ -269,6 +274,7 @@ private:
     bool m_transposeMidi = false;
     bool m_active = false;
     bool m_processing = false;
+    std::atomic<std::uint32_t> m_latency{0};
     std::atomic<bool> processWakeRequested{false};
     PluginListener* m_listener = nullptr;
 };
@@ -359,6 +365,39 @@ int main() {
 
     const std::string pluginPath = DAW_TEST_CLAP_PATH;
     const engine::PrepareInfo info = makeInfo();
+
+    // A number of real plugins repeat the same restart request after every
+    // activation. The common host layer must acknowledge that stable request
+    // without weakening genuine latency/layout changes.
+    {
+        auto instance = std::make_unique<SilentOnStoppedInstance>();
+        auto* reporter = instance.get();
+        auto node = std::make_shared<PluginNode>("stable-restart",
+                                                std::move(instance));
+        engine::PrepareInfo offlineInfo = info;
+        offlineInfo.offline = true;
+        node->prepare(offlineInfo);
+        node->markPrepared(offlineInfo);
+
+        reporter->reportLatencyChanged();
+        check(bool(node->serviceOffline()) && node->isPreparedFor(offlineInfo),
+              "an unchanged latency notification keeps an offline pass");
+
+        reporter->reportRestartRequested();
+        check(bool(node->serviceOffline()) && !node->isPreparedFor(offlineInfo),
+              "the first opaque restart gets one replacement pass");
+        node->prepare(offlineInfo);
+        node->markPrepared(offlineInfo);
+
+        reporter->reportRestartRequested();
+        check(bool(node->serviceOffline()) && node->isPreparedFor(offlineInfo),
+              "an identical restart after activation is acknowledged");
+
+        reporter->setLatency(32);
+        reporter->reportRestartRequested();
+        check(bool(node->serviceOffline()) && !node->isPreparedFor(offlineInfo),
+              "a real configuration change still replaces the pass");
+    }
 
     ClapFactory factory;
     PluginDescriptor descriptor;

@@ -8,7 +8,9 @@ for (const locale of ["ru", "en"]) {
     await expect(page.locator("h1")).toContainText("VLTone");
     await expect(page.locator(".hero-announcement")).toHaveCount(0);
     await expect(page.locator(".vlt-brand .brand-mark img")).toBeVisible();
-    await expect(page.locator('.cta-sound span')).toHaveCount(4);
+    await expect(page.locator(".vlt-brand .brand-mark img")).toHaveCSS("object-fit", "contain");
+    await expect(page.locator(".vlt-brand .brand-mark")).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(page.locator('.cta-sound')).toHaveCount(0);
     await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/icon.png");
     await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", /VLTone.*(?:DAW|digital audio workstation)/);
     await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", "https://vltstudio.ru");
@@ -40,18 +42,18 @@ for (const locale of ["ru", "en"]) {
 }
 
 for (const width of [320, 375, 768, 1440]) {
-  test(`homepage fits ${width}px and preserves the refreshed visual system`, async ({ page }) => {
+  test(`homepage fits ${width}px and preserves the simplified visual system`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/");
     await expect(page.locator(".hero-product img")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    const style = await page.locator(".feature-card").first().evaluate((element) => {
+    const style = await page.locator(".feature-entry").first().evaluate((element) => {
       const computed = getComputedStyle(element);
       return { radius: computed.borderRadius, shadow: computed.boxShadow, weight: computed.fontWeight };
     });
-    expect(parseFloat(style.radius)).toBeGreaterThanOrEqual(26);
-    expect(style.shadow).not.toBe("none");
-    expect(style.weight).toBe("350");
+    expect(parseFloat(style.radius)).toBe(0);
+    expect(style.shadow).toBe("none");
+    expect(style.weight).toBe("400");
     await expect(page.locator(".vlt-nav")).toBeVisible();
     await expect(page.locator(".locale-link")).toBeVisible();
   });
@@ -60,12 +62,7 @@ for (const width of [320, 375, 768, 1440]) {
 test("homepage respects reduced motion", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
-  const motion = await page.locator(".cta-sound span").first().evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { duration: style.animationDuration, iterations: style.animationIterationCount };
-  });
-  expect(motion.iterations).toBe("1");
-  expect(parseFloat(motion.duration)).toBeLessThan(.001);
+  await expect(page.locator(".hero-product")).toHaveCSS("transform", "none");
 });
 
 test("search discovery files expose clean canonical routes", async ({ request }) => {
@@ -73,9 +70,23 @@ test("search discovery files expose clean canonical routes", async ({ request })
   expect(await robots.text()).toContain("Sitemap: https://vltstudio.ru/sitemap.xml");
   const sitemap = await request.get("/sitemap.xml");
   const xml = await sitemap.text();
-  for (const path of ["", "/manual", "/releases"]) expect(xml).toContain(`<loc>https://vltstudio.ru${path}</loc>`);
+  for (const path of ["", "/capabilities", "/manual", "/releases"]) expect(xml).toContain(`<loc>https://vltstudio.ru${path}</loc>`);
   expect(xml).not.toMatch(/vltstudio\.ru\/(ru|en)(\/|<)/);
   expect(xml).not.toContain("/account");
+});
+
+test("capabilities page describes every current area and links to the manual", async ({ page }) => {
+  await page.goto("/capabilities");
+  await expect(page).toHaveTitle(/Возможности VLTone/);
+  await expect(page.locator(".capabilities-beta")).toContainText("Открытая бета");
+  await expect(page.locator(".capability-detail")).toHaveCount(6);
+  for (const id of ["recording", "midi", "mixing", "plugins", "ai", "recovery"]) {
+    const section = page.locator(`#${id}`);
+    await expect(section).toBeVisible();
+    await expect(section.locator("li")).toHaveCount(3);
+    await expect(section.getByRole("link")).toHaveAttribute("href", /\/manual#/);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
 test("language preference persists without changing the URL", async ({ page }) => {

@@ -738,6 +738,35 @@ int main() {
               "undo restores a deleted Pattern clip atomically");
     }
 
+    // Glue reverses a Pattern split without orphaning either half's children.
+    {
+        daw::EngineController p;
+        p.initialize(48000, 512, false);
+        const std::string pattern = p.addPattern("Glue Pattern");
+        const std::string source =
+            p.addTrack(daw::TrackKind::Midi, "Pattern Notes");
+        p.moveTrackToFolder(source, pattern);
+        const std::string midi = p.addMidiClip(source, 0.0, 2.0);
+        p.addNote(source, midi, 60, 0.0, 4.0);
+        const std::string owner = p.project().findTrack(pattern)->clips.front().id;
+        const std::string right = p.splitClip(pattern, owner, 1.0);
+        std::string glued;
+        const audio::Result result = p.glueClips(
+            {{pattern, owner}, {pattern, right}}, glued);
+        const auto* patternTrack = p.project().findTrack(pattern);
+        bool allRelinked = patternTrack && patternTrack->clips.size() == 1;
+        for (const auto& clip : p.project().findTrack(source)->clips)
+            allRelinked &= clip.patternClipId == glued;
+        check(result && !glued.empty() && allRelinked,
+              "Pattern glue creates one owner and relinks every child clip");
+        p.undo();
+        check(findClip(p, pattern, owner) && findClip(p, pattern, right),
+              "undoing Pattern glue restores both owners");
+        p.redo();
+        check(findClip(p, pattern, glued) != nullptr,
+              "redoing Pattern glue restores the same merged owner");
+    }
+
     // Pattern arrangement history stores only its owner/member delta. A dense
     // MIDI clip outside the Pattern makes a whole-ProjectModel fallback visible:
     // it would replace the note vector, republish its schedule, and roll back a
@@ -1366,6 +1395,7 @@ int main() {
         const std::string track = r.addTrack(daw::TrackKind::Audio, "Cut");
         const std::string clip = r.importAudio(tonePath, track, 0.0);
         check(!clip.empty(), "clip to split imported");   // 0.5 s long
+        r.setClipFade(track, clip, 0.1, 0.2);
 
         const std::string right = r.splitClip(track, clip, 0.2);
         check(!right.empty(), "split returns a new clip id");
@@ -1386,6 +1416,11 @@ int main() {
                   "halves are contiguous");
             check(std::fabs(left->durationSeconds + rc->durationSeconds - 0.5) < 1e-6,
                   "the two halves cover the original length");
+            check(std::fabs(left->fadeInSeconds - 0.1) < 1e-6 &&
+                      left->fadeOutSeconds == 0.0 &&
+                      rc->fadeInSeconds == 0.0 &&
+                      std::fabs(rc->fadeOutSeconds - 0.2) < 1e-6,
+                  "split keeps fades only at the original outer edges");
         }
 
         // A cut outside the clip is rejected.
@@ -1396,8 +1431,31 @@ int main() {
         check(r.project().tracks[0].clips.size() == 1, "undo re-joins the clip");
         check(std::fabs(findClip(r, track, clip)->durationSeconds - 0.5) < 1e-6,
               "undo restores the original length");
+        check(std::fabs(findClip(r, track, clip)->fadeInSeconds - 0.1) < 1e-6 &&
+                  std::fabs(findClip(r, track, clip)->fadeOutSeconds - 0.2) < 1e-6,
+              "undo restores both original fades");
         r.redo();
         check(r.project().tracks[0].clips.size() == 2, "redo splits again");
+        left = findClip(r, track, clip);
+        rc = findClip(r, track, right);
+        check(left && rc && left->fadeOutSeconds == 0.0 &&
+                  rc->fadeInSeconds == 0.0,
+              "redo keeps the cut free of automatic fades");
+        r.setRecordDirectory(dir.string());
+        std::string glued;
+        const audio::Result glueResult = r.glueClips(
+            {{track, clip}, {track, right}}, glued);
+        const daw::ClipModel* joined = findClip(r, track, glued);
+        check(glueResult && joined &&
+                  r.project().findTrack(track)->clips.size() == 1 &&
+                  fs::is_regular_file(joined->filePath),
+              "audio glue renders both sources into one ordinary clip");
+        r.undo();
+        check(findClip(r, track, clip) && findClip(r, track, right),
+              "undoing audio glue restores both source clips");
+        r.redo();
+        check(findClip(r, track, glued) != nullptr,
+              "redoing audio glue restores the same rendered clip");
     }
 
     // ── Clip mute / name / duplicate, and track colour reaching its clips ──
@@ -2083,6 +2141,19 @@ int main() {
         check(findClip(a, lane, right) == nullptr &&
                   findClip(a, lane, clip)->automation.points.size() == 2,
               "undo puts the whole curve back");
+        a.redo();
+        std::string glued;
+        const audio::Result gluedResult = a.glueClips(
+            {{lane, clip}, {lane, right}}, glued);
+        const daw::ClipModel* whole = findClip(a, lane, glued);
+        check(gluedResult && whole &&
+                  std::fabs(daw::automationValueAt(
+                      whole->automation.points, 4.0,
+                      whole->automation.defaultValue) - atCut) < 1e-6,
+              "automation glue preserves the value at the former seam");
+        a.undo();
+        check(findClip(a, lane, clip) && findClip(a, lane, right),
+              "automation glue is one undoable edit");
     }
 
     // ── A curve survives save, reload and a tempo change ──
@@ -2152,10 +2223,12 @@ int main() {
         shape.push_back({0.0, 0.2, daw::AutomationSegment::Linear, 0.4});
         shape.push_back({4.0, 0.9, daw::AutomationSegment::Linear, 0.0});
         a.setAutomationPoints(lane, clip, shape);
+        const auto canonicalShape =
+            findClip(a, lane, clip)->automation.points;
 
         const std::string copy = a.duplicateClipAt(lane, clip, 8.0);
         check(!copy.empty(), "a curve duplicates");
-        check(findClip(a, lane, copy)->automation.points == shape,
+        check(findClip(a, lane, copy)->automation.points == canonicalShape,
               "the copy carries the same shape");
         check(findClip(a, lane, copy)->id != clip, "with an id of its own");
 
@@ -2164,7 +2237,7 @@ int main() {
         a.setAutomationTarget(lane, copy, elsewhere);
         check(findClip(a, lane, copy)->automation.target.channelId == two,
               "and can be pointed at another channel");
-        check(findClip(a, lane, copy)->automation.points == shape,
+        check(findClip(a, lane, copy)->automation.points == canonicalShape,
               "without its shape being touched — the whole point of copying it");
         check(findClip(a, lane, clip)->automation.target.channelId == one,
               "and the original still drives what it did");
@@ -3632,25 +3705,27 @@ int main() {
             const std::vector<daw::AutomationPoint> after{
                 {0.0, 0.7}, {1.0, 0.9}};
             a.setLanePoints(trackId, clipId, laneId, before);
+            const auto canonicalBefore = *lanePoints(laneId);
             const auto beforePublished = pluginAutomation();
             a.setLanePoints(trackId, clipId, laneId, after);
+            const auto canonicalAfter = *lanePoints(laneId);
             const auto endpointPublished = pluginAutomation();
             check(endpointPublished && endpointPublished != beforePublished,
                   "a plugin-target lane publishes its live endpoint");
-            a.commitLaneEdit(trackId, clipId, laneId, before,
+            a.commitLaneEdit(trackId, clipId, laneId, canonicalBefore,
                              "Draw Controller Lane");
 
             a.undo();
             const auto undoPublished = pluginAutomation();
             const auto* restored = lanePoints(laneId);
             check(undoPublished && undoPublished != endpointPublished &&
-                      restored && *restored == before,
+                      restored && *restored == canonicalBefore,
                   "controller-lane undo republishes the restored plugin curve");
             a.redo();
             const auto redoPublished = pluginAutomation();
             const auto* replayed = lanePoints(laneId);
             check(redoPublished && redoPublished != undoPublished &&
-                      replayed && *replayed == after,
+                      replayed && *replayed == canonicalAfter,
                   "controller-lane redo republishes the plugin curve endpoint");
 
             const auto beforePluginRemove = redoPublished;
@@ -3665,7 +3740,7 @@ int main() {
             const auto pluginRestored = pluginAutomation();
             const auto* restoredLane = lanePoints(laneId);
             check(pluginRestored && pluginRestored != pluginRemoved &&
-                      restoredLane && *restoredLane == after,
+                      restoredLane && *restoredLane == canonicalAfter,
                   "undoing plugin-lane removal republishes its curve");
             a.redo();
             const auto pluginRemovedAgain = pluginAutomation();
@@ -4279,6 +4354,21 @@ int main() {
         check(midiClip(midiTrack, longClip)->notes.size() == 1 &&
                   midiClip(midiTrack, rightId) != nullptr,
               "redoing a split divides them again");
+        std::string glued;
+        const audio::Result glueResult = m.glueClips(
+            {{midiTrack, longClip}, {midiTrack, rightId}}, glued);
+        const daw::ClipModel* joined = midiClip(midiTrack, glued);
+        check(glueResult && joined && joined->notes.size() == 2 &&
+                  std::fabs(joined->durationSeconds - 4.0) < 1e-9 &&
+                  std::fabs(joined->notes.back().startBeats - 6.0) < 1e-9,
+              "MIDI glue rebases both halves into one clip");
+        m.undo();
+        check(midiClip(midiTrack, longClip) &&
+                  midiClip(midiTrack, rightId),
+              "undoing MIDI glue restores both source clips");
+        m.redo();
+        check(midiClip(midiTrack, glued) != nullptr,
+              "redoing MIDI glue restores the same result id");
     }
 
     // ── Instrument slot (document-only placeholder) ──

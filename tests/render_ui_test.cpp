@@ -126,7 +126,8 @@ int main(int argc, char** argv) {
         completed.show();
         auto* folder = completed.findChild<QLineEdit*>("ExportFolder");
         check(QDir(folder->text()) == QDir(project), "saved project overrides last export folder");
-        completed.findChild<QLineEdit*>("ExportName")->setText("Covered");
+        const QString exportName = QString::fromUtf8("Ночной микс 日本語 العربية");
+        completed.findChild<QLineEdit*>("ExportName")->setText(exportName);
         const QString fullTitle = QString::fromUtf8("Ночной город — полная версия без обрезки названия");
         completed.findChild<QLineEdit*>("ExportTitle")->setText(fullTitle);
         completed.findChild<QLineEdit*>("ExportAlbum")->setText("Test Album");
@@ -157,8 +158,10 @@ int main(int argc, char** argv) {
         check(opened.calls == 2, "folder button opens the completed location");
         QDesktopServices::unsetUrlHandler("file");
 
-        QFile mp3File(project + "/Covered.mp3");
-        check(mp3File.open(QIODevice::ReadOnly), "MP3 exists in the project");
+        const QString exportedMp3 = project + "/" + exportName + ".mp3";
+        QFile mp3File(exportedMp3);
+        check(mp3File.open(QIODevice::ReadOnly),
+              "MP3 preserves a multilingual export name exactly");
         const QByteArray bytes = mp3File.readAll();
         QFile imageFile(cover);
         imageFile.open(QIODevice::ReadOnly);
@@ -174,8 +177,8 @@ int main(int argc, char** argv) {
               && bytes.contains(fullTitle.toUtf8()) && bytes.contains("Test Artist") && bytes.contains("Test Album"),
               "cover preserves title, artist and album metadata");
         audio::platform::DecodedAudio coveredAudio;
-        check(bool(audio::platform::decodeAudioFile((project + "/Covered.mp3").toStdString(), coveredAudio)),
-              "covered MP3 decodes");
+        check(bool(audio::platform::decodeAudioFile(exportedMp3.toStdString(), coveredAudio)),
+              "multilingual MP3 path decodes");
         completed.findChild<QPushButton*>("ExportRemoveCover")->click();
         completed.findChild<QCheckBox*>("ExportOpenAfterRender")->setChecked(false);
         completed.findChild<QLineEdit*>("ExportName")->setText("Plain");

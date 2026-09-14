@@ -8,6 +8,8 @@ param(
     [string] $ApiOrigin = "https://vltstudio.ru/api/v1",
     [string] $MsvcToolset = "14.44",
     [string] $WindowsSdkVersion = "10.0.26100.0",
+    [ValidateRange(0, 65535)]
+    [int] $BuildNumber = 0,
     [string] $SignPfxPath = "",
     [switch] $DisableCollaboration,
     [switch] $RequireSignature,
@@ -37,6 +39,16 @@ if (-not $versionMatch.Success) {
     throw "Could not read the project version from CMakeLists.txt."
 }
 $applicationVersion = $versionMatch.Groups[1].Value
+$displayVersion = if ($BuildNumber -gt 0) {
+    "$applicationVersion Build $BuildNumber"
+} else {
+    $applicationVersion
+}
+$artifactVersion = if ($BuildNumber -gt 0) {
+    "$applicationVersion-Build-$BuildNumber"
+} else {
+    $applicationVersion
+}
 $vcpkgManifest = Get-Content -LiteralPath (Join-Path $repository "vcpkg.json") `
     -Raw | ConvertFrom-Json
 if ($vcpkgManifest.version -ne $applicationVersion) {
@@ -218,13 +230,14 @@ if (-not $DisableCollaboration) {
 New-Item -ItemType Directory -Force -Path $BuildDirectory | Out-Null
 Resolve-VcpkgRoot
 
-Write-Host "Configuring VLTONE $applicationVersion ($Configuration)..."
+Write-Host "Configuring VLTONE $displayVersion ($Configuration)..."
 Invoke-Checked cmake --preset windows-vcpkg -B $BuildDirectory `
     "-DCMAKE_BUILD_TYPE=$Configuration" `
     "-DCMAKE_INSTALL_PREFIX:PATH=$stageDirectory" `
     "-DCMAKE_PREFIX_PATH:PATH=$QtRoot" `
     "-DDAW_ENABLE_COLLABORATION=$collaboration" `
     "-DDAW_ENFORCE_COLLABORATION_RELEASE_GATES=$collaboration" `
+    "-DVLTONE_BUILD_NUMBER=$BuildNumber" `
     "-DVLTONE_RELEASE_CHANNEL=" `
     "-DVLT_DEFAULT_API_ORIGIN=$ApiOrigin" `
     "-DCMAKE_SYSTEM_VERSION=$WindowsSdkVersion"
@@ -336,7 +349,7 @@ if (-not $SkipTests) {
 
 New-Item -ItemType Directory -Force -Path $artifactDirectory | Out-Null
 $zipPath = Join-Path $artifactDirectory `
-    "VLTONE-$applicationVersion-windows-x64.zip"
+    "VLTONE-$artifactVersion-windows-x64.zip"
 if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 Compress-Archive -Path (Join-Path $distributionDirectory "*") `
     -DestinationPath $zipPath -CompressionLevel Optimal
@@ -371,11 +384,12 @@ if (-not $SkipInstaller) {
         "/DSourceDir=$distributionDirectory" `
         "/DOutputDir=$artifactDirectory" `
         "/DAppVersion=$applicationVersion" `
+        "/DAppBuild=$BuildNumber" `
         "/DVcRedist=$vcRedist" `
         "/DIconFile=$icon" `
         (Join-Path $scriptDirectory "installer.iss")
     $installerPath = Join-Path $artifactDirectory `
-        "VLTONE-$applicationVersion-x64-Setup.exe"
+        "VLTONE-$artifactVersion-x64-Setup.exe"
     if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
         throw "Inno Setup completed without producing '$installerPath'."
     }

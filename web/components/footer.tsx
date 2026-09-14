@@ -8,6 +8,7 @@ export function Footer({ locale }: { locale: string }) {
     <p>{ru ? "DAW для Windows и macOS." : "A DAW for Windows and macOS."}</p>
     <nav aria-label={ru ? "Ссылки в подвале" : "Footer navigation"}>
       <Link href="/register">{ru ? "Открытая бета" : "Open beta"}</Link>
+      <Link href="/capabilities">{ru ? "Возможности" : "Capabilities"}</Link>
       <a href="/releases">{ru ? "Скачать" : "Download"}</a>
       <Link href="/manual">{ru ? "Руководство" : "Guide"}</Link>
       <Link href="/bug-report">{ru ? "Сообщить о баге" : "Report a bug"}</Link>
