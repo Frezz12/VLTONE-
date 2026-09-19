@@ -322,6 +322,10 @@ public:
     }
     void drawImage(const QRectF& target, const QImage& image, const QRectF& source,
                    Qt::ImageConversionFlags) override {
+        recordImage(target, image, source, true);
+    }
+    void recordImage(const QRectF& target, const QImage& image, const QRectF& source,
+                     bool smooth) {
         if (target.isEmpty() || image.isNull()) return;
         SceneMesh mesh;
         const auto transform = painter()->worldTransform();
@@ -337,6 +341,7 @@ public:
         }
         if (mesh.vertices.isEmpty()) return;
         mesh.texture = image;
+        mesh.smoothTexture = smooth;
         mesh.opacity = float(painter()->opacity());
         const QRectF sourceRect = source.isEmpty() ? QRectF(image.rect()) : source;
         const auto inverse = painter()->worldTransform().inverted();
@@ -369,8 +374,12 @@ public:
             p.drawText(-bounds.topLeft(), item.text()); p.end();
             glyphAssets.insert(key, new GlyphAsset{glyphs, bounds}, int(glyphs.sizeInBytes() / 1024 + 1));
         }
-        drawImage(QRectF(baseline + bounds.topLeft(), glyphs.deviceIndependentSize()), glyphs,
-                  glyphs.rect(), Qt::AutoColor);
+        // The glyphs already contain antialiased coverage at the target DPR.
+        // Linear sampling adds a second blur when a baseline, widget origin or
+        // retained timeline group lands between physical pixels. Keep native
+        // texels for translation-only text; transformed artwork still filters.
+        recordImage(QRectF(baseline + bounds.topLeft(), glyphs.deviceIndependentSize()), glyphs,
+                    glyphs.rect(), painter()->worldTransform().type() > QTransform::TxTranslate);
     }
     std::vector<SceneMesh> meshes;
     std::vector<std::pair<QPainterPath, std::shared_ptr<const SceneClip>>> clips;

@@ -2421,6 +2421,17 @@ void routingPluginAssetReducerAndWire() {
                   .changed(),
           "Graphit is accepted by the shared built-in allowlist");
 
+    InsertModel pitchCorrector = builtinInsert("pitch-corrector", "daw.pitch-corrector");
+    check(apply("plugin-pitch-add",
+                AddPluginInsert{trackChain, pitchCorrector, graphit.id}).changed() &&
+              apply("plugin-pitch-tuning",
+                    SetPluginParameter{trackChain, pitchCorrector.id,
+                                       "a4_hz", 442.0, false}).changed() &&
+              apply("plugin-pitch-quality",
+                    SetPluginParameter{trackChain, pitchCorrector.id,
+                                       "quality", 1.0, false}).changed(),
+          "pitch correction, reference tuning and quality pass shared validation");
+
     for (const char* uid : {"daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser"}) {
         const std::string key(uid);
         InsertModel modulation = builtinInsert(key, key);

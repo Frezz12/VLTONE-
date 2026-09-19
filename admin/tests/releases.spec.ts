@@ -43,8 +43,8 @@ test("admin saves a draft, uploads an installer, and publishes it", async ({ pag
   await expect(errorSummary).toBeFocused();
   await page.getByRole("button", { name: "Новый релиз" }).click();
   await page.getByRole("button", { name: "Заполнить шаблон" }).click();
-  await expect(page.getByLabel("Версия")).toHaveValue(releaseTemplate.version);
-  await page.getByLabel("Версия").fill(`${releaseTemplate.version} Alpha 1`);
+  await expect(page.locator("#release-version")).toHaveValue(releaseTemplate.version);
+  await page.locator("#release-version").fill(`${releaseTemplate.version} Alpha 1`);
   await expect(page.getByLabel("Кратко — русский")).toHaveValue(releaseTemplate.summary_ru);
 
   // Choosing a file on a new release must create its draft automatically.

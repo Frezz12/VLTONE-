@@ -38,8 +38,6 @@ export function BugReportForm({ locale }: { locale: string }) {
     <form className="vlt-stack" onSubmit={submit}>
       <label className="vlt-label">{t("subject")}<input className="vlt-input" name="title" minLength={3} maxLength={160} required /></label>
       <label className="vlt-label">{t("description")}<textarea className="vlt-input" name="description" minLength={10} maxLength={20000} required /></label>
-      <label className="vlt-label">{t("steps")}<textarea className="vlt-input" name="steps" /></label>
-      <div className="vlt-grid vlt-grid-2"><label className="vlt-label">{t("expected")}<textarea className="vlt-input" name="expected" /></label><label className="vlt-label">{t("actual")}<textarea className="vlt-input" name="actual" /></label></div>
       <label className="vlt-label"><span className="vlt-row"><Paperclip size={15} aria-hidden /> {t("attachments")}</span><input className="vlt-input" name="attachments" type="file" accept="image/jpeg,image/png,image/webp" multiple /></label>
       <div className="form-actions"><button className="vlt-button" disabled={!session || busy}><Send size={16} aria-hidden /> {t("send")}</button></div>
     </form>

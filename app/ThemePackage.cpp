@@ -414,6 +414,8 @@ bool ThemePackage::captureCurrent(const QString& requestedName,
         {QStringLiteral("selectionTint"), int(ui::selectionTint())},
         {QStringLiteral("playheadWidth"), ui::playheadWidth()},
         {QStringLiteral("playheadTrail"), ui::playheadTrail()},
+        {QStringLiteral("gridLineWidth"), ui::gridLineWidth()},
+        {QStringLiteral("gridOpacity"), ui::gridOpacity()},
     };
 
     const ThemeManager& manager = ThemeManager::instance();
@@ -929,7 +931,11 @@ ThemePackageResult ThemePackage::apply(const QString& installedPath,
             .toDouble(ui::kPlayheadWidthDefault),
         ui::kPlayheadWidthMin, ui::kPlayheadWidthMax));
     ui::setPlayheadTrail(
-        appearance.value(QStringLiteral("playheadTrail")).toBool(true));
+        appearance.value(QStringLiteral("playheadTrail")).toBool(false));
+    ui::setGridLineWidth(appearance.value(QStringLiteral("gridLineWidth"))
+        .toDouble(ui::kGridLineWidthDefault));
+    ui::setGridOpacity(boundedInt(appearance, "gridOpacity",
+        ui::kGridOpacityDefault, 0, 100));
 
     Theme palette = ThemeManager::fromJson(
         manifest.value(QStringLiteral("palette")).toObject(), manager.theme());
@@ -967,6 +973,8 @@ bool ThemePackage::checkForTest(QString* error) {
         {QStringLiteral("timeline"), QJsonObject{}},
         {QStringLiteral("header"), QJsonObject{}},
         {QStringLiteral("notebook"), QJsonObject{}},
+        {QStringLiteral("gridLineWidth"), 1.7},
+        {QStringLiteral("gridOpacity"), 43},
     };
     snapshot.resources.push_back(
         {QStringLiteral("timelineBackground"), mediaPath});
@@ -1016,6 +1024,8 @@ bool ThemePackage::checkForTest(QString* error) {
         timelinebackgroundprefs::path() != extracted ||
         headerbackgroundprefs::path() != extracted)
         return fail(QStringLiteral("installed resources were not applied from private storage"));
+    if (ui::gridLineWidth() != 1.7 || ui::gridOpacity() != 43)
+        return fail(QStringLiteral("grid appearance did not survive a theme round trip"));
 
     QFile damaged(damagedPath);
     if (!damaged.open(QIODevice::ReadWrite) || !damaged.seek(damaged.size() - 1) ||

@@ -33,10 +33,10 @@ func TestArgon2idPasswordRoundTrip(t *testing.T) {
 }
 
 func TestPasswordLengthUsesCharacters(t *testing.T) {
-	if ValidatePassword("короткийпар!") != nil {
-		t.Fatal("12-character Unicode password was rejected")
+	if ValidatePassword("пароль12") != nil {
+		t.Fatal("8-character Unicode password was rejected")
 	}
-	if ValidatePassword("too-short") == nil {
+	if ValidatePassword("1234567") == nil {
 		t.Fatal("short password was accepted")
 	}
 	if ValidatePassword(strings.Repeat("я", 129)) == nil {

@@ -8,6 +8,8 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <limits>
+#include <cmath>
 
 namespace fs = std::filesystem;
 namespace en = daw::engine;
@@ -38,6 +40,27 @@ int main() {
     const fs::path dir = fs::temp_directory_path() / "daw-render-safety-test";
     fs::remove_all(dir);
     fs::create_directories(dir);
+    for (auto encoding : {ap::Encoding::Float32, ap::Encoding::Int24}) {
+        ap::WriteSpec format; format.encoding = encoding;
+        ap::AudioFileWriter writer;
+        const auto file = (dir / (encoding == ap::Encoding::Float32 ? "float.wav" : "int.wav")).string();
+        check(bool(writer.open(file, format, 48000, 1, 2)), "numeric fixture opens");
+        float data[]{std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()};
+        const float* channels[]{data};
+        check(bool(writer.write(channels, 2)), "large finite samples can be written");
+        for (float invalid : {std::numeric_limits<float>::quiet_NaN(),
+                              std::numeric_limits<float>::infinity()}) {
+            data[0] = invalid;
+            check(!writer.write(channels, 1), "writer rejects non-finite audio");
+        }
+        check(bool(writer.close()), "numeric fixture closes");
+        ap::DecodedAudio decoded;
+        check(bool(ap::decodeAudioFile(file, decoded)) && decoded.frames == 2,
+              "invalid writes do not append frames");
+        if (encoding == ap::Encoding::Int24 && decoded.interleaved.size() == 2)
+            check(decoded.interleaved[0] > 0.999f && decoded.interleaved[1] == -1.f,
+                  "large finite PCM clips with the correct polarity before integer conversion");
+    }
     {
         en::RealtimeEngine engine(1);
         check(bool(engine.prepare(48000, 64, 2)), "engine prepares");
@@ -117,6 +140,17 @@ int main() {
         daw::rendering::Report first;
         check(bool(controller.renderProject(spec, {}, first)) && first.files.size() == 1,
               "first export completes");
+        for (int invalid = 0; invalid < 5; ++invalid) {
+            auto bad = spec;
+            if (invalid == 0) bad.sampleRate = std::numeric_limits<double>::quiet_NaN();
+            if (invalid == 1) { bad.range = daw::rendering::Range::Custom; bad.customEndSeconds = std::numeric_limits<double>::infinity(); }
+            if (invalid == 2) bad.tailMaxSeconds = -1;
+            if (invalid == 3) bad.blockSize = 8193;
+            if (invalid == 4) { bad.writeMixdown = false; bad.stemChannelIds = {"missing-channel"}; }
+            daw::rendering::Report rejected;
+            check(!controller.renderProject(bad, {}, rejected) && rejected.files.empty(),
+                  "invalid settings and missing stems fail without publishing a file");
+        }
         if (!first.files.empty()) {
             const auto original = bytes(first.files[0]);
             daw::rendering::Report cancelled;

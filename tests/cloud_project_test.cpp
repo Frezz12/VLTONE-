@@ -132,7 +132,8 @@ int main() {
                  {"10000000-0000-4000-8000-000000000004", "daw.doubler"},
                  {"10000000-0000-4000-8000-000000000005", "daw.chorus"},
                  {"10000000-0000-4000-8000-000000000006", "daw.flanger"},
-                 {"10000000-0000-4000-8000-000000000007", "daw.phaser"}}) {
+                 {"10000000-0000-4000-8000-000000000007", "daw.phaser"},
+                 {"10000000-0000-4000-8000-000000000008", "daw.pitch-corrector"}}) {
             project.masterInserts.push_back(builtin(id, uid));
         }
         daw::TrackModel track;
@@ -149,7 +150,7 @@ int main() {
 
         const auto report = daw::cloud::inspectForPublishV1(project);
         check(report.canPublish(),
-              "all eight built-ins, including modulation, are publishable");
+              "built-in instruments and effects, including pitch correction, are publishable");
 
         project.masterInserts.front().stateSchemaVersion = 0;
         check(!daw::cloud::inspectForPublishV1(project).canPublish(),

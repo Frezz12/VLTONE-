@@ -91,7 +91,7 @@ private:
                       std::uint32_t start) noexcept;
     void sendMidi(std::span<const PluginEvent> events, std::uint32_t start,
                   std::uint32_t end) noexcept;
-    void processSegment(const PluginProcessContext& context,
+    bool processSegment(const PluginProcessContext& context,
                         std::uint32_t start, std::uint32_t end) noexcept;
     void receiveEvents(const VstEvents* events) noexcept;
 

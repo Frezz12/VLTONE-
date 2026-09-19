@@ -7,6 +7,11 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
+#include <QEvent>
+#include <QFrame>
+#include <QMenu>
+#include <QPainterPath>
+#include <QRegion>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPalette>
@@ -475,6 +480,14 @@ void ThemeManager::apply() {
     auto* app = qobject_cast<QApplication*>(QCoreApplication::instance());
     if (!app) return;
 
+    app->installEventFilter(this);
+    // Qt's legacy roll effect presents a rectangular grab() that ignores the
+    // popup mask. Open these frequently used lists directly, with their real
+    // rounded native surface, including the very first frame.
+    app->setEffectEnabled(Qt::UI_AnimateMenu, false);
+    app->setEffectEnabled(Qt::UI_FadeMenu, false);
+    app->setEffectEnabled(Qt::UI_AnimateCombo, false);
+
     app->setStyle(QStyleFactory::create("Fusion"));
 
     const Theme& t = m_theme;
@@ -498,6 +511,33 @@ void ThemeManager::apply() {
     app->setPalette(p);
     app->setStyleSheet(styleSheet());
     applyFont();
+}
+
+bool ThemeManager::eventFilter(QObject* object, QEvent* event) {
+    const auto type = event->type();
+    if (type != QEvent::Polish && type != QEvent::Show && type != QEvent::Resize)
+        return false;
+    auto* widget = qobject_cast<QWidget*>(object);
+    if (!widget) return false;
+    const bool comboPopup = widget->inherits("QComboBoxPrivateContainer");
+    const bool tooltip = widget->inherits("QTipLabel");
+    if (!comboPopup && !tooltip && !qobject_cast<QMenu*>(widget)) return false;
+
+    if (type == QEvent::Polish) {
+        // Rounded QSS only paints the plate. The native popup must also have
+        // an alpha backing store, otherwise Windows fills its corners black.
+        widget->setWindowFlag(Qt::FramelessWindowHint);
+        widget->setAttribute(Qt::WA_TranslucentBackground);
+        if (comboPopup) {
+            if (auto* frame = qobject_cast<QFrame*>(widget))
+                frame->setFrameStyle(QFrame::NoFrame);
+        }
+    }
+    const qreal radius = tooltip ? 6 : widget->property("pluginPickerScrollable").toBool() ? 8 : 10;
+    QPainterPath outline;
+    outline.addRoundedRect(QRectF(widget->rect()), radius, radius);
+    widget->setMask(QRegion(outline.toFillPolygon().toPolygon()));
+    return false;
 }
 
 QString ThemeManager::styleSheet() const {
@@ -590,6 +630,7 @@ QComboBox::drop-down { border: none; width: 14px; }
 QComboBox::down-arrow { image: none; width: 0; height: 0; }
 /* Exactly the menu plate above — a combo's list and a menu are the same
    object with different contents. */
+QComboBoxPrivateContainer { background: transparent; border: none; }
 QComboBox QAbstractItemView {
     background: %WELL%; border: 1px solid %SEP%; border-radius: 10px;
     selection-background-color: %ACCENT_SOFT%; outline: none; padding: 5px;

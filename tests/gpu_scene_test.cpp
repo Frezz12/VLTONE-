@@ -142,6 +142,10 @@ bool checkContextMenuRouting(Qt::ContextMenuTrigger trigger) {
 }
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    if (!ui::graphics::WorkspaceSurface::checkPointerRoutingForTest()) {
+        std::cerr << "GPU input routing did not survive reentrant teardown\n";
+        return 1;
+    }
     QTemporaryDir preferences;
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, preferences.path());
@@ -553,6 +557,43 @@ int main(int argc, char** argv) {
         std::cerr << "An explicit update was lost while moving an overlay\n"; return 1;
     }
     floating.hide(); stationary.hide();
+    // A rounded editor clips all descendants, including opaque children and
+    // native control textures. Moving/resizing it must update that clip without
+    // rerecording unchanged children or retaining the old rectangular corners.
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    const QImage behindRounded = surface->quickWindow()->grabWindow();
+    PlainControl rounded(canvas), opaque(&rounded);
+    QToolButton maskedControl(&rounded);
+    rounded.color = Qt::cyan; opaque.color = Qt::magenta;
+    rounded.setGeometry(10, 10, 90, 90);
+    opaque.setGeometry(0, 0, 90, 90);
+    maskedControl.setStyleSheet("background: yellow; border: none;");
+    maskedControl.setGeometry(0, 0, 40, 40);
+    const auto round = [&] {
+        QPainterPath path; path.addRoundedRect(QRectF(rounded.rect()), 20, 20);
+        rounded.setMask(QRegion(path.toFillPolygon().toPolygon()));
+    };
+    round(); rounded.show(); opaque.show(); maskedControl.show();
+    for (int pass = 0; pass < 3; ++pass) {
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        const QImage pixels = surface->quickWindow()->grabWindow();
+        const auto pixel = [&](QPoint point) { return pixels.pixelColor(int(point.x()*dpr), int(point.y()*dpr)); };
+        for (const QPoint corner : {rounded.rect().topLeft(), rounded.rect().topRight(),
+                                    rounded.rect().bottomLeft(), rounded.rect().bottomRight()}) {
+            const QPoint position = rounded.mapTo(canvas, corner);
+            if (pixel(position) != behindRounded.pixelColor(int(position.x()*dpr), int(position.y()*dpr))) {
+                std::cerr << "A rounded ancestor leaked square child corners in the GPU scene\n"; return 1;
+            }
+        }
+        if (pixel(rounded.mapTo(canvas, QPoint(25, 25))) != QColor(Qt::yellow) ||
+            pixel(rounded.mapTo(canvas, QPoint(45, 45))) != QColor(Qt::magenta)) {
+            std::cerr << "Ancestor mask clipped the interior content\n"; return 1;
+        }
+        rounded.move(15 + pass*5, 15 + pass*5);
+        rounded.resize(85 - pass*5, 85 - pass*5);
+        round();
+    }
+    rounded.hide();
     DragControl dragSource(canvas), dropTarget(canvas);
     dragSource.setGeometry(5, 5, 60, 35);
     dropTarget.setGeometry(70, 5, 60, 35);

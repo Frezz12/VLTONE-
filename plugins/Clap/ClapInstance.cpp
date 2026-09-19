@@ -20,10 +20,11 @@ struct SpanReader {
 
     static std::int64_t read(const clap_istream_t* stream, void* buffer,
                              std::uint64_t size) {
+        if (!stream || !stream->ctx || (size && !buffer)) return -1;
         auto* self = static_cast<SpanReader*>(stream->ctx);
         const std::size_t remaining = self->data.size() - self->position;
         const std::size_t count = std::min<std::size_t>(remaining, size);
-        std::memcpy(buffer, self->data.data() + self->position, count);
+        if (count) std::memcpy(buffer, self->data.data() + self->position, count);
         self->position += count;
         return std::int64_t(count);
     }
@@ -32,12 +33,19 @@ struct SpanReader {
 /// A `clap_ostream` that appends to a vector.
 struct VectorWriter {
     std::vector<std::uint8_t>* out = nullptr;
+    bool failed = false;
 
     static std::int64_t write(const clap_ostream_t* stream, const void* buffer,
                               std::uint64_t size) {
+        if (!stream || !stream->ctx) return -1;
         auto* self = static_cast<VectorWriter*>(stream->ctx);
+        const auto reject = [&]() -> std::int64_t { self->failed = true; return -1; };
+        if ((size && !buffer) || !self->out || self->out->size() > kMaxPluginStateBytes ||
+            size > kMaxPluginStateBytes - self->out->size()) return reject();
+        if (!size) return 0;
         const auto* bytes = static_cast<const std::uint8_t*>(buffer);
-        self->out->insert(self->out->end(), bytes, bytes + size);
+        try { self->out->insert(self->out->end(), bytes, bytes + std::size_t(size)); }
+        catch (...) { return reject(); }
         return std::int64_t(size);
     }
 };
@@ -198,7 +206,11 @@ ClapInstance::ClapInstance(std::shared_ptr<ClapModule> module,
                            const clap_plugin_t* plugin,
                            PluginDescriptor descriptor)
     : m_module(std::move(module)), m_plugin(plugin),
-      m_descriptor(std::move(descriptor)) {
+      m_descriptor(std::move(descriptor)) {}
+
+bool ClapInstance::initialize() {
+    if (!m_plugin || !m_plugin->init || !m_plugin->get_extension ||
+        !m_plugin->init(m_plugin)) return false;
     m_params = static_cast<const clap_plugin_params_t*>(
         m_plugin->get_extension(m_plugin, CLAP_EXT_PARAMS));
     m_state = static_cast<const clap_plugin_state_t*>(
@@ -218,6 +230,7 @@ ClapInstance::ClapInstance(std::shared_ptr<ClapModule> module,
     readDescriptorPorts();
     refreshLatency();
     refreshTail();
+    return true;
 }
 
 ClapInstance::~ClapInstance() {
@@ -550,11 +563,13 @@ bool ClapInstance::saveState(std::vector<std::uint8_t>& out) const {
     clap_ostream_t stream{};
     stream.ctx = &writer;
     stream.write = &VectorWriter::write;
-    return m_state->save(m_plugin, &stream);
+    const bool saved = m_state->save(m_plugin, &stream);
+    if (!saved || writer.failed) { out.clear(); return false; }
+    return true;
 }
 
 bool ClapInstance::loadState(std::span<const std::uint8_t> state) {
-    if (!m_state || !m_state->load) return false;
+    if (!m_state || !m_state->load || state.size() > kMaxPluginStateBytes) return false;
     SpanReader reader{state, 0};
     clap_istream_t stream{};
     stream.ctx = &reader;

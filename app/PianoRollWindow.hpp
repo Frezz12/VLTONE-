@@ -356,6 +356,8 @@ private:
     int yToPitch(double y) const;
     double pitchToY(int pitch) const;
     double snapBeats(double beats, bool enabled) const;
+    double noteStartBeats(double beats, bool enabled) const;
+    void rememberNoteProperties(const daw::NoteModel* note);
     int snapPitch(int pitch) const;
     QRectF noteRect(const daw::NoteModel& n) const;
     QPointF laneHandle(const daw::NoteModel& n) const;
@@ -552,7 +554,7 @@ private:
     bool m_duplicateDragCreated = false;
     bool m_shiftClickDeselectPending = false;
     QPointF m_movePress;
-    /// Latest visible geometry for a resize/draw. `m_resizeOrig` remains the
+    /// Latest visible geometry for a resize. `m_resizeOrig` remains the
     /// immutable delta source while this vector follows the pointer.
     std::vector<daw::NoteModel> m_geometryPaintNotes;
     /// Reused payload for high-frequency multi-note setters.
@@ -585,10 +587,8 @@ private:
     bool m_pointerInside = false;
     double m_grabBeats = 0.0;
     double m_laneGrab = 0.0;
-    /// A freshly painted note keeps its grid-safe default length until the
-    /// pointer moves far enough to be an intentional resize.
+    /// A freshly painted note moves between pointer cells without resizing.
     bool m_drawing = false;
-    QPointF m_drawPress;
     /// Each selected note's lane value at the moment of the press, normalised,
     /// so a group drag applies one delta and keeps its relative shape.
     std::vector<daw::NoteModel> m_laneOrig;
@@ -656,6 +656,8 @@ private:
     /// pitch would leave the old one held forever.
     int m_auditionPitch = -1;
     double m_lastLength = 1.0;
+    int m_lastVelocity = 127;
+    float m_lastPan = 0.0f;
     int m_wheelAccum = 0;
     QTimer* m_wheelEditTimer = nullptr;
     bool m_wheelEditUndoActive = false;

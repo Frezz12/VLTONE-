@@ -42,7 +42,7 @@ constexpr KeyNote kLayout[] = {
 /// The velocity every typed note gets. A computer keyboard has no dynamics,
 /// and this is the velocity a note drawn in the piano roll gets, so playing a
 /// part and drawing it sound the same.
-constexpr int kVelocity = 100;
+constexpr int kVelocity = 127;
 
 /// Typing into a field must stay typing — a name, a tempo, a search box, and
 /// the shortcut recorder, where a keystroke is the value being entered.
@@ -54,8 +54,15 @@ bool isTextEntry(const QWidget* widget) {
             qobject_cast<const QLineEdit*>(current) ||
             qobject_cast<const QAbstractSpinBox*>(current) ||
             qobject_cast<const QTextEdit*>(current) ||
-            qobject_cast<const QPlainTextEdit*>(current) ||
-            qobject_cast<const QComboBox*>(current)) {
+            qobject_cast<const QPlainTextEdit*>(current)) {
+            return true;
+        }
+        if (auto* combo = qobject_cast<const QComboBox*>(current)) {
+            if (combo->isEditable()) return true;
+            // A closed channel/preset selector in a plugin must not silence
+            // audition. Other application combo boxes retain type-to-select.
+            for (auto* parent = combo->parentWidget(); parent; parent = parent->parentWidget())
+                if (parent->property("dawPluginEditor").toBool()) return false;
             return true;
         }
     }
@@ -109,12 +116,12 @@ void TypingKeyboard::allNotesOff() {
     m_held.clear();
 }
 
-bool TypingKeyboard::handles(const QKeyEvent* event) const {
+bool TypingKeyboard::handles(const QKeyEvent* event, bool textEntry) const {
     if (!m_enabled) return false;
     // Any modifier means a command, not a note: Ctrl+S is Save, Shift+M is not
     // a B. Keypad is let through because a laptop reports it on plain keys.
     if (event->modifiers() & ~Qt::KeypadModifier) return false;
-    if (isTextEntry(QApplication::focusWidget())) return false;
+    if (textEntry || QApplication::activeModalWidget()) return false;
     // An open menu or combo popup owns the keyboard while it is up.
     if (QApplication::activePopupWidget()) return false;
 
@@ -160,19 +167,19 @@ void TypingKeyboard::releaseKey(int key) {
     m_held.erase(found);
 }
 
-bool TypingKeyboard::eventFilter(QObject* watched, QEvent* event) {
+bool TypingKeyboard::handleKeyEvent(QKeyEvent* event, bool textEntry) {
     switch (event->type()) {
         case QEvent::ShortcutOverride: {
             // Claim the key here or the shortcut machinery gets it first and E
             // expands take layers instead of playing a note.
             auto* key = static_cast<QKeyEvent*>(event);
-            if (!handles(key)) break;
+            if (!handles(key, textEntry)) break;
             key->accept();
             return true;
         }
         case QEvent::KeyPress: {
             auto* key = static_cast<QKeyEvent*>(event);
-            if (!handles(key)) break;
+            if (!handles(key, textEntry)) break;
             // Auto-repeat is the operating system re-sending a key that never
             // came up; retriggering the note on each one would machine-gun it.
             if (!key->isAutoRepeat()) pressKey(eventKey(key));
@@ -189,6 +196,20 @@ bool TypingKeyboard::eventFilter(QObject* watched, QEvent* event) {
             releaseKey(physical);
             return true;
         }
+        default:
+            break;
+    }
+    return false;
+}
+
+bool TypingKeyboard::eventFilter(QObject* watched, QEvent* event) {
+    switch (event->type()) {
+        case QEvent::ShortcutOverride:
+        case QEvent::KeyPress:
+        case QEvent::KeyRelease:
+            if (handleKeyEvent(static_cast<QKeyEvent*>(event),
+                               isTextEntry(QApplication::focusWidget()))) return true;
+            break;
         case QEvent::ApplicationStateChange:
             // A key let go while another application had focus never reaches
             // us, so anything still held would sound forever.

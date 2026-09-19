@@ -278,6 +278,12 @@ protected:
                       hasFocus() ? 1.8 : 1.0));
         p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 7, 7);
         if (!track) return;
+        if (!daw::trackAccepts(track->kind, daw::ClipKind::Midi)) {
+            p.setPen(t.textSecondary);
+            p.drawText(rect().adjusted(10, 0, -10, 0), Qt::AlignVCenter | Qt::AlignLeft,
+                       QCoreApplication::translate("PatternWindow", "Group channel"));
+            return;
+        }
 
         const QRectF area = QRectF(rect()).adjusted(7, 5, -7, -5);
         const double tempo = m_controller->project().tempo;
@@ -674,12 +680,28 @@ QStringList PatternWindow::childTrackIds() const {
     if (!m_controller || m_patternId.isEmpty()) return ids;
     const auto& tracks = m_controller->project().tracks;
     ids.reserve(int(tracks.size()));
-    const std::string patternId = m_patternId.toStdString();
     for (const auto& track : tracks) {
-        if (track.parentId == patternId)
+        const bool channel = daw::trackAccepts(track.kind, daw::ClipKind::Midi) ||
+            (track.kind == daw::TrackKind::Folder && track.summing) ||
+            track.kind == daw::TrackKind::Group;
+        if (channel && ownsTrack(&track))
             ids.push_back(QString::fromStdString(track.id));
     }
     return ids;
+}
+
+bool PatternWindow::ownsTrack(const daw::TrackModel* track) const {
+    if (!m_controller || !track || m_patternId.isEmpty()) return false;
+    const auto& project = m_controller->project();
+    // The nearest Pattern owns the source. Folder disclosure belongs to the
+    // arrangement and must never hide its instruments in this editor.
+    auto* parent = project.findTrack(track->parentId);
+    for (std::size_t depth = 0; parent && depth < project.tracks.size(); ++depth) {
+        if (parent->kind == daw::TrackKind::Pattern)
+            return parent->id == m_patternId.toStdString();
+        parent = project.findTrack(parent->parentId);
+    }
+    return false;
 }
 
 void PatternWindow::setSelectedSources(const QStringList& ids,
@@ -791,7 +813,8 @@ int PatternWindow::replacementRowAtGlobal(const QPoint& globalPos) const {
     const QPoint local = m_rowsHost->mapFromGlobal(globalPos);
     for (int i = 0; i < m_rowWidgets.size(); ++i) {
         const QWidget* row = m_rowWidgets[i];
-        if (row && row->geometry().adjusted(0, 8, 0, -8).contains(local))
+        if (row && row->property("midiSource").toBool() &&
+            row->geometry().adjusted(0, 8, 0, -8).contains(local))
             return i;
     }
     return -1;
@@ -953,15 +976,24 @@ void PatternWindow::reorderSelectedSources(int dropIndex) {
 
     QStringList moving;
     QStringList remaining;
+    QSet<QString> movingIds;
     for (const QString& id : original) {
-        (m_selectedIds.contains(id) ? moving : remaining).push_back(id);
+        for (const QString& selected : std::as_const(m_selectedIds)) {
+            if (daw::isDescendantOf(m_controller->project(), id.toStdString(), selected.toStdString())) {
+                movingIds.insert(id);
+                break;
+            }
+        }
+    }
+    for (const QString& id : original) {
+        (movingIds.contains(id) ? moving : remaining).push_back(id);
     }
     if (moving.isEmpty()) return;
 
     const int boundedDrop = std::clamp(dropIndex, 0, int(original.size()));
     int insertion = 0;
     for (int i = 0; i < boundedDrop; ++i) {
-        if (!m_selectedIds.contains(original[i])) ++insertion;
+        if (!movingIds.contains(original[i])) ++insertion;
     }
     insertion = std::clamp(insertion, 0, int(remaining.size()));
     QStringList desired = remaining;
@@ -970,17 +1002,37 @@ void PatternWindow::reorderSelectedSources(int dropIndex) {
     if (desired == original) return;
 
     const std::size_t undoStart = m_controller->undoDepth();
-    std::size_t cursor =
-        m_controller->project().indexOf(m_patternId.toStdString()) + 1;
+    // Reorder siblings inside their existing parent. A flat editor gesture
+    // must not pull MIDI out of a summing group and silently reroute its audio.
+    QStringList parents;
     for (const QString& id : desired) {
-        const std::string sourceId = id.toStdString();
-        if (m_controller->project().indexOf(sourceId) != cursor) {
-            m_controller->moveTrack(sourceId, cursor,
-                                    m_patternId.toStdString());
+        const auto* track = m_controller->project().findTrack(id.toStdString());
+        const QString parent = QString::fromStdString(track->parentId);
+        if (!parents.contains(parent)) parents.push_back(parent);
+    }
+    for (const QString& parent : parents) {
+        const auto parentId = parent.toStdString();
+        QStringList siblings;
+        for (const QString& id : desired) {
+            const auto* track = m_controller->project().findTrack(id.toStdString());
+            if (track->parentId == parentId) siblings.push_back(id);
         }
-        const std::size_t now = m_controller->project().indexOf(sourceId);
-        cursor = now + 1 +
-                 daw::subtreeOf(m_controller->project(), sourceId).size();
+        if (siblings.size() < 2) continue;
+        // Hidden automation/audio lanes retain their slots among visible rows.
+        std::vector<std::string> ordered;
+        int next = 0;
+        for (const auto& track : m_controller->project().tracks) {
+            if (track.parentId != parentId) continue;
+            ordered.push_back(siblings.contains(QString::fromStdString(track.id))
+                ? siblings[next++].toStdString() : track.id);
+        }
+        std::size_t cursor = m_controller->project().indexOf(parentId) + 1;
+        for (const auto& sourceId : ordered) {
+            if (m_controller->project().indexOf(sourceId) != cursor)
+                m_controller->moveTrack(sourceId, cursor, parentId);
+            cursor = m_controller->project().indexOf(sourceId) + 1 +
+                daw::subtreeOf(m_controller->project(), sourceId).size();
+        }
     }
     m_controller->collapseUndo(undoStart, "Reorder Pattern Sources");
     refresh();
@@ -1017,10 +1069,16 @@ void PatternWindow::showSelectionMenu(const QString& trackId,
     const int count = m_selectedIds.size();
     QMenu menu(this);
     QAction* open = menu.addAction(tr("Open Piano Roll"));
+    const auto* selectedTrack = m_controller->project().findTrack(trackId.toStdString());
+    open->setEnabled(selectedTrack && daw::trackAccepts(selectedTrack->kind, daw::ClipKind::Midi));
     menu.addSeparator();
     QAction* transpose = menu.addAction(
         count == 1 ? tr("Transpose Selected Source…")
                    : tr("Transpose %1 Selected Sources…").arg(count));
+    transpose->setEnabled(std::any_of(m_selectedIds.cbegin(), m_selectedIds.cend(), [this](const QString& id) {
+        const auto* track = m_controller->project().findTrack(id.toStdString());
+        return track && daw::trackAccepts(track->kind, daw::ClipKind::Midi);
+    }));
     QAction* moveUp = menu.addAction(tr("Move Selected Up"));
     QAction* moveDown = menu.addAction(tr("Move Selected Down"));
     menu.addSeparator();
@@ -1083,6 +1141,8 @@ void PatternWindow::rebuildRows() {
 
         auto* row = new PatternSourceRow(id, m_rowsHost);
         row->setObjectName(QStringLiteral("PatternSourceRow"));
+        const bool midiSource = daw::trackAccepts(track->kind, daw::ClipKind::Midi);
+        row->setProperty("midiSource", midiSource);
         row->setFixedHeight(kRowHeight);
         const QString accessibleName =
             tr("Pattern source %1").arg(QString::fromStdString(track->name));
@@ -1215,6 +1275,12 @@ void PatternWindow::rebuildRows() {
 
         auto* sketch = new SourceSketch(m_controller, id, row);
         sketch->setObjectName(QStringLiteral("PatternSourceSketch"));
+        if (!midiSource) {
+            sketch->setEnabled(false);
+            sketch->setCursor(Qt::ArrowCursor);
+            sketch->setAccessibleName(tr("Group channel"));
+            sketch->setToolTip(tr("Group channel"));
+        }
         connect(sketch, &QAbstractButton::clicked, this,
                 [this, id] { openRoll(id); });
         layout->addWidget(sketch, 1);
@@ -1230,6 +1296,12 @@ void PatternWindow::rebuildRows() {
         auto* rhythmMenu = new QMenu(rhythm);
         populateRhythmMenu(rhythmMenu, id);
         rhythm->setMenu(rhythmMenu);
+        if (!midiSource) {
+            auto policy = rhythm->sizePolicy();
+            policy.setRetainSizeWhenHidden(true);
+            rhythm->setSizePolicy(policy);
+            rhythm->hide();
+        }
         layout->addWidget(rhythm);
 
         auto* remove = new ui::IconButton(icons::Glyph::Trash,
@@ -1299,6 +1371,9 @@ bool PatternWindow::rowStructureMatches(const QStringList& ids) const {
     for (int i = 0; i < ids.size(); ++i) {
         const QWidget* row = m_rowWidgets[i];
         if (!row || row->property("trackId").toString() != ids[i]) return false;
+        const auto* track = m_controller->project().findTrack(ids[i].toStdString());
+        if (!track || row->property("midiSource").toBool() !=
+            daw::trackAccepts(track->kind, daw::ClipKind::Midi)) return false;
     }
     return true;
 }
@@ -1345,7 +1420,13 @@ bool PatternWindow::syncRowsFromModel() {
             tr("Pattern source %1").arg(QString::fromStdString(track->name)));
         name->setSourceColor(rgb(track->color));
         name->syncFromModel(QString::fromStdString(track->name),
-                            QString::fromStdString(track->instrument.name));
+                            row->property("midiSource").toBool()
+                                ? QString::fromStdString(track->instrument.name) : tr("Group channel"));
+        if (!row->property("midiSource").toBool()) {
+            name->setCursor(Qt::ArrowCursor);
+            name->setToolTip(tr("Group channel"));
+            name->setAccessibleName(QString::fromStdString(track->name));
+        }
 
         if (mute->isChecked() != track->muted) {
             const QSignalBlocker blocker(mute);
@@ -1437,7 +1518,7 @@ void PatternWindow::addSampleFiles(const QStringList& paths,
 bool PatternWindow::replaceSample(const QString& trackId,
                                   const QString& path) {
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
-    if (!track || track->parentId != m_patternId.toStdString()) return false;
+    if (!ownsTrack(track) || !daw::trackAccepts(track->kind, daw::ClipKind::Midi)) return false;
     const std::size_t undoStart = m_controller->undoDepth();
     const bool loaded = track->instrument.uid == "daw.sampler" &&
                                 !track->instrument.id.empty()
@@ -1471,14 +1552,15 @@ void PatternWindow::chooseReplacementSample(const QString& trackId) {
 
 void PatternWindow::openInstrument(const QString& trackId) {
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
-    if (!track || !track->instrument.isLoaded()) return;
+    if (!ownsTrack(track) || !daw::trackAccepts(track->kind, daw::ClipKind::Midi) ||
+        !track->instrument.isLoaded()) return;
     emit openPluginEditorRequested(
         trackId, QString::fromStdString(track->instrument.id));
 }
 
 void PatternWindow::renameSource(const QString& trackId) {
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
-    if (!track) return;
+    if (!ownsTrack(track)) return;
     bool accepted = false;
     const QString current = QString::fromStdString(track->name);
     const QString name = QInputDialog::getText(
@@ -1493,7 +1575,7 @@ void PatternWindow::renameSource(const QString& trackId) {
 
 void PatternWindow::duplicateSource(const QString& trackId) {
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
-    if (!track || track->parentId != m_patternId.toStdString()) return;
+    if (!ownsTrack(track)) return;
     const std::string copy =
         m_controller->duplicateTrack(trackId.toStdString(), /*withInserts=*/true);
     if (copy.empty()) return;
@@ -1506,7 +1588,7 @@ void PatternWindow::duplicateSource(const QString& trackId) {
 
 void PatternWindow::removeSource(const QString& trackId) {
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
-    if (!track || track->parentId != m_patternId.toStdString()) return;
+    if (!ownsTrack(track)) return;
     m_controller->removeTrack(trackId.toStdString());
     m_selectedIds.removeAll(trackId);
     if (m_primaryId == trackId) m_primaryId.clear();
@@ -1568,7 +1650,7 @@ void PatternWindow::transposeSelectedSourcesBy(int semitones) {
     for (const QString& id : std::as_const(m_selectedIds)) {
         const auto* track =
             m_controller->project().findTrack(id.toStdString());
-        if (!track || track->parentId != m_patternId.toStdString()) continue;
+        if (!ownsTrack(track) || !daw::trackAccepts(track->kind, daw::ClipKind::Midi)) continue;
         for (const auto& clip : track->clips) {
             if (clip.kind != daw::ClipKind::Midi || clip.notes.empty()) continue;
             Job job{id.toStdString(), clip.id, clip.notes};
@@ -1603,11 +1685,14 @@ void PatternWindow::populateRhythmMenu(QMenu* menu, const QString& trackId) {
 
 void PatternWindow::populateSourceMenu(QMenu* menu, const QString& trackId) {
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
-    if (!track) return;
-    menu->addAction(tr("Open Instrument"), this, [this, trackId] { openInstrument(trackId); });
-    menu->addAction(tr("Open piano roll"), this, [this, trackId] { openRoll(trackId); });
-    auto* fill = menu->addMenu(tr("Fill rhythm"));
-    populateRhythmMenu(fill, trackId);
+    if (!ownsTrack(track)) return;
+    const bool midiSource = daw::trackAccepts(track->kind, daw::ClipKind::Midi);
+    if (midiSource) {
+        menu->addAction(tr("Open Instrument"), this, [this, trackId] { openInstrument(trackId); });
+        menu->addAction(tr("Open piano roll"), this, [this, trackId] { openRoll(trackId); });
+        auto* fill = menu->addMenu(tr("Fill rhythm"));
+        populateRhythmMenu(fill, trackId);
+    }
     const std::string slotId = track->instrument.id;
     if (m_controller->samplerInstance(track->id, slotId)) {
         auto* cut = menu->addAction(tr("Cut Itself"));
@@ -1626,7 +1711,8 @@ void PatternWindow::populateSourceMenu(QMenu* menu, const QString& trackId) {
     }
     menu->addSeparator();
     menu->addAction(tr("Rename…"), this, [this, trackId] { renameSource(trackId); });
-    menu->addAction(tr("Replace with Sample..."), this, [this, trackId] { chooseReplacementSample(trackId); });
+    if (midiSource)
+        menu->addAction(tr("Replace with Sample..."), this, [this, trackId] { chooseReplacementSample(trackId); });
     menu->addAction(tr("Duplicate Source"), this, [this, trackId] { duplicateSource(trackId); });
     menu->addSeparator();
     menu->addAction(tr("Remove Source"), this, [this, trackId] { removeSource(trackId); });
@@ -1657,7 +1743,7 @@ void PatternWindow::fillRhythm(const QString& trackId, int divisionsPerBar) {
     if (divisionsPerBar < 1 || divisionsPerBar > 32) return;
     const auto& project = m_controller->project();
     const auto* track = project.findTrack(trackId.toStdString());
-    if (!track || track->parentId != m_patternId.toStdString()) return;
+    if (!ownsTrack(track) || !daw::trackAccepts(track->kind, daw::ClipKind::Midi)) return;
     const auto* clip = firstSourceMidi(track);
     const auto* owner = sourcePatternClip(project.findTrack(m_patternId.toStdString()), clip);
     const double bar = patternBarBeats(project);
@@ -1679,7 +1765,7 @@ void PatternWindow::fillRhythm(const QString& trackId, int divisionsPerBar) {
         note.pitch = pitch;
         note.startBeats = index * step;
         note.lengthBeats = std::min({0.25, step * 0.5, length - note.startBeats});
-        note.velocity = 100;
+        note.velocity = 127;
         notes.push_back(std::move(note));
     }
     replaceSourceNotes(trackId, std::move(notes), length, "Fill Pattern Rhythm");
@@ -1689,7 +1775,7 @@ bool PatternWindow::replaceSourceNotes(const QString& trackId,
     std::vector<daw::NoteModel> notes, double lengthBeats, const std::string& label) {
     const auto& project = m_controller->project();
     const auto* track = project.findTrack(trackId.toStdString());
-    if (!track || track->parentId != m_patternId.toStdString() || notes.empty() ||
+    if (!ownsTrack(track) || !daw::trackAccepts(track->kind, daw::ClipKind::Midi) || notes.empty() ||
         !std::isfinite(lengthBeats) || lengthBeats <= 0.0) return false;
     const auto* source = firstSourceMidi(track);
     const auto* owner = sourcePatternClip(project.findTrack(m_patternId.toStdString()), source);
@@ -1759,7 +1845,7 @@ bool PatternWindow::applyMidiFile(const QString& trackId, const QString& path,
 
 void PatternWindow::openRoll(const QString& trackId) {
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
-    if (!track) return;
+    if (!ownsTrack(track) || !daw::trackAccepts(track->kind, daw::ClipKind::Midi)) return;
     for (const auto& clip : track->clips) {
         if (clip.kind != daw::ClipKind::Midi) continue;
         emit openPianoRollRequested(trackId, QString::fromStdString(clip.id));
@@ -1977,6 +2063,9 @@ bool PatternWindow::checkEditingForTest() {
     rhythm.findChild<QAction*>("pattern.fill.4")->trigger();
     check(firstClip()->notes.size() == 4 && firstClip()->notes[3].startBeats == 3.0,
           "quarter-bar action makes four on the floor");
+    check(std::all_of(firstClip()->notes.begin(), firstClip()->notes.end(),
+                     [](const auto& note) { return note.velocity == 127 && note.pan == 0.0f; }),
+          "new rhythm notes retain the sample's full level");
     const QString checkShot = qEnvironmentVariable("VLTONE_PATTERN_CHECK_SHOT");
     if (!checkShot.isEmpty()) {
         QApplication::processEvents();
@@ -2086,6 +2175,149 @@ bool PatternWindow::checkEditingForTest() {
           "filling an empty source creates MIDI and its ownership in one undo");
     controller.undo();
     check(!firstClip(), "undo removes a MIDI clip created by fill");
+
+    // A mixer group changes immediate parents, not Pattern membership. Cover
+    // collapsed/nested groups and the same editing paths as ungrouped sounds.
+    const auto groupedPattern = controller.addPattern("Grouped Pattern checks");
+    const auto a = controller.addPatternInstrument(groupedPattern, *sampler);
+    const auto b = controller.addPatternInstrument(groupedPattern, *sampler);
+    const auto c = controller.addPatternInstrument(groupedPattern, *sampler);
+    const QString qa = QString::fromStdString(a), qb = QString::fromStdString(b);
+    const QString qc = QString::fromStdString(c);
+    window.setPattern(QString::fromStdString(groupedPattern));
+    window.fillRhythm(qa, 4);
+    const auto originalA = *firstSourceMidi(controller.project().findTrack(a));
+    const auto group = controller.packIntoFolder({a, b}, "Melodies", true);
+    check(!group.empty(), "grouping Pattern instruments succeeds");
+    if (group.empty() || originalA.notes.empty()) return false;
+    window.hide();
+    window.show();
+    QApplication::processEvents();
+    const QString qGroup = QString::fromStdString(group);
+    check(window.childTrackIds() == QStringList{qGroup, qa, qb, qc} &&
+          firstSourceMidi(controller.project().findTrack(a))->id == originalA.id &&
+          firstSourceMidi(controller.project().findTrack(a))->notes == originalA.notes,
+          "reopening after grouping retains the instruments and their MIDI");
+    controller.undo(); window.refresh();
+    check(window.childTrackIds() == QStringList{qa, qb, qc}, "undo grouping restores the original rows");
+    controller.redo(); window.refresh();
+    // packIntoFolder's redo can mint a new folder ID.
+    const auto inner = controller.project().findTrack(a)->parentId;
+    const auto outer = controller.packIntoFolder({inner}, "Nested group", true);
+    controller.packIntoFolder({groupedPattern}, "Arrangement group", true);
+    controller.setFolderExpanded(inner, false);
+    controller.setFolderExpanded(outer, false);
+    controller.setFolderExpanded(groupedPattern, false);
+    window.refresh();
+    const QString qInner = QString::fromStdString(inner), qOuter = QString::fromStdString(outer);
+    check(window.childTrackIds() == QStringList{qOuter, qInner, qa, qb, qc},
+          "collapsed nested groups and an enclosing arrangement group keep all MIDI rows visible");
+    const QString groupShot = qEnvironmentVariable("DAW_PATTERN_CHECK_SHOT");
+    if (!groupShot.isEmpty()) {
+        window.resize(900, 440);
+        QApplication::processEvents();
+        check(window.grab().save(groupShot), "grouped Pattern screenshot saved");
+    }
+    const auto rowFor = [&](const QString& id) -> QWidget* {
+        for (auto* row : window.m_rowWidgets)
+            if (row->property("trackId").toString() == id) return row;
+        return nullptr;
+    };
+    auto* groupRow = rowFor(qInner);
+    check(groupRow != nullptr, "summing group has its own channel row");
+    if (!groupRow) return false;
+    auto* groupSketch = groupRow->findChild<QAbstractButton*>("PatternSourceSketch");
+    auto* groupLevel = groupRow->findChild<ui::FaderWidget*>("PatternSourceLevel");
+    auto* groupPan = groupRow->findChild<ui::PanKnob*>("PatternSourcePan");
+    if (!groupLevel || !groupPan) return false;
+    check(groupSketch && !groupSketch->isEnabled() &&
+          !groupRow->findChild<QToolButton*>("PatternRhythm")->isVisible(),
+          "group rows expose no MIDI editor or rhythm control");
+    groupLevel->setGain(0.6);
+    QMetaObject::invokeMethod(groupLevel, "gainChanged", Q_ARG(double, 0.6));
+    QMetaObject::invokeMethod(groupLevel, "editFinished");
+    groupPan->setPan(-0.25);
+    QMetaObject::invokeMethod(groupPan, "panChanged", Q_ARG(double, -0.25));
+    QMetaObject::invokeMethod(groupPan, "editFinished");
+    check(std::abs(controller.project().findTrack(inner)->volume - 0.6) < 1e-6 &&
+          controller.project().findTrack(inner)->pan == -0.25f &&
+          controller.project().findTrack(a)->volume == 1.0f,
+          "group volume and pan control its bus without editing child gains");
+    QString openedTrack, openedClip;
+    connect(&window, &PatternWindow::openPianoRollRequested, &window,
+        [&](const QString& track, const QString& clip) { openedTrack = track; openedClip = clip; });
+    const auto beforeGroupMidi = controller.undoDepth();
+    window.openRoll(qInner);
+    window.fillRhythm(qInner, 4);
+    check(!window.applyMidiFile(qInner, midiPath, &error) && openedTrack.isEmpty() &&
+          controller.project().findTrack(inner)->clips.empty() && controller.undoDepth() == beforeGroupMidi,
+          "group MIDI actions cannot create clips or alter the project");
+    rowFor(qa)->findChild<QAbstractButton*>("PatternSourceSketch")->click();
+    check(openedTrack == qa && openedClip == QString::fromStdString(originalA.id),
+          "a grouped source opens its original editable MIDI clip");
+    window.setSelectedSources({qa}, qa);
+    window.transposeSelectedSourcesBy(2);
+    check(firstSourceMidi(controller.project().findTrack(a))->notes.front().pitch ==
+          originalA.notes.front().pitch + 2, "transpose works inside nested groups");
+    check(window.applyMidiFile(qa, midiPath, &error) &&
+          firstSourceMidi(controller.project().findTrack(a))->notes.size() == 2 &&
+          firstSourceMidi(controller.project().findTrack(a))->patternClipId == originalA.patternClipId,
+          "MIDI import inside a group preserves the Pattern owner");
+    window.setSelectedSources({qb}, qb);
+    const auto beforeReorder = controller.undoDepth();
+    window.reorderSelectedSources(window.childTrackIds().indexOf(qa));
+    check(window.childTrackIds().indexOf(qb) < window.childTrackIds().indexOf(qa) &&
+          controller.project().findTrack(b)->parentId == inner &&
+          controller.project().findTrack(b)->outputBusId == inner &&
+          controller.undoDepth() == beforeReorder + 1,
+          "reordering grouped MIDI preserves its parent and audio routing");
+    controller.undo(); window.refresh();
+    check(window.childTrackIds().indexOf(qa) < window.childTrackIds().indexOf(qb),
+          "grouped reordering undoes in one step");
+    controller.redo(); window.refresh();
+    check(window.childTrackIds().indexOf(qb) < window.childTrackIds().indexOf(qa) &&
+          controller.project().findTrack(b)->outputBusId == inner,
+          "redo restores the grouped order and routing");
+    controller.undo(); window.refresh();
+    window.setSelectedSources({qOuter, qa}, qOuter);
+    window.reorderSelectedSources(window.childTrackIds().size());
+    check(window.childTrackIds() == QStringList{qc, qOuter, qInner, qa, qb} &&
+          controller.project().findTrack(a)->parentId == inner &&
+          controller.project().findTrack(inner)->parentId == outer,
+          "moving a selected group with a selected child keeps the complete hierarchy");
+    controller.undo(); window.refresh();
+    check(window.childTrackIds() == QStringList{qOuter, qInner, qa, qb, qc},
+          "undo restores the position of a complete group subtree");
+    controller.redo(); window.refresh();
+    check(window.childTrackIds() == QStringList{qc, qOuter, qInner, qa, qb},
+          "redo moves the complete group subtree again");
+    window.duplicateSource(qa);
+    const QString copy = window.m_primaryId;
+    const auto* copyTrack = controller.project().findTrack(copy.toStdString());
+    const bool copyInsideGroup = copy != qa && copyTrack && copyTrack->parentId == inner;
+    check(copyInsideGroup,
+          "duplicate source stays in its summing group");
+    if (!copyInsideGroup) return false;
+    window.removeSource(copy);
+    check(!controller.project().findTrack(copy.toStdString()) && controller.project().findTrack(a),
+          "removing a grouped source preserves its siblings");
+    const auto oldB = firstSourceMidi(controller.project().findTrack(b))->id;
+    controller.removeClip(b, oldB);
+    window.openRoll(qb);
+    const auto* newB = firstSourceMidi(controller.project().findTrack(b));
+    check(newB && !newB->patternClipId.empty() && openedTrack == qb,
+          "opening an empty grouped instrument creates correctly owned MIDI");
+    // An inner Pattern owns its own sounds, while ordinary folders are transparent.
+    const auto nestedPattern = controller.addPattern("Separate nested Pattern");
+    const auto nestedSound = controller.addPatternInstrument(nestedPattern, *sampler);
+    controller.moveTrack(nestedPattern, controller.project().tracks.size(), groupedPattern);
+    const auto plainFolder = controller.packIntoFolder({c}, "Plain folder", false);
+    controller.setFolderExpanded(plainFolder, false);
+    window.refresh();
+    check(window.childTrackIds().contains(qc) &&
+          !window.childTrackIds().contains(QString::fromStdString(nestedSound)) &&
+          !window.childTrackIds().contains(QString::fromStdString(other)),
+          "plain folders keep MIDI visible without leaking another Pattern's sources");
     return ok;
 }
 

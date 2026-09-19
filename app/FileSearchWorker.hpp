@@ -23,7 +23,8 @@ public:
 
     /// Start a search. An empty query cancels whatever is running and emits
     /// nothing — the caller shows the tree again.
-    void search(const QStringList& roots, const QString& query);
+    void search(const QStringList& roots, const QString& query,
+                const QStringList& ignoredExtensions = {});
     /// Abandon the running search; its results will be dropped when they land.
     void cancel();
 
@@ -34,9 +35,9 @@ public:
     static bool matches(const QString& fileName, const QString& query);
 
 signals:
-    /// One finished search. `truncated` says the cap was hit, so the panel can
-    /// admit the list is partial instead of implying it is everything.
-    void results(const QStringList& paths, bool truncated);
+    /// Cumulative results; `finished` is false while more folders remain.
+    /// `truncated` says a traversal or result cap was hit.
+    void results(const QStringList& paths, bool truncated, bool finished);
 
 private:
     /// Bumped per request; a result carrying an older number is stale.

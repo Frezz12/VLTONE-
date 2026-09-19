@@ -1290,6 +1290,13 @@ int main() {
         check(f.moveTrack(c, 0, ""), "track moves to the top");
         check(f.project().tracks[0].id == c && f.project().tracks[1].id == a,
               "document order follows the move");
+        f.undo();
+        check(f.project().tracks[0].id == a && f.project().tracks[1].id == b &&
+                  f.project().tracks[2].id == c,
+              "undo restores the exact position after moving a track upward");
+        f.redo();
+        check(f.project().tracks[0].id == c && f.project().tracks[1].id == a,
+              "redo restores the reordered tracks");
 
         const std::string folder = f.packIntoFolder({a, b}, "Group");
         check(!folder.empty(), "tracks pack into a folder");
@@ -1312,6 +1319,16 @@ int main() {
         check(!f.moveTrack(folder, 0, a),
               "a folder cannot be dropped into its own child");
         check(!f.moveTrack(folder, 0, folder), "a folder cannot contain itself");
+
+        check(f.moveTrack(folder, 0, ""), "folder moves before another track");
+        f.undo();
+        check(f.project().tracks[0].id == c && f.project().tracks[1].id == folder &&
+                  f.project().tracks[2].id == a && f.project().tracks[3].id == b,
+              "undo restores a complete subtree at its original position");
+        f.redo();
+        check(f.project().tracks[0].id == folder && f.project().tracks[1].id == a &&
+                  f.project().tracks[2].id == b && f.project().tracks[3].id == c,
+              "redo preserves the complete subtree order");
 
         // Moving the folder carries its children along, in order.
         check(f.moveTrack(folder, f.project().tracks.size(), ""),

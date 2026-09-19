@@ -1,10 +1,15 @@
 #include "FileSearchWorker.hpp"
 #include "ProjectTemplates.hpp"
+#include "BrowserPrefs.hpp"
 
+#include <QCoreApplication>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QMetaObject>
 #include <QPointer>
+#include <QQueue>
+#include <QSet>
 #include <QThreadPool>
 
 namespace {
@@ -14,10 +19,6 @@ namespace {
 constexpr int kMaxMatches = 2000;
 constexpr int kMaxVisited = 200000;
 constexpr int kMaxDepth = 12;
-
-int depthUnder(const QString& root, const QString& path) {
-    return int(path.mid(root.size()).count(QLatin1Char('/')));
-}
 
 } // namespace
 
@@ -54,25 +55,49 @@ void FileSearchWorker::cancel() {
     m_generation->fetch_add(1, std::memory_order_release);
 }
 
-void FileSearchWorker::search(const QStringList& roots, const QString& query) {
+void FileSearchWorker::search(const QStringList& roots, const QString& query,
+                              const QStringList& ignoredExtensions) {
     const quint64 generation =
         m_generation->fetch_add(1, std::memory_order_release) + 1;
-    if (query.trimmed().isEmpty() || roots.isEmpty()) return;
+    if (query.trimmed().isEmpty()) return;
 
     // Captured by value: the task must not touch the worker except through the
     // queued callback below, and the counter outlives both.
     auto counter = m_generation;
     QPointer<FileSearchWorker> self(this);
 
-    QThreadPool::globalInstance()->start([roots, query, generation, counter, self] {
+    QThreadPool::globalInstance()->start([roots, query, ignoredExtensions, generation, counter, self] {
         QStringList found;
         int visited = 0;
         bool truncated = false;
+        QElapsedTimer delivery;
+        delivery.start();
+        qsizetype publishedCount = 0;
+        const auto publish = [&](bool finished) {
+            QMetaObject::invokeMethod(QCoreApplication::instance(),
+                [self, found, truncated, finished, generation, counter] {
+                    if (self && counter->load(std::memory_order_acquire) == generation)
+                        emit self->results(found, truncated, finished);
+                }, Qt::QueuedConnection);
+            publishedCount = found.size();
+            delivery.restart();
+        };
+        QQueue<QPair<QString, int>> pending;
+        for (const QString& root : roots) pending.enqueue({root, 0});
+        QSet<QString> scanned;
 
-        for (const QString& root : roots) {
+        // Breadth first: one large library must not postpone matches directly
+        // inside the other roots. Prune packages/deep folders before entering.
+        while (!pending.isEmpty() && visited < kMaxVisited && found.size() < kMaxMatches) {
             if (counter->load(std::memory_order_acquire) != generation) return;
-            QDirIterator it(root, QDir::AllEntries | QDir::NoDotAndDotDot,
-                            QDirIterator::Subdirectories);
+            const auto [directory, depth] = pending.dequeue();
+            QString identity = QDir(directory).absolutePath();
+#if defined(Q_OS_WIN)
+            identity = identity.toCaseFolded();
+#endif
+            if (scanned.contains(identity)) continue;
+            scanned.insert(identity);
+            QDirIterator it(directory, QDir::AllEntries | QDir::NoDotAndDotDot);
             while (it.hasNext()) {
                 const QString path = it.next();
                 if (++visited > kMaxVisited) {
@@ -86,44 +111,32 @@ void FileSearchWorker::search(const QStringList& roots, const QString& query) {
                     counter->load(std::memory_order_acquire) != generation) {
                     return;
                 }
+                if (found.size() != publishedCount && delivery.elapsed() >= 100)
+                    publish(false);
                 const QFileInfo info = it.fileInfo();
-                if (info.isDir()) {
-                    if (ui::projecttemplates::isTemplatePackage(path) &&
-                        matches(info.fileName(), query)) {
-                        found << info.absoluteFilePath();
-                        if (found.size() >= kMaxMatches) {
-                            truncated = true;
-                            break;
-                        }
+                const bool package = ui::projecttemplates::isTemplatePackage(path);
+                if (info.isDir() && !package) {
+                    if (!info.isSymLink()) {
+                        if (depth < kMaxDepth) pending.enqueue({path, depth + 1});
+                        else truncated = true;
                     }
                     continue;
                 }
-                // QDirIterator cannot prune a package directory. It may still
-                // walk through one, but none of the package's implementation
-                // files are user-facing search results.
-                if (QDir::fromNativeSeparators(path).contains(
-                        QLatin1String(".vltt/"), Qt::CaseInsensitive)) {
-                    continue;
-                }
-                if (depthUnder(root, path) > kMaxDepth) continue;
+                if (ui::browserprefs::isIgnoredFile(info.fileName(), ignoredExtensions)) continue;
                 if (!matches(info.fileName(), query)) continue;
                 found << info.absoluteFilePath();
+                if (found.size() == 1 || delivery.elapsed() >= 100) {
+                    publish(false);
+                }
                 if (found.size() >= kMaxMatches) {
                     truncated = true;
                     break;
                 }
             }
-            if (truncated) break;
         }
 
         if (counter->load(std::memory_order_acquire) != generation) return;
-        // Back to the UI thread, and only if the worker is still there.
-        QMetaObject::invokeMethod(
-            self, [self, found, truncated, generation, counter] {
-                if (!self) return;
-                if (counter->load(std::memory_order_acquire) != generation) return;
-                emit self->results(found, truncated);
-            },
-            Qt::QueuedConnection);
+        if (!pending.isEmpty()) truncated = true;
+        publish(true);
     });
 }

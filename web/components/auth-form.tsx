@@ -2,10 +2,31 @@
 
 import type { APIError, AccountSession } from "@vlt/api-client";
 import { api } from "@vlt/api-client";
+import { Eye, EyeOff } from "lucide-react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
+
+function PasswordField({ label, name, autoComplete, showLabel, hideLabel }: {
+  label: string;
+  name: string;
+  autoComplete: "current-password" | "new-password";
+  showLabel: string;
+  hideLabel: string;
+}) {
+  const [visible, setVisible] = useState(false);
+  const actionLabel = visible ? hideLabel : showLabel;
+  return <div className="vlt-label">
+    <label htmlFor={name}>{label}</label>
+    <div className="password-input">
+      <input id={name} className="vlt-input" name={name} type={visible ? "text" : "password"} minLength={8} maxLength={128} autoComplete={autoComplete} required />
+      <button className="password-toggle" type="button" onClick={() => setVisible((value) => !value)} aria-label={actionLabel} aria-pressed={visible} title={actionLabel}>
+        {visible ? <EyeOff size={18} aria-hidden /> : <Eye size={18} aria-hidden />}
+      </button>
+    </div>
+  </div>;
+}
 
 export function AuthForm({ locale, mode }: { locale: string; mode: "login" | "register" }) {
   const t = useTranslations("Auth");
@@ -33,8 +54,8 @@ export function AuthForm({ locale, mode }: { locale: string; mode: "login" | "re
     <form className="vlt-stack" onSubmit={submit}>
       <label className="vlt-label">{t("email")}<input className="vlt-input" name="email" type="email" autoComplete="email" required /></label>
       {register && <label className="vlt-label">{t("nickname")}<input className="vlt-input" name="nickname" minLength={3} maxLength={32} autoComplete="nickname" required /></label>}
-      <label className="vlt-label">{t("password")}<input className="vlt-input" name="password" type="password" minLength={12} maxLength={128} autoComplete={register ? "new-password" : "current-password"} required /></label>
-      {register && <label className="vlt-label">{t("passwordAgain")}<input className="vlt-input" name="password_confirmation" type="password" minLength={12} maxLength={128} autoComplete="new-password" required /></label>}
+      <PasswordField label={t("password")} name="password" autoComplete={register ? "new-password" : "current-password"} showLabel={t("showPassword")} hideLabel={t("hidePassword")} />
+      {register && <PasswordField label={t("passwordAgain")} name="password_confirmation" autoComplete="new-password" showLabel={t("showPassword")} hideLabel={t("hidePassword")} />}
       {register && <label className="vlt-checkbox"><input name="consent_accepted" type="checkbox" required /><span>{t("consent", { version: consentVersion })}</span></label>}
       {error && <div className="vlt-error" role="alert">{error}</div>}
       <button className="vlt-button" disabled={busy}>{busy ? t("working") : t(register ? "register" : "login")}</button>

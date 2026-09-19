@@ -49,8 +49,13 @@ public:
 
     /// Restore the saved placement on first use, show, raise and activate.
     void present();
+    /// Restore widget and native stacking without taking keyboard focus.
+    void raiseEditor();
     void activateEditor();
     bool isEditorActive() const { return m_active; }
+    /// Plugin windows keep only Close; also disable title double-click and
+    /// ignore an old maximized placement when expansion is disabled.
+    void setExpansionEnabled(bool enabled);
 
     void setMaximized(bool maximized);
     bool isMaximized() const { return m_maximized; }
@@ -94,6 +99,7 @@ private:
     QRect workspaceRect() const;
     QRect constrainedGeometry(const QRect& wanted) const;
     void updateResizeHandles();
+    void updateCornerMask();
     void updateMaximizeButton();
     void restoreContentFocus();
     bool belongsToFrame(const QWidget* widget) const;
@@ -131,7 +137,9 @@ private:
     bool m_dragging = false;
     bool m_resizing = false;
     bool m_maximized = false;
+    bool m_expansionEnabled = true;
     bool m_active = false;
+    bool m_pitchChrome = false;
     bool m_placementRestored = false;
     bool m_applicationEventFilterInstalled = false;
 };

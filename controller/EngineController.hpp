@@ -810,6 +810,16 @@ public:
     plugins::PluginInstance* insertInstance(const std::string& channelId,
                                             const std::string& insertId);
 
+    /// Project-wide VLT Pitch edits, including Clip FX, sampler FX and master.
+    /// Key import changes only key/scale; copy uses the source editor channel
+    /// and keeps each destination's bypass, routing and automation intact.
+    std::size_t pitchCorrectorCount() const;
+    audio::Result applyKeyToPitchCorrectors(int root, const std::string& scale,
+                                          std::size_t* updated = nullptr);
+    audio::Result copyPitchCorrectorSettings(const std::string& channelId,
+                                             const std::string& insertId,
+                                             std::size_t* updated = nullptr);
+
     // ── Sampler-scoped insert FX ──
     const SamplerFxModel* samplerFx(const std::string& trackId,
                                     const std::string& samplerSlotId) const;
@@ -1729,9 +1739,13 @@ public:
         m_engine.configureAudioWorkers({realtime, m_sampleRate, m_bufferSize, {}, maxParallelThreads});
         return m_engine.realtimeWorkerCount();
     }
+    /// Optional ADC/DAC timestamps exercise recording placement and presentation
+    /// timing through the production callback without opening an audio device.
     bool processDeviceBlockForTest(const audio::AudioBuffer& input,
                                    audio::AudioBuffer& output,
-                                   audio::BufferSize frames);
+                                   audio::BufferSize frames,
+                                   std::int64_t inputTimeNs = 0,
+                                   std::int64_t outputTimeNs = 0);
     /// Offline hook: pretend `seconds` of input have been captured on
     /// `trackId`, shaped by `level(t)` (a flat 0.6 when it is not given).
     /// An offline harness has no audio device, so the recorder's own clock
@@ -1892,6 +1906,11 @@ public:
 
 private:
     class DeviceCallback;   // bridges the PortAudio callback to the engine
+
+    audio::Result applyPitchCorrectorParameters(
+        const std::vector<InsertParameter>& values, const std::string& label,
+        const std::string& excludeChannel, const std::string& excludeInsert,
+        std::size_t* updated);
 
     uint32_t colorForNewTrack(TrackKind kind) const;
 
@@ -2179,7 +2198,7 @@ private:
     audio::Result renderProjectPass(const rendering::Spec& spec,
         const std::function<bool(const rendering::Progress&)>& onProgress,
                                    rendering::Report& out, bool& restartRequired);
-    void applyRenderSelection(const rendering::Spec& spec);
+    static void applyRenderSelection(const rendering::Spec& spec, ProjectModel& project);
     /// Move the whole session to another sample rate, dropping the decoded-clip
     /// caches that were converted for the old one. Used by a render that writes
     /// at a rate the project does not run at, in both directions.
@@ -2298,6 +2317,7 @@ private:
         plugins::PluginMainThreadWork::generation();
     std::uint32_t m_pluginCompatibilitySweepTicks = 0;
     std::uint64_t m_pluginEventScanCount = 0;
+    bool m_pendingPitchQualityChanges = false;
     bool m_previewParameterEditsPending = false;
     /// Wait for every built-in sampler's latest background bake. Playback and
     /// offline/export paths call this before consuming the graph so a GUI-tick

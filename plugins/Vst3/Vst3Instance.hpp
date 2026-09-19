@@ -69,6 +69,7 @@ public:
 
     bool saveState(std::vector<std::uint8_t>& out) const override;
     bool loadState(std::span<const std::uint8_t> state) override;
+    std::vector<PluginEvent> pendingParameterEvents() override;
 
     void setParameterFromHost(std::uint32_t index, double plainValue) override;
     void pumpMainThread() override;
@@ -97,7 +98,7 @@ private:
     void readParameters();
     void readMidiMappings();
     void readBuses();
-    bool allocateAndActivateBuses(std::uint32_t maxBlockSize);
+    bool allocateAndActivateBuses(std::uint32_t maxBlockSize, bool sidechainConnected);
     void refreshLatency();
     /// Normalised 0…1 (what VST3 speaks) ↔ the plugin's own units (what this
     /// host's API and its automation lanes speak).
@@ -164,6 +165,7 @@ private:
     std::uint32_t m_maxBlockSize = 0;
     double m_sampleRate = 48000.0;
     bool m_separateController = false;
+    bool m_componentInitialized = false;
 
     void captureControllerValuesForProcessor();
 

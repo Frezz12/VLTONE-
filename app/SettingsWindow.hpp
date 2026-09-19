@@ -90,6 +90,8 @@ signals:
     void cpuStatusBarVisibilityChanged(bool visible);
     /// How selected tracks are tinted changed on the Themes tab.
     void selectionTintChanged();
+    /// Grid/cursor preferences changed; repaint without rebuilding the style.
+    void timelineAppearanceChanged();
     /// A local arrangement/header image, GIF, video or presentation changed.
     void themeBackgroundSettingsChanged();
     void restartRequested();
@@ -171,6 +173,10 @@ private:
     QSlider* m_headerBlur = nullptr;
     QLabel* m_headerBlurValue = nullptr;
     QCheckBox* m_headerAnimate = nullptr;
+    QSlider* m_gridWidth = nullptr;
+    QLabel* m_gridWidthValue = nullptr;
+    QSlider* m_gridOpacity = nullptr;
+    QLabel* m_gridOpacityValue = nullptr;
     QSlider* m_playheadWidth = nullptr;
     QLabel* m_playheadWidthValue = nullptr;
     QCheckBox* m_playheadTrail = nullptr;

@@ -1,6 +1,7 @@
 #include <aeffectx.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -148,6 +149,10 @@ VstIntPtr dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
 void setParameter(AEffect* effect, VstInt32 index, float value) {
     State& self = state(effect);
     if (index == 0) self.gain = std::clamp(value, 0.0f, 1.0f);
+    if (std::getenv("DAW_TEST_VST_CHANGE_IO")) {
+        effect->numInputs = effect->numOutputs = 6;
+        if (self.host) self.host(effect, audioMasterIOChanged, 0, 0, nullptr, 0);
+    }
 }
 
 float getParameter(AEffect* effect, VstInt32 index) {

@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -223,6 +224,8 @@ const clap_plugin_tail_t kTailExt = {tailGet};
 // in PluginInstance.
 
 bool stateSave(const clap_plugin_t* plugin, const clap_ostream_t* stream) {
+    if (std::getenv("DAW_TEST_CLAP_BAD_STREAM"))
+        return stream->write(stream, nullptr, UINT64_MAX) >= 0;
     auto* self = TestPlugin::of(plugin);
     const double values[4] = {self->gain, self->offset,
                               double(self->processCalls),
@@ -243,7 +246,11 @@ const clap_plugin_state_t kState = {stateSave, stateLoad};
 
 // ── plugin ──
 
-bool pluginInit(const clap_plugin_t*) { return true; }
+bool pluginInit(const clap_plugin_t* plugin) {
+    if (std::getenv("DAW_TEST_CLAP_INIT_CALLBACK"))
+        TestPlugin::of(plugin)->host->request_callback(TestPlugin::of(plugin)->host);
+    return true;
+}
 
 void pluginDestroy(const clap_plugin_t* plugin) { delete TestPlugin::of(plugin); }
 

@@ -1,5 +1,14 @@
 # Compact Sampler editor
 
+New Samplers start at unity gain (0 dB); centred voice pan uses the same
+unity-preserving stereo balance as audio clips and the mixer. A root-key note
+at velocity 127 therefore retains the source sample's level. Piano Roll starts
+with velocity 127, then remembers the last edited note's dynamics; Pattern
+rhythm fill and computer/Sampler keyboards also start at full velocity. The
+channel/FX fader still provides gain above unity. Saved volume values and MIDI
+velocities are retained; the Sampler volume parameter range stays unchanged
+so existing automation keeps its scale.
+
 The instrument editor defaults to **960 × 600** logical pixels (previously
 1080 × 688), excluding the shared internal title bar. The audio-clip editor uses
 the same panel at 960 × 562, without the plugin header. The instrument window's

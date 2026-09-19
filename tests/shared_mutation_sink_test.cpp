@@ -6,6 +6,8 @@
 #include "collaboration/SharedMutationSink.hpp"
 #include "Core/AudioBuffer.hpp"
 #include "Recording/RecordingEngine.hpp"
+#include "Internal/PitchCorrectorInstance.hpp"
+#include "collaboration/ProjectReducer.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -1851,9 +1853,44 @@ void verifyLocalFallback() {
           "fallback sink detaches before its lifetime ends");
 }
 
+void verifyPitchSettingsBatch(daw::collab::SharedMutationResult result) {
+    daw::EngineController controller;
+    check(bool(controller.initialize(48000, 128, false)), "pitch sharing fixture initializes");
+    const auto track = controller.addTrack(daw::TrackKind::Audio, "Pitch");
+    const auto& descriptor = daw::plugins::pitch::PitchCorrectorInstance::staticDescriptor();
+    const auto first = controller.addInsert(track, descriptor);
+    const auto second = controller.addInsert(daw::EngineController::kMasterChannelId, descriptor);
+    controller.setInsertChannelMode(track, first, daw::PluginChannelMode::DualMono);
+    controller.setInsertParameter(track, first, "humanize", 24);
+    const auto depth = controller.undoDepth();
+    FakeSharedMutationSink sink;
+    sink.result = result;
+    controller.attachSharedMutationSink(sink);
+    const auto applied = controller.applyKeyToPitchCorrectors(6, "natural_minor");
+    check(bool(applied) == (result == daw::collab::SharedMutationResult::Submitted) && sink.genericCalls == 1 &&
+              controller.insertParameter(track, first, "key") == 0 && controller.undoDepth() == depth,
+          "shared key import submits once without bypassing the collaboration gateway");
+    const auto batch = std::get<std::shared_ptr<daw::collab::BatchCommand>>(sink.genericBodies.back());
+    check(batch && batch->commands.size() == 6, "shared key batch includes master and both dual-mono processors");
+    daw::collab::SharedProjectDocument scratch;
+    scratch.project = controller.project();
+    daw::collab::ProjectCommand command;
+    command.meta.operationId = daw::newUuid();
+    command.body = batch;
+    check(daw::collab::ProjectReducer::apply(scratch, command).accepted(),
+          "key batch is valid for the shared reducer");
+    const auto copied = controller.copyPitchCorrectorSettings(track, first);
+    check(bool(copied) == (result == daw::collab::SharedMutationResult::Submitted) && sink.genericCalls == 2 &&
+              controller.insertParameter(daw::EngineController::kMasterChannelId, second, "humanize") == 0 &&
+              controller.undoDepth() == depth,
+          "shared send-to-all is atomic and a blocked edit leaves destinations unchanged");
+    controller.detachSharedMutationSink(sink);
+}
 } // namespace
 
 int main() {
+    verifyPitchSettingsBatch(daw::collab::SharedMutationResult::Submitted);
+    verifyPitchSettingsBatch(daw::collab::SharedMutationResult::Blocked);
     verifyCapabilityLedger();
     verifyFreezeAndDiagnosticsStayLocal();
     verifySharedAssetMutationGate();

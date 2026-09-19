@@ -19,6 +19,10 @@
 /// losing the ordering between them.
 namespace daw::plugins {
 
+/// Bound opaque state supplied through host-owned streams. This is a resource
+/// limit, not isolation from native plugin code running in the host process.
+inline constexpr std::size_t kMaxPluginStateBytes = 256u * 1024u * 1024u;
+
 /// `Internal` is the odd one out: it is not a plugin format at all but the
 /// build's own instruments and effects, wearing the same interface so that
 /// slots, state, automation and the picker menus need no second code path. It
@@ -133,6 +137,7 @@ struct PluginProcessInfo {
     double sampleRate = 48000.0;
     std::uint32_t maxBlockSize = 512;
     bool offline = false;
+    bool sidechainConnected = false;
 };
 
 /// What the format says after a process call. Only an explicit

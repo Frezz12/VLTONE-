@@ -640,8 +640,12 @@ Result AudioFileWriter::write(const float* const* channels, FrameCount frames,
     for (FrameCount frame = 0; frame < frames; ++frame) {
         for (ChannelCount channel = 0; channel < m_impl->channels; ++channel) {
             const float* source = channels[channel];
+            const float sample = source ? source[frame] * gain : 0.0f;
+            if (!std::isfinite(sample))
+                return Result::fail(EngineError::FileWriteError,
+                                    "audio contains a non-finite sample (NaN or infinity)");
             m_impl->interleaved[std::size_t(frame) * m_impl->channels + channel] =
-                source ? source[frame] * gain : 0.0f;
+                sample;
         }
     }
     sf_count_t written = 0;
@@ -675,7 +679,7 @@ Result AudioFileWriter::write(const float* const* channels, FrameCount frames,
                 value += a - b;
             }
             const std::int64_t word =
-                std::clamp(std::int64_t(std::llround(value)), lowest, highest);
+                std::llround(std::clamp(value, double(lowest), double(highest)));
             m_impl->quantized[i] = int(word << shift);
         }
         written = sf_writef_int(m_impl->file, m_impl->quantized.data(), frames);

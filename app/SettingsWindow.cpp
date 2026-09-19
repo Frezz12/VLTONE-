@@ -176,12 +176,15 @@ protected:
         const qreal laneTop = frame.top() + headerHeight;
         const qreal laneRight = frame.right();
         const qreal laneBottom = frame.bottom() - footerHeight;
-        painter.setPen(theme.gridLine);
-        for (qreal x = laneLeft + 18.0; x < laneRight; x += 18.0)
+        painter.save();
+        painter.setOpacity(painter.opacity() * ui::gridOpacity() / 100.0);
+        for (int line = 1; laneLeft + line * 18.0 < laneRight; ++line) {
+            const qreal x = laneLeft + line * 18.0;
+            painter.setPen(QPen(line % 4 == 0 ? theme.gridLineStrong : theme.gridLine,
+                                ui::gridLineWidth()));
             painter.drawLine(QPointF(x, laneTop), QPointF(x, laneBottom));
-        painter.setPen(theme.gridLineStrong);
-        for (qreal x = laneLeft + 72.0; x < laneRight; x += 72.0)
-            painter.drawLine(QPointF(x, laneTop), QPointF(x, laneBottom));
+        }
+        painter.restore();
 
         const qreal trackHeight = (laneBottom - laneTop) / 3.0;
         const QString trackNames[] = {
@@ -375,7 +378,7 @@ QScrollArea* scrollablePage(QWidget* page) {
     auto* scroll = new SettingsScrollArea;
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidgetResizable(true);
-    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scroll->setSizeAdjustPolicy(QAbstractScrollArea::AdjustIgnored);
     scroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
@@ -448,7 +451,7 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
                                ShortcutManager* shortcuts, QWidget* parent)
     : QDialog(parent, Qt::Widget), m_controller(controller), m_shortcuts(shortcuts) {
     setWindowTitle(tr("Settings — %1").arg(QApplication::applicationDisplayName()));
-    resize(780, 560);
+    resize(960, 560);
     setSizeGripEnabled(false);
 
     m_pages = new QStackedWidget(this);
@@ -592,7 +595,8 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
         QStringLiteral("ui/settingsPage"), int(kInterfaceTab)).toInt();
     showTab(std::clamp(savedPage, 0, int(kInterfaceTab)));
 
-    constrainToScreen();
+    // The workspace supplies the final bounds after this dialog is embedded.
+    // Standalone dialogs are constrained in showEvent once their host is known.
 }
 
 void SettingsWindow::refreshTimelineBackgroundSource() {
@@ -1425,6 +1429,55 @@ QWidget* SettingsWindow::buildThemesTab() {
                 emit themeBackgroundSettingsChanged();
             });
 
+    auto* gridGroup = new QGroupBox(tr("Timeline grid"), page);
+    auto* gridCol = new QVBoxLayout(gridGroup);
+    auto* gridWidthRow = new QHBoxLayout;
+    auto* gridWidthLabel = new QLabel(tr("Line thickness"), gridGroup);
+    m_gridWidth = new ui::GlassSlider(Qt::Horizontal, gridGroup);
+    m_gridWidth->setObjectName(QStringLiteral("TimelineGridWidth"));
+    m_gridWidth->setAccessibleName(tr("Grid line thickness in pixels"));
+    m_gridWidth->setRange(int(std::lround(ui::kGridLineWidthMin * 10.0)),
+                         int(std::lround(ui::kGridLineWidthMax * 10.0)));
+    m_gridWidth->setPageStep(5);
+    m_gridWidth->setValue(int(std::lround(ui::gridLineWidth() * 10.0)));
+    gridWidthLabel->setBuddy(m_gridWidth);
+    m_gridWidthValue = new QLabel(gridGroup);
+    m_gridWidthValue->setMinimumWidth(48);
+    m_gridWidthValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    const auto showGridWidth = [this] {
+        m_gridWidthValue->setText(tr("%1 px").arg(ui::gridLineWidth(), 0, 'f', 1));
+    };
+    showGridWidth();
+    gridWidthRow->addWidget(gridWidthLabel);
+    gridWidthRow->addWidget(m_gridWidth, 1);
+    gridWidthRow->addWidget(m_gridWidthValue);
+    gridCol->addLayout(gridWidthRow);
+
+    auto* gridOpacityRow = new QHBoxLayout;
+    auto* gridOpacityLabel = new QLabel(tr("Opacity"), gridGroup);
+    m_gridOpacity = new ui::GlassSlider(Qt::Horizontal, gridGroup);
+    m_gridOpacity->setObjectName(QStringLiteral("TimelineGridOpacity"));
+    m_gridOpacity->setAccessibleName(tr("Grid opacity in percent"));
+    m_gridOpacity->setRange(0, 100);
+    m_gridOpacity->setPageStep(10);
+    m_gridOpacity->setValue(ui::gridOpacity());
+    gridOpacityLabel->setBuddy(m_gridOpacity);
+    m_gridOpacityValue = new QLabel(gridGroup);
+    m_gridOpacityValue->setMinimumWidth(48);
+    m_gridOpacityValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    const auto showGridOpacity = [this] {
+        m_gridOpacityValue->setText(QStringLiteral("%1%").arg(ui::gridOpacity()));
+    };
+    showGridOpacity();
+    gridOpacityRow->addWidget(gridOpacityLabel);
+    gridOpacityRow->addWidget(m_gridOpacity, 1);
+    gridOpacityRow->addWidget(m_gridOpacityValue);
+    gridCol->addLayout(gridOpacityRow);
+    auto* gridHint = new QLabel(tr("0% hides the grid. Snapping stays unchanged."), gridGroup);
+    gridHint->setWordWrap(true);
+    gridCol->addWidget(gridHint);
+    col->insertWidget(3, gridGroup); // Keep grid and cursor just below the palette.
+
     // The playhead. Thickness is a real preference rather than a default worth
     // defending: the same hairline that is right on a sparse arrangement is
     // invisible over dense waveforms on a high-density screen.
@@ -1461,7 +1514,7 @@ QWidget* SettingsWindow::buildThemesTab() {
     trail->setChecked(ui::playheadTrail());
     trail->setAccessibleName(tr("Playhead motion trail"));
     headCol->addWidget(trail);
-    col->addWidget(headGroup);
+    col->insertWidget(4, headGroup);
 
     // How a selected track is washed. It belongs beside the palette because it
     // is a palette decision, and it is a real choice rather than a default:
@@ -1495,13 +1548,24 @@ QWidget* SettingsWindow::buildThemesTab() {
     col->addWidget(tintGroup);
 
 
-    // Nothing owns the playhead as a widget property either; the arrangement
-    // reads these while painting, so a theme refresh is again the honest way to
-    // ask every surface to repaint.
+    // Repaint the arrangement without resetting application styles on every
+    // slider step. Its retained grid geometry must be invalidated as well.
     const auto repaintSurfaces = [this] {
-        ThemeManager::instance().apply();
-        emit selectionTintChanged();
+        if (m_themePreview) m_themePreview->update();
+        emit timelineAppearanceChanged();
     };
+    connect(m_gridWidth, &QSlider::valueChanged, this,
+            [showGridWidth, repaintSurfaces](int tenths) {
+                ui::setGridLineWidth(double(tenths) / 10.0);
+                showGridWidth();
+                repaintSurfaces();
+            });
+    connect(m_gridOpacity, &QSlider::valueChanged, this,
+            [showGridOpacity, repaintSurfaces](int percent) {
+                ui::setGridOpacity(percent);
+                showGridOpacity();
+                repaintSurfaces();
+            });
     connect(widthSlider, &QSlider::valueChanged, this,
             [showWidth, repaintSurfaces](int tenths) {
                 const double pixels = double(tenths) / 10.0;
@@ -1630,6 +1694,12 @@ void SettingsWindow::refreshThemeControls() {
              m_headerBlurRow, m_headerAnimate})
         if (widget) widget->setEnabled(headerEnabled);
 
+    setSlider(m_gridWidth, int(std::lround(ui::gridLineWidth() * 10.0)));
+    setSlider(m_gridOpacity, ui::gridOpacity());
+    if (m_gridWidthValue)
+        m_gridWidthValue->setText(tr("%1 px").arg(ui::gridLineWidth(), 0, 'f', 1));
+    if (m_gridOpacityValue)
+        m_gridOpacityValue->setText(QStringLiteral("%1%").arg(ui::gridOpacity()));
     setSlider(m_playheadWidth,
               int(std::lround(ui::playheadWidth() * 10.0)));
     setCheck(m_playheadTrail, ui::playheadTrail());
@@ -2233,6 +2303,19 @@ QWidget* SettingsWindow::buildInterfaceTab() {
         startupGroup);
     startupHint->setWordWrap(true);
     startupForm->addRow(startupHint);
+    auto* startupScan = new QCheckBox(tr("Scan plugins at startup"), startupGroup);
+    startupScan->setObjectName(QStringLiteral("ScanPluginsAtStartup"));
+    startupScan->setChecked(ui::scanPluginsAtStartup());
+    const QString scanHint = tr(
+        "When off, VLTONE uses the saved plugin list. To find new plugins, "
+        "run Scan or Rescan All in Plugin Manager.");
+    startupScan->setAccessibleDescription(scanHint);
+    connect(startupScan, &QCheckBox::toggled, startupGroup,
+            &ui::setScanPluginsAtStartup);
+    startupForm->addRow(startupScan);
+    auto* startupScanHint = new QLabel(scanHint, startupGroup);
+    startupScanHint->setWordWrap(true);
+    startupForm->addRow(startupScanHint);
     layout->addWidget(startupGroup);
 
     auto* group = new QGroupBox(tr("Refresh rate"), page);

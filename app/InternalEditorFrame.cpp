@@ -14,9 +14,11 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QQuickWindow>
 #include <QEventLoop>
 #include <QResizeEvent>
+#include <QRegion>
 #include <QSettings>
 #include <QScreen>
 #include <QShowEvent>
@@ -31,7 +33,7 @@
 
 namespace {
 
-constexpr int kTitleHeight = 36;
+constexpr int kTitleHeight = 22;
 constexpr int kResizeBand = 6;
 constexpr int kCornerBand = 12;
 constexpr int kMinimumWidth = 420;
@@ -54,13 +56,29 @@ constexpr std::array<HandleSpec, 8> kHandleSpecs{{
     {4 | 8, Qt::SizeFDiagCursor},
 }};
 
+QPainterPath pitchFrameOutline(const QRectF& r) {
+    // Standard title-bar corners above, the instrument's softer corners below.
+    constexpr qreal top = 8, bottom = 24;
+    QPainterPath p;
+    p.moveTo(r.left()+top, r.top()); p.lineTo(r.right()-top, r.top());
+    p.quadTo(r.topRight(), QPointF(r.right(), r.top()+top));
+    p.lineTo(r.right(), r.bottom()-bottom);
+    p.quadTo(r.bottomRight(), QPointF(r.right()-bottom, r.bottom()));
+    p.lineTo(r.left()+bottom, r.bottom());
+    p.quadTo(r.bottomLeft(), QPointF(r.left(), r.bottom()-bottom));
+    p.lineTo(r.left(), r.top()+top);
+    p.quadTo(r.topLeft(), QPointF(r.left()+top, r.top())); p.closeSubpath();
+    return p;
+}
+
 } // namespace
 
 InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
     : QFrame(parent), m_settingsKey(std::move(settingsKey)) {
     setObjectName(QStringLiteral("InternalEditorFrame"));
     setProperty("dawInternalEditor", true);
-    setAttribute(Qt::WA_OpaquePaintEvent);
+    // The corners expose the workspace; they are not opaque backing-store pixels.
+    setAttribute(Qt::WA_OpaquePaintEvent, false);
     setMinimumSize(kMinimumWidth, kMinimumHeight);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 
@@ -74,12 +92,14 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
     m_titleBar->setCursor(Qt::OpenHandCursor);
     m_titleBar->installEventFilter(this);
     auto* titleRow = new QHBoxLayout(m_titleBar);
-    titleRow->setContentsMargins(10, 2, 3, 2);
-    titleRow->setSpacing(4);
+    titleRow->setContentsMargins(8, 1, 3, 1);
+    titleRow->setSpacing(2);
 
     m_title = new QLabel(tr("Editor"), m_titleBar);
     m_title->setObjectName(QStringLiteral("InternalEditorTitle"));
     m_title->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_title->setMinimumWidth(0);
+    m_title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     QFont titleFont = m_title->font();
     titleFont.setWeight(QFont::DemiBold);
     m_title->setFont(titleFont);
@@ -87,7 +107,7 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
 
     m_detachButton = new ui::IconButton(icons::Glyph::Detach, tr("Detach editor"), m_titleBar);
     m_detachButton->setObjectName(QStringLiteral("InternalEditorDetach"));
-    m_detachButton->setButtonSize(32, 30);
+    m_detachButton->setButtonSize(24, 20);
     m_detachButton->setFocusPolicy(Qt::StrongFocus);
     m_detachButton->setAccessibleName(tr("Detach editor"));
     m_detachButton->setAccessibleDescription(tr("Move this editor to its own window, or return it to the workspace."));
@@ -97,7 +117,7 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
     m_maximizeButton = new ui::IconButton(
         icons::Glyph::WindowMaximize, tr("Maximize editor"), m_titleBar);
     m_maximizeButton->setObjectName(QStringLiteral("InternalEditorMaximize"));
-    m_maximizeButton->setButtonSize(32, 30);
+    m_maximizeButton->setButtonSize(24, 20);
     m_maximizeButton->setCheckable(true);
     m_maximizeButton->setFocusPolicy(Qt::StrongFocus);
     m_maximizeButton->setAccessibleName(tr("Maximize editor"));
@@ -112,7 +132,7 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
     m_closeButton = new ui::IconButton(
         icons::Glyph::Close, tr("Close editor"), m_titleBar);
     m_closeButton->setObjectName(QStringLiteral("InternalEditorClose"));
-    m_closeButton->setButtonSize(32, 30);
+    m_closeButton->setButtonSize(24, 20);
     m_closeButton->setFocusPolicy(Qt::StrongFocus);
     m_closeButton->setAccessibleName(tr("Close editor"));
     m_closeButton->setAccessibleDescription(
@@ -165,6 +185,12 @@ void InternalEditorFrame::setContent(QWidget* content) {
     }
 
     m_content = content;
+    // Only this application-owned editor opts into one continuous dark shell.
+    // Placement, resize, detach and close continue to use the common host.
+    m_pitchChrome = content->property("vlt.pitchChrome").toBool();
+    setAttribute(Qt::WA_OpaquePaintEvent, false);
+    updateCornerMask();
+    applyTheme();
     content->setParent(this);
     m_preferredContentSize = content->size().expandedTo(QSize(640, 360));
     content->setMinimumSize(0, 0);
@@ -202,19 +228,41 @@ void InternalEditorFrame::present() {
     if (!m_placementRestored) restorePlacement();
     if (m_content) m_content->show();
     show();
-    raise();
     activateEditor();
     restoreContentFocus();
+}
+
+void InternalEditorFrame::raiseEditor() {
+    if (!isVisible()) return;
+    raise();
+    // QWidget::raise() returns early when its QObject sibling order already
+    // looks correct. Native activation can change the actual HWND/NSView order
+    // independently, so explicitly restore that order too.
+    if (testAttribute(Qt::WA_NativeWindow) && windowHandle())
+        windowHandle()->raise();
 }
 
 void InternalEditorFrame::activateEditor() {
     if (!isVisible()) return;
     installApplicationEventFilter();
-    raise();
+    raiseEditor();
     setEditorActive(true);
 }
 
+void InternalEditorFrame::setExpansionEnabled(bool enabled) {
+    if (m_expansionEnabled == enabled) return;
+    if (!enabled) {
+        if (m_detached) setDetached(false);
+        if (m_maximized) setMaximized(false);
+    }
+    m_expansionEnabled = enabled;
+    m_maximizeButton->setVisible(enabled);
+    m_detachButton->setVisible(enabled);
+    updateResizeHandles();
+}
+
 void InternalEditorFrame::setMaximized(bool maximized) {
+    if (maximized && !m_expansionEnabled) return;
     if (!m_placementRestored) restorePlacement();
     if (m_maximized == maximized) return;
     cancelPendingInteractiveResize();
@@ -234,6 +282,7 @@ void InternalEditorFrame::setMaximized(bool maximized) {
 }
 
 void InternalEditorFrame::setDetached(bool detached) {
+    if (detached && !m_expansionEnabled) return;
     if (m_detached == detached || m_dragging || m_resizing) return;
     cancelPendingInteractiveResize();
     const bool visible = isVisible();
@@ -293,6 +342,25 @@ QSize InternalEditorFrame::maximumContentSize() const {
 }
 
 bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
+    auto* target = qobject_cast<QWidget*>(watched);
+    // Application filters see every editor's handles, in reverse installation
+    // order. Only this frame's own handles may start or continue its resize.
+    const bool ownHandle = target &&
+        std::find(m_resizeHandles.begin(), m_resizeHandles.end(), target) !=
+            m_resizeHandles.end();
+    if ((event->type() == QEvent::UngrabMouse &&
+         (watched == m_titleBar || ownHandle)) ||
+        (event->type() == QEvent::WindowDeactivate && target == window()) ||
+        event->type() == QEvent::ApplicationDeactivate) {
+        if (m_dragging || m_resizing) {
+            cancelPendingInteractiveResize();
+            m_dragging = m_resizing = false;
+            m_resizeEdges = NoEdge;
+            updateMaximizeButton();
+            m_restoreGeometry = geometry();
+            savePlacement();
+        }
+    }
     if ((watched == parentWidget() && event->type() == QEvent::Resize) ||
         (watched == m_workspaceArea &&
          (event->type() == QEvent::Resize || event->type() == QEvent::Move))) {
@@ -303,7 +371,7 @@ bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
         auto* mouse = dynamic_cast<QMouseEvent*>(event);
         if (mouse && event->type() == QEvent::MouseButtonDblClick &&
             mouse->button() == Qt::LeftButton) {
-            setMaximized(!m_maximized);
+            if (m_expansionEnabled) setMaximized(!m_maximized);
             restoreContentFocus();
             mouse->accept();
             return true;
@@ -323,15 +391,14 @@ bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
         if (mouse && event->type() == QEvent::MouseMove && m_dragging &&
             (mouse->buttons() & Qt::LeftButton)) {
             const QPoint delta = mouse->globalPosition().toPoint() - m_pressGlobal;
-            if (delta.manhattanLength() < QApplication::startDragDistance()) {
-                mouse->accept();
-                return true;
-            }
             setGeometry(constrainedGeometry(m_pressGeometry.translated(delta)));
             mouse->accept();
             return true;
         }
-        if (mouse && event->type() == QEvent::MouseButtonRelease && m_dragging) {
+        if (mouse && event->type() == QEvent::MouseButtonRelease && m_dragging &&
+            mouse->button() == Qt::LeftButton) {
+            setGeometry(constrainedGeometry(m_pressGeometry.translated(
+                mouse->globalPosition().toPoint() - m_pressGlobal)));
             m_dragging = false;
             m_titleBar->setCursor(Qt::OpenHandCursor);
             m_restoreGeometry = geometry();
@@ -341,15 +408,14 @@ bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
         }
     }
 
-    if (auto* handle = qobject_cast<QWidget*>(watched);
-        handle && handle->property("edges").isValid()) {
+    if (ownHandle) {
         auto* mouse = dynamic_cast<QMouseEvent*>(event);
         if (mouse && event->type() == QEvent::MouseButtonPress &&
             mouse->button() == Qt::LeftButton && !m_maximized) {
             activateEditor();
             cancelPendingInteractiveResize();
             m_resizing = true;
-            m_resizeEdges = handle->property("edges").toInt();
+            m_resizeEdges = target->property("edges").toInt();
             m_pressGlobal = mouse->globalPosition().toPoint();
             m_pressGeometry = geometry();
             mouse->accept();
@@ -362,7 +428,8 @@ bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
             mouse->accept();
             return true;
         }
-        if (mouse && event->type() == QEvent::MouseButtonRelease && m_resizing) {
+        if (mouse && event->type() == QEvent::MouseButtonRelease && m_resizing &&
+            mouse->button() == Qt::LeftButton) {
             // The coalescer may still be waiting when the button comes up. Use
             // the release position as the final sample and apply it synchronously
             // so persisted placement never lags one frame behind the pointer.
@@ -379,7 +446,6 @@ bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
         }
     }
 
-    auto* target = qobject_cast<QWidget*>(watched);
     if (event->type() == QEvent::WindowActivate && target && target->isWindow()) {
         if (belongsToFrame(target)) {
             activateEditor();
@@ -430,9 +496,18 @@ void InternalEditorFrame::paintEvent(QPaintEvent*) {
     painter.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF frameRect = QRectF(rect()).adjusted(0.75, 0.75, -0.75, -0.75);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(theme.surface);
-    painter.drawRoundedRect(frameRect, 8.0, 8.0);
+    if (m_pitchChrome) {
+        QLinearGradient shell(frameRect.topLeft(), frameRect.bottomLeft());
+        const QColor top = mixColors(QColor("#2b2d31"), theme.accent, .06);
+        shell.setColorAt(0, top); shell.setColorAt(.18, top);
+        shell.setColorAt(1, mixColors(QColor("#24262b"), theme.accent, .06));
+        painter.setBrush(shell); painter.setPen(Qt::NoPen);
+        painter.drawPath(pitchFrameOutline(frameRect));
+    } else {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(theme.surface);
+        painter.drawRoundedRect(frameRect, 8.0, 8.0);
+    }
 
     if (m_titleBar) {
         painter.setBrush(theme.toolbarBackground);
@@ -448,18 +523,30 @@ void InternalEditorFrame::paintEvent(QPaintEvent*) {
     // contour itself is deliberately neutral so plugin artwork is not boxed
     // in by the application's accent colour.
     painter.setPen(QPen(QColor(0, 0, 0), 1.0));
-    painter.drawRoundedRect(frameRect, 8.0, 8.0);
+    if (m_pitchChrome) painter.drawPath(pitchFrameOutline(frameRect));
+    else painter.drawRoundedRect(frameRect, 8.0, 8.0);
 }
 
 void InternalEditorFrame::resizeEvent(QResizeEvent* event) {
     QFrame::resizeEvent(event);
+    updateCornerMask();
     updateResizeHandles();
+}
+
+void InternalEditorFrame::updateCornerMask() {
+    QPainterPath outline;
+    if (m_pitchChrome) outline = pitchFrameOutline(QRectF(rect()));
+    else outline.addRoundedRect(QRectF(rect()), 8, 8);
+    // Clip the entire child hierarchy, including native plugin views, rather
+    // than just painting a rounded border over a rectangular content widget.
+    setMask(QRegion(outline.toFillPolygon().toPolygon()));
 }
 
 void InternalEditorFrame::showEvent(QShowEvent* event) {
     // While hidden the parent may have changed size. Re-constrain before the
     // first exposed paint, then opt into the global focus/activation stream.
     if (m_placementRestored) constrainToParent();
+    updateCornerMask();
     installApplicationEventFilter();
     QFrame::showEvent(event);
 }
@@ -492,7 +579,8 @@ void InternalEditorFrame::restorePlacement() {
     // those windows at the same visual location when adopting the larger host.
     if (saved.isValid() && settings.value(m_settingsKey + "/placementVersion", 1).toInt() < 2)
         saved.translate(workspaceRect().topLeft());
-    m_maximized = settings.value(m_settingsKey + "/maximized", false).toBool();
+    m_maximized = m_expansionEnabled &&
+        settings.value(m_settingsKey + "/maximized", false).toBool();
     const QRect movementBounds = m_maximized ? workspaceRect() : availableRect();
     setMinimumSize(std::min(kMinimumWidth, movementBounds.width()),
                    std::min(kMinimumHeight, movementBounds.height()));
@@ -605,6 +693,15 @@ void InternalEditorFrame::updateResizeHandles() {
     m_resizeHandles[7]->setGeometry(w - kCornerBand, h - kCornerBand,
                                     kCornerBand, kCornerBand);
     for (QWidget* handle : m_resizeHandles) {
+        // Compact title buttons keep their entire click area, including the
+        // part that would otherwise sit under the top/corner resize bands.
+        QRegion hitArea(handle->rect());
+        for (QWidget* button : {m_detachButton, m_maximizeButton, m_closeButton}) {
+            if (!button->isHidden())
+                hitArea -= QRect(button->mapTo(this, QPoint()) - handle->pos(),
+                                 button->size());
+        }
+        handle->setMask(hitArea);
         handle->setVisible(!m_maximized);
         if (!m_maximized) handle->raise();
     }
@@ -748,6 +845,113 @@ bool InternalEditorFrame::checkPlacementForTest() {
         nativeFrame.hide();
     }
     overlayHost.hide();
+    {
+        InternalEditorFrame rounded(key + QStringLiteral("/corners"), &host);
+        auto* content = new QWidget;
+        content->setStyleSheet(QStringLiteral("background: #dc3050;"));
+        rounded.setContent(content);
+        rounded.present();
+        for (const QSize size : {QSize(520, 320), QSize(640, 410)}) {
+            rounded.resize(size);
+            QApplication::processEvents();
+            QImage image(rounded.size() * rounded.devicePixelRatioF(), QImage::Format_ARGB32_Premultiplied);
+            image.setDevicePixelRatio(rounded.devicePixelRatioF());
+            image.fill(Qt::transparent);
+            rounded.render(&image);
+            for (const QPoint point : {image.rect().topLeft(), image.rect().topRight(),
+                                       image.rect().bottomLeft(), image.rect().bottomRight()})
+                check(image.pixelColor(point).alpha() == 0,
+                      "rounded editor clips the background and child content at all four corners");
+            check(image.pixelColor(image.rect().center()) == QColor("#dc3050"),
+                  "clipping the editor corners preserves its content");
+        }
+    }
+    {
+        InternalEditorFrame first(key + "/first", &host);
+        InternalEditorFrame second(key + "/second", &host);
+        first.setContent(new QWidget);
+        second.setContent(new QWidget);
+        first.present();
+        second.present();
+        QApplication::processEvents();
+        const auto mouse = [](QWidget* target, QEvent::Type type,
+                              QPoint global, Qt::MouseButton button,
+                              Qt::MouseButtons buttons) {
+            QMouseEvent event(type, target->mapFromGlobal(global), global,
+                              button, buttons, Qt::NoModifier);
+            QApplication::sendEvent(target, &event);
+        };
+        // Both installation orders, all edges/corners, including release before
+        // the resize timer fires. The overlapping peer must never move or resize.
+        for (InternalEditorFrame* target : {&first, &second}) {
+            InternalEditorFrame* peer = target == &first ? &second : &first;
+            for (std::size_t i = 0; i < kHandleSpecs.size(); ++i) {
+                const QRect start(80, 150, 620, 380);
+                target->setGeometry(start);
+                peer->setGeometry(240, 180, 640, 400);
+                peer->activateEditor();
+                const QRect peerBefore = peer->geometry();
+                QWidget* handle = target->m_resizeHandles[i];
+                const QPoint origin = handle->mapToGlobal(handle->rect().center());
+                const QPoint delta(24, 18);
+                mouse(handle, QEvent::MouseButtonPress, origin,
+                      Qt::LeftButton, Qt::LeftButton);
+                mouse(handle, QEvent::MouseMove, origin + delta,
+                      Qt::NoButton, Qt::LeftButton);
+                mouse(handle, QEvent::MouseButtonRelease, origin + delta,
+                      Qt::LeftButton, Qt::NoButton);
+                QRect expected = start;
+                const int edges = kHandleSpecs[i].edges;
+                if (edges & LeftEdge) expected.setLeft(start.left() + delta.x());
+                if (edges & RightEdge) expected.setRight(start.right() + delta.x());
+                if (edges & TopEdge) expected.setTop(start.top() + delta.y());
+                if (edges & BottomEdge) expected.setBottom(start.bottom() + delta.y());
+                check(target->geometry() == expected && peer->geometry() == peerBefore,
+                      "only the owner resizes, with the opposite edges anchored");
+                check(!target->m_resizing && !peer->m_resizing &&
+                          !target->m_resizeApplyTimer.isActive(),
+                      "release commits the final resize without a delayed jump");
+            }
+        }
+        first.setGeometry(80, 150, 620, 380);
+        QApplication::processEvents();
+        for (QWidget* button : {first.m_detachButton, first.m_maximizeButton,
+                               first.m_closeButton}) {
+            const QPoint topRight = button->mapTo(&first, QPoint(button->width() - 1, 0));
+            check(first.childAt(topRight) == button,
+                  "resize bands do not steal compact title button clicks");
+        }
+        QWidget* title = first.m_titleBar;
+        const QPoint origin = title->mapToGlobal(QPoint(80, kTitleHeight / 2));
+        const QRect beforeDrag = first.geometry();
+        mouse(title, QEvent::MouseButtonPress, origin, Qt::LeftButton, Qt::LeftButton);
+        mouse(title, QEvent::MouseMove, origin + QPoint(40, 30),
+              Qt::NoButton, Qt::LeftButton);
+        mouse(title, QEvent::MouseMove, origin + QPoint(1, 1),
+              Qt::NoButton, Qt::LeftButton);
+        check(first.pos() == beforeDrag.topLeft() + QPoint(1, 1),
+              "title drag reverses continuously through the original grab point");
+        mouse(title, QEvent::MouseButtonRelease, origin,
+              Qt::RightButton, Qt::LeftButton);
+        check(first.m_dragging, "releasing another button does not end a title drag");
+        mouse(title, QEvent::MouseButtonRelease, origin,
+              Qt::LeftButton, Qt::NoButton);
+        check(first.geometry() == beforeDrag && !first.m_dragging,
+              "title release applies its final position");
+
+        QWidget* handle = first.m_resizeHandles[7];
+        const QPoint corner = handle->mapToGlobal(handle->rect().center());
+        mouse(handle, QEvent::MouseButtonPress, corner, Qt::LeftButton, Qt::LeftButton);
+        mouse(handle, QEvent::MouseMove, corner + QPoint(30, 30),
+              Qt::NoButton, Qt::LeftButton);
+        QEvent ungrab(QEvent::UngrabMouse);
+        QApplication::sendEvent(handle, &ungrab);
+        check(!first.m_resizing && !first.m_resizeApplyTimer.isActive() &&
+                  !first.m_pendingResizeGeometry.isValid(),
+              "losing the mouse grab cancels any delayed resize");
+        first.hide();
+        second.hide();
+    }
     InternalEditorFrame frame(key, &host);
     frame.setWorkspaceArea(&body);
     auto* content = new QWidget;

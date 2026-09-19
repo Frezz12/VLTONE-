@@ -7,6 +7,7 @@
 // asked for anything back — printed block by block.
 //
 //   plugin_probe <vst3|vst|au|clap> <path> [uid] [--blocks N] [--editor]
+//                [--params] [--set id plainValue] [--offline] [--sidechain-silent]
 //
 // With no uid the first plugin the module advertises is used.
 #include "Host/PluginInstance.hpp"
@@ -52,7 +53,8 @@ int main(int argc, char** argv) {
     if (argc < 3) {
         std::fprintf(stderr,
                      "usage: plugin_probe <vst3|vst|au|clap|internal> <path> [uid] "
-                     "[--blocks N] [--editor]\n");
+                     "[--blocks N] [--editor] [--params] [--set id plainValue] "
+                     "[--offline] [--sidechain-silent]\n");
         return 2;
     }
     const plugins::Format format = plugins::formatFromString(argv[1]);
@@ -60,9 +62,19 @@ int main(int argc, char** argv) {
     std::string uid;
     int blocks = 16;
     bool wantEditor = false;
+    bool listParameters = false;
+    bool offline = false, sidechainConnected = false;
+    std::vector<std::pair<std::string, double>> edits;
     for (int i = 3; i < argc; ++i) {
         if (std::strcmp(argv[i], "--blocks") == 0 && i + 1 < argc) blocks = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--editor") == 0) wantEditor = true;
+        else if (std::strcmp(argv[i], "--params") == 0) listParameters = true;
+        else if (std::strcmp(argv[i], "--offline") == 0) offline = true;
+        else if (std::strcmp(argv[i], "--sidechain-silent") == 0) sidechainConnected = true;
+        else if (std::strcmp(argv[i], "--set") == 0 && i + 2 < argc) {
+            const std::string id = argv[++i];
+            edits.emplace_back(id, std::stod(argv[++i]));
+        }
         else if (uid.empty()) uid = argv[i];
     }
 
@@ -79,7 +91,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     for (const plugins::PluginDescriptor& d : found)
-        std::printf("  %-40s uid=%s%s\n", d.name.c_str(), d.uid.c_str(),
+        if (uid.empty() || d.uid == uid) std::printf("  %-40s uid=%s%s\n", d.name.c_str(), d.uid.c_str(),
                     d.isInstrument ? "  [instrument]" : "");
 
     plugins::PluginDescriptor descriptor = found.front();
@@ -97,12 +109,12 @@ int main(int argc, char** argv) {
     }
 
     std::printf("\n── create '%s' ──\n", descriptor.name.c_str());
+    Listener listener; // Must outlive the plugin on every early-return path too.
     std::unique_ptr<plugins::PluginInstance> plugin = factory->create(descriptor);
     if (!plugin) {
         std::fprintf(stderr, "create failed\n");
         return 1;
     }
-    Listener listener;
     plugin->setListener(&listener);
 
     const plugins::PluginDescriptor& real = plugin->descriptor();
@@ -116,10 +128,31 @@ int main(int argc, char** argv) {
     for (std::uint16_t channels : layout.outputs) std::printf(" %u", channels);
     std::printf("\n  editor     %s\n", plugin->hasEditor() ? "yes" : "no");
     std::printf("  parameters %zu\n", plugin->parameters().size());
+    if (listParameters) {
+        for (const auto& p : plugin->parameters())
+            std::printf("    id=%s name='%s' min=%g max=%g value=%g text='%s' bypass=%d\n",
+                p.id.c_str(), p.name.c_str(), p.minValue, p.maxValue,
+                plugin->parameterValue(p.index),
+                plugin->parameterText(p.index, plugin->parameterValue(p.index)).c_str(), p.isBypass);
+    }
+    std::vector<plugins::PluginEvent> parameterEvents;
+    for (const auto& [id, value] : edits) {
+        const auto index = plugin->parameterIndexForId(id);
+        if (index < 0 || !std::isfinite(value)) return 2;
+        plugins::PluginEvent event;
+        event.kind = plugins::PluginEvent::Kind::ParamValue;
+        event.paramIndex = unsigned(index); event.value = value;
+        parameterEvents.push_back(event);
+        plugin->setParameterFromHost(unsigned(index), value);
+        std::printf("  set %s = %g (%s)\n", id.c_str(), value,
+            plugin->parameterText(unsigned(index), value).c_str());
+    }
 
     plugins::PluginProcessInfo info;
     info.sampleRate = 48000.0;
     info.maxBlockSize = 512;
+    info.offline = offline;
+    info.sidechainConnected = sidechainConnected;
     if (!plugin->activate(info)) {
         std::fprintf(stderr, "activate failed\n");
         return 1;
@@ -168,18 +201,23 @@ int main(int argc, char** argv) {
         context.outputs = outputs;
         context.outputChannels = 2;
         context.frames = frames;
+        if (block == 0) context.inputEvents = parameterEvents;
         context.sampleTime = sampleTime;
         context.playing = true;
+        context.offline = offline;
         context.transport.tempo = 120.0;
         context.transport.ppqPosition =
             double(sampleTime) / info.sampleRate * (120.0 / 60.0);
         context.transport.barStartPpq =
             std::floor(context.transport.ppqPosition / 4.0) * 4.0;
-        plugin->process(context);
+        if (plugin->process(context) == plugins::PluginProcessDisposition::Error) {
+            std::fprintf(stderr, "process failed\n"); return 1;
+        }
         plugin->pumpMainThread();
 
-        std::printf("  block %2d  ppq %6.3f  in %.4f  out %.4f\n", block,
-                    context.transport.ppqPosition, rms(left), rms(outLeft));
+        if (block < 4 || block == blocks - 1)
+            std::printf("  block %2d  ppq %6.3f  in %.6f  out L %.6f R %.6f\n", block,
+                        context.transport.ppqPosition, rms(left), rms(outLeft), rms(outRight));
         sampleTime += frames;
     }
 
@@ -189,5 +227,8 @@ int main(int argc, char** argv) {
                 "%d restarts, %d reloads\n",
                 listener.parameterChanges, listener.latencyChanges,
                 listener.restarts, listener.reloads);
+    plugin->setListener(nullptr);
+    plugin.reset();
+    std::printf("  plugin instance destroyed; probe completed\n");
     return 0;
 }

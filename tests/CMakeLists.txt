@@ -25,6 +25,35 @@ endif()
 add_test(NAME plugin_render_state_test COMMAND plugin_render_state_test)
 set_tests_properties(plugin_render_state_test PROPERTIES TIMEOUT 60)
 
+add_executable(plugin_contract_test plugin_contract_test.cpp)
+target_link_libraries(plugin_contract_test PRIVATE daw_pluginhost daw_engine)
+if(DAW_ENABLE_CLAP)
+    target_compile_definitions(plugin_contract_test PRIVATE DAW_TEST_CLAP_PATH="${DAW_TEST_CLAP_PATH}")
+    add_dependencies(plugin_contract_test daw_test_clap)
+endif()
+if(DAW_ENABLE_VST3)
+    target_compile_definitions(plugin_contract_test PRIVATE DAW_TEST_VST3_PATH="${DAW_TEST_VST3_PATH}")
+    add_dependencies(plugin_contract_test daw_test_vst3)
+endif()
+if(DAW_ENABLE_VST)
+    target_compile_definitions(plugin_contract_test PRIVATE DAW_TEST_VST_SHELL_PATH="${DAW_TEST_VST_SHELL_PATH}")
+    add_dependencies(plugin_contract_test daw_test_vst_shell)
+endif()
+add_test(NAME plugin_contract_test COMMAND plugin_contract_test)
+set_tests_properties(plugin_contract_test PROPERTIES TIMEOUT 60)
+
+if(DAW_ENABLE_VST3)
+    add_executable(plugin_parameter_bench EXCLUDE_FROM_ALL plugin_parameter_bench.cpp)
+    target_link_libraries(plugin_parameter_bench PRIVATE daw_pluginhost)
+endif()
+
+if(DAW_ENABLE_CLAP)
+    add_executable(render_bench EXCLUDE_FROM_ALL render_bench.cpp)
+    target_link_libraries(render_bench PRIVATE daw_controller)
+    target_compile_definitions(render_bench PRIVATE DAW_TEST_CLAP_PATH="${DAW_TEST_CLAP_PATH}")
+    add_dependencies(render_bench daw_test_clap)
+endif()
+
 # Phase-1: the portable device/decode paths (libsndfile + PortAudio).
 add_executable(platform_test platform_test.cpp)
 target_link_libraries(platform_test PRIVATE daw_core daw_engine)
@@ -226,6 +255,36 @@ target_link_libraries(equalizer_test PRIVATE daw_controller)
 add_test(NAME equalizer_test COMMAND equalizer_test)
 set_tests_properties(equalizer_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
+# Vocal correction: DSP timing, pitch accuracy, state and allocation safety.
+add_executable(pitch_corrector_test pitch_corrector_test.cpp)
+target_link_libraries(pitch_corrector_test PRIVATE daw_pluginhost)
+add_test(NAME pitch_corrector_test COMMAND pitch_corrector_test)
+set_tests_properties(pitch_corrector_test PROPERTIES TIMEOUT 180)
+
+add_executable(pitch_corrector_envelope_test pitch_corrector_envelope_test.cpp)
+target_link_libraries(pitch_corrector_envelope_test PRIVATE daw_pluginhost)
+add_test(NAME pitch_corrector_envelope_test COMMAND pitch_corrector_envelope_test)
+set_tests_properties(pitch_corrector_envelope_test PROPERTIES TIMEOUT 30)
+
+add_executable(pitch_corrector_formant_test pitch_corrector_formant_test.cpp)
+target_link_libraries(pitch_corrector_formant_test PRIVATE daw_pluginhost)
+target_include_directories(pitch_corrector_formant_test PRIVATE ${CMAKE_SOURCE_DIR}/third_party/signalsmith)
+add_test(NAME pitch_corrector_formant_test COMMAND pitch_corrector_formant_test)
+set_tests_properties(pitch_corrector_formant_test PROPERTIES TIMEOUT 60)
+
+add_executable(pitch_corrector_bench EXCLUDE_FROM_ALL pitch_corrector_bench.cpp)
+target_link_libraries(pitch_corrector_bench PRIVATE daw_pluginhost daw_core)
+
+add_executable(pitch_corrector_phase_test pitch_corrector_phase_test.cpp)
+target_link_libraries(pitch_corrector_phase_test PRIVATE daw_pluginhost)
+add_test(NAME pitch_corrector_phase_test COMMAND pitch_corrector_phase_test)
+set_tests_properties(pitch_corrector_phase_test PROPERTIES TIMEOUT 30)
+
+add_executable(pitch_corrector_integration_test pitch_corrector_integration_test.cpp)
+target_link_libraries(pitch_corrector_integration_test PRIVATE daw_controller)
+add_test(NAME pitch_corrector_integration_test COMMAND pitch_corrector_integration_test)
+set_tests_properties(pitch_corrector_integration_test PROPERTIES TIMEOUT 90)
 
 # Graphit: stable state/parameters, five voiced EQ/saturation/compressor paths,
 # sample-offset automation, click-safe switching and realtime safety.

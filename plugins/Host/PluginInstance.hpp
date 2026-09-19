@@ -112,8 +112,15 @@ public:
     virtual std::string parameterText(std::uint32_t index, double plainValue) const = 0;
 
     /// Opaque, format-defined. The host stores it and hands it back verbatim.
+    /// CLAP can omit its optional state extension. A failed save from a plugin
+    /// that does support state must not be mistaken for that parameter-only case.
+    virtual bool supportsState() const noexcept { return true; }
     virtual bool saveState(std::vector<std::uint8_t>& out) const = 0;
     virtual bool loadState(std::span<const std::uint8_t> state) = 0;
+
+    /// Unprocessed editor/preset edits owned by the format rather than the
+    /// node's host queue. Control thread with processing parked; non-consuming.
+    virtual std::vector<PluginEvent> pendingParameterEvents() { return {}; }
 
     /// Tell the plugin's *editor side* that the host moved a parameter.
     ///

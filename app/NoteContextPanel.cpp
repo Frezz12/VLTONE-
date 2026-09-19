@@ -221,7 +221,7 @@ QWidget* NoteContextPanel::buildNotes(bool multiple) {
         ui::contextPriority(velocity, 110);
         velocity->setRange(1.0, 127.0);
         velocity->setStep(1.0);
-        velocity->setDefaultValue(100.0);
+        velocity->setDefaultValue(127.0);
         velocity->setFormatter(
             [](double v) { return QString::number(int(std::lround(v))); });
         connect(velocity, &ui::MiniSlider::editStarted, this, [this] {

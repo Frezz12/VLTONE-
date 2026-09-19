@@ -2,6 +2,7 @@
 #include "Core/AudioBuffer.hpp"
 #include "Internal/SamplerInstance.hpp"
 #include "Internal/SamplerParams.hpp"
+#include "Internal/PitchCorrectorInstance.hpp"
 #include "ProjectSerializer.hpp"
 #include "Recording/RecordingEngine.hpp"
 
@@ -100,6 +101,9 @@ int main() {
           "template source has clip-only media to exclude");
 
     const std::size_t liveTrackCount = source.project().tracks.size();
+    const auto pitchSlot = source.addInsert(audio, daw::plugins::pitch::PitchCorrectorInstance::staticDescriptor());
+    source.setInsertParameter(audio, pitchSlot, "key", 5);
+    source.setInsertParameter(audio, pitchSlot, "scale", 2);
     const std::size_t liveUndoDepth = source.undoDepth();
     const fs::path package = root / "Recording.vltt";
     check(source.saveProjectTemplate(package.string(), "Recording").isOk(),
@@ -240,10 +244,10 @@ int main() {
               importedKick->sends.size() == 1 &&
               importedKick->sends.front().destinationTrackId == importedBus->id,
           "import assigns fresh ids and remaps internal routing");
-    check(importedKick && importedBus && importedKick->inserts.size() == 1 &&
-              importedKick->inserts.front().id != missingSlotId &&
-              importedKick->inserts.front().sidechainTrackId == importedBus->id &&
-              importedKick->inserts.front().parameters.size() == 1,
+    check(importedKick && importedBus && importedKick->inserts.size() == 2 &&
+              importedKick->inserts.back().id != missingSlotId &&
+              importedKick->inserts.back().sidechainTrackId == importedBus->id &&
+              importedKick->inserts.back().parameters.size() == 1,
           "missing plugin fallback survives and its slot/sidechain ids are remapped");
     const auto* importedSampler = named(destination.project(), "Sampler Lane");
     daw::plugins::sampler::SamplerInstance* importedSamplerInstance =
@@ -337,8 +341,13 @@ int main() {
           "Quick Import opens the clip before changing project analysis");
     destination.setTempo(128.0);
     destination.setProjectKey(0, "major");
+    check(bool(destination.applyKeyToPitchCorrectors(quickRequest.analysis.key.root,
+                                                    quickRequest.analysis.key.scale)),
+          "Quick Import transfers the analyzed beat key to template VLT Pitch instances");
     destination.collapseUndo(0, "Quick Import Audio");
     check(destination.project().tempo == 128.0 &&
+              destination.insertParameter(quickTarget, pitchSlot, "key") == 0 &&
+              destination.insertParameter(quickTarget, pitchSlot, "scale") == 1 &&
               destination.project().keyRoot == 0 &&
               destination.project().scale == "major" &&
               destination.undoDepth() == 1,
@@ -346,6 +355,8 @@ int main() {
     destination.undo();
     quickTrack = destination.project().findTrack(quickTarget);
     check(quickTrack && quickTrack->clips.empty() &&
+              destination.insertParameter(quickTarget, pitchSlot, "key") == 5 &&
+              destination.insertParameter(quickTarget, pitchSlot, "scale") == 2 &&
               destination.project().tempo == 132.0 &&
               destination.project().keyRoot == 9,
           "one undo restores the clean template project");

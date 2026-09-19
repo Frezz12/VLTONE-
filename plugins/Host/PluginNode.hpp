@@ -46,6 +46,12 @@ public:
     }
 
     void prepare(const engine::PrepareInfo& info) override;
+    void setSidechainConnected(bool connected) override {
+        if (m_sidechainConnected != connected) {
+            m_sidechainConnected = connected;
+            invalidatePrepare();
+        }
+    }
     void reset() override;
     void suspend() override;
     void resume() override;
@@ -208,6 +214,7 @@ private:
     engine::ChannelCount m_arenaChannels = 0;
     std::uint16_t m_pluginInputChannels = 0;
     std::uint16_t m_pluginSidechainChannels = 0;
+    bool m_sidechainConnected = false; // Control thread, under the render gate.
     std::uint16_t m_pluginOutputChannels = 0;
     std::atomic<std::uint16_t> m_preferredChannelCount{2};
 

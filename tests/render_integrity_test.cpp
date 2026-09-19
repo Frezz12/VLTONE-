@@ -92,6 +92,32 @@ int main() try {
     const auto stemSource = temp.path / "stem-tone.wav";
     writeTone(source, 1000); writeTone(stemSource, 375);
 
+    // Larger blocks are automatic only for audio arrangements. A probe makes
+    // the activation size observable; MIDI and automation keep device timing.
+    for (const std::string kind : {"audio", "midi", "automation"}) {
+        daw::EngineController c;
+        require(bool(c.initialize(48000, 128, false)), "initialize block selection");
+        const auto a = track(c, source, "Block probe");
+        require(!c.addInsert(a, plugin(DAW_TEST_RENDER_CLAP_PATH, "review.block-size")).empty(),
+                "insert block probe");
+        if (kind == "midi") {
+            const auto midi = c.addTrack(daw::TrackKind::Midi, "MIDI timing");
+            require(!c.addMidiClip(midi, 0, 1).empty(), "add MIDI clip");
+        } else if (kind == "automation") {
+            daw::AutomationTarget target;
+            target.kind = daw::AutomationTargetKind::TrackVolume;
+            target.channelId = a;
+            const auto lane = c.addAutomationLane(a, target);
+            require(!c.addAutomationClip(lane, target, 0, 1).empty(), "add automation clip");
+        }
+        auto spec = specFor(temp.path / ("block-" + kind));
+        const auto automatic = render(c, spec);
+        spec.blockSize = kind == "audio" ? 1024 : 128;
+        require(difference(automatic, render(c, spec)) < 1e-6, "automatic block selection: " + kind);
+        spec.blockSize = kind == "audio" ? 128 : 1024;
+        require(difference(automatic, render(c, spec)) > 0.01, "block probe distinguishes sizes");
+    }
+
     // The shared engine API also switches back to a correct realtime graph,
     // including after a failed activation. No controller clone masks this.
     for (const auto* uid : {"review.latency", "review.activation"}) {
@@ -157,6 +183,7 @@ int main() try {
             const auto a = track(c, source, "Effect");
             const auto b = track(c, source, "Parallel");
             auto spec = specFor(temp.path / (std::string(uid) + std::to_string(block)));
+            spec.blockSize = block;
             spec.range = daw::rendering::Range::Custom;
             spec.customStartSeconds = 0.013;
             spec.customEndSeconds = 0.9813;
@@ -185,7 +212,7 @@ int main() try {
     // A successful file is impossible after DSP/configuration failure. The
     // same live controller can immediately retry with an explicit FX bypass.
     for (const auto* uid : {"review.activation", "review.process", "review.clone", "review.dual",
-                            "review.restart", "review.mode", "review.hardware"}) {
+                            "review.restart", "review.mode", "review.hardware", "review.nonfinite"}) {
         daw::EngineController c;
         require(bool(c.initialize(48000, 64, false)), "initialize failure case");
         const auto a = track(c, source, "Failure source");
@@ -196,6 +223,8 @@ int main() try {
         if (std::string(uid) == "review.dual")
             require(c.setInsertChannelMode(a, slot, daw::PluginChannelMode::DualMono), "dual mono live instances load");
         auto spec = specFor(temp.path / uid);
+        // Fault injection counts process calls, so hold that granularity fixed.
+        spec.blockSize = 64;
         fs::create_directories(spec.outputDir);
         const auto previous = fs::path(spec.outputDir) / "mixdown.wav";
         { std::ofstream file(previous); file << "previous-export"; }
@@ -254,6 +283,7 @@ int main() try {
         require(!c.addInsert(a, gain).empty(), "track delay");
         require(!c.addInsert(daw::EngineController::kMasterChannelId, gain).empty(), "master delay");
         auto spec = specFor(temp.path / ("stems-" + std::to_string(block)));
+        spec.blockSize = block;
         spec.range = daw::rendering::Range::Custom;
         spec.customStartSeconds = 0.023; spec.customEndSeconds = 0.6813;
         spec.preRollSeconds = 0.015;

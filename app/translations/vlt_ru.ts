@@ -942,6 +942,30 @@ Anything changed since — by the assistant or by you — is undone as well. One
 <context>
     <name>AudioAnalysisResultDialog</name>
     <message>
+        <source>Apply key to VLT Pitch</source>
+        <translation>Передать тональность в VLT Pitch</translation>
+    </message>
+    <message>
+        <source>Set detected key in VLT Pitch</source>
+        <translation>Передать найденную тональность в VLT Pitch</translation>
+    </message>
+    <message>
+        <source>Key applied to VLT Pitch</source>
+        <translation>Тональность передана в VLT Pitch</translation>
+    </message>
+    <message>
+        <source>Keep project</source>
+        <translation>Оставить проект</translation>
+    </message>
+    <message>
+        <source>Set the detected key and scale in all VLT Pitch instances in this project.</source>
+        <translation>Установить найденные тонику и лад во всех экземплярах VLT Pitch в проекте.</translation>
+    </message>
+    <message>
+        <source>Add VLT Pitch to the project to use the detected key.</source>
+        <translation>Добавьте VLT Pitch в проект, чтобы передать ему найденную тональность.</translation>
+    </message>
+    <message>
         <source>Quick Import analysis</source>
         <translation>Анализ быстрого импорта</translation>
     </message>
@@ -1712,6 +1736,18 @@ Will be skipped: %3</source>
 </context>
 <context>
     <name>BrowserSettingsPage</name>
+    <message>
+        <source>Ignored file extensions</source>
+        <translation>Игнорируемые расширения файлов</translation>
+    </message>
+    <message>
+        <source>Ignored extensions</source>
+        <translation>Игнорируемые расширения</translation>
+    </message>
+    <message>
+        <source>Separate extensions with commas or spaces. A leading dot is optional. Applies to folders and search results.</source>
+        <translation>Укажите расширения через запятую или пробел. Точка в начале необязательна. Фильтр действует в папках и результатах поиска.</translation>
+    </message>
     <message>
         <source>FOLDERS</source>
         <translation>ПАПКИ</translation>
@@ -4127,6 +4163,18 @@ Up to 10 MB</source>
 <context>
     <name>FileBrowserPanel</name>
     <message>
+        <source>Search files and plugins…</source>
+        <translation>Поиск файлов и плагинов…</translation>
+    </message>
+    <message>
+        <source>Search files and plugins</source>
+        <translation>Поиск файлов и плагинов</translation>
+    </message>
+    <message>
+        <source>Searching… %1 matches</source>
+        <translation>Поиск… найдено: %1</translation>
+    </message>
+    <message>
         <source>Search — name, .wav, .vlts or .vltt</source>
         <translation>Поиск — имя, .wav, .vlts или .vltt</translation>
     </message>
@@ -4233,6 +4281,10 @@ Up to 10 MB</source>
 </context>
 <context>
     <name>FileBrowserTree</name>
+    <message>
+        <source>Searching…</source>
+        <translation>Поиск…</translation>
+    </message>
     <message>
         <source>Plugins</source>
         <translation>Плагины</translation>
@@ -5320,6 +5372,14 @@ Up to 10 MB</source>
 </context>
 <context>
     <name>MainWindow</name>
+    <message>
+        <source>Key sent to %1 VLT Pitch instance(s).</source>
+        <translation>Тональность передана в экземпляры VLT Pitch: %1.</translation>
+    </message>
+    <message>
+        <source>VLT Pitch already uses this key.</source>
+        <translation>В VLT Pitch уже установлена эта тональность.</translation>
+    </message>
     <message>
         <source>Startup template “%1” is unavailable; opened an empty project</source>
         <translation>Загрузочный шаблон «%1» недоступен; открыт пустой проект</translation>
@@ -8330,6 +8390,10 @@ Click to load. Drag onto Audio FX.</source>
 <context>
     <name>PatternWindow</name>
     <message>
+        <source>Group channel</source>
+        <translation>Групповой канал</translation>
+    </message>
+    <message>
         <source>Pattern</source>
         <translation>Паттерн</translation>
     </message>
@@ -10418,6 +10482,14 @@ This session also contains a finished cloud recording awaiting upload. Restore a
 <context>
     <name>QuickImportSettingsPage</name>
     <message>
+        <source>Set detected key in VLT Pitch</source>
+        <translation>Передавать найденную тональность в VLT Pitch</translation>
+    </message>
+    <message>
+        <source>Apply the beat's key and scale to all VLT Pitch instances in the template. Requires key detection.</source>
+        <translation>Передавать тональность бита всем экземплярам VLT Pitch в шаблоне. Необходимо включить определение тональности.</translation>
+    </message>
+    <message>
         <source>Drop an audio file on the VLTONE icon to create a new project from the chosen template and place the file on this track.</source>
         <translation>Перетащите аудиофайл на значок VLTONE, чтобы создать новый проект из выбранного шаблона и поместить файл на эту дорожку.</translation>
     </message>
@@ -11415,6 +11487,14 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <translation>Применяется только при обычном запуске VLTONE. Открытие проекта, восстановление работы после сбоя и команда «Файл &gt; Новый проект» имеют приоритет над этим шаблоном.</translation>
     </message>
     <message>
+        <source>Scan plugins at startup</source>
+        <translation>Сканировать плагины при запуске</translation>
+    </message>
+    <message>
+        <source>When off, VLTONE uses the saved plugin list. To find new plugins, run Scan or Rescan All in Plugin Manager.</source>
+        <translation>Если выключено, VLTONE использует сохранённый список плагинов. Чтобы найти новые плагины, запустите сканирование или полное пересканирование в менеджере плагинов.</translation>
+    </message>
+    <message>
         <source>Settings — %1</source>
         <translation>Настройки — %1</translation>
     </message>
@@ -11982,11 +12062,11 @@ Reassign it to &quot;%3&quot;?</source>
     </message>
     <message>
         <source>Line thickness</source>
-        <translation type="unfinished"></translation>
+        <translation>Толщина линии</translation>
     </message>
     <message>
         <source>Playhead line thickness in pixels</source>
-        <translation type="unfinished"></translation>
+        <translation>Толщина линии курсора в пикселях</translation>
     </message>
     <message>
         <source>%1 px</source>
@@ -11994,11 +12074,31 @@ Reassign it to &quot;%3&quot;?</source>
     </message>
     <message>
         <source>Leave a glowing trail while it moves</source>
-        <translation type="unfinished"></translation>
+        <translation>Оставлять светящийся след при движении</translation>
     </message>
     <message>
         <source>Playhead motion trail</source>
-        <translation type="unfinished"></translation>
+        <translation>След движущегося курсора</translation>
+    </message>
+    <message>
+        <source>Timeline grid</source>
+        <translation>Сетка таймлайна</translation>
+    </message>
+    <message>
+        <source>Grid line thickness in pixels</source>
+        <translation>Толщина линий сетки в пикселях</translation>
+    </message>
+    <message>
+        <source>Opacity</source>
+        <translation>Непрозрачность</translation>
+    </message>
+    <message>
+        <source>Grid opacity in percent</source>
+        <translation>Непрозрачность сетки в процентах</translation>
+    </message>
+    <message>
+        <source>0% hides the grid. Snapping stays unchanged.</source>
+        <translation>0% скрывает сетку. Привязка остаётся без изменений.</translation>
     </message>
     <message>
         <source>Notebook</source>
@@ -12395,12 +12495,8 @@ Reassign it to &quot;%3&quot;?</source>
         <translation>Войдите, чтобы продолжить.</translation>
     </message>
     <message>
-        <source>Enter your email and a password of at least 12 characters.</source>
-        <translation>Введите ваш адрес электронной почты и пароль длиной не менее 12 символов.</translation>
-    </message>
-    <message>
-        <source>Application language</source>
-        <translation>Язык приложения</translation>
+        <source>Enter your email and a password of at least 8 characters.</source>
+        <translation>Введите ваш адрес электронной почты и пароль длиной не менее 8 символов.</translation>
     </message>
     <message>
         <source>Preparing startup…</source>
@@ -12441,10 +12537,6 @@ Reassign it to &quot;%3&quot;?</source>
     <message>
         <source>Looking for installed plugins</source>
         <translation>Поиск установленных плагинов</translation>
-    </message>
-    <message>
-        <source>Checked: %1 of %2%3</source>
-        <translation>Проверено: %1 из %2%3</translation>
     </message>
     <message>
         <source>Ready</source>
@@ -14030,8 +14122,8 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <translation>Доступна версия VLTONE %1.</translation>
     </message>
     <message>
-        <source>You are using %1. The download button opens the release page in your browser.</source>
-        <translation>У вас установлена версия %1. Кнопка скачивания откроет страницу релиза в браузере.</translation>
+        <source>You are using %1. Download the installer and VLTONE will close to let you install the update.</source>
+        <translation>У вас установлена версия %1. После скачивания установщика VLTONE закроется, и вы сможете установить обновление.</translation>
     </message>
     <message>
         <source>Download</source>
@@ -14040,6 +14132,80 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message>
         <source>Later</source>
         <translation>Позже</translation>
+    </message>
+    <message>
+        <source>Open in browser</source>
+        <translation>Открыть в браузере</translation>
+    </message>
+    <message>
+        <source>Try again</source>
+        <translation>Повторить</translation>
+    </message>
+    <message>
+        <source>Update failed</source>
+        <translation>Не удалось обновить</translation>
+    </message>
+    <message>
+        <source>Downloading update</source>
+        <translation>Скачивание обновления</translation>
+    </message>
+    <message>
+        <source>Preparing download…</source>
+        <translation>Подготовка к скачиванию…</translation>
+    </message>
+    <message>
+        <source>Download progress</source>
+        <translation>Ход скачивания</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Downloading the installer… VLTONE will close when the download is complete.</source>
+        <translation>Скачивание установщика… После завершения VLTONE закроется.</translation>
+    </message>
+    <message>
+        <source>The installer download address is invalid.</source>
+        <translation>Некорректный адрес скачивания установщика.</translation>
+    </message>
+    <message>
+        <source>The Downloads folder is not writable.</source>
+        <translation>Не удалось записать файл в папку «Загрузки».</translation>
+    </message>
+    <message>
+        <source>The downloaded installer does not match the published release. Please try again.</source>
+        <translation>Скачанный установщик не соответствует опубликованному релизу. Повторите скачивание.</translation>
+    </message>
+    <message>
+        <source>Could not save the installer. Check free disk space and try again.</source>
+        <translation>Не удалось сохранить установщик. Проверьте свободное место на диске и повторите попытку.</translation>
+    </message>
+    <message>
+        <source>The release information is invalid. Please try again.</source>
+        <translation>Получены некорректные сведения о релизе. Повторите попытку.</translation>
+    </message>
+    <message>
+        <source>Could not retrieve the installer. Check your connection and try again.</source>
+        <translation>Не удалось получить сведения об установщике. Проверьте подключение к интернету и повторите попытку.</translation>
+    </message>
+    <message>
+        <source>No compatible installer is available. Open the release page in your browser.</source>
+        <translation>Подходящий установщик недоступен. Откройте страницу релиза в браузере.</translation>
+    </message>
+    <message>
+        <source>The download failed. Check your connection and try again.</source>
+        <translation>Не удалось скачать файл. Проверьте подключение к интернету и повторите попытку.</translation>
+    </message>
+    <message>
+        <source>Could not open the installer. You can open it manually:
+%1</source>
+        <translation>Не удалось открыть установщик. Вы можете открыть его вручную:
+%1</translation>
+    </message>
+    <message>
+        <source>Could not open the browser. Please try again.</source>
+        <translation>Не удалось открыть браузер. Повторите попытку.</translation>
     </message>
 </context>
 <context>
@@ -15668,6 +15834,55 @@ Use File → Save as Template… to create one.</source>
     <message>
         <source>Could not apply plugins: %1</source>
         <translation>Не удалось применить плагины: %1</translation>
+    </message>
+</context>
+<context>
+    <name>PitchCorrectorPanel</name>
+    <message>
+        <source>Send settings to all other VLT Pitch instances</source>
+        <translation>Отправить настройки всем остальным экземплярам VLT Pitch</translation>
+    </message>
+</context>
+<context>
+    <name>PitchWebBridge</name>
+    <message>
+        <source>Settings sent to %1 VLT Pitch instance(s).</source>
+        <translation>Настройки отправлены в экземпляры VLT Pitch: %1.</translation>
+    </message>
+    <message>
+        <source>All VLT Pitch instances already use these settings.</source>
+        <translation>Во всех экземплярах VLT Pitch уже установлены эти настройки.</translation>
+    </message>
+</context>
+<context>
+    <name>PitchSettings</name>
+    <message>
+        <source>The detected key is not supported by VLT Pitch.</source>
+        <translation>VLT Pitch не поддерживает найденную тональность.</translation>
+    </message>
+    <message>
+        <source>The source VLT Pitch instance is unavailable.</source>
+        <translation>Исходный экземпляр VLT Pitch недоступен.</translation>
+    </message>
+    <message>
+        <source>A VLT Pitch instance is unavailable. No settings were changed.</source>
+        <translation>Один из экземпляров VLT Pitch недоступен. Настройки не изменены.</translation>
+    </message>
+    <message>
+        <source>Stop playback and input monitoring to send settings with a different quality.</source>
+        <translation>Остановите воспроизведение и мониторинг входа, чтобы передать настройки с другим качеством обработки.</translation>
+    </message>
+    <message>
+        <source>There are no VLT Pitch instances in this project.</source>
+        <translation>В этом проекте нет экземпляров VLT Pitch.</translation>
+    </message>
+    <message>
+        <source>There are no other VLT Pitch instances in this project.</source>
+        <translation>В этом проекте нет других экземпляров VLT Pitch.</translation>
+    </message>
+    <message>
+        <source>The project could not accept the VLT Pitch settings.</source>
+        <translation>Не удалось применить настройки VLT Pitch к проекту.</translation>
     </message>
 </context>
 </TS>

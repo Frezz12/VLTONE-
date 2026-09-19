@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(VLTONE
-    VERSION 0.2.3
+    VERSION 0.2.4
     DESCRIPTION "VLTONE digital audio workstation"
     LANGUAGES CXX)
 

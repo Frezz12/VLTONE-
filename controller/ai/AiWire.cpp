@@ -315,7 +315,14 @@ bool StreamDecoder::feed(std::string_view bytes) {
             continue;
         }
         json parsed = json::parse(data, nullptr, /*allow_exceptions=*/false);
-        if (!parsed.is_discarded()) handle(eventName, parsed);
+        if (!parsed.is_discarded()) {
+            try {
+                handle(eventName, parsed);
+            } catch (const json::exception&) {
+                m_reply.error = "the model stream had an invalid shape";
+                m_done = true;
+            }
+        }
     }
     m_buffer.erase(0, start);
     return m_done;
@@ -391,7 +398,8 @@ void StreamDecoder::handle(const std::string& eventName, const json& data) {
         }
         for (const json& call : delta.value("tool_calls", json::array())) {
             Building& made = building(call.value("index", 0));
-            if (call.contains("id")) made.id = call.value("id", "");
+            if (call.contains("id") && call["id"].is_string())
+                made.id = call["id"].get<std::string>();
             const json& fn = call.value("function", json::object());
             if (fn.contains("name")) made.name = fn.value("name", "");
             made.args += fn.value("arguments", "");

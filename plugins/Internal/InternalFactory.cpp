@@ -4,6 +4,7 @@
 #include "Internal/GraphitInstance.hpp"
 #include "Internal/ModulationInstance.hpp"
 #include "Internal/EqualizerInstance.hpp"
+#include "Internal/PitchCorrectorInstance.hpp"
 #include "Internal/SampleDecoder.hpp"
 #include "Internal/SamplerInstance.hpp"
 #include <mutex>
@@ -60,6 +61,9 @@ std::vector<PluginDescriptor> InternalFactory::inspect(const std::string& path) 
 }
 
 std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& descriptor) {
+    if (descriptor.uid == pitch::PitchCorrectorInstance::uid()) {
+        return std::make_unique<pitch::PitchCorrectorInstance>();
+    }
     if (descriptor.uid == equalizer::EqualizerInstance::uid()) {
         return std::make_unique<equalizer::EqualizerInstance>();
     }
@@ -82,6 +86,7 @@ std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& 
 
 std::vector<PluginDescriptor> builtinPlugins() {
     return {sampler::SamplerInstance::staticDescriptor(),
+            pitch::PitchCorrectorInstance::staticDescriptor(),
             equalizer::EqualizerInstance::staticDescriptor(),
             gravity::GravityInstance::staticDescriptor(),
             graphit::GraphitInstance::staticDescriptor(),

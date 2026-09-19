@@ -15,6 +15,7 @@ constexpr auto kTemplatePath = "quickImport/templatePath";
 constexpr auto kTrackId = "quickImport/trackId";
 constexpr auto kDetectTempo = "quickImport/detectTempo";
 constexpr auto kDetectKey = "quickImport/detectKey";
+constexpr auto kApplyKeyToPitch = "quickImport/applyKeyToPitch";
 }
 
 Preferences load() {
@@ -24,6 +25,7 @@ Preferences load() {
     result.trackId = settings.value(QLatin1String(kTrackId)).toString();
     result.detectTempo = settings.value(QLatin1String(kDetectTempo), true).toBool();
     result.detectKey = settings.value(QLatin1String(kDetectKey), true).toBool();
+    result.applyKeyToPitch = settings.value(QLatin1String(kApplyKeyToPitch), false).toBool();
     return result;
 }
 
@@ -33,6 +35,7 @@ void save(const Preferences& preferences) {
     settings.setValue(QLatin1String(kTrackId), preferences.trackId);
     settings.setValue(QLatin1String(kDetectTempo), preferences.detectTempo);
     settings.setValue(QLatin1String(kDetectKey), preferences.detectKey);
+    settings.setValue(QLatin1String(kApplyKeyToPitch), preferences.applyKeyToPitch);
 }
 
 bool validate(const Preferences& preferences, QString* error) {
@@ -66,7 +69,8 @@ bool validate(const Preferences& preferences, QString* error) {
 bool checkPreferencesForTest(QString* error) {
     QSettings settings;
     const QStringList keys = {QLatin1String(kTemplatePath), QLatin1String(kTrackId),
-                              QLatin1String(kDetectTempo), QLatin1String(kDetectKey)};
+                              QLatin1String(kDetectTempo), QLatin1String(kDetectKey),
+                              QLatin1String(kApplyKeyToPitch)};
     QHash<QString, QVariant> previous;
     for (const QString& key : keys) previous.insert(key, settings.value(key));
     const auto restore = [&] {
@@ -80,20 +84,21 @@ bool checkPreferencesForTest(QString* error) {
 
     for (const QString& key : keys) settings.remove(key);
     const Preferences defaults = load();
-    if (!defaults.detectTempo || !defaults.detectKey ||
+    if (!defaults.detectTempo || !defaults.detectKey || defaults.applyKeyToPitch ||
         !defaults.templatePath.isEmpty() || !defaults.trackId.isEmpty()) {
         if (error) *error = QStringLiteral("Quick Import defaults are invalid");
         restore();
         return false;
     }
     const Preferences expected{QStringLiteral("/tmp/test.vltt"),
-                               QStringLiteral("track-id"), false, true};
+                               QStringLiteral("track-id"), false, true, true};
     save(expected);
     const Preferences actual = load();
     const bool ok = actual.templatePath == expected.templatePath &&
                     actual.trackId == expected.trackId &&
                     actual.detectTempo == expected.detectTempo &&
-                    actual.detectKey == expected.detectKey;
+                    actual.detectKey == expected.detectKey &&
+                    actual.applyKeyToPitch == expected.applyKeyToPitch;
     if (!ok) {
         if (error) *error = QStringLiteral("Quick Import preferences did not round-trip");
         restore();

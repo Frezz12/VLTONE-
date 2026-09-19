@@ -19,6 +19,12 @@ void setFolders(const QStringList& folders);
 bool addFolder(const QString& folder);
 void removeFolder(const QString& folder);
 
+/// Hidden file suffixes, stored lowercase without dots (e.g. "asd").
+QStringList ignoredExtensions();
+/// Accept commas, semicolons or whitespace, with optional dots / "*.".
+void setIgnoredExtensions(const QString& extensions);
+bool isIgnoredFile(const QString& fileName, const QStringList& extensions);
+
 /// True when the panel sits left of the inspector, false when it is on the far
 /// right of the window.
 bool onLeft();

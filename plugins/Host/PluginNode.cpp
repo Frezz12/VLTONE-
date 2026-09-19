@@ -35,14 +35,17 @@ PluginNode::~PluginNode() {
 }
 
 std::vector<PluginEvent> PluginNode::pendingParameterEvents() {
-    if (m_inbound.empty()) return {};
-    std::vector<PluginEvent> events;
+    auto events = m_instance ? m_instance->pendingParameterEvents()
+                             : std::vector<PluginEvent>{};
+    if (m_inbound.empty()) return events;
+    const auto formatEvents = events.size();
     // Allocate before touching the queue: even an allocation failure must
     // leave the live session's parameters and MIDI exactly as they were.
-    events.reserve(kEventQueueCapacity);
+    events.reserve(formatEvents + kEventQueueCapacity);
     PluginEvent event;
     while (m_inbound.pop(event)) events.push_back(event);
-    for (const auto& pending : events) (void)m_inbound.push(pending);
+    for (std::size_t i = formatEvents; i < events.size(); ++i)
+        (void)m_inbound.push(events[i]);
     std::erase_if(events, [](const PluginEvent& pending) {
         return pending.kind != PluginEvent::Kind::ParamValue;
     });
@@ -110,6 +113,7 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
     processInfo.sampleRate = info.sampleRate;
     processInfo.maxBlockSize = info.maxBlockSize;
     processInfo.offline = info.offline;
+    processInfo.sidechainConnected = m_sidechainConnected;
 
     if (m_instance->activate(processInfo)) {
         m_instance->startProcessing();

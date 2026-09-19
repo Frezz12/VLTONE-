@@ -27,7 +27,7 @@ struct Row {
 /// The SMP page. Times are seconds, fractions are 0…1, and anything that reads
 /// as a switch is a stepped 0…1.
 constexpr std::array<Row, kMainCount> kMain{{
-    {Param::Volume,     "vol",        "Volume",          "",     0.0,  1.0,  0.55, false},
+    {Param::Volume,     "vol",        "Volume",          "",     0.0,  1.0,  1.0,  false},
     {Param::Pan,        "pan",        "Pan",             "",    -1.0,  1.0,  0.0,  false},
     {Param::Pitch,      "pitch",      "Pitch",           "",    -1.0,  1.0,  0.0,  false},
     {Param::PitchRange, "pitchrange", "Pitch Range",     "st",   0.0, 24.0,  2.0,  true},

@@ -33,6 +33,7 @@
 #include <QWidget>
 #include <QWindow>
 #include <functional>
+#include <cmath>
 #include <ctime>
 #include <mutex>
 #ifdef Q_OS_WIN
@@ -92,6 +93,12 @@ QWidget* pointerTarget(QPointer<QWidget>& pressed, QEvent::Type type,
     if (startsFreshPointerRoute(type, buttons))
         pressed = nullptr;
     return pressed ? pressed.data() : hit;
+}
+
+bool sendEventWhileAlive(QObject* owner, QObject* receiver, QEvent* event) {
+    const QPointer<QObject> guard(owner);
+    QCoreApplication::sendEvent(receiver, event);
+    return !guard.isNull();
 }
 
 // A native QWidget window lets an ignored wheel event climb from the leaf to
@@ -180,8 +187,23 @@ bool WorkspaceSurface::checkPointerRoutingForTest() {
         afterAngle > 0 && scroll.verticalScrollBar()->value() > afterAngle;
     const bool scrollViewportRecognized = isScrollViewport(scroll.viewport()) &&
         !isScrollViewport(page);
+
+    class DeletesOwner final : public QObject {
+    public:
+        explicit DeletesOwner(QObject* owner) : m_owner(owner) {}
+        bool event(QEvent*) override { delete m_owner; m_owner = nullptr; return true; }
+    private:
+        QObject* m_owner;
+    };
+    QObject* owner = new QObject;
+    DeletesOwner receiver(owner);
+    QEvent event(QEvent::User);
+    const bool reentrantDeletionDetected =
+        !sendEventWhileAlive(owner, &receiver, &event);
+
     return freshPress && staleReleaseHeals && activeDragKeepsGrab &&
-           wheelClimbsToScroller && scrollViewportRecognized;
+           wheelClimbsToScroller && scrollViewportRecognized &&
+           reentrantDeletionDetected;
 }
 WorkspaceSurface::WorkspaceSurface(QWidget* source) : QObject(source), m_source(source),
     m_frameMailbox(std::make_shared<FrameMailbox>()) {
@@ -423,6 +445,16 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
     wanted.insert(id);
     auto found = m_layers.find(id);
     const QRectF clip = visible.translated(-origin);
+    QRegion mask(visible);
+    for (auto* ancestor = widget; ancestor; ancestor = ancestor->parentWidget()) {
+        if (!ancestor->mask().isEmpty())
+            mask &= ancestor->mask().translated(ancestor->mapTo(m_source, QPoint()));
+        if (ancestor == m_source) break;
+    }
+    if (mask.isEmpty()) return;
+    // Ordinary rectangular widgets keep the cheap scissor/batching path.
+    if (mask == QRegion(visible)) mask = {};
+    else mask.translate(-origin);
     const bool rebuild = found == m_layers.end() || !found->second.widget || m_dirty.contains(widget);
     if (rebuild) {
         ui::perf::Scope layerCost(nativeControlAsset(widget) && !dynamic_cast<ScenePaintSource*>(widget)
@@ -440,9 +472,11 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
         layer->id = id; layer->revision = ++m_revision;
         layer->origin = origin;
         layer->clip = visible.translated(-origin);
+        layer->mask = mask;
         if (nativeControlAsset(widget) && !dynamic_cast<ScenePaintSource*>(widget)) {
             const auto dpr = m_window->devicePixelRatio();
-            const QSize pixels = (QSizeF(widget->size()) * dpr).toSize();
+            const QSize pixels(int(std::ceil(widget->width() * dpr)),
+                               int(std::ceil(widget->height() * dpr)));
             if (qint64(pixels.width()) * pixels.height() > 512 * 1024) {
                 fail(tr("A native control exceeds the experimental texture size limit."));
                 return;
@@ -451,10 +485,12 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
             control.setDevicePixelRatio(dpr); control.fill(Qt::transparent);
             widget->render(&control, QPoint(), QRegion(), QWidget::RenderFlags());
             SceneMesh mesh;
-            const float w = widget->width(), h = widget->height();
+            const QSizeF logical = control.deviceIndependentSize();
+            const float w = logical.width(), h = logical.height();
             mesh.vertices = {{0, 0, 0, 0}, {w, 0, 1, 0}, {0, h, 0, 1},
                              {w, 0, 1, 0}, {w, h, 1, 1}, {0, h, 0, 1}};
             mesh.texture = std::move(control);
+            mesh.smoothTexture = false; // Native text is already rasterized at full DPR.
             layer->meshes.push_back(std::move(mesh));
         } else {
             if (auto* canvas = dynamic_cast<ScenePaintSource*>(widget)) {
@@ -470,13 +506,15 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
         }
         layer->clipRequired = requiresLayerClip(*layer);
         m_layers[id] = {widget, layer, std::move(recording)};
-    } else if (found->second.layer->origin != origin || found->second.layer->clip != clip) {
+    } else if (found->second.layer->origin != origin || found->second.layer->clip != clip ||
+               found->second.layer->mask != mask) {
         auto moved = std::make_shared<SceneLayer>(*found->second.layer);
         moved->origin = origin;
         // Recording always covers the widget's full local rect. Scrolling
         // changes visibility, not its pixels or geometry.
-        if (moved->clip != clip) {
+        if (moved->clip != clip || moved->mask != mask) {
             moved->clip = clip;
+            moved->mask = mask;
             moved->clipRequired = requiresLayerClip(*moved);
         }
         found->second.layer = std::move(moved);
@@ -763,7 +801,7 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
         QMouseEvent forwarded(mouse->type(), local, target->mapTo(target->window(), local), mouse->globalPosition(),
             mouse->button(), mouse->buttons(), mouse->modifiers(), mouse->source(), mouse->pointingDevice());
         forwarded.setTimestamp(mouse->timestamp());
-        QCoreApplication::sendEvent(target, &forwarded);
+        if (!sendEventWhileAlive(this, target, &forwarded)) return true;
         // Forwarding from Quick bypasses QWidget's native context-menu synthesis.
         // Respect the platform trigger (Windows: release, macOS: press), and
         // remember the event so a native duplicate can be discarded below.
@@ -776,15 +814,15 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
             m_syntheticContextMenuClock.restart();
             QContextMenuEvent context(QContextMenuEvent::Mouse, local.toPoint(),
                                       global, mouse->modifiers());
-            QCoreApplication::sendEvent(target, &context);
+            if (!sendEventWhileAlive(this, target, &context)) return true;
         }
         if (target && event->type() == QEvent::MouseMove && target->testAttribute(Qt::WA_Hover)) {
             QHoverEvent hover(QEvent::HoverMove, local, mouse->globalPosition(),
                 target->mapFrom(m_source, m_lastHoverPosition), mouse->modifiers(), mouse->pointingDevice());
-            QCoreApplication::sendEvent(target, &hover);
+            if (!sendEventWhileAlive(this, target, &hover)) return true;
         }
         m_lastHoverPosition = mouse->position();
-        if (target) m_window->setCursor(target->cursor());
+        if (target && m_window) m_window->setCursor(target->cursor());
         if (event->type() == QEvent::MouseButtonRelease && mouse->buttons() == Qt::NoButton) {
             m_pressed = nullptr;
             updateHover(m_source->rect().contains(mouse->position().toPoint()) ? targetAt(mouse->position()) : nullptr,

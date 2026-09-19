@@ -547,15 +547,26 @@ void VstInstance::sendMidi(std::span<const PluginEvent> events,
                              reinterpret_cast<VstEvents*>(&m_events), 0.0f);
 }
 
-void VstInstance::processSegment(const PluginProcessContext& context,
+bool VstInstance::processSegment(const PluginProcessContext& context,
                                  std::uint32_t start,
                                  std::uint32_t end) noexcept {
-    if (end <= start) return;
+    if (end <= start) return true;
+    // IOChanged is delivered asynchronously to the controller. A plugin may
+    // already have updated AEffect's counts, including during setParameter in
+    // this very block. Never index the old pointer arrays with the new layout.
+    const auto layoutReady = [&] {
+        if (m_effect->numInputs == m_inputPointers.size() &&
+            m_effect->numOutputs == m_outputPointers.size()) return true;
+        if (!m_restartPending.exchange(true, std::memory_order_acq_rel)) PluginMainThreadWork::request();
+        return false;
+    };
+    if (!layoutReady()) return false;
     const VstInt32 frames = static_cast<VstInt32>(end - start);
     m_segmentStart = start;
     prepareTime(context, start);
-    prepareAudio(context, start);
     sendMidi(context.inputEvents, start, end);
+    if (!layoutReady()) return false; // MIDI program changes can change IO too.
+    prepareAudio(context, start);
 
     if (m_effect->processReplacing) {
         m_effect->processReplacing(m_effect, m_inputPointers.data(),
@@ -566,12 +577,21 @@ void VstInstance::processSegment(const PluginProcessContext& context,
         m_effect->process(m_effect, m_inputPointers.data(),
                           m_outputPointers.data(), frames);
     }
+    return true;
 }
 
 PluginProcessDisposition VstInstance::process(
     const PluginProcessContext& context) noexcept {
+    const auto failed = [&] {
+        for (std::uint16_t ch = 0; ch < context.outputChannels; ++ch)
+            if (context.outputs && context.outputs[ch])
+                std::fill_n(context.outputs[ch], context.frames, 0.0f);
+        m_outputSink = nullptr;
+        m_currentProcess = nullptr;
+        return PluginProcessDisposition::Error;
+    };
     if (!m_effect || !m_processing || context.frames > m_maxBlockSize)
-        return PluginProcessDisposition::Continue;
+        return failed();
     m_currentProcess = &context;
     m_outputSink = context.outputEvents;
 
@@ -584,7 +604,7 @@ PluginProcessDisposition VstInstance::process(
             continue;
         }
         const std::uint32_t offset = std::min(event.frameOffset, context.frames);
-        processSegment(context, cursor, offset);
+        if (!processSegment(context, cursor, offset)) return failed();
         cursor = offset;
         while (eventIndex < context.inputEvents.size()) {
             const PluginEvent& parameter = context.inputEvents[eventIndex];
@@ -598,7 +618,7 @@ PluginProcessDisposition VstInstance::process(
             ++eventIndex;
         }
     }
-    processSegment(context, cursor, context.frames);
+    if (!processSegment(context, cursor, context.frames)) return failed();
     m_outputSink = nullptr;
     m_currentProcess = nullptr;
     return PluginProcessDisposition::Continue;

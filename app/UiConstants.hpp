@@ -132,6 +132,13 @@ inline constexpr const char* kCpuStatusMeterModeSetting = "ui/cpuStatusMeterMode
 /// User-chosen width of the track-header column.
 inline constexpr const char* kTrackHeaderWidthSetting = "ui/trackHeaderWidth";
 
+/// Automatic plugin discovery at launch. Enabled unless the user opts out;
+/// the saved catalogue and manual scans remain available either way.
+inline constexpr const char* kScanPluginsAtStartupSetting =
+    "startup/scanPlugins";
+bool scanPluginsAtStartup();
+void setScanPluginsAtStartup(bool enabled);
+
 /// Whether Duplicate Track/Folder also copies the arrangement clips carried by
 /// the duplicated tracks. The default is deliberately false: duplicating a
 /// channel is primarily a way to reuse its instrument, plugins and routing
@@ -155,6 +162,18 @@ void setSelectionTint(SelectionTint tint);
 /// place the two modes are resolved, so the headers and the lanes cannot
 /// disagree about what "selected" looks like.
 QColor selectionWash(const QColor& trackColor);
+
+/// Arrangement grid appearance, independent of its division and snapping.
+inline constexpr const char* kGridLineWidthSetting = "ui/gridLineWidth";
+inline constexpr double kGridLineWidthMin = 0.5;
+inline constexpr double kGridLineWidthMax = 3.0;
+inline constexpr double kGridLineWidthDefault = 0.8;
+inline constexpr const char* kGridOpacitySetting = "ui/gridOpacity";
+inline constexpr int kGridOpacityDefault = 75;
+double gridLineWidth();
+void setGridLineWidth(double pixels);
+int gridOpacity(); // Percent; zero hides the lines without disabling snapping.
+void setGridOpacity(int percent);
 
 /// How thick the playhead line is drawn, in pixels. A hairline is right on a
 /// sparse arrangement and invisible on a dense one at a high pixel density, and

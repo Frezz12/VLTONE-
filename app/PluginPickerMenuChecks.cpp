@@ -4,14 +4,18 @@
 #include "Theme.hpp"
 
 #include <QApplication>
+#include <QAbstractItemView>
+#include <QComboBox>
 #include <QElapsedTimer>
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
 #include <QPixmap>
+#include <QPainter>
 #include <QSettings>
 #include <QStyle>
+#include <QWindow>
 #include <QWheelEvent>
 #include <memory>
 
@@ -80,6 +84,11 @@ bool checkPluginPickerForTest(QString* error, const QString& screenshotPath) {
     QWidget root;
     root.resize(600, 720);
     root.show();
+    root.hide();
+    root.show();
+    root.raise();
+    root.activateWindow();
+    QApplication::processEvents();
     int changes = 0;
     int picked = 0;
     auto makeMenu = [&](const std::string& channel, const std::string& slot, bool instrument) {
@@ -110,12 +119,38 @@ bool checkPluginPickerForTest(QString* error, const QString& screenshotPath) {
     if (!remove || !current || !current->menu() || !search ||
         !manufacturers || !category)
         return fail("missing replacement controls");
-    if (menu->testAttribute(Qt::WA_TranslucentBackground) ||
+    if (!menu->testAttribute(Qt::WA_TranslucentBackground) ||
         menu->windowOpacity() != 1.0 ||
         manufacturers->style()->styleHint(QStyle::SH_Menu_Scrollable) != 1)
         return fail("plugin picker surface or manufacturer scrolling style");
     menu->popup(root.mapToGlobal(QPoint(10, 10)));
     QApplication::processEvents();
+    const auto roundedPopup = [&](QWidget* popup) {
+        // QWidget::grab deliberately ignores the window mask. Render with the
+        // actual QWindow mask, matching the native compositor's visible contour.
+        if (!popup->windowHandle() || popup->windowHandle()->mask() != popup->mask()) return false;
+        QImage image(popup->size() * popup->devicePixelRatioF(), QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(popup->devicePixelRatioF());
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        painter.setClipRegion(popup->windowHandle()->mask());
+        painter.drawPixmap(QPoint(), popup->grab());
+        painter.end();
+        if (qEnvironmentVariableIsSet("DAW_SELFTEST_VERBOSE"))
+            std::fprintf(stderr, "popup corners: %s %dx%d alpha=%d/%d/%d/%d center=%d translucent=%d mask=%d visible=%d\n",
+            popup->metaObject()->className(), image.width(), image.height(),
+            image.pixelColor(image.rect().topLeft()).alpha(), image.pixelColor(image.rect().topRight()).alpha(),
+            image.pixelColor(image.rect().bottomLeft()).alpha(), image.pixelColor(image.rect().bottomRight()).alpha(),
+            image.pixelColor(image.rect().center()).alpha(), popup->testAttribute(Qt::WA_TranslucentBackground),
+            popup->mask().rectCount(), popup->isVisible());
+        if (!screenshotPath.isEmpty()) image.save(screenshotPath + QStringLiteral(".corners.png"));
+        if (image.isNull() || !popup->testAttribute(Qt::WA_TranslucentBackground)) return false;
+        for (const QPoint point : {image.rect().topLeft(), image.rect().topRight(),
+                                   image.rect().bottomLeft(), image.rect().bottomRight()})
+            if (image.pixelColor(point).alpha() != 0) return false;
+        return image.pixelColor(image.rect().center()).alpha() > 0;
+    };
+    if (!roundedPopup(menu.get())) return fail("plugin picker has opaque square corners");
     if (!search->hasFocus()) return fail("search did not receive popup focus");
     QKeyEvent recordOverride(QEvent::ShortcutOverride, Qt::Key_R,
                              Qt::NoModifier, QStringLiteral("r"));
@@ -204,6 +239,46 @@ bool checkPluginPickerForTest(QString* error, const QString& screenshotPath) {
     controller.undo();
     if (!controller.insertModel(track, replace)) return fail("undo removal");
     menu.reset();
+
+    // QComboBox uses a separate native container around the styled list. Test
+    // that actual container, as well as ordinary QMenus, across theme changes
+    // and popup recreation/resizing (the intermittent black-corner case).
+    const Theme originalTheme = th();
+    struct RestoreTheme {
+        Theme value;
+        ~RestoreTheme() {
+            if (value.id == QLatin1String("custom")) ThemeManager::instance().applyCustomTheme(value, false);
+            else ThemeManager::instance().setThemeId(value.id, false);
+        }
+    } restoreTheme{originalTheme};
+    QComboBox combo(&root);
+    combo.setGeometry(20, 20, 250, 30);
+    combo.addItems({QStringLiteral("First option"), QStringLiteral("Second option")});
+    combo.show();
+    QMenu ordinary(&root);
+    ordinary.addAction(QStringLiteral("First option"));
+    ordinary.addAction(QStringLiteral("Second option"));
+    for (const auto& theme : ThemeManager::instance().presets()) {
+        // One light and the original dark palette are enough to catch backing
+        // colors leaking through; keep this interaction check inexpensive.
+        if (theme.dark && theme.id != originalTheme.id) continue;
+        ThemeManager::instance().setThemeId(theme.id, false);
+        for (int pass = 0; pass < 2; ++pass) {
+            ordinary.popup(root.mapToGlobal(QPoint(20, 80)));
+            QApplication::processEvents();
+            if (!roundedPopup(&ordinary)) return fail("ordinary menu has opaque square corners");
+            ordinary.hide();
+            combo.showPopup();
+            QApplication::processEvents();
+            if (!roundedPopup(combo.view()->window())) return fail("combo popup has opaque square corners");
+            if (!screenshotPath.isEmpty() && pass == 0)
+                combo.view()->window()->grab().save(screenshotPath + QStringLiteral(".combo.png"));
+            combo.hidePopup();
+            combo.addItem(QStringLiteral("An additional option changes the popup height"));
+        }
+    }
+    if (originalTheme.id == QLatin1String("custom")) ThemeManager::instance().applyCustomTheme(originalTheme, false);
+    else ThemeManager::instance().setThemeId(originalTheme.id, false);
 
     const auto midi = controller.addTrack(daw::TrackKind::Midi, "Picker instrument");
     if (!controller.setTrackInstrumentPlugin(midi, *sampler)) return fail("sampler insertion");

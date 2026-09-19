@@ -56,6 +56,77 @@
 #include <cmath>
 #include <cstdio>
 
+bool TimelineWidget::checkGridAppearanceForTest() {
+    const double savedWidth = ui::gridLineWidth();
+    const int savedOpacity = ui::gridOpacity();
+    const double savedHeadWidth = ui::playheadWidth();
+    const double savedScale = m_pixelsPerSecond, savedScroll = m_scrollSeconds;
+    const double savedGrid = m_gridBeats;
+    m_pixelsPerSecond = 80.0; m_scrollSeconds = 0.0; m_gridBeats = 0.25;
+    const double snapped = snap(1.234, true);
+    const double snapStep = snapSeconds();
+    bool ok = true;
+    for (qreal dpr : {1.0, 1.5, 2.0}) {
+        const bool beforeScale = ok;
+        const auto gridInk = [&] {
+            QImage raster(QSize(320 * dpr, 100 * dpr), QImage::Format_ARGB32_Premultiplied);
+            raster.setDevicePixelRatio(dpr);
+            raster.fill(Qt::transparent);
+            { QPainter p(&raster); p.setClipRect(QRect(0, 0, 320, 100)); drawGrid(p); }
+            int ink = 0;
+            for (int x = 0; x < raster.width(); ++x)
+                ink += qAlpha(raster.pixel(x, int(60 * dpr)));
+            return ink;
+        };
+        ui::setGridLineWidth(1.0); ui::setGridOpacity(100);
+        const int full = gridInk();
+        ui::setGridOpacity(50);
+        const int half = gridInk();
+        // Includes coincident subdivision/beat/bar positions: layering them
+        // twice would make 50% substantially more opaque than half strength.
+        ok &= full > 0 && std::abs(half - full * 0.5) < full * 0.02 + 5;
+        ui::setGridLineWidth(ui::kGridLineWidthDefault);
+        ui::setGridOpacity(ui::kGridOpacityDefault);
+        ok &= gridInk() > 0 && gridInk() < full * 0.85;
+        ui::setGridLineWidth(2.5); ui::setGridOpacity(100);
+        ok &= gridInk() > full * 1.8;
+        ui::setGridOpacity(0);
+        ok &= gridInk() == 0 && snap(1.234, true) == snapped && snapSeconds() == snapStep;
+
+        QImage cursor(QSize(160 * dpr, 100 * dpr), QImage::Format_ARGB32_Premultiplied);
+        cursor.setDevicePixelRatio(dpr);
+        cursor.fill(Qt::transparent);
+        ui::setPlayheadWidth(ui::kPlayheadWidthDefault);
+        constexpr double x = 80.25;
+        { QPainter p(&cursor); drawPlayhead(p, x, 0.0); }
+        int cursorInk = 0;
+        const int left = int(std::floor((x - ui::playheadWidth() / 2) * dpr));
+        const int right = int(std::ceil((x + ui::playheadWidth() / 2) * dpr));
+        for (int col = 0; col < cursor.width(); ++col) {
+            const int alpha = qAlpha(cursor.pixel(col, int(60 * dpr)));
+            cursorInk += alpha;
+            if (col < left || col >= right) ok &= alpha == 0;
+        }
+        ok &= cursorInk > 0;
+        if (beforeScale && !ok)
+            std::fprintf(stderr, "grid/cursor raster failed at DPR %.1f (full=%d, half=%d, cursor=%d)\n",
+                         double(dpr), full, half, cursorInk);
+    }
+    m_staticDirty = {};
+    m_staticFrameValid = true;
+    // Deliver the same notification as a palette change, without replacing
+    // the theme or resetting the whole application's style in this probe.
+    QMetaObject::invokeMethod(&ThemeManager::instance(), "changed", Qt::DirectConnection);
+    ok &= m_staticDirty.intersected(rect()) == QRegion(rect());
+    ui::setGridLineWidth(savedWidth); ui::setGridOpacity(savedOpacity);
+    ui::setPlayheadWidth(savedHeadWidth);
+    m_pixelsPerSecond = savedScale; m_scrollSeconds = savedScroll; m_gridBeats = savedGrid;
+    m_staticFrameValid = false;
+    update();
+    if (!ok) std::fprintf(stderr, "grid appearance, hidden-grid snapping or crisp cursor check failed\n");
+    return ok;
+}
+
 bool TimelineWidget::checkAdaptiveGridForTest() {
     auto& project = const_cast<daw::ProjectModel&>(m_controller->project());
     const double savedTempo = project.tempo;
@@ -414,6 +485,8 @@ bool checkUiScaling() {
     controller.initialize(48000.0, 512, false);
     TimelineWidget gridProbe(&controller);
     gridProbe.resize(200, 120);
+    check(gridProbe.checkGridAppearanceForTest(),
+          "grid width/opacity, invisible-grid snapping and crisp playhead at 100/150/200% scale");
     check(gridProbe.checkGestureGridStabilityForTest(),
           "clip gestures keep the grid on its stable retained-tile origin");
     check(gridProbe.checkMoveGuidePaintForTest(),
@@ -729,6 +802,8 @@ bool checkUiScaling() {
           playbackStaticPaints <= std::uint64_t(timeline.playbackFullPaints),
           "cursor-only frames reuse the static timeline without whole-window repainting");
 
+    const bool savedTrail = ui::playheadTrail();
+    ui::setPlayheadTrail(true); // The trail is opt-in; explicitly exercise it.
     timeline.zoomBy(80.0 / timeline.pixelsPerSecondForTest());
     timeline.refreshPlaybackFrame(); settle();
     const double steadyTrail = timeline.displayedPlayheadTrailForTest();
@@ -777,6 +852,7 @@ bool checkUiScaling() {
               QPoint(int(wideHeadX - wideTrail + 1), 100)) &&
           timeline.staticFramePaintCountForTest() == stopStaticBefore,
           "stopping erases the whole previous trail with a cached narrow repaint");
+    ui::setPlayheadTrail(savedTrail);
     controller.seekSeconds(20.0);
     timeline.zoomBy(80.0 / timeline.pixelsPerSecondForTest());
     timeline.refreshPlaybackFrame(); settle();

@@ -286,6 +286,11 @@ int main() {
         check(graphit && !graphit->isInstrument &&
                   manager.instantiate(*graphit) != nullptr,
               "Graphit is registered as an instantiable built-in effect");
+        const auto pitchCorrector =
+            manager.find(plugins::Format::Internal, "daw.pitch-corrector");
+        check(pitchCorrector && !pitchCorrector->isInstrument &&
+                  manager.instantiate(*pitchCorrector) != nullptr,
+              "Pitch Corrector is registered as an instantiable built-in effect");
 
         // It must be usable, not merely listed.
         const auto descriptor =

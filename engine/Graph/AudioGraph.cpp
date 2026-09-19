@@ -273,6 +273,9 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
     // this before compiling compensation, otherwise the first graph snapshot
     // permanently bakes in the descriptor/default latency of zero.
     for (auto& entry : compiled->nodes) {
+        const auto& inputs = m_nodes[entry.id].inputs;
+        entry.node->setSidechainConnected(std::any_of(inputs.begin(), inputs.end(),
+            [](const auto& input) { return input.role == InputRole::Sidechain; }));
         if (entry.node->isPreparedFor(info)) continue;
         entry.node->invalidatePrepare();
         entry.node->prepare(info);

@@ -1194,7 +1194,7 @@ components:
       content: { application/json: { schema: { $ref: "#/components/schemas/LoginRequest" } } }
     PasswordConfirmation:
       required: true
-      content: { application/json: { schema: { type: object, additionalProperties: false, required: [password], properties: { password: { type: string, minLength: 12, maxLength: 128 } } } } }
+      content: { application/json: { schema: { type: object, additionalProperties: false, required: [password], properties: { password: { type: string, minLength: 8, maxLength: 128 } } } } }
     AIProviderRequest:
       required: true
       content:
@@ -1929,7 +1929,7 @@ components:
       required: [email, password]
       properties:
         email: { type: string, format: email }
-        password: { type: string, minLength: 12, maxLength: 128 }
+        password: { type: string, minLength: 8, maxLength: 128 }
     RegisterRequest:
       type: object
       additionalProperties: false
@@ -1937,8 +1937,8 @@ components:
       properties:
         email: { type: string, format: email }
         nickname: { type: string, minLength: 3, maxLength: 32 }
-        password: { type: string, minLength: 12, maxLength: 128 }
-        password_confirmation: { type: string, minLength: 12, maxLength: 128 }
+        password: { type: string, minLength: 8, maxLength: 128 }
+        password_confirmation: { type: string, minLength: 8, maxLength: 128 }
         locale: { type: string, enum: [ru, en] }
         consent_accepted: { const: true }
         consent_version: { type: string }
@@ -1948,8 +1948,8 @@ components:
       required: [token, password, password_confirmation]
       properties:
         token: { type: string }
-        password: { type: string, minLength: 12, maxLength: 128 }
-        password_confirmation: { type: string, minLength: 12, maxLength: 128 }
+        password: { type: string, minLength: 8, maxLength: 128 }
+        password_confirmation: { type: string, minLength: 8, maxLength: 128 }
     User:
       type: object
       required: [id, email, nickname, locale, status, collaboration_enabled]
@@ -2021,7 +2021,7 @@ components:
       required: [email, password, installation_id, device_name, platform, os_version, app_version, hardware]
       properties:
         email: { type: string, format: email }
-        password: { type: string, minLength: 12, maxLength: 128 }
+        password: { type: string, minLength: 8, maxLength: 128 }
         installation_id: { type: string, format: uuid, description: Random installation UUID; never hardware-derived }
         device_name: { type: string }
         platform: { type: string, enum: [windows, macos] }

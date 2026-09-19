@@ -2,6 +2,7 @@
 #include "ChannelStripPresets.hpp"
 
 #include "BrowserPrefs.hpp"
+#include "BrowserSettingsPage.hpp"
 #include "Controls.hpp"
 #include "EngineController.hpp"
 #include "FileBrowserTree.hpp"
@@ -21,6 +22,12 @@
 #include <QApplication>
 #include <QThread>
 #include <QFileInfo>
+#include <QFile>
+#include <QDir>
+#include <QTemporaryDir>
+#include <QScopeGuard>
+#include <QKeyEvent>
+#include <QWindow>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -35,6 +42,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 
 #include "platform/AudioFileDecoder.hpp"
@@ -96,7 +104,8 @@ FileBrowserPanel::FileBrowserPanel(daw::EngineController* controller,
     m_searchField = new QLineEdit(this);
     m_searchField->setObjectName("BrowserSearch");
     m_searchField->setPlaceholderText(
-        tr("Search — name, .wav, .vlts or .vltt"));
+        tr("Search files and plugins…"));
+    m_searchField->setAccessibleName(tr("Search files and plugins"));
     m_searchField->setClearButtonEnabled(true);
     m_searchField->addAction(icons::icon(icons::Glyph::Search, th().textSecondary, 13),
                              QLineEdit::LeadingPosition);
@@ -131,12 +140,13 @@ FileBrowserPanel::FileBrowserPanel(daw::EngineController* controller,
 
     m_search = new FileSearchWorker(this);
     connect(m_search, &FileSearchWorker::results, this,
-            [this](const QStringList& paths, bool truncated) {
-                m_tree->showResults(paths, truncated);
-                emit statusMessage(truncated
+            [this](const QStringList& paths, bool truncated, bool finished) {
+                const int count = m_tree->showResults(
+                    paths, truncated, m_searchField->text().trimmed(), !finished);
+                emit statusMessage(!finished ? tr("Searching… %1 matches").arg(count) : truncated
                                        ? tr("%1 matches (more were found)")
-                                             .arg(paths.size())
-                                       : tr("%1 matches").arg(paths.size()));
+                                             .arg(count)
+                                       : tr("%1 matches").arg(count));
             });
 
     m_searchTimer = new QTimer(this);
@@ -146,7 +156,7 @@ FileBrowserPanel::FileBrowserPanel(daw::EngineController* controller,
         QStringList roots = ui::browserprefs::folders();
         roots.prepend(ui::channelstrippresets::rootFolder());
         roots.removeDuplicates();
-        m_search->search(roots, m_searchField->text());
+        m_search->search(roots, m_searchField->text(), ui::browserprefs::ignoredExtensions());
     });
 
     m_loader = new PreviewLoader(this);
@@ -466,7 +476,8 @@ QStringList FileBrowserPanel::searchForTest(const QString& query) {
     timeout.setSingleShot(true);
     const QMetaObject::Connection finished = connect(
         m_search, &FileSearchWorker::results, &loop,
-        [&result, &loop](const QStringList& paths, bool) {
+        [&result, &loop](const QStringList& paths, bool, bool finished) {
+            if (!finished) return;
             result = paths;
             loop.quit();
         });
@@ -475,11 +486,162 @@ QStringList FileBrowserPanel::searchForTest(const QString& query) {
     // This regression searches its temporary preset fixtures. User folders
     // can be network volumes and must not determine a fixed test timeout.
     const QStringList roots{ui::channelstrippresets::rootFolder()};
-    m_search->search(roots, query);
+    m_search->search(roots, query, ui::browserprefs::ignoredExtensions());
     timeout.start(5000);
     loop.exec();
     disconnect(finished);
     return result;
+}
+
+bool FileBrowserPanel::checkSearchForTest(QObject* keyboardTarget) {
+    const auto fail = [](const char* reason) {
+        std::fprintf(stderr, "browser search: %s\n", reason);
+        return false;
+    };
+    QTemporaryDir fixture;
+    if (!fixture.isValid()) return fail("cannot create fixture");
+    QDir root(fixture.path());
+    root.mkpath(QStringLiteral("nested/Template.vltt"));
+    root.mkpath(QStringLiteral("folder.asd"));
+    const QStringList names{QStringLiteral("Kick.WAV"), QStringLiteral("Kick.wav.ASD"),
+        QStringLiteral("notes.TMP"), QStringLiteral("readme.txt"),
+        QStringLiteral("nested/Bass.flac"), QStringLiteral("nested/Template.vltt/Project.vlt")};
+    for (const QString& name : names) {
+        QFile file(root.filePath(name));
+        if (!file.open(QIODevice::WriteOnly)) return fail("cannot write fixture");
+    }
+    const auto savedFolders = ui::browserprefs::folders();
+    const auto savedIgnored = ui::browserprefs::ignoredExtensions();
+    const auto restore = qScopeGuard([&] {
+        m_searchField->clear();
+        m_search->cancel();
+        ui::browserprefs::setFolders(savedFolders);
+        ui::browserprefs::setIgnoredExtensions(savedIgnored.join(QLatin1Char(',')));
+        reloadSettings();
+    });
+    ui::browserprefs::setFolders({fixture.path(), root.filePath(QStringLiteral("nested"))});
+    ui::browserprefs::setIgnoredExtensions({});
+    reloadSettings();
+    const auto waitFor = [](auto predicate) {
+        QElapsedTimer timer; timer.start();
+        while (!predicate() && timer.elapsed() < 5000) {
+            QApplication::processEvents(QEventLoop::AllEvents, 10);
+            QThread::msleep(1);
+        }
+        return predicate();
+    };
+    bool finished = false;
+    QStringList paths;
+    const auto connection = connect(m_search, &FileSearchWorker::results, this,
+        [&](const QStringList& found, bool, bool done) {
+            if (done) { paths = found; finished = true; }
+        });
+    const auto disconnectSearch = qScopeGuard([&] { disconnect(connection); });
+
+    // Exercise real typing, including Quick-to-QWidget keyboard forwarding.
+    // Consume Windows' first-show hidden hint in a headless native check.
+    window()->hide(); window()->show(); window()->activateWindow();
+    if (auto* inputWindow = qobject_cast<QWindow*>(keyboardTarget)) inputWindow->requestActivate();
+    QApplication::processEvents();
+    QApplication::setActiveWindow(window()); // Offscreen platforms do not activate native windows.
+    m_searchField->setFocus(Qt::OtherFocusReason);
+    if (!waitFor([&] { return QApplication::focusWidget() == m_searchField; }))
+    {
+        std::fprintf(stderr, "browser search focus: visible=%d size=%dx%d active=%d focus=%s\n",
+            m_searchField->isVisible(), width(), height(), window()->isActiveWindow(),
+            QApplication::focusWidget() ? QApplication::focusWidget()->metaObject()->className() : "none");
+        return fail("search field did not receive focus");
+    }
+    QObject* target = keyboardTarget ? keyboardTarget : m_searchField;
+    for (QChar letter : QStringLiteral("kick")) {
+        QKeyEvent overrideKey(QEvent::ShortcutOverride, letter.toUpper().unicode(), Qt::NoModifier, QString(letter));
+        QKeyEvent press(QEvent::KeyPress, letter.toUpper().unicode(), Qt::NoModifier, QString(letter));
+        QKeyEvent release(QEvent::KeyRelease, letter.toUpper().unicode(), Qt::NoModifier, QString(letter));
+        QApplication::sendEvent(target, &overrideKey);
+        QApplication::sendEvent(target, &press);
+        QApplication::sendEvent(target, &release);
+    }
+    if (m_searchField->text() != QLatin1String("kick") || !waitFor([&] { return finished; }) ||
+        !paths.contains(root.filePath(QStringLiteral("Kick.WAV"))) || paths.size() != 2)
+        return fail("typing did not find case-insensitive file names");
+
+    // Commit the real preference field while results are open; it must restart
+    // the same query and remove sidecars without closing the browser.
+    BrowserSettingsPage settings;
+    connect(&settings, &BrowserSettingsPage::changed, this, &FileBrowserPanel::reloadSettings);
+    auto* ignored = settings.findChild<QLineEdit*>(QStringLiteral("BrowserIgnoredExtensions"));
+    if (!ignored) return fail("ignored extensions field is missing");
+    finished = false;
+    ignored->setText(QStringLiteral(".ASD; *.tmp, asd"));
+    QMetaObject::invokeMethod(ignored, "editingFinished", Qt::DirectConnection);
+    if (ui::browserprefs::ignoredExtensions() != QStringList{QStringLiteral("asd"), QStringLiteral("tmp")} ||
+        !waitFor([&] { return finished; }) || paths != QStringList{root.filePath(QStringLiteral("Kick.WAV"))})
+        return fail("extension preference did not update active search");
+
+    const auto search = [&](const QString& query) {
+        finished = false;
+        m_searchField->setText(query);
+        return waitFor([&] { return finished; });
+    };
+    if (!search(QStringLiteral("*.FLAC")) || paths != QStringList{root.filePath(QStringLiteral("nested/Bass.flac"))})
+        return fail("nested extension search failed or overlapping roots duplicated files");
+    if (!search(QStringLiteral(".asd")) || !paths.isEmpty())
+        return fail("ignored files leaked into extension search");
+    if (!search(QStringLiteral("Project.vlt")) || !paths.isEmpty())
+        return fail("search exposed template implementation files");
+    if (!search(QStringLiteral(".vltt")) || paths != QStringList{root.filePath(QStringLiteral("nested/Template.vltt"))})
+        return fail("template was not returned as one package");
+
+    FileBrowserTree::PluginEntry plugin;
+    plugin.name = QStringLiteral("Needle Synth"); plugin.vendor = QStringLiteral("Fixture Audio");
+    plugin.uid = QStringLiteral("test.search.synth"); plugin.formatName = QStringLiteral("Test");
+    m_tree->setPlugins({plugin});
+    if (!search(QStringLiteral("needle")) || m_tree->pluginRowCountForTest() != 1 ||
+        !m_tree->selectFirstPluginForTest()) return fail("plugin name search failed");
+    const std::unique_ptr<QMimeData> mime(m_tree->dragPayload());
+    int format = 0; QString uid;
+    if (!ui::decodePluginRef(mime.get(), format, uid) || uid != plugin.uid)
+        return fail("plugin result lost its drag payload");
+    if (!search(QStringLiteral("fixture audio")) || m_tree->pluginRowCountForTest() != 1)
+        return fail("plugin vendor search failed");
+
+    // An already queued result must not land during the next debounce period.
+    m_search->search({fixture.path()}, QStringLiteral("kick"));
+    if (!search(QStringLiteral("bass")) || paths != QStringList{root.filePath(QStringLiteral("nested/Bass.flac"))})
+        return fail("an obsolete query replaced current results");
+    m_searchField->clear();
+    if (m_tree->showingResults()) return fail("clearing query did not restore folders");
+    QTreeWidgetItem* folder = nullptr;
+    for (int i = 0; i < m_tree->topLevelItemCount(); ++i)
+        if (m_tree->topLevelItem(i)->data(0, Qt::UserRole).toString() == fixture.path())
+            folder = m_tree->topLevelItem(i);
+    if (!folder) return fail("fixture root disappeared");
+    folder->setExpanded(true);
+    const auto childNames = [&] {
+        QStringList result;
+        for (int i = 0; i < folder->childCount(); ++i) result << folder->child(i)->text(0);
+        return result;
+    };
+    if (!waitFor([&] { return childNames().contains(QStringLiteral("Kick.WAV")); }) ||
+        childNames().contains(QStringLiteral("Kick.wav.ASD")) ||
+        childNames().contains(QStringLiteral("notes.TMP")) ||
+        !childNames().contains(QStringLiteral("folder.asd")))
+        return fail("folder enumeration did not respect ignored suffixes");
+
+    const QString text = root.filePath(QStringLiteral("readme.txt"));
+    m_tree->showResults({text}, false, QStringLiteral("text"), true);
+    auto* selected = m_tree->topLevelItem(0);
+    m_tree->setCurrentItem(selected);
+    m_tree->showResults({text, root.filePath(QStringLiteral("notes.TMP"))}, false, QStringLiteral("text"));
+    if (m_tree->currentItem() != selected) return fail("incremental results discarded selection");
+    m_tree->showTree();
+    finished = false;
+    ignored->clear();
+    QMetaObject::invokeMethod(ignored, "editingFinished", Qt::DirectConnection);
+    if (!search(QStringLiteral(".asd")) || paths != QStringList{root.filePath(QStringLiteral("Kick.wav.ASD"))})
+        return fail("clearing ignored extensions did not restore files");
+    std::fprintf(stderr, "browser search: files, plugins, typing, cancellation, suffixes and live settings PASS\n");
+    return true;
 }
 
 bool FileBrowserPanel::selectedProjectTemplateForTest() const {
@@ -514,6 +676,7 @@ void FileBrowserPanel::reloadPlugins() {
         entries.push_back(entry);
     }
     m_tree->setPlugins(entries);
+    if (!m_searchField->text().trimmed().isEmpty()) searchChanged(m_searchField->text());
 }
 
 void FileBrowserPanel::setOnLeft(bool onLeft) {
@@ -540,7 +703,8 @@ void FileBrowserPanel::reloadSettings() {
 void FileBrowserPanel::requestAddFolder() { addFolder(); }
 
 void FileBrowserPanel::refreshFolders() {
-    if (m_tree) m_tree->refresh();
+    if (!m_searchField->text().trimmed().isEmpty()) searchChanged(m_searchField->text());
+    else if (m_tree) m_tree->refresh();
 }
 
 bool FileBrowserPanel::hasPreviewableSelection() const {
@@ -588,16 +752,19 @@ void FileBrowserPanel::addFolder() {
         return;
     }
     m_tree->setRoots(ui::browserprefs::folders());
+    if (!m_searchField->text().trimmed().isEmpty()) searchChanged(m_searchField->text());
     emit statusMessage(tr("Added %1").arg(folder));
 }
 
 void FileBrowserPanel::searchChanged(const QString& query) {
+    // Invalidate old results immediately, including the debounce interval.
+    m_search->cancel();
     if (query.trimmed().isEmpty()) {
         m_searchTimer->stop();
-        m_search->cancel();
         m_tree->showTree();
         return;
     }
+    m_tree->showResults({}, false, query.trimmed(), true);
     m_searchTimer->start();
 }
 

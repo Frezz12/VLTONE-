@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -35,6 +36,15 @@ struct TempDirectory {
     TempDirectory() { fs::create_directories(path); }
     ~TempDirectory() { std::error_code error; fs::remove_all(path, error); }
 };
+
+void environment(const char* name, const char* value) {
+#if defined(_WIN32)
+    _putenv_s(name, value);
+#else
+    if (*value) setenv(name, value, 1);
+    else unsetenv(name);
+#endif
+}
 
 void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
                  const std::string& parameterId, double dryValue,
@@ -125,6 +135,34 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
                     descriptor.name + " / " + scope + ": export retains audible settings");
         };
         render(0.1f, 0.1f);
+        if (descriptor.format == Format::Vst3) {
+            // The native editor queues directly in the format, without a
+            // PluginNode host event. Export before the next device callback.
+            environment("DAW_TEST_VST3_EDITOR_EDIT", "1");
+            controller.insertInstance(channel, slot)->setParameterFromHost(unsigned(index), editedValue);
+            environment("DAW_TEST_VST3_EDITOR_EDIT", "");
+            render(0.2f * editedGain, dual ? 0.1f : 0.2f * editedGain);
+            play();
+            require(std::abs(left[kBlock - 1] - 0.2f * editedGain) < 1e-4f,
+                    "export preserves unconsumed native editor edit");
+            eachSide([&] { require(controller.insertInstance(channel, slot)->loadState(state), "restore preset"); });
+            play();
+
+            // A previous successful recovery capture must never hide a failed
+            // export capture behind cached opaque state.
+            (void)controller.captureRecoverySnapshot();
+            environment("DAW_TEST_VST3_FAIL_SAVE_STATE", "1");
+            rendering::Report failed;
+            const auto status = controller.renderProject(spec, {}, failed);
+            // Bypassed processors do not participate in this render and must
+            // not block a dry export when their state extension fails.
+            spec.bypassChannelInserts = scope != "master";
+            spec.bypassMasterChain = scope == "master";
+            render(0.2f, 0.2f);
+            spec.bypassChannelInserts = spec.bypassMasterChain = false;
+            environment("DAW_TEST_VST3_FAIL_SAVE_STATE", "");
+            require(!status && failed.files.empty(), "failed state capture rejects stale-cache export");
+        }
         // Two edits before the next audio callback: the last value must win.
         // In dual mono edit only the right instance, to catch swapped snapshots.
         if (dual) controller.setInsertEditorChannel(channel, slot, PluginEditorChannel::Right);
@@ -160,7 +198,17 @@ int main() try {
     Vst3Factory vst3;
     const auto vst3Plugins = vst3.inspect(DAW_TEST_VST3_PATH);
     require(!vst3Plugins.empty(), "VST3 fixture");
+#if defined(_WIN32)
+    _putenv_s("DAW_TEST_VST3_STALE_CONTROLLER_STATE", "1");
+#else
+    setenv("DAW_TEST_VST3_STALE_CONTROLLER_STATE", "1", 1);
+#endif
     checkFormat(vst3, vst3Plugins.front(), "100", 1.0, 0.5, 0.75, 0.75f);
+#if defined(_WIN32)
+    _putenv_s("DAW_TEST_VST3_STALE_CONTROLLER_STATE", "");
+#else
+    unsetenv("DAW_TEST_VST3_STALE_CONTROLLER_STATE");
+#endif
 #endif
 #if DAW_ENABLE_AU
     AuFactory au;

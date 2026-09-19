@@ -71,6 +71,13 @@ audio::Result EngineController::renderProject(
     const std::function<bool(const rendering::Progress&)>& onProgress,
     rendering::Report& out) {
     out = {};
+    const auto nonnegative = [](double value) { return std::isfinite(value) && value >= 0.0; };
+    if (!nonnegative(spec.sampleRate) || !nonnegative(spec.preRollSeconds) ||
+        !nonnegative(spec.tailSeconds) || !nonnegative(spec.tailMaxSeconds) ||
+        !nonnegative(spec.tailHoldSeconds) || !std::isfinite(spec.tailSilenceDb) ||
+        !std::isfinite(spec.customStartSeconds) || !std::isfinite(spec.customEndSeconds) ||
+        spec.blockSize > 8192)
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "invalid render settings");
     if (m_exportInProgress)
         return audio::Result::fail(audio::EngineError::InvalidArgument,
                                    "a render is already in progress");
@@ -103,9 +110,106 @@ audio::Result EngineController::renderProject(
         // immutable sample data is shared with the live session. UI timers and
         // queued collaboration updates can therefore run at progress points.
         recovery::RecoverySnapshot snapshot;
+        std::unordered_map<std::string, std::vector<InsertParameter>>
+            pendingParameterOverrides;
         {
             const engine::RealtimeEngine::RenderGate gate(m_engine);
-            snapshot = captureRecoverySnapshot();
+            snapshot.project = m_project;
+            snapshot.project.sampleRate = m_sampleRate;
+            applyRenderSelection(spec, snapshot.project);
+
+            // A plugin's native state is the authoritative description of its
+            // sound. Some commercial VST3 controllers expose a stale or lossy
+            // parameter mirror; replaying every reported value after loadState
+            // can therefore undo a valid component state. Keep only host edits
+            // that have not reached the live processor yet and replay those on
+            // top of the state in the render clone.
+            const auto captureNode = [&](plugins::PluginNode* node,
+                                            const std::string& key,
+                                            std::string& stateFile,
+                                            std::vector<InsertParameter>& fallback) {
+                if (!node || !node->instance())
+                    throw std::runtime_error("cannot capture unavailable render plugin: " + key);
+                auto* instance = node->instance();
+                stateFile.clear();
+                fallback.clear();
+                // Export needs a fresh opaque snapshot. Recovery deliberately
+                // retains old chunks after a failed save, which must never be
+                // used as if they described the sound of this render.
+                if (instance->supportsState()) {
+                    recovery::RecoverySnapshot::PluginState state;
+                    state.fileName = key;
+                    if (!instance->saveState(state.bytes))
+                        throw std::runtime_error("cannot capture render plugin state: " +
+                                                 std::string(node->name()));
+                    stateFile = key;
+                    snapshot.pluginStates.push_back(std::move(state));
+                } else {
+                    for (const auto& parameter : instance->parameters()) {
+                        const double value = instance->parameterValue(parameter.index);
+                        if (!parameter.id.empty() && std::isfinite(value))
+                            fallback.push_back({parameter.id, value});
+                    }
+                }
+                const auto events = node->pendingParameterEvents();
+                const auto descriptors = node->instance()->parameters();
+                auto& values = pendingParameterOverrides[key];
+                for (const auto& event : events) {
+                    if (event.paramIndex >= descriptors.size() ||
+                        !std::isfinite(event.value)) {
+                        continue;
+                    }
+                    const std::string& id = descriptors[event.paramIndex].id;
+                    if (id.empty()) continue;
+                    const auto existing = std::find_if(
+                        values.begin(), values.end(), [&](const auto& value) {
+                            return value.id == id;
+                        });
+                    if (existing != values.end()) existing->value = event.value;
+                    else values.push_back({id, event.value});
+                }
+                if (stateFile.empty()) {
+                    for (const auto& pending : values) {
+                        const auto found = std::find_if(fallback.begin(), fallback.end(),
+                            [&](const auto& value) { return value.id == pending.id; });
+                        if (found != fallback.end()) found->value = pending.value;
+                        else fallback.push_back(pending);
+                    }
+                }
+                if (values.empty()) pendingParameterOverrides.erase(key);
+            };
+            const auto collectSlot = [&](const std::string& channelId,
+                                         InsertModel& slot) {
+                if (!slot.isLoaded() || slot.bypassed || slot.mix == 0.f) return;
+                InsertSlot* live = liveInsertSlot(channelId, slot.id);
+                if (!live || !live->node || !live->node->instance())
+                    throw std::runtime_error("cannot capture unavailable render plugin: " + slot.name);
+                captureNode(live->node.get(), slot.id,
+                               slot.stateFile, slot.parameters);
+                if (slot.channelMode == PluginChannelMode::DualMono)
+                    captureNode(live->rightNode.get(),
+                                   slot.id + "-right", slot.rightStateFile,
+                                   slot.rightParameters);
+            };
+            for (auto& track : snapshot.project.tracks) {
+                if (!carriesAudio(track) || track.freeze.active()) continue;
+                if (!spec.independentTrackId.empty() && track.id != spec.independentTrackId) continue;
+                if (trackAccepts(track.kind, ClipKind::Midi))
+                    collectSlot(track.id, track.instrument);
+                for (auto& slot : track.inserts)
+                    collectSlot(track.id, slot);
+                if (track.samplerFx.isOwnedBy(track.instrument))
+                    for (auto& slot : track.samplerFx.inserts)
+                        collectSlot(track.id, slot);
+                for (auto& clip : track.clips) {
+                    if (clip.kind != ClipKind::Audio) continue;
+                    for (auto& slot : clip.inserts)
+                        collectSlot(track.id, slot);
+                }
+            }
+            if (spec.independentTrackId.empty())
+                for (auto& slot : snapshot.project.masterInserts)
+                    collectSlot(kMasterChannelId, slot);
         }
         EngineController scratch;
         scratch.m_isRenderClone = true;
@@ -113,7 +217,16 @@ audio::Result EngineController::renderProject(
         const double rate = spec.sampleRate > 0.0 ? spec.sampleRate : m_sampleRate;
         if (!std::isfinite(rate) || rate < 1000 || rate > 768000)
             return audio::Result::fail(audio::EngineError::InvalidArgument, "invalid render sample rate");
-        if (const auto ready = scratch.initialize(rate, m_bufferSize, false); !ready) return ready;
+        const bool eventSensitive = std::any_of(snapshot.project.tracks.begin(),
+            snapshot.project.tracks.end(), [](const auto& track) {
+                return std::any_of(track.clips.begin(), track.clips.end(), [](const auto& clip) {
+                    return !clip.muted && (clip.kind == ClipKind::Midi ||
+                        clip.kind == ClipKind::Pattern || clip.kind == ClipKind::Automation);
+                });
+            });
+        const auto renderBlockSize = spec.blockSize ? spec.blockSize
+            : eventSensitive ? m_bufferSize : std::max(m_bufferSize, 1024u);
+        if (const auto ready = scratch.initialize(rate, renderBlockSize, false); !ready) return ready;
         scratch.m_pluginManager.copyCatalogFrom(m_pluginManager);
         scratch.m_project = std::move(snapshot.project);
         if (!spec.independentTrackId.empty()) {
@@ -131,7 +244,6 @@ audio::Result EngineController::renderProject(
             scratch.m_project.masterVolume = 1.f; scratch.m_project.masterPan = 0.f;
             scratch.m_project.invalidateTrackIndex();
         }
-        scratch.applyRenderSelection(spec);
         scratch.m_sourceSamples = m_sourceSamples;
         if (std::abs(rate - m_sampleRate) <= 0.01) {
             scratch.m_samples = m_samples;
@@ -155,21 +267,30 @@ audio::Result EngineController::renderProject(
             if (!live) return;
             const auto restoreNode = [&](const std::shared_ptr<plugins::PluginNode>& node,
                                           const std::string& file,
-                                          const std::vector<InsertParameter>& parameters) {
+                                          const std::vector<InsertParameter>& parameters,
+                                          const std::string& pendingKey) {
                 if (!node || !node->instance()) return;
+                bool restored = false;
                 if (const auto state = states.find(file); state != states.end()) {
                     if (!node->instance()->loadState(*state->second))
                         throw std::runtime_error("cannot restore render plugin state: " + slot.name);
+                    restored = true;
                 }
                 if (auto* sampler = dynamic_cast<plugins::sampler::SamplerInstance*>(node->instance());
                     sampler && !sampler->samplePath().empty() && !sampler->rawSample())
                     throw std::runtime_error("cannot load render sampler source: " + sampler->samplePath());
                 node->discardPendingEvents();
-                scratch.applyStoredParameters(*node, parameters);
+                const auto pending = pendingParameterOverrides.find(pendingKey);
+                if (!restored) {
+                    scratch.applyStoredParameters(*node, parameters);
+                } else if (pending != pendingParameterOverrides.end()) {
+                    scratch.applyStoredParameters(*node, pending->second);
+                }
                 node->invalidatePrepare();
             };
-            restoreNode(live->node, slot.stateFile, slot.parameters);
-            restoreNode(live->rightNode, slot.rightStateFile, slot.rightParameters);
+            restoreNode(live->node, slot.stateFile, slot.parameters, slot.id);
+            restoreNode(live->rightNode, slot.rightStateFile,
+                        slot.rightParameters, slot.id + "-right");
         };
         for (const TrackModel& track : scratch.m_project.tracks) {
             if (track.instrument.isLoaded()) restoreSlot(track.id, track.instrument);
@@ -205,7 +326,7 @@ audio::Result EngineController::renderProject(
     }
 }
 
-void EngineController::applyRenderSelection(const rendering::Spec& spec) {
+void EngineController::applyRenderSelection(const rendering::Spec& spec, ProjectModel& project) {
     // ── Bypass ──
     auto bypassSlots = [](std::vector<InsertModel>& slots) {
         for (InsertModel& slot : slots) {
@@ -213,21 +334,21 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec) {
         }
     };
     if (spec.bypassChannelInserts) {
-        for (TrackModel& track : m_project.tracks) {
+        for (TrackModel& track : project.tracks) {
             bypassSlots(track.inserts);
             bypassSlots(track.samplerFx.inserts);
             for (ClipModel& clip : track.clips) bypassSlots(clip.inserts);
         }
     }
     if (spec.bypassClipInserts && !spec.bypassChannelInserts) {
-        for (TrackModel& track : m_project.tracks)
+        for (TrackModel& track : project.tracks)
             for (ClipModel& clip : track.clips)
                 bypassSlots(clip.inserts);
     }
     if (spec.bypassTrackInserts && !spec.bypassChannelInserts) {
         const std::unordered_set<std::string> sources(
             spec.sourceTrackIds.begin(), spec.sourceTrackIds.end());
-        for (TrackModel& track : m_project.tracks) {
+        for (TrackModel& track : project.tracks) {
             const bool ordinarySource =
                 track.kind == TrackKind::Audio ||
                 track.kind == TrackKind::Midi ||
@@ -242,7 +363,7 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec) {
         }
     }
     if (spec.bypassSummingInserts && !spec.bypassChannelInserts) {
-        for (TrackModel& track : m_project.tracks) {
+        for (TrackModel& track : project.tracks) {
             if (!track.summing && track.kind != TrackKind::Bus &&
                 track.kind != TrackKind::Group &&
                 track.kind != TrackKind::Folder) {
@@ -252,14 +373,14 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec) {
         }
     }
     if (spec.bypassSends) {
-        for (TrackModel& track : m_project.tracks) {
+        for (TrackModel& track : project.tracks) {
             for (SendModel& send : track.sends) {
                 send.enabled = false;
             }
         }
     }
     if (spec.bypassMasterChain) {
-        bypassSlots(m_project.masterInserts);
+        bypassSlots(project.masterInserts);
     }
 
     // Isolate the requested musical material without touching automation
@@ -270,7 +391,7 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec) {
         const std::unordered_set<std::string> trackIds(
             spec.sourceTrackIds.begin(), spec.sourceTrackIds.end());
         std::unordered_set<std::string> patternOwners;
-        for (const TrackModel& track : m_project.tracks) {
+        for (const TrackModel& track : project.tracks) {
             if (!trackIds.empty() && !trackIds.contains(track.id)) continue;
             for (const ClipModel& clip : track.clips)
                 if (clip.kind == ClipKind::Pattern)
@@ -279,7 +400,7 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec) {
         patternOwners.insert(clipIds.begin(), clipIds.end());
 
         std::unordered_set<std::string> sourceChannels = trackIds;
-        for (TrackModel& track : m_project.tracks) {
+        for (TrackModel& track : project.tracks) {
             bool channelHasSource = false;
             for (ClipModel& clip : track.clips) {
                 if (clip.kind == ClipKind::Automation) continue;
@@ -295,7 +416,7 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec) {
             }
             if (channelHasSource) sourceChannels.insert(track.id);
         }
-        for (TrackModel& track : m_project.tracks) {
+        for (TrackModel& track : project.tracks) {
             track.soloed = sourceChannels.contains(track.id);
             if (track.soloed) track.muted = false;
         }
@@ -303,7 +424,7 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec) {
 
     // ── Mute and solo ──
     if (spec.ignoreMuteSolo) {
-        for (TrackModel& track : m_project.tracks) {
+        for (TrackModel& track : project.tracks) {
             if (!track.muted && !track.soloed) continue;
             track.muted = false;
             track.soloed = false;
@@ -359,9 +480,15 @@ audio::Result EngineController::renderProjectPass(
             break;
     }
     startSeconds = std::max(0.0, startSeconds);
-    if (endSeconds <= startSeconds) {
+    // Reserve room for plugin latency and prevent llround/addition overflow.
+    const double maxSeconds = double(std::numeric_limits<engine::SamplePos>::max() / 2) / m_sampleRate;
+    if (!std::isfinite(startSeconds) || !std::isfinite(endSeconds) ||
+        !std::isfinite(endSeconds + spec.tailMaxSeconds) ||
+        endSeconds + spec.tailMaxSeconds > maxSeconds ||
+        spec.preRollSeconds > maxSeconds || spec.tailHoldSeconds > maxSeconds ||
+        endSeconds <= startSeconds) {
         return audio::Result::fail(audio::EngineError::InvalidArgument,
-                                   "the render range is empty");
+                                   "the render range is empty or invalid");
     }
 
     const double targetRate =
@@ -405,6 +532,9 @@ audio::Result EngineController::renderProjectPass(
             "too many stems in one render (" + std::to_string(stems.size()) +
                 "); the limit is " + std::to_string(kMaxRenderStems));
     }
+    if (!spec.writeMixdown && stems.empty())
+        return audio::Result::fail(audio::EngineError::InvalidArgument,
+                                   "no requested stem channels are available");
 
     // One rebuild puts the taps, the bypasses, the mutes and the rate into the
     // graph together, rather than recompiling once per change.

@@ -23,6 +23,8 @@ QuickImportSettingsPage::QuickImportSettingsPage(QWidget* parent) : QWidget(pare
     m_track->setAccessibleName(tr("Quick Import audio track"));
     m_detectTempo = new QCheckBox(tr("Detect BPM"), this);
     m_detectKey = new QCheckBox(tr("Detect key"), this);
+    m_applyKeyToPitch = new QCheckBox(tr("Set detected key in VLT Pitch"), this);
+    m_applyKeyToPitch->setToolTip(tr("Apply the beat's key and scale to all VLT Pitch instances in the template. Requires key detection."));
 
     auto* form = new QFormLayout;
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
@@ -43,6 +45,7 @@ QuickImportSettingsPage::QuickImportSettingsPage(QWidget* parent) : QWidget(pare
     layout->addLayout(form);
     layout->addWidget(m_detectTempo);
     layout->addWidget(m_detectKey);
+    layout->addWidget(m_applyKeyToPitch);
     layout->addWidget(m_error);
     layout->addStretch();
 
@@ -57,6 +60,9 @@ QuickImportSettingsPage::QuickImportSettingsPage(QWidget* parent) : QWidget(pare
             &QuickImportSettingsPage::persist);
     connect(m_detectKey, &QCheckBox::toggled, this,
             &QuickImportSettingsPage::persist);
+    connect(m_detectKey, &QCheckBox::toggled, m_applyKeyToPitch, &QCheckBox::setEnabled);
+    connect(m_applyKeyToPitch, &QCheckBox::toggled, this,
+            &QuickImportSettingsPage::persist);
     refresh();
 }
 
@@ -65,6 +71,7 @@ void QuickImportSettingsPage::refresh() {
     const QSignalBlocker templateBlock(m_template);
     const QSignalBlocker tempoBlock(m_detectTempo);
     const QSignalBlocker keyBlock(m_detectKey);
+    const QSignalBlocker pitchBlock(m_applyKeyToPitch);
     m_template->clear();
     m_template->addItem(tr("Choose a template…"), QString());
     for (const QString& path : ui::projecttemplates::files())
@@ -78,6 +85,8 @@ void QuickImportSettingsPage::refresh() {
     m_template->setCurrentIndex(std::max(0, templateIndex));
     m_detectTempo->setChecked(preferences.detectTempo);
     m_detectKey->setChecked(preferences.detectKey);
+    m_applyKeyToPitch->setChecked(preferences.applyKeyToPitch);
+    m_applyKeyToPitch->setEnabled(preferences.detectKey);
     refreshTracks(preferences.trackId);
 }
 
@@ -103,6 +112,7 @@ void QuickImportSettingsPage::persist() {
     preferences.trackId = m_track->currentData().toString();
     preferences.detectTempo = m_detectTempo->isChecked();
     preferences.detectKey = m_detectKey->isChecked();
+    preferences.applyKeyToPitch = m_applyKeyToPitch->isChecked();
     ui::quickimport::save(preferences);
     QString error;
     if (ui::quickimport::validate(preferences, &error)) {

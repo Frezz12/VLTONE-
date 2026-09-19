@@ -150,10 +150,10 @@ void AuthWindow::showEvent(QShowEvent* event) {
 }
 
 void AuthWindow::submit() {
-    if (m_email->text().trimmed().isEmpty() || m_password->text().size() < 12) {
+    if (m_email->text().trimmed().isEmpty() || m_password->text().size() < 8) {
         setStatus(m_locale == QLatin1String("ru")
-                      ? QStringLiteral("Введите почту и пароль не короче 12 символов.")
-                      : QStringLiteral("Enter your email and a password of at least 12 characters."), true);
+                      ? QStringLiteral("Введите почту и пароль не короче 8 символов.")
+                      : QStringLiteral("Enter your email and a password of at least 8 characters."), true);
         return;
     }
     m_service->login(m_email->text(), m_password->text());

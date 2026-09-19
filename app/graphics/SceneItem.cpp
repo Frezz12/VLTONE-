@@ -72,6 +72,7 @@ struct MeshNode final : QSGOpacityNode {
 struct LayerNode final : QSGTransformNode {
     quint64 revision = 0;
     QSGClipNode* clip = nullptr;
+    QRegion mask;
     QSGNode* content = nullptr;
     std::vector<MeshNode*> meshes;
     LayerNode() {
@@ -164,7 +165,11 @@ bool updateMesh(MeshNode* node, const SceneMesh& mesh, QQuickWindow* window, Tex
         if (!node->texture) return false;
         auto* material = static_cast<QSGTextureMaterial*>(node->drawing->material());
         material->setTexture(node->texture.get());
-        material->setFiltering(QSGTexture::Linear);
+        node->drawing->markDirty(QSGNode::DirtyMaterial);
+    }
+    if (textured && (newType || node->previous.smoothTexture != mesh.smoothTexture)) {
+        static_cast<QSGTextureMaterial*>(node->drawing->material())->setFiltering(
+            mesh.smoothTexture ? QSGTexture::Linear : QSGTexture::Nearest);
         node->drawing->markDirty(QSGNode::DirtyMaterial);
     }
     if (newType || changedTexture || node->previous.vertices != mesh.vertices) {
@@ -206,9 +211,28 @@ void updateLayerClip(LayerNode* node, const SceneLayer& layer) {
         delete node->clip; node->clip = nullptr;
         node->appendChildNode(node->content);
     }
-    if (node->clip && node->clip->clipRect() != layer.clip) {
+    if (node->clip && (node->clip->clipRect() != layer.clip || node->mask != layer.mask)) {
         node->clip->setClipRect(layer.clip);
-        QSGGeometry::updateRectGeometry(node->clip->geometry(), layer.clip);
+        node->clip->setIsRectangular(layer.mask.isEmpty());
+        auto* geometry = node->clip->geometry();
+        if (layer.mask.isEmpty()) {
+            geometry->setDrawingMode(QSGGeometry::DrawTriangleStrip);
+            geometry->allocate(4);
+            QSGGeometry::updateRectGeometry(geometry, layer.clip);
+        } else {
+            // QWidget masks also clip descendants. Enforce that at the layer
+            // boundary, so a child's painter cannot reset its parent's clip.
+            geometry->setDrawingMode(QSGGeometry::DrawTriangles);
+            geometry->allocate(layer.mask.rectCount() * 6);
+            auto* vertices = geometry->vertexDataAsPoint2D();
+            for (const QRect& rect : layer.mask) {
+                const float l = rect.x(), t = rect.y();
+                const float r = l + rect.width(), b = t + rect.height();
+                (vertices++)->set(l, t); (vertices++)->set(r, t); (vertices++)->set(l, b);
+                (vertices++)->set(r, t); (vertices++)->set(r, b); (vertices++)->set(l, b);
+            }
+        }
+        node->mask = layer.mask;
         node->clip->markDirty(QSGNode::DirtyGeometry);
     }
 }

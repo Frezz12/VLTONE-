@@ -432,9 +432,10 @@ void Voice::render(const SampleData& sample, const SamplerSettings& settings,
             settings.pan + double(m_notePan) +
                 modulation[std::uint32_t(ModTarget::Pan)],
             -1.0, 1.0);
-        const double angle = (pan + 1.0) * kPi * 0.25;
-        const double gainLeft = std::cos(angle);
-        const double gainRight = std::sin(angle);
+        // Match the clip/mixer stereo balance: centre passes the source at
+        // unity instead of adding another -3 dB attenuation inside each voice.
+        const double gainLeft = pan <= 0.0 ? 1.0 : 1.0 - pan;
+        const double gainRight = pan >= 0.0 ? 1.0 : 1.0 + pan;
 
         const double cut = std::clamp(settings.modX + modulation[std::uint32_t(ModTarget::Cutoff)],
                                       0.0, 1.0);
@@ -506,12 +507,14 @@ void Voice::render(const SampleData& sample, const SamplerSettings& settings,
                 r = m_filter.processLowpass(1, r);
             }
 
-            outLeft[done + i] += float(double(l) * gain * gainLeft);
             if (outRight) {
+                outLeft[done + i] += float(double(l) * gain * gainLeft);
                 outRight[done + i] += float(double(r) * gain * gainRight);
             } else {
-                // A mono output still hears both channels of a stereo sample.
-                outLeft[done + i] += float(double(r) * gain * gainRight);
+                // Average both sides for mono, including duplicated mono
+                // samples, without doubling their original level.
+                outLeft[done + i] += float((double(l) * gainLeft +
+                                            double(r) * gainRight) * gain * 0.5);
             }
         }
 

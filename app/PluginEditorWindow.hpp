@@ -8,12 +8,16 @@
 #include <QWidget>
 
 #include <limits>
+#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace daw { class EngineController; }
 
 class QEvent;
+class QKeyEvent;
+class PluginEditorNativeKeyboard;
 class QHideEvent;
 class QTimer;
 class QVBoxLayout;
@@ -68,6 +72,9 @@ public:
     void initializeEditor();
     bool isEditorInitialized() const { return m_editorReady; }
     bool isClosing() const { return m_closing; }
+    void setHostKeyHandler(std::function<bool(QKeyEvent*, bool)> handler) {
+        m_hostKeyHandler = std::move(handler);
+    }
 
     /// Let go of the plugin's view *now*, because the plugin itself is about to
     /// be destroyed — a Replace, a Remove, an undo, a project being closed.
@@ -95,6 +102,7 @@ public:
     double contentScaleFactor() const noexcept override;
 
 signals:
+    void keyboardFocusReceived();
     /// The window is going away; the registry drops its entry.
     void closing(const QString& channelId, const QString& insertId);
     void nestedPluginEditorRequested(const QString& channelId,
@@ -110,6 +118,7 @@ signals:
                              const QString& parameterId);
 
 protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void changeEvent(QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
     void hideEvent(QHideEvent* event) override;
@@ -117,6 +126,10 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
+    friend class PluginEditorNativeKeyboard;
+    bool routeHostKey(QKeyEvent* event, bool textEntry);
+    std::function<bool(QKeyEvent*, bool)> m_hostKeyHandler;
+    std::unique_ptr<PluginEditorNativeKeyboard> m_nativeKeyboard;
     /// The live plugin behind the slot, or null if it went away.
     daw::plugins::PluginInstance* instance() const;
     /// Build the fallback panel of sliders for a plugin with no GUI.

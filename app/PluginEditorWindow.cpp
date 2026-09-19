@@ -3,6 +3,7 @@
 #include "Controls.hpp"
 #include "EqualizerPanel.hpp"
 #include "GraphitPanel.hpp"
+#include "PitchCorrectorPanel.hpp"
 #include "ModulationPanel.hpp"
 #include "GravityPanel.hpp"
 #include "InternalEditorFrame.hpp"
@@ -16,6 +17,7 @@
 #include "Internal/SamplerInstance.hpp"
 #include "Internal/EqualizerInstance.hpp"
 #include "Internal/GraphitInstance.hpp"
+#include "Internal/PitchCorrectorInstance.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -34,6 +36,7 @@
 #include <QStyle>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QKeyEvent>
 #include <QComboBox>
 #include <QResizeEvent>
 #include <QScrollArea>
@@ -42,6 +45,91 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWindow>
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
+// Vendor HWNDs never deliver QWidget key events. A hook on this UI thread
+// catches them before TranslateMessage, including vendor nested message loops.
+// Only descendants of our live plugin containers participate; this is not a
+// system-wide keyboard hook. See Win32 GetMsgProc (PM_REMOVE / WM_NULL).
+class PluginEditorNativeKeyboard {
+public:
+    explicit PluginEditorNativeKeyboard(PluginEditorWindow* editor) {
+#ifdef Q_OS_WIN
+        m_editor = editor;
+        editors().append(editor);
+        if (!hook()) hook() = SetWindowsHookExW(WH_GETMESSAGE, intercept, nullptr,
+                                              GetCurrentThreadId());
+#endif
+    }
+    ~PluginEditorNativeKeyboard() {
+#ifdef Q_OS_WIN
+        editors().removeAll(m_editor);
+        if (editors().isEmpty() && hook()) {
+            UnhookWindowsHookEx(hook());
+            hook() = nullptr;
+        }
+#endif
+    }
+private:
+#ifdef Q_OS_WIN
+    static QList<PluginEditorWindow*>& editors() {
+        static QList<PluginEditorWindow*> list;
+        return list;
+    }
+    static HHOOK& hook() { static HHOOK value = nullptr; return value; }
+    static LRESULT CALLBACK intercept(int code, WPARAM removed, LPARAM data) {
+        if (code != HC_ACTION || removed != PM_REMOVE)
+            return CallNextHookEx(hook(), code, removed, data);
+        auto* message = reinterpret_cast<MSG*>(data);
+        const bool down = message->message == WM_KEYDOWN || message->message == WM_SYSKEYDOWN;
+        const bool up = message->message == WM_KEYUP || message->message == WM_SYSKEYUP;
+        const bool click = message->message == WM_LBUTTONDOWN || message->message == WM_RBUTTONDOWN;
+        if (down || up || click) {
+            for (auto* editor : editors()) {
+                if (editor->m_closing || !editor->isVisible() || !editor->m_container) continue;
+                const HWND host = reinterpret_cast<HWND>(editor->m_container->effectiveWinId());
+                if (!host || (host != message->hwnd && !IsChild(host, message->hwnd))) continue;
+                if (click) {
+                    emit editor->keyboardFocusReceived();
+                    break;
+                }
+                Qt::KeyboardModifiers modifiers;
+                if (GetKeyState(VK_SHIFT) & 0x8000) modifiers |= Qt::ShiftModifier;
+                if (GetKeyState(VK_CONTROL) & 0x8000) modifiers |= Qt::ControlModifier;
+                if (GetKeyState(VK_MENU) & 0x8000) modifiers |= Qt::AltModifier;
+                if ((GetKeyState(VK_LWIN) | GetKeyState(VK_RWIN)) & 0x8000)
+                    modifiers |= Qt::MetaModifier;
+                const auto bits = static_cast<quintptr>(message->lParam);
+                const int key = message->wParam == VK_SPACE ? Qt::Key_Space : int(message->wParam);
+                QKeyEvent event(down ? QEvent::KeyPress : QEvent::KeyRelease,
+                                key, modifiers, (bits >> 16) & 0x1ff,
+                                quint32(message->wParam), 0, QString(),
+                                down && (bits & (quintptr(1) << 30)));
+                wchar_t name[128]{};
+                GetClassNameW(message->hwnd, name, 128);
+                const QString control = QString::fromWCharArray(name);
+                const auto* nativeWidget = QWidget::find(WId(message->hwnd));
+                const bool textEntry = control.compare(QStringLiteral("Edit"), Qt::CaseInsensitive) == 0 ||
+                    control.startsWith(QStringLiteral("RichEdit"), Qt::CaseInsensitive) ||
+                    (nativeWidget && nativeWidget->testAttribute(Qt::WA_InputMethodEnabled));
+                if (editor->routeHostKey(&event, textEntry)) {
+                    message->message = WM_NULL;
+                    message->wParam = 0;
+                    message->lParam = 0;
+                }
+                break;
+            }
+        }
+        return CallNextHookEx(hook(), code, removed, data);
+    }
+    PluginEditorWindow* m_editor = nullptr;
+#endif
+};
 
 namespace {
 
@@ -90,6 +178,10 @@ PluginEditorWindow::PluginEditorWindow(daw::EngineController* controller,
       m_channelKey(m_channelId.toStdString()),
       m_insertKey(m_insertId.toStdString()) {
     setAttribute(Qt::WA_DeleteOnClose);
+    setProperty("dawPluginEditor", true);
+    setFocusPolicy(Qt::StrongFocus);
+    m_nativeKeyboard = std::make_unique<PluginEditorNativeKeyboard>(this);
+    qApp->installEventFilter(this);
     m_layout = new QVBoxLayout(this);
     m_layout->setContentsMargins(0, 0, 0, 0);
     m_layout->setSpacing(0);
@@ -114,6 +206,8 @@ PluginEditorWindow::PluginEditorWindow(daw::EngineController* controller,
     if (daw::plugins::PluginInstance* plugin = instance()) {
         setWindowTitle(QString::fromStdString(plugin->descriptor().name));
         m_pluginUid = QString::fromStdString(plugin->descriptor().uid);
+        setProperty("vlt.pitchChrome", plugin->descriptor().format == daw::plugins::Format::Internal &&
+                    plugin->descriptor().uid == "daw.pitch-corrector");
     } else {
         setWindowTitle(tr("Plugin"));
     }
@@ -129,6 +223,8 @@ PluginEditorWindow::PluginEditorWindow(daw::EngineController* controller,
 }
 
 PluginEditorWindow::~PluginEditorWindow() {
+    qApp->removeEventFilter(this);
+    m_nativeKeyboard.reset();
     // The plugin must let go of the view before Qt destroys it, or the plugin
     // is left drawing into freed memory.
     detachFromPlugin();
@@ -459,6 +555,21 @@ void PluginEditorWindow::rebuildEditorContent() {
         setMinimumSize(440, pro ? 599 : doubler ? 499 : 539);
         m_fallbackContentSize = QSize(560, pro ? 639 : doubler ? 559 : 579);
         resize(m_fallbackContentSize);
+    } else if (trustedInternal && descriptorUid == "daw.pitch-corrector" &&
+               dynamic_cast<daw::plugins::pitch::PitchCorrectorInstance*>(plugin)) {
+        auto* panel = new PitchCorrectorPanel(m_controller, m_channelId, m_insertId, this);
+        m_generic = panel;
+        connect(panel, &PitchCorrectorPanel::projectEdited, this,
+                &PluginEditorWindow::projectEdited);
+        connect(panel, &PitchCorrectorPanel::automationRequested, this,
+                [this](const QString& id) {
+                    emit automationRequested(m_channelId, m_insertId, id);
+                });
+        m_contentRow->insertWidget(0, panel, 1);
+        emit builtInPanelReady(panel, QStringLiteral("pitch-corrector"));
+        setMinimumSize(560, 399);
+        m_fallbackContentSize = QSize(640, 449);
+        resize(m_fallbackContentSize);
     } else if (trustedInternal && descriptorUid == "daw.graphit" &&
                dynamic_cast<daw::plugins::graphit::GraphitInstance*>(plugin)) {
         auto* graphitPanel =
@@ -734,6 +845,31 @@ void PluginEditorWindow::syncPollTimer() {
     // before its first restored frame, then resume the low-rate follow-up.
     pollEditorState();
     m_poll->start();
+}
+
+bool PluginEditorWindow::routeHostKey(QKeyEvent* event, bool textEntry) {
+    if (m_closing || !isVisible()) return false;
+    if (event->type() != QEvent::KeyRelease &&
+        (QApplication::activeModalWidget() || QApplication::activePopupWidget())) return false;
+    if (event->type() == QEvent::KeyPress) emit keyboardFocusReceived();
+    return m_hostKeyHandler && m_hostKeyHandler(event, textEntry);
+}
+
+bool PluginEditorWindow::eventFilter(QObject* watched, QEvent* event) {
+    auto* widget = qobject_cast<QWidget*>(watched);
+    auto* frame = qobject_cast<InternalEditorFrame*>(parentWidget());
+    const bool belongs = widget && (widget == this || isAncestorOf(widget) ||
+        (frame && (widget == frame || frame->isAncestorOf(widget))));
+    if (!belongs || m_closing || !isVisible()) return false;
+    if (event->type() == QEvent::FocusIn || event->type() == QEvent::MouseButtonPress)
+        emit keyboardFocusReceived();
+    if (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress ||
+        event->type() == QEvent::KeyRelease) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Space && !(key->modifiers() & ~Qt::KeypadModifier))
+            return routeHostKey(key, false);
+    }
+    return false;
 }
 
 void PluginEditorWindow::changeEvent(QEvent* event) {
@@ -1478,4 +1614,8 @@ PluginEditorWindow { background: %BG%; }
         .replace("%ACCENT%", t.accent.name())
         .replace("%TEXT%", t.textPrimary.name())
         .replace("%TEXT2%", t.textSecondary.name()));
+    if (property("vlt.pitchChrome").toBool()) {
+        setStyleSheet(styleSheet() + QStringLiteral(
+            "PluginEditorWindow { background: transparent; }"));
+    }
 }

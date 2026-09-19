@@ -21,8 +21,17 @@ test("RU/EN pages and registration-to-account flow", async ({ page }) => {
   await expect(page).toHaveURL(/\/register$/);
   await page.getByLabel("Почта").fill("tester@example.com");
   await page.getByLabel("Никнейм").fill("Тестировщик");
-  await page.getByLabel("Пароль", { exact: true }).fill("correct horse battery staple");
-  await page.getByLabel("Повторите пароль").fill("correct horse battery staple");
+  const password = page.getByLabel("Пароль", { exact: true });
+  const confirmation = page.getByLabel("Повторите пароль");
+  await expect(password).toHaveAttribute("minlength", "8");
+  await password.fill("passw0rd");
+  await confirmation.fill("passw0rd");
+  const visibilityButtons = page.getByRole("button", { name: "Показать пароль" });
+  await visibilityButtons.first().click();
+  await expect(password).toHaveAttribute("type", "text");
+  await expect(confirmation).toHaveAttribute("type", "password");
+  await page.getByRole("button", { name: "Скрыть пароль" }).click();
+  await expect(password).toHaveAttribute("type", "password");
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Зарегистрироваться" }).click();
   await expect(page).toHaveURL(/\/account$/);
@@ -42,6 +51,9 @@ test("bug report rejects more than five attachments before upload", async ({ pag
   });
   await page.context().addCookies([{ name: "vlt-locale", value: "ru", url: "http://127.0.0.1:3100" }]);
   await page.goto("/bug-report");
+  await expect(page.getByLabel("Шаги воспроизведения")).toHaveCount(0);
+  await expect(page.getByLabel("Ожидаемое поведение")).toHaveCount(0);
+  await expect(page.getByLabel("Фактическое поведение")).toHaveCount(0);
   await page.getByLabel("Краткий заголовок").fill("Ошибка экспорта");
   await page.getByLabel("Описание").fill("Экспорт останавливается после запуска");
   await page.getByLabel(/До 5 изображений/).setInputFiles(Array.from({ length: 6 }, (_, index) => ({

@@ -122,7 +122,7 @@ struct ModSettings {
 
 /// Every knob that matters to a voice, resolved once per block.
 struct SamplerSettings {
-    double volume = 0.55;
+    double volume = 1.0;
     double pan = 0.0;
     double pitchSemitones = 0.0;   ///< the Pitch knob already scaled by Range
     /// The Range knob itself. It also scales the INS pitch envelope and LFO —

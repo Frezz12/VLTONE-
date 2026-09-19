@@ -87,6 +87,7 @@ public:
     /// Headless check only: run the real asynchronous library search and wait
     /// for its package-filtered result.
     QStringList searchForTest(const QString& query);
+    bool checkSearchForTest(QObject* keyboardTarget = nullptr);
     bool selectedProjectTemplateForTest() const;
     bool activateSelectedProjectTemplateForTest();
 

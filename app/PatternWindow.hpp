@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace daw { class EngineController; struct NoteModel; }
+namespace daw { class EngineController; struct NoteModel; struct TrackModel; }
 class QVBoxLayout;
 class QMenu;
 
@@ -90,6 +90,7 @@ private:
     void clearExternalDropFeedback();
     void endRowGestureState();
     QStringList childTrackIds() const;
+    bool ownsTrack(const daw::TrackModel* track) const;
 
     daw::EngineController* m_controller = nullptr;
     QString m_patternId;

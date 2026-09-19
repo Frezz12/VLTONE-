@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QPointF>
 #include <QRectF>
+#include <QRegion>
 #include <QVector>
 #include <QTransform>
 #include <memory>
@@ -23,6 +24,7 @@ struct SceneMesh {
     QVector<SceneVertex> vertices; // triangles, viewport-local coordinates
     QColor color;
     QImage texture; // immutable assets/small native controls, never an editor canvas
+    bool smoothTexture = true; // False for already-antialiased, device-resolution UI pixels.
     float opacity = 1;
     QTransform transform;
     std::shared_ptr<const SceneClip> clip; // layer coordinates, before mesh transform
@@ -38,6 +40,7 @@ struct SceneLayer {
     quint64 id = 0, revision = 0;
     QPointF origin;
     QRectF clip;
+    QRegion mask; // Effective QWidget/ancestor mask in layer coordinates; empty means rectangular.
     bool clipRequired = true;
     std::vector<SceneMesh> meshes;
 };
@@ -45,6 +48,7 @@ struct SceneLayer {
 // redundant clip lets Qt batch adjacent controls instead of switching scissor
 // state for every widget. Mesh clips are already in layer coordinates.
 inline bool requiresLayerClip(const SceneLayer& layer) {
+    if (!layer.mask.isEmpty()) return true;
     for (const auto& mesh : layer.meshes) {
         if (mesh.clip && layer.clip.contains(mesh.clip->bounds)) continue;
         if (mesh.group) return true;

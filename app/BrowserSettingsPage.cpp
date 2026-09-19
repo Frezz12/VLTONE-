@@ -52,6 +52,28 @@ BrowserSettingsPage::BrowserSettingsPage(QWidget* parent) : QWidget(parent) {
     buttons->addStretch(1);
     column->addLayout(buttons);
 
+    auto* ignoredForm = new QFormLayout;
+    auto* ignored = new QLineEdit(this);
+    ignored->setObjectName(QStringLiteral("BrowserIgnoredExtensions"));
+    ignored->setAccessibleName(tr("Ignored file extensions"));
+    ignored->setPlaceholderText(QStringLiteral("asd, peak, tmp"));
+    ignored->setClearButtonEnabled(true);
+    ignored->setText(ui::browserprefs::ignoredExtensions().join(QStringLiteral(", ")));
+    connect(ignored, &QLineEdit::editingFinished, this, [this, ignored] {
+        const auto before = ui::browserprefs::ignoredExtensions();
+        ui::browserprefs::setIgnoredExtensions(ignored->text());
+        const auto after = ui::browserprefs::ignoredExtensions();
+        ignored->setText(after.join(QStringLiteral(", ")));
+        if (before != after) emit changed();
+    });
+    ignoredForm->addRow(tr("Ignored extensions"), ignored);
+    auto* ignoredHint = new QLabel(
+        tr("Separate extensions with commas or spaces. A leading dot is optional. "
+           "Applies to folders and search results."), this);
+    ignoredHint->setWordWrap(true);
+    ignoredForm->addRow(QString(), ignoredHint);
+    column->addLayout(ignoredForm);
+
     column->addWidget(ui::separatorLine(Qt::Horizontal, 0, this));
     column->addWidget(ui::sectionLabel(tr("PANEL"), this));
 

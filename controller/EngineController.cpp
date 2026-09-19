@@ -12,6 +12,7 @@
 #include "Internal/SampleDecoder.hpp"
 #include "Internal/SamplerInstance.hpp"
 #include "Internal/SamplerPrecompute.hpp"
+#include "Internal/PitchCorrectorInstance.hpp"
 #include "DSP/Resampler.hpp"
 #include "Nodes/BasicNodes.hpp"
 #include "Nodes/PlaybackNodes.hpp"
@@ -456,7 +457,8 @@ bool supportedSharedBuiltin(const InsertModel& insert) {
            (insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
             insert.uid == "daw.gravity" || insert.uid == "daw.graphit" ||
             insert.uid == "daw.doubler" || insert.uid == "daw.doubler-pro" || insert.uid == "daw.chorus" ||
-            insert.uid == "daw.flanger" || insert.uid == "daw.phaser");
+            insert.uid == "daw.flanger" || insert.uid == "daw.phaser" ||
+            insert.uid == "daw.pitch-corrector");
 }
 
 bool supportedSharedPlugin(const InsertModel& insert) {
@@ -1179,12 +1181,17 @@ private:
 
 bool EngineController::processDeviceBlockForTest(const audio::AudioBuffer& input,
                                                  audio::AudioBuffer& output,
-                                                 audio::BufferSize frames) {
+                                                 audio::BufferSize frames,
+                                                 std::int64_t inputTimeNs,
+                                                 std::int64_t outputTimeNs) {
     if (m_liveDeviceAllowed || !m_prepared || !m_callback || frames > input.numFrames() ||
         frames > output.numFrames() || frames > m_bufferSize) return false;
     audio::AudioCallbackContext context;
     context.inputBuffer = &input; context.outputBuffer = &output;
     context.numFrames = frames; context.sampleRate = m_sampleRate;
+    context.inputTimeNs = inputTimeNs; context.outputTimeNs = outputTimeNs;
+    context.inputTimeIsDeviceTimestamp = inputTimeNs > 0;
+    context.outputTimeIsDeviceTimestamp = outputTimeNs > 0;
     m_callback->onAudioCallback(context);
     return true;
 }
@@ -1442,7 +1449,7 @@ audio::Result EngineController::initialize(
     m_project.sampleRate = config.sampleRate;
     m_recordDir = platform::pathToUtf8(fs::temp_directory_path());
 
-    m_engine.prepare(m_sampleRate, m_bufferSize, 2);
+    m_engine.prepare(m_sampleRate, m_bufferSize, 2, m_isRenderClone);
     m_engine.transport().setTempo(m_project.tempo);
     m_engine.transport().setTimeSignature(m_project.timeSigNumerator,
                                           m_project.timeSigDenominator);
@@ -1451,7 +1458,7 @@ audio::Result EngineController::initialize(
     // that only wants the document model never touches the user's cache file.
     // Without this the plugin browser is empty until the first scan of the
     // session, and a project's inserts fail to resolve their descriptors.
-    m_pluginManager.load();
+    if (!m_isRenderClone) m_pluginManager.load();
     rebuildGraph();
     m_prepared = true;
 
@@ -2498,6 +2505,7 @@ void EngineController::syncTrackAutomation(const TrackModel& track) {
             const std::span<const plugins::ParameterInfo> parameters =
                 node->instance()->parameters();
             const plugins::ParameterInfo& info = parameters[std::size_t(index)];
+            if (!info.isAutomatable) continue;
             const double span = info.maxValue - info.minValue;
             auto toPlain = [&](double normalized) {
                 return info.minValue + span * std::clamp(normalized, 0.0, 1.0);
@@ -2535,6 +2543,7 @@ void EngineController::syncTrackAutomation(const TrackModel& track) {
             const std::span<const plugins::ParameterInfo> parameters =
                 node->instance()->parameters();
             const plugins::ParameterInfo& info = parameters[std::size_t(index)];
+            if (!info.isAutomatable) continue;
             const double span = info.maxValue - info.minValue;
             auto toPlain = [&](double normalized) {
                 return info.minValue + span * std::clamp(normalized, 0.0, 1.0);
@@ -8014,8 +8023,12 @@ bool EngineController::moveTrack(const std::string& trackId, size_t targetIndex,
     syncFolderRouting();
 
     m_undo.push("Move Track",
-                [this, trackId, from, previousParent] {
-                    moveTrack(trackId, from, previousParent);
+                [this, trackId, from, previousParent, blockSize = blockIds.size()] {
+                    // moveTrack takes an insertion boundary before removing the
+                    // subtree. Restore the final index when undo moves it down.
+                    const size_t current = m_project.indexOf(trackId);
+                    moveTrack(trackId, from + (current < from ? blockSize : 0),
+                              previousParent);
                 },
                 [this, trackId, targetIndex, newParentId] {
                     moveTrack(trackId, targetIndex, newParentId);
@@ -10311,8 +10324,10 @@ bool EngineController::pumpPluginEvents() {
         plugins::PluginMainThreadWork::generation();
     const bool compatibilitySweep =
         ++m_pluginCompatibilitySweepTicks >= kPluginCompatibilitySweepTicks;
+    const bool pendingPitchQualityCanApply =
+        m_pendingPitchQualityChanges && !liveAudioActivity();
     if (requestedGeneration == m_pluginMainThreadGeneration &&
-        !compatibilitySweep) {
+        !compatibilitySweep && !pendingPitchQualityCanApply) {
         // Steady playback lands here: no channel/clip/slot traversal and no
         // virtual calls for VST3's empty pumpMainThread implementation.
         return false;
@@ -10329,6 +10344,27 @@ bool EngineController::pumpPluginEvents() {
     bool changed = false;
     bool needsRebuild = false;
     bool needsReconfigure = false;
+    const bool canApplyPitchQuality = pendingPitchQualityCanApply || !liveAudioActivity();
+    m_pendingPitchQualityChanges = false;
+    std::unique_ptr<engine::RealtimeEngine::RenderGate> pitchQualityGate;
+    const auto applyPitchQuality = [&](plugins::PluginNode* node) {
+        auto* corrector = node ? dynamic_cast<plugins::pitch::PitchCorrectorInstance*>(
+                                     node->instance()) : nullptr;
+        if (!corrector || !corrector->qualityChangePending()) return;
+        if (!canApplyPitchQuality) {
+            m_pendingPitchQualityChanges = true;
+            return;
+        }
+        // Mode selects a different processing latency. Preserve the audible
+        // mode through playback/monitoring, including undo and remote edits,
+        // and adopt the latest request only while the graph is quiet.
+        if (!pitchQualityGate)
+            pitchQualityGate = std::make_unique<engine::RealtimeEngine::RenderGate>(m_engine);
+        if (corrector->applyPendingQuality()) {
+            node->invalidatePrepare();
+            needsRebuild = needsReconfigure = true;
+        }
+    };
     struct NativeParameterEdit {
         collab::PluginLocation location;
         std::string channelId;
@@ -10448,6 +10484,7 @@ bool EngineController::pumpPluginEvents() {
             }
         }
 
+        applyPitchQuality(slot.node.get());
         if (!slot.rightNode) return;
         slot.rightNode->beginMainThreadPump();
         if (slot.rightNode->takeReloadRequested()) {
@@ -10478,6 +10515,7 @@ bool EngineController::pumpPluginEvents() {
         if (plugins::PluginInstance* instance = slot.rightNode->instance()) {
             instance->pumpMainThread();
         }
+        applyPitchQuality(slot.rightNode.get());
         while (slot.rightNode->popNotification(event)) {
             if (event.kind != plugins::PluginEvent::Kind::ParamValue) continue;
             plugins::PluginInstance* instance = slot.rightNode->instance();
@@ -16036,6 +16074,8 @@ std::pair<std::string, std::string> EngineController::findAutomation(
 
 std::pair<std::string, std::string> EngineController::ensureAutomation(
     const AutomationTarget& target) {
+    if (const auto* info = automationParameterInfo(target); info && !info->isAutomatable)
+        return {};
     if (auto found = findAutomation(target); !found.first.empty()) {
         // Already automated. Opening the owner is the whole of the work: the
         // lane exists, and the only reason to ask again is to look at it.

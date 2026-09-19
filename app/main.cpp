@@ -75,6 +75,7 @@
 #include <QFont>
 #include <QToolTip>
 #include <QToolButton>
+#include <QPushButton>
 #include <QEvent>
 #include <QEventLoop>
 #include <QFileOpenEvent>
@@ -870,6 +871,10 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "the startup window hierarchy is incomplete\n");
                 return 31;
             }
+            if (std::getenv("DAW_SELFTEST_STARTUP_ONLY")) {
+                std::fprintf(stderr, "PASS Startup window\n");
+                return 0;
+            }
         }
     } else {
         startup = std::make_unique<StartupWindow>(&accountService);
@@ -885,6 +890,17 @@ int main(int argc, char** argv) {
         StartupWindow startupShot(&accountService);
         startupShot.showPluginScan(
             3, 8, QStringLiteral("/Library/Audio/Plug-Ins/VST3/Example.vst3"));
+        const QString stage = qEnvironmentVariable("DAW_SHOT_STARTUP");
+        if (stage == QLatin1String("loading")) startupShot.showSystemLoading();
+        if (stage == QLatin1String("ready")) startupShot.showReady(128);
+        if (stage == QLatin1String("long"))
+            startupShot.showPluginScan(127, 256,
+                QStringLiteral("/Plugins/Very long instrument and effects collection name.vst3"));
+        if (stage == QLatin1String("login") || stage == QLatin1String("error")) {
+            accountService.authenticationRequired(QString(), false);
+            if (stage == QLatin1String("error"))
+                startupShot.findChild<QPushButton*>(QStringLiteral("StartupLoginButton"))->click();
+        }
         startupShot.show();
         QTimer::singleShot(250, &app, [&startupShot, screenshotPath] {
             startupShot.grab().save(QString::fromUtf8(screenshotPath));
@@ -1023,21 +1039,25 @@ int main(int argc, char** argv) {
 #endif
     if (startup) {
         daw::PluginManager& plugins = window.pluginManagerForStartup();
-        startup->showPluginScan(0, 0, QString());
-        plugins.startScan(/*rescanAll=*/false);
-        while (plugins.isScanning()) {
-            startup->showPluginScan(
-                plugins.scanned(), plugins.scanTotal(),
-                QString::fromStdString(plugins.currentScanPath()));
-            QApplication::processEvents(QEventLoop::AllEvents, 25);
-            if (startup->cancelled()) {
-                plugins.cancelScan();
-                plugins.waitForScan();
-                return 0;
+        if (ui::scanPluginsAtStartup()) {
+            startup->showPluginScan(0, 0, QString());
+            plugins.startScan(/*rescanAll=*/false);
+            while (plugins.isScanning()) {
+                startup->showPluginScan(
+                    plugins.scanned(), plugins.scanTotal(),
+                    QString::fromStdString(plugins.currentScanPath()));
+                QApplication::processEvents(QEventLoop::AllEvents, 25);
+                if (startup->cancelled()) {
+                    plugins.cancelScan();
+                    plugins.waitForScan();
+                    return 0;
+                }
+                QThread::msleep(12);
             }
-            QThread::msleep(12);
+            plugins.waitForScan();
         }
-        plugins.waitForScan();
+        // EngineController has already loaded the saved catalogue, including
+        // when automatic discovery is disabled.
         window.applyStartupPluginScanResults();
         startup->showReady(int(plugins.plugins().size()));
         QApplication::processEvents(QEventLoop::AllEvents, 20);

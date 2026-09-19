@@ -240,7 +240,7 @@ audio::Result EngineController::createPluginBatchDraft(
             if (track.id != source.trackId && upstream.contains(track.id))
                 for (const auto& clip : track.clips) selection.sourceClipIds.push_back(clip.id);
     }
-    draft->applyRenderSelection(selection);
+    applyRenderSelection(selection, draft->m_project);
     for (auto& track : draft->m_project.tracks) {
         for (auto& clip : track.clips)
             if (clip.id != source.clipId && mutedClips.contains(clip.id)) clip.muted = true;

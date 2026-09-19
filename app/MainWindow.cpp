@@ -662,7 +662,7 @@ public:
         const daw::analysis::MusicalAnalysisResult& result,
         const daw::analysis::MusicalAnalysisRequest& request,
         double currentTempo, Mode mode, bool autoApplyTempo,
-        QWidget* parent)
+        QWidget* parent, bool hasPitchCorrectors = false, bool autoApplyPitch = false)
         : QDialog(parent), m_quickImport(mode == Mode::QuickImport) {
         setWindowTitle(m_quickImport ? tr("Quick Import analysis")
                                      : tr("Audio analysis result"));
@@ -762,6 +762,28 @@ public:
             }
             if (result.key.variable)
                 column->addWidget(new QLabel(tr("The tonal center changes across this clip."), this));
+            const QString pitchHelp = hasPitchCorrectors
+                ? tr("Set the detected key and scale in all VLT Pitch instances in this project.")
+                : tr("Add VLT Pitch to the project to use the detected key.");
+            if (m_quickImport) {
+                m_applyPitch = new QCheckBox(autoApplyPitch ? tr("Key applied to VLT Pitch")
+                                                          : tr("Set detected key in VLT Pitch"), this);
+                m_applyPitch->setObjectName(QStringLiteral("ApplyDetectedKeyToPitch"));
+                m_applyPitch->setChecked(autoApplyPitch && hasPitchCorrectors);
+                m_applyPitch->setEnabled(hasPitchCorrectors && !autoApplyPitch);
+                m_applyPitch->setToolTip(pitchHelp);
+                column->addWidget(m_applyPitch);
+            } else {
+                auto* sendKey = new QPushButton(tr("Apply key to VLT Pitch"), this);
+                sendKey->setObjectName(QStringLiteral("ApplyDetectedKeyToPitch"));
+                sendKey->setEnabled(hasPitchCorrectors);
+                sendKey->setToolTip(pitchHelp);
+                connect(sendKey, &QPushButton::clicked, this, [this] {
+                    m_sendPitchKey = true;
+                    accept();
+                });
+                column->addWidget(sendKey, 0, Qt::AlignLeft);
+            }
         } else if (request.detectKey) {
             column->addWidget(new QLabel(tr("Key · not enough tonal information"),
                                          this));
@@ -775,7 +797,7 @@ public:
             ok->setText(m_quickImport ? tr("Apply")
                         : mode == Mode::Import ? tr("Import") : tr("Done"));
         if (auto* cancel = buttons->button(QDialogButtonBox::Cancel))
-            cancel->setText(m_quickImport ? tr("Keep without applying")
+            cancel->setText(m_quickImport ? (autoApplyPitch ? tr("Keep project") : tr("Keep without applying"))
                                           : tr("Keep File Only"));
         connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
         connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -795,10 +817,16 @@ public:
     }
     int keyRoot() const { return m_keyRoot; }
     const std::string& keyScale() const { return m_keyScale; }
+    bool appliesPitchKey() const {
+        return m_keyRoot >= 0 && m_keyRoot < 12 && !m_keyScale.empty() &&
+               (m_sendPitchKey || (m_applyPitch && m_applyPitch->isEnabled() && m_applyPitch->isChecked()));
+    }
 
 private:
     QComboBox* m_tempo = nullptr;
     QCheckBox* m_applyTempo = nullptr;
+    QCheckBox* m_applyPitch = nullptr;
+    bool m_sendPitchKey = false;
     bool m_quickImport = false;
     int m_keyRoot = -1;
     std::string m_keyScale;
@@ -819,10 +847,29 @@ bool checkAudioAnalysisResultDialogForTest(QWidget* parent) {
         dialog.findChild<QComboBox*>(QStringLiteral("DetectedTempoOptions"));
     const auto* showAll =
         dialog.findChild<QToolButton*>(QStringLiteral("ShowAllTempoOptions"));
-    return options && options->count() == 4 &&
+    const bool tempoOk = options && options->count() == 4 &&
            options->itemData(0).toInt() == 140 && showAll &&
            showAll->text().contains(QStringLiteral("4")) &&
            !showAll->accessibleName().isEmpty();
+    request.detectKey = true;
+    result.key.status = daw::analysis::DetectionStatus::Available;
+    result.key.root = 9;
+    result.key.scale = "natural_minor";
+    AudioAnalysisResultDialog keyDialog(result, request, 120.0,
+        AudioAnalysisResultDialog::Mode::Review, false, parent, true);
+    auto* send = keyDialog.findChild<QPushButton*>(QStringLiteral("ApplyDetectedKeyToPitch"));
+    if (!send || !send->isEnabled() || keyDialog.appliesPitchKey()) return false;
+    send->click();
+    const bool manualOk = keyDialog.result() == QDialog::Accepted &&
+        keyDialog.appliesPitchKey() && keyDialog.keyRoot() == 9 && keyDialog.keyScale() == "natural_minor";
+    AudioAnalysisResultDialog quickDialog(result, request, 120.0,
+        AudioAnalysisResultDialog::Mode::QuickImport, false, parent, true, true);
+    const auto* automatic = quickDialog.findChild<QCheckBox*>(QStringLiteral("ApplyDetectedKeyToPitch"));
+    AudioAnalysisResultDialog emptyDialog(result, request, 120.0,
+        AudioAnalysisResultDialog::Mode::Review, false, parent);
+    const auto* unavailable = emptyDialog.findChild<QPushButton*>(QStringLiteral("ApplyDetectedKeyToPitch"));
+    return tempoOk && manualOk && automatic && automatic->isChecked() && !automatic->isEnabled() &&
+           !quickDialog.appliesPitchKey() && unavailable && !unavailable->isEnabled();
 }
 
 #ifdef DAW_ENABLE_COLLABORATION
@@ -7177,6 +7224,48 @@ bool MainWindow::checkLiveTempoForTest() {
 
 bool MainWindow::checkSettingsViewportForTest() {
     if (!m_settingsWindow) return false;
+    auto* startupScan = m_settingsWindow->findChild<QCheckBox*>(
+        QStringLiteral("ScanPluginsAtStartup"));
+    if (!startupScan) return false;
+    QSettings startupSettings;
+    const QString scanKey = QLatin1String(ui::kScanPluginsAtStartupSetting);
+    const QVariant savedScan = startupSettings.value(scanKey);
+    const bool initialScan = ui::scanPluginsAtStartup();
+    bool scanControl = startupScan->isChecked() == initialScan;
+    startupSettings.remove(scanKey);
+    scanControl = scanControl && ui::scanPluginsAtStartup();
+    // Exercise both transitions through the actual checkbox and verify the
+    // stored value consumed by the next application launch.
+    startupScan->setChecked(true);
+    startupScan->click();
+    scanControl = scanControl && !ui::scanPluginsAtStartup() &&
+                  !startupSettings.value(scanKey, true).toBool();
+    startupScan->click();
+    scanControl = scanControl && ui::scanPluginsAtStartup() &&
+                  startupSettings.value(scanKey, false).toBool();
+    startupScan->setChecked(initialScan);
+    if (savedScan.isValid()) startupSettings.setValue(scanKey, savedScan);
+    else startupSettings.remove(scanKey);
+    if (!scanControl) {
+        std::fprintf(stderr, "startup plugin scan preference did not persist\n");
+        return false;
+    }
+    if (!m_timeline->checkGridAppearanceForTest()) return false;
+    auto* gridWidth = m_settingsWindow->findChild<QSlider*>(
+        QStringLiteral("TimelineGridWidth"));
+    auto* gridOpacity = m_settingsWindow->findChild<QSlider*>(
+        QStringLiteral("TimelineGridOpacity"));
+    if (!gridWidth || !gridOpacity) return false;
+    const int savedGridWidth = gridWidth->value();
+    const int savedGridOpacity = gridOpacity->value();
+    gridWidth->setValue(23);
+    gridOpacity->setValue(0);
+    const bool gridControls = ui::gridLineWidth() == 2.3 && ui::gridOpacity() == 0 &&
+        QSettings().value(ui::kGridLineWidthSetting).toDouble() == 2.3 &&
+        QSettings().value(ui::kGridOpacitySetting).toInt() == 0;
+    gridWidth->setValue(savedGridWidth);
+    gridOpacity->setValue(savedGridOpacity);
+    if (!gridControls) return false;
     QApplication::processEvents();   // runs the post-show native-frame clamp
 
     auto* pages = m_settingsWindow->findChild<QStackedWidget*>(
@@ -7216,13 +7305,23 @@ bool MainWindow::checkSettingsViewportForTest() {
                       SettingsWindow::checkWheelRoutingForTest() &&
                       startupTemplateControl;
     if (pages) {
+        const int selectedPage = pages->currentIndex();
         for (int i = 0; i < pages->count(); ++i) {
+            m_settingsWindow->showTab(i);
+            QApplication::processEvents();
             auto* scroll = qobject_cast<QScrollArea*>(pages->widget(i));
             scrollable = scrollable && scroll && scroll->widgetResizable() &&
                          scroll->verticalScrollBarPolicy() == Qt::ScrollBarAsNeeded &&
                          scroll->horizontalScrollBarPolicy() ==
-                             Qt::ScrollBarAlwaysOff;
+                             Qt::ScrollBarAsNeeded;
+            if (scroll && scroll->widget()) {
+                const int overflow = scroll->widget()->width() - scroll->viewport()->width();
+                scrollable = scrollable &&
+                    scroll->horizontalScrollBar()->maximum() >= overflow;
+            }
         }
+        m_settingsWindow->showTab(selectedPage);
+        QApplication::processEvents();
     }
 
     // Exercise the exact input path used by the running workspace. With GPU
@@ -11018,7 +11117,28 @@ void MainWindow::openPluginEditor(const QString& channelId, const QString& inser
 
     auto* editor = new PluginEditorWindow(&m_controller, channelId, insertId, this);
     m_pluginEditors.insert(key, editor);
-    hostInternalWindow(editor, QStringLiteral("internalEditors/plugins/") + key);
+    auto* frame = hostInternalWindow(editor, QStringLiteral("internalEditors/plugins/") + key);
+    frame->setExpansionEnabled(false);
+    editor->setHostKeyHandler([this](QKeyEvent* event, bool textEntry) {
+        if (event->key() == Qt::Key_Space && !(event->modifiers() & ~Qt::KeypadModifier)) {
+            if (event->type() == QEvent::KeyPress && !event->isAutoRepeat())
+                toggleProjectPlayback();
+            event->accept();
+            return true;
+        }
+        return m_typingKeyboard && m_typingKeyboard->handleKeyEvent(event, textEntry);
+    });
+    connect(editor, &PluginEditorWindow::keyboardFocusReceived, this, [this, editor, frame] {
+        const auto channel = editor->channelId().toStdString();
+        const bool playable = m_controller.liveNoteTarget(channel) == channel;
+        const bool changed = playable && m_liveInputEditor != editor;
+        if (playable) m_liveInputEditor = editor;
+        frame->activateEditor();
+        if (changed && m_midiInput) m_midiInput->refreshTarget();
+    });
+    connect(frame, &InternalEditorFrame::activeChanged, editor, [editor](bool active) {
+        if (active) emit editor->keyboardFocusReceived();
+    });
     // Reparenting is complete now and the frame is still hidden. Make this
     // exact hierarchy native before show(), so Qt never has to replace a
     // handle already handed to CLAP/VST3/AU.
@@ -11027,6 +11147,11 @@ void MainWindow::openPluginEditor(const QString& channelId, const QString& inser
     // has to drop the key or the next open would raise a dangling pointer.
     connect(editor, &PluginEditorWindow::closing, this,
             [this, editor, key](const QString&, const QString&) {
+                if (m_liveInputEditor == editor) {
+                    m_liveInputEditor = nullptr;
+                    if (m_typingKeyboard) m_typingKeyboard->allNotesOff();
+                    if (m_midiInput) m_midiInput->refreshTarget();
+                }
                 if (m_pluginEditors.value(key, nullptr) == editor)
                     m_pluginEditors.remove(key);
                 // A plugin may change opaque preset/MIDI-learn state without a
@@ -12038,6 +12163,10 @@ bool MainWindow::checkBrowser(const QString& folder, const QString& audioFile,
         return false;
     };
     if (!m_browser) return fail("panel was not constructed");
+    setBrowserVisible(true);
+    auto* searchSurface = findChild<ui::graphics::WorkspaceSurface*>();
+    if (!m_browser->checkSearchForTest(searchSurface ? searchSurface->quickWindow() : nullptr))
+        return fail("file/plugin search regression");
     if (!openDemoBrowser(folder, audioFile))
         return fail("demo file was not found in the tree");
     if (!m_browser->containersAreNavigationOnlyForTest())
@@ -12772,8 +12901,19 @@ bool MainWindow::checkPluginSearchFocusForTest() {
 void MainWindow::openSettings(int tab) {
     if (!m_settingsWindow) {
         m_settingsWindow = new SettingsWindow(&m_controller, m_shortcuts, this);
+        // Widen pre-sidebar placements once; subsequent user resizing persists.
+        QSettings settings;
+        const QString key = QStringLiteral("internalEditors/settings");
+        if (!settings.value(key + "/wideLayout", false).toBool()) {
+            QRect saved = settings.value(key + "/geometry").toRect();
+            if (saved.isValid()) {
+                saved.setWidth(std::max(saved.width(), m_settingsWindow->width() + 2));
+                settings.setValue(key + "/geometry", saved);
+            }
+            settings.setValue(key + "/wideLayout", true);
+        }
         hostInternalWindow(m_settingsWindow,
-                           QStringLiteral("internalEditors/settings"));
+                           key);
         connect(m_settingsWindow, &SettingsWindow::transportPanelStyleChanged,
                 m_transport, &TransportBar::reloadPanelStyle);
         connect(m_settingsWindow, &SettingsWindow::contextPanelSettingsChanged,
@@ -12820,6 +12960,8 @@ void MainWindow::openSettings(int tab) {
                     if (m_timeline) m_timeline->reloadBackgroundSettings();
                     if (m_transport) m_transport->reloadBackgroundSettings();
                 });
+        connect(m_settingsWindow, &SettingsWindow::timelineAppearanceChanged,
+                m_timeline, [this] { m_timeline->update(); });
         connect(m_settingsWindow, &SettingsWindow::restartRequested, this,
                 [this] {
                     if (!maybeSaveChanges()) return;
@@ -13306,6 +13448,10 @@ void MainWindow::onPlayPause() {
     // A focused web page owns Space (media controls, form buttons, scrolling).
     // Application-wide DAW shortcuts must not fire through the embedded browser.
     if (m_webPanel && m_webPanel->ownsFocus()) return;
+    toggleProjectPlayback();
+}
+
+void MainWindow::toggleProjectPlayback() {
 #ifdef DAW_ENABLE_COLLABORATION
     if (m_collaboration)
         m_collaboration->localSessionState()->noteLocalTransportInteraction();
@@ -13642,7 +13788,17 @@ void MainWindow::presentAuxiliaryWindow(QWidget* window) {
     window->activateWindow();
 }
 
-void MainWindow::raiseAuxiliaryWindows() {
+void MainWindow::raiseEditorWindows() {
+    // Native workspace activation can cover an editor without hiding its
+    // QWidget. Keep open frames above the workspace, in their existing order,
+    // while keyboard focus stays with the mixer/browser/inspector control.
+    if (m_editorHost) {
+        const auto frames = m_editorHost->findChildren<InternalEditorFrame*>(
+            QString(), Qt::FindDirectChildrenOnly);
+        for (InternalEditorFrame* frame : frames) {
+            if (!frame->isDetached()) frame->raiseEditor();
+        }
+    }
     if (m_auxiliaryLowered) return;
     for (int i = m_auxiliaryWindows.size() - 1; i >= 0; --i) {
         if (m_auxiliaryWindows[i].isNull()) m_auxiliaryWindows.removeAt(i);
@@ -13698,12 +13854,11 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* ev) {
         }
         case QEvent::WindowActivate: {
             auto* activated = qobject_cast<QWidget*>(watched);
-            if (activated == this && !m_auxiliaryLowered &&
-                !m_auxiliaryRaiseQueued) {
+            if (activated == this && !m_auxiliaryRaiseQueued) {
                 m_auxiliaryRaiseQueued = true;
                 QTimer::singleShot(0, this, [this] {
                     m_auxiliaryRaiseQueued = false;
-                    raiseAuxiliaryWindows();
+                    raiseEditorWindows();
                 });
                 break;
             }
@@ -13725,9 +13880,6 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* ev) {
             const bool onTimeline =
                 m_timeline &&
                 (target == m_timeline || m_timeline->isAncestorOf(target));
-            const bool onTrackList =
-                m_trackList &&
-                (target == m_trackList || m_trackList->isAncestorOf(target));
             if (onTimeline) {
                 // A plugin editor is transient editing UI. Deactivating its
                 // native frame can put it underneath the GPU workspace while
@@ -13739,13 +13891,13 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* ev) {
                     if (editor && editor->isVisible()) editor->close();
                 }
             }
-            if (onTimeline || onTrackList) {
+            if (onTimeline) {
                 lowerAuxiliaryWindowsForWorkspace();
-            } else if (!m_auxiliaryLowered && !m_auxiliaryRaiseQueued) {
+            } else if (!m_auxiliaryRaiseQueued) {
                 m_auxiliaryRaiseQueued = true;
                 QTimer::singleShot(0, this, [this] {
                     m_auxiliaryRaiseQueued = false;
-                    raiseAuxiliaryWindows();
+                    raiseEditorWindows();
                 });
             }
             break;
@@ -14355,6 +14507,14 @@ std::string MainWindow::liveInputTarget() const {
         m_pianoRollFrame->isEditorActive() &&
         !m_pianoRoll->trackId().isEmpty()) {
         preferred = m_pianoRoll->trackId();
+    }
+    if (m_liveInputEditor && m_liveInputEditor->isVisible() && !m_liveInputEditor->isClosing()) {
+        const auto* frame = m_internalEditorFrames.value(m_liveInputEditor, nullptr);
+        const bool pianoActive = m_pianoRollFrame && m_pianoRollFrame->isEditorActive();
+        const std::string channel = m_liveInputEditor->channelId().toStdString();
+        if ((!pianoActive || (frame && frame->isEditorActive())) &&
+            m_controller.liveNoteTarget(channel) == channel)
+            preferred = m_liveInputEditor->channelId();
     }
     return m_controller.liveNoteTarget(preferred.toStdString());
 }
@@ -15185,10 +15345,12 @@ void MainWindow::analyzeAudioClip(const QString& trackId, const QString& clipId,
     AudioAnalysisResultDialog resultDialog(
         analysis, request, m_controller.tempo(),
         AudioAnalysisResultDialog::Mode::Review,
-        /*autoApplyTempo=*/false, this);
+        /*autoApplyTempo=*/false, this, m_controller.pitchCorrectorCount() > 0);
     const bool resultAccepted = resultDialog.exec() == QDialog::Accepted;
     if (resultAccepted && resultDialog.appliesTempo())
         m_controller.setTempo(resultDialog.selectedTempo());
+    if (resultAccepted && resultDialog.appliesPitchKey())
+        applyDetectedKeyToPitch(resultDialog.keyRoot(), resultDialog.keyScale());
     m_controller.collapseUndo(undoStart, "Analyze Audio Clip");
     syncViews();
     if (m_contextPanel) m_contextPanel->rebuild();
@@ -15234,6 +15396,7 @@ void MainWindow::showNextDownloadedAudioPrompt() {
 
     daw::ClipMusicalAnalysisModel analysisModel;
     double tempoToApply = 0.0;
+    bool applyPitchKey = false;
     if (choice != DownloadedAudioDialog::Choice::None &&
         (detectTempo || detectKey)) {
         daw::analysis::MusicalAnalysisRequest request;
@@ -15256,11 +15419,13 @@ void MainWindow::showNextDownloadedAudioPrompt() {
             AudioAnalysisResultDialog resultDialog(
                 analysis, request, m_controller.tempo(),
                 AudioAnalysisResultDialog::Mode::Import,
-                detectTempo && analysis.tempo.highConfidence(), this);
+                detectTempo && analysis.tempo.highConfidence(), this,
+                m_controller.pitchCorrectorCount() > 0);
             if (resultDialog.exec() != QDialog::Accepted) {
                 choice = DownloadedAudioDialog::Choice::None;
-            } else if (resultDialog.appliesTempo()) {
-                tempoToApply = resultDialog.selectedTempo();
+            } else {
+                if (resultDialog.appliesTempo()) tempoToApply = resultDialog.selectedTempo();
+                applyPitchKey = resultDialog.appliesPitchKey();
             }
         }
     }
@@ -15302,6 +15467,8 @@ void MainWindow::showNextDownloadedAudioPrompt() {
     }
 
     if (imported) {
+        if (applyPitchKey)
+            applyDetectedKeyToPitch(analysisModel.key.root, analysisModel.key.scale);
         m_controller.collapseUndo(undoStart, "Import Downloaded Audio");
         markDirty();
         const auto* track =
@@ -15980,6 +16147,20 @@ void MainWindow::onImportAudio() {
     markDirty();
 }
 
+bool MainWindow::applyDetectedKeyToPitch(int root, const std::string& scale) {
+    std::size_t updated = 0;
+    const auto result = m_controller.applyKeyToPitchCorrectors(root, scale, &updated);
+    if (!result) {
+        QMessageBox::warning(this, tr("VLT Pitch"),
+            QCoreApplication::translate("PitchSettings", result.message().c_str()));
+        return false;
+    }
+    statusBar()->showMessage(updated
+        ? tr("Key sent to %1 VLT Pitch instance(s).").arg(updated)
+        : tr("VLT Pitch already uses this key."), 4000);
+    return true;
+}
+
 void MainWindow::onQuickImportAudio() {
     const QString path = QFileDialog::getOpenFileName(
         this, tr("Quick Import Audio"), QString(), ui::audioNameFilter());
@@ -16097,16 +16278,26 @@ bool MainWindow::quickImportAudioPath(const QString& sourcePath) {
 
     if (!analysisFailed &&
         (preferences.detectTempo || preferences.detectKey)) {
+        bool pitchKeyApplied = false;
+        if (preferences.detectKey && preferences.applyKeyToPitch &&
+            analysisResult.key.status != daw::analysis::DetectionStatus::Unavailable &&
+            m_controller.pitchCorrectorCount() > 0) {
+            pitchKeyApplied = applyDetectedKeyToPitch(analysisResult.key.root, analysisResult.key.scale);
+            m_controller.collapseUndo(0, "Quick Import Audio");
+        }
         AudioAnalysisResultDialog resultDialog(
             analysisResult, analysisRequest, m_controller.tempo(),
             AudioAnalysisResultDialog::Mode::QuickImport,
-            /*autoApplyTempo=*/false, this);
+            /*autoApplyTempo=*/false, this, m_controller.pitchCorrectorCount() > 0,
+            pitchKeyApplied);
         if (resultDialog.exec() == QDialog::Accepted) {
             if (resultDialog.appliesTempo())
                 m_controller.setTempo(resultDialog.selectedTempo());
             if (resultDialog.appliesKey())
                 m_controller.setProjectKey(resultDialog.keyRoot(),
                                            resultDialog.keyScale());
+            if (resultDialog.appliesPitchKey())
+                applyDetectedKeyToPitch(resultDialog.keyRoot(), resultDialog.keyScale());
             // Opening the template cleared history and installed the import as
             // its first entry. Fold the chosen musical values into that same
             // action so one undo still restores the clean template.

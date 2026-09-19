@@ -115,6 +115,7 @@ signals:
 
 private:
     ThemeManager();
+    bool eventFilter(QObject* object, QEvent* event) override;
     QString styleSheet() const;
     QString fontDataPath() const;
     void loadStoredFont();

@@ -116,6 +116,9 @@ public:
     /// `isPreparedFor`. Implementations may still assume it runs before the
     /// first `process`.
     virtual void prepare(const PrepareInfo&) {}
+    /// Control thread, before prepare: connectivity is not the same as silence.
+    /// A hosted compressor may select its detector from aux-bus activation.
+    virtual void setSidechainConnected(bool) {}
     virtual void reset() {}
     /// Offline control thread, between completed blocks only. A callback may
     /// invalidate preparation; the pass must then stop rather than use stale

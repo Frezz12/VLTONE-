@@ -543,6 +543,7 @@ func TestPostgresAccountFlow(t *testing.T) {
 		onlineUsers[0].(map[string]any)["user_id"] != user.ID.String() {
 		t.Fatalf("admin dashboard online users failed: %v", dashboard.Body["online_users"])
 	}
+	t.Run("dashboard session durations", func(t *testing.T) { checkDashboardUsage(t, server, user.ID) })
 	t.Run("refresh retry after restart", func(t *testing.T) {
 		login := deviceLogin(secondID, "203.0.113.65:1234")
 		if login.Status != 200 {

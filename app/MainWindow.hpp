@@ -402,6 +402,8 @@ public:
     bool checkTimelinePanForTest();
     bool checkProjectScrollForTest(const QString& path);
     bool checkWorkspaceMotionForTest();
+    bool checkPluginWindowPolicyForTest();
+    bool checkPluginKeyboardForTest();
     /// Exercise multi-lane clip movement, Shift-add/duplicate and marquee
     /// auto-scroll with real mouse events.
     bool checkTimelineClipGesturesForTest();
@@ -515,6 +517,7 @@ protected:
 
 private slots:
     void onPlayPause();
+    void toggleProjectPlayback();
     void onStop();
     /// The transport's Record button. It only ever engages — the take is set
     /// up in the context panel that appears, and started from there or with R.
@@ -625,7 +628,7 @@ private:
     void registerAuxiliaryWindow(QWidget* window);
     void installGpuSurface(QWidget* source);
     void presentAuxiliaryWindow(QWidget* window);
-    void raiseAuxiliaryWindows();
+    void raiseEditorWindows();
     void lowerAuxiliaryWindowsForWorkspace();
     void closeAuxiliaryWindows();
     /// Apply the held state of the two modifier gestures above.
@@ -827,6 +830,7 @@ private:
     bool createProjectFromTemplatePath(const QString& packageDir);
     bool loadProjectTemplatePath(const QString& packageDir, bool startup);
     bool quickImportAudioPath(const QString& path);
+    bool applyDetectedKeyToPitch(int root, const std::string& scale);
     void addProjectTemplateTracks(const QString& packageDir);
 
     daw::EngineController m_controller;
@@ -966,6 +970,7 @@ private:
     /// Open editors, keyed by "<channelId>/<insertId>". Not a single instance:
     /// several plugins are routinely open side by side.
     QHash<QString, PluginEditorWindow*> m_pluginEditors;
+    QPointer<PluginEditorWindow> m_liveInputEditor;
     QHash<QString, SampleEditorWindow*> m_sampleEditors;
     QHash<QString, class AutomationEditorWindow*> m_automationEditors;
     PianoRollWindow* m_pianoRoll = nullptr;

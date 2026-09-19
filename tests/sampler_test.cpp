@@ -165,8 +165,8 @@ int main() {
         check(unique, "parameter ids are unique");
         check(defaultsInRange, "every default sits inside its range");
 
-        check(std::abs(table[std::uint32_t(Param::Volume)].defaultValue - 0.55) < 1e-9,
-              "volume defaults to 55 % (-5.2 dB), as the sampler is documented to");
+        check(table[std::uint32_t(Param::Volume)].defaultValue == 1.0,
+              "volume defaults to unity (0 dB)");
         check(!table[std::uint32_t(Param::PreNormalize)].isAutomatable,
               "a precomputed knob is not automatable");
         check(table[std::uint32_t(Param::Volume)].isAutomatable,
@@ -222,15 +222,42 @@ int main() {
     // ── The plain one-shot ──
     {
         auto instance = makeSampler();
-        set(*instance, Param::Volume, 1.0);
         const Output out = render(*instance, kBlock, {noteOn(60, 1.0)});
-        // 0.5 sample × velocity 1 × volume 1, panned centre (−3 dB a side).
-        const float expected =
-            0.5f * float(std::cos(std::numbers::pi_v<double> * 0.25));
-        check(std::abs(out.left[10] - expected) < 0.01f,
+        check(std::abs(out.left[10] - 0.5f) < 1e-6f,
               "a note at the root note plays the sample at its own level");
         check(std::abs(out.left[10] - out.right[10]) < 1e-6f, "centred by default");
     }
+
+    // Default playback must preserve both mono and stereo source amplitudes,
+    // without normalising the sample or losing its original channel balance.
+    for (engine::ChannelCount channels : {1, 2}) {
+        sampler::setSampleDecoder([channels](const std::string&) {
+            auto sample = std::make_shared<engine::SampleBuffer>(channels, kSampleFrames, kRate);
+            std::fill_n(sample->writableChannel(0), kSampleFrames, 0.5f);
+            if (channels > 1) std::fill_n(sample->writableChannel(1), kSampleFrames, -0.25f);
+            return sample;
+        });
+        auto instance = makeSampler();
+        const Output stereo = render(*instance, kBlock, {noteOn(60, 1.0)});
+        const float expectedRight = channels > 1 ? -0.25f : 0.5f;
+        check(std::all_of(stereo.left.begin(), stereo.left.end(), [](float v) {
+                  return std::abs(v - 0.5f) < 1e-6f;
+              }) && std::all_of(stereo.right.begin(), stereo.right.end(), [expectedRight](float v) {
+                  return std::abs(v - expectedRight) < 1e-6f;
+              }), "default mono/stereo playback preserves every source sample");
+        auto monoInstance = makeSampler();
+        Output mono(kBlock);
+        const std::vector<PluginEvent> events{noteOn(60, 1.0)};
+        PluginProcessContext context;
+        context.outputs = mono.pointers;
+        context.outputChannels = 1;
+        context.frames = kBlock;
+        context.inputEvents = events;
+        monoInstance->process(context);
+        check(std::abs(mono.left[10] - (0.5f + expectedRight) * 0.5f) < 1e-6f,
+              "mono output folds once without doubling the source");
+    }
+    sampler::setSampleDecoder([](const std::string&) { return makeDcSample(); });
 
     // ── Velocity and volume ──
     {
@@ -706,25 +733,8 @@ int main() {
 
             check(controller.loadSamplerSample(track, slot, wav),
                   "and takes a sample through the controller");
-            controller.setInsertParameter(track, slot, "vol", 1.0);
-
-            // A key played rather than written: it must find the track's MIDI
-            // path, and a track that has none must say so instead of pretending
-            // to have played something.
-            check(controller.liveNoteTarget({}) == track,
-                  "the instrument track is where a played note goes");
-            check(controller.liveNoteOn(track, 60, 100) &&
-                      controller.liveNoteOff(track, 60),
-                  "a live note reaches the instrument");
-            check(controller.liveMidiEvent(track, 0xB3, 1, 64) &&
-                      !controller.liveMidiEvent(track, 0xF8, 0, 0) &&
-                      !controller.liveMidiEvent(track, 0x90, 128, 100),
-                  "generic live MIDI accepts channel voice data only");
-            const std::string audio = controller.addTrack(TrackKind::Audio, "Audio");
-            check(!controller.liveNoteOn(audio, 60, 100),
-                  "an audio track takes no notes");
-            check(controller.liveNoteTarget(audio) == track,
-                  "and asking for one falls back to a track that does");
+            check(controller.insertParameter(track, slot, "vol") == 1.0,
+                  "loading a sample preserves the default unity gain");
 
             // Dropping a sample on a track's instrument slot: the sampler and
             // the sample are one gesture, so they must be one undo entry —
@@ -757,7 +767,7 @@ int main() {
 
             const std::string clip = controller.addMidiClip(track, 0.0, 1.0);
             check(!clip.empty(), "a MIDI clip goes on the track");
-            controller.addNote(track, clip, 60, 0.0, 2.0, 100);
+            controller.addNote(track, clip, 60, 0.0, 2.0, 127);
 
             sampler::SamplerInstance* liveSampler =
                 controller.samplerInstance(track, slot);
@@ -807,7 +817,28 @@ int main() {
             for (std::size_t i = 0; i < decoded.interleaved.size(); ++i) {
                 peak = std::max(peak, std::abs(decoded.interleaved[i]));
             }
-            check(peak > 0.1f, "and the sampler is audible in it");
+            audio::platform::DecodedAudio source;
+            check(audio::platform::decodeAudioFile(wav, source).isOk(), "the original source decodes");
+            const float sourcePeak = peakOf(source.interleaved);
+            if (std::abs(peak - sourcePeak) >= 1e-4f)
+                std::printf("      source peak %.8f, MIDI render peak %.8f\n", sourcePeak, peak);
+            check(sourcePeak > 0.1f && std::abs(peak - sourcePeak) < 1e-4f,
+                  "MIDI sample playback reaches the master at its original file level");
+
+            // The user's channel control can still attenuate or boost the
+            // source. Grouping must not insert another centre-pan loss.
+            const auto group = controller.packIntoFolder({track}, "Sample bus", true);
+            for (float gain : {0.5f, 1.0f, 1.125f}) {
+                controller.setTrackVolume(track, gain);
+                const auto levelPath = (dir / "channel-level.wav").string();
+                check(controller.exportMixdown(levelPath, false).isOk(), "channel gain renders through a group");
+                audio::platform::DecodedAudio level;
+                check(audio::platform::decodeAudioFile(levelPath, level).isOk() &&
+                          std::abs(peakOf(level.interleaved) - sourcePeak * gain) < 1e-4f,
+                      "channel gain attenuates, preserves or boosts the original level");
+            }
+            controller.setTrackVolume(track, 1.0f);
+            controller.removeTrack(group);
 
             // The same knob, driven the way the panel drives it — through the
             // controller, as a plugin parameter — reaches the voice and is
@@ -837,6 +868,24 @@ int main() {
                 check(count > 1000 && difference > 0.01,
                       "the formant knob is heard through the controller's own path");
             }
+
+            // Run audition routing after the level measurements: with no
+            // audio device the preview events stay queued and would otherwise
+            // add a second one-shot to the first legacy offline render.
+            check(controller.liveNoteTarget({}) == track,
+                  "the instrument track is where a played note goes");
+            check(controller.liveNoteOn(track, 60, 100) &&
+                      controller.liveNoteOff(track, 60),
+                  "a live note reaches the instrument");
+            check(controller.liveMidiEvent(track, 0xB3, 1, 64) &&
+                      !controller.liveMidiEvent(track, 0xF8, 0, 0) &&
+                      !controller.liveMidiEvent(track, 0x90, 128, 100),
+                  "generic live MIDI accepts channel voice data only");
+            const std::string audio = controller.addTrack(TrackKind::Audio, "Audio");
+            check(!controller.liveNoteOn(audio, 60, 100),
+                  "an audio track takes no notes");
+            check(controller.liveNoteTarget(audio) == track,
+                  "and asking for one falls back to a track that does");
 
             // Save, reopen, and the sample must still be there — Content owns
             // the portable audio while the state chunk carries its basename.

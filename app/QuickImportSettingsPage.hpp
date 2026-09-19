@@ -22,5 +22,6 @@ private:
     QComboBox* m_track = nullptr;
     QCheckBox* m_detectTempo = nullptr;
     QCheckBox* m_detectKey = nullptr;
+    QCheckBox* m_applyKeyToPitch = nullptr;
     QLabel* m_error = nullptr;
 };

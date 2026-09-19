@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Host/PluginTypes.hpp"
+
 /// The host-side COM objects VST3 requires a host to provide.
 ///
 /// VST3 is the only one of the three formats where the host has to *implement*
@@ -24,6 +26,7 @@
 #include <pluginterfaces/vst/ivstmidicontrollers.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -42,9 +45,11 @@ public:
     explicit MemoryStream(std::vector<std::uint8_t> data) : m_data(std::move(data)) {}
 
     const std::vector<std::uint8_t>& data() const noexcept { return m_data; }
+    bool failed() const noexcept { return m_failed; }
     void rewind() noexcept { m_position = 0; }
 
     tresult PLUGIN_API read(void* buffer, int32 numBytes, int32* numBytesRead) override {
+        if (numBytesRead) *numBytesRead = 0;
         if (numBytes < 0 || (numBytes > 0 && !buffer)) return kInvalidArgument;
         if (m_position >= m_data.size()) {
             if (numBytesRead) *numBytesRead = 0;
@@ -59,14 +64,18 @@ public:
     }
 
     tresult PLUGIN_API write(void* buffer, int32 numBytes, int32* numBytesWritten) override {
-        if (numBytes < 0 || (numBytes > 0 && !buffer)) return kInvalidArgument;
+        if (numBytesWritten) *numBytesWritten = 0;
+        const auto reject = [&](tresult error) { m_failed = true; return error; };
+        if (numBytes < 0 || (numBytes > 0 && !buffer)) return reject(kInvalidArgument);
         const std::size_t count = std::size_t(numBytes);
-        if (count > std::numeric_limits<std::size_t>::max() - m_position) {
-            return kOutOfMemory;
+        if (!count) return kResultOk;
+        if (m_position > kMaxPluginStateBytes || count > kMaxPluginStateBytes - m_position) {
+            return reject(kOutOfMemory);
         }
         const auto* bytes = static_cast<const std::uint8_t*>(buffer);
         if (m_position + count > m_data.size()) {
-            m_data.resize(m_position + count);
+            try { m_data.resize(m_position + count); }
+            catch (...) { return reject(kOutOfMemory); }
         }
         if (count > 0) std::memcpy(m_data.data() + m_position, bytes, count);
         m_position += count;
@@ -75,14 +84,16 @@ public:
     }
 
     tresult PLUGIN_API seek(int64 pos, int32 mode, int64* result) override {
-        int64 target = 0;
+        int64 base = 0;
         switch (mode) {
-            case kIBSeekSet: target = pos; break;
-            case kIBSeekCur: target = int64(m_position) + pos; break;
-            case kIBSeekEnd: target = int64(m_data.size()) + pos; break;
+            case kIBSeekSet: break;
+            case kIBSeekCur: base = int64(m_position); break;
+            case kIBSeekEnd: base = int64(m_data.size()); break;
             default: return kInvalidArgument;
         }
-        if (target < 0) return kInvalidArgument;
+        if (base < 0 || base > int64(kMaxPluginStateBytes) ||
+            pos < -base || pos > int64(kMaxPluginStateBytes) - base) return kInvalidArgument;
+        const int64 target = base + pos;
         // Seeking past the end is legal and does not grow the buffer; a write
         // there is what grows it.
         m_position = std::size_t(target);
@@ -99,6 +110,7 @@ public:
 private:
     std::vector<std::uint8_t> m_data;
     std::size_t m_position = 0;
+    bool m_failed = false;
 };
 
 /// The bag of typed values a plugin passes between its processor and its
@@ -298,19 +310,22 @@ public:
             queue->reserve(64);
             m_queues.push_back(std::move(queue));
         }
+        // Preallocated open addressing: a block containing N changed
+        // parameters must not perform N squared COM/linear-search operations.
+        m_lookup.assign(std::bit_ceil(std::max(std::size_t{2}, m_queues.size() * 2)), 0);
+        m_used = 0;
     }
-    void clear() noexcept { m_used = 0; }
+    void clear() noexcept {
+        if (!m_used) return; // Idle plugins need no table scan on each audio block.
+        m_used = 0;
+        std::fill(m_lookup.begin(), m_lookup.end(), 0);
+    }
 
     /// Null when the pre-grown pool is exhausted, which is a dropped automation
     /// point rather than an allocation on the audio thread.
     ParamValueQueue* begin(Vst::ParamID id) {
-        for (std::size_t i = 0; i < m_used; ++i) {
-            if (m_queues[i]->getParameterId() == id) return m_queues[i];
-        }
-        if (m_used >= m_queues.size()) return nullptr;
-        ParamValueQueue* queue = m_queues[m_used++];
-        queue->reset(id);
-        return queue;
+        int32 index = -1;
+        return findOrAdd(id, index);
     }
 
     int32 PLUGIN_API getParameterCount() override { return int32(m_used); }
@@ -320,17 +335,32 @@ public:
     }
     Vst::IParamValueQueue* PLUGIN_API addParameterData(const Vst::ParamID& id,
                                                        int32& index) override {
-        ParamValueQueue* queue = begin(id);
-        index = 0;
-        if (!queue) return nullptr;
-        for (std::size_t i = 0; i < m_used; ++i) {
-            if (m_queues[i] == queue) index = int32(i);
-        }
-        return queue;
+        return findOrAdd(id, index);
     }
 
 private:
+    ParamValueQueue* findOrAdd(Vst::ParamID id, int32& index) noexcept {
+        index = -1;
+        if (m_lookup.empty()) return nullptr;
+        uint32 hash = id;
+        hash ^= hash >> 16; hash *= 0x7feb352du; hash ^= hash >> 15;
+        const auto mask = m_lookup.size() - 1;
+        auto slot = std::size_t(hash) & mask;
+        while (const auto encoded = m_lookup[slot]) {
+            const auto existing = encoded - 1;
+            if (m_queues[existing]->getParameterId() == id) {
+                index = int32(existing); return m_queues[existing];
+            }
+            slot = (slot + 1) & mask;
+        }
+        if (m_used >= m_queues.size()) return nullptr;
+        index = int32(m_used++);
+        m_lookup[slot] = uint32(index) + 1;
+        m_queues[index]->reset(id);
+        return m_queues[index];
+    }
     std::vector<IPtr<ParamValueQueue>> m_queues;
+    std::vector<uint32> m_lookup;
     std::size_t m_used = 0;
 };
 

@@ -88,7 +88,11 @@ Vst3Instance::Vst3Instance(std::shared_ptr<Vst3Module> module,
       m_component(component, false) {}
 
 Vst3Instance::~Vst3Instance() {
+    m_listener.store(nullptr, std::memory_order_release);
     closeEditor();
+    // hasEditor/editorSize may retain an unattached view too. Release every
+    // view while its controller is still initialized.
+    m_probeView = nullptr;
     if (m_processing) stopProcessing();
     if (m_active) deactivate();
 
@@ -107,7 +111,14 @@ Vst3Instance::~Vst3Instance() {
             m_controller->terminate();
         }
     }
-    if (m_component) m_component->terminate();
+    if (m_component && m_componentInitialized) m_component->terminate();
+    // These plugin objects may release/query their host in their destructors.
+    // Member destruction would otherwise destroy the host context first.
+    m_controllerPoint = nullptr;
+    m_componentPoint = nullptr;
+    m_controller = nullptr;
+    m_processor = nullptr;
+    m_component = nullptr;
 }
 
 bool Vst3Instance::initialize(IPluginFactory* factory) {
@@ -148,6 +159,7 @@ bool Vst3Instance::initialize(IPluginFactory* factory) {
 
     auto* hostContext = static_cast<IHostApplication*>(&m_hostContext);
     if (m_component->initialize(hostContext) != kResultOk) return false;
+    m_componentInitialized = true;
 
     m_processor = FUnknownPtr<IAudioProcessor>(m_component);
     if (!m_processor) return false;
@@ -489,7 +501,7 @@ bool Vst3Instance::setBusLayout(const PluginBusLayout& wanted, PluginBusLayout& 
     return result == kResultOk;
 }
 
-bool Vst3Instance::allocateAndActivateBuses(std::uint32_t maxBlockSize) {
+bool Vst3Instance::allocateAndActivateBuses(std::uint32_t maxBlockSize, bool sidechainConnected) {
     m_maxBlockSize = maxBlockSize;
     m_inputBuses.clear();
     m_outputBuses.clear();
@@ -517,10 +529,10 @@ bool Vst3Instance::allocateAndActivateBuses(std::uint32_t maxBlockSize) {
                 bus.pointers[channel] =
                     bus.storage.data() + std::size_t(channel) * maxBlockSize;
             }
-            // Input bus 1 is the conventional sidechain. It remains active
-            // even while disconnected so the wrapper can route it without a
-            // second activation transition; PluginNode feeds explicit silence.
-            const bool enable = i == 0 || (direction == kInput && i == 1);
+            // An active silent key bus makes compressors such as Waves RComp
+            // detect silence rather than their main input. Activate an aux
+            // input only when the graph actually connects a sidechain source.
+            const bool enable = i == 0 || (direction == kInput && i == 1 && sidechainConnected);
             if (m_component->activateBus(kAudio, direction, i, enable) != kResultOk &&
                 enable) {
                 activated = false;
@@ -579,7 +591,7 @@ bool Vst3Instance::activate(const PluginProcessInfo& info) {
 
     // Bus arrangements and activation belong to the inactive state. A number
     // of instruments snapshot their event/audio topology in setActive(true).
-    if (!allocateAndActivateBuses(info.maxBlockSize)) return false;
+    if (!allocateAndActivateBuses(info.maxBlockSize, info.sidechainConnected)) return false;
 
     ProcessSetup setup{};
     setup.processMode = info.offline ? kOffline : kRealtime;
@@ -694,17 +706,52 @@ bool Vst3Instance::serviceOfflineRestart() {
 
 // ── State ──────────────────────────────────────────────────────────────────
 
+std::vector<PluginEvent> Vst3Instance::pendingParameterEvents() {
+    std::vector<PluginEvent> events;
+    // Same order as process(): a preset snapshot, then individual editor
+    // changes, then PluginNode's host events. Read only explicitly pending
+    // values; the complete controller mirror may be stale after loadState.
+    const bool presetRequested = (m_restartFlags.load(std::memory_order_acquire) &
+                                  kParamValuesChanged) != 0;
+    if (presetRequested || m_parameterSyncPending.load(std::memory_order_acquire)) {
+        for (std::uint32_t i = 0; i < m_parameterIds.size(); ++i) {
+            if (!presetRequested && i >= m_pendingParameterValues.size()) break;
+            PluginEvent event;
+            event.kind = PluginEvent::Kind::ParamValue;
+            event.paramIndex = i;
+            event.value = toPlain(i, presetRequested
+                ? m_controller->getParamNormalized(m_parameterIds[i])
+                : m_pendingParameterValues[i]);
+            events.push_back(event);
+        }
+    }
+    std::vector<QueuedEdit> edits;
+    edits.reserve(1024); // Allocate before touching the live queue.
+    QueuedEdit edit;
+    while (m_editorEdits.pop(edit)) edits.push_back(edit);
+    for (const auto& pending : edits) (void)m_editorEdits.push(pending);
+    for (const auto& pending : edits) {
+        PluginEvent event;
+        event.kind = PluginEvent::Kind::ParamValue;
+        event.paramIndex = pending.parameterIndex;
+        event.value = toPlain(pending.parameterIndex, pending.normalized);
+        events.push_back(event);
+    }
+    return events;
+}
+
 bool Vst3Instance::saveState(std::vector<std::uint8_t>& out) const {
     out.clear();
     if (!m_component) return false;
 
     auto componentState = owned(new vst3::MemoryStream);
-    if (m_component->getState(componentState) != kResultOk) return false;
+    if (m_component->getState(componentState) != kResultOk || componentState->failed()) return false;
 
     std::vector<std::uint8_t> controllerBytes;
     if (m_controller && m_separateController) {
         auto controllerState = owned(new vst3::MemoryStream);
         if (m_controller->getState(controllerState) == kResultOk) {
+            if (controllerState->failed()) return false;
             controllerBytes = controllerState->data();
         }
     }
@@ -719,23 +766,23 @@ bool Vst3Instance::saveState(std::vector<std::uint8_t>& out) const {
 
 bool Vst3Instance::loadState(std::span<const std::uint8_t> state) {
     if (!m_component) return false;
+    if (state.size() > 2 * kMaxPluginStateBytes + 12) return false;
     if (state.size() < sizeof(kStateMagic)) return false;
     if (std::memcmp(state.data(), kStateMagic, sizeof(kStateMagic)) != 0) return false;
 
     std::size_t at = sizeof(kStateMagic);
     std::uint32_t componentSize = 0;
     if (!readUint32(state, at, componentSize)) return false;
-    if (at + componentSize > state.size()) return false;
+    if (componentSize > kMaxPluginStateBytes || at + componentSize > state.size()) return false;
     std::vector<std::uint8_t> componentBytes(state.begin() + std::ptrdiff_t(at),
                                              state.begin() + std::ptrdiff_t(at + componentSize));
     at += componentSize;
 
     std::vector<std::uint8_t> controllerBytes;
     std::uint32_t controllerSize = 0;
-    if (readUint32(state, at, controllerSize) && at + controllerSize <= state.size()) {
-        controllerBytes.assign(state.begin() + std::ptrdiff_t(at),
-                               state.begin() + std::ptrdiff_t(at + controllerSize));
-    }
+    if (!readUint32(state, at, controllerSize) || controllerSize > kMaxPluginStateBytes ||
+        controllerSize != state.size() - at) return false;
+    controllerBytes.assign(state.begin() + std::ptrdiff_t(at), state.end());
 
     auto componentStream = owned(new vst3::MemoryStream(componentBytes));
     if (m_component->setState(componentStream) != kResultOk) return false;
@@ -750,10 +797,11 @@ bool Vst3Instance::loadState(std::span<const std::uint8_t> state) {
             auto controllerStream = owned(new vst3::MemoryStream(controllerBytes));
             m_controller->setState(controllerStream);
         }
-        // setComponentState/setState update the controller half. The processor
-        // receives the same values through IParameterChanges on its first
-        // block; this also covers vendors whose component state omits params.
-        captureControllerValuesForProcessor();
+        // setState already restored the processor. setComponentState/setState
+        // only bring the editor/controller half in sync; feeding every value
+        // back into the processor would let a stale or lossy controller undo
+        // the authoritative component state. Pending host edits are replayed
+        // separately by PluginNode after the state has loaded.
     }
 
     const std::uint32_t before = m_latency.load(std::memory_order_relaxed);

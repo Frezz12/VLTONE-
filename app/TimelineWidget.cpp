@@ -340,7 +340,7 @@ TimelineWidget::TimelineWidget(daw::EngineController* controller,
             &TimelineWidget::setVerticalScroll);
 
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
-            QOverload<>::of(&QWidget::update));
+            [this] { update(); }); // Invalidate retained grid/lane geometry too.
     m_backgroundMedia = new ui::ThemeMediaBackground(this);
     connect(m_backgroundMedia, &ui::ThemeMediaBackground::frameChanged, this,
             [this](bool animatedFrame) {
@@ -2531,6 +2531,11 @@ void TimelineWidget::refreshRecordingFrame() {
 // ── Painting ───────────────────────────────────────────────────────────────
 
 void TimelineWidget::drawGrid(QPainter& p) {
+    if (ui::gridOpacity() == 0) return;
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setOpacity(p.opacity() * ui::gridOpacity() / 100.0);
+    const double lineWidth = ui::gridLineWidth();
     const auto& project = m_controller->project();
     const double tempo = std::max(1.0, project.tempo);
     const double secondsPerBeat = 60.0 / tempo;
@@ -2538,12 +2543,12 @@ void TimelineWidget::drawGrid(QPainter& p) {
     // A playback frame invalidates two 19 px cursor strips. Iterating grid
     // divisions for the complete viewport on every one of those frames made a
     // visually tiny repaint retain almost all of a full paint's fixed cost.
-    // Expand by two pixels for the antialiased one-pixel lines and iterate only
-    // the actual horizontal clip.
+    // Include the widest antialiased line and iterate only the actual clip.
     const QRectF dirty = p.clipBoundingRect().intersected(QRectF(rect()));
-    if (dirty.isEmpty()) return;
-    const int dirtyLeft = std::max(0, int(std::floor(dirty.left())) - 2);
-    const int dirtyRight = std::min(width(), int(std::ceil(dirty.right())) + 2);
+    if (dirty.isEmpty()) { p.restore(); return; }
+    const int margin = int(std::ceil(lineWidth / 2.0)) + 1;
+    const int dirtyLeft = std::max(0, int(std::floor(dirty.left())) - margin);
+    const int dirtyRight = std::min(width(), int(std::ceil(dirty.right())) + margin);
     const double leftSec = std::max(0.0, xToSeconds(dirtyLeft));
     const double rightSec = xToSeconds(dirtyRight);
     const Theme& t = th();
@@ -2552,39 +2557,53 @@ void TimelineWidget::drawGrid(QPainter& p) {
     const bool overview = m_gridBeats < 0.0 && barStride > 1;
     // At overview scales, only the grouped bar lines below are visible.
     const double grid = effectiveGridBeats();
+    const double barStep = secondsPerBeat * beatsPerBar * barStride;
+    const bool showBeats = !overview && (m_gridBeats >= 0.0 || grid <= 1.0) &&
+        secondsPerBeat * m_pixelsPerSecond >= kMinGridSpacingPx;
+    const auto onDivision = [](double time, double step) {
+        return std::abs(time / step - std::round(time / step)) < 1e-7;
+    };
+    const qreal dpr = p.device()->devicePixelRatioF();
+    const auto drawLine = [&](double time) {
+        // Centre hairlines on a physical pixel, so subpixel widths stay fine
+        // instead of spreading across two pixels on a 100% display.
+        const qreal x = (std::floor(secondsToX(time) * dpr) + 0.5) / dpr;
+        p.drawLine(QPointF(x, ui::kRulerHeight), QPointF(x, height()));
+    };
     if (!overview && grid > 0.0) {
         const double stepSeconds = grid * secondsPerBeat;
         if (stepSeconds * m_pixelsPerSecond >= kMinGridSpacingPx) {
-            p.setPen(QPen(mixColors(t.gridLine, t.background, 0.45), 1));
+            p.setPen(QPen(mixColors(t.gridLine, t.background, 0.45), lineWidth));
             long first = long(std::floor(leftSec / stepSeconds));
             if (first < 0) first = 0;
             for (long i = first;; ++i) {
                 const double time = i * stepSeconds;
                 if (time > rightSec) break;
-                const int x = secondsToX(time);
-                p.drawLine(x, ui::kRulerHeight, x, height());
+                // Each division is painted once: translucent beat/bar lines
+                // must not accumulate opacity over the finer grid beneath.
+                if (onDivision(time, barStep) ||
+                    (showBeats && onDivision(time, secondsPerBeat))) continue;
+                drawLine(time);
             }
         }
     }
 
     // Fine beat lines disappear with subdivisions in the overview. Enumerate
     // bars separately: a 7/8 bar boundary is not an integer quarter-note beat.
-    if (!overview && (m_gridBeats >= 0.0 || grid <= 1.0) &&
-        secondsPerBeat * m_pixelsPerSecond >= kMinGridSpacingPx) {
-        p.setPen(QPen(t.gridLine, 1));
+    if (showBeats) {
+        p.setPen(QPen(t.gridLine, lineWidth));
         const long firstBeat = std::max(0L, long(std::floor(leftSec / secondsPerBeat)));
         for (long beat = firstBeat; beat * secondsPerBeat <= rightSec; ++beat) {
-            const int x = secondsToX(beat * secondsPerBeat);
-            p.drawLine(x, ui::kRulerHeight, x, height());
+            const double time = beat * secondsPerBeat;
+            if (!onDivision(time, barStep)) drawLine(time);
         }
     }
-    const double stepSeconds = secondsPerBeat * beatsPerBar * barStride;
-    const long firstBarGroup = std::max(0L, long(std::floor(leftSec / stepSeconds)));
-    p.setPen(QPen(t.gridLineStrong, 1));
-    for (long group = firstBarGroup; group * stepSeconds <= rightSec; ++group) {
-        const int x = secondsToX(group * stepSeconds);
-        p.drawLine(x, ui::kRulerHeight, x, height());
+    const long firstBarGroup = std::max(0L, long(std::floor(leftSec / barStep)));
+    p.setPen(QPen(t.gridLineStrong, lineWidth));
+    for (long group = firstBarGroup; group * barStep <= rightSec; ++group) {
+        drawLine(group * barStep);
     }
+    p.restore();
 }
 
 void TimelineWidget::drawCycleStrip(QPainter& p) {
@@ -4608,8 +4627,8 @@ void TimelineWidget::drawPlayhead(QPainter& p, double x, double trail) {
     if (x < -reach || x > this->width() + reach) return;
 
     p.save();
-    // The trail and the halo are soft shapes on a grid of hard ones; without
-    // this they land on pixel boundaries and flicker as the head advances.
+    // Keep fractional positions for smooth playback; antialiasing covers only
+    // the line's edge, without a second, wider glow around it.
     p.setRenderHint(QPainter::Antialiasing, true);
 
     // ── The trail ──
@@ -4633,12 +4652,6 @@ void TimelineWidget::drawPlayhead(QPainter& p, double x, double trail) {
     }
 
     // ── The line ──
-    // A soft halo under it, so a one-pixel cursor still reads over a busy clip
-    // and a six-pixel one does not look like a pasted rectangle.
-    QColor halo = t.cursor;
-    halo.setAlpha(t.dark ? 58 : 44);
-    p.setPen(QPen(halo, width + 3.0));
-    p.drawLine(QPointF(x, 0.0), QPointF(x, double(height())));
     p.setPen(QPen(t.cursor, width));
     p.drawLine(QPointF(x, 0.0), QPointF(x, double(height())));
 

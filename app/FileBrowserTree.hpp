@@ -67,7 +67,8 @@ public:
 
     /// Show a flat list of results instead of the tree. The hierarchy and what
     /// was open in it are remembered, so clearing the search puts it back.
-    void showResults(const QStringList& paths, bool truncated);
+    int showResults(const QStringList& paths, bool truncated,
+                    const QString& query = {}, bool searching = false);
     /// Return to the folder hierarchy.
     void showTree();
     bool showingResults() const { return m_showingResults; }
@@ -144,7 +145,7 @@ private:
     /// Rebuild the whole tree: the plugin root, then the folder roots.
     void rebuildRoots();
     /// The synthetic plugin root, or null when there are no plugins.
-    QTreeWidgetItem* buildPluginRoot();
+    QTreeWidgetItem* buildPluginRoot(const QString& query = {});
 
     QStringList m_roots;
     QString m_presetRoot;
@@ -156,4 +157,7 @@ private:
     /// `m_parkedExpanded` until the search is cleared.
     bool m_showingResults = false;
     QStringList m_parkedExpanded;
+    QString m_resultQuery;
+    QStringList m_resultPaths;
+    int m_resultPluginCount = 0;
 };

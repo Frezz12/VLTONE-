@@ -366,6 +366,8 @@ AiChatPanel::AiChatPanel(daw::EngineController* controller, QWidget* parent)
     if (auto* account = account::Service::instance()) {
         connect(account, &account::Service::aiModelsChanged, this,
                 &AiChatPanel::reloadSettings);
+        connect(account, &account::Service::authenticatedChanged, this,
+                &AiChatPanel::reloadSettings);
         connect(account, &account::Service::snapshotChanged, this,
                 &AiChatPanel::updateUsageLabel);
     }
@@ -523,6 +525,10 @@ QWidget* AiChatPanel::buildComposer() {
     m_input->setAccessibleDescription(
         tr("Type a request. Enter sends; Shift+Enter inserts a new line."));
     m_input->installEventFilter(this);
+    // The whole composer reads as one input surface. Forward a click on its
+    // padding to the editor instead of leaving a focused-looking dead area.
+    composer->setFocusPolicy(Qt::ClickFocus);
+    composer->setFocusProxy(m_input);
     column->addWidget(m_input);
 
     auto* buttons = new QHBoxLayout;
@@ -1049,16 +1055,6 @@ void AiChatPanel::populateModelMenu(QMenu* menu) {
             &AiChatPanel::settingsRequested);
 }
 
-bool AiChatPanel::hasKey() const {
-    if (!m_client) return false;
-    if (m_client->config().transport == ui::LlmConfig::Transport::Direct)
-        return !m_client->config().endpoint.isEmpty();
-    if (auto* account = account::Service::instance())
-        return account->authenticated() && !account->accessToken().isEmpty() &&
-               !m_client->config().connectionId.isEmpty();
-    return false;
-}
-
 void AiChatPanel::updateReadiness() {
     if (!m_stack) return;
     // Music needs no chat key — often no key at all, when the model runs on the
@@ -1070,10 +1066,10 @@ void AiChatPanel::updateReadiness() {
         if (m_input) m_input->setEnabled(true);
         return;
     }
-    // The scripted stand-in has no key by design, so a headless run must not be
-    // pushed onto the "connect a model" page.
-    const bool scripted = dynamic_cast<ScriptedClient*>(m_client.get()) != nullptr;
-    const bool ready = hasKey() || scripted;
+    // A selected model is configured even while an account token is being
+    // restored. Runtime authorization errors belong in the transcript; they
+    // must not masquerade as a missing model and send the user back to setup.
+    const bool ready = m_client != nullptr;
     m_stack->setCurrentIndex(ready ? 0 : 1);
     // The composer is still useful before a model is connected: the user can
     // draft or paste a request, then connect a model without losing it.
@@ -1175,8 +1171,7 @@ void AiChatPanel::send() {
     if (m_session->running()) return;
     const QString text = m_input->toPlainText().trimmed();
     if (text.isEmpty()) return;
-    const bool scripted = dynamic_cast<ScriptedClient*>(m_client.get()) != nullptr;
-    if (!m_client || (!hasKey() && !scripted)) {
+    if (!m_client) {
         emit statusMessage(tr("Connect an AI model to send this request"));
         emit settingsRequested();
         return;
@@ -2087,12 +2082,26 @@ void AiChatPanel::showPromptMenu() {
 
 bool AiChatPanel::checkAgentForTest() {
     setMode(Mode::Assistant, /*persist=*/false);
+
+    // A managed model remains selected while its short-lived account token is
+    // being restored. That state is a chat with a recoverable authorization
+    // error, not the first-run "connect a model" screen.
+    m_client.reset(new ui::LlmClient(ui::LlmClient::Provider::OpenAi, this));
+    ui::LlmConfig selected;
+    selected.transport = ui::LlmConfig::Transport::Managed;
+    selected.connectionId = QStringLiteral("managed-free-model");
+    selected.displayName = QStringLiteral("Free model");
+    m_client->setConfig(std::move(selected));
+    updateReadiness();
+    if (m_stack->currentIndex() != 0) return false;
+
     m_client.reset(new ScriptedClient(this));
     updateReadiness();
 
     // Exercise the actual editor path, not just setPlainText(): this catches a
     // disabled composer or a key filter that steals normal text/newlines.
-    if (!m_composer || m_composer->isHidden() || !m_input->isEnabled() ||
+    if (!m_composer || m_composer->isHidden() ||
+        m_composer->focusProxy() != m_input || !m_input->isEnabled() ||
         m_input->focusPolicy() != Qt::StrongFocus) {
         return false;
     }

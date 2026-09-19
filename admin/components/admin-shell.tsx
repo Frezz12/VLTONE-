@@ -10,8 +10,10 @@ import appIcon from "@/app/icon.png";
 import { adminPollingAllowed, markAdminActivity } from "./admin-activity";
 
 const navigation = [
-  { label: "Мониторинг", links: [["/", "Обзор", CircleGauge], ["/users", "Пользователи", Users], ["/bugs", "Баги", Bug], ["/crashes", "Краши", Activity]] },
-  { label: "Управление", links: [["/models", "Модели AI", Bot], ["/prompts", "Промпты", MessageSquareText], ["/releases", "Релизы", PackageOpen], ["/browser-backgrounds", "Фоны браузера", Image]] },
+  { label: "Обзор и пользователи", links: [["/", "Обзор", CircleGauge], ["/users", "Пользователи", Users]] },
+  { label: "Диагностика", links: [["/bugs", "Баги", Bug], ["/crashes", "Краши", Activity]] },
+  { label: "Приложение", links: [["/releases", "Релизы", PackageOpen], ["/browser-backgrounds", "Фоны браузера", Image]] },
+  { label: "Искусственный интеллект", links: [["/models", "Модели AI", Bot], ["/prompts", "Промпты", MessageSquareText]] },
   { label: "Система", links: [["/audit", "Аудит", Files]] },
 ] as const;
 

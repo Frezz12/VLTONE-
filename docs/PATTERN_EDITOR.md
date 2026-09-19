@@ -15,7 +15,7 @@ The Pattern editor uses the existing Qt Widgets/QPainter controls and the projec
 
 Right-click the sound plate for its instrument, piano roll, rhythm fill, rename, sample replacement, duplication and removal. Built-in Samplers also expose a checked **Cut Itself** action bound to the same `cutitself` parameter as the Sampler editor, including undo.
 
-**Fill rhythm** offers every bar, 1/2, 1/4, 1/8, 1/16 and 1/32 of a bar. The project meter defines a bar; for example, 1/8 of a bar in 6/8 is 0.375 quarter-note beats. Fill replaces notes across the source clip’s duration. Samplers use their root note; other instruments use their first existing note’s pitch, or MIDI 60 for an empty source. Notes have velocity 100 and short, nonoverlapping gates.
+**Fill rhythm** offers every bar, 1/2, 1/4, 1/8, 1/16 and 1/32 of a bar. The project meter defines a bar; for example, 1/8 of a bar in 6/8 is 0.375 quarter-note beats. Fill replaces notes across the source clip’s duration. Samplers use their root note; other instruments use their first existing note’s pitch, or MIDI 60 for an empty source. Notes have velocity 127 and short, nonoverlapping gates.
 
 Like the source’s piano-roll opener, MIDI replacement and fill target its first MIDI clip. If none exists, they create an owned MIDI clip at the first Pattern instance. This editor currently represents a Pattern track rather than an individually selected arrangement instance.
 

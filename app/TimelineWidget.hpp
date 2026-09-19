@@ -245,6 +245,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     /// column is in step with the lanes.
     bool checkClipIndexForTest() const;
     bool checkAdaptiveGridForTest();
+    bool checkGridAppearanceForTest();
     bool checkGestureGridStabilityForTest();
     bool checkMoveGuidePaintForTest();
     bool checkBottomInsetInvalidationForTest();

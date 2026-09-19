@@ -26,6 +26,7 @@
 #include <pluginterfaces/vst/ivsteditcontroller.h>
 #include <pluginterfaces/vst/ivstevents.h>
 #include <pluginterfaces/vst/ivstmidicontrollers.h>
+#include <pluginterfaces/vst/ivsthostapplication.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -80,8 +81,23 @@ public:
     explicit TestProcessor(int32 outputChannels = 2, bool instrument = false)
         : m_outputChannels(outputChannels), m_instrument(instrument) {}
 
-    tresult PLUGIN_API initialize(FUnknown*) override { return kResultOk; }
-    tresult PLUGIN_API terminate() override { return kResultOk; }
+    tresult PLUGIN_API initialize(FUnknown* context) override {
+        if (std::getenv("DAW_TEST_VST3_FAIL_INITIALIZE")) return kResultFalse;
+        m_initialized = true;
+        if (std::getenv("DAW_TEST_VST3_RELEASE_HOST")) m_host = FUnknownPtr<IHostApplication>(context);
+        return kResultOk;
+    }
+    tresult PLUGIN_API terminate() override {
+        if (!m_initialized) std::abort();
+        m_initialized = false;
+        return kResultOk;
+    }
+    ~TestProcessor() override {
+        if (m_host) {
+            String128 name{};
+            if (m_host->getName(name) != kResultOk || name[0] != 'V') std::abort();
+        }
+    }
 
     tresult PLUGIN_API getControllerClassId(TUID classId) override {
         std::memcpy(classId, kControllerUID, sizeof(TUID));
@@ -130,6 +146,8 @@ public:
         // The instrument deliberately refuses late activation. This turns the
         // VST3 lifecycle rule into a regression test instead of a comment.
         if (m_active) return kResultFalse;
+        if (type == kAudio && direction == kInput && index == 1)
+            m_sidechainActive = state != 0;
         if (index == 0 && state) {
             if (type == kEvent && direction == kInput) m_eventInputActive = true;
             if (type == kAudio && direction == kOutput) m_audioOutputActive = true;
@@ -162,6 +180,7 @@ public:
     }
     tresult PLUGIN_API getState(IBStream* stream) override {
         if (!stream) return kInvalidArgument;
+        if (std::getenv("DAW_TEST_VST3_FAIL_SAVE_STATE")) return kResultFalse;
         const double values[2] = {m_gain, m_offset};
         int32 written = 0;
         return stream->write(const_cast<double*>(values), sizeof(values), &written);
@@ -251,6 +270,12 @@ public:
                     if (queue->getParameterId() == kOffsetId) m_offset = offsetFromNormalized(value);
                 }
             }
+        }
+
+        if (m_gain == 0.03125) {
+            for (int32 ch = 0; ch < m_outputChannels; ++ch)
+                std::fill_n(out[ch], frames, m_sidechainActive ? 0.75f : 0.25f);
+            return kResultOk;
         }
 
         // Test-only silence-flag diagnostic. 0.0625 is otherwise unused: the
@@ -346,6 +371,9 @@ private:
     bool m_active = false;
     bool m_eventInputActive = false;
     bool m_audioOutputActive = false;
+    bool m_sidechainActive = false;
+    bool m_initialized = false;
+    IPtr<IHostApplication> m_host;
     float m_voice = 0.0f;
 };
 
@@ -365,8 +393,13 @@ public:
             read != int32(sizeof(values))) {
             return kResultFalse;
         }
-        m_gain = values[0];
-        m_offset = values[1];
+        // Some commercial controllers expose a stale parameter mirror even
+        // though the processor's component state is complete. The opt-in mode
+        // makes the fixture reproduce that host-compatibility edge case.
+        if (!std::getenv("DAW_TEST_VST3_STALE_CONTROLLER_STATE")) {
+            m_gain = values[0];
+            m_offset = values[1];
+        }
         return kResultOk;
     }
     tresult PLUGIN_API setState(IBStream*) override { return kResultOk; }
@@ -428,6 +461,8 @@ public:
         else if (id == kOffsetId) m_offset = offsetFromNormalized(value);
         else return kInvalidArgument;
         if (m_handler) {
+            if (std::getenv("DAW_TEST_VST3_EDITOR_EDIT"))
+                m_handler->performEdit(id, value);
             if (const char* flags = std::getenv("DAW_TEST_VST3_RESTART_FLAGS"))
                 m_handler->restartComponent(std::atoi(flags));
         }
@@ -568,6 +603,15 @@ public:
 };
 
 TestFactory* g_factory = nullptr;
+#if defined(_WIN32)
+bool g_checkModuleShutdown = false;
+bool g_moduleExited = false;
+struct ModuleShutdownCheck {
+    ~ModuleShutdownCheck() {
+        if (g_checkModuleShutdown && !g_moduleExited) std::abort();
+    }
+} g_moduleShutdownCheck;
+#endif
 
 } // namespace
 
@@ -577,8 +621,12 @@ extern "C" {
 __attribute__((visibility("default"))) bool bundleEntry(CFBundleRef) { return true; }
 __attribute__((visibility("default"))) bool bundleExit() { return true; }
 #elif defined(_WIN32)
-__declspec(dllexport) bool InitDll() { return true; }
-__declspec(dllexport) bool ExitDll() { return true; }
+__declspec(dllexport) bool InitDll() {
+    g_checkModuleShutdown = std::getenv("DAW_TEST_VST3_MODULE_EXIT") != nullptr;
+    g_moduleExited = false;
+    return true;
+}
+__declspec(dllexport) bool ExitDll() { g_moduleExited = true; return true; }
 #else
 __attribute__((visibility("default"))) bool ModuleEntry(void*) { return true; }
 __attribute__((visibility("default"))) bool ModuleExit() { return true; }
@@ -590,9 +638,8 @@ __declspec(dllexport)
 __attribute__((visibility("default")))
 #endif
 IPluginFactory* PLUGIN_API GetPluginFactory() {
-    // The factory outlives every call, so it is created once and never
-    // released — releasing it on the host's behalf is how a module gets
-    // unloaded out from under an open plugin.
+    // Each call transfers one reference; the host's module cache keeps the
+    // factory alive until shutdown, after all instances have gone.
     if (!g_factory) g_factory = new TestFactory;
     else g_factory->addRef();
     return static_cast<IPluginFactory*>(g_factory);

@@ -180,7 +180,6 @@ private:
     /// Fill the model picker with managed models followed by local custom
     /// models, tick the active connection and link to model settings.
     void populateModelMenu(class QMenu* menu);
-    bool hasKey() const;
 
     daw::EngineController* m_controller = nullptr;
     ui::SelectionModel* m_selection = nullptr;

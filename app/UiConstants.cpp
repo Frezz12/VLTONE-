@@ -41,8 +41,25 @@ double& cachedPlayheadWidth() {
 }
 
 bool& cachedPlayheadTrail() {
-    static bool trail = QSettings().value(kPlayheadTrailSetting, true).toBool();
+    static bool trail = QSettings().value(kPlayheadTrailSetting, false).toBool();
     return trail;
+}
+
+double& cachedGridLineWidth() {
+    static double width = [] {
+        const double stored = QSettings().value(
+            kGridLineWidthSetting, kGridLineWidthDefault).toDouble();
+        return std::isfinite(stored) && stored > 0.0
+            ? std::clamp(stored, kGridLineWidthMin, kGridLineWidthMax)
+            : kGridLineWidthDefault;
+    }();
+    return width;
+}
+
+int& cachedGridOpacity() {
+    static int opacity = std::clamp(QSettings().value(
+        kGridOpacitySetting, kGridOpacityDefault).toInt(), 0, 100);
+    return opacity;
 }
 
 bool& cachedDuplicateTrackClips() {
@@ -118,6 +135,28 @@ QColor selectionWash(const QColor& trackColor) {
     return mixColors(trackColor, t.textPrimary, t.dark ? 0.10 : 0.0);
 }
 
+double gridLineWidth() {
+    return cachedGridLineWidth();
+}
+
+void setGridLineWidth(double pixels) {
+    const double value = std::isfinite(pixels)
+        ? std::clamp(pixels, kGridLineWidthMin, kGridLineWidthMax)
+        : kGridLineWidthDefault;
+    cachedGridLineWidth() = value;
+    QSettings().setValue(kGridLineWidthSetting, value);
+}
+
+int gridOpacity() {
+    return cachedGridOpacity();
+}
+
+void setGridOpacity(int percent) {
+    const int value = std::clamp(percent, 0, 100);
+    cachedGridOpacity() = value;
+    QSettings().setValue(kGridOpacitySetting, value);
+}
+
 double playheadWidth() {
     return cachedPlayheadWidth();
 }
@@ -136,6 +175,14 @@ bool playheadTrail() {
 void setPlayheadTrail(bool enabled) {
     cachedPlayheadTrail() = enabled;
     QSettings().setValue(kPlayheadTrailSetting, enabled);
+}
+
+bool scanPluginsAtStartup() {
+    return QSettings().value(kScanPluginsAtStartupSetting, true).toBool();
+}
+
+void setScanPluginsAtStartup(bool enabled) {
+    QSettings().setValue(kScanPluginsAtStartupSetting, enabled);
 }
 
 bool duplicateTrackClips() {

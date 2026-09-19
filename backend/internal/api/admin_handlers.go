@@ -143,10 +143,15 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, "dashboard_unavailable", "Dashboard AI usage is unavailable.", nil)
 		return
 	}
+	usage, err := s.dashboardUsage(r, now)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "dashboard_unavailable", "Application usage is unavailable.", nil)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"users": users, "active_sessions": activeSessions, "crashes_24h": crashes,
 		"open_bugs": bugs, "ai_tokens_month": aiUsed, "generated_at": now,
-		"activity": activity, "ai_daily": aiDaily, "online_users": onlineUsers,
+		"activity": activity, "ai_daily": aiDaily, "online_users": onlineUsers, "usage": usage,
 	})
 }
 

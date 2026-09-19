@@ -9,6 +9,7 @@ struct Preferences {
     QString trackId;
     bool detectTempo = true;
     bool detectKey = true;
+    bool applyKeyToPitch = false;
 };
 
 Preferences load();

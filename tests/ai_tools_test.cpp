@@ -1385,17 +1385,23 @@ int main() {
             "\"id\":\"c1\",\"function\":{\"name\":\"set_tempo\","
             "\"arguments\":\"{\\\"bpm\\\":\"}}]}}]}\n\n"
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,"
-            "\"function\":{\"arguments\":\"140}\"}}]}}]}\n\n");
+            "\"id\":null,\"function\":{\"arguments\":\"140}\"}}]}}]}\n\n");
         check(gptStream.takeText() == "Sure", "OpenAI text streams the same way");
         gptStream.feed(
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],"
             "\"usage\":{\"prompt_tokens\":90,\"completion_tokens\":12}}\n\n"
             "data: [DONE]\n\n");
         check(gptStream.done() && gptStream.reply().calls.size() == 1 &&
+                  gptStream.reply().calls[0].id == "c1" &&
                   gptStream.reply().calls[0].args.value("bpm", 0) == 140,
-              "its calls reassemble too, and [DONE] ends the stream");
+              "null fields do not overwrite a call while its chunks reassemble");
         check(gptStream.usage().inputTokens == 90,
               "and the usage it was asked for comes back");
+
+        StreamDecoder malformed(Provider::OpenAi);
+        malformed.feed("data: {\"choices\":[0]}\n\n");
+        check(malformed.done() && !malformed.reply().error.empty(),
+              "a malformed stream becomes an error instead of an exception");
 
         // An error mid-stream must end it rather than hang the panel.
         StreamDecoder broken(Provider::Anthropic);

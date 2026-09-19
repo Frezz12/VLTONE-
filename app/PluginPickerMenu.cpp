@@ -312,7 +312,7 @@ void applyDarkPluginMenuStyle(QMenu* menu) {
     const QColor hover = mixColors(background, ink, 0.08);
     const QColor selected = mixColors(background, ink, 0.16);
     const QColor border = mixColors(background, ink, 0.22);
-    menu->setAttribute(Qt::WA_TranslucentBackground, false);
+    menu->setAttribute(Qt::WA_TranslucentBackground);
     menu->setWindowFlag(Qt::FramelessWindowHint);
     menu->setWindowOpacity(1.0);
     menu->setMinimumWidth(210);

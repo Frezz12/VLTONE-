@@ -68,6 +68,9 @@ public:
     /// the application loses focus (a key let go elsewhere never reaches us),
     /// and from the destructor.
     void allNotesOff();
+    /// Native plugin HWNDs bypass Qt's event delivery. Route their keys through
+    /// the same held-note state, using the actual native text-entry state.
+    bool handleKeyEvent(QKeyEvent* event, bool textEntry);
 
 signals:
     void enabledChanged(bool enabled);
@@ -88,7 +91,7 @@ private:
     /// Whether this key event is ours to take: the keyboard is on, the key is
     /// in the layout (or an octave key), nothing is being typed into a text
     /// field, and no modifier is held — Ctrl+S must stay Save.
-    bool handles(const QKeyEvent* event) const;
+    bool handles(const QKeyEvent* event, bool textEntry) const;
     /// Layout-independent key used for both note-on and note-off identity.
     static int eventKey(const QKeyEvent* event);
 

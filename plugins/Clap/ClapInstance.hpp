@@ -20,6 +20,8 @@ public:
     ClapInstance(std::shared_ptr<ClapModule> module, const clap_plugin_t* plugin,
                  PluginDescriptor descriptor);
     ~ClapInstance() override;
+    /// Called after host_data is installed; CLAP init may call host callbacks.
+    bool initialize();
 
     const PluginDescriptor& descriptor() const noexcept override { return m_descriptor; }
     void setListener(PluginListener* listener) noexcept override {
@@ -42,6 +44,9 @@ public:
     double parameterValue(std::uint32_t index) const noexcept override;
     std::string parameterText(std::uint32_t index, double plainValue) const override;
 
+    bool supportsState() const noexcept override {
+        return m_state && m_state->save && m_state->load;
+    }
     bool saveState(std::vector<std::uint8_t>& out) const override;
     bool loadState(std::span<const std::uint8_t> state) override;
 

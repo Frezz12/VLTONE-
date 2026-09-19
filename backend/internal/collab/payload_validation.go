@@ -1173,7 +1173,7 @@ func validateSharedInsert(raw json.RawMessage,
 	if format == "internal" && uid != "daw.sampler" && uid != "daw.equalizer" &&
 		uid != "daw.gravity" && uid != "daw.graphit" &&
 		uid != "daw.doubler" && uid != "daw.doubler-pro" && uid != "daw.chorus" &&
-		uid != "daw.flanger" && uid != "daw.phaser" {
+		uid != "daw.flanger" && uid != "daw.phaser" && uid != "daw.pitch-corrector" {
 		return "", "", "", invalidf("command payload built-in plugin uid is unsupported")
 	}
 	vendor, err := payloadString(body, "vendor", 4096, format == "internal")

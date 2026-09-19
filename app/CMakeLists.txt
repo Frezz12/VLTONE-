@@ -84,11 +84,24 @@ target_link_libraries(web_permission_link_check PRIVATE Qt6::Widgets Qt6::WebEng
 
 if(DAW_BUILD_TESTS)
     find_package(Qt6 REQUIRED COMPONENTS Test)
+    qt_add_executable(update_checker_test ../tests/update_checker_test.cpp
+        UpdateChecker.cpp UpdateChecker.hpp LocalizationManager.cpp LocalizationManager.hpp)
+    target_include_directories(update_checker_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(update_checker_test PRIVATE Qt6::Widgets Qt6::Network Qt6::Test)
+    add_test(NAME update_checker_test COMMAND update_checker_test
+        -o -,txt -o ${CMAKE_CURRENT_BINARY_DIR}/update_checker_test.txt,txt)
+    set_tests_properties(update_checker_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
     qt_add_executable(gpu_browser_test ../tests/gpu_browser_test.cpp
         WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp)
     target_link_libraries(gpu_browser_test PRIVATE vlt_browser_surface Qt6::Test)
     qt_add_executable(gpu_scene_test ../tests/gpu_scene_test.cpp)
     target_link_libraries(gpu_scene_test PRIVATE vlt_gpu_scene)
+    qt_add_executable(text_rendering_test ../tests/text_rendering_test.cpp)
+    target_link_libraries(text_rendering_test PRIVATE vlt_gpu_scene)
+    target_compile_definitions(text_rendering_test PRIVATE
+        DAW_TEST_FONT_PATH="${CMAKE_SOURCE_DIR}/fonts/Inter-Regular.ttf")
+    add_test(NAME text_rendering_test COMMAND text_rendering_test)
+    set_tests_properties(text_rendering_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
     add_test(NAME gpu_scene_test COMMAND gpu_scene_test)
     set_tests_properties(gpu_scene_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
     add_test(NAME gpu_fallback_test COMMAND gpu_scene_test --software-fallback)
@@ -203,6 +216,21 @@ if(DAW_BUILD_TESTS)
     add_test(NAME modulation_ui_test COMMAND modulation_ui_test)
     set_tests_properties(modulation_ui_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 90)
 
+    qt_add_executable(pitch_corrector_ui_test
+        ../tests/pitch_corrector_ui_test.cpp PitchCorrectorPanel.cpp PitchCorrectorPanel.hpp
+        WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
+    target_include_directories(pitch_corrector_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(pitch_corrector_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test)
+    if(APPLE)
+        target_link_libraries(pitch_corrector_ui_test PRIVATE "-framework CoreFoundation")
+    endif()
+    add_test(NAME pitch_corrector_ui_test COMMAND pitch_corrector_ui_test)
+    set_tests_properties(pitch_corrector_ui_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 90)
+    if(WIN32)
+        set_tests_properties(pitch_corrector_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+
     qt_add_executable(render_ui_test
         ../tests/render_ui_test.cpp
         PreviewLoader.cpp PreviewLoader.hpp
@@ -225,6 +253,13 @@ list(REMOVE_ITEM DAW_APP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.hpp")
 
 qt_add_executable(daw ${DAW_APP_SOURCES})
+foreach(pitch_target daw pitch_corrector_ui_test)
+    if(TARGET ${pitch_target})
+        qt_add_resources(${pitch_target} "${pitch_target}_pitch_ui"
+            PREFIX "/vlt/pitch" BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/pitch"
+            FILES resources/pitch/index.html resources/pitch/pitch.css resources/pitch/pitch.js)
+    endif()
+endforeach()
 if(DAW_BUILD_TESTS)
     add_test(NAME plugin_drag_lifecycle_test COMMAND daw --plugin-interaction-check)
     set_tests_properties(plugin_drag_lifecycle_test PROPERTIES
@@ -246,6 +281,12 @@ if(TARGET browser_navigation_test)
     qt_add_resources(browser_navigation_test "browser_test_brand"
         PREFIX "/vlt" BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources"
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon-1024.png")
+endif()
+
+if(TARGET pitch_corrector_ui_test)
+    qt_add_resources(pitch_corrector_ui_test "pitch_test_fonts"
+        PREFIX "/fonts" BASE "${CMAKE_SOURCE_DIR}/fonts"
+        FILES ${VLTONE_UI_FONTS})
 endif()
 
 if(MSVC)

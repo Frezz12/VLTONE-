@@ -179,9 +179,8 @@ std::unique_ptr<PluginInstance> ClapFactory::create(
 
     // Chicken and egg: `create_plugin` needs a host pointer, but `host_data`
     // should point at the instance, which cannot exist until the plugin does.
-    // Allocate the host separately, create with `host_data` null, then fill it
-    // in. Safe because CLAP forbids the plugin from calling host callbacks
-    // during create and init, so nothing can dereference it before the patch.
+    // Only create_plugin forbids host callbacks. init explicitly permits them,
+    // so install host_data before init and query plugin extensions afterwards.
     auto holder = std::make_unique<clap_host_t>();
     ClapInstance::fillHost(*holder, nullptr);
 
@@ -189,18 +188,11 @@ std::unique_ptr<PluginInstance> ClapFactory::create(
     const clap_plugin_t* plugin =
         factory->create_plugin(factory, holder.get(), descriptor.uid.c_str());
     if (!plugin) return nullptr;
-    if (plugin->init && !plugin->init(plugin)) {
-        if (plugin->destroy) plugin->destroy(plugin);
-        return nullptr;
-    }
-
     auto instance =
         std::make_unique<ClapInstance>(std::move(module), plugin, descriptor);
-    // Point the host back at the instance now that one exists. The plugin was
-    // forbidden from calling host callbacks during create/init, so nothing can
-    // have dereferenced host_data before this line.
     holder->host_data = instance.get();
     instance->adoptHost(std::move(holder));
+    if (!instance->initialize()) return nullptr;
     return instance;
 }
 

@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QSettings>
+#include <QRegularExpression>
 #include <QStandardPaths>
 
 #include <algorithm>
@@ -57,6 +58,30 @@ void removeFolder(const QString& folder) {
     // Written even when nothing was removed: the first removal has to stop the
     // defaults from coming back, and only a stored (possibly empty) list does.
     setFolders(current);
+}
+
+QStringList ignoredExtensions() {
+    return QSettings().value(key("ignoredExtensions")).toStringList();
+}
+
+void setIgnoredExtensions(const QString& extensions) {
+    QStringList normalized;
+    const auto parts = extensions.toLower().split(
+        QRegularExpression(QStringLiteral("[\\s,;]+")), Qt::SkipEmptyParts);
+    for (QString part : parts) {
+        if (part.startsWith(QLatin1String("*."))) part.remove(0, 2);
+        else if (part.startsWith(QLatin1Char('.'))) part.remove(0, 1);
+        if (part.isEmpty() || part.contains(QRegularExpression(QStringLiteral("[*/\\\\?:]"))))
+            continue;
+        if (!normalized.contains(part)) normalized.append(part);
+    }
+    QSettings().setValue(key("ignoredExtensions"), normalized);
+}
+
+bool isIgnoredFile(const QString& fileName, const QStringList& extensions) {
+    for (const QString& extension : extensions)
+        if (fileName.endsWith(QLatin1Char('.') + extension, Qt::CaseInsensitive)) return true;
+    return false;
 }
 
 bool onLeft() { return QSettings().value(key("onLeft"), true).toBool(); }

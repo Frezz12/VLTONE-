@@ -6,8 +6,9 @@
 
 namespace account { class Service; }
 class QFrame;
-class QComboBox;
 class QEvent;
+class QMouseEvent;
+class QPaintEvent;
 class QLabel;
 class QLineEdit;
 class QProgressBar;
@@ -42,6 +43,8 @@ public slots:
 
 protected:
     void changeEvent(QEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
 
 private:
     enum class Stage {
@@ -66,11 +69,11 @@ private:
     void applyTheme();
 
     account::Service* m_service = nullptr;
-    QComboBox* m_language = nullptr;
     QLabel* m_logo = nullptr;
     QLabel* m_product = nullptr;
     QLabel* m_status = nullptr;
     QLabel* m_detail = nullptr;
+    QLabel* m_count = nullptr;
     QLabel* m_emailLabel = nullptr;
     QLabel* m_passwordLabel = nullptr;
     QProgressBar* m_progress = nullptr;

@@ -1,6 +1,8 @@
 #include "FileBrowserTree.hpp"
 
 #include "ChannelStripPresets.hpp"
+#include "BrowserPrefs.hpp"
+#include "FileSearchWorker.hpp"
 #include "FileTypes.hpp"
 #include "ProjectTemplates.hpp"
 
@@ -226,10 +228,11 @@ void FileBrowserTree::setPresetRoot(const QString& folder) {
 void FileBrowserTree::setPlugins(const QVector<PluginEntry>& plugins) {
     if (plugins == m_plugins) return;
     m_plugins = plugins;
-    rebuildRoots();
+    if (!m_showingResults) rebuildRoots();
+    else m_resultQuery.clear(); // Rebuild matching plugin rows on the next result.
 }
 
-QTreeWidgetItem* FileBrowserTree::buildPluginRoot() {
+QTreeWidgetItem* FileBrowserTree::buildPluginRoot(const QString& query) {
     if (m_plugins.isEmpty()) return nullptr;
 
     // Grouped by format, in the order the formats first appear, so the folders
@@ -237,6 +240,8 @@ QTreeWidgetItem* FileBrowserTree::buildPluginRoot() {
     QStringList order;
     QHash<QString, QList<const PluginEntry*>> byFormat;
     for (const PluginEntry& entry : m_plugins) {
+        if (!query.isEmpty() && !FileSearchWorker::matches(entry.name, query) &&
+            !entry.vendor.contains(query, Qt::CaseInsensitive)) continue;
         if (!byFormat.contains(entry.formatName)) order << entry.formatName;
         byFormat[entry.formatName].push_back(&entry);
     }
@@ -291,6 +296,7 @@ QTreeWidgetItem* FileBrowserTree::buildPluginRoot() {
         }
         root->addChild(group);
     }
+    if (root->childCount() == 0) { delete root; return nullptr; }
     return root;
 }
 
@@ -444,7 +450,8 @@ void FileBrowserTree::populate(QTreeWidgetItem* parent, const QString& path) {
     result->selected = selectedPath();
     parent->setData(0, generationRole, result->serial);
     const QPointer<FileBrowserTree> guard(this);
-    QThreadPool::globalInstance()->start([guard, result, path] {
+    const QStringList ignored = ui::browserprefs::ignoredExtensions();
+    QThreadPool::globalInstance()->start([guard, result, path, ignored] {
         QDir dir(path);
         const auto entries = dir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot,
                                                QDir::DirsFirst | QDir::Name | QDir::IgnoreCase);
@@ -452,6 +459,8 @@ void FileBrowserTree::populate(QTreeWidgetItem* parent, const QString& path) {
         result->entries.reserve(entries.size());
         for (const auto& entry : entries) {
             if (entry.isSymLink() && !entry.exists()) continue;
+            if ((!entry.isDir() || ui::projecttemplates::isTemplatePackage(entry.filePath())) &&
+                ui::browserprefs::isIgnoredFile(entry.fileName(), ignored)) continue;
             result->entries.push_back({entry.absoluteFilePath(), int(kindOf(entry))});
         }
         QMetaObject::invokeMethod(qApp, [guard, result] {
@@ -528,18 +537,51 @@ void FileBrowserTree::refresh() {
     setRoots(m_roots);
 }
 
-void FileBrowserTree::showResults(const QStringList& paths, bool truncated) {
+int FileBrowserTree::showResults(const QStringList& paths, bool truncated,
+                                const QString& query, bool searching) {
+    const bool append = m_showingResults && m_resultQuery == query &&
+        m_resultPaths.size() <= paths.size() &&
+        std::equal(m_resultPaths.cbegin(), m_resultPaths.cend(), paths.cbegin());
     if (!m_showingResults) m_parkedExpanded = expandedPaths();
     m_showingResults = true;
-    clear();
-
-    for (const QString& path : paths) {
+    if (!append) {
+        clear();
+        m_resultQuery = query;
+        m_resultPaths.clear();
+        m_resultPluginCount = 0;
+        if (!query.isEmpty()) {
+            if (auto* plugins = buildPluginRoot(query)) {
+                addTopLevelItem(plugins);
+                plugins->setExpanded(true);
+                for (int i = 0; i < plugins->childCount(); ++i) {
+                    auto* group = plugins->child(i);
+                    m_resultPluginCount += group->childCount();
+                    group->setExpanded(true);
+                }
+            }
+        }
+    } else {
+        // Keep existing rows, selection, audition and scroll position as the
+        // worker adds matches. Only the status footer is replaced.
+        while (topLevelItemCount() &&
+               !topLevelItem(topLevelItemCount() - 1)->data(0, kKindRole).isValid())
+            delete takeTopLevelItem(topLevelItemCount() - 1);
+    }
+    for (qsizetype i = m_resultPaths.size(); i < paths.size(); ++i) {
+        const QString& path = paths[i];
         QTreeWidgetItem* item = makeItem(path, QFileInfo(path).isDir());
         // In a flat list the name alone is ambiguous, so each row says which
         // folder it came from.
         item->setText(0, QFileInfo(path).fileName());
         item->setToolTip(0, path);
         addTopLevelItem(item);
+    }
+    m_resultPaths = paths;
+    const int count = m_resultPluginCount + int(paths.size());
+    if (searching) {
+        auto* pending = new QTreeWidgetItem(QStringList(tr("Searching…")));
+        pending->setFlags(Qt::NoItemFlags);
+        addTopLevelItem(pending);
     }
     if (truncated) {
         auto* note = new QTreeWidgetItem(
@@ -550,12 +592,13 @@ void FileBrowserTree::showResults(const QStringList& paths, bool truncated) {
         note->setForeground(0, dim);
         addTopLevelItem(note);
     }
-    if (paths.isEmpty() && !truncated) {
+    if (count == 0 && !truncated && !searching) {
         auto* none = new QTreeWidgetItem(QStringList(tr("Nothing matches")));
         none->setFlags(Qt::ItemIsEnabled);
         none->setForeground(0, th().textSecondary);
         addTopLevelItem(none);
     }
+    return count;
 }
 
 void FileBrowserTree::showTree() {

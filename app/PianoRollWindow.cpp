@@ -109,7 +109,6 @@ constexpr int kControllerLaneFrameMs = 16;
 /// Ignore the few pixels a stationary mouse reports between press and release;
 /// without this, a click intended to place a default-length note immediately
 /// turns into a resize down to the hard minimum.
-constexpr double kDrawResizeThresholdPx = 5.0;
 int editShortcutKey(const QKeyEvent* event) {
     const int physical = ui::physicalUsKey(event);
     return physical ? physical : event->key();
@@ -559,6 +558,7 @@ PianoRollView::~PianoRollView() {
 void PianoRollView::setClip(const QString& trackId, const QString& clipId) {
     // Whatever the keyboard is sounding belongs to the track being left.
     finishWheelNoteEdit();
+    rememberNoteProperties(note(m_primary));
     commitPendingErase();
     if (m_gestureUndoActive || m_selectionEditUndoActive) {
         m_controller->endNoteEdit(m_eraseChanged
@@ -708,6 +708,24 @@ double PianoRollView::snapBeats(double beats, bool enabled) const {
         snapped += (m_swing - 0.5) * grid;
     }
     return std::max(0.0, snapped);
+}
+
+double PianoRollView::noteStartBeats(double beats, bool enabled) const {
+    const double grid = effectiveGridBeats();
+    if (!enabled || grid <= 0.0) return std::max(0.0, beats);
+    // Placement belongs to the clicked cell, including its right half. Swing
+    // shifts odd grid lines, so compare with the actual visible boundary.
+    const double slot = std::floor(std::max(0.0, beats) / grid + 1e-9);
+    const double boundary = snapBeats(slot * grid, true);
+    return boundary > beats + grid * 1e-9
+        ? snapBeats((slot - 1.0) * grid, true) : boundary;
+}
+
+void PianoRollView::rememberNoteProperties(const daw::NoteModel* source) {
+    if (!source) return;
+    m_lastLength = std::max(kMinNoteBeats, source->lengthBeats);
+    m_lastVelocity = std::clamp(source->velocity, 1, 127);
+    m_lastPan = std::clamp(source->pan, -1.0f, 1.0f);
 }
 
 int PianoRollView::snapPitch(int pitch) const {
@@ -886,6 +904,10 @@ bool PianoRollView::checkInteractionGesturesForTest() {
     const double originalScrollX = m_scrollX;
     const double originalScrollY = m_scrollY;
     const double originalLastLength = m_lastLength;
+    const int originalLastVelocity = m_lastVelocity;
+    const float originalLastPan = m_lastPan;
+    const double originalSwing = m_swing;
+    const bool originalSnapToScale = m_snapToScale;
     const auto originalPreview = m_preview;
     const QSet<QString> originalPreviewSelection = m_previewSelection;
     const bool originalPreviewWholeClip = m_previewWholeClip;
@@ -1038,13 +1060,15 @@ bool PianoRollView::checkInteractionGesturesForTest() {
     QApplication::sendEvent(this, &rightRelease);
     const bool sweptAll = clip() && clip()->notes.empty();
 
-    // A click with sub-threshold pointer jitter keeps at least the active grid
-    // length even if the previously resized note was at the hard minimum.
+    // A click anywhere inside a cell keeps the last length, even below the
+    // active grid size. Pointer jitter must not trim that newly placed note.
     m_tool = Tool::Draw;
     m_gridBeats = 0.25;
     m_adaptiveSnap = false;
+    m_swing = 0.5;
+    m_snapToScale = false;
     m_lastLength = kMinNoteBeats;
-    const QPointF drawAt(beatsToX(0.75), pitchToY(60) + m_rowHeight * 0.5);
+    const QPointF drawAt(beatsToX(0.95), pitchToY(60) + m_rowHeight * 0.5);
     QMouseEvent drawPress(QEvent::MouseButtonPress, drawAt,
                           QPointF(mapToGlobal(drawAt.toPoint())), Qt::LeftButton,
                           Qt::LeftButton, Qt::NoModifier);
@@ -1059,7 +1083,135 @@ bool PianoRollView::checkInteractionGesturesForTest() {
                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(this, &drawRelease);
     const bool brushSafe = clip() && clip()->notes.size() == 1 &&
-                           clip()->notes.front().lengthBeats >= 0.25 - 1e-9;
+        std::abs(clip()->notes.front().startBeats - 0.75) < 1e-9 &&
+        std::abs(clip()->notes.front().lengthBeats - kMinNoteBeats) < 1e-9;
+
+    bool brushProperties = true;
+    const auto brushCheck = [&](bool passed, const char* message) {
+        if (!passed) std::fprintf(stderr, "piano-roll brush: %s\n", message);
+        brushProperties &= passed;
+    };
+    replaceNotes({}, "Prepare Default Velocity Check");
+    {
+        PianoRollView fresh(m_controller);
+        fresh.resize(640, 400);
+        fresh.setClip(m_trackId, m_clipId);
+        fresh.setTool(Tool::Draw);
+        fresh.m_scrollY = (kMaxPitch - 60) * fresh.m_rowHeight - 100.0;
+        const QPointF at(fresh.beatsToX(0.0), fresh.pitchToY(60) + fresh.m_rowHeight * 0.5);
+        QMouseEvent press(QEvent::MouseButtonPress, at, fresh.mapToGlobal(at.toPoint()),
+                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&fresh, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, at, fresh.mapToGlobal(at.toPoint()),
+                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&fresh, &release);
+        brushCheck(clip()->notes.size() == 1 && clip()->notes.front().velocity == 127 &&
+                   clip()->notes.front().pan == 0.0f,
+                   "a fresh piano roll draws at full velocity and centre pan");
+    }
+    const auto pointer = [&](QEvent::Type type, const QPointF& at,
+                             Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QMouseEvent event(type, at, QPointF(mapToGlobal(at.toPoint())),
+            type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+            modifiers);
+        QApplication::sendEvent(this, &event);
+    };
+    const auto gridPoint = [&](double beat, int pitch) {
+        return QPointF(beatsToX(beat), pitchToY(pitch) + m_rowHeight * 0.5);
+    };
+    const auto clickGrid = [&](const QPointF& at) {
+        pointer(QEvent::MouseButtonPress, at);
+        pointer(QEvent::MouseButtonRelease, at);
+    };
+    replaceNotes({makeNote("brush-template", 0.25, 0.5)}, "Prepare Brush Check");
+    m_selected.clear(); m_primary.clear();
+    clickGrid(gridPoint(0.5, 60));
+    beginSelectionVelocityEdit();
+    setSelectionVelocity(127);
+    endSelectionVelocityEdit();
+    beginSelectionEdit();
+    setSelectionPan(0.375f);
+    setSelectionLength(0.125);
+    endSelectionEdit(QStringLiteral("Brush Properties"));
+    selectNone();
+    const auto beforeDraw = m_controller->undoDepth();
+    pointer(QEvent::MouseButtonPress, gridPoint(1.23, 62));
+    const QString drawnId = m_primary;
+    const auto drawnMatches = [&](double start, int pitch) {
+        const auto* drawn = note(drawnId);
+        return drawn && std::abs(drawn->startBeats - start) < 1e-9 &&
+            drawn->pitch == pitch && std::abs(drawn->lengthBeats - 0.125) < 1e-9 &&
+            drawn->velocity == 127 && drawn->pan == 0.375f;
+    };
+    brushCheck(drawnMatches(1.0, 62), "click inherits length, velocity and pan");
+    pointer(QEvent::MouseMove, gridPoint(2.46, 64));
+    brushCheck(drawnMatches(2.25, 64), "drawing moves the whole note right");
+    pointer(QEvent::MouseMove, gridPoint(1.70, 61));
+    brushCheck(drawnMatches(1.5, 61), "reversing a draw preserves note properties");
+    pointer(QEvent::MouseButtonRelease, gridPoint(1.96, 65));
+    brushCheck(drawnMatches(1.75, 65) && m_controller->undoDepth() == beforeDraw + 1,
+               "release endpoint and creation commit together");
+    m_controller->undo();
+    brushCheck(clip()->notes.size() == 1, "one undo removes the drawn note");
+    m_controller->redo();
+    brushCheck(clip()->notes.size() == 2 && drawnMatches(1.75, 65),
+               "redo restores the final note and its properties");
+    m_laneParam = LaneParam::Velocity;
+    bumpSelectedVelocity(-7);
+    m_laneParam = LaneParam::Pan;
+    bumpSelectedPan(1);
+    finishWheelNoteEdit();
+    clickGrid(gridPoint(2.73, 67));
+    const auto* repeated = note(m_primary);
+    brushCheck(repeated && repeated->velocity == 120 && repeated->pan == 0.40625f &&
+               std::abs(repeated->lengthBeats - 0.125) < 1e-9,
+               "wheel edits become the next note's defaults");
+    if (repeated) {
+        const QPointF edge(noteRect(*repeated).right() - 1.0, noteRect(*repeated).center().y());
+        pointer(QEvent::MouseButtonPress, edge);
+        pointer(QEvent::MouseMove, gridPoint(3.25, 67));
+        pointer(QEvent::MouseButtonRelease, gridPoint(3.25, 67));
+        clickGrid(gridPoint(3.73, 69));
+        const auto* resized = note(m_primary);
+        brushCheck(resized && std::abs(resized->lengthBeats - 0.75) < 1e-9 &&
+                   resized->velocity == 120 && resized->pan == 0.40625f,
+                   "explicit edge resize becomes the next note's length");
+    }
+
+    // Exercise real pointer input on both halves and exact boundaries of
+    // straight, triplet and swung cells at fractional zoom/scroll positions.
+    m_pxPerBeat = 221.3;
+    m_scrollX = 11.7;
+    for (double grid : {0.0625, 0.25, 1.0 / 6.0}) {
+        m_gridBeats = grid;
+        for (double swing : {0.5, 0.75}) {
+            m_swing = swing;
+            for (int slot : {2, 3}) {
+                const double start = (slot + (slot % 2 ? swing - 0.5 : 0.0)) * grid;
+                const double end = (slot + 1 + (slot % 2 ? 0.0 : swing - 0.5)) * grid;
+                for (double fraction : {0.0, 0.49, 0.51, 0.99}) {
+                    replaceNotes({}, "Prepare Cell Check");
+                    m_selected.clear(); m_primary.clear();
+                    clickGrid(gridPoint(start + (end - start) * fraction, 60));
+                    brushCheck(clip()->notes.size() == 1 &&
+                               std::abs(clip()->notes.front().startBeats - start) < 1e-9,
+                               "placement follows the clicked visible cell");
+                }
+            }
+        }
+    }
+    replaceNotes({}, "Prepare Free Draw Check");
+    m_selected.clear(); m_primary.clear();
+    pointer(QEvent::MouseButtonPress, gridPoint(0.63, 60), Qt::AltModifier);
+    pointer(QEvent::MouseButtonRelease, gridPoint(0.87, 60), Qt::AltModifier);
+    brushCheck(clip()->notes.size() == 1 &&
+               std::abs(clip()->notes.front().startBeats - 0.87) < 1e-9,
+               "Alt retains unsnapped placement and dragging");
+    m_gridBeats = 0.25;
+    m_swing = 0.5;
+    m_pxPerBeat = 220.0;
+    m_scrollX = 0.0;
 
     // The group handle is absent for one note and separated to the right when
     // the second note joins the selection.
@@ -1504,6 +1656,10 @@ bool PianoRollView::checkInteractionGesturesForTest() {
     m_scrollX = originalScrollX;
     m_scrollY = originalScrollY;
     m_lastLength = originalLastLength;
+    m_lastVelocity = originalLastVelocity;
+    m_lastPan = originalLastPan;
+    m_swing = originalSwing;
+    m_snapToScale = originalSnapToScale;
     m_preview = originalPreview;
     invalidateNotePaintIndex();
     m_previewSelection = originalPreviewSelection;
@@ -1521,7 +1677,7 @@ bool PianoRollView::checkInteractionGesturesForTest() {
     const bool ok = noteStylesClean && keyboardShapeClean &&
                     localPlayheadMapped && fractionalPlayhead && rulerSeekSnapped &&
                     blankRightClearsSelection &&
-                    eraseDeferred && sweptAll && brushSafe && singleHidden && groupOffset &&
+                    eraseDeferred && sweptAll && brushSafe && brushProperties && singleHidden && groupOffset &&
                     groupTrim && groupTrimAtomic && copiesMovedTogether &&
                     duplicateUndoAtomic && dynamicsPreserved &&
                     velocityAtomic && velocityCeilingIndependent &&
@@ -2134,6 +2290,7 @@ void PianoRollView::selectAll() {
 }
 
 void PianoRollView::selectNone() {
+    rememberNoteProperties(note(m_primary));
     m_selected.clear();
     m_primary.clear();
     emit selectionChanged();
@@ -2228,6 +2385,7 @@ void PianoRollView::finishWheelNoteEdit() {
     m_wheelEditLabel.clear();
     m_wheelEditUndoActive = false;
     m_controller->endNoteEdit(label);
+    rememberNoteProperties(note(m_primary));
     emit edited();
 }
 
@@ -2405,6 +2563,7 @@ void PianoRollView::endSelectionEdit(const QString& label) {
     m_controller->endNoteEdit(label.toStdString());
     m_selectionEditUndoActive = false;
     m_selectionEditWorking.clear();
+    rememberNoteProperties(note(m_primary));
     if (m_soundingPitchInvalidationDeferred)
         invalidateSoundingPitchIndex();
 }
@@ -2428,6 +2587,7 @@ void PianoRollView::beginSelectionVelocityEdit() {
 }
 
 void PianoRollView::setSelectionVelocity(int velocity) {
+    m_lastVelocity = std::clamp(velocity, 1, 127);
     if (m_velocityEditActive && !m_velocityEditOriginal.isEmpty()) {
         // The control asks for the group's *average*, not a raw offset. Find
         // the offset whose clamped notes best reach that average. Once a loud
@@ -2492,6 +2652,7 @@ void PianoRollView::endSelectionVelocityEdit() {
 }
 
 void PianoRollView::setSelectionPan(float pan) {
+    m_lastPan = std::clamp(pan, -1.0f, 1.0f);
     if (m_selectionEditUndoActive) {
         for (auto& note : m_selectionEditWorking) note.pan = pan;
         m_controller->setNoteStates(m_trackId.toStdString(),
@@ -3563,7 +3724,7 @@ bool PianoRollView::freezesDocumentNoteIndex() const noexcept {
 const std::vector<daw::NoteModel>*
 PianoRollView::liveGeometryNotes() const noexcept {
     if (m_moving) return &m_moveWorking;
-    if (m_resizing || m_drawing) return &m_geometryPaintNotes;
+    if (m_resizing) return &m_geometryPaintNotes;
     if (m_selectionEditUndoActive) return &m_selectionEditWorking;
     return nullptr;
 }
@@ -3934,6 +4095,7 @@ void PianoRollView::paintLaneValues(QPainter& p) {
 void PianoRollView::mousePressEvent(QMouseEvent* ev) {
     if (!clip()) return;
     finishWheelNoteEdit();
+    rememberNoteProperties(note(m_primary));
     setFocus(Qt::MouseFocusReason);
     const QPointF pos = ev->position();
     m_pointer = pos;
@@ -4094,6 +4256,7 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
             if (additive) toggleSelected(hit); else selectOnly(hit);
         }
         m_primary = hit;
+        rememberNoteProperties(note(hit));
         m_laneDragging = true;
         m_laneGrab = laneValueAtY(pos.y());
         m_laneOrig.clear();
@@ -4159,6 +4322,7 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
         // selection, so a group can be dragged; clicking elsewhere replaces it.
         if (!m_selected.contains(hit)) selectOnly(hit);
         m_primary = hit;
+        rememberNoteProperties(n);
         m_grabBeats = xToBeats(pos.x()) - n->startBeats;
         // The left edge resizes from the head, keeping the note's end put.
         const bool onLeftEdge = pos.x() <= noteRect(*n).left() + kEdgePx;
@@ -4205,29 +4369,28 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
         return;
     }
 
-    // Draw: drop a note and go straight into resizing it, so a bare click
-    // places one of the last-used length and a click-drag draws it to size.
-    const double drawLength =
-        std::max({m_lastLength, effectiveGridBeats(), kMinNoteBeats});
+    // Place the last-used note properties immediately, then move the new note
+    // as a whole. Only grabbing an existing edge changes its length.
+    const double drawLength = std::max(m_lastLength, kMinNoteBeats);
     const std::string noteId = m_controller->addNote(
         m_trackId.toStdString(), m_clipId.toStdString(),
-        snapPitch(yToPitch(pos.y())), snapBeats(xToBeats(pos.x()), snapOn),
-        drawLength);
+        snapPitch(yToPitch(pos.y())), noteStartBeats(xToBeats(pos.x()), snapOn),
+        drawLength, m_lastVelocity);
     if (noteId.empty()) return;
+    m_controller->setNotePan(m_trackId.toStdString(), m_clipId.toStdString(),
+                             noteId, m_lastPan);
     invalidateSoundingPitchIndex();
     // Note: `clip()` and any NoteModel* taken before this call are now stale —
     // addNote pushes into the vector and can reallocate it.
     selectOnly(QString::fromStdString(noteId));
     m_lastLength = drawLength;
     m_drawing = true;
-    m_drawPress = pos;
-    m_resizing = true;
+    m_resizing = false;
     m_resizingLeft = false;
-    m_moving = false;
+    m_moving = true;
     if (const auto* drawn = note(QString::fromStdString(noteId))) {
-        m_resizeOrig = {*drawn};
-        m_geometryPaintNotes = m_resizeOrig;
-        m_resizeGrabBeats = drawn->startBeats + drawn->lengthBeats;
+        m_moveWorking = {*drawn};
+        m_grabBeats = xToBeats(pos.x()) - drawn->startBeats;
     }
     emit edited();
     update();
@@ -4400,13 +4563,7 @@ void PianoRollView::mouseMoveEvent(QMouseEvent* ev) {
     if (!n) return;
 
     if (m_resizing) {
-        if (m_drawing &&
-            std::abs(pos.x() - m_drawPress.x()) < kDrawResizeThresholdPx) {
-            return;
-        }
-        const bool drawingResize = m_drawing;
-        m_drawing = false;
-        if (!drawingResize && !m_resizeOrig.empty()) {
+        if (!m_resizeOrig.empty()) {
             // A note edge is trim, even for a multi-selection. Every selected
             // note receives the same edge delta; starts and spacing stay put
             // for a right-edge trim, while a left-edge trim keeps each tail.
@@ -4430,43 +4587,17 @@ void PianoRollView::mouseMoveEvent(QMouseEvent* ev) {
                 next.startBeats = start;
                 next.lengthBeats = length;
                 m_noteUpdateScratch.push_back(std::move(next));
-                if (original.id == m_primary.toStdString() &&
-                    !m_resizingLeft) {
-                    m_lastLength = length;
-                }
             }
             m_controller->setNoteStates(m_trackId.toStdString(),
                                         m_clipId.toStdString(),
                                         m_noteUpdateScratch);
             m_geometryPaintNotes = m_noteUpdateScratch;
-        } else if (m_resizingLeft) {
-            // Dragging the head: the tail stays exactly where it is.
-            const double end = n->startBeats + n->lengthBeats;
-            const double start = std::min(snapBeats(xToBeats(pos.x()), snapOn),
-                                          end - kMinNoteBeats);
-            m_controller->setNote(m_trackId.toStdString(), m_clipId.toStdString(),
-                                  m_primary.toStdString(), n->pitch, start,
-                                  end - start);
-            m_geometryPaintNotes = {*n};
-            m_geometryPaintNotes.front().startBeats = start;
-            m_geometryPaintNotes.front().lengthBeats = end - start;
-        } else {
-            const double end = snapBeats(xToBeats(pos.x()), snapOn);
-            const double minimum = drawingResize
-                                       ? std::max(kMinNoteBeats,
-                                                  effectiveGridBeats())
-                                       : kMinNoteBeats;
-            const double length = std::max(minimum, end - n->startBeats);
-            m_controller->setNote(m_trackId.toStdString(), m_clipId.toStdString(),
-                                  m_primary.toStdString(), n->pitch, n->startBeats,
-                                  length);
-            m_geometryPaintNotes = {*n};
-            m_geometryPaintNotes.front().lengthBeats = length;
-            m_lastLength = length;
         }
     } else {
         // The whole selection travels with the grabbed note.
-        const double start = snapBeats(xToBeats(pos.x()) - m_grabBeats, snapOn);
+        const double start = m_drawing
+            ? noteStartBeats(xToBeats(pos.x()), snapOn)
+            : snapBeats(xToBeats(pos.x()) - m_grabBeats, snapOn);
         const int pitch = snapPitch(yToPitch(pos.y()));
         const double beatDelta = start - n->startBeats;
         const int pitchDelta = pitch - n->pitch;
@@ -4508,12 +4639,12 @@ void PianoRollView::mouseReleaseEvent(QMouseEvent* ev) {
         ev->accept();
         return;
     }
-    if (m_duplicateDragPending &&
+    if (m_drawing || (m_duplicateDragPending &&
         (ev->position() - m_movePress).manhattanLength() >=
-            QApplication::startDragDistance()) {
+            QApplication::startDragDistance())) {
         // Some platforms coalesce the final movement into the release event.
         // Feed that endpoint through the normal move path so a quick
-        // Shift-drag cannot degrade into a Shift-click.
+        // Shift-drag or drawing gesture cannot lose its final position.
         QMouseEvent finalMove(QEvent::MouseMove, ev->position(),
                               ev->globalPosition(), Qt::NoButton,
                               Qt::LeftButton, ev->modifiers());
@@ -4572,6 +4703,7 @@ void PianoRollView::mouseReleaseEvent(QMouseEvent* ev) {
     m_erasing = false;
     m_eraseChanged = false;
     m_drawing = false;
+    rememberNoteProperties(note(m_primary));
     m_muting = false;
     m_laneResizing = false;
     m_lanePointDrag = -1;
@@ -5194,7 +5326,7 @@ void PianoRollView::auditionPitch(int pitch) {
     if (pitch < 0 || pitch > 127 || m_trackId.isEmpty()) return;
     // The velocity a drawn note would get, so the click previews what writing
     // the note there would sound like.
-    if (m_controller->liveNoteOn(m_trackId.toStdString(), pitch, 100))
+    if (m_controller->liveNoteOn(m_trackId.toStdString(), pitch, m_lastVelocity))
         m_auditionPitch = pitch;
 }
 

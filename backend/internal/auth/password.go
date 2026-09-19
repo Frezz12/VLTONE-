@@ -31,8 +31,8 @@ func NormalizeNickname(value string) string {
 
 func ValidatePassword(value string) error {
 	count := len([]rune(value))
-	if count < 12 || count > 128 {
-		return errors.New("password must contain between 12 and 128 characters")
+	if count < 8 || count > 128 {
+		return errors.New("password must contain between 8 and 128 characters")
 	}
 	return nil
 }

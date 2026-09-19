@@ -116,6 +116,22 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .vlt-input::placeholder { color: #767676; }
 .vlt-input:hover { border-color: rgba(128, 191, 255, .4); }
 .vlt-input:focus { border-color: var(--vlt-accent-hover); outline: 2px solid rgba(128, 191, 255, .22); outline-offset: 1px; box-shadow: 0 0 0 4px rgba(74, 143, 217, .08); }
+.password-input { position: relative; }
+.password-input .vlt-input { padding-inline-end: 58px; }
+.password-toggle {
+  position: absolute;
+  inset-block: 2px;
+  inset-inline-end: 2px;
+  display: grid;
+  width: 44px;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  color: var(--vlt-text-muted);
+  background: transparent;
+}
+.password-toggle:hover { color: var(--vlt-text); background: var(--vlt-surface-raised); }
+.password-toggle[aria-pressed="true"] { color: var(--vlt-waveform); }
 textarea.vlt-input { min-height: 132px; resize: vertical; line-height: 1.5; }
 select.vlt-input { cursor: pointer; }
 input[type="file"].vlt-input { padding: 7px; }

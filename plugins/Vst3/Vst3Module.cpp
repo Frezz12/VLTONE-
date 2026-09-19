@@ -102,11 +102,20 @@ std::shared_ptr<Vst3Module> Vst3Module::open(const std::string& path) {
     // class and it dies inside itself. Real hosts keep plugin binaries resident
     // for the same reason.
     //
-    // Deliberately never emptied: unloading at exit would run third-party
-    // teardown after our own statics have gone, which buys nothing and can
-    // crash on the way out.
     static std::mutex* cacheMutex = new std::mutex;
+#if defined(_WIN32)
+    // Run release/ExitDll/FreeLibrary during CRT shutdown, before Windows
+    // detaches dependencies in loader order. Leaking this cache skipped
+    // ExitDll and made Waves use an already-destroyed dictionary at exit.
+    // Instances still retain their own module reference; no per-instance unload.
+    (void)vst3::hostApplication(); // Construct first, destroy after cached factories.
+    static std::map<std::string, std::shared_ptr<Vst3Module>> windowsCache;
+    auto* cache = &windowsCache;
+#else
+    // Keep Objective-C modules resident: reloading registers stale classes,
+    // and late teardown can access platform statics that have already gone.
     static auto* cache = new std::map<std::string, std::shared_ptr<Vst3Module>>;
+#endif
     {
         std::lock_guard<std::mutex> lock(*cacheMutex);
         const auto found = cache->find(path);

@@ -38,6 +38,10 @@ struct Spec {
     /// engine for the pass, so clips resample once into the target rate rather
     /// than being converted twice.
     double sampleRate = 0.0;
+    /// Zero selects a larger offline block for audio-only arrangements. MIDI
+    /// and automation retain the device block's event resolution. An explicit
+    /// size (up to 8192) is available for compatibility checks and benchmarks.
+    std::uint32_t blockSize = 0;
     Channels channels = Channels::Stereo;
 
     // ── Range ──

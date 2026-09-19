@@ -6,6 +6,7 @@
 #include <chrono>
 #include <thread>
 #include <vector>
+#include <limits>
 
 namespace {
 const char* features[]{CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, nullptr};
@@ -24,6 +25,8 @@ const clap_plugin_descriptor_t descriptors[]{
     {CLAP_VERSION_INIT, "review.audio-latency", "Latency discovered from audio", "Review", "", "", "", "1", "", features},
     {CLAP_VERSION_INIT, "review.once-restart", "One deferred restart", "Review", "", "", "", "1", "", features},
     {CLAP_VERSION_INIT, "review.redundant-restart", "Repeated stable restart", "Review", "", "", "", "1", "", features},
+    {CLAP_VERSION_INIT, "review.nonfinite", "Non-finite output", "Review", "", "", "", "1", "", features},
+    {CLAP_VERSION_INIT, "review.block-size", "Offline block probe", "Review", "", "", "", "1", "", features},
 };
 constexpr unsigned descriptorCount = sizeof(descriptors) / sizeof(descriptors[0]);
 unsigned instances[descriptorCount]{};
@@ -35,7 +38,7 @@ struct Instance {
     bool offline{}, callbackDone{}, configured{};
     bool active{};
     bool wrongCallbackThread{};
-    unsigned latency{}, position{}, blocks{};
+    unsigned latency{}, position{}, blocks{}, maxBlock{};
     std::vector<float> ring;
     static Instance& get(const clap_plugin_t* plugin) {
         return *static_cast<Instance*>(plugin->plugin_data);
@@ -61,10 +64,11 @@ uint32_t latencyGet(const clap_plugin_t* plugin) { return Instance::get(plugin).
 const clap_plugin_latency_t latencyExt{latencyGet};
 bool init(const clap_plugin_t*) { return true; }
 void destroy(const clap_plugin_t* p) { --instances[Instance::get(p).kind]; delete &Instance::get(p); }
-bool activate(const clap_plugin_t* p, double, uint32_t, uint32_t) {
+bool activate(const clap_plugin_t* p, double, uint32_t, uint32_t maxBlock) {
     auto& self = Instance::get(p);
     if (self.kind == 1 && self.offline) return false;
     self.active = true;
+    self.maxBlock = maxBlock;
     if (self.kind != 7)
         self.latency = self.offline && (self.kind == 0 || ((self.kind == 6 || self.kind == 11) && self.configured)) ? 24 : 0;
     if (self.offline && self.kind == 6 && !self.configured) self.host->request_callback(self.host);
@@ -108,6 +112,7 @@ clap_process_status process(const clap_plugin_t* p, const clap_process_t* block)
     }
     // Model deferred setup: the requested main-thread turn enables full level.
     const float gain = self.kind == 1 ? 0.5f
+                     : self.kind == 15 ? self.maxBlock / 1024.f
                      : self.kind == 3 && !self.callbackDone && number > 0 ? 0.25f : 1.f;
     for (uint32_t i = 0; i < block->frames_count; ++i) {
         for (unsigned ch = 0; ch < 2; ++ch) {
@@ -121,6 +126,8 @@ clap_process_status process(const clap_plugin_t* p, const clap_process_t* block)
         }
         if (self.latency) self.position = (self.position + 1) % self.latency;
     }
+    if (self.kind == 14 && self.offline && number == 4)
+        block->audio_outputs[0].data32[1][0] = std::numeric_limits<float>::quiet_NaN();
     return CLAP_PROCESS_CONTINUE;
 }
 const void* extension(const clap_plugin_t*, const char* id) {

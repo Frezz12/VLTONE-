@@ -1742,7 +1742,7 @@ QWidget* SamplerPanel::buildSamplerBody() {
         m_keyboard->noteOn = [this](int pitch) {
             if (!m_controller) return;
             if (m_context == Context::Instrument) {
-                m_controller->liveNoteOn(m_channelId.toStdString(), pitch, 100);
+                m_controller->liveNoteOn(m_channelId.toStdString(), pitch, 127);
             } else if (const daw::ClipModel* clip = m_controller->audioClip(
                            m_channelId.toStdString(), m_slotId.toStdString())) {
                 const double root = readParameter(QStringLiteral("rootnote"));
