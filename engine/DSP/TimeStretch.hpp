@@ -33,7 +33,7 @@ public:
     /// The caller supplies two output channels (mono sources are duplicated).
     void render(const StretchSource& source, double sourcePosition, double speed,
                 double pitch, double formant, float* left, float* right,
-                FrameCount frames) noexcept;
+                FrameCount frames, bool exactBoundary = false) noexcept;
 
 private:
     struct Impl;

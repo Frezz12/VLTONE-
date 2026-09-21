@@ -7,6 +7,22 @@
 #include <random>
 
 namespace daw {
+ClipWarpModel sliceWarp(const ClipWarpModel& warp, double beginBeat, double endBeat) {
+    if (std::abs(beginBeat) < 1e-10 && std::abs(endBeat - warp.markers.back().targetBeats) < 1e-10) return warp;
+    ClipWarpModel result = warp;
+    result.markers.clear();
+    result.markers.push_back({newUuid(), warpSourceAt(warp, beginBeat), 0, true});
+    for (auto marker : warp.markers) {
+        if (marker.targetBeats <= beginBeat + 1e-7 || marker.targetBeats >= endBeat - 1e-7) continue;
+        marker.targetBeats -= beginBeat;
+        result.markers.push_back(std::move(marker));
+    }
+    result.markers.push_back({newUuid(), warpSourceAt(warp, endBeat), endBeat - beginBeat, true});
+    result.baselineDurationSeconds *= (result.markers.back().sourceSeconds - result.markers.front().sourceSeconds) /
+        (warp.markers.back().sourceSeconds - warp.markers.front().sourceSeconds);
+    return result;
+}
+
 ClipAudioVersionSource captureClipAudioVersion(const ClipModel& clip) {
     ClipAudioVersionSource source;
     source.filePath = clip.filePath;
@@ -26,6 +42,7 @@ ClipAudioVersionSource captureClipAudioVersion(const ClipModel& clip) {
     source.comp = clip.comp;
     source.compCrossfadeMs = clip.compCrossfadeMs;
     source.sampleEdit = clip.sampleEdit;
+    source.warp = clip.warp;
     source.musicalAnalysis = clip.musicalAnalysis;
     source.expanded = clip.expanded;
     return source;
@@ -49,6 +66,7 @@ void applyClipAudioVersion(ClipModel& clip, const ClipAudioVersionSource& source
     clip.comp = source.comp;
     clip.compCrossfadeMs = source.compCrossfadeMs;
     clip.sampleEdit = source.sampleEdit;
+    clip.warp = source.warp;
     clip.musicalAnalysis = source.musicalAnalysis;
     clip.expanded = source.expanded;
     clip.offlineProcess = {};
@@ -66,14 +84,21 @@ void retimeClipComp(ClipModel& clip, double ratio) {
 void retimeClipToTempo(ClipModel& clip, double ratio) {
     clip.startSeconds *= ratio;
     const bool stretch = clip.kind == ClipKind::Audio &&
-                         clip.sampleEdit.stretchMode != ClipStretchMode::Resample;
-    if (clip.kind == ClipKind::Midi || stretch) {
+                         (clip.warp.enabled || clip.sampleEdit.stretchMode != ClipStretchMode::Resample);
+    if (clip.kind == ClipKind::Midi || clip.kind==ClipKind::Pattern || stretch) {
         clip.durationSeconds *= ratio;
         clip.fadeInSeconds *= ratio;
         clip.fadeOutSeconds *= ratio;
     }
+    if(clip.kind==ClipKind::Midi) {
+        retimeClipComp(clip,ratio);
+        for(auto& take:clip.takes){take.offsetSeconds*=ratio;take.lengthSeconds*=ratio;}
+    }
     if (stretch) {
-        clip.sampleEdit.stretchTime *= ratio;
+        if (!clip.warp.enabled) {
+            clip.sampleEdit.stretchTime *= ratio;
+            if (!clip.warp.empty()) clip.warp.baselineDurationSeconds *= ratio;
+        }
         retimeClipComp(clip, ratio);
         // Analysis belongs to the heard clip. Its pitch is unchanged.
         if (clip.musicalAnalysis.tempo.bpm > 0) {
@@ -326,6 +351,29 @@ namespace {
 constexpr double kMinCompSegment = 0.001;
 }
 
+namespace {
+template <class Clip, class Member>
+decltype(auto) midiEntities(Clip& clip, Member member, const std::string& id) {
+    if (!clip.takes.empty()) {
+        if (!id.empty()) for (auto& take : clip.takes) {
+            auto& entities = take.*member;
+            if (std::any_of(entities.begin(), entities.end(), [&](const auto& e) { return e.id == id; }))
+                return (take.*member);
+        }
+        if (!clip.comp.empty() && std::all_of(clip.comp.begin(),clip.comp.end(),[&](const auto& c){return c.takeId==clip.comp.front().takeId;})) if (auto* take = findTake(clip, clip.comp.front().takeId))
+            return (take->*member);
+        return (clip.takes.back().*member);
+    }
+    // Member pointers belong to TakeModel, so select the matching clip vector.
+    if constexpr (std::is_same_v<Member, std::vector<NoteModel> TakeModel::*>) return (clip.notes);
+    else return (clip.lanes);
+}
+}
+std::vector<NoteModel>& midiNotes(ClipModel& clip, const std::string& id) { return midiEntities(clip, &TakeModel::notes, id); }
+const std::vector<NoteModel>& midiNotes(const ClipModel& clip, const std::string& id) { return midiEntities(clip, &TakeModel::notes, id); }
+std::vector<ControllerLane>& midiLanes(ClipModel& clip, const std::string& id) { return midiEntities(clip, &TakeModel::lanes, id); }
+const std::vector<ControllerLane>& midiLanes(const ClipModel& clip, const std::string& id) { return midiEntities(clip, &TakeModel::lanes, id); }
+
 bool isLayered(const ClipModel& clip) { return !clip.takes.empty(); }
 
 TakeModel* findTake(ClipModel& clip, const std::string& takeId) {
@@ -468,7 +516,7 @@ void promoteToTake(ClipModel& clip) {
     if (!clip.takes.empty()) return;
     const bool hasSource = clip.kind == ClipKind::Audio
                                ? !clip.filePath.empty()
-                               : clip.kind == ClipKind::Midi && !clip.notes.empty();
+                               : clip.kind == ClipKind::Midi && (!clip.notes.empty() || !clip.lanes.empty());
     if (!hasSource) return;
 
     TakeModel take;
@@ -481,6 +529,14 @@ void promoteToTake(ClipModel& clip) {
     take.channels = clip.channels;
     take.color = clip.color;
     take.notes = clip.notes;
+    take.lanes = clip.lanes;
+    if (clip.kind == ClipKind::Midi) {
+        // MIDI content belongs to the take now; retaining it on the clip would
+        // duplicate persistent note/lane identities in shared snapshots.
+        take.offsetSeconds = 0.0;
+        clip.notes.clear();
+        clip.lanes.clear();
+    }
     clip.takes.push_back(std::move(take));
     selectWholeTake(clip, clip.takes.front().id);
 }
@@ -532,7 +588,8 @@ void normalizeAutomation(std::vector<AutomationPoint>& points) {
                      });
     points.erase(std::unique(points.begin(), points.end(),
                              [](const AutomationPoint& a, const AutomationPoint& b) {
-                                 return std::abs(a.beats - b.beats) < 1e-9;
+                                 return !a.eventOrder && !b.eventOrder &&
+                                        std::abs(a.beats - b.beats) < 1e-9;
                              }),
                  points.end());
 }

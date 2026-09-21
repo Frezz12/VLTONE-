@@ -40,12 +40,17 @@ static void writeTone(const std::string& path) {
     recorder.writeWAVFile(path, tone, rate);
 }
 
-static double rmsFile(const std::string& path) {
+static double rmsFile(const std::string& path, double firstSeconds = 0.0) {
     audio::platform::DecodedAudio audio;
     if (!check(audio::platform::decodeAudioFile(path, audio).isOk(), "rendered audio decodes")) return 0.0;
     double energy = 0.0;
-    for (float sample : audio.interleaved) energy += double(sample) * sample;
-    return audio.interleaved.empty() ? 0.0 : std::sqrt(energy / audio.interleaved.size());
+    const std::size_t sampleCount = firstSeconds > 0.0
+        ? std::min(audio.interleaved.size(), std::size_t(
+              firstSeconds * audio.sampleRate * audio.channels))
+        : audio.interleaved.size();
+    for (std::size_t index = 0; index < sampleCount; ++index)
+        energy += double(audio.interleaved[index]) * audio.interleaved[index];
+    return sampleCount == 0 ? 0.0 : std::sqrt(energy / sampleCount);
 }
 
 static const daw::ClipModel* findClip(const daw::EngineController& controller,
@@ -197,6 +202,96 @@ int main() {
         check(destination && std::abs(destination->volume - 0.4f) < 1e-6f &&
                   std::abs(destination->pan + 0.25f) < 1e-6f,
               "new-track bounce moves the still-live fader and pan");
+    }
+    // A playable MIDI clip on an ordinary instrument track must print the
+    // instrument output, rather than an empty audio file.
+    {
+        daw::EngineController controller;
+        check(controller.initialize(48000, 256, false).isOk(),
+              "instrument bounce controller initializes headless");
+        const std::string instrument = controller.addTrack(
+            daw::TrackKind::Instrument, "Sampler");
+        check(controller.loadInstrumentSampler(instrument, tone),
+              "standalone MIDI instrument loads its sample");
+        const std::string midi = controller.addMidiClip(instrument, 0.0, 0.5);
+        controller.addNote(instrument, midi, 60, 0.0, 0.5, 100);
+        daw::EngineController::BounceRequest request;
+        request.clips = {{instrument, midi}};
+        request.startSeconds = 0.0;
+        request.endSeconds = 0.5;
+        daw::EngineController::BounceReport report;
+        check(controller.bounceInPlace(request, {}, report).isOk() &&
+                  report.outputs.size() == 1 &&
+                  rmsFile(report.outputs.front().filePath) > 0.01,
+              "standalone MIDI bounce renders the instrument sound");
+    }
+    // An isolated MIDI source inside a Pattern still needs its owner clip as
+    // a playback gate. The owner must not admit the other Pattern sounds.
+    {
+        daw::EngineController controller;
+        check(controller.initialize(48000, 256, false).isOk(),
+              "Pattern bounce controller initializes headless");
+        const std::string pattern = controller.addPattern("Beat");
+        const std::string first = controller.addPatternSample(pattern, tone, 0.0);
+        const std::string second = controller.addPatternSample(pattern, tone, 0.0);
+        const auto* firstTrack = controller.project().findTrack(first);
+        const auto* secondTrack = controller.project().findTrack(second);
+        const auto* patternTrack = controller.project().findTrack(pattern);
+        const std::string firstClip = firstTrack && !firstTrack->clips.empty()
+            ? firstTrack->clips.front().id : std::string{};
+        const std::string secondClip = secondTrack && !secondTrack->clips.empty()
+            ? secondTrack->clips.front().id : std::string{};
+        const std::string owner = patternTrack && !patternTrack->clips.empty()
+            ? patternTrack->clips.front().id : std::string{};
+        check(!firstClip.empty() && !secondClip.empty() && !owner.empty(),
+              "Pattern has two MIDI sounds and an owner clip");
+        controller.addNote(first, firstClip, 60, 0.0, 0.5, 100);
+        controller.addNote(second, secondClip, 60, 0.0, 0.5, 100);
+        const std::string originalMix = (dir / "pattern-original.wav").string();
+        check(controller.exportMixdown(originalMix, false).isOk() &&
+                  rmsFile(originalMix) > 0.01,
+              "Pattern MIDI fixture produces audible audio");
+
+        daw::EngineController::BounceRequest request;
+        request.clips = {{first, firstClip}};
+        request.startSeconds = 0.0;
+        request.endSeconds = 0.5;
+        daw::EngineController::BounceReport childReport;
+        check(controller.bounceInPlace(request, {}, childReport).isOk() &&
+                  childReport.outputs.size() == 1,
+              "one Pattern MIDI source bounces successfully");
+        const auto* audioTrack = childReport.outputs.empty() ? nullptr
+            : controller.project().findTrack(
+                  childReport.outputs.front().destinationTrackId);
+        const auto* audioClip = childReport.outputs.empty() ? nullptr
+            : findClip(controller, childReport.outputs.front().destinationTrackId,
+                       childReport.outputs.front().clipId);
+        const double childRms = childReport.outputs.empty() ? 0.0
+            : rmsFile(childReport.outputs.front().filePath);
+        const double originalRms = rmsFile(originalMix, 0.5);
+        check(childRms > 0.01 && childRms < originalRms * 0.7,
+              "single MIDI bounce has sound without the sibling Pattern source");
+        check(audioTrack && audioTrack->kind == daw::TrackKind::Audio &&
+                  audioTrack->parentId == pattern &&
+                  audioTrack->outputBusId == pattern && audioClip &&
+                  audioClip->patternClipId == owner,
+              "bounced audio is a volume-controlled member of the Pattern");
+
+        request.clips = {{pattern, owner}};
+        daw::EngineController::BounceReport patternReport;
+        check(controller.bounceInPlace(request, {}, patternReport).isOk() &&
+                  patternReport.outputs.size() == 1,
+              "selecting the whole Pattern bounces its complete mix");
+        const double patternRms = patternReport.outputs.empty() ? 0.0
+            : rmsFile(patternReport.outputs.front().filePath);
+        check(patternRms > childRms * 1.7 && patternRms < childRms * 2.3,
+              "whole Pattern bounce includes the sibling and audio without muted MIDI");
+        const auto* mutedAudio = childReport.outputs.empty() ? nullptr
+            : controller.project().findTrack(
+                  childReport.outputs.front().destinationTrackId);
+        check(mutedAudio && !mutedAudio->clips.empty() &&
+                  mutedAudio->clips.front().muted,
+              "replacing the Pattern mutes its linked audio source");
     }
     // Layered offline processing uses the currently heard audio, with portable
     // immutable history and no retained live chain.

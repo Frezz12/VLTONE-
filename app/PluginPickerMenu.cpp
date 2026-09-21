@@ -4,6 +4,7 @@
 #include "PluginFormatPreference.hpp"
 #include "Theme.hpp"
 #include "Icons.hpp"
+#include "PopupStyle.hpp"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -15,7 +16,6 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QActionGroup>
-#include <QProxyStyle>
 #include <QSettings>
 #include <QStyleOption>
 #include <QTimer>
@@ -41,13 +41,13 @@ constexpr auto kSearchFilterObjectName = "PluginPickerSearchFilter";
 /// platforms whose style disables menu scrolling. A plugin catalogue is much
 /// easier to scan as Logic's adjacent one-column lists, with the standard menu
 /// scrollers keeping each column inside the screen.
-class ScrollablePluginMenuStyle final : public QProxyStyle {
+class ScrollablePluginMenuStyle final : public PopupStyle {
 public:
     int styleHint(StyleHint hint, const QStyleOption* option,
                   const QWidget* widget,
                   QStyleHintReturn* returnData = nullptr) const override {
         if (hint == QStyle::SH_Menu_Scrollable) return 1;
-        return QProxyStyle::styleHint(hint, option, widget, returnData);
+        return PopupStyle::styleHint(hint, option, widget, returnData);
     }
 
     int pixelMetric(PixelMetric metric, const QStyleOption* option,
@@ -56,23 +56,6 @@ public:
         return QProxyStyle::pixelMetric(metric, option, widget);
     }
 
-    void drawPrimitive(PrimitiveElement element, const QStyleOption* option,
-                       QPainter* painter,
-                       const QWidget* widget = nullptr) const override {
-        const bool verticalArrow = element == QStyle::PE_IndicatorArrowUp ||
-                                   element == QStyle::PE_IndicatorArrowDown;
-        const bool submenuArrow = element == QStyle::PE_IndicatorArrowLeft ||
-                                  element == QStyle::PE_IndicatorArrowRight;
-        if (option && (verticalArrow || submenuArrow)) {
-            QStyleOption compact(*option);
-            compact.rect = QStyle::alignedRect(
-                Qt::LeftToRight, Qt::AlignCenter,
-                verticalArrow ? QSize(6, 4) : QSize(4, 6), option->rect);
-            QProxyStyle::drawPrimitive(element, &compact, painter, widget);
-            return;
-        }
-        QProxyStyle::drawPrimitive(element, option, painter, widget);
-    }
 };
 
 [[maybe_unused]] const char* const kTranslatableCategoryNames[] = {
@@ -298,7 +281,7 @@ private:
     QLineEdit* m_edit = nullptr;
 };
 
-void applyDarkPluginMenuStyle(QMenu* menu) {
+void applyPluginMenuStyle(QMenu* menu) {
     if (!menu) return;
     if (!menu->property("pluginPickerScrollable").toBool()) {
         auto* style = new ScrollablePluginMenuStyle;
@@ -306,36 +289,20 @@ void applyDarkPluginMenuStyle(QMenu* menu) {
         menu->setStyle(style);
         menu->setProperty("pluginPickerScrollable", true);
     }
-    const Theme& theme = th();
-    const QColor background(8, 8, 8, 255);
-    const QColor ink(238, 238, 238);
-    const QColor hover = mixColors(background, ink, 0.08);
-    const QColor selected = mixColors(background, ink, 0.16);
-    const QColor border = mixColors(background, ink, 0.22);
     menu->setAttribute(Qt::WA_TranslucentBackground);
     menu->setWindowFlag(Qt::FramelessWindowHint);
     menu->setWindowOpacity(1.0);
     menu->setMinimumWidth(210);
     menu->setToolTipsVisible(true);
     menu->setObjectName(QStringLiteral("PluginPickerMenu"));
-    menu->setStyleSheet(QString(R"(
-QMenu { background: %1; color: %2; border: 1px solid %3;
-        border-radius: 8px; padding: 4px; font-size: 11px; }
-QMenu::item { min-height: 16px; padding: 2px 18px 2px 8px;
-              border-radius: 5px; background: transparent; }
-QMenu::item:selected { background: %4; color: %2; }
-QMenu::item:disabled { color: %5; }
-QMenu::separator { height: 1px; background: %3; margin: 3px 6px; }
-QMenu::scroller { height: 10px; background: %1; }
-QLineEdit { color: %2; background: %6; border: 1px solid %3;
-            border-radius: 5px; padding: 3px 7px; font-size: 11px; }
-QLineEdit:hover { background: %7; }
-QLineEdit:focus { border-color: %8; }
-)")
-        .arg(background.name(QColor::HexArgb), ink.name(),
-             border.name(), selected.name(),
-             mixColors(background, ink, 0.55).name(), hover.name(), hover.name(),
-             theme.accent.name()));
+    // Keep catalogue density while inheriting the application's popup colours,
+    // rounded frame, selection and disclosure arrows in every theme.
+    menu->setStyleSheet(QStringLiteral(R"(
+QMenu { font-size: 11px; }
+QMenu::item { min-height: 18px; padding: 1px 22px 1px 8px; font-size: 11px; }
+QMenu::scroller { height: 12px; }
+QLineEdit { font-size: 11px; }
+)"));
 }
 
 using PickCallback =
@@ -517,7 +484,7 @@ void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
     edit->setAccessibleName(QObject::tr("Plugin search"));
     edit->setClearButtonEnabled(true);
     edit->setMinimumWidth(208);
-    edit->addAction(icons::icon(icons::Glyph::Search, QColor(220, 220, 220), 16),
+    edit->addAction(icons::icon(icons::Glyph::Search, th().textSecondary, 16),
                     QLineEdit::LeadingPosition);
     auto* editAction = new QWidgetAction(menu);
     editAction->setDefaultWidget(edit);
@@ -564,7 +531,7 @@ void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
             QString::fromStdString(slot->name), Qt::ElideRight, 250).replace('&', QStringLiteral("&&")));
         currentMenu->menuAction()->setToolTip(QString::fromStdString(slot->name));
         currentMenu->menuAction()->setObjectName(QStringLiteral("PluginPickerCurrent"));
-        applyDarkPluginMenuStyle(currentMenu);
+        applyPluginMenuStyle(currentMenu);
         searchFilter->watch(currentMenu);
         groupActions.push_back(currentMenu->menuAction());
         auto* modes = new QActionGroup(currentMenu);
@@ -655,7 +622,7 @@ void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
          prepared](QMenu* owner, const QString& title,
                    const std::vector<daw::plugins::PluginDescriptor>* entries) {
             auto* submenu = owner->addMenu(title);
-            applyDarkPluginMenuStyle(submenu);
+            applyPluginMenuStyle(submenu);
             searchFilter->watch(submenu);
             QObject::connect(
                 submenu, &QMenu::aboutToShow, submenu,
@@ -689,7 +656,7 @@ void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
         groupActions.push_back(menu->addSeparator());
         auto* manufacturers = menu->addMenu(
             QCoreApplication::translate("PluginPickerMenu", "Manufacturers"));
-        applyDarkPluginMenuStyle(manufacturers);
+        applyPluginMenuStyle(manufacturers);
         manufacturers->setObjectName(
             QStringLiteral("PluginPickerManufacturers"));
         searchFilter->watch(manufacturers);
@@ -799,7 +766,7 @@ QMenu* buildPluginMenu(QWidget* parent, daw::EngineController* controller,
                        std::function<void(const daw::plugins::PluginDescriptor&)> onPick,
                        PluginPickerTarget target) {
     auto* menu = new QMenu(parent);
-    applyDarkPluginMenuStyle(menu);
+    applyPluginMenuStyle(menu);
     populatePluginMenu(
         menu, parent, controller, instruments,
         std::make_shared<PickCallback>(std::move(onPick)), /*openingNow=*/false, target);
@@ -816,7 +783,7 @@ QMenu* buildLazyPluginMenu(
     QWidget* parent, daw::EngineController* controller, bool instruments,
     std::function<void(const daw::plugins::PluginDescriptor&)> onPick) {
     auto* menu = new QMenu(parent);
-    applyDarkPluginMenuStyle(menu);
+    applyPluginMenuStyle(menu);
     menu->setProperty("pluginPickerLazy", true);
     menu->setProperty("pluginPickerInstruments", instruments);
 
@@ -827,7 +794,7 @@ QMenu* buildLazyPluginMenu(
         // Rebuild from the current scan and grouping preference, not from the
         // state that existed when the channel strip was constructed.
         clearPluginMenu(menu);
-        applyDarkPluginMenuStyle(menu);
+        applyPluginMenuStyle(menu);
         populatePluginMenu(menu, parent, controller, instruments, callback,
                            /*openingNow=*/true);
     });

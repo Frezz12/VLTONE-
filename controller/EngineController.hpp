@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MidiFile.hpp"
+#include "MidiRecording.hpp"
 #include "RenderSpec.hpp"
 #include "model/Document.hpp"
 #include "recovery/RecoverySnapshot.hpp"
@@ -33,6 +34,7 @@
 #include "Core/Result.hpp"
 
 #include <cstdint>
+#include <deque>
 #include <chrono>
 #include <functional>
 #include <limits>
@@ -101,6 +103,8 @@ struct RecordingPreview {
     /// Seconds captured so far, from the recorder's own frame count — the
     /// clock the stripe and its waveform are both drawn against.
     double capturedSeconds = 0.0;
+    bool midi = false;
+    std::span<const NoteModel> notes;
 };
 
 class EngineController {
@@ -447,6 +451,12 @@ public:
     collab::SharedMutationResult setTracksMuted(
         std::span<const std::string> trackIds, bool muted);
     void setTrackSoloed(const std::string& trackId, bool soloed);
+    /// Session-only playback isolation for an editor. A Pattern track opens
+    /// its descendants; existing solo states resume when this is cleared.
+    void setExclusiveAuditionTrack(const std::string& trackId);
+    const std::string& exclusiveAuditionTrackId() const {
+        return m_exclusiveAuditionTrackId;
+    }
     /// Is anything soloed / muted right now? What a "clear all" control lights
     /// itself from, so the UI never keeps its own copy of the answer.
     bool anySoloed() const;
@@ -939,6 +949,13 @@ public:
     /// Plain audio clip addressed for the shared Sample/Clip Editor.
     const ClipModel* audioClip(const std::string& trackId,
                                const std::string& clipId) const;
+    std::string warpUnavailableReason(const std::string& trackId, const std::string& clipId);
+    bool initializeClipWarp(const std::string& trackId, const std::string& clipId);
+    bool setClipWarp(const std::string& trackId, const std::string& clipId,
+                     const ClipWarpModel& warp, const std::string& label = "Edit Warp");
+    void beginWarpEdit(const std::string& trackId, const std::string& clipId);
+    void commitWarpEdit();
+    void cancelWarpEdit();
     /// Replace or clear the media referenced by one clip while keeping that
     /// clip's processing, stretch and private FX state. Empty clears it.
     bool setClipAudioFile(const std::string& trackId,
@@ -994,6 +1011,11 @@ public:
         std::shared_ptr<const engine::SampleBuffer> source, playback;
         WaveformPeaks peaks;
     };
+    /// GUI-thread waveform detail only; never decodes or loads from paint.
+    const engine::SampleBuffer* cachedSourceSamples(const std::string& path) const {
+        const auto it = m_sourceSamples.find(path);
+        return it == m_sourceSamples.end() ? nullptr : it->second.get();
+    }
     struct PreparedProject {
         ProjectModel document;
         std::string path;
@@ -1345,6 +1367,27 @@ public:
     /// messages and bytes outside 0…127 are rejected at this public boundary.
     bool liveMidiEvent(const std::string& trackId, int status, int data1,
                        int data2 = 0);
+    bool liveMidiInput(const std::string& trackId, int status, int data1, int data2,
+                      std::uint64_t source, MidiInputStamp stamp,
+                      LiveMidiOrigin origin = LiveMidiOrigin::Performance);
+    MidiInputStamp midiInputStamp() const noexcept;
+    bool hasRetrospectiveMidi() const;
+    bool restoreRetrospectiveMidi(double startSeconds);
+    void markRetrospectiveMidiPending(std::uint64_t through) { m_retrospectivePendingThrough=std::max(m_retrospectivePendingThrough, through); }
+    void clearRetrospectiveMidi(std::uint64_t throughNs = UINT64_MAX);
+    const std::string& midiCaptureError() const { return m_midiCaptureError; }
+    struct MidiLearnBinding {
+        std::string trackId, instrumentUid, parameterId, name;
+        int channel = 0, cc = 0;
+    };
+    std::function<std::vector<MidiLearnBinding>(const std::string&)> loadLocalMidiBindings;
+    std::function<void(const std::string&, const std::vector<MidiLearnBinding>&)> saveLocalMidiBindings;
+    void beginMidiLearn(const std::string& trackId, const std::string& parameterId);
+    void cancelMidiLearn();
+    bool isMidiLearning() const { return !m_midiLearnParameter.empty(); }
+    void removeMidiLearn(const std::string& trackId, const std::string& parameterId);
+    const std::vector<MidiLearnBinding>& midiLearnBindings() const { return m_midiLearnBindings; }
+    void setMidiLearnBindings(std::vector<MidiLearnBinding> bindings) { m_midiLearnBindings = std::move(bindings); }
     /// The track a live note would sound on: `preferred` when it takes notes,
     /// otherwise the first track that does. Empty when the project has none.
     std::string liveNoteTarget(const std::string& preferred = {}) const;
@@ -1625,6 +1668,7 @@ public:
         double loopStartSeconds = 0.0;
         double loopEndSeconds = 0.0;
         bool loopCreatesTakes = true;
+        bool midiOverdubMerge = false;
         bool trimTakesToRegion = true;
         bool autoExpandAfterRecord = false;
         double compCrossfadeMs = 5.0;
@@ -1656,6 +1700,10 @@ public:
         FrozenRecordingSemantics semantics;
         bool fileWriteSucceeded = false;
         bool audioReadable = false;
+        bool midi = false;
+        MidiPerformance performance;
+        double midiTempo = 120.0;
+        std::uint64_t midiThroughNs = 0;
     };
 
     /// Capture finalization is deliberately separate from document landing.
@@ -1666,6 +1714,9 @@ public:
 
         bool empty() const noexcept { return tracks.empty(); }
     };
+
+    std::vector<ClipModel> midiRecordingLanding(const TrackModel& before, const FinalizedRecordingTrack& recording);
+    std::function<bool(const std::vector<std::pair<std::string, ClipModel>>&, std::uint64_t)> submitRecoveredMidi;
 
     const RecordingPrefs& recordingPrefs() const { return m_recording; }
     void setRecordingPrefs(const RecordingPrefs& prefs);
@@ -2074,6 +2125,15 @@ private:
     std::unique_ptr<DeviceCallback> m_callback;
 
     ProjectModel m_project;
+    std::string m_exclusiveAuditionTrackId;
+    struct WarpEdit {
+        std::string trackId, clipId;
+        ClipWarpModel before;
+    };
+    std::optional<WarpEdit> m_warpEdit;
+    std::unordered_map<std::string, ClipWarpModel> m_sampleWarpOrigins;
+    void applyClipWarpState(const std::string& trackId, const std::string& clipId,
+                           const ClipWarpModel& warp, double fallbackDuration);
     std::optional<uint32_t> m_defaultTrackColor;
     collab::SharedMutationSink* m_sharedMutationSink = nullptr;
     collab::SharedAssetMutationSink* m_sharedAssetMutationSink = nullptr;
@@ -2369,6 +2429,12 @@ private:
         unsigned monitorInputMaskBefore = 3; ///< exact-start rollback only
         bool monitorManaged = false;
         FrozenRecordingSemantics semantics;
+        bool midi = false;
+        bool midiInputReceived=false;
+        MidiRecording midiRecording;
+        std::unordered_map<std::string, double> midiInitialParameters;
+        MidiInputStamp midiStart;
+        double midiLastBeat = 0.0;
         /// Input peak per bucket since the capture began, for the growing
         /// waveform the arrangement draws inside the take-to-be. A bucket is a
         /// fixed slice of *recorded* time rather than one UI frame: the frame
@@ -2435,6 +2501,36 @@ private:
     /// deliberately irrelevant here.
     void landCapture(TrackModel& track,
                      const FinalizedRecordingTrack& recording);
+    void landMidiCapture(TrackModel& track, const FinalizedRecordingTrack& recording);
+    void captureMidiEvent(const std::string& trackId, int status, int d1, int d2,
+                         std::uint64_t source, MidiInputStamp stamp, LiveMidiOrigin origin);
+    bool sendLiveMidiEvent(const std::string& trackId, int status, int data1, int data2);
+    void captureMidiParameter(const std::string& trackId, const std::string& slotId,
+                              const std::string& parameterId, double plain,
+                              MidiInputStamp stamp, bool retrospective);
+    void resetMidiInput();
+    void seedMidiControllers(const std::string& track, MidiRecording& recording);
+    void pruneRetrospectiveMidi(std::uint64_t now);
+    void ensureMidiBindings(const std::string& track);
+    void persistMidiBindings(const std::string& track);
+    struct RetrospectiveMidiEvent {
+        std::string trackId, slotId, parameterId, parameterName;
+        std::uint64_t source = 0, order = 0;
+        MidiInputStamp stamp;
+        int status = 0, d1 = 0, d2 = 0;
+        double value = 0.0;
+    };
+    std::map<std::string, RetrospectiveMidiEvent> m_liveMidiControllers;
+    std::uint64_t m_retrospectivePendingThrough=0;
+    std::deque<RetrospectiveMidiEvent> m_retrospectiveMidi;
+    std::map<std::string, RetrospectiveMidiEvent> m_retrospectiveState;
+    std::vector<MidiLearnBinding> m_midiLearnBindings;
+    std::unordered_set<std::string> m_loadedMidiBindings;
+    std::string m_midiLearnTrack, m_midiLearnParameter, m_midiCaptureError;
+    std::uint64_t m_midiEventOrder = 0;
+    bool m_applyingMidiLearn = false;
+    struct HeldMidiInput { std::string trackId; std::uint64_t source; int channel, pitch, velocity; };
+    std::vector<HeldMidiInput> m_heldMidiInput;
 
     /// Put every track's output back where its folders say it belongs, after
     /// anything that changed the tree: a track inside a summing folder feeds
@@ -2588,6 +2684,7 @@ private:
         double beforeOffsetSeconds = 0.0;
         double beforeDurationSeconds = 0.0;
         ClipMusicalAnalysisModel beforeMusicalAnalysis;
+        ClipWarpModel beforeWarp;
         // Populated only for an Automation clip. MIDI notes/lanes, takes,
         // inserts and sample payloads are deliberately absent from this state.
         ClipAutomationModel beforeAutomation;

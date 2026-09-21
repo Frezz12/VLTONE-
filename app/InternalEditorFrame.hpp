@@ -99,7 +99,6 @@ private:
     QRect workspaceRect() const;
     QRect constrainedGeometry(const QRect& wanted) const;
     void updateResizeHandles();
-    void updateCornerMask();
     void updateMaximizeButton();
     void restoreContentFocus();
     bool belongsToFrame(const QWidget* widget) const;

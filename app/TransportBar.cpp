@@ -82,6 +82,52 @@ QString gridDivisionName(const ui::GridDivision& division) {
     return division.name;
 }
 
+// Shared pointer tracking for the two transport scrubs. Recenter only at a
+// screen edge, ignore the warp itself, and return to the grab point on release.
+class VerticalScrubPointer {
+public:
+    void begin(const QPointF& position) {
+        m_pressPosition = m_lastPosition = position;
+        m_warpPending = false;
+    }
+
+    qreal takePixels(const QPointF& position, bool wrapAtEdge) {
+        if (m_warpPending) {
+            // Ignore queued old-edge events, including on release. A zero
+            // delta at the warp destination is not physical movement either.
+            if (std::abs(position.y() - m_lastPosition.y()) > m_warpTolerance) return 0.0;
+            if (qFuzzyIsNull(position.y() - m_lastPosition.y())) return 0.0;
+            m_warpPending = false;
+        }
+        const qreal delta = m_lastPosition.y() - position.y();
+        m_lastPosition = position;
+        if (wrapAtEdge && std::abs(delta) > 0.0) {
+            if (const auto* screen = QGuiApplication::screenAt(position.toPoint())) {
+                const QRect bounds = screen->geometry();
+                if ((delta > 0 && position.y() <= bounds.top() + 2) ||
+                    (delta < 0 && position.y() >= bounds.bottom() - 2)) {
+                    m_lastPosition.setY(bounds.center().y());
+                    m_warpTolerance = bounds.height() / 4.0;
+                    m_warpPending = true;
+                    QCursor::setPos(m_lastPosition.toPoint());
+                }
+            }
+        }
+        return delta;
+    }
+
+    void finish(bool restorePosition) {
+        m_warpPending = false;
+        if (restorePosition) QCursor::setPos(m_pressPosition.toPoint());
+    }
+
+private:
+    QPointF m_pressPosition;
+    QPointF m_lastPosition;
+    qreal m_warpTolerance = 0.0;
+    bool m_warpPending = false;
+};
+
 /// A tempo number with the interaction used by DAWs and graphics tools: drag
 /// vertically for quick relative changes, or double-click to turn it into a
 /// normal text editor. It remains a real QLineEdit for accessibility and for
@@ -126,8 +172,7 @@ protected:
         if (!ok) startValue = 120.0;
         m_currentValue = std::clamp(startValue, 20.0, 300.0);
         m_pendingPixels = 0.0;
-        m_pressPosition = m_lastPosition = event->globalPosition();
-        m_warpPending = false;
+        m_pointer.begin(event->globalPosition());
         m_fineMode = event->modifiers() & Qt::ShiftModifier;
         m_pressed = true;
         m_dragging = false;
@@ -145,7 +190,7 @@ protected:
             event->accept();
             return;
         }
-        applyDrag(takeDragPixels(event->globalPosition(), true), event->modifiers());
+        applyDrag(m_pointer.takePixels(event->globalPosition(), true), event->modifiers());
         event->accept();
     }
 
@@ -154,7 +199,7 @@ protected:
             QLineEdit::mouseReleaseEvent(event);
             return;
         }
-        applyDrag(takeDragPixels(event->globalPosition(), false), event->modifiers());
+        applyDrag(m_pointer.takePixels(event->globalPosition(), false), event->modifiers());
         finishDrag();
         event->accept();
     }
@@ -164,9 +209,9 @@ protected:
             QLineEdit::mouseDoubleClickEvent(event);
             return;
         }
+        m_pointer.finish(m_dragging);
         m_pressed = false;
         m_dragging = false;
-        m_warpPending = false;
         m_textBeforeEdit = text();
         setReadOnly(false);
         setFocusPolicy(Qt::StrongFocus);
@@ -193,35 +238,6 @@ protected:
     }
 
 private:
-    qreal takeDragPixels(const QPointF& position, bool wrapAtEdge) {
-        if (m_warpPending) {
-            // Discard queued events at the old screen edge until an event
-            // arrives near the recentered pointer. Never count the warp as
-            // a physical move, including on mouse release.
-            if (std::abs(position.y() - m_lastPosition.y()) > m_warpTolerance) return 0.0;
-            if (qFuzzyIsNull(position.y() - m_lastPosition.y())) return 0.0;
-            m_warpPending = false;
-        }
-        const qreal delta = m_lastPosition.y() - position.y();
-        m_lastPosition = position;
-        // Most events use ordinary successive positions, so duplicate or
-        // coalesced move events cannot multiply the same displacement. Only
-        // recenter at screen edges to retain unbounded vertical scrubbing.
-        if (wrapAtEdge && std::abs(delta) > 0.0) {
-            if (const auto* screen = QGuiApplication::screenAt(position.toPoint())) {
-                const QRect bounds = screen->geometry();
-                if ((delta > 0 && position.y() <= bounds.top() + 2) ||
-                    (delta < 0 && position.y() >= bounds.bottom() - 2)) {
-                    m_lastPosition.setY(bounds.center().y());
-                    m_warpTolerance = bounds.height() / 4.0;
-                    m_warpPending = true;
-                    QCursor::setPos(m_lastPosition.toPoint());
-                }
-            }
-        }
-        return delta;
-    }
-
     void applyDrag(qreal pixels, Qt::KeyboardModifiers modifiers) {
         const bool fine = modifiers & Qt::ShiftModifier;
         if (fine != m_fineMode) { m_fineMode = fine; m_pendingPixels = 0.0; }
@@ -247,8 +263,8 @@ private:
 
     void finishDrag() {
         const bool dragged = m_dragging;
-        m_pressed = m_dragging = m_warpPending = false;
-        if (dragged) QCursor::setPos(m_pressPosition.toPoint());
+        m_pressed = m_dragging = false;
+        m_pointer.finish(dragged);
         setCursor(Qt::SizeVerCursor);
         if (dragged && m_callback) m_callback(m_currentValue, true);
     }
@@ -257,10 +273,7 @@ private:
     QString m_textBeforeEdit;
     double m_currentValue = 120.0;
     qreal m_pendingPixels = 0.0;
-    QPointF m_pressPosition;
-    QPointF m_lastPosition;
-    qreal m_warpTolerance = 0.0;
-    bool m_warpPending = false;
+    VerticalScrubPointer m_pointer;
     bool m_fineMode = false;
     bool m_pressed = false;
     bool m_dragging = false;
@@ -301,9 +314,9 @@ protected:
             QLineEdit::mousePressEvent(event);
             return;
         }
-        m_startSeconds = m_seconds ? std::max(0.0, m_seconds()) : 0.0;
-        m_currentSeconds = m_startSeconds;
-        m_pressGlobalY = event->globalPosition().y();
+        m_currentSeconds = m_seconds ? std::max(0.0, m_seconds()) : 0.0;
+        m_pendingPixels = 0.0;
+        m_pointer.begin(event->globalPosition());
         m_pressed = true;
         m_dragging = false;
         setCursor(Qt::ClosedHandCursor);
@@ -311,24 +324,16 @@ protected:
     }
 
     void mouseMoveEvent(QMouseEvent* event) override {
-        if (!m_pressed || !(event->buttons() & Qt::LeftButton)) {
+        if (!m_pressed) {
             QLineEdit::mouseMoveEvent(event);
             return;
         }
-        const qreal delta = m_pressGlobalY - event->globalPosition().y();
-        if (!m_dragging && std::abs(delta) < 3.0) {
+        if (!(event->buttons() & Qt::LeftButton)) {
+            finishDrag();
             event->accept();
             return;
         }
-        m_dragging = true;
-        const double secondsPerPixel =
-            event->modifiers() & Qt::ShiftModifier ? 0.01 : 0.10;
-        const double seconds = std::max(0.0, m_startSeconds +
-                                                delta * secondsPerPixel);
-        if (std::abs(seconds - m_currentSeconds) >= 0.0001) {
-            m_currentSeconds = seconds;
-            if (m_seek) m_seek(seconds);
-        }
+        applyDrag(m_pointer.takePixels(event->globalPosition(), true), event->modifiers());
         event->accept();
     }
 
@@ -337,9 +342,8 @@ protected:
             QLineEdit::mouseReleaseEvent(event);
             return;
         }
-        m_pressed = false;
-        m_dragging = false;
-        setCursor(Qt::SizeVerCursor);
+        applyDrag(m_pointer.takePixels(event->globalPosition(), false), event->modifiers());
+        finishDrag();
         event->accept();
     }
 
@@ -348,8 +352,7 @@ protected:
             QLineEdit::mouseDoubleClickEvent(event);
             return;
         }
-        m_pressed = false;
-        m_dragging = false;
+        finishDrag();
         m_textBeforeEdit = text();
         setReadOnly(false);
         setFocusPolicy(Qt::StrongFocus);
@@ -373,11 +376,34 @@ protected:
     }
 
 private:
+    void applyDrag(qreal pixels, Qt::KeyboardModifiers modifiers) {
+        if (!m_dragging) {
+            m_pendingPixels += pixels;
+            if (std::abs(m_pendingPixels) < 3.0) return;
+            pixels = m_pendingPixels;
+            m_pendingPixels = 0.0;
+            m_dragging = true;
+            setCursor(Qt::BlankCursor);
+        }
+        const double secondsPerPixel = modifiers & Qt::ShiftModifier ? 0.01 : 0.10;
+        const double seconds = std::max(0.0, m_currentSeconds + pixels * secondsPerPixel);
+        if (std::abs(seconds - m_currentSeconds) >= 0.0001) {
+            m_currentSeconds = seconds;
+            if (m_seek) m_seek(seconds);
+        }
+    }
+
+    void finishDrag() {
+        m_pointer.finish(m_dragging);
+        m_pressed = m_dragging = false;
+        setCursor(Qt::SizeVerCursor);
+    }
+
     SecondsGetter m_seconds;
     SeekCallback m_seek;
     QString m_textBeforeEdit;
-    qreal m_pressGlobalY = 0.0;
-    double m_startSeconds = 0.0;
+    VerticalScrubPointer m_pointer;
+    qreal m_pendingPixels = 0.0;
     double m_currentSeconds = 0.0;
     bool m_pressed = false;
     bool m_dragging = false;
@@ -934,6 +960,14 @@ QWidget* TransportBar::buildLeftDock() {
             &TransportBar::mixerToggled);
     panel->addAction(m_mixerPanelButton);
 
+    m_warpButton = panelButton(
+        icons::Glyph::Waveform, tr("Open Warp for the selected audio clip (W)"),
+        "HeaderWarpButton");
+    m_warpButton->setCheckable(true);
+    connect(m_warpButton, &QAbstractButton::clicked, this,
+            &TransportBar::warpRequested);
+    panel->addAction(m_warpButton);
+
     m_detachMixerButton = panelButton(
         icons::Glyph::Detach, tr("Open the mixer in its own window"),
         "HeaderDetachMixerButton");
@@ -1150,6 +1184,14 @@ QWidget* TransportBar::buildPill() {
                                         transportPanel);
     m_recordButton->setObjectName(QStringLiteral("TransportRecord"));
     m_recordButton->setCheckable(true);
+    m_recordButton->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_recordButton, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        QMenu menu(this);
+        auto* restore = menu.addAction(tr("Восстановить сыгранное"));
+        restore->setEnabled(m_controller->hasRetrospectiveMidi());
+        connect(restore, &QAction::triggered, this, &TransportBar::restoreMidiRequested);
+        menu.exec(m_recordButton->mapToGlobal(pos));
+    });
     m_recordButton->setActiveColor(Theme::record());
     m_recordButton->setIdleColor(Theme::record());
     m_recordButton->setButtonSize(kBtn, kBtn);
@@ -2038,6 +2080,9 @@ void TransportBar::refreshPosition() {
 }
 
 void TransportBar::refresh() {
+    // Analysis/import and other external edits change the model directly.
+    // Preserve partial keyboard input and the current scrub's Undo gesture.
+    if (m_tempoEdit && m_tempoEdit->isReadOnly() && !m_tempoEditing) syncTempo();
     const bool playing = m_controller->isPlaying();
     const bool recording = m_controller->isRecording();
 
@@ -2212,6 +2257,10 @@ void TransportBar::setMixerVisible(bool visible) {
     reflectToggle(m_mixerPanelButton, visible);
 }
 
+void TransportBar::setWarpVisible(bool visible) {
+    reflectToggle(m_warpButton, visible);
+}
+
 void TransportBar::setInspectorVisible(bool visible) {
     reflectToggle(m_inspectorPanelButton, visible);
 }
@@ -2245,7 +2294,8 @@ void TransportBar::setMixerDetached(bool detached) {
 void TransportBar::syncTempo() {
     if (!m_tempoEdit) return;
     m_tempoEditing = false;
-    m_tempoEdit->setText(tempoText(m_controller->tempo()));
+    const QString text = tempoText(m_controller->tempo());
+    if (m_tempoEdit->text() != text) m_tempoEdit->setText(text);
 }
 
 bool TransportBar::checkTempoInteractionForTest() {
@@ -2279,6 +2329,7 @@ bool TransportBar::checkTempoInteractionForTest() {
     if (!near(121)) return fail(__LINE__); // Repeated coordinates do not accelerate.
     send(QEvent::MouseMove, origin - QPointF(0, 20));
     if (!near(122)) return fail(__LINE__);
+    bar.refresh(); // A UI tick must not split the active tempo gesture's Undo.
     send(QEvent::MouseMove, origin - QPointF(0, 10));
     send(QEvent::MouseButtonRelease, origin - QPointF(0, 10));
     if (!near(121) || controller.undoDepth() != depth + 1) return fail(__LINE__);
@@ -2335,6 +2386,79 @@ bool TransportBar::checkTempoInteractionForTest() {
     QMetaObject::invokeMethod(edit, "textEdited", Qt::DirectConnection, Q_ARG(QString, edit->text()));
     QMetaObject::invokeMethod(edit, "editingFinished", Qt::DirectConnection);
     if (!near(138.5) || !edit->isReadOnly()) return fail(__LINE__);
+    // The analyzer applies tempo through the controller, outside this field.
+    controller.setTempo(143.5);
+    bar.refresh();
+    if (edit->text() != QStringLiteral("143.5")) return fail(__LINE__);
+    controller.undo(); bar.refresh();
+    if (edit->text() != QStringLiteral("138.5")) return fail(__LINE__);
+    controller.redo(); bar.refresh();
+    if (edit->text() != QStringLiteral("143.5")) return fail(__LINE__);
+    send(QEvent::MouseButtonDblClick, origin);
+    edit->setText(QStringLiteral("1"));
+    bar.refresh();
+    if (edit->text() != QStringLiteral("1")) return fail(__LINE__);
+    QMetaObject::invokeMethod(edit, "editingFinished", Qt::DirectConnection);
+    if (edit->text() != QStringLiteral("143.5") || !edit->isReadOnly()) return fail(__LINE__);
+
+    auto* position = bar.m_positionValue;
+    const QPointF positionLocal = position->rect().center();
+    const QPointF positionOrigin = position->mapToGlobal(positionLocal.toPoint());
+    const auto sendPosition = [&](QEvent::Type type, QPointF global,
+                                  Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QMouseEvent event(type, positionLocal + global - positionOrigin, global,
+            type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, modifiers);
+        QCoreApplication::sendEvent(position, &event);
+    };
+    const auto atPosition = [&](double value) {
+        return std::abs(controller.positionSeconds() - value) < 1.e-8;
+    };
+    controller.seekSeconds(10.0);
+    sendPosition(QEvent::MouseButtonPress, positionOrigin);
+    for (int i = 0; i < 10; ++i)
+        sendPosition(QEvent::MouseMove, positionOrigin - QPointF(0, 20));
+    if (!atPosition(12.0) || position->cursor().shape() != Qt::BlankCursor) return fail(__LINE__);
+    sendPosition(QEvent::MouseMove, positionOrigin - QPointF(0, 20), Qt::ShiftModifier);
+    if (!atPosition(12.0)) return fail(__LINE__);
+    sendPosition(QEvent::MouseMove, positionOrigin - QPointF(0, 30), Qt::ShiftModifier);
+    if (!atPosition(12.1)) return fail(__LINE__);
+    sendPosition(QEvent::MouseMove, positionOrigin - QPointF(0, 20));
+    sendPosition(QEvent::MouseButtonRelease, positionOrigin - QPointF(0, 20));
+    if (!atPosition(11.1) || position->cursor().shape() != Qt::SizeVerCursor ||
+        QCursor::pos() != positionOrigin.toPoint()) return fail(__LINE__);
+
+    if (const auto* screen = QGuiApplication::screenAt(positionOrigin.toPoint())) {
+        for (int direction : {-1, 1}) {
+            controller.seekSeconds(1000.0);
+            sendPosition(QEvent::MouseButtonPress, positionOrigin);
+            const QPointF edge(positionOrigin.x(), direction < 0
+                ? screen->geometry().top() : screen->geometry().bottom());
+            const QPointF center(positionOrigin.x(), screen->geometry().center().y());
+            const QPointF next = center + QPointF(0, direction * 10);
+            for (int wrap = 0; wrap < 3; ++wrap) {
+                sendPosition(QEvent::MouseMove, edge);
+                const double atEdge = controller.positionSeconds();
+                sendPosition(QEvent::MouseMove, edge);
+                sendPosition(QEvent::MouseMove, center);
+                sendPosition(QEvent::MouseMove, edge);
+                if (!atPosition(atEdge)) return fail(__LINE__);
+                sendPosition(QEvent::MouseMove, next);
+                if (!atPosition(atEdge - direction)) return fail(__LINE__);
+            }
+            const double beforeRelease = controller.positionSeconds();
+            sendPosition(QEvent::MouseButtonRelease, next);
+            if (!atPosition(beforeRelease) || QCursor::pos() != positionOrigin.toPoint()) return fail(__LINE__);
+        }
+    } else return fail(__LINE__); // Do not silently skip the screen-edge regression.
+    controller.seekSeconds(0.0);
+    sendPosition(QEvent::MouseButtonPress, positionOrigin);
+    sendPosition(QEvent::MouseMove, positionOrigin + QPointF(0, 20));
+    if (!atPosition(0.0)) return fail(__LINE__);
+    sendPosition(QEvent::MouseMove, positionOrigin + QPointF(0, 10));
+    sendPosition(QEvent::MouseButtonRelease, positionOrigin + QPointF(0, 10));
+    if (!atPosition(1.0)) return fail(__LINE__);
+    std::puts("PASS external BPM refresh and unlimited position scrub: both edges, pointer restore, Shift, reversal and duplicate events");
     std::puts("PASS BPM scrub: distance, duplicate events, Shift precision, bounds, screen wrapping, text entry and one Undo");
     return true;
 }

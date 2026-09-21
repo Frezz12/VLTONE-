@@ -25,12 +25,14 @@ public:
 
     void setPattern(const QString& patternId);
     const QString& patternId() const { return m_patternId; }
+    const QStringList& selectedSourceTrackIds() const { return m_selectedIds; }
     void refresh();
     bool checkInteractionGesturesForTest();
     static bool checkEditingForTest();
 
 signals:
     void projectEdited(bool localFileDirty = true);
+    void sourceSelectionChanged();
     void openPianoRollRequested(const QString& trackId, const QString& clipId);
     void openPluginEditorRequested(const QString& trackId,
                                    const QString& slotId);

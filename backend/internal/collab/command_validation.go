@@ -3,6 +3,7 @@ package collab
 import (
 	"encoding/json"
 	"sort"
+	"strconv"
 
 	"github.com/google/uuid"
 )
@@ -86,6 +87,16 @@ func deriveCommandMetadataForSchema(kind string, payload json.RawMessage,
 	}
 
 	switch kind {
+	case "recording.prepareMidi":
+		body, _ := commandPayloadObject(payload)
+		id, _ := requiredPayloadString(body, "contentId")
+		index, _ := payloadInteger(body, "index", 0, 1023)
+		add("midiContent:" + id + ":part:" + strconv.FormatInt(index, 10))
+	case "recording.applyMidi", "recording.restoreMidi":
+		body, _ := commandPayloadObject(payload)
+		id, _ := requiredPayloadString(body, "clipId")
+		add("clip:" + id + ":midiContent")
+		addClipDescendants(id)
 	case "project.setScalar":
 		body, err := commandPayloadObject(payload)
 		if err != nil {
@@ -845,6 +856,11 @@ func deriveLifecycleStepsForSchema(kind string, payload json.RawMessage,
 	}
 
 	switch kind {
+	case "recording.applyMidi", "recording.restoreMidi":
+		if err := parents(false); err != nil {
+			return nil, err
+		}
+
 	case "track.add":
 		trackID, _ := identifier("trackId")
 		parentID, _ := optionalIdentifier("parentId")

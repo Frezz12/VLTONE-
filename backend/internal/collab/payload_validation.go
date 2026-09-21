@@ -445,7 +445,7 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 			return err
 		}
 		minimumStateSchema := int64(1)
-		if schemaVersion == CollaborationCommandSchemaV3 {
+		if schemaVersion >= CollaborationCommandSchemaV3 {
 			minimumStateSchema = 0
 		}
 		if _, err := payloadInteger(body, "stateSchemaVersion", minimumStateSchema, math.MaxInt32); err != nil {
@@ -681,6 +681,10 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		if err := requireIDs("trackId", "clipId"); err != nil {
 			return err
 		}
+		var take map[string]json.RawMessage
+		if json.Unmarshal(body["take"], &take) == nil && take["notes"] != nil && take["asset"] == nil && schemaVersion < 4 {
+			return invalidf("MIDI takes require command schema v4")
+		}
 		if err := validateTakePayload(body["take"]); err != nil {
 			return err
 		}
@@ -753,6 +757,11 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 			return invalidf("nested batch commands are unsupported")
 		}
 		return validateBatchPayload(body, schemaVersion)
+	case "recording.prepareMidi", "recording.applyMidi", "recording.restoreMidi":
+		if schemaVersion < CollaborationCommandSchemaV4 {
+			return invalidf("MIDI recording requires schema 4")
+		}
+		return validateMidiRecordingPayload(kind, body)
 	case "recording.commit":
 		if !allowBatch {
 			return invalidf("nested recording commits are unsupported")
@@ -1160,7 +1169,7 @@ func validateSharedInsert(raw json.RawMessage,
 	}
 	format, err := payloadString(body, "format", 16, false)
 	if err != nil || (format != "internal" &&
-		(schemaVersion != CollaborationCommandSchemaV3 || !validPluginFormat(format))) {
+		(schemaVersion < CollaborationCommandSchemaV3 || !validPluginFormat(format))) {
 		return "", "", "", invalidf("command payload plugin format is unsupported")
 	}
 	// Must stay in lockstep with supportedBuiltin() in ProjectReducer.cpp and
@@ -1173,7 +1182,7 @@ func validateSharedInsert(raw json.RawMessage,
 	if format == "internal" && uid != "daw.sampler" && uid != "daw.equalizer" &&
 		uid != "daw.gravity" && uid != "daw.graphit" &&
 		uid != "daw.doubler" && uid != "daw.doubler-pro" && uid != "daw.chorus" &&
-		uid != "daw.flanger" && uid != "daw.phaser" && uid != "daw.pitch-corrector" {
+		uid != "daw.flanger" && uid != "daw.phaser" && uid != "daw.modulation" && uid != "daw.pitch-corrector" {
 		return "", "", "", invalidf("command payload built-in plugin uid is unsupported")
 	}
 	vendor, err := payloadString(body, "vendor", 4096, format == "internal")
@@ -1182,7 +1191,7 @@ func validateSharedInsert(raw json.RawMessage,
 	}
 	maximumVersionLength := 64
 	minimumStateSchema := int64(1)
-	if schemaVersion == CollaborationCommandSchemaV3 {
+	if schemaVersion >= CollaborationCommandSchemaV3 {
 		maximumVersionLength = 200
 		minimumStateSchema = 0
 	}
@@ -1303,11 +1312,18 @@ func validateNotePayload(raw json.RawMessage) error {
 	if err != nil {
 		return invalidf("command payload note must be an object")
 	}
-	if err := exactPayloadKeys(body, []string{"id", "pitch", "startBeats", "lengthBeats", "velocity", "muted", "color", "pan"}, nil); err != nil {
+	if err := exactPayloadKeys(body, []string{"id", "pitch", "startBeats", "lengthBeats", "velocity", "muted", "color", "pan"}, []string{"channel", "releaseVelocity", "startOrder", "endOrder"}); err != nil {
 		return err
 	}
 	if _, err := requiredPayloadUUID(body, "id"); err != nil {
 		return err
+	}
+	for key, maximum := range map[string]int64{"channel": 15, "releaseVelocity": 127, "startOrder": math.MaxInt64, "endOrder": math.MaxInt64} {
+		if _, exists := body[key]; exists {
+			if _, err := payloadInteger(body, key, 0, maximum); err != nil {
+				return err
+			}
+		}
 	}
 	if _, err := payloadInteger(body, "pitch", 0, 127); err != nil {
 		return err
@@ -1336,11 +1352,16 @@ func validateAutomationPointPayload(raw json.RawMessage) error {
 	if err != nil {
 		return invalidf("command payload point must be an object")
 	}
-	if err := exactPayloadKeys(body, []string{"id", "beats", "value", "shape", "curve"}, nil); err != nil {
+	if err := exactPayloadKeys(body, []string{"id", "beats", "value", "shape", "curve"}, []string{"eventOrder"}); err != nil {
 		return err
 	}
 	if _, err := requiredPayloadUUID(body, "id"); err != nil {
 		return err
+	}
+	if _, exists := body["eventOrder"]; exists {
+		if _, err := payloadInteger(body, "eventOrder", 0, math.MaxInt64); err != nil {
+			return err
+		}
 	}
 	if _, err := payloadNumber(body, "beats", 0, math.MaxFloat64, false); err != nil {
 		return err
@@ -1360,10 +1381,17 @@ func validateControllerLaneTarget(raw json.RawMessage) error {
 	if err != nil {
 		return invalidf("command payload target must be an object")
 	}
-	if err := exactPayloadKeys(body, []string{"cc", "parameterId", "slotId"}, nil); err != nil {
+	if err := exactPayloadKeys(body, []string{"cc", "parameterId", "slotId"}, []string{"channel", "key"}); err != nil {
 		return err
 	}
-	cc, err := payloadInteger(body, "cc", -1, 127)
+	for key, maximum := range map[string]int64{"channel": 15, "key": 127} {
+		if _, exists := body[key]; exists {
+			if _, err := payloadInteger(body, key, 0, maximum); err != nil {
+				return err
+			}
+		}
+	}
+	cc, err := payloadInteger(body, "cc", -5, 127)
 	if err != nil {
 		return err
 	}
@@ -1425,6 +1453,10 @@ func validateAutomationTarget(raw json.RawMessage) error {
 }
 
 func validateTakePayload(raw json.RawMessage) error {
+	var midi map[string]json.RawMessage
+	if json.Unmarshal(raw, &midi) == nil && midi["notes"] != nil && midi["asset"] == nil {
+		return validateMidiTake(raw)
+	}
 	body, err := commandPayloadObject(raw)
 	if err != nil {
 		return invalidf("command payload take must be an object")
@@ -1600,7 +1632,7 @@ func validateRecordingCommitPayload(body map[string]json.RawMessage,
 	newClips := make(map[clipTarget]struct{})
 	for _, child := range commands {
 		kind, _ := payloadString(child, "kind", 100, false)
-		if !recordingCommitChildKindAllowed(kind) {
+		if !recordingCommitChildKindAllowed(kind) && !(schemaVersion >= CollaborationCommandSchemaV4 && (kind == "recording.applyMidi" || kind == "clip.delete" || kind == "clip.setPatternOwner")) {
 			return invalidf("recording commit child kind %s is unsupported", kind)
 		}
 		trackID, found, err := commandTargetTrackID(kind, child["payload"])

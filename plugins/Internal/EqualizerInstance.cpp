@@ -1207,7 +1207,13 @@ void EqualizerInstance::resetDsp() noexcept {
             ? m_sampleRate * 2.0 : m_sampleRate);
 }
 
-void EqualizerInstance::reset() noexcept { resetDsp(); }
+void EqualizerInstance::reset() noexcept {
+    // A reset starts a new stream at the current settings, including changes
+    // made while stopped. Do not reuse the preceding stream's smoothing state.
+    for (std::uint32_t i = 0; i < kParameterCount; ++i)
+        m_smoothed[i] = m_targets[i] = m_values[i].load(std::memory_order_relaxed);
+    resetDsp();
+}
 
 void EqualizerInstance::setAnalyzerConfig(const AnalyzerConfig& config) noexcept {
     std::uint32_t flags = 0;

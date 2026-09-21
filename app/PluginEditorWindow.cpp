@@ -36,6 +36,7 @@
 #include <QStyle>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMenu>
 #include <QKeyEvent>
 #include <QComboBox>
 #include <QResizeEvent>
@@ -319,34 +320,29 @@ void PluginEditorWindow::hideLoadingState() {
 void PluginEditorWindow::buildWrapper() {
     m_wrapper = new QWidget(this);
     m_wrapper->setObjectName(QStringLiteral("PluginWrapper"));
-    m_wrapper->setFixedHeight(38);
+    m_wrapper->setFixedHeight(28);
     auto* row = new QHBoxLayout(m_wrapper);
-    row->setContentsMargins(7, 4, 7, 4);
-    row->setSpacing(6);
+    row->setContentsMargins(6, 2, 6, 2);
+    row->setSpacing(4);
 
     m_power = new ui::IconButton(icons::Glyph::Power,
                                  tr("Enable or bypass this plugin"), m_wrapper);
     m_power->setObjectName(QStringLiteral("PluginPower"));
     m_power->setCheckable(true);
-    m_power->setButtonSize(28, 28);
+    m_power->setButtonSize(24, 24);
+    m_power->setProperty("circular", true);
     m_power->setAccessibleName(tr("Plugin enabled"));
     row->addWidget(m_power);
 
-    auto* identity = new QWidget(m_wrapper);
-    auto* identityLayout = new QVBoxLayout(identity);
-    identityLayout->setContentsMargins(2, 0, 4, 0);
-    identityLayout->setSpacing(0);
-    m_pluginName = new QLabel(tr("Plugin"), identity);
+    m_pluginName = new QLabel(tr("Plugin"), m_wrapper);
     m_pluginName->setObjectName(QStringLiteral("PluginWrapperName"));
-    m_pluginFormat = new QLabel(identity);
-    m_pluginFormat->setObjectName(QStringLiteral("PluginWrapperFormat"));
-    identityLayout->addWidget(m_pluginName);
-    identityLayout->addWidget(m_pluginFormat);
-    row->addWidget(identity, 1);
+    m_pluginName->setMinimumWidth(0);
+    m_pluginName->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    row->addWidget(m_pluginName, 1);
 
     m_dockToggle = new QToolButton(m_wrapper);
     m_dockToggle->setCheckable(true);
-    m_dockToggle->setFixedSize(27, 27);
+    m_dockToggle->setFixedSize(24, 24);
     m_dockToggle->setIcon(icons::icon(icons::Glyph::Automation, th().textPrimary));
     m_dockToggle->setToolTip(
         tr("Show this plugin's parameters — right-click a knob to create automation"));
@@ -372,7 +368,7 @@ void PluginEditorWindow::buildWrapper() {
     for (QToolButton* button : {m_leftChannel, m_rightChannel}) {
         button->setCheckable(true);
         button->setAutoExclusive(true);
-        button->setFixedSize(27, 27);
+        button->setFixedSize(24, 24);
     }
     m_leftChannel->setText(QStringLiteral("L"));
     m_leftChannel->setToolTip(tr("Edit the left mono instance"));
@@ -539,21 +535,26 @@ void PluginEditorWindow::rebuildEditorContent() {
         setMinimumSize(820, 559);
         m_fallbackContentSize = QSize(1040, 680);
         resize(m_fallbackContentSize);
-    } else if (trustedInternal && daw::plugins::modulation::isModulationUid(descriptorUid) &&
-               dynamic_cast<daw::plugins::modulation::ModulationInstance*>(plugin)) {
-        auto* modulation = static_cast<daw::plugins::modulation::ModulationInstance*>(plugin);
-        auto* panel = new ModulationPanel(m_controller, m_channelId, m_insertId,
-                                          modulation->kind(), this);
+    } else if (trustedInternal &&
+               ((daw::plugins::modulation::isModulationUid(descriptorUid) &&
+                 dynamic_cast<daw::plugins::modulation::ModulationInstance*>(plugin)) ||
+                dynamic_cast<daw::plugins::modulation::ModulationRackInstance*>(plugin))) {
+        auto* panel = new ModulationPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = panel;
         connect(panel, &ModulationPanel::projectEdited, this, &PluginEditorWindow::projectEdited);
         connect(panel, &ModulationPanel::automationRequested, this,
                 [this](const QString& id) { emit automationRequested(m_channelId, m_insertId, id); });
+        connect(panel, &ModulationPanel::eqExpansionChanged, this, [this, collapsedHeight = 0](bool expanded) mutable {
+            const int limit = screen() ? screen()->availableGeometry().height() - 60 : 1000;
+            if (expanded) { collapsedHeight = height(); resize(width(), std::min(limit, height() + 270)); }
+            else if (collapsedHeight) resize(width(), collapsedHeight);
+        });
         m_contentRow->insertWidget(0, panel, 1);
         emit builtInPanelReady(panel, QString::fromStdString(descriptorUid).mid(4));
-        const bool doubler = modulation->kind() == daw::plugins::modulation::Kind::Doubler;
-        const bool pro = modulation->kind() == daw::plugins::modulation::Kind::DoublerPro;
-        setMinimumSize(440, pro ? 599 : doubler ? 499 : 539);
-        m_fallbackContentSize = QSize(560, pro ? 639 : doubler ? 559 : 579);
+        const bool rack = descriptorUid == "daw.modulation";
+        const bool pro = descriptorUid == "daw.doubler-pro";
+        setMinimumSize(rack ? 800 : 360, pro ? 659 : 529);
+        m_fallbackContentSize = QSize(rack ? 1040 : 440, pro ? 700 : 570);
         resize(m_fallbackContentSize);
     } else if (trustedInternal && descriptorUid == "daw.pitch-corrector" &&
                dynamic_cast<daw::plugins::pitch::PitchCorrectorInstance*>(plugin)) {
@@ -750,12 +751,10 @@ void PluginEditorWindow::refreshWrapper() {
 
     if (daw::plugins::PluginInstance* plugin = instance()) {
         m_pluginName->setText(QString::fromStdString(plugin->descriptor().name));
-        m_pluginFormat->setText(QString::fromStdString(
-            std::string(daw::plugins::toString(plugin->descriptor().format))));
     } else {
         m_pluginName->setText(QString::fromStdString(model->name));
-        m_pluginFormat->setText(tr("not loaded"));
     }
+    m_pluginName->setToolTip(m_pluginName->text());
 
     const bool supports =
         m_controller->insertSupportsSidechain(m_channelKey, m_insertKey);
@@ -1153,6 +1152,23 @@ QWidget* PluginEditorWindow::buildParameterDock() {
         // reachable some other way.
         knob->setToolTip(QString::fromStdString(parameter.name));
         knob->setProperty("parameterId", parameterId);
+        if (const auto* track = m_controller->project().findTrack(m_channelKey);
+            track && track->instrument.id == m_insertKey) {
+            knob->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(knob, &QWidget::customContextMenuRequested, this, [this, knob, parameterId, parameterKey](const QPoint& pos) {
+                QMenu menu(this);
+                auto* automate = menu.addAction(tr("Automate"));
+                auto* learn = menu.addAction(tr("Назначить MIDI-ручку"));
+                auto* cancel = menu.addAction(tr("Отменить обучение"));
+                cancel->setEnabled(m_controller->isMidiLearning());
+                auto* remove = menu.addAction(tr("Удалить назначение"));
+                const auto* picked = menu.exec(knob->mapToGlobal(pos));
+                if (picked == automate) emit automationRequested(m_channelId, m_insertId, parameterId);
+                if (picked == learn) m_controller->beginMidiLearn(m_channelKey, parameterKey);
+                if (picked == cancel) m_controller->cancelMidiLearn();
+                if (picked == remove) m_controller->removeMidiLearn(m_channelKey, parameterKey);
+            });
+        }
         knob->setValue(parameterIndex >= 0
                            ? live->parameterValue(std::uint32_t(parameterIndex))
                            : parameter.defaultValue);
@@ -1545,31 +1561,22 @@ PluginEditorWindow { background: %BG%; }
     background: %SURFACE%;
     border-bottom: 1px solid %SEPARATOR%;
 }
-#PluginWrapperName { color: %TEXT%; font-size: 12px; font-weight: 600; }
-#PluginWrapperFormat { color: %TEXT2%; font-size: 9px; text-transform: uppercase; }
+#PluginWrapperName { color: %TEXT%; font-size: 11px; font-weight: 600; }
 #PluginMode, #PluginSidechain {
     color: %TEXT%;
     background: %WELL%;
     border: 1px solid %SEPARATOR%;
-    border-radius: 5px;
-    padding: 3px 24px 3px 8px;
-    min-height: 20px;
+    border-radius: 0;
+    padding: 2px 22px 2px 7px;
+    min-height: 18px;
 }
 #PluginMode:hover, #PluginSidechain:hover { border-color: %ACCENT%; }
 #PluginMode:focus, #PluginSidechain:focus { border: 1px solid %ACCENT%; }
-#PluginMode QAbstractItemView, #PluginSidechain QAbstractItemView {
-    color: %TEXT%;
-    background: %ELEVATED%;
-    border: 1px solid %SEPARATOR%;
-    selection-background-color: %SELECTION%;
-    selection-color: %TEXT%;
-    outline: none;
-}
 #PluginWrapper QToolButton {
     color: %TEXT2%;
     background: %WELL%;
     border: 1px solid %SEPARATOR%;
-    border-radius: 5px;
+    border-radius: 0;
     font-weight: 700;
 }
 #PluginWrapper QToolButton:hover { color: %TEXT%; border-color: %ACCENT%; }

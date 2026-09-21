@@ -56,6 +56,61 @@
 #include <cmath>
 #include <cstdio>
 
+bool TimelineWidget::checkInterruptedPointerGestureForTest() {
+    daw::EngineController controller;
+    controller.initialize(48000.0, 512, false);
+    auto& project = const_cast<daw::ProjectModel&>(controller.project());
+    project.tracks.emplace_back();
+    project.tracks.back().id = "pointer-test-track";
+    project.invalidateTrackIndex();
+    TimelineWidget timeline(&controller);
+    timeline.resize(400, 180);
+    timeline.m_snapEnabled = false;
+    const auto mouse = [&](QEvent::Type type, QPointF pos,
+                           Qt::MouseButton button, Qt::MouseButtons buttons) {
+        QMouseEvent event(type, pos, timeline.mapToGlobal(pos),
+                          button, buttons, Qt::NoModifier);
+        QCoreApplication::sendEvent(&timeline, &event);
+    };
+    const auto press = [&](QPointF pos) {
+        mouse(QEvent::MouseButtonPress, pos, Qt::LeftButton, Qt::LeftButton);
+    };
+    const auto drag = [&](QPointF pos) {
+        mouse(QEvent::MouseMove, pos, Qt::NoButton, Qt::LeftButton);
+    };
+    const auto hover = [&](QPointF pos) {
+        mouse(QEvent::MouseMove, pos, Qt::NoButton, Qt::NoButton);
+    };
+
+    press({80, 22}); drag({160, 22});
+    const double stoppedAt = controller.positionSeconds();
+    hover({300, 22}); hover({350, 22});
+    const bool scrubStopped = !timeline.m_scrubbing &&
+        std::abs(controller.positionSeconds() - stoppedAt) < 1e-9;
+
+    press({90, 22}); drag({190, 22});
+    const double ungrabAt = controller.positionSeconds();
+    QEvent ungrab(QEvent::UngrabMouse);
+    QCoreApplication::sendEvent(&timeline, &ungrab);
+    hover({330, 22});
+    const bool ungrabStopped = !timeline.m_scrubbing &&
+        std::abs(controller.positionSeconds() - ungrabAt) < 1e-9;
+
+    timeline.setTool(Tool::Select);
+    press({80, 55}); drag({180, 80});
+    hover({320, 100});
+    const bool marqueeStopped = !timeline.m_marqueeActive &&
+        timeline.m_marqueeCurrent == QPoint(180, 80);
+
+    timeline.setTool(Tool::SelectRegion);
+    press({80, 55}); drag({200, 55});
+    QCoreApplication::sendEvent(&timeline, &ungrab);
+    const bool regionStopped = !timeline.m_regionPicking &&
+        timeline.m_regionActive && timeline.m_regionEnd > timeline.m_regionStart;
+
+    return scrubStopped && ungrabStopped && marqueeStopped && regionStopped;
+}
+
 bool TimelineWidget::checkGridAppearanceForTest() {
     const double savedWidth = ui::gridLineWidth();
     const int savedOpacity = ui::gridOpacity();
@@ -252,6 +307,96 @@ bool TimelineWidget::checkGestureGridStabilityForTest() {
         std::fprintf(stderr,
                      "clip gesture switched away from the stable grid tiles\n");
     return tiled;
+}
+
+bool TimelineWidget::checkClipTrimPreviewForTest() {
+    daw::EngineController controller;
+    if (!controller.initialize(48000.0, 512, false)) return false;
+    auto& project = const_cast<daw::ProjectModel&>(controller.project());
+    project.tracks.clear();
+    const daw::ClipKind kinds[] = {daw::ClipKind::Audio, daw::ClipKind::Midi,
+                                   daw::ClipKind::Pattern, daw::ClipKind::Automation};
+    const daw::TrackKind tracks[] = {daw::TrackKind::Audio, daw::TrackKind::Midi,
+                                     daw::TrackKind::Pattern, daw::TrackKind::Automation};
+    std::vector<std::pair<std::string, std::string>> addresses;
+    for (int i = 0; i < 4; ++i) {
+        daw::TrackModel track;
+        track.id = "trim-preview-" + std::to_string(i);
+        track.kind = tracks[i];
+        daw::ClipModel clip;
+        clip.id = track.id + "-clip";
+        clip.kind = kinds[i];
+        clip.startSeconds = 2.0;
+        clip.offsetSeconds = 12.0;
+        clip.durationSeconds = 2.0;
+        addresses.emplace_back(track.id, clip.id);
+        track.clips.push_back(std::move(clip));
+        project.tracks.push_back(std::move(track));
+    }
+    project.invalidateTrackIndex();
+    TimelineWidget timeline(&controller);
+    timeline.resize(1600, 600);
+    timeline.m_pixelsPerSecond = 80.0;
+    timeline.m_scrollSeconds = 0.0;
+    const auto render = [&](bool tiled) {
+        QImage image(timeline.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        if (tiled) {
+            // Match the GPU's independently culled 512px lane tiles.
+            for (int x = 0; x < timeline.width(); x += 512)
+                timeline.drawStaticFrame(painter, QRegion(QRect(x, 0, 512, timeline.height())));
+        } else timeline.drawStaticFrame(painter, QRegion(timeline.rect()));
+        return image;
+    };
+    (void)render(true); // Warm the interval cache at the original clip length.
+    const bool savedRounded = ui::roundedClipCorners();
+    ui::setRoundedClipCorners(true);
+    const QImage rounded = render(false);
+    ui::setRoundedClipCorners(false);
+    const QImage square = render(false);
+    ui::setRoundedClipCorners(savedRounded);
+    bool ok = true;
+    for (int lane = 0; lane < 4; ++lane) {
+        const QRect corner = timeline.clipRect(lane, project.tracks[lane].clips.front())
+                                 .toAlignedRect();
+        bool changed = false;
+        for (int y = corner.bottom() - 4; y <= corner.bottom(); ++y)
+            for (int x = corner.left(); x < corner.left() + 5; ++x)
+                changed |= rounded.pixel(x, y) != square.pixel(x, y);
+        if (!changed) {
+            std::fprintf(stderr, "clip corner preference did not redraw kind=%d\n", int(kinds[lane]));
+            ok = false;
+        }
+    }
+    if (const QString path = qEnvironmentVariable("DAW_CLIP_CORNERS_SCREENSHOT"); !path.isEmpty()) {
+        rounded.save(path + "-rounded.png");
+        square.save(path + "-square.png");
+    }
+    controller.beginClipTrimEdit(addresses);
+    // Extend across multiple tile boundaries, reverse, and move the left edge
+    // in both directions, all before committing the group gesture.
+    for (const auto [start, duration] : {std::pair{2., 14.}, {2., 2.}, {8., 8.},
+                                        {1., 15.}, {6., 10.}, {2., 2.}}) {
+        for (const auto& [track, clip] : addresses)
+            controller.setClipTrim(track, clip, start, 12. + start - 2., duration);
+        const QImage tiled = render(true);
+        const QImage whole = render(false);
+        for (int lane = 0; lane < 4; ++lane) {
+            bool visible = true;
+            const int y = timeline.laneTop(lane) + 32;
+            for (int x = 16; x < timeline.width(); x += 32)
+                visible &= tiled.pixel(x, y) == whole.pixel(x, y);
+            if (!visible) {
+                std::fprintf(stderr, "live trim preview clipped: kind=%d start=%.1f duration=%.1f\n",
+                             int(kinds[lane]), start, duration);
+                ok = false;
+            }
+        }
+        ok = timeline.checkClipIndexForTest() && ok;
+    }
+    controller.endClipTrimEdit();
+    return ok;
 }
 
 bool TimelineWidget::checkMoveGuidePaintForTest() {
@@ -480,6 +625,12 @@ bool checkUiScaling() {
     const auto check = [&](bool result, const char* name) {
         std::printf("%s  %s\n", result ? "PASS" : "FAIL", name); ok = ok && result;
     };
+    check(TimelineWidget::checkInterruptedPointerGestureForTest(),
+          "lost mouse release stops playhead, marquee and time selection");
+    if (qEnvironmentVariableIsSet("VLT_POINTER_RELEASE_CHECK_ONLY")) return ok;
+    check(TimelineWidget::checkClipTrimPreviewForTest(),
+          "live audio/MIDI/Pattern/automation trim stays visible across tile boundaries and reversals");
+    if (qEnvironmentVariableIsSet("VLT_CLIP_TRIM_CHECK_ONLY")) return ok;
     const auto settle = [](int ms = 80) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
     daw::EngineController controller;
     controller.initialize(48000.0, 512, false);
@@ -656,6 +807,12 @@ bool checkUiScaling() {
     check(near(timeline.pixelsPerSecondForTest(), startScale * 1.15), "one wheel notch retains 15 percent zoom");
     wheel(timeline, {}, {0, -120}, Qt::ControlModifier);
     const double zoomScroll = timeline.horizontalScrollForTest();
+    const double closeAnchor = timeAt(wheelX);
+    timeline.zoomBy(ui::kMaxTimelineZoom / timeline.pixelsPerSecondForTest(), wheelX);
+    check(near(timeline.pixelsPerSecondForTest(), ui::kMaxTimelineZoom) &&
+          near(timeAt(wheelX), closeAnchor),
+          "sample-level zoom reaches the new limit without moving the pointer anchor");
+    timeline.zoomBy(startScale / timeline.pixelsPerSecondForTest(), wheelX);
     wheel(timeline, {}, {}, Qt::ControlModifier, Qt::ScrollBegin);
     wheel(timeline, {}, {}, Qt::ControlModifier, Qt::ScrollEnd);
     check(near(timeline.pixelsPerSecondForTest(), startScale) &&
@@ -1153,7 +1310,7 @@ bool MainWindow::checkWorkspaceMotionForTest() {
     syncViews();
     resize(1600, 960);
     setMixerVisible(true);
-    m_mixerHeight = 320; layoutMixer();
+    m_mixerHeight = 320; layoutBottomPanels();
     show(); raise(); activateWindow();
     ui::FrameClock::instance().setPreference(ui::FrameMode::Display, 60);
     settle(1800);
@@ -1234,7 +1391,7 @@ bool MainWindow::checkWorkspaceMotionForTest() {
     if (surface && !failed && targetName == "mixer") {
         // Reveal lanes covered when the retained tiles were built, then compare
         // with a forced full rebuild at exactly the same geometry.
-        m_mixerHeight = 180; layoutMixer(); settle(150);
+        m_mixerHeight = 180; layoutBottomPanels(); settle(150);
         const QImage retained = surface->quickWindow()->grabWindow();
         m_timeline->update(); settle(150);
         if (retained != surface->quickWindow()->grabWindow()) {

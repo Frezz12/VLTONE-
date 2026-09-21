@@ -128,6 +128,18 @@ public:
         return m_automation.controlCopy();
     }
 
+    /// A live recording gesture owns this parameter until the next loop/stop.
+    void overrideAutomation(std::uint32_t index) {
+        const auto epoch = m_overrideEpoch.load(std::memory_order_acquire);
+        auto old = m_automationOverrides.controlCopy();
+        auto next = std::make_shared<AutomationOverrides>();
+        if (old) for (const auto& entry : *old) if (entry.second == epoch) next->push_back(entry);
+        if (std::none_of(next->begin(), next->end(), [index](const auto& e) { return e.first == index; })) {
+            next->emplace_back(index, epoch); m_automationOverrides.publish(std::move(next));
+        }
+    }
+    void clearAutomationOverrides() { m_overrideEpoch.fetch_add(1, std::memory_order_acq_rel); }
+
     /// Drain what the plugin reported back — parameters it moved in its own
     /// editor, gestures. Control thread.
     bool popNotification(PluginEvent& out) noexcept { return m_outbound.pop(out); }
@@ -159,6 +171,11 @@ public:
     void onReloadRequested() noexcept override;
 
 private:
+    using AutomationOverrides = std::vector<std::pair<std::uint32_t, std::uint64_t>>;
+    engine::RealtimeSnapshot<AutomationOverrides> m_automationOverrides;
+    std::atomic<std::uint64_t> m_overrideEpoch{0};
+    bool m_overrideWasPlaying = false;
+    double m_overrideLastBeat = 0;
     struct OfflineConfiguration {
         engine::FrameCount latency = 0;
         std::uint64_t tail = 0;

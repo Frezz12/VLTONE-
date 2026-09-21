@@ -76,6 +76,9 @@ func commandAssetRequirements(kind string, payload json.RawMessage,
 		if err != nil {
 			return nil, invalidf("take command contains an invalid asset reference")
 		}
+		if take["asset"] == nil && take["notes"] != nil {
+			return nil, validateMidiTake(body["take"])
+		}
 		requirement, err := assetRequirement(take["asset"])
 		if err != nil || requirement.Kind != "audio" {
 			return nil, invalidf("take command contains an invalid asset reference")

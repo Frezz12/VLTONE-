@@ -305,8 +305,10 @@ std::string commandKind(const ProjectCommand& command) {
             return "compSegment.delete";
         else if constexpr (std::is_same_v<T, RestoreCompSegment>)
             return "compSegment.restore";
-        else if constexpr (std::is_same_v<T, RecordingCommit>)
-            return "recording.commit";
+        else if constexpr (std::is_same_v<T, PrepareMidiPart>) return "recording.prepareMidi";
+        else if constexpr (std::is_same_v<T, ApplyMidiContent>) return "recording.applyMidi";
+        else if constexpr (std::is_same_v<T, RestoreMidiContent>) return "recording.restoreMidi";
+        else if constexpr (std::is_same_v<T, RecordingCommit>) return "recording.commit";
         else
             return "batch";
     }, command.body);
@@ -636,8 +638,8 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                 return requireUuid(body.trackId, "trackId") &&
                        requireUuid(body.clipId, "clipId") &&
                        requireUuid(body.take.id, "take.id") &&
-                       requireUuid(body.take.asset.assetId,
-                                   "take.asset.assetId") &&
+                       (body.take.asset.empty() ? command.meta.schemaVersion >= 4 : requireUuid(body.take.asset.assetId,
+                                   "take.asset.assetId")) &&
                        requireOptionalUuid(body.afterId, "afterId");
             } else if constexpr (std::is_same_v<T, DeleteTake>) {
                 return requireUuid(body.trackId, "trackId") &&
@@ -674,6 +676,14 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                        requireUuid(body.segmentId, "segmentId") &&
                        requireUuid(body.deleteOperationId,
                                    "deleteOperationId");
+            } else if constexpr (std::is_same_v<T, PrepareMidiPart>) {
+                return value.meta.schemaVersion >= 4 && body.count > 0 && body.count <= 1024 && body.index < body.count &&
+                    requireUuid(body.recordingId,"recordingId") && requireUuid(body.contentId,"contentId");
+            } else if constexpr (std::is_same_v<T, ApplyMidiContent>) {
+                return value.meta.schemaVersion >= 4 && body.count > 0 && body.count <= 1024 &&
+                    requireUuid(body.trackId,"trackId") && requireUuid(body.clipId,"clipId") && requireUuid(body.recordingId,"recordingId") && requireUuid(body.contentId,"contentId");
+            } else if constexpr (std::is_same_v<T, RestoreMidiContent>) {
+                return value.meta.schemaVersion >= 4 && requireUuid(body.trackId,"trackId") && requireUuid(body.clipId,"clipId") && requireUuid(body.operationId,"operationId");
             } else if constexpr (std::is_same_v<T, RecordingCommit>) {
                 const bool leaseFreeNewClips = body.leases.empty();
                 if (!body.batch ||
@@ -716,7 +726,8 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                         std::holds_alternative<SetClipProperty>(child.body) ||
                         std::holds_alternative<SetClipAsset>(child.body) ||
                         std::holds_alternative<AddTake>(child.body) ||
-                        std::holds_alternative<UpsertCompSegment>(child.body);
+                        std::holds_alternative<UpsertCompSegment>(child.body) ||
+                        (value.meta.schemaVersion >= 4 && (std::holds_alternative<ApplyMidiContent>(child.body) || std::holds_alternative<DeleteClip>(child.body) || std::holds_alternative<SetClipPatternOwner>(child.body)));
                     if (!allowed) {
                         return fail(
                             "command kind is not allowed in recording.commit");
@@ -1114,6 +1125,10 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
                 fields.insert("compSegment:" + body.segmentId +
                               ":lifecycle");
                 addClipDescendants(body.clipId);
+            } else if constexpr (std::is_same_v<T, PrepareMidiPart>) {
+                fields.insert("midiContent:" + body.contentId + ":part:" + std::to_string(body.index));
+            } else if constexpr (std::is_same_v<T, ApplyMidiContent> || std::is_same_v<T, RestoreMidiContent>) {
+                fields.insert("clip:" + body.clipId + ":midiContent"); addClipDescendants(body.clipId);
             } else if constexpr (std::is_same_v<T, RecordingCommit>) {
                 for (const RecordingLeaseClaim& lease : body.leases)
                     addTrackClipLandingHead(lease.trackId);

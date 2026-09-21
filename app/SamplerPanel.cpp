@@ -1062,10 +1062,8 @@ QTabBar#SamplerToolsTabs::tab:hover { color: %ACCENT%; }
 #SamplerButton:hover { background: %HOVER%; }
 #SamplerButton:pressed { background: %ACCENT%; color: %BG%; }
 #SamplerButton:focus, QComboBox:focus { border: 1px solid %ACCENT%; }
-QComboBox { color: %TEXT%; background: %WELL%; border: none; border-radius: 4px;
+QComboBox { color: %TEXT%; background: %WELL%; border: none; border-radius: 0;
             padding: 3px 8px; font-size: 11px; }
-QComboBox QAbstractItemView { background: %SURFACE%; color: %TEXT%;
-                              selection-background-color: %ACCENT%; }
 )")
             .replace("%SURFACE%", t.surface.name())
             .replace("%WELL%", t.well().name())

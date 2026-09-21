@@ -1,0 +1,200 @@
+{
+  "notes": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "pitch": 61,
+      "startBeats": 0.25,
+      "lengthBeats": 1.5,
+      "velocity": 111,
+      "releaseVelocity": 45,
+      "channel": 2,
+      "startOrder": 1,
+      "endOrder": 11,
+      "pan": 0.0,
+      "muted": false,
+      "color": 0
+    }
+  ],
+  "lanes": [
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "name": "Target 64",
+      "cc": 64,
+      "channel": 2,
+      "key": 0,
+      "parameterId": "",
+      "slotId": "",
+      "defaultValue": 0.5,
+      "points": [
+        {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "beats": 0.25,
+          "value": 0.5,
+          "shape": "hold",
+          "curve": 0.0,
+          "eventOrder": 2
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "name": "Target -2",
+      "cc": -2,
+      "channel": 2,
+      "key": 0,
+      "parameterId": "",
+      "slotId": "",
+      "defaultValue": 0.5,
+      "points": [
+        {
+          "id": "00000000-0000-4000-8000-000000000005",
+          "beats": 0.25,
+          "value": 0.5861563816150888,
+          "shape": "hold",
+          "curve": 0.0,
+          "eventOrder": 3
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "name": "Target -3",
+      "cc": -3,
+      "channel": 2,
+      "key": 0,
+      "parameterId": "",
+      "slotId": "",
+      "defaultValue": 0.5,
+      "points": [
+        {
+          "id": "00000000-0000-4000-8000-000000000007",
+          "beats": 0.25,
+          "value": 0.5,
+          "shape": "hold",
+          "curve": 0.0,
+          "eventOrder": 4
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000008",
+      "name": "Target -4",
+      "cc": -4,
+      "channel": 2,
+      "key": 61,
+      "parameterId": "",
+      "slotId": "",
+      "defaultValue": 0.5,
+      "points": [
+        {
+          "id": "00000000-0000-4000-8000-000000000009",
+          "beats": 0.25,
+          "value": 0.5,
+          "shape": "hold",
+          "curve": 0.0,
+          "eventOrder": 5
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000010",
+      "name": "Target -5",
+      "cc": -5,
+      "channel": 2,
+      "key": 0,
+      "parameterId": "",
+      "slotId": "",
+      "defaultValue": 0.5,
+      "points": [
+        {
+          "id": "00000000-0000-4000-8000-000000000011",
+          "beats": 0.25,
+          "value": 0.5,
+          "shape": "hold",
+          "curve": 0.0,
+          "eventOrder": 6
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000012",
+      "name": "Target -1",
+      "cc": -1,
+      "channel": 2,
+      "key": 0,
+      "parameterId": "cutoff",
+      "slotId": "",
+      "defaultValue": 0.5,
+      "points": [
+        {
+          "id": "00000000-0000-4000-8000-000000000013",
+          "beats": 0.25,
+          "value": 0.5,
+          "shape": "hold",
+          "curve": 0.0,
+          "eventOrder": 7
+        }
+      ]
+    }
+  ],
+  "takes": [
+    {
+      "id": "00000000-0000-4000-8000-000000000014",
+      "name": "MIDI layer",
+      "offsetSeconds": 0.0,
+      "lengthSeconds": 2.0,
+      "clipOffsetSeconds": 0.0,
+      "gain": 1.0,
+      "muted": false,
+      "channels": 0,
+      "color": 0,
+      "notes": [
+        {
+          "id": "00000000-0000-4000-8000-000000000015",
+          "pitch": 61,
+          "startBeats": 0.25,
+          "lengthBeats": 1.5,
+          "velocity": 111,
+          "releaseVelocity": 45,
+          "channel": 2,
+          "startOrder": 1,
+          "endOrder": 11,
+          "pan": 0.0,
+          "muted": false,
+          "color": 0
+        }
+      ],
+      "lanes": [
+        {
+          "id": "00000000-0000-4000-8000-000000000016",
+          "name": "Target 74",
+          "cc": 74,
+          "channel": 2,
+          "key": 0,
+          "parameterId": "",
+          "slotId": "",
+          "defaultValue": 0.5,
+          "points": [
+            {
+              "id": "00000000-0000-4000-8000-000000000017",
+              "beats": 0.25,
+              "value": 0.5,
+              "shape": "hold",
+              "curve": 0.0,
+              "eventOrder": 8
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "comp": [
+    {
+      "id": "00000000-0000-4000-8000-000000000018",
+      "takeId": "00000000-0000-4000-8000-000000000014",
+      "startSeconds": 0.0,
+      "endSeconds": 2.0
+    }
+  ],
+  "expanded": true
+}

@@ -201,6 +201,8 @@ private:
     ui::MsrButton* m_monitor = nullptr;
     QLabel* m_gainLabel = nullptr;
     QLabel* m_panLabel = nullptr;
+    QLabel* m_headerName = nullptr;
+    QWidget* m_headerSwatch = nullptr;
     QLabel* m_namePlate = nullptr;
     QString m_namePlateStyleKey;
     RoutingField* m_inputButton = nullptr;

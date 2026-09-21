@@ -185,6 +185,14 @@ set_tests_properties(resampler_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 
 add_executable(time_stretch_test time_stretch_test.cpp)
+add_executable(warp_test warp_test.cpp)
+add_executable(warp_audio_test warp_audio_test.cpp)
+target_link_libraries(warp_audio_test PRIVATE daw_engine)
+add_test(NAME warp_audio_test COMMAND warp_audio_test)
+set_tests_properties(warp_audio_test PROPERTIES TIMEOUT 30)
+target_link_libraries(warp_test PRIVATE daw_controller)
+add_test(NAME warp_test COMMAND warp_test)
+set_tests_properties(warp_test PROPERTIES TIMEOUT 90)
 target_link_libraries(time_stretch_test PRIVATE daw_engine)
 add_test(NAME time_stretch_test COMMAND time_stretch_test)
 set_tests_properties(time_stretch_test PROPERTIES
@@ -605,3 +613,13 @@ if(NOT WIN32)
     add_test(NAME audio_device_recovery_test COMMAND audio_device_recovery_test)
     set_tests_properties(audio_device_recovery_test PROPERTIES TIMEOUT 45)
 endif()
+
+add_executable(midi_recording_test midi_recording_test.cpp)
+target_link_libraries(midi_recording_test PRIVATE daw_controller)
+add_test(NAME midi_recording_test COMMAND midi_recording_test)
+set_tests_properties(midi_recording_test PROPERTIES TIMEOUT 60)
+
+add_executable(midi_recording_protocol_test midi_recording_protocol_test.cpp)
+target_link_libraries(midi_recording_protocol_test PRIVATE daw_controller)
+add_test(NAME midi_recording_protocol_test COMMAND midi_recording_protocol_test)
+set_tests_properties(midi_recording_protocol_test PROPERTIES TIMEOUT 120)

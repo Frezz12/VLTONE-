@@ -1013,6 +1013,7 @@ QTabBar::tab:focus { background: %8; }
 #NotebookSaveStatus { color: %4; font-size: 11px; }
 #NotebookSaveStatus[error="true"] { color: %5; }
 QComboBox, QToolButton { background: %6; color: %3; border: 1px solid %7; border-radius: 7px; padding: 3px 7px; }
+QComboBox { border-radius: 0; }
 QComboBox:focus, QToolButton:focus { border: 2px solid %2; }
 QToolButton:hover { background: %8; }
 )CSS")

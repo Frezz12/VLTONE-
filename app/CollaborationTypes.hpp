@@ -13,9 +13,11 @@
 namespace collab {
 
 inline constexpr int kProtocolVersionV2 = 2;
-inline constexpr int kProtocolVersion = 3;
+inline constexpr int kProtocolVersionV3 = 3;
+inline constexpr int kProtocolVersion = 4;
 inline constexpr auto kProtocolNameV2 = "vlt-collab-v2";
-inline constexpr auto kProtocolName = "vlt-collab-v3";
+inline constexpr auto kProtocolNameV3 = "vlt-collab-v3";
+inline constexpr auto kProtocolName = "vlt-collab-v4";
 
 QString protocolNameForCommandSchema(int schemaVersion);
 bool isSupportedProtocolName(const QString& protocol);

@@ -3,6 +3,7 @@
 #include "Audio/SampleBuffer.hpp"
 #include "DSP/Simd.hpp"
 #include "DSP/TimeStretch.hpp"
+#include "DSP/WarpPlayback.hpp"
 #include "Graph/Node.hpp"
 #include "Common/RealtimeSnapshot.hpp"
 
@@ -47,6 +48,10 @@ struct ClipPlacement {
     float pan = 0.0f;
     bool muted = false;
     // Prepared by setClips on the control thread.
+    std::string clipId;
+    std::shared_ptr<const daw::ClipWarpModel> warp;
+    double warpTempo = 120;
+    std::shared_ptr<dsp::WarpPlayback> warpPlayback;
     float fadeInExponent = 1.0f, fadeOutExponent = 1.0f;
     std::shared_ptr<dsp::TimeStretch> stretcher; // prepared off the audio thread
 };
@@ -81,12 +86,20 @@ public:
         auto prepared = std::make_shared<ClipList>(*clips);
         for (std::size_t index = 0; index < prepared->size(); ++index) {
             auto& clip = (*prepared)[index];
+            if (clip.warp && clip.audio) {
+                std::shared_ptr<dsp::WarpPlayback> old;
+                if (previous) for (const auto& prior : *previous)
+                    if (prior.clipId == clip.clipId && prior.audio == clip.audio) { old = prior.warpPlayback; break; }
+                if (old && old->sampleRate() != m_sampleRate) old.reset();
+                clip.warpPlayback = old && daw::sameWarpAudio(old->map, *clip.warp) && old->tempo == clip.warpTempo ? old :
+                    std::make_shared<dsp::WarpPlayback>(*clip.warp, clip.warpTempo, m_sampleRate, old);
+            }
             clip.fadeInExponent = std::pow(4.0f, -std::clamp(clip.fadeInCurve, -1.0f, 1.0f));
             clip.fadeOutExponent = std::pow(4.0f, -std::clamp(clip.fadeOutCurve, -1.0f, 1.0f));
             const int mode = clip.stretchMode ? clip.stretchMode : 4;
             const double ratio = std::max(clip.stretchTime, 1.0 / std::max(clip.stretchTime, .001));
             if (clip.audio && clip.sourceStartFrame >= 0 &&
-                (clip.stretchMode != 0 || std::abs(clip.stretchPitch) > 0.001)) {
+                !clip.warp && (clip.stretchMode != 0 || std::abs(clip.stretchPitch) > 0.001)) {
                 // Reuse one processor per placement across control edits.
                 // Matching by index is one-to-one even for overlapping copies
                 // of the same file. The DSP detects source changes/seeks itself.
@@ -149,7 +162,8 @@ private:
             if (clip.audio && clipEnd(clip) > position) {
                 const double rate = clip.audio->sampleRate() / m_sampleRate;
                 const double rel = double(std::max<SamplePos>(0, position - clip.startSample));
-                const double start = clip.sourceStartFrame >= 0 ? clip.sourceStartFrame + rel * rate / std::max(.001, clip.stretchTime)
+                const double start = clip.warp ? daw::warpSourceAt(*clip.warp, rel / m_sampleRate * clip.warpTempo / 60.) * clip.audio->sampleRate() :
+                    clip.sourceStartFrame >= 0 ? clip.sourceStartFrame + rel * rate / std::max(.001, clip.stretchTime)
                                                                : (clip.offsetSamples + rel) * rate;
                 const auto request = [&](double frame) {
                     const auto first = FrameCount(std::clamp(frame, 0., double(clip.audio->frames())));
@@ -171,8 +185,10 @@ public:
     void reset() override {
 
         auto schedule = m_clips.read();
-        if (schedule) for (const auto& clip : *schedule->clips)
+        if (schedule) for (const auto& clip : *schedule->clips) {
             if (clip.stretcher) clip.stretcher->reset();
+            if (clip.warpPlayback) clip.warpPlayback->reset();
+        }
     }
 
     void process(const ProcessContext& context) override {
@@ -293,6 +309,21 @@ public:
 
             const bool sampleEdited = clip.sourceStartFrame >= 0.0 &&
                                       clip.sourceEndFrame > clip.sourceStartFrame;
+            if (clip.warpPlayback) {
+                for (FrameCount done = 0; done < count;) {
+                    const auto n = std::min<FrameCount>(count - done, m_stretchLeft.size());
+                    clip.warpPlayback->render(*clip.audio, double(clipRelStart + done) / m_sampleRate,
+                        clip.stretchPitch, clip.formant, m_stretchLeft.data(), m_stretchRight.data(), n);
+                    for (ChannelCount ch = 0; ch < channels; ++ch) {
+                        const float* source = ch == 0 ? m_stretchLeft.data() : m_stretchRight.data();
+                        float* destination = context.output.data(ch) + destinationOffset + done;
+                        for (FrameCount i = 0; i < n; ++i)
+                            destination[i] += source[i] * channelGain(ch) * fadeAt(clipRelStart + done + i);
+                    }
+                    done += n;
+                }
+                return;
+            }
             if (sampleEdited) {
                 const double sourceBegin = clip.sourceStartFrame;
                 const double sourceEnd = std::min(

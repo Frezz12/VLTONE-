@@ -59,6 +59,7 @@ public:
     /// the keyboard is on — on macOS the menu bar is the system's, and AppKit
     /// takes a key equivalent before any Qt filter is consulted.
     static bool usesKey(int key);
+    static bool reservesKey(int key);
 
     /// How many keys are sounding right now. Only interesting to the headless
     /// check, which has no ears.

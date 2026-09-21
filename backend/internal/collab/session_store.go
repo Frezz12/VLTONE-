@@ -95,7 +95,7 @@ func (s *Store) startSession(ctx context.Context, projectID, actorUserID,
 		return SessionState{}, invalidf("session mode or device is invalid")
 	}
 	if compatibility != nil &&
-		compatibility.CommandSchemaVersion == CollaborationCommandSchemaV3 &&
+		compatibility.CommandSchemaVersion >= CollaborationCommandSchemaV3 &&
 		mode != model.SessionModeIndependent {
 		return SessionState{}, invalidf("v3 sessions require independent transport")
 	}
@@ -134,12 +134,23 @@ func (s *Store) startSession(ctx context.Context, projectID, actorUserID,
 		if compatibility != nil {
 			commandSchemaVersion = compatibility.CommandSchemaVersion
 		}
+		// Once a project contains v4 content an older client cannot start a
+		// room whose reducer would discard the new MIDI properties.
+		if commandSchemaVersion < CollaborationCommandSchemaV4 {
+			var newer int64
+			if err := tx.Model(&model.ProjectOperation{}).Where("project_id = ? AND schema_version >= ?", projectID, CollaborationCommandSchemaV4).Count(&newer).Error; err != nil {
+				return err
+			}
+			if newer != 0 {
+				return invalidf("project requires collaboration command schema v4")
+			}
+		}
 		manifestRevision := int64(0)
 		manifestJSON := json.RawMessage("[]")
 		readinessStatus, effectiveRole := model.SessionReadinessReady, view.Role
 		readinessRevision := int64(0)
 		readinessJSON := json.RawMessage("[]")
-		if commandSchemaVersion == CollaborationCommandSchemaV3 {
+		if commandSchemaVersion >= CollaborationCommandSchemaV3 {
 			if readiness == nil {
 				return invalidf("v3 host plugin readiness is required")
 			}
@@ -351,7 +362,7 @@ func (s *Store) joinSession(ctx context.Context, projectID, sessionID,
 				readinessStatus, effectiveRole := model.SessionReadinessReady, view.Role
 				readinessRevision := int64(0)
 				readinessJSON := json.RawMessage("[]")
-				if session.CommandSchemaVersion == CollaborationCommandSchemaV3 {
+				if session.CommandSchemaVersion >= CollaborationCommandSchemaV3 {
 					if readiness == nil {
 						return invalidf("v3 plugin readiness is required")
 					}
@@ -470,7 +481,7 @@ func (s *Store) UpdatePluginReadiness(ctx context.Context, projectID, sessionID,
 		if err != nil {
 			return err
 		}
-		if session.CommandSchemaVersion != CollaborationCommandSchemaV3 {
+		if session.CommandSchemaVersion < CollaborationCommandSchemaV3 {
 			return ErrVersionMismatch
 		}
 		member, err := s.activeSessionMemberTx(tx, sessionID, actorUserID,
@@ -530,7 +541,7 @@ func (s *Store) ActivateSession(ctx context.Context, projectID, sessionID,
 		if err != nil {
 			return err
 		}
-		if session.CommandSchemaVersion != CollaborationCommandSchemaV3 {
+		if session.CommandSchemaVersion < CollaborationCommandSchemaV3 {
 			return ErrVersionMismatch
 		}
 		member, err := s.activeSessionMemberTx(tx, sessionID, actorUserID,
@@ -1298,7 +1309,7 @@ func (s *Store) hostCandidateTx(tx *gorm.DB, project model.CloudProject,
 		if err != nil {
 			return model.ProjectSessionMember{}, false, err
 		}
-		if session.CommandSchemaVersion == CollaborationCommandSchemaV3 {
+		if session.CommandSchemaVersion >= CollaborationCommandSchemaV3 {
 			role = member.EffectiveRole
 			if member.ReadinessRevision != session.PluginRequirementsRevision ||
 				member.ReadinessStatus != model.SessionReadinessReady {

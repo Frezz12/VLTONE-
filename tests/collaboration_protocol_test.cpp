@@ -407,7 +407,7 @@ void serializerV7AndLegacyMigration(const fs::path& dir) {
               .isOk(),
           "writes v8 project document");
     const json saved = readJson(v8File);
-    check(saved.value("version", 0) == 8 &&
+    check(saved.value("version", 0) == daw::ProjectSerializer::kFormatVersion &&
               saved.value("renderSampleRate", 0.0) == 96000.0 &&
               !saved.contains("sampleRate"),
           "v8 writer publishes a durable render sample rate");
@@ -2432,7 +2432,7 @@ void routingPluginAssetReducerAndWire() {
                                        "quality", 1.0, false}).changed(),
           "pitch correction, reference tuning and quality pass shared validation");
 
-    for (const char* uid : {"daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser"}) {
+    for (const char* uid : {"daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser", "daw.modulation"}) {
         const std::string key(uid);
         InsertModel modulation = builtinInsert(key, key);
         const std::string parameter = key.starts_with("daw.doubler") ? "width" : "amount";

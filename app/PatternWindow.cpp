@@ -334,9 +334,10 @@ private:
         m_cachedNotes = {};
         m_cachedNoteCount = 0;
 
+        const auto previewClips = daw::midiPlaybackClips(track, tempo);
         int low = 127;
         int high = 0;
-        for (const auto& clip : track.clips) {
+        for (const auto& clip : previewClips) {
             if (clip.kind != daw::ClipKind::Midi) continue;
             for (const auto& note : clip.notes) {
                 low = std::min(low, note.pitch);
@@ -361,7 +362,7 @@ private:
         // the phrase envelope while bounding path primitives. Crucially, this
         // full model pass now happens only after a note revision or resize; a
         // hover repaint simply fills the cached path.
-        for (const auto& clip : track.clips) {
+        for (const auto& clip : previewClips) {
             if (clip.kind != daw::ClipKind::Midi) continue;
             for (const auto& note : clip.notes) {
                 if ((visited++ % stride) != 0) continue;
@@ -682,6 +683,7 @@ QStringList PatternWindow::childTrackIds() const {
     ids.reserve(int(tracks.size()));
     for (const auto& track : tracks) {
         const bool channel = daw::trackAccepts(track.kind, daw::ClipKind::Midi) ||
+            track.kind == daw::TrackKind::Audio ||
             (track.kind == daw::TrackKind::Folder && track.summing) ||
             track.kind == daw::TrackKind::Group;
         if (channel && ownsTrack(&track))
@@ -722,6 +724,7 @@ void PatternWindow::setSelectedSources(const QStringList& ids,
     m_selectedIds = selected;
     m_primaryId = lead;
     updateSelectionVisuals();
+    emit sourceSelectionChanged();
 }
 
 void PatternWindow::selectRange(int first, int last) {
@@ -742,6 +745,7 @@ void PatternWindow::selectRange(int first, int last) {
     m_selectedIds = std::move(range);
     m_primaryId = lead;
     updateSelectionVisuals();
+    emit sourceSelectionChanged();
 }
 
 void PatternWindow::updateSelectionVisuals() {
@@ -1278,8 +1282,10 @@ void PatternWindow::rebuildRows() {
         if (!midiSource) {
             sketch->setEnabled(false);
             sketch->setCursor(Qt::ArrowCursor);
-            sketch->setAccessibleName(tr("Group channel"));
-            sketch->setToolTip(tr("Group channel"));
+            const QString description = track->kind == daw::TrackKind::Audio
+                ? tr("Audio channel") : tr("Group channel");
+            sketch->setAccessibleName(description);
+            sketch->setToolTip(description);
         }
         connect(sketch, &QAbstractButton::clicked, this,
                 [this, id] { openRoll(id); });
@@ -1419,12 +1425,15 @@ bool PatternWindow::syncRowsFromModel() {
         row->setAccessibleName(
             tr("Pattern source %1").arg(QString::fromStdString(track->name)));
         name->setSourceColor(rgb(track->color));
+        const QString nonMidiDescription = track->kind == daw::TrackKind::Audio
+            ? tr("Audio channel") : tr("Group channel");
         name->syncFromModel(QString::fromStdString(track->name),
                             row->property("midiSource").toBool()
-                                ? QString::fromStdString(track->instrument.name) : tr("Group channel"));
+                                ? QString::fromStdString(track->instrument.name)
+                                : nonMidiDescription);
         if (!row->property("midiSource").toBool()) {
             name->setCursor(Qt::ArrowCursor);
-            name->setToolTip(tr("Group channel"));
+            name->setToolTip(nonMidiDescription);
             name->setAccessibleName(QString::fromStdString(track->name));
         }
 
@@ -1652,8 +1661,8 @@ void PatternWindow::transposeSelectedSourcesBy(int semitones) {
             m_controller->project().findTrack(id.toStdString());
         if (!ownsTrack(track) || !daw::trackAccepts(track->kind, daw::ClipKind::Midi)) continue;
         for (const auto& clip : track->clips) {
-            if (clip.kind != daw::ClipKind::Midi || clip.notes.empty()) continue;
-            Job job{id.toStdString(), clip.id, clip.notes};
+            if (clip.kind != daw::ClipKind::Midi || daw::midiNotes(clip).empty()) continue;
+            Job job{id.toStdString(), clip.id, daw::midiNotes(clip)};
             for (auto& note : job.notes) note.pitch += semitones;
             jobs.push_back(std::move(job));
         }
@@ -2318,6 +2327,24 @@ bool PatternWindow::checkEditingForTest() {
           !window.childTrackIds().contains(QString::fromStdString(nestedSound)) &&
           !window.childTrackIds().contains(QString::fromStdString(other)),
           "plain folders keep MIDI visible without leaking another Pattern's sources");
+    const std::string audio = controller.addTrack(daw::TrackKind::Audio,
+                                                  "Rendered source");
+    controller.moveTrackToFolder(audio, groupedPattern);
+    window.refresh();
+    QWidget* audioRow = nullptr;
+    for (QWidget* row : std::as_const(window.m_rowWidgets)) {
+        if (row && row->property("trackId").toString() ==
+                       QString::fromStdString(audio)) audioRow = row;
+    }
+    auto* audioLevel = audioRow
+        ? audioRow->findChild<ui::FaderWidget*>("PatternSourceLevel") : nullptr;
+    check(audioLevel && window.childTrackIds().contains(
+              QString::fromStdString(audio)),
+          "bounced audio has a level control in the Pattern window");
+    controller.setTrackVolumeLive(audio, 0.35f);
+    window.refresh();
+    check(audioLevel && std::abs(audioLevel->gain() - 0.35) < 1e-5,
+          "Pattern audio level follows its track fader");
     return ok;
 }
 

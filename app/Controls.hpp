@@ -287,16 +287,9 @@ private:
     Fade m_pressFade{this, 90};
 };
 
-/// The channel fader: a console fader, not a slider.
-///
-/// Deliberately its own instrument, drawn nothing like `paintSlider` above. It
-/// is the one control on the strip that an engineer reads *without* touching —
-/// which is what the whole shape is for: a thin recessed slot so the cap's
-/// position is unambiguous, a wide milled cap that reads at a glance and gives
-/// the finger something to sit on, and a printed dB scale beside it so a level
-/// can be read off the panel rather than off a number. That is Logic's fader,
-/// and every console it borrowed it from; what is ours is the palette, the
-/// accent lit in the slot below the cap, and the glass on the cap's face.
+/// Console fader with a broad graphite grip and a recessed rail. A single
+/// light inlay marks the exact gain position; the curved crown and lower
+/// casting give the grip depth without moving that marker on hover or press.
 ///
 /// Vertical in the mixer, horizontal in the track headers — same feel and the
 /// same unity detent in both. The scale only appears where there is width for

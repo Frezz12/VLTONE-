@@ -634,9 +634,9 @@ protected:
                    QPointF(r.right() - 4.0, r.top() + 1.0));
 
         QFont f = font();
-        f.setPixelSize(7);
-        f.setBold(true);
-        f.setLetterSpacing(QFont::PercentageSpacing, 108);
+        f.setPixelSize(8);
+        f.setWeight(QFont::Normal);
+        f.setLetterSpacing(QFont::PercentageSpacing, 100);
         p.setFont(f);
         p.setPen(mixColors(t.textSecondary, t.background, isEnabled() ? 0.2 : 0.5));
         p.drawText(QRectF(r.left() + 4.0, r.top(), kCaptionWidth, r.height()),
@@ -657,7 +657,7 @@ protected:
 private:
     void relabel() {
         const int available =
-            width() - int(kCaptionWidth) - kCaretWidth - kFieldPad * 2;
+            width() - int(kCaptionWidth) - kCaretWidth - kFieldPad * 2 - 2;
         setText(fontMetrics().elidedText(m_full, Qt::ElideRight,
                                          std::max(0, available)));
         setToolTip(m_full);
@@ -816,6 +816,7 @@ QWidget* ChannelStrip::buildHeader() {
     box->setFixedHeight(20);
 
     auto* swatch = new QWidget(box);
+    m_headerSwatch = swatch;
     swatch->setObjectName("ColorSwatch");
     swatch->setFixedSize(5, 18);
     uint32_t color = 0x888888;
@@ -831,6 +832,7 @@ QWidget* ChannelStrip::buildHeader() {
             name = QString::fromStdString(t->name);
     }
     auto* label = new QLabel(name, box);
+    m_headerName = label;
     label->setObjectName("StripName");
 
     row->addWidget(swatch);
@@ -1071,9 +1073,9 @@ QWidget* ChannelStrip::buildSlotWell(const QString& title, QWidget* addButton,
             [this] { emit structureChanged(); }, box);
         handle->setProperty("role", "section");
         QFont f = handle->font();
-        f.setPixelSize(9);
-        f.setBold(true);
-        f.setLetterSpacing(QFont::AbsoluteSpacing, 0.7);
+        f.setPixelSize(10);
+        f.setWeight(QFont::Medium);
+        f.setLetterSpacing(QFont::AbsoluteSpacing, 0.3);
         handle->setFont(f);
         caption = handle;
     } else {
@@ -2155,6 +2157,11 @@ void ChannelStrip::syncFromModel() {
         updateNamePlate(tr("MASTER"), 0x888888);
     } else if (const auto* t =
                    m_controller->project().findTrack(m_trackId.toStdString())) {
+        m_headerName->setText(QString::fromStdString(t->name));
+        const QString swatchStyle = QString("background: %1; border-radius: 2px;")
+                                        .arg(colorFromRgb(t->color).name());
+        if (m_headerSwatch->styleSheet() != swatchStyle)
+            m_headerSwatch->setStyleSheet(swatchStyle);
         updateNamePlate(QString::fromStdString(t->name).toUpper(), t->color);
         if (!m_fader->isEditing()) m_fader->setGain(t->volume);
         if (!m_pan->isEditing()) m_pan->setPan(t->pan);
@@ -2702,7 +2709,7 @@ QLabel { color: %TEXT2%; font-size: 10px; }
    paints on the left and the caret it paints on the right. */
 #RoutingButton {
     background: %RECESS%; border: 1px solid %SEP%; border-radius: 5px;
-    color: %TEXT%; font-size: 9px; font-weight: 600; padding: 0 14px;
+    color: %TEXT%; font-size: 10px; font-weight: 400; padding: 0 10px 0 25px;
 }
 #RoutingButton:hover { background: %WELL%; border-color: %ACCENT_SOFT%; }
 #RoutingButton:disabled { color: %TEXT2%; }
@@ -2710,7 +2717,7 @@ QLabel { color: %TEXT2%; font-size: 10px; }
 #SlotWell { background: %WELL%; border: 1px solid %SEP%; border-radius: 7px; }
 #SlotButton {
     background: %SLOT%; border: 1px solid %SEP%; border-radius: 4px;
-    color: %TEXT2%; font-size: 9px; font-weight: 600; padding: 0 5px;
+    color: %TEXT2%; font-size: 10px; font-weight: 400; padding: 0 5px;
     text-align: left;
 }
 #SlotButton[active="true"] { color: %TEXT%; border-color: %ACCENT%; }
@@ -2729,7 +2736,7 @@ QLabel { color: %TEXT2%; font-size: 10px; }
    only one that says its state in letters rather than in a glyph. */
 #TapButton {
     background: %SLOT%; border: 1px solid %SEP%; border-radius: 4px;
-    color: %ACCENT%; font-size: 8px; font-weight: 700; padding: 0;
+    color: %ACCENT%; font-size: 9px; font-weight: 500; padding: 0;
 }
 #TapButton:hover { background: %HOVER%; }
 #TapButton::menu-indicator { image: none; width: 0; }

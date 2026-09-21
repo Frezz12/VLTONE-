@@ -4,11 +4,15 @@
 #include "EngineController.hpp"
 #include "PluginFormatPreference.hpp"
 #include "Theme.hpp"
+#include "UiConstants.hpp"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -17,6 +21,8 @@
 #include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QShortcut>
+#include <QSignalBlocker>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTimer>
@@ -69,13 +75,34 @@ PluginManagerWindow::PluginManagerWindow(daw::EngineController* controller,
                                          QWidget* parent)
     : QDialog(parent, Qt::Widget), m_controller(controller) {
     setWindowTitle(tr("Plugin Manager — %1").arg(QApplication::applicationDisplayName()));
-    resize(880, 580);
+    resize(920, 620);
+    setMinimumSize(720, 480);
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(12, 12, 12, 12);
-    root->setSpacing(10);
+    root->setContentsMargins(16, 16, 16, 16);
+    root->setSpacing(12);
 
-    // ── Scan header, shared by every tab ──
+    // ── Discovery controls, shared by every tab ──
+    auto* scanPanel = new QFrame(this);
+    scanPanel->setObjectName(QStringLiteral("PluginScanPanel"));
+    auto* scanLayout = new QVBoxLayout(scanPanel);
+    scanLayout->setContentsMargins(14, 12, 14, 12);
+    scanLayout->setSpacing(9);
+    auto* scanHeading = new QHBoxLayout();
+    auto* scanTitle = new QLabel(tr("Plugin discovery"), scanPanel);
+    scanTitle->setObjectName(QStringLiteral("PluginScanTitle"));
+    m_startupScan = new QCheckBox(tr("Scan plugins at startup"), scanPanel);
+    m_startupScan->setObjectName(QStringLiteral("ScanPluginsAtStartup"));
+    m_startupScan->setChecked(ui::scanPluginsAtStartup());
+    m_startupScan->setToolTip(tr("When off, VLTONE uses the saved plugin list. You can still scan manually here."));
+    m_startupScan->setAccessibleDescription(m_startupScan->toolTip());
+    connect(m_startupScan, &QCheckBox::toggled, this,
+            &ui::setScanPluginsAtStartup);
+    scanHeading->addWidget(scanTitle);
+    scanHeading->addStretch(1);
+    scanHeading->addWidget(m_startupScan);
+    scanLayout->addLayout(scanHeading);
+
     auto* header = new QHBoxLayout();
     header->setSpacing(8);
     m_rescanButton = new QPushButton(tr("Scan"), this);
@@ -96,6 +123,8 @@ PluginManagerWindow::PluginManagerWindow(daw::EngineController* controller,
     m_progress = new QProgressBar(this);
     m_progress->setTextVisible(false);
     m_progress->setFixedHeight(6);
+    m_progress->setFixedWidth(220);
+    m_progress->setAccessibleName(tr("Plugin scan progress"));
     m_status = new QLabel(this);
     m_status->setObjectName(QStringLiteral("PluginScanStatus"));
     // The path is the long part; let it elide rather than stretch the window.
@@ -104,16 +133,24 @@ PluginManagerWindow::PluginManagerWindow(daw::EngineController* controller,
     header->addWidget(m_rescanButton);
     header->addWidget(m_rescanAllButton);
     header->addWidget(m_cancelButton);
-    header->addSpacing(8);
-    header->addWidget(m_progress, 1);
-    root->addLayout(header);
-    root->addWidget(m_status);
+    header->addStretch(1);
+    header->addWidget(m_progress);
+    scanLayout->addLayout(header);
+    scanLayout->addWidget(m_status);
+    root->addWidget(scanPanel);
 
     m_tabs = new QTabWidget(this);
     m_tabs->addTab(buildPluginsTab(), tr("Plugins"));
     m_tabs->addTab(buildPathsTab(), tr("Search Paths"));
     m_tabs->addTab(buildBlacklistTab(), tr("Blacklist"));
     root->addWidget(m_tabs, 1);
+    auto* findShortcut = new QShortcut(QKeySequence::Find, this);
+    findShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(findShortcut, &QShortcut::activated, this, [this] {
+        m_tabs->setCurrentIndex(0);
+        m_filter->setFocus();
+        m_filter->selectAll();
+    });
 
     m_poll = new QTimer(this);
     m_poll->setInterval(kPollMs);
@@ -135,6 +172,10 @@ void PluginManagerWindow::showTab(int index) {
 
 void PluginManagerWindow::showEvent(QShowEvent* event) {
     QDialog::showEvent(event);
+    {
+        const QSignalBlocker blocker(m_startupScan);
+        m_startupScan->setChecked(ui::scanPluginsAtStartup());
+    }
     // Re-read on every open: a scan may have run, or a project load may have
     // touched the cache, since the window was last visible.
     refreshPaths();
@@ -162,6 +203,8 @@ QWidget* PluginManagerWindow::buildPluginsTab() {
     auto* filters = new QHBoxLayout();
     filters->setSpacing(8);
     m_filter = new QLineEdit(page);
+    m_filter->setObjectName(QStringLiteral("PluginFilter"));
+    m_filter->setAccessibleName(tr("Search plugins"));
     m_filter->setPlaceholderText(tr("Filter by name, vendor or path…"));
     m_filter->setClearButtonEnabled(true);
     connect(m_filter, &QLineEdit::textChanged, this,
@@ -186,6 +229,21 @@ QWidget* PluginManagerWindow::buildPluginsTab() {
     filters->addWidget(m_filter, 1);
     filters->addWidget(m_formatFilter);
     filters->addWidget(m_typeFilter);
+    m_clearFiltersButton = new QPushButton(tr("Clear filters"), page);
+    m_clearFiltersButton->setObjectName(QStringLiteral("ClearPluginFilters"));
+    connect(m_clearFiltersButton, &QPushButton::clicked, this, [this] {
+        {
+            const QSignalBlocker textBlock(m_filter);
+            const QSignalBlocker formatBlock(m_formatFilter);
+            const QSignalBlocker typeBlock(m_typeFilter);
+            m_filter->clear();
+            m_formatFilter->setCurrentIndex(0);
+            m_typeFilter->setCurrentIndex(0);
+        }
+        refreshPlugins();
+        m_filter->setFocus();
+    });
+    filters->addWidget(m_clearFiltersButton);
     layout->addLayout(filters);
 
     m_pluginTable = new QTableWidget(0, 6, page);
@@ -201,13 +259,38 @@ QWidget* PluginManagerWindow::buildPluginsTab() {
     // header sorts descending and the table opens in that order.
     m_pluginTable->sortByColumn(0, Qt::AscendingOrder);
     m_pluginTable->setAlternatingRowColors(true);
-    m_pluginTable->horizontalHeader()->setStretchLastSection(true);
+    m_pluginTable->verticalHeader()->setDefaultSectionSize(30);
+    m_pluginTable->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    auto* pluginHeader = m_pluginTable->horizontalHeader();
+    pluginHeader->setStretchLastSection(false);
+    pluginHeader->setSectionResizeMode(0, QHeaderView::Stretch);
+    for (int column = 1; column <= 4; ++column)
+        pluginHeader->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+    pluginHeader->setSectionResizeMode(5, QHeaderView::Interactive);
+    pluginHeader->resizeSection(5, 230);
     m_pluginTable->horizontalHeader()->setHighlightSections(false);
     m_pluginTable->setWordWrap(false);
+    m_pluginTable->setObjectName(QStringLiteral("PluginTable"));
     layout->addWidget(m_pluginTable, 1);
 
     m_pluginCount = ui::sectionLabel(QString(), page);
-    layout->addWidget(m_pluginCount);
+    auto* footer = new QHBoxLayout();
+    footer->addWidget(m_pluginCount);
+    footer->addStretch(1);
+    m_copyPathButton = new QPushButton(tr("Copy path"), page);
+    m_copyPathButton->setObjectName(QStringLiteral("CopyPluginPath"));
+    m_copyPathButton->setEnabled(false);
+    connect(m_pluginTable, &QTableWidget::itemSelectionChanged, this, [this] {
+        const auto* path = m_pluginTable->item(m_pluginTable->currentRow(), 5);
+        m_copyPathButton->setEnabled(path && !path->text().isEmpty());
+    });
+    connect(m_copyPathButton, &QPushButton::clicked, this, [this] {
+        const auto* path = m_pluginTable->item(m_pluginTable->currentRow(), 5);
+        if (path && !path->text().isEmpty())
+            QApplication::clipboard()->setText(path->text());
+    });
+    footer->addWidget(m_copyPathButton);
+    layout->addLayout(footer);
     return page;
 }
 
@@ -228,6 +311,10 @@ void PluginManagerWindow::refreshPlugins() {
 
     const QString needle = m_filter ? m_filter->text().trimmed() : QString();
     const int typeWanted = m_typeFilter ? m_typeFilter->currentIndex() : 0;
+    const bool filtered = !needle.isEmpty() || typeWanted != 0 ||
+                          formatWanted != Format::Unknown;
+    m_clearFiltersButton->setEnabled(filtered);
+    m_copyPathButton->setEnabled(false);
 
     // Sorting has to be off while rows are filled, or each insertion re-sorts
     // the table under the column being written and the cells scatter.
@@ -265,10 +352,11 @@ void PluginManagerWindow::refreshPlugins() {
         ++shown;
     }
     m_pluginTable->setSortingEnabled(true);
-    m_pluginTable->resizeColumnsToContents();
 
     const int total = static_cast<int>(m_plugins.size());
-    if (total == 0) {
+    if (shown == 0 && filtered) {
+        m_pluginCount->setText(tr("No matching plugins. Try another search or clear the filters."));
+    } else if (total == 0) {
         m_pluginCount->setText(
             tr("No plugins yet — check the search paths, then press Scan."));
     } else if (shown == total) {
@@ -490,6 +578,7 @@ void PluginManagerWindow::refreshScanState() {
     m_rescanButton->setEnabled(!scanning);
     m_rescanAllButton->setEnabled(!scanning);
     m_cancelButton->setEnabled(scanning);
+    m_progress->setVisible(scanning);
 
     if (scanning) {
         const std::uint32_t total = manager.scanTotal();
@@ -539,27 +628,33 @@ void PluginManagerWindow::applyTheme() {
     // global stylesheet (Theme.cpp), so without this they fall back to raw
     // Fusion and read as a different application.
     setStyleSheet(QString(R"(
+#PluginScanPanel { background: %ELEV%; border: 1px solid %SEP%;
+                   border-radius: 0; }
+#PluginScanTitle { color: %TEXT%; font-size: 14px; font-weight: 700;
+                   border: none; background: transparent; }
+#PluginScanPanel QCheckBox, #PluginScanPanel QLabel { border: none; background: transparent; }
 QTabWidget::pane { background: %SURFACE%; border: 1px solid %SEP%;
-                   border-radius: 8px; top: -1px; }
-QTabBar::tab { background: transparent; color: %TEXT2%; padding: 5px 14px;
-               border: 1px solid transparent; border-top-left-radius: 7px;
-               border-top-right-radius: 7px; }
+                   border-radius: 0; top: -1px; }
+QTabBar::tab { background: transparent; color: %TEXT2%; padding: 7px 16px;
+               border: 1px solid transparent; border-top-left-radius: 0;
+               border-top-right-radius: 0; }
 QTabBar::tab:hover { color: %TEXT%; }
 QTabBar::tab:selected { background: %SURFACE%; color: %TEXT%;
                         border-color: %SEP%; border-bottom-color: %SURFACE%; }
 
 QTableWidget, QListWidget {
-    background: %WELL%; border: 1px solid %SEP%; border-radius: 7px;
+    background: %WELL%; border: 1px solid %SEP%; border-radius: 0;
     alternate-background-color: %ALT%; outline: none;
 }
-QTableWidget::item, QListWidget::item { padding: 3px 6px; border: none; }
+QTableWidget:focus, QListWidget:focus { border-color: %ACCENT%; }
+QTableWidget::item, QListWidget::item { padding: 4px 8px; border: none; }
 QTableWidget::item:selected, QListWidget::item:selected {
     background: %ACCENT%; color: white;
 }
 QHeaderView::section {
-    background: %ELEV%; color: %TEXT2%; padding: 4px 6px;
+    background: %ELEV%; color: %TEXT2%; padding: 6px 8px;
     border: none; border-right: 1px solid %SEP%; border-bottom: 1px solid %SEP%;
-    font-size: 10px; font-weight: 700;
+    font-size: 11px; font-weight: 700;
 }
 QHeaderView::section:last { border-right: none; }
 QTableCornerButton::section { background: %ELEV%; border: none; }
@@ -567,7 +662,7 @@ QTableCornerButton::section { background: %ELEV%; border: none; }
 QProgressBar { background: %WELL%; border: none; border-radius: 3px; }
 QProgressBar::chunk { background: %ACCENT%; border-radius: 3px; }
 
-#PluginScanStatus, #PluginHint { color: %TEXT2%; font-size: 11px; }
+#PluginScanStatus, #PluginHint { color: %TEXT2%; font-size: 12px; }
 )")
         .replace("%SURFACE%", t.surface.name())
         .replace("%WELL%", t.well().name())

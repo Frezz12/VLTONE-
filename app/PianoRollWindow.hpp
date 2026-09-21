@@ -74,9 +74,8 @@ public:
 
     /// What the left mouse button does on the grid.
     ///
-    /// Erase is deliberately *not* here: like FL, the right button erases in
-    /// every mode, so there is never a reason to switch tools to delete a note.
-    enum class Tool { Draw, Select, Slice, Mute };
+    /// The right button also erases in every mode.
+    enum class Tool { Draw, Select, Slice, Mute, Erase };
 
     /// How a note is painted. Purely cosmetic — nothing here changes a note.
     enum class NoteStyle {
@@ -333,6 +332,8 @@ protected:
     void resizeEvent(QResizeEvent*) override;
 
 private:
+    bool hasActivePointerGesture() const;
+    void finishInterruptedPointerGesture();
     friend class PianoRollWindow;
 
     /// The clip this window edits, or null when it no longer exists.
@@ -569,6 +570,8 @@ private:
     QSet<QString> m_pendingErase;
     /// Dragging the ruler moves the project transport in clip-local time.
     bool m_scrubbingPlayhead = false;
+    Qt::MouseButton m_pointerButton = Qt::NoButton;
+    QPointF m_lastPointerPosition;
     LoopGrab m_loopGrab = LoopGrab::None;
     double m_loopAnchorBeats = 0.0;
     double m_loopGrabOffset = 0.0;
@@ -655,6 +658,7 @@ private:
     /// key and the sounding one in the same move, and a note-off for the new
     /// pitch would leave the old one held forever.
     int m_auditionPitch = -1;
+    bool m_auditionPerformance = false;
     double m_lastLength = 1.0;
     int m_lastVelocity = 127;
     float m_lastPan = 0.0f;
@@ -703,7 +707,9 @@ class PianoRollWindow : public QWidget {
     Q_OBJECT
 public:
     explicit PianoRollWindow(daw::EngineController* controller,
-                             QWidget* parent = nullptr);
+                             QWidget* parent = nullptr,
+                             QAction* undoAction = nullptr,
+                             QAction* redoAction = nullptr);
     ~PianoRollWindow() override;
 
     /// Point the window at a clip. Safe to call while it is already open.
@@ -727,6 +733,9 @@ public:
     void setLivePitches(const std::bitset<128>& pitches);
     bool livePitchHeldForTest(int pitch) const;
     bool checkInteractionGesturesForTest();
+    bool checkHistoryShortcutsForTest();
+    /// Commit live wheel edits before dispatching project history.
+    void finishPendingNoteEdit();
 
     /// The four clipboard chords, performed on the notes.
     ///
@@ -769,6 +778,9 @@ signals:
     /// Mute/Solo changed on the clip's track; the arrangement, headers and
     /// mixer need to refresh their copy of those two states.
     void trackStateChanged(bool localFileDirty = true);
+    /// Switch through the existing MainWindow route so live MIDI input and
+    /// collaboration presence follow the newly selected clip.
+    void clipSwitchRequested(const QString& trackId, const QString& clipId);
     void automateMuteRequested(const QString& trackId);
     void noteSelectionChanged(bool hasSelection);
     /// A modeless MIDI tool wants the same workspace chrome as every other
@@ -778,6 +790,7 @@ signals:
 protected:
     /// Where the settings no menu owns get written back.
     void closeEvent(QCloseEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
     void showEvent(QShowEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -794,6 +807,8 @@ private:
     /// Rebuild the ghost-note list from the project's other MIDI tracks.
     void refreshGhostMenu();
     void refreshPatternGhosts();
+    void refreshClipSelector();
+    QString auditionTrackForCurrentClip() const;
     /// Keep the tool palette and the Tools menu showing the same choice.
     void syncToolActions();
     /// Rebuild the bottom lane's picker from the clip's controller curves.
@@ -846,7 +861,9 @@ private:
     QMenu* m_noteStyleMenu = nullptr;
     QButtonGroup* m_toolButtons = nullptr;
     QComboBox* m_laneSelector = nullptr;
+    QComboBox* m_clipSelector = nullptr;
     QToolButton* m_removeLaneButton = nullptr;
+    QToolButton* m_auditionButton = nullptr;
     ui::MsrButton* m_trackMuteButton = nullptr;
     QAbstractButton* m_trackSoloButton = nullptr;
     // Kept so the context panel can trigger the very same actions the menu does.
@@ -859,6 +876,8 @@ private:
     QAction* m_randomAction = nullptr;
     QAction* m_undoAction = nullptr;
     QAction* m_redoAction = nullptr;
+    bool m_sharedUndoAction = false;
+    bool m_sharedRedoAction = false;
     QAction* m_pasteAction = nullptr;
     QAction* m_repeatAction = nullptr;
     QActionGroup* m_toolGroup = nullptr;

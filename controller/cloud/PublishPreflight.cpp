@@ -11,7 +11,8 @@
 namespace daw::cloud {
 namespace {
 
-constexpr std::array<std::string_view, 10> kBuiltinUids{
+constexpr std::array<std::string_view, 11> kBuiltinUids{
+    "daw.modulation",
     "daw.sampler",
     "daw.equalizer",
     "daw.gravity",
@@ -196,6 +197,7 @@ bool isSupportedBuiltinV1(const InsertModel& insert) noexcept {
 
 const char* publishIssueKindName(PublishIssueKind kind) noexcept {
     switch (kind) {
+        case PublishIssueKind::LocalWarp: return "local_warp";
         case PublishIssueKind::ThirdPartyPlugin: return "third_party_plugin";
         case PublishIssueKind::UnknownInternalPlugin: return "unknown_internal_plugin";
         case PublishIssueKind::MissingEntityId: return "missing_entity_id";
@@ -230,6 +232,10 @@ PublishPreflightReport inspectForPublishV1(const ProjectModel& project) {
                 trackLocation + "/clip:" +
                 (clip.id.empty() ? std::to_string(clipIndex) : clip.id);
             requireId(clip.id, clipLocation, report);
+            if (!clip.warp.empty() || std::any_of(clip.offlineHistory.begin(), clip.offlineHistory.end(),
+                    [](const auto& version) { return !version.source.warp.empty(); }))
+                report.blockers.push_back({PublishIssueKind::LocalWarp, clipLocation, clip.id,
+                    {}, clip.name, "Warp is local-only. Bounce to a new audio clip before publishing."});
             addAsset(clip.asset, clipLocation + "/audio", report, seenAssets,
                      AssetKind::Audio);
             inspectInsertList(clip.inserts, clipLocation, report, seenAssets);

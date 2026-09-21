@@ -334,7 +334,7 @@ void PluginQuickAdder::updateGeometryForState() {
             background: %2;
             border: 1px solid %3;
             border-top-color: %4;
-            border-radius: 6px;
+            border-radius: 0;
             padding: 0 24px 0 2px;
             selection-background-color: %5;
             font-size: 11px;
@@ -592,7 +592,7 @@ void PluginQuickAdder::insertCurrent(bool openEditor, bool keepOpen) {
         QMessageBox::warning(
             this, tr("Plugin could not be loaded"),
             tr("%1 is still listed by the last plugin scan, but its module "
-               "could not create an instance. Rescan plugins in Settings and "
+               "could not create an instance. Rescan plugins in Plugin Manager and "
                "check that the plugin is installed and licensed.")
                 .arg(QString::fromStdString(entry->descriptor.name)));
         emit pluginInserted(QString(), false);
@@ -718,7 +718,7 @@ void PluginQuickAdder::paintOverlay(QPaintEvent*) {
     const QRectF panel = QRectF(m_overlay->rect()).adjusted(0.5, 0.5, -0.5, -1.5);
     p.setPen(QPen(th().separator(), 1.0));
     p.setBrush(th().well());
-    p.drawRoundedRect(panel, 9, 9);
+    p.drawRect(panel);
 
     const QRect viewport = listViewport();
     p.save();
@@ -735,7 +735,7 @@ void PluginQuickAdder::paintOverlay(QPaintEvent*) {
         p.drawText(viewport.adjusted(12, 92, -12, -12),
                    Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,
                    m_filter.isEmpty()
-                       ? tr("No plugins are available. Scan plugins in Settings.")
+                       ? tr("No plugins are available. Scan plugins in Plugin Manager.")
                        : tr("No plugins match “%1”. Try a name, vendor, or tag.")
                              .arg(m_filter));
     }
@@ -776,12 +776,12 @@ void PluginQuickAdder::paintOverlay(QPaintEvent*) {
             const QColor selection = mixColors(th().well(), m_accent, 0.20);
             p.setPen(QPen(mixColors(th().separator(), m_accent, 0.55), 0.8));
             p.setBrush(selection);
-            p.drawRoundedRect(QRectF(hit.rect).adjusted(1, 2, -1, -2), 7, 7);
+            p.drawRect(QRectF(hit.rect).adjusted(1, 2, -1, -2));
         }
         if (hit.visibleIndex == m_confirmIndex && m_confirmProgress > 0.0) {
             p.setPen(Qt::NoPen);
             p.setBrush(withAlpha(m_accent, int(180 * m_confirmProgress)));
-            p.drawRoundedRect(QRectF(hit.rect).adjusted(1, 2, -1, -2), 7, 7);
+            p.drawRect(QRectF(hit.rect).adjusted(1, 2, -1, -2));
         }
 
         const QRect iconRect(hit.rect.left() + 6, hit.rect.top() + 6, 24, 24);
@@ -857,7 +857,7 @@ void PluginQuickAdder::paintOverlay(QPaintEvent*) {
     if (m_loading) {
         p.setPen(Qt::NoPen);
         p.setBrush(withAlpha(th().well(), 205));
-        p.drawRoundedRect(panel.adjusted(5, 5, -5, -5), 7, 7);
+        p.drawRect(panel.adjusted(5, 5, -5, -5));
         QFont loadingFont = p.font();
         loadingFont.setPixelSize(12);
         loadingFont.setWeight(QFont::DemiBold);

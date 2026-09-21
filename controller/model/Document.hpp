@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DSP/Curve.hpp"
+#include "Common/WarpMap.hpp"
 
 #include <cstdint>
 #include <string>
@@ -157,6 +158,11 @@ struct NoteModel {
     /// roll's parameter lane edits this exactly like velocity.
     float pan = 0.0f;
 
+    int channel = 0;              ///< MIDI channel, zero based
+    int releaseVelocity = 0;
+    std::uint64_t startOrder = 0; ///< preserves simultaneous performance events
+    std::uint64_t endOrder = 0;
+
     friend bool operator==(const NoteModel&, const NoteModel&) = default;
 };
 
@@ -201,6 +207,7 @@ struct AutomationPoint {
     /// initializers remain source-compatible; v5 files receive deterministic
     /// migration ids when they are loaded.
     std::string id;
+    std::uint64_t eventOrder = 0;
 
     /// Exact comparison on purpose: this answers "did the gesture change
     /// anything", where the two sides are copies of the same doubles, not the
@@ -280,6 +287,12 @@ struct ControllerLane {
     /// first breakpoint.
     double defaultValue = 0.0;
     std::vector<AutomationPoint> points;   // kept sorted by `beats`
+    /// cc: 0..127 controller, -1 plugin, -2 bend, -3 channel pressure,
+    /// -4 poly pressure (key), -5 program. Existing pitch-bend lanes use -2.
+    int channel = 0;
+    int key = 0;
+
+    friend bool operator==(const ControllerLane&, const ControllerLane&) = default;
 };
 
 /// One recorded attempt stored inside a clip — a "take" or "layer".
@@ -304,6 +317,7 @@ struct TakeModel {
     uint32_t color = 0x4A90D9;
     std::vector<NoteModel> notes;  // MIDI takes
     AssetRef asset;               // v6 cloud identity; filePath is legacy/cache
+    std::vector<ControllerLane> lanes; // MIDI take's own automation
 };
 
 /// One stretch of the finished comp: play `takeId` from `startSeconds` to
@@ -480,6 +494,7 @@ struct ClipAudioVersionSource {
     std::vector<CompSegment> comp;
     double compCrossfadeMs = 5.0;
     ClipSampleEditModel sampleEdit;
+    ClipWarpModel warp;
     ClipMusicalAnalysisModel musicalAnalysis;
     bool expanded = false;
 };
@@ -538,6 +553,7 @@ struct ClipModel {
     /// Per-instance Sample/Clip Editor state. Optional on disk for backward
     /// compatibility; its defaults reproduce the pre-v4 playback path.
     ClipSampleEditModel sampleEdit;
+    ClipWarpModel warp;
     ClipMusicalAnalysisModel musicalAnalysis;
     /// Plugin effects owned by this clip alone. They are routed after this
     /// clip's player and before it joins the track, so neighbouring clips,
@@ -565,6 +581,7 @@ void applyClipAudioVersion(ClipModel& clip, const ClipAudioVersionSource& source
 /// remain source time; musical clip lengths and fades follow the tempo.
 void retimeClipToTempo(ClipModel& clip, double ratio);
 void retimeClipComp(ClipModel& clip, double ratio);
+ClipWarpModel sliceWarp(const ClipWarpModel& warp, double beginBeat, double endBeat);
 
 /// An aux send from a track to a bus/aux track. Rendered by the engine as a
 /// SendNode tapped before or after the fader.
@@ -866,6 +883,13 @@ bool isLayered(const ClipModel& clip);
 
 TakeModel* findTake(ClipModel& clip, const std::string& takeId);
 const TakeModel* findTake(const ClipModel& clip, const std::string& takeId);
+
+// Piano Roll edits the selected take (the first comp segment), retaining the
+// other passes. An entity ID resolves its original take after a comp change.
+std::vector<NoteModel>& midiNotes(ClipModel& clip, const std::string& noteId = {});
+const std::vector<NoteModel>& midiNotes(const ClipModel& clip, const std::string& noteId = {});
+std::vector<ControllerLane>& midiLanes(ClipModel& clip, const std::string& laneId = {});
+const std::vector<ControllerLane>& midiLanes(const ClipModel& clip, const std::string& laneId = {});
 
 /// Sort the comp map, drop empty and unknown-take segments, clamp it to
 /// [0, clip length] and merge neighbours that name the same take. Every comp

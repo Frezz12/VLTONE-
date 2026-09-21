@@ -340,7 +340,7 @@ void StartupWindow::paintEvent(QPaintEvent*) {
     surface.setColorAt(1, t.headerBackground);
     painter.setBrush(surface);
     painter.setPen(mixColors(t.separator(), t.textPrimary, 0.12));
-    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12, 12);
+    painter.drawRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5));
 }
 
 void StartupWindow::mousePressEvent(QMouseEvent* event) {

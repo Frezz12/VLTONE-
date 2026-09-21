@@ -1,5 +1,6 @@
 #include "Theme.hpp"
 #include "Typography.hpp"
+#include "PopupStyle.hpp"
 
 #include <QApplication>
 #include <QDir>
@@ -10,7 +11,6 @@
 #include <QEvent>
 #include <QFrame>
 #include <QMenu>
-#include <QPainterPath>
 #include <QRegion>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -21,6 +21,14 @@
 #include <QStyleFactory>
 #include <QTemporaryDir>
 #include <QWidget>
+
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <dwmapi.h>
+#endif
 
 #include <cmath>
 
@@ -481,14 +489,12 @@ void ThemeManager::apply() {
     if (!app) return;
 
     app->installEventFilter(this);
-    // Qt's legacy roll effect presents a rectangular grab() that ignores the
-    // popup mask. Open these frequently used lists directly, with their real
-    // rounded native surface, including the very first frame.
+    // Open menus and combo lists directly, without Qt's legacy roll effect.
     app->setEffectEnabled(Qt::UI_AnimateMenu, false);
     app->setEffectEnabled(Qt::UI_FadeMenu, false);
     app->setEffectEnabled(Qt::UI_AnimateCombo, false);
 
-    app->setStyle(QStyleFactory::create("Fusion"));
+    app->setStyle(new PopupStyle(QStyleFactory::create("Fusion")));
 
     const Theme& t = m_theme;
     QPalette p;
@@ -519,13 +525,29 @@ bool ThemeManager::eventFilter(QObject* object, QEvent* event) {
         return false;
     auto* widget = qobject_cast<QWidget*>(object);
     if (!widget) return false;
+#ifdef Q_OS_WIN
+    if (type == QEvent::Show && widget->isWindow()) {
+        // Windows 11 rounds native top-level frames independently of Qt's QSS.
+        static const auto setCornerPreference = [] {
+            const HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+            return dwm ? reinterpret_cast<decltype(&DwmSetWindowAttribute)>(
+                             GetProcAddress(dwm, "DwmSetWindowAttribute"))
+                       : nullptr;
+        }();
+        if (setCornerPreference) {
+            const auto preference = DWMWCP_DONOTROUND;
+            setCornerPreference(reinterpret_cast<HWND>(widget->winId()),
+                                DWMWA_WINDOW_CORNER_PREFERENCE, &preference,
+                                sizeof(preference));
+        }
+    }
+#endif
     const bool comboPopup = widget->inherits("QComboBoxPrivateContainer");
     const bool tooltip = widget->inherits("QTipLabel");
     if (!comboPopup && !tooltip && !qobject_cast<QMenu*>(widget)) return false;
 
     if (type == QEvent::Polish) {
-        // Rounded QSS only paints the plate. The native popup must also have
-        // an alpha backing store, otherwise Windows fills its corners black.
+        // The popup uses the same frameless surface in every theme.
         widget->setWindowFlag(Qt::FramelessWindowHint);
         widget->setAttribute(Qt::WA_TranslucentBackground);
         if (comboPopup) {
@@ -533,10 +555,10 @@ bool ThemeManager::eventFilter(QObject* object, QEvent* event) {
                 frame->setFrameStyle(QFrame::NoFrame);
         }
     }
-    const qreal radius = tooltip ? 6 : widget->property("pluginPickerScrollable").toBool() ? 8 : 10;
-    QPainterPath outline;
-    outline.addRoundedRect(QRectF(widget->rect()), radius, radius);
-    widget->setMask(QRegion(outline.toFillPolygon().toPolygon()));
+    // Let QSS antialias the rounded popup against its transparent backing.
+    // A rounded QRegion would quantize the curve to whole logical pixels.
+    if (tooltip) widget->setMask(QRegion(widget->rect()));
+    else widget->clearMask();
     return false;
 }
 
@@ -560,43 +582,37 @@ QString ThemeManager::styleSheet() const {
     const QColor accentText = relativeLuminance(t.accent) > 0.179
                                   ? QColor(18, 18, 20)
                                   : QColor(250, 250, 252);
+    const QColor popup = mixColors(t.surface, t.background, t.dark ? 0.55 : 0.35);
 
-    // Deliberately flat: thin 1px borders, 6px radii, no bevels or gradients —
-    // the "3D" Fusion look is what we are getting away from.
+    // Thin borders and flat surfaces keep the application's dense controls legible.
     return QString(R"(
 QWidget { color: %TEXT%; font-size: 12px; }
 QMainWindow, QDialog { background: %BG%; }
 QMenuBar { background: %TOOLBAR%; border: none; }
 QMenuBar::item { padding: 4px 10px; background: transparent; border-radius: 5px; }
 QMenuBar::item:selected { background: %ACCENT_SOFT%; }
-/* Menus are a list, not a set of buttons: tight rows, one line of text each,
-   and only as much padding as it takes to keep the highlight off the border.
-   The 24px rows this used to have turned a plugin list into a scroll.
-
-   The plate is a *well*, not a raised surface: a popup that recedes reads as a
-   hole punched through the window rather than a card floating over it, and it
-   is the one look every drop-down in the application shares — the grid chip in
-   the transport bar had it on its own, and now nothing has to. */
-QMenu { background: %WELL%; border: 1px solid %SEP%; border-radius: 10px;
-        padding: 5px; }
-QMenu::item { min-height: 17px; padding: 3px 20px 3px 9px; border-radius: 6px;
+/* Compact, opaque popups with a small, antialiased corner and inset selection. */
+QMenu { background: %POPUP%; border: 1px solid %POPUP_BORDER%; border-radius: 6px;
+        padding: 4px; }
+QMenu::item { min-height: 18px; padding: 1px 22px 1px 8px; border-radius: 3px;
               font-size: 12px; }
-QMenu::item:selected { background: %ACCENT_SOFT%; color: %TEXT%; }
+QMenu::item:selected { background: %POPUP_HOVER%; color: %TEXT%; }
 QMenu::item:checked { color: %ACCENT_HL%; font-weight: 600; }
 QMenu::item:disabled { color: %TEXT2%; }
 QMenu::icon { padding-left: 5px; }
-QMenu::indicator { width: 0; height: 0; }
-QMenu::separator { height: 1px; background: %SEP%; margin: 3px 6px; }
+QMenu::indicator { width: 12px; height: 12px; }
+QMenu::right-arrow, QMenu::left-arrow { width: 12px; height: 12px; }
+QMenu::separator { height: 1px; background: %POPUP_BORDER%; margin: 3px 6px; }
 /* A menu long enough to scroll gets arrows at its ends; unstyled they are a
    grey Fusion strip that does not belong to any of this. */
-QMenu::scroller { height: 14px; background: %WELL%; }
+QMenu::scroller { height: 14px; background: %POPUP%; }
 
 QStatusBar { background: %TOOLBAR%; border-top: 1px solid %SEP%; }
 QStatusBar QLabel { color: %TEXT2%; font-size: 11px; }
 QStatusBar::item { border: none; }
 
 QToolTip { background: %ELEV%; color: %TEXT%; border: 1px solid %SEP%;
-           border-radius: 6px; padding: 4px 6px; }
+           border-radius: 0; padding: 4px 6px; }
 
 QScrollArea, QAbstractScrollArea { background: transparent; border: none; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
@@ -613,30 +629,30 @@ QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {
     border: 1px solid %ACCENT%;
 }
-/* A closed combo is a chip: the same pill the transport bar's grid selector
-   is, so the two are one control with different contents rather than two
-   different-looking ways to pick from a list. */
+QCheckBox { spacing: 7px; min-height: 20px; }
+QCheckBox:disabled { color: %TEXT2%; }
+/* Compact closed controls; their lists use the shared popup surface below. */
 QComboBox {
-    background: %WELL%; border: 1px solid %SEP%; border-radius: 9px;
+    background: %WELL%; border: 1px solid %SEP%; border-radius: 0;
     padding: 3px 9px; min-height: 20px; color: %TEXT%; font-weight: 500;
     selection-background-color: %ACCENT%;
 }
 QComboBox:hover { background: %HOVER%; border-color: %HOVER%; }
 QComboBox:focus, QComboBox:on { border: 1px solid %ACCENT%; }
 QComboBox:disabled { color: %TEXT2%; }
-/* No Fusion arrow: the chip is the affordance, and a native triangle in the
-   corner is the one part of it that never matched anything else here. */
-QComboBox::drop-down { border: none; width: 14px; }
-QComboBox::down-arrow { image: none; width: 0; height: 0; }
+QComboBox::drop-down { border: none; width: 22px; }
+QComboBox::down-arrow { image: url(:/icons/popup-chevron-%APPEARANCE%.svg); width: 12px; height: 12px; }
 /* Exactly the menu plate above — a combo's list and a menu are the same
    object with different contents. */
 QComboBoxPrivateContainer { background: transparent; border: none; }
 QComboBox QAbstractItemView {
-    background: %WELL%; border: 1px solid %SEP%; border-radius: 10px;
-    selection-background-color: %ACCENT_SOFT%; outline: none; padding: 5px;
+    background: %POPUP%; border: 1px solid %POPUP_BORDER%; border-radius: 6px;
+    selection-background-color: %POPUP_HOVER%; selection-color: %TEXT%;
+    outline: none; padding: 4px;
 }
-QComboBox QAbstractItemView::item { min-height: 18px; padding: 3px 7px;
-                                    border-radius: 6px; }
+QComboBox QAbstractItemView::item { min-height: 18px; padding: 1px 7px;
+                                    border-radius: 3px; }
+QComboBox QAbstractItemView::item:selected { background: %POPUP_HOVER%; color: %TEXT%; }
 
 QPushButton {
     background: %ELEV%; border: 1px solid %SEP%; border-radius: 6px;
@@ -669,9 +685,31 @@ QDockWidget::title { background: %TOOLBAR%; padding: 5px 8px; border-bottom: 1px
 QGroupBox { border: 1px solid %SEP%; border-radius: 8px; margin-top: 14px; padding-top: 6px; }
 QGroupBox::title { subcontrol-origin: margin; left: 10px; color: %TEXT2%; font-weight: 600; }
 
-QLabel[role="section"] { color: %TEXT2%; font-size: 10px; font-weight: 600; }
+QLabel[role="section"] { color: %TEXT2%; font-size: 10px; font-weight: 500; }
 QLabel[role="pageTitle"] { font-size: 18px; font-weight: 600; }
 QLabel[role="secondary"] { color: %TEXT2%; }
+
+/* Settings navigation keeps text labels and native keyboard navigation;
+   the edge marker also identifies the active page without relying on colour. */
+QTreeWidget#SettingsNavigation {
+    background: %WELL%; border: none; border-right: 1px solid %SEP%;
+    padding: 4px; outline: none;
+}
+QTreeWidget#SettingsNavigation::item {
+    padding: 0 6px; border: 1px solid transparent;
+    border-left: 2px solid transparent; border-radius: 3px;
+}
+QTreeWidget#SettingsNavigation::item:hover { background: %HOVER%; }
+QTreeWidget#SettingsNavigation::item:selected {
+    background: %ACCENT_SOFT%; color: %TEXT%; border-left-color: %ACCENT%;
+}
+QTreeWidget#SettingsNavigation::item:focus { border-color: %ACCENT%; }
+QWidget#SettingsPageHeader { border-bottom: 1px solid %SEP%; }
+QLabel#SettingsPageIcon { background: %ACCENT_SOFT%; border-radius: 4px; }
+SettingsWindow QGroupBox {
+    background: %SURFACE%; border-radius: 4px; margin-top: 18px; padding-top: 8px;
+}
+SettingsWindow QGroupBox::title { color: %TEXT%; padding: 0 4px; }
 
 /* Fallback for third-party/plain QSliders. Application-owned sliders use
    ui::GlassSlider and the same proportions: a quiet 4px rail under an 18px
@@ -719,6 +757,7 @@ QSlider::handle:vertical:hover, QSlider::handle:vertical:pressed {
 QSlider::groove:vertical:focus { border: 1px solid %ACCENT%; }
 )")
         .replace("%TEXT%", c(t.textPrimary))
+        .replace("%APPEARANCE%", t.dark ? QStringLiteral("dark") : QStringLiteral("light"))
         .replace("%TEXT2%", c(t.textSecondary))
         .replace("%BG%", c(t.background))
         .replace("%SURFACE%", c(t.surface))
@@ -729,6 +768,9 @@ QSlider::groove:vertical:focus { border: 1px solid %ACCENT%; }
         .replace("%SEP%", c(t.separator()))
         .replace("%SECTION%", c(t.sectionDivider()))
         .replace("%WELL%", c(t.well()))
+        .replace("%POPUP%", c(popup))
+        .replace("%POPUP_BORDER%", c(mixColors(popup, t.textPrimary, 0.22)))
+        .replace("%POPUP_HOVER%", c(mixColors(popup, t.textPrimary, t.dark ? 0.12 : 0.09)))
         // The glass handle, flattened to two opaque stops: QSS has no backdrop
         // and no specular, so the cap is mixed against the surface it sits on
         // rather than composited over it.

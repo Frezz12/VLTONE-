@@ -207,14 +207,31 @@ if(DAW_BUILD_TESTS)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
     qt_add_executable(modulation_ui_test
         ../tests/modulation_ui_test.cpp ModulationPanel.cpp ModulationPanel.hpp
-        Controls.cpp Controls.hpp Icons.cpp Theme.cpp Typography.cpp GlassPanel.cpp GlassPanel.hpp)
+        WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
+    qt_add_executable(warp_ui_test
+        ../tests/warp_ui_test.cpp WarpEditorWidget.cpp WarpEditorWidget.hpp WaveformPaint.cpp
+        WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
+    target_include_directories(warp_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(warp_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test)
+    add_test(NAME warp_ui_test COMMAND warp_ui_test)
+    set_tests_properties(warp_ui_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 60)
+    if(WIN32)
+        set_tests_properties(warp_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     target_include_directories(modulation_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(modulation_ui_test PRIVATE daw_controller Qt6::Widgets Qt6::Svg Qt6::WebEngineCore Qt6::WebEngineQuick vlt_ui_frame_clock)
+    target_link_libraries(modulation_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test)
     if(APPLE)
         target_link_libraries(modulation_ui_test PRIVATE "-framework CoreFoundation")
+        target_link_libraries(warp_ui_test PRIVATE "-framework CoreFoundation")
     endif()
     add_test(NAME modulation_ui_test COMMAND modulation_ui_test)
-    set_tests_properties(modulation_ui_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 90)
+    set_tests_properties(modulation_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QTWEBENGINE_DISABLE_SANDBOX=1;QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu --disable-gpu-compositing" TIMEOUT 90)
+    if(WIN32)
+        set_tests_properties(modulation_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
 
     qt_add_executable(pitch_corrector_ui_test
         ../tests/pitch_corrector_ui_test.cpp PitchCorrectorPanel.cpp PitchCorrectorPanel.hpp
@@ -253,6 +270,13 @@ list(REMOVE_ITEM DAW_APP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.hpp")
 
 qt_add_executable(daw ${DAW_APP_SOURCES})
+foreach(modulation_target daw modulation_ui_test)
+    if(TARGET ${modulation_target})
+        qt_add_resources(${modulation_target} "${modulation_target}_modulation_ui"
+            PREFIX "/vlt/modulation" BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/modulation"
+            FILES resources/modulation/index.html resources/modulation/modulation.css resources/modulation/modulation.js)
+    endif()
+endforeach()
 foreach(pitch_target daw pitch_corrector_ui_test)
     if(TARGET ${pitch_target})
         qt_add_resources(${pitch_target} "${pitch_target}_pitch_ui"
@@ -357,6 +381,17 @@ if(DAW_BUILD_TESTS)
     add_test(NAME plugin_batch_ui_test COMMAND $<TARGET_FILE:daw> --pluginbatchcheck)
     add_test(NAME tempo_scrub_ui_test COMMAND $<TARGET_FILE:daw> --tempocheck)
     add_test(NAME mixer_fader_input_test COMMAND $<TARGET_FILE:daw> --mixerwheelcheck)
+    add_test(NAME midi_input_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    set_tests_properties(midi_input_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_MIDI_ONLY=1"
+        TIMEOUT 90 RUN_SERIAL TRUE)
+    add_test(NAME track_mixer_sync_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    add_test(NAME warp_panel_test COMMAND $<TARGET_FILE:daw> --warpcheck)
+    set_tests_properties(warp_panel_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 60 RUN_SERIAL TRUE)
+    set_tests_properties(track_mixer_sync_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;DAW_SELFTEST_TRACK_MIXER_ONLY=1"
+        TIMEOUT 90 RUN_SERIAL TRUE)
     set_tests_properties(mixer_fader_input_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
     set_tests_properties(tempo_scrub_ui_test PROPERTIES
@@ -379,7 +414,7 @@ if(DAW_BUILD_TESTS)
         # CTest does not inherit the Qt SDK's bin directory on clean Windows
         # runners. Without this, the loader opens an invisible error dialog for
         # a missing Qt6Core.dll and the headless test appears to time out.
-        set_tests_properties(collaboration_client_selftest track_creation_ui_test plugin_picker_ui_test offline_render_ui_test plugin_batch_ui_test tempo_scrub_ui_test mixer_fader_input_test PROPERTIES
+        set_tests_properties(midi_input_ui_test warp_panel_test collaboration_client_selftest track_creation_ui_test plugin_picker_ui_test offline_render_ui_test plugin_batch_ui_test tempo_scrub_ui_test mixer_fader_input_test track_mixer_sync_ui_test PROPERTIES
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()

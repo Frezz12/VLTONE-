@@ -34,6 +34,7 @@ class QAction;
 class TrackListWidget;
 class TimelineWidget;
 class MixerWidget;
+class WarpEditorWidget;
 class InspectorWidget;
 class TransportBar;
 class ToolPanel;
@@ -70,6 +71,7 @@ class PresenceOverlay;
 class SessionStatusStrip;
 class CloudAssetTransferManager;
 class CloudRecordingAssetCoordinator;
+class CloudMidiRecordingCoordinator;
 struct CloudRecordingAssetResult;
 enum class SurfaceKind;
 struct TransportFrame;
@@ -360,6 +362,7 @@ public:
     /// mixer strip and the track header *as it moves*, not when the strip is
     /// next rebuilt. Returns false with a reason on stderr.
     bool checkContextSyncForTest();
+    bool checkTrackMixerSyncForTest();
     /// Add a track and prove the header column did not shrink to fit: every row
     /// must still be exactly its lane's height, and sit exactly where that lane
     /// starts. This is the check the "tracks squeeze when I add one" bug would
@@ -450,6 +453,7 @@ public:
     /// children of the workspace and hand focus back to the arrangement.
     bool checkAuxiliaryWindowPolicyForTest();
     bool checkPianoRollForTest();
+    bool checkWarpForTest();
     /// The Edit menu's chords with the piano roll in front: they must reach the
     /// notes, never the clips behind them.
     bool checkEditChordRoutingForTest();
@@ -522,6 +526,10 @@ private slots:
     /// The transport's Record button. It only ever engages — the take is set
     /// up in the context panel that appears, and started from there or with R.
     void onRecord();
+    void onRestoreMidi();
+#ifdef DAW_ENABLE_COLLABORATION
+    bool queueCloudMidiRecording();
+#endif
     /// The R key. Starts the recording when record is engaged (or the
     /// preference lets R arm and start by itself), and stops one in flight.
     void onRecordKey();
@@ -698,6 +706,9 @@ private:
     void retirePluginEditor(const QString& channelId, const QString& insertId);
     /// Show the piano roll for a MIDI clip, creating the window on first use.
     void openPianoRoll(const QString& trackId, const QString& clipId);
+    void openWarpEditor(const QString& trackId, const QString& clipId);
+    void toggleWarpEditor();
+    void setWarpVisible(bool visible);
     /// Show the compact editor for a Pattern container.
     void openPattern(const QString& patternId);
     bool canOpenSelectedEditor() const;
@@ -766,9 +777,8 @@ private:
     /// Lay the main row out for the current side. The only place that decides
     /// the column order, so the two sides cannot drift apart.
     void relayoutRow();
-    /// Keep the floating mixer overlay pinned to the bottom of the arrangement,
-    /// sized to m_mixerHeight.
-    void layoutMixer();
+    /// Keep the active bottom editor attached to the arrangement's lower edge.
+    void layoutBottomPanels();
     /// Keep the context panel centred at the top of the arrangement.
     void layoutContextPanel();
     /// Give the shared context strip to selected Piano Roll notes while the
@@ -861,6 +871,7 @@ private:
     QPointer<collab::AssetCache> m_collaborationAssetCache;
     QPointer<collab::RecordingLeaseCoordinator> m_recordingLeases;
     QPointer<collab::CloudRecordingAssetCoordinator> m_cloudRecordingAssets;
+    std::unique_ptr<collab::CloudMidiRecordingCoordinator> m_cloudMidiRecording;
     struct CloudRecordingRuntime;
     std::unique_ptr<CloudRecordingRuntime> m_cloudRecording;
     quint64 m_cloudRecordingGeneration = 0;
@@ -895,6 +906,10 @@ private:
     TrackListWidget* m_trackList = nullptr;
     TimelineWidget* m_timeline = nullptr;
     MixerWidget* m_mixer = nullptr;
+    QWidget* m_bottomPanel = nullptr;
+    WarpEditorWidget* m_warpEditor = nullptr;
+    QWidget* m_warpPanel = nullptr;
+    QWidget* m_warpHandle = nullptr;
     InspectorWidget* m_inspector = nullptr;
     ContextPanel* m_contextPanel = nullptr;
     NoteContextPanel* m_noteContextPanel = nullptr;
@@ -933,6 +948,7 @@ private:
     QLabel* m_cpuStatusIcon = nullptr;
     QProgressBar* m_cpuStatusMeter = nullptr;
     QAction* m_showMixerAction = nullptr;
+    QAction* m_showWarpAction = nullptr;
     QAction* m_showInspectorAction = nullptr;
     QAction* m_showContextPanelAction = nullptr;
     QAction* m_showBrowserAction = nullptr;
@@ -1040,6 +1056,8 @@ private:
     double m_playRangeEnd = -1.0;
     int m_mixerHeight = 545;
     int m_mixerDragStartHeight = 545;
+    int m_warpHeight = 360;
+    int m_warpDragStartHeight = 360;
     int m_trackHeaderWidth = ui::kTrackHeaderWidth;
     int m_trackHeaderDragStartWidth = ui::kTrackHeaderWidth;
     bool m_browserOnLeft = true;

@@ -135,7 +135,7 @@ func (s *Server) connectedEditorParticipants(ctx context.Context,
 	result := make([]uuid.UUID, 0, len(connected))
 	for _, member := range state.Members {
 		role := roles[member.UserID]
-		if state.Session.CommandSchemaVersion == collab.CollaborationCommandSchemaV3 {
+		if state.Session.CommandSchemaVersion >= collab.CollaborationCommandSchemaV3 {
 			role = member.EffectiveRole
 		}
 		if connected[member.ID] && role != model.ProjectRoleViewer {

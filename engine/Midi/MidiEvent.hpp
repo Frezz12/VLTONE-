@@ -30,6 +30,7 @@ struct MidiEvent {
     /// Host-only per-note stereo position. It is not encoded into the three
     /// MIDI wire bytes and defaults to centre for ordinary MIDI producers.
     float notePan = 0.0f;
+    std::uint64_t musicalOrder = 0; ///< recorded ordering at equal frame offsets
 
     static constexpr std::uint8_t kNoteOff = 0x80;
     static constexpr std::uint8_t kNoteOn = 0x90;
@@ -58,8 +59,8 @@ struct MidiEvent {
         return event;
     }
     static MidiEvent noteOff(FrameCount offset, std::uint8_t channel,
-                             std::uint8_t key) noexcept {
-        return {offset, std::uint8_t(kNoteOff | (channel & 0x0F)), key, 0};
+                             std::uint8_t key, std::uint8_t velocity = 0) noexcept {
+        return {offset, std::uint8_t(kNoteOff | (channel & 0x0F)), key, velocity};
     }
 };
 
@@ -149,24 +150,21 @@ public:
     /// which is what makes a note-off before a note-on at the same offset stay
     /// that way, instead of cutting the note it was meant to precede.
     void sort() noexcept {
+        const auto before = [](const MidiEvent& a, const MidiEvent& b) {
+            if (a.frameOffset != b.frameOffset) return a.frameOffset < b.frameOffset;
+            const auto ao = a.musicalOrder;
+            const auto bo = b.musicalOrder;
+            return ao != bo ? ao < bo : a.sortOrder < b.sortOrder;
+        };
         constexpr std::size_t kInsertionSortThreshold = 32;
         if (m_events.size() <= kInsertionSortThreshold) {
-            stableRealtimeSort(m_events.begin(), m_events.end(),
-                               [](const MidiEvent& a, const MidiEvent& b) {
-                                   return a.frameOffset < b.frameOffset;
-                               });
+            stableRealtimeSort(m_events.begin(), m_events.end(), before);
             return;
         }
         // std::sort is allocation-free introsort in the supported standard
         // libraries. Explicit arrival order supplies stable semantics without
         // the O(N^2) movement of insertion sort on a reversed 512-event burst.
-        std::sort(m_events.begin(), m_events.end(),
-                  [](const MidiEvent& a, const MidiEvent& b) {
-                      if (a.frameOffset != b.frameOffset) {
-                          return a.frameOffset < b.frameOffset;
-                      }
-                      return a.sortOrder < b.sortOrder;
-                  });
+        std::sort(m_events.begin(), m_events.end(), before);
     }
 
     std::span<const MidiEvent> events() const noexcept { return m_events; }

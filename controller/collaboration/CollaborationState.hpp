@@ -103,6 +103,8 @@ struct PluginInsertTombstone {
 
 struct SharedProjectDocument {
     ProjectModel project;
+    std::unordered_map<std::string, PrepareMidiPart> preparedMidi;
+    std::unordered_map<std::string, ClipModel> midiHistory;
     std::uint64_t confirmedSequence = 0;
     std::unordered_map<std::string, TrackTombstone> deletedTracks;
     std::unordered_map<std::string, ClipTombstone> deletedClips;

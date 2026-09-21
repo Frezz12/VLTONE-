@@ -1,347 +1,150 @@
-#include "Controls.hpp"
 #include "EngineController.hpp"
 #include "ModulationPanel.hpp"
 #include "Theme.hpp"
-#include "cloud/PublishPreflight.hpp"
-#include "platform/AudioFileDecoder.hpp"
+#include "Typography.hpp"
+#include "graphics/BrowserSurface.hpp"
 #include <QApplication>
 #include <QDir>
-#include <QDoubleSpinBox>
 #include <QEventLoop>
-#include <QInputDialog>
-#include <QKeyEvent>
-#include <QLabel>
-#include <QMenu>
-#include <QMessageBox>
-#include <QPushButton>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QTest>
 #include <QTimer>
+#include <QWebEngineView>
+#include <QtWebEngineQuick/qtwebenginequickglobal.h>
 #include <cmath>
 #include <cstdio>
-
-using namespace daw::plugins::modulation;
+#include <memory>
+namespace mod = daw::plugins::modulation;
 namespace {
 int failures = 0;
-void check(bool ok, const char *text) {
-    std::printf("%s %s\n", ok ? "PASS" : "FAIL", text);
-    if (!ok)
-        ++failures;
+void check(bool ok, const char* text) { std::printf("%s %s\n",ok?"PASS":"FAIL",text); if(!ok)++failures; }
+void events(int ms=70) { QEventLoop loop; QTimer::singleShot(ms,&loop,&QEventLoop::quit); loop.exec(); }
+QVariant js(ui::graphics::BrowserPage* page, const QString& code) {
+    struct Result {bool done=false; QVariant value;}; auto result=std::make_shared<Result>();
+    page->runJavaScript(code,[result](const QVariant& v){result->value=v;result->done=true;});
+    for(int i=0;i<100&&!result->done;++i)events(10);
+    check(result->done,"JavaScript completes"); events(); return result->value;
 }
-void events(int ms = 80) {
-    QEventLoop loop;
-    QTimer::singleShot(ms, &loop, &QEventLoop::quit);
-    loop.exec();
 }
-void chooseMenu(QPushButton *button, const QString &name, const QString &input = {}) {
-    QTimer::singleShot(0, [name, input] {
-        auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
-        if (!menu) {
-            check(false, "preset popup opens");
-            return;
-        }
-        for (auto *action : menu->actions())
-            if (action->text() == name) {
-                QTimer::singleShot(0, [input] {
-                    for (auto *widget : QApplication::topLevelWidgets()) {
-                        if (auto *dialog = qobject_cast<QInputDialog *>(widget);
-                            dialog && dialog->isVisible()) {
-                            dialog->setTextValue(input);
-                            dialog->accept();
-                        }
-                        if (auto *dialog = qobject_cast<QMessageBox *>(widget);
-                            dialog && dialog->isVisible())
-                            dialog->done(QMessageBox::Yes);
-                    }
-                });
-                action->trigger();
-                menu->close();
-                return;
-            }
-        check(false, "requested preset action exists");
-        menu->close();
-    });
-    button->click();
-    events();
-}
-
-} // namespace
-int main(int argc, char **argv) {
-    QApplication app(argc, argv);
-    QTemporaryDir temporary;
-    QCoreApplication::setOrganizationName("VLTONE-Modulation-Test");
-    QCoreApplication::setApplicationName("Modulation");
+int main(int argc,char** argv) {
+    std::setvbuf(stdout,nullptr,_IONBF,0);
+    ui::registerFontUrlScheme(); QtWebEngineQuick::initialize();
+    QApplication app(argc,argv); ui::initializeApplicationFonts(); QTemporaryDir temporary;
+    app.setProperty("dawHeadlessDataRoot",temporary.path());
+    app.setOrganizationName("VLTONE-Modulation-Test");app.setApplicationName("ModulationWeb");
     QSettings::setDefaultFormat(QSettings::IniFormat);
-    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, temporary.path());
-    daw::EngineController controller;
-    check(bool(controller.initialize(48000, 257, false)), "headless controller initializes");
-    QString screenshotDir;
-    if (argc == 3 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--screenshots")) {
-        screenshotDir = QString::fromLocal8Bit(argv[2]);
-        QDir().mkpath(screenshotDir);
+    QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,temporary.path());
+    QString screenshots;
+    if(argc==3&&QString::fromLocal8Bit(argv[1])=="--screenshots"){screenshots=QString::fromLocal8Bit(argv[2]);QDir().mkpath(screenshots);}
+    daw::EngineController controller;check(bool(controller.initialize(48000,257,false)),"controller initializes");
+    for(int k=0;k<=mod::kindCount;++k) {
+        const bool rack=k==mod::kindCount;
+        const auto& desc=rack?mod::ModulationRackInstance::staticDescriptor():mod::descriptorFor(mod::Kind(k));
+        const auto track=controller.addTrack(daw::TrackKind::Audio,desc.name),insert=controller.addInsert(track,desc);
+        check(!insert.empty(),"plugin inserts through host"); if(insert.empty())continue;
+        ModulationPanel panel(&controller,QString::fromStdString(track),QString::fromStdString(insert));
+        panel.resize(rack?1040:440,rack?530:k==4?660:530);panel.show();
+        auto* view=panel.findChild<ui::graphics::BrowserSurface*>("ModulationWebView");
+        check(view!=nullptr,"HTML editor uses shared Chromium surface");if(!view)continue;
+        auto* page=view->page();bool ready=false;
+        for(int i=0;i<40&&!ready;++i)ready=js(page,"document.documentElement.dataset.connected === 'true' && document.querySelectorAll('.card').length > 0").toBool();
+        check(ready,"local resources and WebChannel initialize without a server");if(!ready)continue;
+        events(250);
+        const auto initial=panel.grab().toImage();
+        check(!initial.isNull() && initial.pixelColor(initial.width()/2,initial.height()/3).lightness()>120 &&
+              initial.pixelColor(initial.width()/2,8).lightness()<100,"Chromium paints the light cards and dark header");
+        if(!screenshots.isEmpty())initial.save(screenshots+"/"+QString::fromStdString(desc.name).remove(' ')+"-initial.png");
+        check(js(page,QString("document.querySelectorAll('.card').length === %1").arg(rack?4:1)).toBool(),"correct number of module cards");
+        check(js(page,"document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight").toBool(),"default panel has no scrollbars or clipped controls");
+        auto* plugin=controller.insertInstance(track,insert);
+        const unsigned mainIndex=rack?1:0;
+        const auto id=plugin->parameters()[mainIndex].id;
+        const auto value=[&]{return controller.insertParameter(track,insert,id);};
+        const double before=value();
+        js(page,QString("document.getElementById('value-%1').value='37';document.getElementById('value-%1').dispatchEvent(new Event('change'))").arg(mainIndex));
+        check(std::abs(value()-.37)<1.e-6,"HTML numeric input edits actual audio parameter");
+        controller.undo();events();check(std::abs(value()-before)<1.e-6,"numeric input is one undo step");
+        js(page,QString("document.getElementById('param-%1').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true}))").arg(mainIndex));
+        check(value()>before,"keyboard adjusts round slider");controller.undo();events();
+        QString routed;QObject::connect(&panel,&ModulationPanel::automationRequested,[&](QString parameter){routed=parameter;});
+        js(page,QString("document.getElementById('param-%1').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:100,clientY:150}));document.getElementById('automate').click()").arg(mainIndex));
+        check(routed==QString::fromStdString(id),"automation uses stable identity");
+        if(auto* native=view->findChild<QWebEngineView*>()) {
+            const auto position=js(page,QString("(()=>{let r=document.getElementById('param-%1').getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]})()").arg(mainIndex)).toList();
+            const QPoint center(qRound(position[0].toDouble()),qRound(position[1].toDouble()));
+            auto* receiver=native->focusProxy();if(!receiver)receiver=native;
+            controller.play();events();
+            QTest::mousePress(receiver,Qt::LeftButton,Qt::NoModifier,center);events();
+            bool monotonic=true;double last=value();
+            for(int step=1;step<=12;++step){QTest::mouseMove(receiver,center-QPoint(0,step*3),15);events(35);monotonic&=value()>=last;last=value();}
+            QTest::mouseRelease(receiver,Qt::LeftButton,Qt::NoModifier,center-QPoint(0,36));events();
+            check(monotonic&&value()>before+.12,"pointer drag during playback remains anchored across telemetry updates");
+            controller.stop();controller.undo();events();check(std::abs(value()-before)<1.e-6,"entire drag undoes in one step");
+        }
+        auto* bridge=panel.findChild<ModulationWebBridge*>();
+        check(bridge->savePreset("My modulation",false).isEmpty(),"user preset saves");
+        bridge->edit(mainIndex,.11,true);bridge->loadPreset("My modulation");events();
+        check(std::abs(value()-before)<1.e-6,"user preset restores values");
+        check(!bridge->savePreset("My modulation",false).isEmpty(),"accidental preset overwrite rejected");
+        check(bridge->renamePreset("My modulation","Renamed").isEmpty(),"user preset renames");
+        if(rack){
+            if(auto* native=view->findChild<QWebEngineView*>()) {
+                auto* receiver=native->focusProxy();if(!receiver)receiver=native;
+                const auto rect=js(page,"(()=>{const r=document.querySelector('.grab').getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]})()").toList();
+                const QPoint start(qRound(rect[0].toDouble()),qRound(rect[1].toDouble()));
+                QTest::mousePress(receiver,Qt::LeftButton,Qt::NoModifier,start);
+                for(int i=1;i<=10;++i)QTest::mouseMove(receiver,start+QPoint(i*52,0),10);
+                QTest::mouseRelease(receiver,Qt::LeftButton,Qt::NoModifier,start+QPoint(520,0));events();
+                check(plugin->parameterValue(mod::ModulationRackInstance::orderParameter)!=0,"real pointer drag reorders modules");
+                controller.undo();events();check(plugin->parameterValue(mod::ModulationRackInstance::orderParameter)==0,"pointer reorder is one undo step");
+            }
+            check(js(page,"document.getElementById('eq-content').hidden").toBool(),"EQ initially collapsed");
+            js(page,"document.getElementById('eq-toggle').click()");
+            check(js(page,"!document.getElementById('eq-content').hidden && document.getElementById('eq-toggle').getAttribute('aria-expanded')==='true'").toBool(),"EQ disclosure opens accessibly");
+            panel.resize(1040,800);events(300);js(page,"scrollTo(0,0)");
+            if(auto* native=view->findChild<QWebEngineView*>()) {
+                auto* receiver=native->focusProxy();if(!receiver)receiver=native;
+                const auto rect=js(page,"(()=>{const r=document.querySelector('[data-band=\"1\"]').getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]})()").toList();
+                const QPoint start(qRound(rect[0].toDouble()),qRound(rect[1].toDouble()));
+                const double oldFrequency=plugin->parameterValue(26),oldGain=plugin->parameterValue(27);
+                QTest::mousePress(receiver,Qt::LeftButton,Qt::NoModifier,start);
+                QTest::mouseMove(receiver,start+QPoint(20,-30),30);QTest::mouseRelease(receiver,Qt::LeftButton,Qt::NoModifier,start+QPoint(20,-30));events();
+                check(plugin->parameterValue(26)>oldFrequency&&plugin->parameterValue(27)>oldGain,"real EQ drag edits frequency and gain together");
+                controller.undo();events();check(plugin->parameterValue(26)==oldFrequency&&plugin->parameterValue(27)==oldGain,"EQ drag restores both coordinates in one undo");
+            }
+            const auto orderBefore=plugin->parameterValue(mod::ModulationRackInstance::orderParameter);
+            js(page,"document.querySelector('.grab').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',altKey:true,bubbles:true}))");
+            check(plugin->parameterValue(mod::ModulationRackInstance::orderParameter)!=orderBefore,"keyboard reordering changes DSP chain");
+            controller.undo();events();check(plugin->parameterValue(mod::ModulationRackInstance::orderParameter)==orderBefore,"reordering undoes once");
+            bridge->reorder(0,3);events();check(js(page,"document.querySelector('.card:last-child').dataset.module === '0'").toBool(),"visual order follows host order");
+            js(page,"document.querySelector('[data-module=\"2\"] .power').click()");
+            check(plugin->parameterValue(mod::ModulationRackInstance::offsets[2])==0,"module power controls correct identity after reorder");
+            js(page,"document.querySelector('[data-band=\"1\"]').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true}))");
+            check(plugin->parameterValue(27)==1,"EQ handle keyboard movement changes gain");controller.undo();events();
+            js(page,"document.getElementById('eq-band').value='0';document.getElementById('eq-band').dispatchEvent(new Event('change'));document.getElementById('eq-frequency').value='120';document.getElementById('eq-frequency').dispatchEvent(new Event('change'))");
+            check(plugin->parameterValue(21)==1&&plugin->parameterValue(22)==120,"low-cut inspector enables actual filter");
+            js(page,"document.getElementById('eq-band').value='5';document.getElementById('eq-band').dispatchEvent(new Event('change'));document.getElementById('eq-frequency').value='6000';document.getElementById('eq-frequency').dispatchEvent(new Event('change'))");
+            check(plugin->parameterValue(41)==1&&plugin->parameterValue(42)==6000,"high-cut inspector enables actual filter");
+            if(!screenshots.isEmpty())panel.grab().save(screenshots+"/Modulation-expanded.png");
+            js(page,"document.getElementById('eq-toggle').click()");panel.resize(1040,530);events(300);js(page,"scrollTo(0,0)");
+        } else {
+            panel.applyFactoryPreset(9);events();bool match=true;
+            for(const auto& info:plugin->parameters())match&=std::abs(plugin->parameterValue(info.index)-mod::factoryPresets(mod::Kind(k))[9].values[info.index])<1.e-6;
+            check(match,"all standalone factory parameters preserved");controller.undo();events();
+        }
+        if(!screenshots.isEmpty())panel.grab().save(screenshots+"/"+QString::fromStdString(desc.name).remove(' ')+".png");
+        panel.resize(rack?800:360,rack?490:k==4?650:490);events();
+        check(js(page,"document.documentElement.scrollWidth <= innerWidth").toBool(),"minimum supported width has no horizontal overflow");
+        panel.hide();events();check(!panel.visualUpdatesActive(),"hidden panel stops timer");panel.show();events();check(panel.visualUpdatesActive(),"shown panel resumes updates");
+        const auto path=(temporary.path()+"/state.vlt").toStdString();
+        check(bool(controller.saveProject(path)),"project saves HTML-controlled plugin state");
+        std::vector<std::uint8_t> saved;plugin->saveState(saved);
+        check(bool(controller.openProject(path)),"project reopens");
+        auto* restored=controller.insertInstance(track,insert);std::vector<std::uint8_t> loaded;
+        if(restored)restored->saveState(loaded);
+        check(restored && loaded==saved,"reopened project preserves all module, order and EQ state");
+        panel.hide();bridge->deletePreset("Renamed");
     }
-    for (int k = 0; k < kindCount; ++k) {
-        const auto kind = Kind(k);
-        const auto &desc = descriptorFor(kind);
-        std::printf("\n%s\n", desc.name.c_str());
-        const auto track = controller.addTrack(daw::TrackKind::Audio, desc.name);
-        const auto insert = controller.addInsert(track, desc);
-        check(!insert.empty() && controller.insertInstance(track, insert),
-              "effect inserts into a live controller");
-        auto panel = std::make_unique<ModulationPanel>(&controller, QString::fromStdString(track),
-                                                       QString::fromStdString(insert), kind);
-        panel->resize(560, kind == Kind::Doubler ? 520 : 540);
-        panel->show();
-        events();
-        auto *preset = panel->findChild<QPushButton *>("ModulationPreset");
-        check(preset && preset->text().contains(
-                            QString::fromUtf8(factoryPresets(kind)[0].name.data(),
-                                              int(factoryPresets(kind)[0].name.size()))),
-              "default preset is visible");
-        const auto table = parameterTable(kind);
-        panel->applyFactoryPreset(9);
-        events();
-        bool values = true;
-        for (const auto &p : table)
-            values &= std::abs(controller.insertParameter(track, insert, p.id) -
-                               factoryPresets(kind)[9].values[p.index]) < 1.e-6;
-        check(values, "preset applies every parameter through the controller");
-        controller.undo();
-        events();
-        values = true;
-        for (const auto &p : table)
-            values &= std::abs(controller.insertParameter(track, insert, p.id) -
-                               factoryPresets(kind)[0].values[p.index]) < 1.e-6;
-        check(values, "one undo restores all preset parameters");
-        controller.redo();
-        events();
-        auto *knob =
-            panel->findChild<ui::Knob *>(QString::fromStdString("ModulationKnob_" + table[0].id));
-        const double before = controller.insertParameter(track, insert, table[0].id);
-        QKeyEvent press(QEvent::KeyPress, Qt::Key_Left, Qt::NoModifier);
-        QApplication::sendEvent(knob, &press);
-        events();
-        check(controller.insertParameter(track, insert, table[0].id) < before &&
-                  preset->text().contains('*'),
-              "keyboard input updates audio state and marks modified preset");
-        controller.undo();
-        events();
-        check(std::abs(controller.insertParameter(track, insert, table[0].id) - before) < 1.e-6,
-              "keyboard edit is undoable");
-        auto *numeric = panel->findChild<QDoubleSpinBox *>(
-            QString::fromStdString("ModulationValue_" + table[0].id));
-        numeric->setValue(37);
-        events();
-        if (kind == Kind::DoublerPro) {
-            auto *delay = panel->findChild<QDoubleSpinBox *>("ModulationValue_delay");
-            auto *detune = panel->findChild<QDoubleSpinBox *>("ModulationValue_detune");
-            auto *body = panel->findChild<QDoubleSpinBox *>("ModulationValue_body");
-            check(delay && detune && body && panel->findChildren<ui::Knob *>().size() == 6,
-                  "Pro exposes six knobs with independent Delay, Detune and Body controls");
-            if (delay && detune && body) {
-                delay->setValue(73);
-                detune->setValue(9.5);
-                body->setValue(61);
-                events();
-                check(std::abs(controller.insertParameter(track, insert, "delay") - .73) < 1.e-6 &&
-                          std::abs(controller.insertParameter(track, insert, "detune") - 9.5) < 1.e-6 &&
-                          std::abs(controller.insertParameter(track, insert, "body") - .61) < 1.e-6,
-                      "Pro numerical entry preserves cents and percentage units");
-                QStringList routed;
-                const auto connection = QObject::connect(panel.get(), &ModulationPanel::automationRequested,
-                                                          [&](const QString &id) { routed.append(id); });
-                for (const auto *id : {"delay", "detune", "body"}) {
-                    auto *control = panel->findChild<ui::Knob *>(QString("ModulationKnob_%1").arg(id));
-                    if (control) QMetaObject::invokeMethod(control, "automateRequested", Qt::DirectConnection);
-                }
-                QObject::disconnect(connection);
-                check(routed == QStringList{"delay", "detune", "body"},
-                      "each new Pro knob routes its own automation parameter ID");
-            }
-        }
-        check(std::abs(controller.insertParameter(track, insert, table[0].id) - .37) < 1.e-6,
-              "numeric input uses percentage units");
-        chooseMenu(preset, QString::fromUtf8("Save preset…"), QStringLiteral("My soft preset"));
-        check(preset->text().contains(QStringLiteral("My soft preset")),
-              "user preset saves and becomes the selected reference");
-        numeric->setValue(11);
-        events();
-        chooseMenu(preset, QStringLiteral("My soft preset"));
-        check(std::abs(controller.insertParameter(track, insert, table[0].id) - .37) < 1.e-6,
-              "user preset restores its saved sound");
-        chooseMenu(preset, QString::fromUtf8("Rename preset…"),
-                   QStringLiteral("Renamed soft preset"));
-        check(preset->text().contains(QStringLiteral("Renamed soft preset")),
-              "user preset can be renamed");
-        int automationSignals = 0;
-        QObject::connect(panel.get(), &ModulationPanel::automationRequested,
-                         [&](const QString &id) {
-                             if (id == QString::fromStdString(table[0].id))
-                                 ++automationSignals;
-                         });
-        QMetaObject::invokeMethod(knob, "automateRequested", Qt::DirectConnection);
-        check(automationSignals == 1, "knob automation routes the stable parameter ID");
-        daw::AutomationTarget target;
-        target.kind = daw::AutomationTargetKind::PluginParameter;
-        target.channelId = track;
-        target.slotId = insert;
-        target.parameterId = table[0].id;
-        check(!controller.ensureAutomation(target).first.empty(),
-              "controller creates plugin automation");
-
-        auto *instance =
-            dynamic_cast<ModulationInstance *>(controller.insertInstance(track, insert));
-        const auto chosen = instance->presetReference();
-        const auto package =
-            temporary.filePath(QString::fromStdString(desc.name) + ".vlt").toStdString();
-        check(bool(controller.saveProject(package)), "project saves opaque plugin state");
-        daw::EngineController restored;
-        restored.initialize(48000, 257, false);
-        check(bool(restored.openProject(package)), "project reopens with built-in modulation");
-        auto *recalled = dynamic_cast<ModulationInstance *>(restored.insertInstance(track, insert));
-        bool restoredValues = recalled && recalled->presetReference() == chosen;
-        for (const auto &parameter : table)
-            restoredValues &= std::abs(restored.insertParameter(track, insert, parameter.id) -
-                                        controller.insertParameter(track, insert, parameter.id)) < 1.e-6;
-        check(restoredValues,
-              "parameters and preset reference survive project round trip");
-        chooseMenu(preset, QString::fromUtf8("Delete preset…"));
-        check(std::abs(controller.insertParameter(track, insert, table[0].id) - .37) < 1.e-6,
-              "deleting a user preset retains current parameter values");
-        const auto source =
-            temporary.filePath(QString::fromStdString(desc.name) + "-source.wav").toStdString();
-        audio::platform::AudioFileWriter writer;
-        writer.open(source, 48000, 1, 48000);
-        std::array<float, 48000> signal{};
-        for (unsigned i = 0; i < signal.size(); ++i)
-            signal[i] = float(.25 * std::sin(i * .071) + .06 * std::sin(i * .19));
-        const float *sourceChannels[]{signal.data()};
-        writer.write(sourceChannels, 48000);
-        writer.close();
-        controller.importAudio(source, track, 0);
-        daw::rendering::Spec spec;
-        spec.outputDir = temporary.filePath("renders").toStdString();
-        spec.baseName = desc.name;
-        spec.range = daw::rendering::Range::Custom;
-        spec.customEndSeconds = .5;
-        spec.sourceTrackIds = {track};
-        daw::rendering::Report report;
-        const bool rendered = bool(controller.renderProject(spec, {}, report));
-        audio::platform::DecodedAudio decoded;
-        const bool decodedOk =
-            rendered && !report.files.empty() &&
-            bool(audio::platform::decodeAudioFile(report.files.front(), decoded));
-        bool finite = decodedOk, nonzero = false;
-        for (float v : decoded.interleaved) {
-            finite &= std::isfinite(v);
-            nonzero |= std::abs(v) > .01f;
-        }
-        check(finite && nonzero && decoded.channels == 2,
-              "mono recording renders through the stereo insert offline");
-        if (kind == Kind::Doubler && decodedOk) {
-            spec.baseName = "Doubler-dry";
-            spec.bypassChannelInserts = true;
-            daw::rendering::Report dryReport;
-            audio::platform::DecodedAudio dry;
-            bool exact = bool(controller.renderProject(spec, {}, dryReport)) &&
-                         !dryReport.files.empty() &&
-                         bool(audio::platform::decodeAudioFile(dryReport.files.front(), dry)) &&
-                         dry.frames == decoded.frames;
-            double error = 0;
-            if (exact)
-                for (std::size_t i = 0; i < dry.interleaved.size(); i += 2)
-                    error = std::max(
-                        error,
-                        std::abs(.5 * (double(decoded.interleaved[i]) + decoded.interleaved[i + 1] -
-                                       dry.interleaved[i] - dry.interleaved[i + 1])));
-            check(exact && error < 1.e-6,
-                  "offline wet and bypassed exports preserve the same Doubler mono sum");
-        }
-        const auto copy = controller.duplicateTrack(track, true);
-        const auto *chain = controller.channelInserts(copy);
-        check(chain && !chain->empty() && chain->front().uid == desc.uid &&
-                  std::abs(controller.insertParameter(copy, chain->front().id, table[0].id) - .37) <
-                      1.e-6,
-              "track duplication retains independent modulation settings");
-        controller.removeTrack(copy);
-        check(daw::cloud::isSupportedBuiltinV1(*controller.insertModel(track, insert)),
-              "cloud preflight recognises the versioned built-in");
-
-        Theme custom = ThemeManager::instance().theme();
-        custom.accent = QColor("#c07af2");
-        ThemeManager::instance().applyCustomTheme(custom);
-        events();
-        check(panel->styleSheet().contains("#c07af2"), "open panel follows a changed theme accent");
-        panel->resize(440, kind == Kind::Doubler ? 460 : 620);
-        events();
-        bool contained = true;
-        for (auto *number : panel->findChildren<QDoubleSpinBox *>())
-            contained &=
-                panel->rect().contains(QRect(number->mapTo(panel.get(), QPoint()), number->size()));
-        check(contained, "controls remain reachable at minimum width");
-        if (k == 0) {
-            controller.setInsertChannelMode(track, insert, daw::PluginChannelMode::Mono);
-            events();
-            check(panel->findChild<QLabel *>("ModulationMonoNotice")->isVisible(),
-                  "mono routing explains why widening is unavailable");
-            controller.setInsertChannelMode(track, insert, daw::PluginChannelMode::Stereo);
-            events();
-        }
-        panel->hide();
-        events();
-        check(!panel->visualUpdatesActive(), "hidden panel stops visual updates");
-        panel->show();
-        events();
-        check(panel->visualUpdatesActive(), "reopening resumes visual updates");
-
-        if (!screenshotDir.isEmpty()) {
-            panel->resize(560, kind == Kind::Doubler ? 520 : 540);
-            panel->applyFactoryPreset(0);
-            events();
-            // Feed actual DSP output into the view while the audio device is
-            // disabled. This exercises presentation without starting transport.
-            auto *dsp =
-                dynamic_cast<ModulationInstance *>(controller.insertInstance(track, insert));
-            constexpr unsigned n = 257;
-            std::array<float, n> in{}, l{}, r{};
-            const float *inputs[]{in.data(), in.data()};
-            float *outputs[]{l.data(), r.data()};
-            daw::plugins::PluginProcessContext ctx;
-            ctx.inputs = inputs;
-            ctx.outputs = outputs;
-            ctx.inputChannels = ctx.outputChannels = 2;
-            ctx.frames = n;
-            for (int b = 0; b < 120; ++b) {
-                for (unsigned i = 0; i < n; ++i)
-                    in[i] =
-                        float(.2 * std::sin((b * n + i) * .071) + .1 * std::sin((b * n + i) * .17));
-                dsp->process(ctx);
-            }
-            auto *field = panel->findChild<ModulationField *>();
-            events(80);
-            check(!field->accessibleDescription().contains("-120.0"),
-                  "fresh monitoring telemetry stays visible with stopped transport");
-            events(300);
-            check(field->accessibleDescription().contains("-120.0"),
-                  "stale audio telemetry fades when processing stops");
-            for (int i = 0; i < 60; ++i)
-                field->present(dsp->telemetry(), 1. / 60, false);
-            if (kind == Kind::Doubler) {
-                const auto t = dsp->telemetry();
-                panel->findChild<QLabel *>("ModulationMeters")
-                    ->setText(QString("Width %1%   ·   Correlation %2")
-                                  .arg(t.width * 100, 0, 'f', 0)
-                                  .arg(t.correlation, 0, 'f', 2));
-            }
-            panel->grab().save(screenshotDir + "/" + QString::fromStdString(desc.name) + ".png");
-        }
-        controller.removeInsert(track, insert);
-        events();
-        check(!knob->isEnabled() && !panel->visualUpdatesActive(),
-              "removing an insert invalidates controls and stops telemetry safely");
-        panel.reset();
-        controller.removeTrack(track);
-    }
-    std::printf("%d failures\n", failures);
-    return failures ? 1 : 0;
+    std::printf("%d failures\n",failures);return failures?1:0;
 }

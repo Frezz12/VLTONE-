@@ -20,6 +20,9 @@ struct Reader {
             const auto& s = reader.source;
             const auto& audio = *s.audio;
             double p = s.begin + (reader.offset + i) * reader.step;
+            // Musical-to-sample conversion can leave an integral frame a few
+            // ulps away from its integer. Identity Warp must remain bit exact.
+            if (std::abs(p - std::round(p)) < 1e-7) p = std::round(p);
             if (p < s.begin) return 0;
             const double length = s.loopEnd - s.loopBegin;
             if (s.loopMode && length >= 2 && p >= s.loopEnd) {
@@ -57,6 +60,7 @@ struct TimeStretch::Impl {
         std::array<std::vector<float>, 2> input;
         double remainder = 0;
         int readPosition = quantum;
+        int outputFrames = quantum;
         Stage(double rate, int mode) {
             const double seconds = mode == 1 ? 0.096 : mode == 2 ? 0.08 :
                                    mode == 3 ? 0.10 : 0.12;
@@ -75,6 +79,7 @@ struct TimeStretch::Impl {
     StretchSource previousSource;
     double expectedPosition = 0, inputPosition = 0, stageSpeed = 1;
     bool ready = false;
+    bool exactBoundary = false;
 
     static int stageCount(double ratio) {
         return std::max(1, int(std::ceil(std::log2(std::max(1.0, ratio)) - 1e-10)));
@@ -97,23 +102,24 @@ struct TimeStretch::Impl {
         auto& stage = *stages[index];
         int done = 0;
         while (done < frames) {
-            if (stage.readPosition == quantum) {
-                const double wanted = quantum * stageSpeed + stage.remainder;
+            if (stage.readPosition == stage.outputFrames) {
+                stage.outputFrames = exactBoundary ? std::min(quantum, frames - done) : quantum;
+                const double wanted = stage.outputFrames * stageSpeed + stage.remainder;
                 const int inputFrames = int(std::floor(wanted));
                 stage.remainder = wanted - inputFrames;
                 float* output[2]{stage.output[0].data(), stage.output[1].data()};
                 if (index == 0) {
                     reader.offset = inputPosition;
-                    stage.stretch.process(reader, inputFrames, output, quantum);
+                    stage.stretch.process(reader, inputFrames, output, stage.outputFrames);
                     inputPosition += inputFrames;
                 } else {
                     float* input[2]{stage.input[0].data(), stage.input[1].data()};
                     produce(index - 1, reader, input[0], input[1], inputFrames);
-                    stage.stretch.process(input, inputFrames, output, quantum);
+                    stage.stretch.process(input, inputFrames, output, stage.outputFrames);
                 }
                 stage.readPosition = 0;
             }
-            const int count = std::min(frames - done, quantum - stage.readPosition);
+            const int count = std::min(frames - done, stage.outputFrames - stage.readPosition);
             std::copy_n(stage.output[0].data() + stage.readPosition, count, left + done);
             std::copy_n(stage.output[1].data() + stage.readPosition, count, right + done);
             stage.readPosition += count;
@@ -134,6 +140,7 @@ struct TimeStretch::Impl {
             }
             stage.remainder = 0;
             stage.readPosition = quantum;
+            stage.outputFrames = quantum;
         }
     }
 };
@@ -148,8 +155,9 @@ void TimeStretch::reset() noexcept { m_impl->ready = false; }
 
 void TimeStretch::render(const StretchSource& source, double sourcePosition,
                         double speed, double pitch, double formant,
-                        float* left, float* right, FrameCount frames) noexcept {
+                        float* left, float* right, FrameCount frames, bool exactBoundary) noexcept {
     auto& p = *m_impl;
+    p.exactBoundary = exactBoundary;
     if (!source.audio || source.audio->channels() == 0 || source.end <= source.begin) {
         std::fill_n(left, frames, 0); std::fill_n(right, frames, 0); return;
     }

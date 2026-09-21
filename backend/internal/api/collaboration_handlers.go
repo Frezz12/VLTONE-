@@ -528,7 +528,7 @@ func (s *Server) startProjectSession(w http.ResponseWriter, r *http.Request) {
 	input.Password = ""
 	var state collab.SessionState
 	var err error
-	if input.CommandSchemaVersion == collab.CollaborationCommandSchemaV3 {
+	if input.CommandSchemaVersion >= collab.CollaborationCommandSchemaV3 {
 		state, err = s.Collab.StartSessionV3Secured(r.Context(), projectID,
 			userFrom(r).ID, deviceFrom(r).ID, collaborationActorSessionID(r),
 			input.Mode, input.compatibility(), secret,
@@ -576,7 +576,7 @@ func (s *Server) sessionMemberAction(w http.ResponseWriter, r *http.Request, act
 		input.Password = ""
 		var state collab.SessionState
 		var err error
-		if input.CommandSchemaVersion == collab.CollaborationCommandSchemaV3 {
+		if input.CommandSchemaVersion >= collab.CollaborationCommandSchemaV3 {
 			state, err = s.Collab.JoinSessionV3Secured(r.Context(), projectID,
 				sessionID, userID, deviceID, authSessionID,
 				input.compatibility(), secret, input.Readiness)
@@ -650,8 +650,9 @@ func (s *Server) updateProjectSessionReadiness(w http.ResponseWriter,
 					"readinessStatus":   member.ReadinessStatus,
 					"readinessRevision": member.ReadinessRevision,
 				})
+				sessionProtocol, _ := collab.CollaborationProtocolForSchema(state.Session.CommandSchemaVersion)
 				s.Rooms.Publish(projectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelopeFor(
-					collab.CollaborationProtocolV3, "session.readiness_changed",
+					sessionProtocol, "session.readiness_changed",
 					payload, uuid.Nil, nil, 0)})
 				s.Rooms.DisconnectParticipant(member.ID, collab.RoomClose{
 					Code:   "readiness_changed",
@@ -680,7 +681,8 @@ func (s *Server) activateProjectSession(w http.ResponseWriter,
 		payload, _ := json.Marshal(map[string]any{
 			"sessionId": sessionID, "status": model.ProjectSessionActive,
 		})
-		s.Rooms.Publish(projectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelopeFor(collab.CollaborationProtocolV3,
+		sessionProtocol, _ := collab.CollaborationProtocolForSchema(state.Session.CommandSchemaVersion)
+		s.Rooms.Publish(projectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelopeFor(sessionProtocol,
 			"session.activated", payload, uuid.Nil, nil, 0)})
 		for _, participantID := range s.Rooms.ConnectedParticipants(projectID) {
 			s.Rooms.DisconnectParticipant(participantID, collab.RoomClose{
@@ -830,7 +832,7 @@ func (s *Server) requireCloudRecording(w http.ResponseWriter, r *http.Request,
 			return false
 		}
 		if state.Session.ID == sessionID &&
-			state.Session.CommandSchemaVersion ==
+			state.Session.CommandSchemaVersion >=
 				collab.CollaborationCommandSchemaV3 {
 			return true
 		}

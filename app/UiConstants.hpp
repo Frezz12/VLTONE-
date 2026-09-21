@@ -40,6 +40,10 @@ inline constexpr int kMinTrackHeaderWidth = 220;
 /// The headers may take the rest of the arrangement, but the resize rail and a
 /// narrow strip of timeline must remain reachable so the gesture is reversible.
 inline constexpr int kMinTimelineWidth = 180;
+inline constexpr double kMinTimelineZoom = 4.0;
+// Two screen pixels per sample at 48 kHz; the decoded-source view can expose
+// individual samples instead of magnifying the 1 ms peak envelope.
+inline constexpr double kMaxTimelineZoom = 96000.0;
 inline constexpr int kTransportHeight = 80;
 inline constexpr int kBottomBarHeight = 28;
 
@@ -174,6 +178,13 @@ double gridLineWidth();
 void setGridLineWidth(double pixels);
 int gridOpacity(); // Percent; zero hides the lines without disabling snapping.
 void setGridOpacity(int percent);
+
+inline constexpr const char* kRoundedClipCornersSetting = "ui/roundedClipCorners";
+bool roundedClipCorners();
+void setRoundedClipCorners(bool enabled);
+inline double clipCornerRadius(double roundedRadius = 5.0) {
+    return roundedClipCorners() ? roundedRadius : 0.0;
+}
 
 /// How thick the playhead line is drawn, in pixels. A hairline is right on a
 /// sparse arrangement and invisible on a dense one at a high pixel density, and

@@ -1247,10 +1247,9 @@ QPushButton:pressed { background: %TINT%; }
 QPushButton:focus { border-color: %ACCENT%; }
 QPushButton:disabled { color: %MUTED%; background: %SURFACE%; }
 QCheckBox, QRadioButton { spacing: 8px; padding: 4px 0; }
-QCheckBox::indicator:unchecked, QRadioButton::indicator:unchecked {
-    border: 1px solid %CONTROL_BORDER%; background: %WELL%; width: 12px; height: 12px; border-radius: 3px; }
-QRadioButton::indicator:unchecked { border-radius: 7px; }
-QCheckBox::indicator:hover, QRadioButton::indicator:hover { border-color: %ACCENT%; }
+QRadioButton::indicator:unchecked {
+    border: 1px solid %CONTROL_BORDER%; background: %WELL%; width: 12px; height: 12px; border-radius: 7px; }
+QRadioButton::indicator:hover { border-color: %ACCENT%; }
 QCheckBox:disabled, QRadioButton:disabled { color: %MUTED%; }
 QCheckBox:focus, QRadioButton:focus { color: %TEXT%; background: %TINT%; border-radius: 4px; }
 #ExportCover { background: %INPUT%; border: 1px dashed %CONTROL_BORDER%; border-radius: 12px; padding: 4px;

@@ -109,6 +109,7 @@ engineNotesFor(const daw::EngineController& controller,
 }
 
 int main() {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     {
         daw::ProjectModel model;
         daw::TrackModel a, b;
@@ -2504,6 +2505,25 @@ int main() {
         audio::platform::decodeAudioFile(otherPath, other);
         const float otherPeak =
             std::max(channelPeak(other, 0), channelPeak(other, 1));
+        f.setExclusiveAuditionTrack(folder);
+        const std::string auditionPath = (dir / "folder-audition.wav").string();
+        f.exportMixdown(auditionPath, false);
+        audio::platform::DecodedAudio audition;
+        audio::platform::decodeAudioFile(auditionPath, audition);
+        const float auditionPeak =
+            std::max(channelPeak(audition, 0), channelPeak(audition, 1));
+        check(auditionPeak > 0.1f && auditionPeak < otherPeak * 1.3f &&
+                  f.project().findTrack(outside)->soloed &&
+                  !f.project().findTrack(folder)->soloed,
+              "temporary group audition overrides solo without changing project state");
+        f.setExclusiveAuditionTrack({});
+        const std::string restoredPath = (dir / "folder-solo-restored.wav").string();
+        f.exportMixdown(restoredPath, false);
+        audio::platform::DecodedAudio restored;
+        audio::platform::decodeAudioFile(restoredPath, restored);
+        check(std::abs(std::max(channelPeak(restored, 0),
+                                channelPeak(restored, 1)) - otherPeak) < 0.01f,
+              "turning off audition restores the previous solo mix");
         f.setTrackSoloed(outside, false);
         const std::string bothPath = (dir / "folder-solo-both.wav").string();
         f.exportMixdown(bothPath, false);
@@ -4069,6 +4089,7 @@ int main() {
 
         const auto trimSchedule = engineNotesFor(p, second);
         const std::uint64_t trimRevision = p.midiNotesRevision(second);
+        const auto trimGeometry = p.clipGeometryRevision();
         const double trimDurationCache = p.durationSeconds();
         const std::size_t trimDepth = p.undoDepth();
         p.beginClipTrimEdit(second, denseClip);
@@ -4077,6 +4098,7 @@ int main() {
         check(findClip(p, second, denseClip)->notes.data() == noteStorage &&
                   engineNotesFor(p, second) == trimSchedule &&
                   p.midiNotesRevision(second) > trimRevision &&
+                  p.clipGeometryRevision() > trimGeometry &&
                   std::fabs(p.durationSeconds() - trimDurationCache) < 1e-9,
               "100k-note trim changes geometry/revision without copying or publishing");
         p.endClipTrimEdit("Trim Dense MIDI Clip");
@@ -4119,7 +4141,10 @@ int main() {
         const std::size_t depth = p.undoDepth();
 
         p.beginClipTrimEdit({{audio, audioClip}, {midi, midiClip}});
+        const auto audioGeometry = p.clipGeometryRevision();
         p.setClipTrim(audio, audioClip, 0.0, 0.0, audioLength - 0.2);
+        check(p.clipGeometryRevision() > audioGeometry,
+              "audio trim invalidates visual geometry before release");
         p.setClipTrim(midi, midiClip, 1.0, 0.0, 3.8);
         p.endClipTrimEdit("Trim Clips");
         check(p.undoDepth() == depth + 1 &&
@@ -4191,10 +4216,12 @@ int main() {
 
         const auto childSchedule = engineNotesFor(p, child);
         const std::uint64_t childRevision = p.midiNotesRevision(child);
+        const auto patternGeometry = p.clipGeometryRevision();
         const std::size_t trimDepth = p.undoDepth();
         p.beginClipTrimEdit(pattern, owner);
         p.setClipTrim(pattern, owner, 3.0, 0.0, 1.0);
         check(engineNotesFor(p, child) == childSchedule &&
+                  p.clipGeometryRevision() > patternGeometry &&
                   p.midiNotesRevision(child) > childRevision,
               "Pattern trim invalidates linked preview without publishing mid-drag");
         p.endClipTrimEdit("Trim Pattern Clip");

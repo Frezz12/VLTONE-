@@ -1394,7 +1394,7 @@ std::optional<double> TimelineWidget::liveZoomPointerX() const {
 void TimelineWidget::applyHorizontalZoom(
     double pixelsPerSecond, std::optional<double> pointerX) {
     if (!std::isfinite(pixelsPerSecond)) return;
-    const double next = std::clamp(pixelsPerSecond, 4.0, 1200.0);
+    const double next = std::clamp(pixelsPerSecond, ui::kMinTimelineZoom, ui::kMaxTimelineZoom);
     if (next == m_pixelsPerSecond) return;
     noteManualNavigation();
 
@@ -1431,7 +1431,8 @@ void TimelineWidget::setHorizontalZoom(double pixelsPerSecond) {
 void TimelineWidget::zoomToFit() {
     noteManualNavigation();
     const double duration = std::max(4.0, m_controller->durationSeconds());
-    m_pixelsPerSecond = std::clamp((width() - 40) / duration, 4.0, 1200.0);
+    m_pixelsPerSecond = std::clamp((width() - 40) / duration,
+                                    ui::kMinTimelineZoom, ui::kMaxTimelineZoom);
     setHorizontalScroll(0.0);
     syncNavigationControls();
     update();
@@ -2950,13 +2951,13 @@ void TimelineWidget::drawLanes(QPainter& p) {
             p.setPen(QPen(sel ? t.textPrimary
                               : mixColors(clipColor, Qt::black, 0.45),
                           sel ? 1.8 : 1.0));
-            p.drawRoundedRect(r, 5, 5);
+            p.drawRoundedRect(r, ui::clipCornerRadius(), ui::clipCornerRadius());
 
             const QRectF caption(r.left(), r.top(), r.width(), 14);
             p.setPen(Qt::NoPen);
             p.setBrush(QColor(0, 0, 0, 60));
             QPainterPath capPath;
-            capPath.addRoundedRect(caption, 5, 5);
+            capPath.addRoundedRect(caption, ui::clipCornerRadius(), ui::clipCornerRadius());
             p.drawPath(capPath);
         }
 
@@ -2974,7 +2975,7 @@ void TimelineWidget::drawLanes(QPainter& p) {
                 // not the editor is open, so opening it changes nothing above.
                 p.save();
                 QPainterPath body;
-                body.addRoundedRect(r, 5, 5);
+                body.addRoundedRect(r, ui::clipCornerRadius(), ui::clipCornerRadius());
                 p.setClipPath(body, Qt::IntersectClip);
                 drawCompLane(p, track, clip, content, midiNotesRevision);
                 p.restore();
@@ -3003,12 +3004,12 @@ void TimelineWidget::drawLanes(QPainter& p) {
                     !m_controller->pendingLocalAudioPath(clip.id).empty();
                 p.setPen(Qt::NoPen);
                 p.setBrush(QColor(18, 20, 24, mine ? 40 : 120));
-                p.drawRoundedRect(r, 4.0, 4.0);
+                p.drawRoundedRect(r, ui::clipCornerRadius(4), ui::clipCornerRadius(4));
                 QPen hatch(QColor(255, 255, 255, mine ? 70 : 110), 1.0,
                            Qt::DashLine);
                 p.setPen(hatch);
                 p.setBrush(Qt::NoBrush);
-                p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 4.0, 4.0);
+                p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), ui::clipCornerRadius(4), ui::clipCornerRadius(4));
                 if (r.width() > 74.0 && r.height() > 18.0) {
                     const QFont previousFont = p.font();
                     QFont badgeFont = previousFont;
@@ -3027,7 +3028,7 @@ void TimelineWidget::drawLanes(QPainter& p) {
                 // even on tracks whose own colour is already subdued.
                 p.setPen(Qt::NoPen);
                 p.setBrush(QColor(55, 58, 64, 118));
-                p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 4, 4);
+                p.drawRoundedRect(r.adjusted(1, 1, -1, -1), ui::clipCornerRadius(4), ui::clipCornerRadius(4));
                 if (clip.kind == daw::ClipKind::Audio) {
                     // Editing affordances stay bright even while the content
                     // itself is visibly switched off.
@@ -3458,7 +3459,7 @@ void TimelineWidget::drawAutomationClips(QPainter& p,
         p.setPen(QPen(selected ? t.textPrimary
                                : mixColors(accent, t.background, 0.45),
                       selected ? 1.8 : 1.0));
-        p.drawRoundedRect(body, 5, 5);
+        p.drawRoundedRect(body, ui::clipCornerRadius(), ui::clipCornerRadius());
 
         p.save();
         p.setClipRect(body.adjusted(1, 1, -1, -1), Qt::IntersectClip);
@@ -3646,13 +3647,13 @@ void TimelineWidget::drawPatternClips(
         p.setPen(QPen(selected ? t.textPrimary
                                : mixColors(fill, t.background, 0.52),
                       selected ? 1.8 : 1.0));
-        p.drawRoundedRect(body, 6, 6);
+        p.drawRoundedRect(body, ui::clipCornerRadius(6), ui::clipCornerRadius(6));
 
         const QRectF caption(body.left(), body.top(), body.width(), 15);
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(0, 0, 0, 70));
         QPainterPath cap;
-        cap.addRoundedRect(caption, 6, 6);
+        cap.addRoundedRect(caption, ui::clipCornerRadius(6), ui::clipCornerRadius(6));
         p.drawPath(cap);
 
         const QRectF content(body.left() + 4, caption.bottom() + 2,
@@ -3664,7 +3665,7 @@ void TimelineWidget::drawPatternClips(
             const int basePitch = low - (span - used) / 2;
             const double rowH = content.height() / double(span);
             QPainterPath clipPath;
-            clipPath.addRoundedRect(body, 6, 6);
+            clipPath.addRoundedRect(body, ui::clipCornerRadius(6), ui::clipCornerRadius(6));
             p.save();
             p.setClipPath(clipPath, Qt::IntersectClip);
             p.setRenderHint(QPainter::Antialiasing, false);
@@ -4168,13 +4169,13 @@ void TimelineWidget::drawRecordingClip(QPainter& p,
         // stops being a red stripe that turns into something else on stop.
         p.setBrush(body);
         p.setPen(QPen(mixColors(body, Qt::black, 0.45), 1.0));
-        p.drawRoundedRect(r, 5, 5);
+        p.drawRoundedRect(r, ui::clipCornerRadius(), ui::clipCornerRadius());
 
         const QRectF caption(r.left(), r.top(), r.width(), 14);
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(0, 0, 0, 60));
         QPainterPath capPath;
-        capPath.addRoundedRect(caption, 5, 5);
+        capPath.addRoundedRect(caption, ui::clipCornerRadius(), ui::clipCornerRadius());
         p.drawPath(capPath);
 
         const QRectF content(r.left(), caption.bottom(), r.width(),
@@ -4207,7 +4208,7 @@ void TimelineWidget::drawRecordingClip(QPainter& p,
         p.setPen(QPen(QColor(rec.red(), rec.green(), rec.blue(),
                              live ? int(120 + 100 * pulse) : 110),
                       live ? 1.6 : 1.0));
-        p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5);
+        p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), ui::clipCornerRadius(), ui::clipCornerRadius());
 
         // The write head, where the take is being written right now.
         if (live && r.width() > 2.0) {
@@ -4241,13 +4242,13 @@ void TimelineWidget::drawPendingCloudRecordings(
                             220),
                       1.4, Qt::DashLine));
         p.setBrush(QColor(body.red(), body.green(), body.blue(), 120));
-        p.drawRoundedRect(clip, 5.0, 5.0);
+        p.drawRoundedRect(clip, ui::clipCornerRadius(), ui::clipCornerRadius());
 
         const QRectF caption(clip.left(), clip.top(), clip.width(),
                              std::min(16.0, clip.height()));
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(0, 0, 0, 90));
-        p.drawRoundedRect(caption, 5.0, 5.0);
+        p.drawRoundedRect(caption, ui::clipCornerRadius(), ui::clipCornerRadius());
         if (caption.width() > 64.0) {
             QFont font = p.font();
             font.setPixelSize(10);
@@ -4267,6 +4268,21 @@ void TimelineWidget::drawRecordingEnvelope(QPainter& p,
                                            const QRectF& area,
                                            const QRectF& body,
                                            const QColor& color) {
+    if (preview.midi) {
+        p.save(); p.setClipRect(area.intersected(body), Qt::IntersectClip);
+        const double secondsPerBeat = 60.0 / m_controller->tempo();
+        int low = 127, high = 0;
+        for (const auto& n : preview.notes) { low = std::min(low, n.pitch); high = std::max(high, n.pitch); }
+        const double rowHeight = std::min(5.0, std::max(1.0, (area.height() - 6) / std::max(12, high - low + 1)));
+        p.setPen(Qt::NoPen); p.setBrush(color.lighter(150));
+        for (const auto& n : preview.notes) {
+            const double time = span.startSeconds + n.startBeats * secondsPerBeat - span.captureOffsetSeconds;
+            const double x = (time - m_scrollSeconds) * m_pixelsPerSecond;
+            const double y = area.center().y() - (n.pitch - (low + high) * 0.5) * rowHeight;
+            p.drawRect(QRectF(x, y, std::max(1.0, n.lengthBeats * secondsPerBeat * m_pixelsPerSecond), std::max(1.0, rowHeight - 1)));
+        }
+        p.restore(); return;
+    }
     if (preview.envelope.empty() || !(preview.envelopeStepSeconds > 0.0)) return;
     // Anchor tiles to frame zero of this capture, even when the visible span
     // is cropped by a comp row or a loop pass. Floating scroll cancellation in
@@ -4280,7 +4296,7 @@ void TimelineWidget::drawRecordingEnvelope(QPainter& p,
     how.clipRight = std::min(double(width()), area.right());
     how.gain = float(m_waveformScale); how.color = color;
     p.save();
-    QPainterPath clip; clip.addRoundedRect(body, 5, 5);
+    QPainterPath clip; clip.addRoundedRect(body, ui::clipCornerRadius(), ui::clipCornerRadius());
     p.setClipPath(clip, Qt::IntersectClip);
     ui::paintRecordingPeaks(p, preview.envelope, preview.envelopeStepSeconds,
         preview.envelopeId, sourceArea, how);
@@ -4344,11 +4360,24 @@ void TimelineWidget::drawWaveform(QPainter& p, const daw::ClipModel& clip,
                                   const QRectF& area) {
     const std::string& path = m_controller->clipDisplayFilePath(clip);
     const bool processed = path != clip.filePath;
+    if (clip.warp.enabled && !processed && clip.warp.markers.size() >= 2) {
+        for (std::size_t i = 0; i + 1 < clip.warp.markers.size(); ++i) {
+            const auto& a = clip.warp.markers[i]; const auto& b = clip.warp.markers[i + 1];
+            const double start = daw::beatsToSeconds(a.targetBeats, m_controller->tempo());
+            const double duration = daw::beatsToSeconds(b.targetBeats - a.targetBeats, m_controller->tempo());
+            const QRectF segment(area.left() + start * m_pixelsPerSecond, area.top(), duration * m_pixelsPerSecond, area.height());
+            drawPeaks(p, m_controller->waveforms().cached(path), a.sourceSeconds, segment,
+                clip.gain, QColor(255, 255, 255), duration / (b.sourceSeconds - a.sourceSeconds), clip.sampleEdit.reverse,
+                m_controller->cachedSourceSamples(path));
+        }
+        return;
+    }
     drawPeaks(p, m_controller->waveforms().cached(path),
               processed ? 0.0 : clip.offsetSeconds, area,
               processed ? 1.0f : clip.gain, QColor(255, 255, 255),
               processed ? 1.0 : clip.sampleEdit.stretchTime,
-              processed ? false : clip.sampleEdit.reverse);
+              processed ? false : clip.sampleEdit.reverse,
+              m_controller->cachedSourceSamples(path));
 }
 
 /// The waveform envelope of `peaks` across `area`, where the source time at the
@@ -4361,7 +4390,8 @@ void TimelineWidget::drawWaveform(QPainter& p, const daw::ClipModel& clip,
 void TimelineWidget::drawPeaks(QPainter& p, const daw::WaveformPeaks* peaks,
                                double sourceStartSeconds, const QRectF& area,
                                float gain, const QColor& color,
-                               double timeStretch, bool reversed) {
+                               double timeStretch, bool reversed,
+                               const daw::engine::SampleBuffer* samples) {
     // Source seconds per screen pixel. A stretched clip covers more timeline
     // per second of file, so each pixel steps through less of the source.
     ui::perf::Scope timing("timeline.waveform.paint.ms");
@@ -4377,6 +4407,7 @@ void TimelineWidget::drawPeaks(QPainter& p, const daw::WaveformPeaks* peaks,
     how.reversed = reversed;
     how.gain = float(double(gain) * m_waveformScale);
     how.color = color;
+    how.samples = samples;
     ui::paintPeaks(p, peaks, area, how);
 }
 
@@ -4532,7 +4563,8 @@ void TimelineWidget::drawTakeAudio(QPainter& p, const daw::ClipModel& clip,
     p.save();
     p.setClipRect(vis, Qt::IntersectClip);
     drawPeaks(p, m_controller->waveforms().cached(take.filePath),
-              take.offsetSeconds, span, take.gain, color, stretch);
+              take.offsetSeconds, span, take.gain, color, stretch, false,
+              m_controller->cachedSourceSamples(take.filePath));
     p.restore();
 }
 
@@ -4609,7 +4641,7 @@ void TimelineWidget::drawMidiNotes(QPainter& p, const daw::ClipModel& clip,
     // right edge — and a note on the lowest row would poke out of the rounded
     // bottom corners.
     QPainterPath bodyClip;
-    bodyClip.addRoundedRect(body, 5, 5);
+    bodyClip.addRoundedRect(body, ui::clipCornerRadius(), ui::clipCornerRadius());
     p.save();
     p.setClipPath(bodyClip, Qt::IntersectClip);
     p.setClipRect(area, Qt::IntersectClip);
@@ -5226,6 +5258,8 @@ void TimelineWidget::updateCursor(const QPoint& pos) {
 }
 
 void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
+    if (hasActivePointerGesture()) finishInterruptedPointerGesture();
+    m_lastPointerPosition = ev->position();
     setFocus(Qt::MouseFocusReason);
     if (ev->button() != Qt::RightButton) m_suppressContextMenu = false;
     if (ev->button() == Qt::MiddleButton) {
@@ -6093,6 +6127,16 @@ QRegion TimelineWidget::gestureDamage() const {
 }
 
 void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
+    // A release can be consumed by a popup or another native surface. The next
+    // move must end the old gesture before it can seek or change a selection.
+    if ((m_panning && !(ev->buttons() & Qt::MiddleButton)) ||
+        (!m_panning && hasActivePointerGesture() &&
+         !(ev->buttons() & Qt::LeftButton))) {
+        finishInterruptedPointerGesture();
+        updateCursor(ev->position().toPoint());
+        return;
+    }
+    if (ev->buttons() != Qt::NoButton) m_lastPointerPosition = ev->position();
     const bool patternGesture = std::any_of(m_dragOrigins.begin(), m_dragOrigins.end(),
         [](const auto& origin) { return origin.kind == daw::ClipKind::Pattern; }) ||
         std::any_of(m_trimOrigins.begin(), m_trimOrigins.end(),
@@ -6114,29 +6158,6 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
         if (scroll != m_scrollSeconds || scrollY != m_scrollY) update();
         else update(before.united(after));
     });
-    // A cancelled implicit grab may arrive without MouseButtonRelease. Land the
-    // current endpoint as soon as Qt reports that the left button is no longer
-    // down, otherwise the controller would remain in deferred-publish mode.
-    if (m_stretching && !(ev->buttons() & Qt::LeftButton)) {
-        finishStretchGesture();
-        updateCursor(ev->position().toPoint());
-        update();
-        return;
-    }
-    const bool projectGestureButtonHeld =
-        bool(ev->buttons() & Qt::LeftButton);
-    if (m_projectGestureActive && !projectGestureButtonHeld) {
-        cancelProjectGesture();
-        updateCursor(ev->position().toPoint());
-        update();
-        return;
-    }
-    // If the platform cancelled its implicit mouse grab, do not leave the
-    // timeline in a mode where ordinary hover movement keeps panning forever.
-    if (m_panning && !(ev->buttons() & Qt::MiddleButton)) {
-        m_panning = false;
-        updateCursor(ev->position().toPoint());
-    }
     if (m_panning) {
         // Grab-and-drag navigation: the content follows the hand, hence the
         // inverse sign on both scroll offsets. Use incremental deltas so the
@@ -6753,18 +6774,36 @@ void TimelineWidget::leaveEvent(QEvent*) {
     update();
 }
 
+bool TimelineWidget::hasActivePointerGesture() const {
+    return m_panning || m_scrubbing || m_loopGrab != LoopGrab::None ||
+           m_regionPicking || m_regionMovePending || m_regionMoving ||
+           m_marqueeActive || m_projectGestureActive || m_clipPositionEditOpen ||
+           m_clipTrimEditOpen || m_stretching ||
+           m_dragging || m_trimming || m_fading || m_fadeCurving ||
+           m_gainDragging || m_erasing || m_swiping || m_expandDrag ||
+           m_draggingPoint || m_bendingSegment || m_drawingCurve;
+}
+
+void TimelineWidget::finishInterruptedPointerGesture() {
+    if (!hasActivePointerGesture()) return;
+    // Use the last position reported with a button held. A later hover or a
+    // popup's position must not move the playhead or extend the selection.
+    const Qt::MouseButton button = m_panning ? Qt::MiddleButton : Qt::LeftButton;
+    if (m_projectGestureActive || m_clipPositionEditOpen || m_clipTrimEditOpen)
+        cancelProjectGesture();
+    if (m_stretching) finishStretchGesture();
+    QMouseEvent release(QEvent::MouseButtonRelease, m_lastPointerPosition,
+                        mapToGlobal(m_lastPointerPosition), button,
+                        Qt::NoButton, QApplication::keyboardModifiers());
+    mouseReleaseEvent(&release);
+    update();
+}
+
 bool TimelineWidget::event(QEvent* e) {
     ui::perf::Scope timing("timeline.event.ms");
-    if ((m_projectGestureActive || m_clipPositionEditOpen ||
-         m_clipTrimEditOpen) &&
-        (e->type() == QEvent::UngrabMouse || e->type() == QEvent::Hide)) {
-        cancelProjectGesture();
-        m_erasing = false;
-    }
-    if (m_stretching &&
-        (e->type() == QEvent::UngrabMouse || e->type() == QEvent::Hide)) {
-        finishStretchGesture();
-    }
+    if (e->type() == QEvent::UngrabMouse || e->type() == QEvent::Hide ||
+        e->type() == QEvent::WindowDeactivate)
+        finishInterruptedPointerGesture();
     if (e->type() == QEvent::ShortcutOverride) {
         auto* key = static_cast<QKeyEvent*>(e);
         if (isArrangementEditShortcut(key)) {
@@ -6902,6 +6941,7 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
         QMenu menu(this);
         QAction* openRoll = nullptr;
         QAction* openPattern = nullptr;
+        QAction* warpAudio = nullptr;
         QAction* detectBpm = nullptr;
         QAction* detectKey = nullptr;
         QAction* detectBoth = nullptr;
@@ -6912,6 +6952,12 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
             openPattern = menu.addAction(tr("Open Pattern Editor"));
             menu.addSeparator();
         } else if (hit.kind == daw::ClipKind::Audio) {
+            warpAudio = menu.addAction(tr("Warp Audio"));
+            warpAudio->setObjectName("WarpAudioAction");
+            menu.setToolTipsVisible(true);
+            const auto reason = m_controller->warpUnavailableReason(hit.trackId.toStdString(), hit.clipId.toStdString());
+            warpAudio->setEnabled(reason.empty());
+            warpAudio->setToolTip(QString::fromStdString(reason));
             detectBpm = menu.addAction(tr("Detect BPM…"));
             detectKey = menu.addAction(tr("Detect Key…"));
             detectBoth = menu.addAction(tr("Detect BPM && Key…"));
@@ -7053,6 +7099,8 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
                                           daw::ClipFadeMode::Tape);
             emit projectEdited();
             update();
+        } else if (chosen == warpAudio && warpAudio) {
+            emit openWarpEditorRequested(hit.trackId, hit.clipId);
         } else if (chosen == openRoll && openRoll) {
             emit openPianoRollRequested(hit.trackId, hit.clipId);
         } else if (chosen == openPattern && openPattern) {

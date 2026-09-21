@@ -10,6 +10,7 @@
 namespace daw { class EngineController; }
 
 class QComboBox;
+class QCheckBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -70,6 +71,7 @@ private:
     QPushButton* m_rescanButton = nullptr;
     QPushButton* m_rescanAllButton = nullptr;
     QPushButton* m_cancelButton = nullptr;
+    QCheckBox* m_startupScan = nullptr;
     QProgressBar* m_progress = nullptr;
     QLabel* m_status = nullptr;
     bool m_wasScanning = false;
@@ -80,6 +82,8 @@ private:
     QComboBox* m_typeFilter = nullptr;
     QTableWidget* m_pluginTable = nullptr;
     QLabel* m_pluginCount = nullptr;
+    QPushButton* m_clearFiltersButton = nullptr;
+    QPushButton* m_copyPathButton = nullptr;
     std::vector<daw::plugins::PluginDescriptor> m_plugins;
 
     // Search Paths tab.

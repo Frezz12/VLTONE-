@@ -326,7 +326,7 @@ func (s *Server) collaborationLiveActorState(ctx context.Context, projectID,
 		return state, err
 	}
 	state.participantActive = true
-	if participant.CommandSchemaVersion == collab.CollaborationCommandSchemaV3 &&
+	if participant.CommandSchemaVersion >= collab.CollaborationCommandSchemaV3 &&
 		participant.EffectiveRole != "" {
 		state.projectRole = participant.EffectiveRole
 	}
@@ -509,7 +509,7 @@ func (s *Server) collaborationLive(w http.ResponseWriter, r *http.Request) {
 			"roomQueueBytes":  normalizedRoomQueueBytes(s.Config.CollabRoomQueueBytes),
 		},
 	}
-	if requiredProtocol == collab.CollaborationProtocolV3 {
+	if requiredProtocol == collab.CollaborationProtocolV3 || requiredProtocol == collab.CollaborationProtocolV4 {
 		welcome["effectiveRole"] = role
 		welcome["pluginRequirementsRevision"] = joined.Session.PluginRequirementsRevision
 	}
@@ -897,7 +897,7 @@ func (connection *collaborationRoomConnection) handleSnapshotHash(ctx context.Co
 func (connection *collaborationRoomConnection) handleLease(ctx context.Context,
 	envelope collaborationClientEnvelope) error {
 	if !connection.server.Config.CollabRecordingEnabled ||
-		connection.protocol != collab.CollaborationProtocolV3 {
+		(connection.protocol != collab.CollaborationProtocolV3 && connection.protocol != collab.CollaborationProtocolV4) {
 		connection.reject(ctx, envelope.MessageID, "cloud_recording_disabled",
 			"Recording is not available in cloud projects.", false)
 		return nil
@@ -1091,7 +1091,7 @@ func (s *Server) collaborationParticipantViews(ctx context.Context,
 	currentRole := ""
 	for _, member := range state.Members {
 		role := roles[member.UserID]
-		if state.Session.CommandSchemaVersion == collab.CollaborationCommandSchemaV3 {
+		if state.Session.CommandSchemaVersion >= collab.CollaborationCommandSchemaV3 {
 			role = member.EffectiveRole
 		}
 		participant := collaborationParticipant{

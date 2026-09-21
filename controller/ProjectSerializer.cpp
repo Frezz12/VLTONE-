@@ -134,6 +134,10 @@ json noteToJson(const NoteModel& n) {
         {"muted", n.muted},
         {"color", n.color},
         {"pan", n.pan},
+        {"channel", n.channel},
+        {"releaseVelocity", n.releaseVelocity},
+        {"startOrder", n.startOrder},
+        {"endOrder", n.endOrder},
     };
 }
 
@@ -148,12 +152,17 @@ NoteModel noteFromJson(const json& j) {
     n.muted = j.value("muted", false);
     n.color = j.value("color", 0u);
     n.pan = j.value("pan", 0.0f);
+    n.channel = std::clamp(j.value("channel", 0), 0, 15);
+    n.releaseVelocity = std::clamp(j.value("releaseVelocity", 0), 0, 127);
+    n.startOrder = j.value("startOrder", std::uint64_t(0));
+    n.endOrder = j.value("endOrder", std::uint64_t(0));
     return n;
 }
 
 json pointToJson(const AutomationPoint& point) {
     json out{{"beats", point.beats}, {"value", point.value}};
     if (!point.id.empty()) out["id"] = point.id;
+    if (point.eventOrder) out["eventOrder"] = point.eventOrder;
     // Written only when it has something to say. A straight segment is what
     // every point saved before shapes existed was, and what most points still
     // are — spelling that out on each one would double the size of a curve.
@@ -166,6 +175,7 @@ json pointToJson(const AutomationPoint& point) {
 AutomationPoint pointFromJson(const json& j) {
     AutomationPoint point;
     point.id = j.value("id", std::string());
+    point.eventOrder = j.value("eventOrder", std::uint64_t(0));
     point.beats = j.value("beats", 0.0);
     point.value = j.value("value", 0.0);
     point.shape = automationSegmentFromString(j.value("shape", std::string("linear")));
@@ -216,6 +226,8 @@ json laneToJson(const ControllerLane& lane) {
         {"id", lane.id},
         {"name", lane.name},
         {"cc", lane.cc},
+        {"channel", lane.channel},
+        {"key", lane.key},
         {"parameterId", lane.parameterId},
         {"slotId", lane.slotId},
         {"defaultValue", lane.defaultValue},
@@ -228,6 +240,8 @@ ControllerLane laneFromJson(const json& j) {
     lane.id = j.value("id", newUuid());
     lane.name = j.value("name", "CC");
     lane.cc = j.value("cc", 1);
+    lane.channel = std::clamp(j.value("channel", 0), 0, 15);
+    lane.key = std::clamp(j.value("key", 0), 0, 127);
     lane.parameterId = j.value("parameterId", "");
     lane.slotId = j.value("slotId", "");
     lane.defaultValue = j.value("defaultValue", 0.0);
@@ -270,6 +284,10 @@ json takeToJson(const TakeModel& t, MediaPaths media) {
         {"notes", std::move(notes)},
     };
     if (!t.asset.empty()) result["asset"] = assetRefToJson(t.asset);
+    if (!t.lanes.empty()) {
+        result["lanes"] = reservedArray(t.lanes.size());
+        for (const auto& lane : t.lanes) result["lanes"].push_back(laneToJson(lane));
+    }
     return result;
 }
 
@@ -289,6 +307,8 @@ TakeModel takeFromJson(const json& j, const std::string& mediaDir) {
     t.muted = j.value("muted", false);
     t.channels = j.value("channels", 0);
     t.color = j.value("color", 0x4A90D9u);
+    if (j.contains("lanes") && j.at("lanes").is_array())
+        for (const auto& lane : j.at("lanes")) t.lanes.push_back(laneFromJson(lane));
     if (j.contains("asset")) t.asset = assetRefFromJson(j.at("asset"));
     if (j.contains("notes") && j.at("notes").is_array()) {
         const auto& notes = j.at("notes");
@@ -501,6 +521,15 @@ json clipToJson(const ClipModel& c, MediaPaths media, bool withHistory = true) {
         {"inserts", insertsToJson(c.inserts)},
         {"expanded", c.expanded},
     };
+    if (!c.warp.empty()) {
+        json markers = json::array();
+        for (const auto& marker : c.warp.markers)
+            markers.push_back({{"id", marker.id}, {"sourceSeconds", marker.sourceSeconds},
+                               {"targetBeats", marker.targetBeats}, {"locked", marker.locked}});
+        result["warp"] = {{"enabled", c.warp.enabled}, {"preservePitch", c.warp.preservePitch},
+            {"mode", c.warp.mode}, {"baselineDurationSeconds", c.warp.baselineDurationSeconds},
+            {"sensitivity", c.warp.sensitivity}, {"markers", std::move(markers)}};
+    }
     if (!c.musicalAnalysis.empty())
         result["musicalAnalysis"] = musicalAnalysisToJson(c.musicalAnalysis);
     if (!c.asset.empty()) result["asset"] = assetRefToJson(c.asset);
@@ -656,6 +685,21 @@ ClipModel clipFromJson(const json& j, const std::string& mediaDir,
             musicalAnalysisFromJson(j.at("musicalAnalysis"));
     }
     c.inserts = insertsFromJson(j, "inserts");
+    if (j.contains("warp") && !j.at("warp").is_null()) {
+        const auto& w = j.at("warp");
+        c.warp.enabled = w.at("enabled").get<bool>();
+        c.warp.preservePitch = w.at("preservePitch").get<bool>();
+        c.warp.mode = w.at("mode").get<int>();
+        c.warp.baselineDurationSeconds = w.at("baselineDurationSeconds").get<double>();
+        c.warp.sensitivity = w.value("sensitivity", 50.);
+        const auto& markers = w.at("markers");
+        if (!markers.is_array() || markers.size() > 16384) throw std::runtime_error("Invalid Warp markers");
+        for (const auto& marker : markers)
+            c.warp.markers.push_back({marker.at("id").get<std::string>(),
+                marker.at("sourceSeconds").get<double>(), marker.at("targetBeats").get<double>(),
+                marker.at("locked").get<bool>()});
+        if (!validWarp(c.warp)) throw std::runtime_error("Invalid Warp map");
+    }
     if (c.inserts.size() > 8) c.inserts.resize(8);
     c.expanded = j.value("expanded", false);
     // Repairs a comp that names a take the file no longer has, so a

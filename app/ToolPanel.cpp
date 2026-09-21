@@ -24,23 +24,20 @@
 
 namespace {
 
-constexpr int kCompactZoomSteps = 100;
-constexpr double kMinTimelineZoom = 4.0;
-constexpr double kMaxTimelineZoom = 1200.0;
-
+constexpr int kCompactZoomSteps = 200;
 double timelineZoomForSlider(int value) {
     const double position = std::clamp(value, 0, kCompactZoomSteps) /
                             double(kCompactZoomSteps);
-    return kMinTimelineZoom *
-           std::pow(kMaxTimelineZoom / kMinTimelineZoom, position);
+    return ui::kMinTimelineZoom *
+           std::pow(ui::kMaxTimelineZoom / ui::kMinTimelineZoom, position);
 }
 
 int sliderForTimelineZoom(double pixelsPerSecond) {
-    const double zoom = std::clamp(pixelsPerSecond, kMinTimelineZoom,
-                                   kMaxTimelineZoom);
+    const double zoom = std::clamp(pixelsPerSecond, ui::kMinTimelineZoom,
+                                   ui::kMaxTimelineZoom);
     const double position =
-        std::log(zoom / kMinTimelineZoom) /
-        std::log(kMaxTimelineZoom / kMinTimelineZoom);
+        std::log(zoom / ui::kMinTimelineZoom) /
+        std::log(ui::kMaxTimelineZoom / ui::kMinTimelineZoom);
     return int(std::lround(position * kCompactZoomSteps));
 }
 
@@ -174,8 +171,9 @@ private:
         const double moved = (m_axis == Axis::Vertical ? -delta.y()
                                                        : delta.x());
         if (std::abs(moved) < 1.0e-9) return false;
-        const double throwPixels = modifiers & Qt::ShiftModifier
-                                       ? 360.0 : 90.0;
+        const double throwPixels = m_axis == Axis::Horizontal
+            ? (modifiers & Qt::ShiftModifier ? 720.0 : 180.0)
+            : (modifiers & Qt::ShiftModifier ? 360.0 : 90.0);
         m_positionAccumulator = std::clamp(
             m_positionAccumulator + moved / throwPixels *
                                         double(maximum() - minimum()),

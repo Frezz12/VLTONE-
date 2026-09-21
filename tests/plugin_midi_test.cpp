@@ -875,6 +875,32 @@ int main() {
             instance->stopProcessing();
             instance->deactivate();
         }
+        if (tone) {
+            PluginNode host("MIDI expression echo", factory.create(*tone));
+            host.prepare(info);
+            MidiBuffer input, output;
+            input.reserve(8); output.reserve(32);
+            input.push(MidiEvent::noteOn(3, 2, 61, 111));
+            input.push(MidiEvent::noteOff(14, 2, 61, 45));
+            MidiEvent bend; bend.frameOffset = 18; bend.status = 0xe2;
+            bend.data1 = 3; bend.data2 = 75; input.push(bend);
+            const MidiBuffer* inputs[] = {&input};
+            OutputBuffer audio(2, kBlock);
+            ProcessContext context;
+            context.frames = kBlock; context.sampleRate = 48000;
+            context.playing = true; context.output = audio.block();
+            context.midiInputs = inputs; context.midiOutput = &output;
+            host.process(context);
+            bool release = false, wheel = false;
+            for (const auto& event : output.events()) {
+                release |= event.status == 0x82 && event.data1 == 61 &&
+                           event.data2 == 45 && event.frameOffset == 14;
+                wheel |= event.status == 0xe2 && event.data1 == 3 &&
+                         event.data2 == 75 && event.frameOffset == 18;
+            }
+            check(release && wheel,
+                  "hosted instrument preserves release velocity and all pitch bend bits");
+        }
     }
 
     // ── Audio effects do not swallow MIDI on the way to a later instrument ──

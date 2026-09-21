@@ -693,11 +693,11 @@ func (s *Store) AppendOperation(ctx context.Context, input AppendOperationInput)
 		if normalized.SchemaVersion != liveSession.CommandSchemaVersion {
 			return ErrVersionMismatch
 		}
-		if liveSession.CommandSchemaVersion == CollaborationCommandSchemaV3 &&
+		if liveSession.CommandSchemaVersion >= CollaborationCommandSchemaV3 &&
 			!RoleAllows(member.EffectiveRole, PermissionEdit) {
 			return ErrPluginNotReady
 		}
-		if liveSession.CommandSchemaVersion == CollaborationCommandSchemaV3 {
+		if liveSession.CommandSchemaVersion >= CollaborationCommandSchemaV3 {
 			requirements, err := unmarshalPluginRequirements(
 				json.RawMessage(liveSession.PluginRequirements))
 			if err != nil {
@@ -727,6 +727,9 @@ func (s *Store) AppendOperation(ctx context.Context, input AppendOperationInput)
 		}
 		if err := s.checkLifecycleStepsTx(tx, normalized.ProjectID, normalized.OpID,
 			normalized.LifecycleSteps); err != nil {
+			return err
+		}
+		if err := checkMidiPreparationTx(tx, normalized.ProjectID, normalized.Kind, normalized.Payload); err != nil {
 			return err
 		}
 		if err := requireCommandAssetsReadyTx(tx, normalized.ProjectID,

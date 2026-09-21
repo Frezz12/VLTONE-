@@ -1,4 +1,5 @@
 #include "collaboration/CommandJson.hpp"
+#include "collaboration/MidiContentJson.hpp"
 #include "serialization/AssetJson.hpp"
 
 #include <nlohmann/json.hpp>
@@ -42,7 +43,8 @@ json noteToJson(const NoteModel& note) {
                 {"velocity", note.velocity},
                 {"muted", note.muted},
                 {"color", note.color},
-                {"pan", note.pan}};
+                {"pan", note.pan}, {"channel", note.channel}, {"releaseVelocity", note.releaseVelocity},
+                {"startOrder", note.startOrder}, {"endOrder", note.endOrder}};
 }
 
 bool noteFromJson(const json& value, NoteModel& note) {
@@ -55,6 +57,8 @@ bool noteFromJson(const json& value, NoteModel& note) {
     note.muted = value.value("muted", false);
     note.color = value.value("color", std::uint32_t(0));
     note.pan = value.value("pan", 0.0f);
+    note.channel = value.value("channel", 0); note.releaseVelocity = value.value("releaseVelocity", 0);
+    note.startOrder = value.value("startOrder", std::uint64_t(0)); note.endOrder = value.value("endOrder", std::uint64_t(0));
     return true;
 }
 
@@ -63,7 +67,7 @@ json automationPointToJson(const AutomationPoint& point) {
                 {"beats", point.beats},
                 {"value", point.value},
                 {"shape", toString(point.shape)},
-                {"curve", point.curve}};
+                {"curve", point.curve}, {"eventOrder", point.eventOrder}};
 }
 
 bool automationPointFromJson(const json& value, AutomationPoint& point) {
@@ -76,18 +80,20 @@ bool automationPointFromJson(const json& value, AutomationPoint& point) {
     point.value = value.value("value", 0.0);
     point.shape = automationSegmentFromString(shape);
     point.curve = value.value("curve", 0.0);
+    point.eventOrder = value.value("eventOrder", std::uint64_t(0));
     return true;
 }
 
 json controllerLaneTargetToJson(const ControllerLaneTarget& target) {
     return json{{"cc", target.cc},
                 {"parameterId", target.parameterId},
-                {"slotId", target.slotId}};
+                {"slotId", target.slotId}, {"channel", target.channel}, {"key", target.key}};
 }
 
 bool controllerLaneTargetFromJson(const json& value,
                                   ControllerLaneTarget& target) {
-    if (!value.is_object() || value.size() != 3) return false;
+    if (!value.is_object() || (value.size() != 3 && value.size() != 5)) return false;
+    target.channel = value.value("channel", 0); target.key = value.value("key", 0);
     target.cc = value.value("cc", -2);
     target.parameterId = value.value("parameterId", std::string());
     target.slotId = value.value("slotId", std::string());
@@ -120,6 +126,7 @@ bool automationTargetFromJson(const json& value, AutomationTarget& target) {
 }
 
 json takeToJson(const TakeModel& take) {
+    if (take.asset.empty()) { ClipModel clip; clip.kind=ClipKind::Midi; clip.takes.push_back(take); return midiContentToJson(clip).at("takes").at(0); }
     return json{{"id", take.id},
                 {"name", take.name},
                 {"offsetSeconds", take.offsetSeconds},
@@ -133,6 +140,11 @@ json takeToJson(const TakeModel& take) {
 }
 
 bool takeFromJson(const json& value, TakeModel& take) {
+    if (value.is_object() && !value.contains("asset") && value.contains("notes")) {
+        ClipModel content;
+        if(!midiContentFromJson(json{{"notes",json::array()},{"lanes",json::array()},{"takes",json::array({value})},{"comp",json::array()},{"expanded",false}},content) || content.takes.size()!=1)return false;
+        take=std::move(content.takes.front());return true;
+    }
     if (!hasExactKeys(value,
                       {"id", "name", "offsetSeconds", "lengthSeconds",
                        "clipOffsetSeconds", "gain", "muted", "channels",
@@ -936,6 +948,12 @@ json bodyToJson(const ProjectCommand& command) {
                         {"clipId", body.clipId},
                         {"segmentId", body.segmentId},
                         {"deleteOperationId", body.deleteOperationId}};
+        } else if constexpr (std::is_same_v<T, PrepareMidiPart>) {
+            return json{{"recordingId",body.recordingId},{"contentId",body.contentId},{"index",body.index},{"count",body.count},{"content",midiContentToJson(body.content)}};
+        } else if constexpr (std::is_same_v<T, ApplyMidiContent>) {
+            return json{{"trackId",body.trackId},{"clipId",body.clipId},{"recordingId",body.recordingId},{"contentId",body.contentId},{"count",body.count}};
+        } else if constexpr (std::is_same_v<T, RestoreMidiContent>) {
+            return json{{"trackId",body.trackId},{"clipId",body.clipId},{"operationId",body.operationId}};
         } else if constexpr (std::is_same_v<T, RecordingCommit>) {
             json leases = json::array();
             for (const RecordingLeaseClaim& lease : body.leases) {
@@ -981,6 +999,22 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
     if (!payload.is_object()) {
         error = "payload must be an object";
         return false;
+    }
+    if (kind == "recording.prepareMidi") {
+        PrepareMidiPart body;
+        if (schemaVersion < 4 || !hasExactKeys(payload,{"recordingId","contentId","index","count","content"})) return false;
+        body.recordingId=payload.value("recordingId",std::string()); body.contentId=payload.value("contentId",std::string());
+        body.index=payload.value("index",0u); body.count=payload.value("count",0u);
+        if (!midiContentFromJson(payload.at("content"),body.content)) return false;
+        out=std::move(body); return true;
+    }
+    if (kind == "recording.applyMidi") {
+        if (schemaVersion < 4 || !hasExactKeys(payload,{"trackId","clipId","recordingId","contentId","count"})) return false;
+        out=ApplyMidiContent{payload.value("trackId",std::string()),payload.value("clipId",std::string()),payload.value("recordingId",std::string()),payload.value("contentId",std::string()),payload.value("count",0u)}; return true;
+    }
+    if (kind == "recording.restoreMidi") {
+        if (schemaVersion < 4 || !hasExactKeys(payload,{"trackId","clipId","operationId"})) return false;
+        out=RestoreMidiContent{payload.value("trackId",std::string()),payload.value("clipId",std::string()),payload.value("operationId",std::string())}; return true;
     }
     if (kind == "project.setScalar") {
         SetProjectScalar body;

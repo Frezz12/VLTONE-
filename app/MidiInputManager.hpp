@@ -13,7 +13,7 @@
 
 class QTimer;
 
-namespace daw { class EngineController; }
+namespace daw { class EngineController; struct MidiInputStamp; }
 
 /// Plug-and-play MIDI input for the desktop application.
 ///
@@ -41,6 +41,8 @@ public:
     bool injectMessageForTest(const QByteArray& message,
                               quint64 source = 0xFFFFFFFFu);
 
+    bool checkQueueOverflowForTest();
+
 signals:
     /// One physical key changed state after its live event was accepted.
     void noteStateChanged(const QString& trackId, int pitch, bool down);
@@ -63,7 +65,7 @@ private:
     void closePorts();
     void postMessage(quint64 generation, quint64 source,
                      const std::vector<unsigned char>& message);
-    bool handleMessage(quint64 source, const QByteArray& message);
+    bool handleMessage(quint64 source, const QByteArray& message, daw::MidiInputStamp stamp);
     void rememberRoute(quint64 source, int channel,
                        const std::string& trackId);
     void releaseHeld(quint64 source, int channel);
@@ -76,6 +78,8 @@ private:
     std::vector<Held> m_held;
     std::vector<Route> m_routes;
     std::string m_lastTarget;
+    std::atomic<unsigned> m_pendingMessages{0};
+    std::atomic<bool> m_inputOverflow{false};
     quint64 m_generation = 1;
 #if defined(Q_OS_MACOS)
     /// The first CoreMIDI call a process makes is a synchronous XPC round trip

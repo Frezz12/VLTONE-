@@ -15,10 +15,12 @@
 #include "Theme.hpp"
 #include "ThemePackage.hpp"
 #include "Controls.hpp"
+#include "Icons.hpp"
 #include "TimelineBackgroundPrefs.hpp"
 #include "ProjectTemplates.hpp"
 #include "StartupProjectPrefs.hpp"
 #include "UiConstants.hpp"
+#include "WaveformPaint.hpp"
 #include "RecordingSettingsPage.hpp"
 #include "TransportSettingsPage.hpp"
 
@@ -79,6 +81,31 @@
 #include <vector>
 
 namespace {
+struct SettingsPageAppearance {
+    icons::Glyph icon;
+    const char* description;
+};
+
+// Indexed by the stable SettingsWindow::Tab IDs, independently of sidebar order.
+constexpr SettingsPageAppearance kPageAppearance[] = {
+    {icons::Glyph::Headphones, QT_TRANSLATE_NOOP("SettingsWindow", "Audio devices, inputs, outputs and latency.")},
+    {icons::Glyph::Import, QT_TRANSLATE_NOOP("SettingsWindow", "Sources and options for importing media.")},
+    {icons::Glyph::Play, QT_TRANSLATE_NOOP("SettingsWindow", "Playback controls and transport display.")},
+    {icons::Glyph::Record, QT_TRANSLATE_NOOP("SettingsWindow", "Recording modes, takes and MIDI input.")},
+    {icons::Glyph::Inspector, QT_TRANSLATE_NOOP("SettingsWindow", "Tools and actions for the current selection.")},
+    {icons::Glyph::Folder, QT_TRANSLATE_NOOP("SettingsWindow", "Folders, previews and browser layout.")},
+    {icons::Glyph::Notebook, QT_TRANSLATE_NOOP("SettingsWindow", "Notes, fonts and notebook appearance.")},
+    {icons::Glyph::Assistant, QT_TRANSLATE_NOOP("SettingsWindow", "Assistant providers, models and access keys.")},
+    {icons::Glyph::Users, QT_TRANSLATE_NOOP("SettingsWindow", "Your account and connected services.")},
+    {icons::Glyph::Globe, QT_TRANSLATE_NOOP("SettingsWindow", "Interface language and installed translations.")},
+    {icons::Glyph::Reload, QT_TRANSLATE_NOOP("SettingsWindow", "Automatic backups and project recovery.")},
+    {icons::Glyph::Image, QT_TRANSLATE_NOOP("SettingsWindow", "Palettes, backgrounds and timeline appearance.")},
+    {icons::Glyph::Brush, QT_TRANSLATE_NOOP("SettingsWindow", "Create your own palette with a live preview.")},
+    {icons::Glyph::Key, QT_TRANSLATE_NOOP("SettingsWindow", "Find commands and customize keyboard shortcuts.")},
+    {icons::Glyph::Gear, QT_TRANSLATE_NOOP("SettingsWindow", "Startup, graphics and editing preferences.")},
+};
+static_assert(std::size(kPageAppearance) == SettingsWindow::kInterfaceTab + 1);
+
 enum class ColorSection {
     Surfaces,
     Typography,
@@ -451,7 +478,7 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
                                ShortcutManager* shortcuts, QWidget* parent)
     : QDialog(parent, Qt::Widget), m_controller(controller), m_shortcuts(shortcuts) {
     setWindowTitle(tr("Settings — %1").arg(QApplication::applicationDisplayName()));
-    resize(960, 560);
+    resize(960, 640);
     setSizeGripEnabled(false);
 
     m_pages = new QStackedWidget(this);
@@ -509,11 +536,13 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     m_navigation->setHeaderHidden(true);
     m_navigation->setRootIsDecorated(false);
     m_navigation->setItemsExpandable(false);
-    m_navigation->setUniformRowHeights(true);
-    m_navigation->setIndentation(12);
+    m_navigation->setUniformRowHeights(false);
+    m_navigation->setIndentation(0);
+    m_navigation->setIconSize(QSize(18, 18));
+    m_navigation->setMouseTracking(true);
+    m_navigation->setFrameShape(QFrame::NoFrame);
     m_navigation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_navigation->setMinimumWidth(176);
-    m_navigation->setMaximumWidth(196);
+    m_navigation->setFixedWidth(218);
     const auto addGroup = [this](
                               const QString& title,
                               std::initializer_list<std::pair<QString, Tab>> pages) {
@@ -522,11 +551,13 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
         QFont font = group->font(0);
         font.setBold(true);
         group->setFont(0, font);
-        group->setSizeHint(0, QSize(0, 26));
+        group->setSizeHint(0, QSize(0, 28));
         for (const auto& [label, page] : pages) {
             auto* item = new QTreeWidgetItem(group, QStringList{label});
             item->setData(0, Qt::UserRole, int(page));
-            item->setSizeHint(0, QSize(0, 30));
+            item->setSizeHint(0, QSize(0, 28));
+            item->setToolTip(0, tr(kPageAppearance[int(page)].description));
+            item->setData(0, Qt::AccessibleDescriptionRole, item->toolTip(0));
             m_navigationItems.insert(int(page), item);
         }
     };
@@ -551,6 +582,30 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
              {{tr("Account"), kAccountTab},
               {tr("AI"), kAiTab}});
     m_navigation->expandAll();
+
+    auto* pageHeader = new QWidget(this);
+    pageHeader->setObjectName(QStringLiteral("SettingsPageHeader"));
+    auto* headerRow = new QHBoxLayout(pageHeader);
+    headerRow->setContentsMargins(12, 4, 12, 14);
+    headerRow->setSpacing(12);
+    m_pageIcon = new QLabel(pageHeader);
+    m_pageIcon->setObjectName(QStringLiteral("SettingsPageIcon"));
+    m_pageIcon->setFixedSize(40, 40);
+    m_pageIcon->setAlignment(Qt::AlignCenter);
+    headerRow->addWidget(m_pageIcon);
+    auto* heading = new QVBoxLayout;
+    heading->setSpacing(3);
+    m_pageTitle = new QLabel(pageHeader);
+    m_pageTitle->setObjectName(QStringLiteral("SettingsPageTitle"));
+    m_pageTitle->setProperty("role", "pageTitle");
+    m_pageTitle->setWordWrap(true);
+    m_pageDescription = new QLabel(pageHeader);
+    m_pageDescription->setProperty("role", "secondary");
+    m_pageDescription->setWordWrap(true);
+    m_pageDescription->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    heading->addWidget(m_pageTitle);
+    heading->addWidget(m_pageDescription);
+    headerRow->addLayout(heading, 1);
     connect(m_navigation, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* current) {
                 if (!current) return;
@@ -558,11 +613,14 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
                 const int page = current->data(0, Qt::UserRole).toInt(&valid);
                 if (!valid || page < 0 || page >= m_pages->count()) return;
                 m_pages->setCurrentIndex(page);
+                refreshNavigationAppearance();
                 setWindowTitle(tr("Settings — %1 · %2")
                                    .arg(QApplication::applicationDisplayName(),
                                         current->text(0)));
                 QSettings().setValue(QStringLiteral("ui/settingsPage"), page);
             });
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+            &SettingsWindow::refreshNavigationAppearance);
 
     const auto markThemeModified = [this] {
         if (m_applyingInstalledTheme) return;
@@ -579,15 +637,20 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
             markThemeModified);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+    buttons->button(QDialogButtonBox::Close)->setText(tr("Close"));
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
 
     auto* body = new QHBoxLayout;
-    body->setSpacing(10);
+    body->setSpacing(12);
     body->addWidget(m_navigation);
-    body->addWidget(ui::separatorLine(Qt::Vertical, 1, this));
-    body->addWidget(m_pages, 1);
+    auto* content = new QVBoxLayout;
+    content->setSpacing(10);
+    content->addWidget(pageHeader);
+    content->addWidget(m_pages, 1);
+    body->addLayout(content, 1);
 
     auto* col = new QVBoxLayout(this);
+    col->setContentsMargins(10, 12, 10, 10);
     col->addLayout(body, 1);
     col->addWidget(buttons);
 
@@ -597,6 +660,26 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
 
     // The workspace supplies the final bounds after this dialog is embedded.
     // Standalone dialogs are constrained in showEvent once their host is known.
+}
+
+void SettingsWindow::refreshNavigationAppearance() {
+    for (int i = 0; i < m_navigation->topLevelItemCount(); ++i)
+        m_navigation->topLevelItem(i)->setForeground(0, th().textSecondary);
+    const int currentPage = m_pages->currentIndex();
+    for (auto it = m_navigationItems.cbegin(); it != m_navigationItems.cend(); ++it) {
+        const bool selected = it.key() == currentPage;
+        auto* item = it.value();
+        item->setIcon(0, icons::icon(kPageAppearance[it.key()].icon,
+                                     selected ? th().accent : th().textSecondary));
+        QFont font = item->font(0);
+        font.setBold(selected);
+        item->setFont(0, font);
+        if (!selected) continue;
+        m_pageTitle->setText(item->text(0));
+        m_pageDescription->setText(item->toolTip(0));
+        m_pageIcon->setPixmap(icons::icon(kPageAppearance[it.key()].icon, th().accent, 24)
+                                  .pixmap(QSize(24, 24), devicePixelRatioF()));
+    }
 }
 
 void SettingsWindow::refreshTimelineBackgroundSource() {
@@ -636,7 +719,7 @@ void SettingsWindow::constrainToScreen() {
     if (!target) return;
 
     constexpr int kScreenInset = 20;
-    constexpr int kPreferredHeight = 560;
+    constexpr int kPreferredHeight = 640;
     constexpr int kAbsoluteHeightCap = 680;
     const QRect available =
         target->availableGeometry().adjusted(kScreenInset, kScreenInset,
@@ -1478,6 +1561,36 @@ QWidget* SettingsWindow::buildThemesTab() {
     gridCol->addWidget(gridHint);
     col->insertWidget(3, gridGroup); // Keep grid and cursor just below the palette.
 
+    auto* clipsGroup = new QGroupBox(tr("Timeline clips"), page);
+    auto* clipsColumn = new QVBoxLayout(clipsGroup);
+    auto* roundedClips = new QCheckBox(tr("Rounded clip corners"), clipsGroup);
+    roundedClips->setObjectName(QStringLiteral("RoundedClipCorners"));
+    roundedClips->setChecked(ui::roundedClipCorners());
+    roundedClips->setToolTip(tr("Applies to audio, MIDI, automation and Pattern clips, including recording previews."));
+    clipsColumn->addWidget(roundedClips);
+    auto* waveformRow = new QHBoxLayout;
+    auto* waveformLabel = new QLabel(tr("Waveform style"), clipsGroup);
+    auto* waveformStyle = new QComboBox(clipsGroup);
+    waveformStyle->setObjectName(QStringLiteral("WaveformStyle"));
+    waveformStyle->setAccessibleName(tr("Waveform style"));
+    waveformStyle->addItem(tr("Crisp"), int(ui::WaveformStyle::Crisp));
+    waveformStyle->addItem(tr("Smooth"), int(ui::WaveformStyle::Smooth));
+    waveformStyle->setCurrentIndex(waveformStyle->findData(int(ui::waveformStyle())));
+    waveformStyle->setToolTip(tr("Crisp keeps visible steps; Smooth draws a soft, continuous outline. Applies to the timeline, Warp and audio previews."));
+    waveformLabel->setBuddy(waveformStyle);
+    waveformRow->addWidget(waveformLabel);
+    waveformRow->addWidget(waveformStyle, 1);
+    clipsColumn->addLayout(waveformRow);
+    connect(waveformStyle, &QComboBox::currentIndexChanged, this, [this, waveformStyle] {
+        ui::setWaveformStyle(ui::WaveformStyle(waveformStyle->currentData().toInt()));
+        emit timelineAppearanceChanged();
+    });
+    col->insertWidget(4, clipsGroup);
+    connect(roundedClips, &QCheckBox::toggled, this, [this](bool enabled) {
+        ui::setRoundedClipCorners(enabled);
+        emit timelineAppearanceChanged();
+    });
+
     // The playhead. Thickness is a real preference rather than a default worth
     // defending: the same hairline that is right on a sparse arrangement is
     // invisible over dense waveforms on a high-density screen.
@@ -2303,19 +2416,6 @@ QWidget* SettingsWindow::buildInterfaceTab() {
         startupGroup);
     startupHint->setWordWrap(true);
     startupForm->addRow(startupHint);
-    auto* startupScan = new QCheckBox(tr("Scan plugins at startup"), startupGroup);
-    startupScan->setObjectName(QStringLiteral("ScanPluginsAtStartup"));
-    startupScan->setChecked(ui::scanPluginsAtStartup());
-    const QString scanHint = tr(
-        "When off, VLTONE uses the saved plugin list. To find new plugins, "
-        "run Scan or Rescan All in Plugin Manager.");
-    startupScan->setAccessibleDescription(scanHint);
-    connect(startupScan, &QCheckBox::toggled, startupGroup,
-            &ui::setScanPluginsAtStartup);
-    startupForm->addRow(startupScan);
-    auto* startupScanHint = new QLabel(scanHint, startupGroup);
-    startupScanHint->setWordWrap(true);
-    startupForm->addRow(startupScanHint);
     layout->addWidget(startupGroup);
 
     auto* group = new QGroupBox(tr("Refresh rate"), page);

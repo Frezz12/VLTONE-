@@ -13,11 +13,12 @@
 namespace daw::collab {
 
 inline constexpr std::uint32_t kProjectCommandSchemaVersionV2 = 2;
-inline constexpr std::uint32_t kProjectCommandSchemaVersion = 3;
+inline constexpr std::uint32_t kProjectCommandSchemaVersionV3 = 3;
+inline constexpr std::uint32_t kProjectCommandSchemaVersion = 4;
 
 inline constexpr bool supportedProjectCommandSchemaVersion(
     std::uint32_t version) noexcept {
-    return version == kProjectCommandSchemaVersionV2 ||
+    return version == kProjectCommandSchemaVersionV2 || version == kProjectCommandSchemaVersionV3 ||
            version == kProjectCommandSchemaVersion;
 }
 inline constexpr std::size_t kMaxProjectCommandPreconditions = 1024;
@@ -441,6 +442,7 @@ struct ControllerLaneTarget {
     int cc = 1;
     std::string parameterId;
     std::string slotId;
+    int channel = 0, key = 0;
 
     friend bool operator==(const ControllerLaneTarget&,
                            const ControllerLaneTarget&) = default;
@@ -576,6 +578,20 @@ struct RecordingLeaseClaim {
                            const RecordingLeaseClaim&) = default;
 };
 
+/// Immutable, non-timeline MIDI content, uploaded before one atomic commit.
+struct PrepareMidiPart {
+    std::string recordingId, contentId;
+    std::uint32_t index = 0, count = 1;
+    ClipModel content; // only notes, lanes, takes, comp and expanded are encoded
+};
+struct ApplyMidiContent {
+    std::string trackId, clipId, recordingId, contentId;
+    std::uint32_t count = 1;
+};
+struct RestoreMidiContent {
+    std::string trackId, clipId, operationId;
+};
+
 struct RecordingCommit {
     std::vector<RecordingLeaseClaim> leases;
     std::shared_ptr<BatchCommand> batch;
@@ -614,7 +630,7 @@ using CommandBody = std::variant<SetProjectScalar, SetTimeSignature,
                                  RestoreTake, MoveTake, SetTakeProperty,
                                  UpsertCompSegment,
                                  DeleteCompSegment, RestoreCompSegment,
-                                 RecordingCommit,
+                                 PrepareMidiPart, ApplyMidiContent, RestoreMidiContent, RecordingCommit,
                                  std::shared_ptr<BatchCommand>>;
 
 struct ProjectCommand {

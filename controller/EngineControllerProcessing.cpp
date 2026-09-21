@@ -358,6 +358,7 @@ audio::Result EngineController::bounceInPlace(
             TrackModel* source = m_project.findTrack(job.sourceTrackId);
             const std::string sourceId = source ? source->id : std::string();
             const std::string sourceName = source ? source->name : std::string();
+            const TrackKind sourceKind = source ? source->kind : TrackKind::Audio;
             const std::string sourceParent = source ? source->parentId
                                                      : std::string();
             const std::size_t sourceIndex = source
@@ -365,6 +366,17 @@ audio::Result EngineController::bounceInPlace(
                 : m_project.tracks.size();
             const ChannelSnapshot sourceStrip =
                 source ? copyChannelStrip(sourceId, true) : ChannelSnapshot{};
+            std::string patternClipId;
+            for (const ClipAddress& address : job.affected) {
+                const ClipModel* clip = findClip(address.trackId, address.clipId);
+                if (!clip || clip->patternClipId.empty() ||
+                    (!patternClipId.empty() &&
+                     patternClipId != clip->patternClipId)) {
+                    patternClipId.clear();
+                    break;
+                }
+                patternClipId = clip->patternClipId;
+            }
             const bool replaceOnSource =
                 request.destination == BounceDestination::Replace && source &&
                 source->kind == TrackKind::Audio;
@@ -383,7 +395,7 @@ audio::Result EngineController::bounceInPlace(
                                     sourceParent);
                 }
                 if (TrackModel* target = m_project.findTrack(destination);
-                    target && source) {
+                    target && !sourceId.empty()) {
                     // TrackSource and BeforeTrackFader leave the source
                     // channel's fader live. Move those settings to the channel
                     // that now owns playback; later capture points already
@@ -430,6 +442,8 @@ audio::Result EngineController::bounceInPlace(
             bounced->pan = 0.0f;
             bounced->fadeInSeconds = 0.0;
             bounced->fadeOutSeconds = 0.0;
+            if (sourceKind != TrackKind::Pattern)
+                bounced->patternClipId = patternClipId;
             // A clip created on a new track belongs to that track's channel
             // strip. Keeping the source injection here made the arrangement
             // and the graph disagree: mute/fader/pan on the visible bounce

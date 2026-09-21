@@ -1,5 +1,6 @@
 #include "Internal/InternalFactory.hpp"
 #include "Internal/ModulationInstance.hpp"
+#include "Internal/ModulationRackInstance.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -75,7 +76,7 @@ struct Audio {
     explicit Audio(unsigned n) : l(n), r(n) {}
     unsigned size() const { return unsigned(l.size()); }
 };
-void run(ModulationInstance &p, const Audio &in, Audio &out, unsigned block = 257,
+void run(PluginInstance &p, const Audio &in, Audio &out, unsigned block = 257,
          std::span<const PluginEvent> events = {}, double tempo = 120) {
     for (unsigned at = 0; at < in.size();) {
         const auto count = std::min(block, in.size() - at);
@@ -372,6 +373,72 @@ int main(int argc, char **argv) {
         p->deactivate();
         check(!p->isActive() && !p->isProcessing() && p->latencySamples() == 0,
               "deactivation and zero latency contract");
+    }
+    {
+        using Rack = ModulationRackInstance;
+        Rack rack;
+        const auto input = fixture(48000, 2, true);
+        Audio output(input.size()), reference(input.size());
+        check(rack.activate({48000, 257, true}), "rack activates");
+        run(rack, input, reference, 257);
+        rack.reset(); run(rack, input, output, 1024);
+        check(difference(output, reference) < 1.e-6, "rack processing is invariant across host block sizes");
+        bool orders = true;
+        for (unsigned i = 0; i < 24; ++i) {
+            orders &= Rack::encodeOrder(Rack::decodeOrder(i)) == i;
+            rack.setParameterFromHost(Rack::orderParameter, i); rack.reset();
+            run(rack, input, output);
+            orders &= peak(output) < 4;
+        }
+        check(orders && difference(output, reference) > .01, "all 24 real DSP orders are bounded and changing order changes sound");
+        for (auto index : Rack::offsets) rack.setParameterFromHost(index, 0);
+        rack.setParameterFromHost(Rack::eqEnabledParameter, 0); rack.reset();
+        run(rack, input, output);
+        check(difference(input, output) == 0, "all disabled modules and EQ null exactly to dry audio");
+        // A rack with one enabled module must be the independent plugin.
+        rack.setParameterFromHost(Rack::offsets[0], 1); rack.reset();
+        ChorusInstance chorus; chorus.activate({48000, 257, true});
+        run(chorus, input, reference); run(rack, input, output);
+        check(difference(output, reference) < 1.e-6, "rack Chorus and standalone Chorus use the same algorithm");
+        rack.setParameterFromHost(Rack::offsets[0], 0);
+        rack.setParameterFromHost(Rack::eqEnabledParameter, 1);
+        rack.setParameterFromHost(Rack::eqOffset, 1);
+        rack.setParameterFromHost(Rack::eqOffset + 1, 1500);
+        rack.setParameterFromHost(Rack::eqOffset + 20, 1);
+        rack.setParameterFromHost(Rack::eqOffset + 21, 5000); rack.reset();
+        run(rack, input, output);
+        check(rack.equalizer().responseDb(50) < -24 && rack.equalizer().responseDb(15000) < -10 &&
+              difference(input, output) > .05, "low cut and high cut change both displayed response and actual audio");
+        std::vector<std::uint8_t> saved; rack.saveState(saved);
+        Rack restored; check(restored.loadState(saved), "rack state loads");
+        bool same = true;
+        for (const auto& p : rack.parameters()) same &= rack.parameterValue(p.index) == restored.parameterValue(p.index);
+        check(same, "state retains module settings, bypass, EQ and complete order");
+        restored.activate({48000, 257, true}); restored.reset(); run(restored, input, reference);
+        rack.reset(); run(rack, input, output);
+        check(difference(reference, output) < 1.e-6, "restored rack renders the same audio");
+        const std::string invalid = R"({"version":1,"uid":"daw.modulation","params":{"chorus.amount":"bad"}})";
+        check(!rack.loadState({reinterpret_cast<const std::uint8_t*>(invalid.data()),invalid.size()}), "malformed rack state is rejected atomically");
+        bool matrix = true;
+        for (double rate : {8000., 44100., 96000., 192000.}) {
+            Rack p; PluginBusLayout accepted;
+            matrix &= p.setBusLayout({{1},{1}},accepted);
+            for (const auto& info : p.parameters()) p.setParameterFromHost(info.index, info.maxValue);
+            matrix &= p.activate({rate, 1, true});
+            Audio silence(1024), result(1024); run(p,silence,result,1);
+            matrix &= peak(result) == 0;
+            auto signal = fixture(rate,.15); Audio processed(signal.size()); run(p,signal,processed,1024);
+            matrix &= peak(processed) < 100;
+        }
+        check(matrix, "rack handles mono, silence, sample rates, maximum EQ and oversized blocks");
+        // Parameter events are split before the child processors, never broadcast with wrong IDs.
+        Rack automated;
+        for (auto index : Rack::offsets) automated.setParameterFromHost(index, 0);
+        automated.setParameterFromHost(Rack::eqEnabledParameter, 0); automated.activate({48000,257,true});
+        PluginEvent event; event.kind=PluginEvent::Kind::ParamValue; event.paramIndex=Rack::offsets[0]; event.value=1; event.frameOffset=1000;
+        run(automated,input,output,257,{&event,1});
+        bool dryBefore=true;for(unsigned i=0;i<1000;++i)dryBefore &= output.l[i]==input.l[i] && output.r[i]==input.r[i];
+        check(dryBefore && difference(input,output)>.01, "sample-offset module automation begins at the requested frame");
     }
     {
         DoublerInstance p;

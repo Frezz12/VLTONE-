@@ -7364,6 +7364,10 @@ Check free disk space and folder permissions, then try again.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <source>%1 selected track(s), %2–%3 s</source>
+        <translation>Выбрано дорожек: %1, %2–%3 с</translation>
+    </message>
+    <message>
         <source>Select clips, a region, or enable Loop</source>
         <translation type="unfinished"></translation>
     </message>
@@ -8394,6 +8398,10 @@ Click to load. Drag onto Audio FX.</source>
         <translation>Групповой канал</translation>
     </message>
     <message>
+        <source>Audio channel</source>
+        <translation>Аудиоканал</translation>
+    </message>
+    <message>
         <source>Pattern</source>
         <translation>Паттерн</translation>
     </message>
@@ -8702,6 +8710,10 @@ Click to load. Drag onto Audio FX.</source>
         <translation>Отключить</translation>
     </message>
     <message>
+        <source>Erase</source>
+        <translation>Стереть</translation>
+    </message>
+    <message>
         <source>%1 · %2 notes selected</source>
         <translation>%1 · выбрано %2 нот</translation>
     </message>
@@ -8761,20 +8773,24 @@ Click to load. Drag onto Audio FX.</source>
         <translation>Редактирование, Вид и Инструменты</translation>
     </message>
     <message>
-        <source>Draw (P)</source>
-        <translation>Рисовать (P)</translation>
+        <source>Draw (1 / P)</source>
+        <translation>Кисточка (1 / P)</translation>
     </message>
     <message>
-        <source>Select (E)</source>
-        <translation>Выделить (E)</translation>
+        <source>Erase (3)</source>
+        <translation>Ластик (3)</translation>
     </message>
     <message>
-        <source>Slice — hold S to borrow it for one cut</source>
-        <translation>Нарезать — удерживайте S, чтобы взять для одного среза</translation>
+        <source>Select (4 / E / Ctrl)</source>
+        <translation>Выделение (4 / E / Ctrl)</translation>
     </message>
     <message>
-        <source>Disable notes — hold T to borrow it for one note</source>
-        <translation>Отключить ноты — удерживайте T, чтобы взять для одной ноты</translation>
+        <source>Slice (2) — hold S to borrow it for one cut</source>
+        <translation>Нож (2) — удерживайте S для одного разреза</translation>
+    </message>
+    <message>
+        <source>Disable notes (5) — hold T to borrow it for one note</source>
+        <translation>Отключить ноты (5) — удерживайте T для одной ноты</translation>
     </message>
     <message>
         <source>Build chords (%1)</source>
@@ -8795,6 +8811,38 @@ Click to load. Drag onto Audio FX.</source>
     <message>
         <source>Solo this MIDI track</source>
         <translation>Соло этой MIDI-дорожки</translation>
+    </message>
+    <message>
+        <source>Hear only this MIDI track</source>
+        <translation>Слушать только эту MIDI-дорожку</translation>
+    </message>
+    <message>
+        <source>Hear only this pattern</source>
+        <translation>Слушать только этот паттерн</translation>
+    </message>
+    <message>
+        <source>MIDI clip</source>
+        <translation>MIDI-клип</translation>
+    </message>
+    <message>
+        <source>Choose any MIDI clip in the project, including clips inside patterns.</source>
+        <translation>Выберите любой MIDI-клип проекта, в том числе внутри паттернов.</translation>
+    </message>
+    <message>
+        <source>Choose MIDI clip</source>
+        <translation>Выберите MIDI-клип</translation>
+    </message>
+    <message>
+        <source>Choose any MIDI clip in the project</source>
+        <translation>Выберите любой MIDI-клип проекта</translation>
+    </message>
+    <message>
+        <source>Untitled MIDI clip</source>
+        <translation>MIDI-клип без названия</translation>
+    </message>
+    <message>
+        <source>%1 — %2 · bar %3</source>
+        <translation>%1 — %2 · такт %3</translation>
     </message>
     <message>
         <source>Snap and grid</source>
@@ -9187,6 +9235,10 @@ Click to load. Drag onto Audio FX.</source>
     <message>
         <source>Slice</source>
         <translation>Нарезать</translation>
+    </message>
+    <message>
+        <source>Erase</source>
+        <translation>Стереть</translation>
     </message>
     <message>
         <source>Disable Notes</source>
@@ -9583,6 +9635,22 @@ Click to load. Drag onto Audio FX.</source>
         <translation>Менеджер плагинов — %1</translation>
     </message>
     <message>
+        <source>Plugin discovery</source>
+        <translation>Поиск плагинов</translation>
+    </message>
+    <message>
+        <source>Plugin scan progress</source>
+        <translation>Ход сканирования плагинов</translation>
+    </message>
+    <message>
+        <source>Scan plugins at startup</source>
+        <translation>Сканировать плагины при запуске</translation>
+    </message>
+    <message>
+        <source>When off, VLTONE uses the saved plugin list. You can still scan manually here.</source>
+        <translation>Если выключено, VLTONE использует сохранённый список плагинов. Здесь можно запустить сканирование вручную.</translation>
+    </message>
+    <message>
         <source>Scan</source>
         <translation>Сканировать</translation>
     </message>
@@ -9617,6 +9685,18 @@ Click to load. Drag onto Audio FX.</source>
     <message>
         <source>Filter by name, vendor or path…</source>
         <translation>Фильтровать по названию, производителю или пути…</translation>
+    </message>
+    <message>
+        <source>Search plugins</source>
+        <translation>Поиск плагинов</translation>
+    </message>
+    <message>
+        <source>Clear filters</source>
+        <translation>Сбросить фильтры</translation>
+    </message>
+    <message>
+        <source>Copy path</source>
+        <translation>Копировать путь</translation>
     </message>
     <message>
         <source>Preferred variants</source>
@@ -9669,6 +9749,10 @@ Click to load. Drag onto Audio FX.</source>
     <message>
         <source>No plugins yet — check the search paths, then press Scan.</source>
         <translation>Пока нет плагинов — проверьте пути поиска, затем нажмите Сканировать.</translation>
+    </message>
+    <message>
+        <source>No matching plugins. Try another search or clear the filters.</source>
+        <translation>Подходящих плагинов нет. Измените запрос или сбросьте фильтры.</translation>
     </message>
     <message>
         <source>1 plugin</source>
@@ -9861,12 +9945,12 @@ Click to load. Drag onto Audio FX.</source>
         <translation>Не удалось загрузить плагин</translation>
     </message>
     <message>
-        <source>%1 is still listed by the last plugin scan, but its module could not create an instance. Rescan plugins in Settings and check that the plugin is installed and licensed.</source>
-        <translation>%1 все еще указан после последнего сканирования плагинов, но его модуль не смог создать экземпляр. Повторно отсканируйте плагины в Настройках и убедитесь, что плагин установлен и активирован.</translation>
+        <source>%1 is still listed by the last plugin scan, but its module could not create an instance. Rescan plugins in Plugin Manager and check that the plugin is installed and licensed.</source>
+        <translation>%1 всё ещё указан после последнего сканирования, но его модуль не смог создать экземпляр. Повторно отсканируйте плагины в менеджере плагинов и убедитесь, что плагин установлен и активирован.</translation>
     </message>
     <message>
-        <source>No plugins are available. Scan plugins in Settings.</source>
-        <translation>Доступные плагины отсутствуют. Отсканируйте плагины в Настройках.</translation>
+        <source>No plugins are available. Scan plugins in Plugin Manager.</source>
+        <translation>Доступных плагинов нет. Запустите сканирование в менеджере плагинов.</translation>
     </message>
     <message>
         <source>No plugins match “%1”. Try a name, vendor, or tag.</source>
@@ -11463,6 +11547,70 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
 <context>
     <name>SettingsWindow</name>
     <message>
+        <source>Close</source>
+        <translation>Закрыть</translation>
+    </message>
+    <message>
+        <source>Audio devices, inputs, outputs and latency.</source>
+        <translation>Аудиоустройства, входы, выходы и задержка.</translation>
+    </message>
+    <message>
+        <source>Sources and options for importing media.</source>
+        <translation>Источники и параметры импорта медиафайлов.</translation>
+    </message>
+    <message>
+        <source>Playback controls and transport display.</source>
+        <translation>Управление воспроизведением и панель транспорта.</translation>
+    </message>
+    <message>
+        <source>Recording modes, takes and MIDI input.</source>
+        <translation>Режимы записи, дубли и MIDI-вход.</translation>
+    </message>
+    <message>
+        <source>Tools and actions for the current selection.</source>
+        <translation>Инструменты и действия для выбранных объектов.</translation>
+    </message>
+    <message>
+        <source>Folders, previews and browser layout.</source>
+        <translation>Папки, предпрослушивание и расположение браузера.</translation>
+    </message>
+    <message>
+        <source>Notes, fonts and notebook appearance.</source>
+        <translation>Заметки, шрифты и оформление блокнота.</translation>
+    </message>
+    <message>
+        <source>Assistant providers, models and access keys.</source>
+        <translation>Провайдеры, модели и ключи доступа ИИ-ассистента.</translation>
+    </message>
+    <message>
+        <source>Your account and connected services.</source>
+        <translation>Ваш аккаунт и подключённые сервисы.</translation>
+    </message>
+    <message>
+        <source>Interface language and installed translations.</source>
+        <translation>Язык интерфейса и установленные переводы.</translation>
+    </message>
+    <message>
+        <source>Automatic backups and project recovery.</source>
+        <translation>Автоматические резервные копии и восстановление проектов.</translation>
+    </message>
+    <message>
+        <source>Palettes, backgrounds and timeline appearance.</source>
+        <translation>Цветовые темы, фон и оформление таймлайна.</translation>
+    </message>
+    <message>
+        <source>Create your own palette with a live preview.</source>
+        <translation>Создание своей палитры с предпросмотром изменений.</translation>
+    </message>
+    <message>
+        <source>Find commands and customize keyboard shortcuts.</source>
+        <translation>Поиск команд и настройка сочетаний клавиш.</translation>
+    </message>
+    <message>
+        <source>Startup, graphics and editing preferences.</source>
+        <translation>Запуск приложения, графика и параметры редактирования.</translation>
+    </message>
+    <message>
         <source>Startup</source>
         <translation>Запуск</translation>
     </message>
@@ -11485,14 +11633,6 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     <message>
         <source>Applies only when VLTONE starts normally. Opening a project, restoring work after a crash, and File &gt; New Project take priority over this template.</source>
         <translation>Применяется только при обычном запуске VLTONE. Открытие проекта, восстановление работы после сбоя и команда «Файл &gt; Новый проект» имеют приоритет над этим шаблоном.</translation>
-    </message>
-    <message>
-        <source>Scan plugins at startup</source>
-        <translation>Сканировать плагины при запуске</translation>
-    </message>
-    <message>
-        <source>When off, VLTONE uses the saved plugin list. To find new plugins, run Scan or Rescan All in Plugin Manager.</source>
-        <translation>Если выключено, VLTONE использует сохранённый список плагинов. Чтобы найти новые плагины, запустите сканирование или полное пересканирование в менеджере плагинов.</translation>
     </message>
     <message>
         <source>Settings — %1</source>
@@ -11700,15 +11840,15 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     </message>
     <message>
         <source>Editing</source>
-        <translation type="unfinished"></translation>
+        <translation>Редактирование</translation>
     </message>
     <message>
         <source>Include clips when duplicating tracks and folders</source>
-        <translation type="unfinished"></translation>
+        <translation>Копировать клипы при дублировании дорожек и папок</translation>
     </message>
     <message>
         <source>When off, Duplicate keeps the track hierarchy, instruments, plugins, mixer settings and routing, but creates empty lanes.</source>
-        <translation type="unfinished"></translation>
+        <translation>Если выключено, дублирование сохраняет структуру дорожек, инструменты, плагины, настройки микшера и маршрутизацию, но создаёт пустые дорожки.</translation>
     </message>
     <message>
         <source>Selected tracks</source>
@@ -12083,6 +12223,34 @@ Reassign it to &quot;%3&quot;?</source>
     <message>
         <source>Timeline grid</source>
         <translation>Сетка таймлайна</translation>
+    </message>
+    <message>
+        <source>Timeline clips</source>
+        <translation>Клипы на таймлайне</translation>
+    </message>
+    <message>
+        <source>Waveform style</source>
+        <translation>Стиль волны</translation>
+    </message>
+    <message>
+        <source>Crisp</source>
+        <translation>Чёткий</translation>
+    </message>
+    <message>
+        <source>Smooth</source>
+        <translation>Сглаженный</translation>
+    </message>
+    <message>
+        <source>Crisp keeps visible steps; Smooth draws a soft, continuous outline. Applies to the timeline, Warp and audio previews.</source>
+        <translation>Чёткий — со ступенчатой формой; Сглаженный — с мягким, плавным контуром. Применяется в таймлайне, Warp и предпрослушивании аудио.</translation>
+    </message>
+    <message>
+        <source>Rounded clip corners</source>
+        <translation>Скруглять углы клипов</translation>
+    </message>
+    <message>
+        <source>Applies to audio, MIDI, automation and Pattern clips, including recording previews.</source>
+        <translation>Для аудио, MIDI, автоматизации и Pattern-клипов, в том числе во время записи.</translation>
     </message>
     <message>
         <source>Grid line thickness in pixels</source>

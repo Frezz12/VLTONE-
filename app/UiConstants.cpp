@@ -139,6 +139,11 @@ double gridLineWidth() {
     return cachedGridLineWidth();
 }
 
+bool& cachedRoundedClipCorners() {
+    static bool rounded = QSettings().value(kRoundedClipCornersSetting, true).toBool();
+    return rounded;
+}
+
 void setGridLineWidth(double pixels) {
     const double value = std::isfinite(pixels)
         ? std::clamp(pixels, kGridLineWidthMin, kGridLineWidthMax)
@@ -179,6 +184,13 @@ void setPlayheadTrail(bool enabled) {
 
 bool scanPluginsAtStartup() {
     return QSettings().value(kScanPluginsAtStartupSetting, true).toBool();
+}
+
+bool roundedClipCorners() { return cachedRoundedClipCorners(); }
+
+void setRoundedClipCorners(bool enabled) {
+    cachedRoundedClipCorners() = enabled;
+    QSettings().setValue(kRoundedClipCornersSetting, enabled);
 }
 
 void setScanPluginsAtStartup(bool enabled) {

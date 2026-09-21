@@ -1,4 +1,6 @@
 #include "collaboration/ProjectReducer.hpp"
+#include "collaboration/MidiContentJson.hpp"
+#include <nlohmann/json.hpp>
 #include "collaboration/CommandJson.hpp"
 
 #include <algorithm>
@@ -166,10 +168,10 @@ bool clipScopeIsDeleted(const SharedProjectDocument& state,
 ControllerLane* findControllerLane(ClipModel& clip,
                                    const std::string& laneId) {
     const auto found = std::find_if(
-        clip.lanes.begin(), clip.lanes.end(), [&](const ControllerLane& lane) {
+        midiLanes(clip, laneId).begin(), midiLanes(clip, laneId).end(), [&](const ControllerLane& lane) {
             return lane.id == laneId;
         });
-    return found == clip.lanes.end() ? nullptr : &*found;
+    return found == midiLanes(clip, laneId).end() ? nullptr : &*found;
 }
 
 bool liveControllerLaneExistsOutside(const ProjectModel& project,
@@ -364,7 +366,7 @@ bool automationPointIsDeleted(const SharedProjectDocument& state,
 }
 
 bool laneTargetIsValid(const ControllerLaneTarget& target) {
-    if (target.cc < -1 || target.cc > 127 || target.parameterId.size() > 4096)
+    if (target.cc < -5 || target.cc > 127 || target.channel < 0 || target.channel > 15 || target.key < 0 || target.key > 127 || target.parameterId.size() > 4096)
         return false;
     return target.cc != -1 || !target.parameterId.empty();
 }
@@ -687,7 +689,7 @@ bool supportedBuiltin(const InsertModel& insert) {
            (insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
             insert.uid == "daw.gravity" || insert.uid == "daw.graphit" ||
             insert.uid == "daw.doubler" || insert.uid == "daw.doubler-pro" || insert.uid == "daw.chorus" ||
-            insert.uid == "daw.flanger" || insert.uid == "daw.phaser" ||
+            insert.uid == "daw.flanger" || insert.uid == "daw.phaser" || insert.uid == "daw.modulation" ||
             insert.uid == "daw.pitch-corrector");
 }
 
@@ -3015,7 +3017,8 @@ ApplyResult applySetSamplerFxLevels(SharedProjectDocument& state,
 }
 
 bool validNote(const NoteModel& note) {
-    return note.pitch >= 0 && note.pitch <= 127 &&
+    return note.channel >= 0 && note.channel <= 15 && note.releaseVelocity >= 0 && note.releaseVelocity <= 127 &&
+           note.pitch >= 0 && note.pitch <= 127 &&
            std::isfinite(note.startBeats) && note.startBeats >= 0.0 &&
            std::isfinite(note.lengthBeats) && note.lengthBeats > 0.0 &&
            note.velocity >= 1 && note.velocity <= 127 &&
@@ -3042,7 +3045,7 @@ ApplyResult applyUpsertMidiNote(SharedProjectDocument& state,
         return reject(ApplyCode::InvalidCommand,
                       "note id belongs to another clip");
 
-    std::vector<NoteModel> candidate = location.clip->notes;
+    std::vector<NoteModel> candidate = midiNotes(*location.clip, body.note.id);
     const std::size_t existing = entityIndexOf(candidate, body.note.id);
     const bool inserted = existing == std::string::npos;
     NoteModel before;
@@ -3055,8 +3058,8 @@ ApplyResult applyUpsertMidiNote(SharedProjectDocument& state,
     if (!validEntityAnchor(candidate, body.afterId))
         return reject(ApplyCode::MissingAnchor, "note anchor does not exist");
     insertEntityAfter(candidate, body.note, body.afterId, false);
-    const bool same = candidate == location.clip->notes;
-    location.clip->notes = std::move(candidate);
+    const bool same = candidate == midiNotes(*location.clip, body.note.id);
+    midiNotes(*location.clip, body.note.id) = std::move(candidate);
 
     ApplyResult result;
     result.code = same ? ApplyCode::NoChange : ApplyCode::Applied;
@@ -3079,6 +3082,7 @@ ApplyResult applyUpsertMidiNote(SharedProjectDocument& state,
             inverse.conditions.push_back(
                 FieldWriterIs{field, command.meta.operationId});
         }
+        if(!location.clip->takes.empty())inverse.conditions.push_back(FieldWriterIs{ProjectReducer::clipDescendantsKey(body.clipId),command.meta.operationId});
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;
@@ -3105,18 +3109,18 @@ ApplyResult applyDeleteMidiNote(SharedProjectDocument& state,
         return reject(ApplyCode::MissingEntity,
                       "MIDI clip does not exist in track");
     }
-    const std::size_t index = entityIndexOf(location.clip->notes, body.noteId);
+    const std::size_t index = entityIndexOf(midiNotes(*location.clip, body.noteId), body.noteId);
     if (index == std::string::npos)
         return reject(ApplyCode::MissingEntity, "MIDI note does not exist");
     MidiNoteTombstone tombstone;
     tombstone.trackId = body.trackId;
     tombstone.clipId = body.clipId;
-    tombstone.note = location.clip->notes[index];
+    tombstone.note = midiNotes(*location.clip, body.noteId)[index];
     tombstone.afterId = index == 0 ? std::string()
-                                   : location.clip->notes[index - 1].id;
+                                   : midiNotes(*location.clip, body.noteId)[index - 1].id;
     tombstone.deleteOperationId = command.meta.operationId;
     tombstone.deleteServerSequence = command.meta.serverSequence;
-    location.clip->notes.erase(location.clip->notes.begin() +
+    midiNotes(*location.clip, body.noteId).erase(midiNotes(*location.clip, body.noteId).begin() +
                                std::ptrdiff_t(index));
     state.deletedNotes[body.noteId] = std::move(tombstone);
 
@@ -3134,7 +3138,8 @@ ApplyResult applyDeleteMidiNote(SharedProjectDocument& state,
     inverse.conditions.push_back(FieldWriterIs{
         ProjectReducer::noteLifecycleKey(body.noteId),
         command.meta.operationId});
-    result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    if(!location.clip->takes.empty())inverse.conditions.push_back(FieldWriterIs{ProjectReducer::clipDescendantsKey(body.clipId),command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     return result;
 }
 
@@ -3160,11 +3165,11 @@ ApplyResult applyRestoreMidiNote(SharedProjectDocument& state,
                       "MIDI clip does not exist in track");
     }
     if (liveNoteExistsOutside(state.project, body.noteId, body.clipId) ||
-        entityIndexOf(location.clip->notes, body.noteId) != std::string::npos) {
+        entityIndexOf(midiNotes(*location.clip, body.noteId), body.noteId) != std::string::npos) {
         return reject(ApplyCode::InvalidCommand, "MIDI note already exists");
     }
     MidiNoteTombstone tombstone = found->second;
-    insertEntityAfter(location.clip->notes, tombstone.note, tombstone.afterId,
+    insertEntityAfter(midiNotes(*location.clip, body.noteId), tombstone.note, tombstone.afterId,
                       /*missingAnchorFallsBack=*/true);
     state.deletedNotes.erase(found);
 
@@ -3181,7 +3186,8 @@ ApplyResult applyRestoreMidiNote(SharedProjectDocument& state,
     inverse.conditions.push_back(FieldWriterIs{
         ProjectReducer::noteLifecycleKey(body.noteId),
         command.meta.operationId});
-    result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    if(!location.clip->takes.empty())inverse.conditions.push_back(FieldWriterIs{ProjectReducer::clipDescendantsKey(body.clipId),command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     return result;
 }
 
@@ -3263,6 +3269,7 @@ ApplyResult applyUpsertAutomationPoint(
             inverse.conditions.push_back(
                 FieldWriterIs{field, command.meta.operationId});
         }
+        if(!location.clip->takes.empty())inverse.conditions.push_back(FieldWriterIs{ProjectReducer::clipDescendantsKey(body.clipId),command.meta.operationId});
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;
@@ -3323,7 +3330,8 @@ ApplyResult applyDeleteAutomationPoint(
     inverse.conditions.push_back(FieldWriterIs{
         ProjectReducer::automationPointLifecycleKey(body.pointId),
         command.meta.operationId});
-    result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    if(!location.clip->takes.empty())inverse.conditions.push_back(FieldWriterIs{ProjectReducer::clipDescendantsKey(body.clipId),command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     return result;
 }
 
@@ -3388,7 +3396,8 @@ ApplyResult applyRestoreAutomationPoint(
     inverse.conditions.push_back(FieldWriterIs{
         ProjectReducer::automationPointLifecycleKey(body.pointId),
         command.meta.operationId});
-    result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    if(!location.clip->takes.empty())inverse.conditions.push_back(FieldWriterIs{ProjectReducer::clipDescendantsKey(body.clipId),command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     return result;
 }
 
@@ -3418,7 +3427,7 @@ ApplyResult applyAddControllerLane(SharedProjectDocument& state,
         return reject(ApplyCode::InvalidCommand,
                       "controller lane id already exists");
     }
-    if (!validEntityAnchor(location.clip->lanes, body.afterId))
+    if (!validEntityAnchor(midiLanes(*location.clip), body.afterId))
         return reject(ApplyCode::MissingAnchor,
                       "controller lane anchor does not exist");
     ControllerLane lane;
@@ -3427,8 +3436,9 @@ ApplyResult applyAddControllerLane(SharedProjectDocument& state,
     lane.cc = body.target.cc;
     lane.parameterId = body.target.parameterId;
     lane.slotId = body.target.slotId;
+    lane.channel = body.target.channel; lane.key = body.target.key;
     lane.defaultValue = body.defaultValue;
-    insertEntityAfter(location.clip->lanes, std::move(lane), body.afterId,
+    insertEntityAfter(midiLanes(*location.clip), std::move(lane), body.afterId,
                       false);
 
     ApplyResult result;
@@ -3444,7 +3454,8 @@ ApplyResult applyAddControllerLane(SharedProjectDocument& state,
     inverse.conditions.push_back(FieldWriterIs{
         ProjectReducer::controllerLaneLifecycleKey(body.laneId),
         command.meta.operationId});
-    result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    if(!location.clip->takes.empty())inverse.conditions.push_back(FieldWriterIs{ProjectReducer::clipDescendantsKey(body.clipId),command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     return result;
 }
 
@@ -3469,19 +3480,19 @@ ApplyResult applyDeleteControllerLane(SharedProjectDocument& state,
         return reject(ApplyCode::MissingEntity,
                       "MIDI clip does not exist in track");
     }
-    const std::size_t index = entityIndexOf(location.clip->lanes, body.laneId);
+    const std::size_t index = entityIndexOf(midiLanes(*location.clip), body.laneId);
     if (index == std::string::npos)
         return reject(ApplyCode::MissingEntity,
                       "controller lane does not exist");
     ControllerLaneTombstone tombstone;
     tombstone.trackId = body.trackId;
     tombstone.clipId = body.clipId;
-    tombstone.lane = location.clip->lanes[index];
+    tombstone.lane = midiLanes(*location.clip)[index];
     tombstone.afterId = index == 0 ? std::string()
-                                   : location.clip->lanes[index - 1].id;
+                                   : midiLanes(*location.clip)[index - 1].id;
     tombstone.deleteOperationId = command.meta.operationId;
     tombstone.deleteServerSequence = command.meta.serverSequence;
-    location.clip->lanes.erase(location.clip->lanes.begin() +
+    midiLanes(*location.clip).erase(midiLanes(*location.clip).begin() +
                                std::ptrdiff_t(index));
     state.deletedControllerLanes[body.laneId] = std::move(tombstone);
 
@@ -3499,7 +3510,8 @@ ApplyResult applyDeleteControllerLane(SharedProjectDocument& state,
     inverse.conditions.push_back(FieldWriterIs{
         ProjectReducer::controllerLaneLifecycleKey(body.laneId),
         command.meta.operationId});
-    result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    if(!location.clip->takes.empty())inverse.conditions.push_back(FieldWriterIs{ProjectReducer::clipDescendantsKey(body.clipId),command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     return result;
 }
 
@@ -3531,7 +3543,7 @@ ApplyResult applyRestoreControllerLane(SharedProjectDocument& state,
                       "controller lane already exists");
     }
     ControllerLaneTombstone tombstone = found->second;
-    insertEntityAfter(location.clip->lanes, tombstone.lane,
+    insertEntityAfter(midiLanes(*location.clip), tombstone.lane,
                       tombstone.afterId, /*missingAnchorFallsBack=*/true);
     state.deletedControllerLanes.erase(found);
 
@@ -3548,7 +3560,8 @@ ApplyResult applyRestoreControllerLane(SharedProjectDocument& state,
     inverse.conditions.push_back(FieldWriterIs{
         ProjectReducer::controllerLaneLifecycleKey(body.laneId),
         command.meta.operationId});
-    result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    if(!location.clip->takes.empty())inverse.conditions.push_back(FieldWriterIs{ProjectReducer::clipDescendantsKey(body.clipId),command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     return result;
 }
 
@@ -3572,11 +3585,12 @@ ApplyResult applySetControllerLaneTarget(
     if (!laneTargetIsValid(body.target))
         return reject(ApplyCode::InvalidCommand,
                       "invalid controller lane target");
-    const ControllerLaneTarget before{lane->cc, lane->parameterId, lane->slotId};
+    const ControllerLaneTarget before{lane->cc, lane->parameterId, lane->slotId, lane->channel, lane->key};
     const bool same = before == body.target;
     lane->cc = body.target.cc;
     lane->parameterId = body.target.parameterId;
     lane->slotId = body.target.slotId;
+    lane->channel = body.target.channel; lane->key = body.target.key;
 
     ApplyResult result;
     result.code = same ? ApplyCode::NoChange : ApplyCode::Applied;
@@ -3593,6 +3607,7 @@ ApplyResult applySetControllerLaneTarget(
         inverse.conditions.push_back(FieldWriterIs{
             "controllerLane:" + body.laneId + ":target",
             command.meta.operationId});
+        if(!location.clip->takes.empty())inverse.conditions.push_back(FieldWriterIs{ProjectReducer::clipDescendantsKey(body.clipId),command.meta.operationId});
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;
@@ -3639,6 +3654,7 @@ ApplyResult applySetControllerLaneDefault(
                                               body.laneId, before});
         inverse.conditions.push_back(
             FieldWriterIs{key, command.meta.operationId});
+        if(!location.clip->takes.empty())inverse.conditions.push_back(FieldWriterIs{ProjectReducer::clipDescendantsKey(body.clipId),command.meta.operationId});
         result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     }
     return result;
@@ -3762,11 +3778,14 @@ ApplyResult applyAddTake(SharedProjectDocument& state,
     }
     ClipLocation location = findClip(state.project, body.clipId);
     if (!location.clip || location.track->id != body.trackId ||
-        location.clip->kind != ClipKind::Audio) {
+        (location.clip->kind != ClipKind::Audio && location.clip->kind != ClipKind::Midi)) {
         return reject(ApplyCode::MissingEntity,
-                      "audio clip does not exist in track");
+                      "clip does not exist in track");
     }
-    if (!completeAudioTake(body.take))
+    ClipModel midiTake; midiTake.kind=ClipKind::Midi; midiTake.takes.push_back(body.take);
+    ClipModel checkedTake;
+    if (location.clip->kind==ClipKind::Audio ? !completeAudioTake(body.take) :
+        (command.meta.schemaVersion<4 || !body.take.asset.empty() || !body.take.filePath.empty() || !midiContentFromJson(midiContentToJson(midiTake),checkedTake)))
         return reject(ApplyCode::InvalidCommand,
                       "take requires a complete cloud audio AssetRef");
     if (entityIndexOf(location.clip->takes, body.take.id) != std::string::npos ||
@@ -3817,9 +3836,9 @@ ApplyResult applyDeleteTake(SharedProjectDocument& state,
     }
     ClipLocation location = findClip(state.project, body.clipId);
     if (!location.clip || location.track->id != body.trackId ||
-        location.clip->kind != ClipKind::Audio) {
+        (location.clip->kind != ClipKind::Audio && location.clip->kind != ClipKind::Midi)) {
         return reject(ApplyCode::MissingEntity,
-                      "audio clip does not exist in track");
+                      "clip does not exist in track");
     }
     const std::size_t index = entityIndexOf(location.clip->takes, body.takeId);
     if (index == std::string::npos)
@@ -3875,9 +3894,9 @@ ApplyResult applyRestoreTake(SharedProjectDocument& state,
                       "delete wins over take restore");
     ClipLocation location = findClip(state.project, body.clipId);
     if (!location.clip || location.track->id != body.trackId ||
-        location.clip->kind != ClipKind::Audio) {
+        (location.clip->kind != ClipKind::Audio && location.clip->kind != ClipKind::Midi)) {
         return reject(ApplyCode::MissingEntity,
-                      "audio clip does not exist in track");
+                      "clip does not exist in track");
     }
     if (entityIndexOf(location.clip->takes, body.takeId) != std::string::npos ||
         liveTakeExistsOutside(state.project, body.takeId, body.clipId)) {
@@ -3919,9 +3938,9 @@ ApplyResult applyMoveTake(SharedProjectDocument& state,
     }
     ClipLocation location = findClip(state.project, body.clipId);
     if (!location.clip || location.track->id != body.trackId ||
-        location.clip->kind != ClipKind::Audio) {
+        (location.clip->kind != ClipKind::Audio && location.clip->kind != ClipKind::Midi)) {
         return reject(ApplyCode::MissingEntity,
-                      "audio clip does not exist in track");
+                      "clip does not exist in track");
     }
     const std::size_t index = entityIndexOf(location.clip->takes, body.takeId);
     if (index == std::string::npos)
@@ -3971,9 +3990,9 @@ ApplyResult applySetTakeProperty(SharedProjectDocument& state,
     }
     ClipLocation location = findClip(state.project, body.clipId);
     if (!location.clip || location.track->id != body.trackId ||
-        location.clip->kind != ClipKind::Audio) {
+        (location.clip->kind != ClipKind::Audio && location.clip->kind != ClipKind::Midi)) {
         return reject(ApplyCode::MissingEntity,
-                      "audio clip does not exist in track");
+                      "clip does not exist in track");
     }
     const std::size_t index = entityIndexOf(location.clip->takes, body.takeId);
     if (index == std::string::npos)
@@ -4083,9 +4102,9 @@ ApplyResult applyUpsertCompSegment(SharedProjectDocument& state,
     }
     ClipLocation location = findClip(state.project, body.clipId);
     if (!location.clip || location.track->id != body.trackId ||
-        location.clip->kind != ClipKind::Audio) {
+        (location.clip->kind != ClipKind::Audio && location.clip->kind != ClipKind::Midi)) {
         return reject(ApplyCode::MissingEntity,
-                      "audio clip does not exist in track");
+                      "clip does not exist in track");
     }
     if (!findTake(*location.clip, body.segment.takeId))
         return takeIsDeleted(state, body.segment.takeId)
@@ -4168,9 +4187,9 @@ ApplyResult applyDeleteCompSegment(SharedProjectDocument& state,
     }
     ClipLocation location = findClip(state.project, body.clipId);
     if (!location.clip || location.track->id != body.trackId ||
-        location.clip->kind != ClipKind::Audio) {
+        (location.clip->kind != ClipKind::Audio && location.clip->kind != ClipKind::Midi)) {
         return reject(ApplyCode::MissingEntity,
-                      "audio clip does not exist in track");
+                      "clip does not exist in track");
     }
     const std::size_t index = entityIndexOf(location.clip->comp, body.segmentId);
     if (index == std::string::npos)
@@ -4222,9 +4241,9 @@ ApplyResult applyRestoreCompSegment(SharedProjectDocument& state,
                       "delete wins over comp segment restore");
     ClipLocation location = findClip(state.project, body.clipId);
     if (!location.clip || location.track->id != body.trackId ||
-        location.clip->kind != ClipKind::Audio) {
+        (location.clip->kind != ClipKind::Audio && location.clip->kind != ClipKind::Midi)) {
         return reject(ApplyCode::MissingEntity,
-                      "audio clip does not exist in track");
+                      "clip does not exist in track");
     }
     CompSegmentTombstone tombstone = found->second;
     if (!findTake(*location.clip, tombstone.segment.takeId))
@@ -4274,6 +4293,53 @@ ApplyResult applyRestoreCompSegment(SharedProjectDocument& state,
         command.meta.operationId});
     result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
     return result;
+}
+
+ApplyResult applyPrepareMidi(SharedProjectDocument& state, const ProjectCommand& command, const PrepareMidiPart& body) {
+    const auto key = body.contentId + ":" + std::to_string(body.index);
+    if (const auto it=state.preparedMidi.find(key); it!=state.preparedMidi.end()) {
+        if (it->second.recordingId!=body.recordingId || it->second.count!=body.count || midiContentToJson(it->second.content)!=midiContentToJson(body.content))
+            return reject(ApplyCode::InvalidCommand,"MIDI part identity is immutable");
+        return reject(ApplyCode::InvalidCommand,"MIDI part already exists under another operation");
+    }
+    ClipModel checked;
+    if (!midiContentFromJson(midiContentToJson(body.content),checked)) return reject(ApplyCode::InvalidCommand,"invalid MIDI content");
+    state.preparedMidi.emplace(key,body);
+    ApplyResult result; result.code=ApplyCode::Applied;
+    markCommandWriters(state,command,result.impact); return result;
+}
+
+template<class Body>
+ApplyResult applyMidiContent(SharedProjectDocument& state,const ProjectCommand& command,const Body& body) {
+    if (clipScopeIsDeleted(state,body.trackId,body.clipId)) return reject(ApplyCode::DeletedEntity,"MIDI target was deleted");
+    const auto location=findClip(state.project,body.clipId);
+    if (!location.clip || location.track->id!=body.trackId || location.clip->kind!=ClipKind::Midi)
+        return reject(ApplyCode::MissingEntity,"MIDI clip is unavailable");
+    ClipModel content;
+    if constexpr (std::is_same_v<Body,ApplyMidiContent>) {
+        std::vector<PrepareMidiPart> parts; parts.reserve(body.count);
+        for(std::uint32_t i=0;i<body.count;++i) {
+            auto it=state.preparedMidi.find(body.contentId+":"+std::to_string(i));
+            if(it==state.preparedMidi.end() || it->second.recordingId!=body.recordingId || it->second.count!=body.count)
+                return reject(ApplyCode::MissingEntity,"MIDI preparation is incomplete");
+            parts.push_back(it->second);
+        }
+        content=joinMidiContent(parts);
+        if(!validMidiContentIdentities(content))return reject(ApplyCode::InvalidCommand,"MIDI content contains duplicate identities or missing takes");
+    } else {
+        auto it=state.midiHistory.find(body.operationId+":"+body.clipId);
+        if(it==state.midiHistory.end()) return reject(ApplyCode::MissingEntity,"MIDI undo material is unavailable");
+        content=it->second;
+    }
+    state.midiHistory[command.meta.operationId+":"+body.clipId]=*location.clip;
+    location.clip->notes=std::move(content.notes); location.clip->lanes=std::move(content.lanes);
+    location.clip->takes=std::move(content.takes); location.clip->comp=std::move(content.comp); location.clip->expanded=content.expanded;
+    ApplyResult result; result.code=ApplyCode::Applied; result.impact.documentChanged=true;
+    result.impact.graphRebuild=true; result.impact.timelineChanged=true; result.impact.trackIds.insert(body.trackId); result.impact.clipIds.insert(body.clipId);
+    markCommandWriters(state,command,result.impact);
+    auto inverse=inverseShell(command,RestoreMidiContent{body.trackId,body.clipId,command.meta.operationId});
+    inverse.conditions.push_back(FieldWriterIs{ProjectReducer::clipDescendantsKey(body.clipId),command.meta.operationId});
+    result.inverse=std::make_shared<ProjectCommand>(std::move(inverse)); return result;
 }
 
 ApplyResult applyBatch(SharedProjectDocument& state,
@@ -4492,6 +4558,8 @@ ApplyResult applyImpl(SharedProjectDocument& state,
             return applyDeleteCompSegment(state, command, body);
         else if constexpr (std::is_same_v<T, RestoreCompSegment>)
             return applyRestoreCompSegment(state, command, body);
+        else if constexpr (std::is_same_v<T, PrepareMidiPart>) return applyPrepareMidi(state,command,body);
+        else if constexpr (std::is_same_v<T, ApplyMidiContent> || std::is_same_v<T, RestoreMidiContent>) return applyMidiContent(state,command,body);
         else if constexpr (std::is_same_v<T, RecordingCommit>)
             return allowBatch
                        ? applyBatch(state, command, body.batch)

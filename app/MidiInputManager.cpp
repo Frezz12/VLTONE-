@@ -6,6 +6,8 @@
 #include <rtmidi/RtMidi.h>
 
 #include <QMetaObject>
+#include <QCoreApplication>
+#include <QEvent>
 #include <QTimer>
 #include <QtLogging>
 
@@ -229,12 +231,23 @@ void MidiInputManager::refreshPorts() {
 void MidiInputManager::postMessage(
     quint64 generation, quint64 source,
     const std::vector<unsigned char>& message) {
+    const auto stamp = m_controller->midiInputStamp();
+    if(m_pendingMessages.fetch_add(1,std::memory_order_acq_rel)>=8192) {
+        m_inputOverflow.store(true,std::memory_order_release);
+        m_pendingMessages.fetch_sub(1,std::memory_order_release);return;
+    }
     const QByteArray bytes(reinterpret_cast<const char*>(message.data()),
                            qsizetype(message.size()));
     QMetaObject::invokeMethod(
         this,
-        [this, generation, source, bytes] {
-            if (generation == m_generation) handleMessage(source, bytes);
+        [this, generation, source, bytes, stamp] {
+            const auto remaining=m_pendingMessages.fetch_sub(1,std::memory_order_acq_rel)-1;
+            if(m_inputOverflow.load(std::memory_order_acquire)) {
+                allNotesOff();
+                if(!remaining)m_inputOverflow.store(false,std::memory_order_release);
+                return;
+            }
+            if (generation == m_generation) handleMessage(source, bytes, stamp);
         },
         Qt::QueuedConnection);
 }
@@ -256,9 +269,9 @@ void MidiInputManager::releaseHeld(quint64 source, int channel) {
             ++it;
             continue;
         }
-        m_controller->liveMidiEvent(
+        m_controller->liveMidiInput(
             it->trackId, daw::engine::MidiEvent::kNoteOff | it->channel,
-            it->pitch, 0);
+            it->pitch, 0, it->source, m_controller->midiInputStamp(), daw::LiveMidiOrigin::Cleanup);
         emit noteStateChanged(QString::fromStdString(it->trackId),
                               it->pitch, false);
         it = m_held.erase(it);
@@ -267,9 +280,9 @@ void MidiInputManager::releaseHeld(quint64 source, int channel) {
 
 void MidiInputManager::allNotesOff() {
     for (const Held& held : m_held) {
-        m_controller->liveMidiEvent(
+        m_controller->liveMidiInput(
             held.trackId, daw::engine::MidiEvent::kNoteOff | held.channel,
-            held.pitch, 0);
+            held.pitch, 0, held.source, m_controller->midiInputStamp(), daw::LiveMidiOrigin::Cleanup);
         emit noteStateChanged(QString::fromStdString(held.trackId),
                               held.pitch, false);
     }
@@ -278,18 +291,18 @@ void MidiInputManager::allNotesOff() {
     // Pedals and wheels can outlive the last key. Return every channel that
     // accepted input to a neutral state before forgetting its route.
     for (const Route& route : m_routes) {
-        m_controller->liveMidiEvent(
+        m_controller->liveMidiInput(
             route.trackId, daw::engine::MidiEvent::kControlChange | route.channel,
-            64, 0); // sustain up
-        m_controller->liveMidiEvent(
+            64, 0, route.source, m_controller->midiInputStamp(), daw::LiveMidiOrigin::Cleanup);
+        m_controller->liveMidiInput(
             route.trackId, daw::engine::MidiEvent::kControlChange | route.channel,
-            121, 0); // reset all controllers
-        m_controller->liveMidiEvent(
+            121, 0, route.source, m_controller->midiInputStamp(), daw::LiveMidiOrigin::Cleanup);
+        m_controller->liveMidiInput(
             route.trackId, daw::engine::MidiEvent::kControlChange | route.channel,
-            123, 0); // all notes off
-        m_controller->liveMidiEvent(
+            123, 0, route.source, m_controller->midiInputStamp(), daw::LiveMidiOrigin::Cleanup);
+        m_controller->liveMidiInput(
             route.trackId, daw::engine::MidiEvent::kPitchBend | route.channel,
-            0, 64); // centre (8192)
+            0, 64, route.source, m_controller->midiInputStamp(), daw::LiveMidiOrigin::Cleanup);
     }
     m_routes.clear();
 }
@@ -302,7 +315,7 @@ void MidiInputManager::refreshTarget() {
 }
 
 bool MidiInputManager::handleMessage(quint64 source,
-                                     const QByteArray& message) {
+                                     const QByteArray& message, daw::MidiInputStamp stamp) {
     if (message.isEmpty()) return false;
     const auto status = std::uint8_t(message[0]);
     const int bytes = messageBytes(status);
@@ -328,9 +341,9 @@ bool MidiInputManager::handleMessage(quint64 source,
     });
 
     if (noteOn && held != m_held.end()) {
-        m_controller->liveMidiEvent(
+        m_controller->liveMidiInput(
             held->trackId, daw::engine::MidiEvent::kNoteOff | held->channel,
-            held->pitch, 0);
+            held->pitch, 0, source, stamp);
         emit noteStateChanged(QString::fromStdString(held->trackId),
                               held->pitch, false);
         m_held.erase(held);
@@ -340,15 +353,15 @@ bool MidiInputManager::handleMessage(quint64 source,
     if (noteOff && held != m_held.end()) {
         const std::string noteTarget = held->trackId;
         const int pitch = held->pitch;
-        const bool accepted = m_controller->liveMidiEvent(
-            noteTarget, status, data1, data2);
+        const bool accepted = m_controller->liveMidiInput(
+            noteTarget, status, data1, data2, source, stamp);
         emit noteStateChanged(QString::fromStdString(noteTarget), pitch, false);
         m_held.erase(held);
         return accepted;
     }
 
     const bool accepted =
-        m_controller->liveMidiEvent(target, status, data1, data2);
+        m_controller->liveMidiInput(target, status, data1, data2, source, stamp);
     if (!accepted) return false;
     rememberRoute(source, channel, target);
 
@@ -364,5 +377,20 @@ bool MidiInputManager::handleMessage(quint64 source,
 
 bool MidiInputManager::injectMessageForTest(const QByteArray& message,
                                             quint64 source) {
-    return handleMessage(source, message);
+    return handleMessage(source, message, m_controller->midiInputStamp());
+}
+
+bool MidiInputManager::checkQueueOverflowForTest() {
+    constexpr quint64 source = 0xFFFFFF10;
+    const QByteArray on = QByteArray::fromHex("904864");
+    const QByteArray off = QByteArray::fromHex("80482d");
+    if (!injectMessageForTest(on, source) || heldCount() != 1) return false;
+    for (int i = 0; i < 8193; ++i)
+        postMessage(m_generation, source, {0x90, 72, 100});
+    QCoreApplication::sendPostedEvents(this, QEvent::MetaCall);
+    const bool drained = heldCount() == 0 && m_pendingMessages.load() == 0 &&
+                         !m_inputOverflow.load();
+    const bool resumed = injectMessageForTest(on, source) && heldCount() == 1 &&
+                         injectMessageForTest(off, source) && heldCount() == 0;
+    return drained && resumed;
 }

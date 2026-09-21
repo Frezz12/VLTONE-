@@ -690,19 +690,12 @@ GravityPanel::GravityPanel(daw::EngineController* controller, QString channelId,
 #GravityReadout { color: #AEB0B5; padding-bottom: 1px; }
 #GravityAlgorithm, #GravityPresetName, #GravityDrawer QComboBox {
     color: #D1D3D7; background: #121315; border: 1px solid #44474C;
-    border-radius: 7px; min-height: 28px; padding: 0 9px;
+    border-radius: 0; min-height: 28px; padding: 0 9px;
     font-size: 10px; font-weight: 600;
 }
 #GravityPresetName { letter-spacing: 1px; }
 #GravityAlgorithm:hover, #GravityPresetName:hover, #GravityDrawer QComboBox:hover { border-color: #8A2356; }
 #GravityAlgorithm:focus, #GravityPresetName:focus, #GravityDrawer QComboBox:focus { border: 2px solid #FF26B5; }
-#GravityAlgorithm QAbstractItemView {
-    color: #D1D3D7; background: #17181A; border: 1px solid #55585E;
-    selection-background-color: #76123C; outline: none;
-}
-QMenu { color: #D1D3D7; background: #202124; border: 1px solid #4B4D52; }
-QMenu::item { min-height: 26px; padding: 3px 24px 3px 10px; }
-QMenu::item:selected { background: #76123C; }
 QSpinBox { color: #D1D3D7; background: #111214; border: 1px solid #55585E;
            border-radius: 4px; padding: 3px; }
 #GravityDrawer { background: #17181B; border: 1px solid #34363A; border-radius: 10px; }

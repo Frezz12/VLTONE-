@@ -2014,11 +2014,6 @@ QPushButton#WebBookmarksButton:hover, QPushButton#WebBookmarkChip:hover,
 QPushButton#WebBookmarksMore:hover { color: #f5f5f7; background: #252630; }
 QPushButton#WebBookmarksButton:focus, QPushButton#WebBookmarkChip:focus,
 QPushButton#WebBookmarksMore:focus { border-color: #a0cdef; }
-QMenu { background: #22232d; color: #f5f5f7; border: 1px solid #383b48; padding: 5px; }
-QMenu::item { padding: 6px 25px 6px 12px; border-radius: 5px; }
-QMenu::item:selected { background: #353847; }
-QMenu::item:disabled { color: #777b89; }
-QMenu::separator { height: 1px; background: #383b48; margin: 4px 8px; }
 )"));
     update();
 }

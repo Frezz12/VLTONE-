@@ -3,6 +3,7 @@
 #include "Internal/GravityInstance.hpp"
 #include "Internal/GraphitInstance.hpp"
 #include "Internal/ModulationInstance.hpp"
+#include "Internal/ModulationRackInstance.hpp"
 #include "Internal/EqualizerInstance.hpp"
 #include "Internal/PitchCorrectorInstance.hpp"
 #include "Internal/SampleDecoder.hpp"
@@ -73,6 +74,7 @@ std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& 
     if (descriptor.uid == graphit::GraphitInstance::uid()) {
         return std::make_unique<graphit::GraphitInstance>();
     }
+    if (descriptor.uid == "daw.modulation") return std::make_unique<modulation::ModulationRackInstance>();
     if (descriptor.uid == "daw.doubler") return std::make_unique<modulation::DoublerInstance>();
     if (descriptor.uid == "daw.doubler-pro") return std::make_unique<modulation::DoublerProInstance>();
     if (descriptor.uid == "daw.chorus") return std::make_unique<modulation::ChorusInstance>();
@@ -94,7 +96,8 @@ std::vector<PluginDescriptor> builtinPlugins() {
             modulation::descriptorFor(modulation::Kind::DoublerPro),
             modulation::descriptorFor(modulation::Kind::Chorus),
             modulation::descriptorFor(modulation::Kind::Flanger),
-            modulation::descriptorFor(modulation::Kind::Phaser)};
+            modulation::descriptorFor(modulation::Kind::Phaser),
+            modulation::ModulationRackInstance::staticDescriptor()};
 }
 
 } // namespace daw::plugins

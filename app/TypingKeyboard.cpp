@@ -87,6 +87,11 @@ bool TypingKeyboard::usesKey(int key) {
            key == Qt::Key_BracketRight;
 }
 
+bool TypingKeyboard::reservesKey(int key) {
+    return usesKey(key) || (key >= Qt::Key_A && key <= Qt::Key_Z) ||
+           (key >= Qt::Key_0 && key <= Qt::Key_9);
+}
+
 void TypingKeyboard::setEnabled(bool enabled) {
     if (m_enabled == enabled) return;
     m_enabled = enabled;
@@ -109,7 +114,8 @@ void TypingKeyboard::setOctave(int octave) {
 
 void TypingKeyboard::allNotesOff() {
     for (auto it = m_held.constBegin(); it != m_held.constEnd(); ++it) {
-        m_controller->liveNoteOff(it->trackId, it->pitch);
+        m_controller->liveMidiInput(it->trackId, 0x80, it->pitch, 0,
+            (1ULL << 63) | unsigned(it.key()), m_controller->midiInputStamp(), daw::LiveMidiOrigin::Cleanup);
         emit noteStateChanged(QString::fromStdString(it->trackId),
                               it->pitch, false);
     }
@@ -125,7 +131,7 @@ bool TypingKeyboard::handles(const QKeyEvent* event, bool textEntry) const {
     // An open menu or combo popup owns the keyboard while it is up.
     if (QApplication::activePopupWidget()) return false;
 
-    return usesKey(eventKey(event));
+    return reservesKey(eventKey(event));
 }
 
 int TypingKeyboard::eventKey(const QKeyEvent* event) {
@@ -151,7 +157,8 @@ void TypingKeyboard::pressKey(int key) {
 
     const std::string track = m_target ? m_target() : std::string();
     if (track.empty()) return;
-    if (!m_controller->liveNoteOn(track, pitch, kVelocity)) return;
+    if (!m_controller->liveMidiInput(track, 0x90, pitch, kVelocity,
+            (1ULL << 63) | unsigned(key), m_controller->midiInputStamp())) return;
 
     m_held.insert(key, Held{track, pitch});
     emit noteStateChanged(QString::fromStdString(track), pitch, true);
@@ -161,7 +168,8 @@ void TypingKeyboard::pressKey(int key) {
 void TypingKeyboard::releaseKey(int key) {
     auto found = m_held.find(key);
     if (found == m_held.end()) return;
-    m_controller->liveNoteOff(found->trackId, found->pitch);
+    m_controller->liveMidiInput(found->trackId, 0x80, found->pitch, 0,
+        (1ULL << 63) | unsigned(key), m_controller->midiInputStamp());
     emit noteStateChanged(QString::fromStdString(found->trackId),
                           found->pitch, false);
     m_held.erase(found);

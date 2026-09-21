@@ -10,6 +10,11 @@ class QPainter;
 
 namespace ui {
 
+enum class WaveformStyle { Crisp = 0, Smooth = 1 };
+inline constexpr const char* kWaveformStyleSetting = "ui/waveformStyle";
+WaveformStyle waveformStyle(); // Cached preference; defaults to Crisp.
+void setWaveformStyle(WaveformStyle style);
+
 /// Where the envelope sits in time and how loud it is drawn.
 struct PeakPaint {
     /// Source time at the left edge of the area — a clip's `offsetSeconds`, or
@@ -28,16 +33,18 @@ struct PeakPaint {
     /// Height multiplier, so a clip's gain visibly swells the wave.
     float gain = 1.0f;
     QColor color = QColor(255, 255, 255);
+    /// Optional decoded source for a staircase trace at individual-sample zoom.
+    const daw::engine::SampleBuffer* samples = nullptr;
+    WaveformStyle style = waveformStyle();
 };
 
 /// Draw a min/max envelope using bounded, source-anchored raster tiles.
 ///
 /// Lifted out of TimelineWidget so anything with a `WaveformPeaks` can draw one
 /// the same way: the clip bodies, the take rows of an open comp editor, the comp
-/// lane, and the browser's preview strip. Two zoom regimes — extremes over the
-/// buckets a pixel spans when zoomed out, interpolation between neighbouring
-/// buckets when zoomed in, so the outline stays a smooth wave instead of
-/// stair-stepping.
+/// lane, and the browser's preview strip. Crisp holds each source column;
+/// Smooth connects the envelope edges with antialiased slopes. At sample zoom,
+/// decoded samples form a staircase or a connected line respectively.
 void paintPeaks(QPainter& painter, const daw::WaveformPeaks* peaks,
                 const QRectF& area, const PeakPaint& how);
 

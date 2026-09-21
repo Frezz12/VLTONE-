@@ -583,7 +583,7 @@ protected:
         const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
         p.setPen(QPen(t.accent, 1));
         p.setBrush(mixColors(t.surfaceElevated, t.background, 0.15));
-        p.drawRoundedRect(r, 6, 6);
+        p.drawRect(r);
         p.setPen(t.textPrimary);
         p.drawText(r, Qt::AlignCenter, m_text);
     }
@@ -688,7 +688,8 @@ void IconButton::paintEvent(QPaintEvent*) {
     const Theme& t = th();
     const QColor active = m_activeColor.isValid() ? m_activeColor : t.accent;
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    const qreal radius = m_prominent ? r.height() / 2.0 : 6.0;
+    const qreal radius = (m_prominent || property("circular").toBool())
+                             ? r.height() / 2.0 : 6.0;
 
     auto plate = [&](const QColor& c) {
         if (c.alpha() <= 0) return;
@@ -839,10 +840,9 @@ void MsrButton::paintEvent(QPaintEvent*) {
     p.drawRoundedRect(r, 4, 4);
 
     QFont f = font();
-    // Tied to the chip rather than fixed: the track headers run these at 14 px
-    // tall, where a 10 px letter has no room to breathe inside its border.
-    f.setPixelSize(std::clamp(height() - 6, 8, 10));
-    f.setBold(true);
+    // Small chips need open counters: use medium weight instead of bold.
+    f.setPixelSize(std::clamp(height() - 5, 9, 10));
+    f.setWeight(QFont::Medium);
     p.setFont(f);
     // Lit chips carry dark text so the colour reads as a lamp, not a label.
     p.setPen(isChecked() ? QColor(20, 20, 20) : t.textSecondary);
@@ -854,6 +854,7 @@ void MsrButton::paintEvent(QPaintEvent*) {
     if (m_autoMark) {
         QFont af = f;
         af.setPixelSize(7);
+        af.setWeight(QFont::Normal);
         p.setFont(af);
         const QRectF corner(r.right() - 7.0, r.top() + 0.5, 6.0, 6.0);
         p.setPen(Qt::NoPen);
@@ -882,18 +883,17 @@ namespace {
 constexpr double kFaderScale[] = {6, 3, 0, -3, -6, -9, -12, -18,
                                   -24, -30, -40, -50, -60};
 /// Width the printed scale takes: labels, then the ticks against the slot.
-constexpr double kScaleWidth = 22.0;
+constexpr double kScaleWidth = 24.0;
 constexpr double kTickLength = 5.0;
-/// The cap, at Logic's proportions: wide enough to read, short enough that the
-/// slot either side of it still tells you where it is.
-constexpr double kCapAlong = 16.0;
-constexpr double kCapAcross = 24.0;
+/// A broad console grip; its single inlay marks the exact gain position.
+constexpr double kCapAlong = 20.0;
+constexpr double kCapAcross = 28.0;
 /// The slot the cap rides in.
 constexpr double kSlotThickness = 4.0;
 /// Closest two printed numbers may come. Both the thinning in `paintScale` and
 /// the fader's minimum height are derived from it, so "the shortest fader that
 /// still prints every number" is one fact with one definition.
-constexpr double kMinLabelGap = 8.0;
+constexpr double kMinLabelGap = 9.0;
 /// Room above the first mark, where the unit is printed.
 constexpr double kScaleHeadroom = 11.0;
 
@@ -983,9 +983,11 @@ QRectF FaderWidget::faderColumn() const {
 }
 
 QSizeF FaderWidget::capSize() const {
-    if (m_orientation == Qt::Vertical) return QSizeF(kCapAcross, kCapAlong);
-    // Laid on its side the cap has to fit the header row, which is shorter than
-    // the mixer's cap is wide: it keeps its proportions, scaled to fit.
+    if (m_orientation == Qt::Vertical)
+        return QSizeF(std::min(kCapAcross, std::max(1.0, faderColumn().width() - 4.0)),
+                      kCapAlong);
+    // The header row is shorter than the mixer grip is wide, so narrow the
+    // shoulders for the horizontal version.
     const double across = std::min(kCapAcross, double(height()) - 2.0);
     return QSizeF(kCapAlong - 2.0, across);
 }
@@ -1037,8 +1039,9 @@ QRectF FaderWidget::capRect(double position) const {
 void FaderWidget::paintScale(QPainter& p) const {
     const Theme& t = th();
     QFont f = p.font();
-    f.setPixelSize(7);
-    f.setLetterSpacing(QFont::PercentageSpacing, 102);
+    f.setPixelSize(8);
+    f.setWeight(QFont::Normal);
+    f.setLetterSpacing(QFont::PercentageSpacing, 100);
     p.setFont(f);
 
     const double tickRight = kScaleWidth - 2.0;
@@ -1097,95 +1100,90 @@ void FaderWidget::paintCap(QPainter& p, const QRectF& cap) const {
     const Theme& t = th();
     const bool vertical = m_orientation == Qt::Vertical;
     const bool lit = m_dragging || m_hovered;
-
-    // It sits *on* the slot, so it gets a real shadow under it — the one place
-    // in this UI where something is genuinely on top of something else.
-    p.setPen(Qt::NoPen);
-    p.setBrush(QColor(0, 0, 0, t.dark ? 120 : 55));
-    p.drawRoundedRect(cap.translated(0.0, 1.6), 3.0, 3.0);
-
-    // Milled metal: bright along the lit edge, falling away across the cap,
-    // with the two halves of the face split by the finger groove. On a light
-    // palette the same mix lands as brushed aluminium rather than silver.
-    const QColor bright = mixColors(t.surfaceElevated, t.textPrimary,
-                                    t.dark ? 0.82 : 0.34);
-    const QColor mid = mixColors(t.surfaceElevated, t.textPrimary,
-                                 t.dark ? 0.55 : 0.20);
-    const QColor dim = mixColors(t.surfaceElevated, QColor(0, 0, 0),
-                                 t.dark ? 0.30 : 0.06);
-    QLinearGradient metal(cap.topLeft(),
-                          vertical ? cap.bottomLeft() : cap.topRight());
-    metal.setColorAt(0.00, mixColors(bright, QColor(255, 255, 255), 0.25));
-    metal.setColorAt(0.18, bright);
-    metal.setColorAt(0.50, mid);
-    metal.setColorAt(0.52, dim);
-    metal.setColorAt(0.62, mid);
-    metal.setColorAt(1.00, dim);
-    p.setBrush(metal);
-    p.drawRoundedRect(cap, 2.5, 2.5);
-
-    // The milling: hairlines across the grip, skipping the groove. Drawn inside
-    // a clip so they cannot escape the rounded corners.
     p.save();
-    QPainterPath clip;
-    clip.addRoundedRect(cap, 2.5, 2.5);
-    p.setClipPath(clip);
-    QColor line = t.ink(t.dark ? 34 : 26);
-    QColor shade(0, 0, 0, t.dark ? 46 : 26);
-    const double from = vertical ? cap.top() : cap.left();
-    const double to = vertical ? cap.bottom() : cap.right();
-    const double centre = (from + to) / 2.0;
-    for (double at = from + 2.0; at < to - 1.0; at += 2.0) {
-        if (std::abs(at - centre) < 2.0) continue;
-        p.setPen(QPen(line, 1.0));
-        if (vertical) {
-            p.drawLine(QPointF(cap.left() + 2.0, at), QPointF(cap.right() - 2.0, at));
-            p.setPen(QPen(shade, 1.0));
-            p.drawLine(QPointF(cap.left() + 2.0, at + 1.0),
-                       QPointF(cap.right() - 2.0, at + 1.0));
-        } else {
-            p.drawLine(QPointF(at, cap.top() + 2.0), QPointF(at, cap.bottom() - 2.0));
-            p.setPen(QPen(shade, 1.0));
-            p.drawLine(QPointF(at + 1.0, cap.top() + 2.0),
-                       QPointF(at + 1.0, cap.bottom() - 2.0));
-        }
-    }
+    p.translate(cap.topLeft());
+    // The same sculpted grip in both orientations, lit from the upper left.
+    if (!vertical) p.setTransform(QTransform(0, 1, 1, 0, 0, 0), true);
+    const double width = vertical ? cap.width() : cap.height();
+    const double height = vertical ? cap.height() : cap.width();
+    const QRectF shell(0.6, 0.6, width - 1.2, height - 2.2);
+    const QRectF face = shell.adjusted(1.4, 1.0, -1.4, -3.0);
+    const QColor graphite = mixColors(QColor(72, 80, 90), t.accent,
+                                      isEnabled() && lit ? 0.14 : 0.025);
+    const auto metal = [&](int lightness) {
+        return mixColors(QColor(lightness, lightness, lightness), graphite, 0.20);
+    };
 
-    // The groove across the middle: where the finger sits, and the line the
-    // value is actually read against.
-    p.setPen(QPen(QColor(0, 0, 0, t.dark ? 170 : 90), 1.4));
-    if (vertical) {
-        p.drawLine(QPointF(cap.left() + 1.0, centre), QPointF(cap.right() - 1.0, centre));
-        p.setPen(QPen(t.ink(t.dark ? 90 : 120), 1.0));
-        p.drawLine(QPointF(cap.left() + 1.0, centre + 1.2),
-                   QPointF(cap.right() - 1.0, centre + 1.2));
-    } else {
-        p.drawLine(QPointF(centre, cap.top() + 1.0), QPointF(centre, cap.bottom() - 1.0));
-        p.setPen(QPen(t.ink(t.dark ? 90 : 120), 1.0));
-        p.drawLine(QPointF(centre + 1.2, cap.top() + 1.0),
-                   QPointF(centre + 1.2, cap.bottom() - 1.0));
-    }
-
-    // A film of glass over the face, so the cap belongs to this UI and not to
-    // 2004: one soft sheen across the lit half, nothing more.
-    QLinearGradient sheen(cap.topLeft(),
-                          vertical ? QPointF(cap.left(), centre)
-                                   : QPointF(centre, cap.top()));
-    QColor gloss(255, 255, 255);
-    gloss.setAlphaF(t.dark ? 0.13 : 0.34);
-    sheen.setColorAt(0.0, gloss);
-    gloss.setAlphaF(0.0);
-    sheen.setColorAt(1.0, gloss);
+    // The lower casting is visible below the curved grip. Contact and cast
+    // shadows are local to the cap, including at the rail's end stops.
     p.setPen(Qt::NoPen);
-    p.setBrush(sheen);
-    p.drawRect(cap);
+    p.setBrush(QColor(0, 0, 0, t.dark ? 60 : 28));
+    p.drawRoundedRect(shell.adjusted(-0.5, 0.5, 0.5, 1.4), 4.2, 4.2);
+    p.setBrush(QColor(0, 0, 0, t.dark ? 205 : 120));
+    p.drawRoundedRect(shell.translated(0.3, m_dragging ? 0.5 : 1.0), 3.5, 3.5);
+
+    QLinearGradient casting(shell.topLeft(), shell.bottomLeft());
+    casting.setColorAt(0.0, metal(141));
+    casting.setColorAt(0.34, metal(69));
+    casting.setColorAt(0.75, metal(34));
+    casting.setColorAt(1.0, metal(14));
+    p.setBrush(casting);
+    p.setPen(QPen(QColor(8, 12, 17), 0.9));
+    p.drawRoundedRect(shell, 3.4, 3.4);
+
+    // The face rolls over at the top and falls into a shallow finger bed.
+    // A continuous reflection models the curvature without adding grip ribs.
+    QLinearGradient crown(face.topLeft(), face.bottomLeft());
+    crown.setColorAt(0.00, metal(m_dragging ? 132 : 166));
+    crown.setColorAt(0.16, metal(m_dragging ? 105 : 133));
+    crown.setColorAt(0.40, metal(77));
+    crown.setColorAt(0.68, metal(45));
+    crown.setColorAt(1.00, metal(58));
+    p.setPen(Qt::NoPen);
+    p.setBrush(crown);
+    p.drawRoundedRect(face, 2.5, 2.5);
+
+    QPainterPath faceClip;
+    faceClip.addRoundedRect(face, 2.5, 2.5);
+    p.save();
+    p.setClipPath(faceClip, Qt::IntersectClip);
+    QLinearGradient shoulders(face.topLeft(), face.topRight());
+    shoulders.setColorAt(0.00, QColor(0, 0, 0, 80));
+    shoulders.setColorAt(0.13, QColor(255, 255, 255, 18));
+    shoulders.setColorAt(0.35, QColor(255, 255, 255, 0));
+    shoulders.setColorAt(0.82, QColor(0, 0, 0, 12));
+    shoulders.setColorAt(1.00, QColor(0, 0, 0, 110));
+    p.fillRect(face, shoulders);
     p.restore();
 
-    // Touched, in our accent rather than Logic's blue.
+    // A narrow rim catches light at the crown and down the two rounded ends.
+    QPainterPath rim;
+    rim.moveTo(shell.left() + 0.9, shell.bottom() - 4.2);
+    rim.lineTo(shell.left() + 0.9, shell.top() + 3.5);
+    rim.quadTo(shell.left() + 0.9, shell.top() + 0.7,
+               shell.left() + 3.7, shell.top() + 0.7);
+    rim.lineTo(shell.right() - 3.7, shell.top() + 0.7);
+    rim.quadTo(shell.right() - 0.9, shell.top() + 0.7,
+               shell.right() - 0.9, shell.top() + 3.5);
+    QLinearGradient rimLight(shell.topLeft(), shell.bottomRight());
+    rimLight.setColorAt(0.0, metal(lit ? 225 : 192));
+    rimLight.setColorAt(0.45, metal(111));
+    rimLight.setColorAt(1.0, metal(45));
     p.setBrush(Qt::NoBrush);
-    p.setPen(QPen(lit ? t.accent : QColor(0, 0, 0, t.dark ? 190 : 90),
-                  lit ? 1.4 : 1.0));
-    p.drawRoundedRect(cap.adjusted(0.5, 0.5, -0.5, -0.5), 2.5, 2.5);
+    p.setPen(QPen(rimLight, 0.8));
+    p.drawPath(rim);
+
+    // One inset ivory inlay, centred on the actual gain. It stops before the
+    // shoulders so the handle reads as one solid piece, including at 100% DPI.
+    const QRectF inlay(4.0, height / 2.0 - 0.65, width - 8.0, 1.3);
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(13, 17, 22));
+    p.drawRoundedRect(inlay.adjusted(-0.6, -0.6, 0.6, 0.6), 1.0, 1.0);
+    p.setBrush(isEnabled() ? (lit ? mixColors(QColor(236, 241, 245), t.accent, 0.22)
+                                : QColor(223, 230, 234))
+                           : QColor(151, 158, 164));
+    p.drawRoundedRect(inlay, 0.35, 0.35);
+    p.restore();
 }
 
 void FaderWidget::paintEvent(QPaintEvent*) {
@@ -1276,8 +1274,9 @@ void FaderWidget::paintEvent(QPaintEvent*) {
         p.setPen(QPen(mixColors(t.textSecondary, t.background, 0.3), 1.0));
         if (vertical) {
             const QRectF column = faderColumn();
-            p.drawLine(QPointF(column.center().x() + kCapAcross / 2.0 - 2.0, unity),
-                       QPointF(column.center().x() + kCapAcross / 2.0 + 1.0, unity));
+            const double halfCap = capSize().width() / 2.0;
+            p.drawLine(QPointF(column.center().x() + halfCap - 2.0, unity),
+                       QPointF(column.center().x() + halfCap + 1.0, unity));
         } else {
             p.drawLine(QPointF(unity, track.top() - 3.0),
                        QPointF(unity, track.top() - 1.0));
@@ -1311,6 +1310,7 @@ void FaderWidget::mousePressEvent(QMouseEvent* ev) {
                                : ev->position().x());
     setCursor(Qt::ClosedHandCursor);
     showBubble();
+    update();
 }
 
 void FaderWidget::mouseMoveEvent(QMouseEvent* ev) {
@@ -1343,6 +1343,7 @@ void FaderWidget::mouseReleaseEvent(QMouseEvent*) {
     m_dragging = false;
     setCursor(Qt::OpenHandCursor);
     ValueBubble::dismiss();
+    update();
     emit editFinished();
 }
 
@@ -1486,7 +1487,7 @@ protected:
 
         p.setPen(QPen(mixColors(t.separator(), t.accent, 0.4), 1));
         p.setBrush(mixColors(t.surfaceElevated, t.background, 0.1));
-        p.drawRoundedRect(r, kFlyoutHeight / 2.0, kFlyoutHeight / 2.0);
+        p.drawRect(r);
 
         if (m_owner->m_rotary) {
             paintRing(p);
@@ -2568,8 +2569,9 @@ void Knob::paintEvent(QPaintEvent*) {
 
     if (!m_caption.isEmpty()) {
         QFont font = p.font();
-        font.setPixelSize(m_compact ? 8 : 9);
-        font.setLetterSpacing(QFont::PercentageSpacing, 105);
+        font.setPixelSize(10);
+        font.setWeight(QFont::Normal);
+        font.setLetterSpacing(QFont::PercentageSpacing, 100);
         p.setFont(font);
         // Hovering swaps the caption for the value: the panel is dense enough
         // that a permanent readout under every knob would be unreadable.
@@ -2736,7 +2738,8 @@ void Led::paintEvent(QPaintEvent*) {
 
     if (text().isEmpty()) return;
     QFont font = p.font();
-    font.setPixelSize(9);
+    font.setPixelSize(10);
+    font.setWeight(QFont::Normal);
     p.setFont(font);
     p.setPen(isChecked() ? t.textPrimary : t.textSecondary);
     p.drawText(QRect(14, 0, width() - 14, height()),
@@ -2845,9 +2848,9 @@ void ModeSwitch::paintEvent(QPaintEvent*) {
     p.drawRoundedRect(knob, knobRadius, knobRadius);
 
     QFont f = font();
-    f.setPixelSize(9);
-    f.setBold(true);
-    f.setLetterSpacing(QFont::AbsoluteSpacing, 0.6);
+    f.setPixelSize(10);
+    f.setWeight(QFont::Medium);
+    f.setLetterSpacing(QFont::AbsoluteSpacing, 0.0);
     p.setFont(f);
 
     // Each label crosses from "quiet text on the well" to "dark text on the
@@ -3154,9 +3157,9 @@ QLabel* sectionLabel(const QString& text, QWidget* parent) {
     auto* label = new QLabel(text.toUpper(), parent);
     label->setProperty("role", "section");
     QFont f = label->font();
-    f.setPixelSize(9);
-    f.setWeight(QFont::DemiBold);
-    f.setLetterSpacing(QFont::AbsoluteSpacing, 0.7);
+    f.setPixelSize(10);
+    f.setWeight(QFont::Medium);
+    f.setLetterSpacing(QFont::AbsoluteSpacing, 0.3);
     label->setFont(f);
     return label;
 }
@@ -3287,14 +3290,34 @@ bool ResizeHandle::eventFilter(QObject* watched, QEvent* event) {
 }
 
 std::string NewTrackSpec::create(daw::EngineController& controller) const {
-    if (kind == daw::TrackKind::Pattern) return controller.addPattern();
     if (kind == daw::TrackKind::Automation) {
         // Free-standing: no parent, and no target until a curve on it is given
         // one.
         return controller.addAutomationLane({}, {});
     }
     if (kind == daw::TrackKind::Folder) return controller.addFolder(summing);
-    return controller.addTrack(kind);
+    // All quick-add entry points share the same numbering, including menus.
+    const char* format = kind == daw::TrackKind::Midi ? QT_TRANSLATE_NOOP("MainWindow", "MIDI %1")
+                       : kind == daw::TrackKind::Pattern ? QT_TRANSLATE_NOOP("MainWindow", "Pattern %1")
+                       : kind == daw::TrackKind::Aux ? QT_TRANSLATE_NOOP("MainWindow", "Send %1")
+                       : QT_TRANSLATE_NOOP("MainWindow", "Audio %1");
+    const QString nameFormat = kind == daw::TrackKind::Bus
+        ? QCoreApplication::translate("MainWindow", "Bus") + QStringLiteral(" %1")
+        : QCoreApplication::translate("MainWindow", format);
+    const auto& tracks = controller.project().tracks;
+    int number = int(tracks.size()) + 1;
+    if (kind == daw::TrackKind::Aux || kind == daw::TrackKind::Pattern)
+        number = int(std::count_if(tracks.begin(), tracks.end(), [this](const auto& track) {
+            return track.kind == kind;
+        })) + 1;
+    std::string name;
+    do {
+        name = nameFormat.arg(number++).toStdString();
+    } while (std::any_of(tracks.begin(), tracks.end(), [&](const auto& track) {
+        return track.name == name;
+    }));
+    return kind == daw::TrackKind::Pattern ? controller.addPattern(name)
+                                          : controller.addTrack(kind, name);
 }
 
 QHash<QAction*, NewTrackSpec> addTrackKindItems(QMenu& menu) {

@@ -14,6 +14,7 @@
 #include "CollaborationCommandBridge.hpp"
 #include "CollaborationTransport.hpp"
 #include "CollaborationTypes.hpp"
+#include "CloudMidiRecordingCoordinator.hpp"
 #include "CloudProjectClient.hpp"
 #include "CloudProjectInviteDialog.hpp"
 #include "CloudAssetTransferManager.hpp"
@@ -289,6 +290,7 @@ int main(int argc, char** argv) {
         qputenv("QT_NO_GUI_THREADPOOL", "1");
 #endif
     bool selftest = false;
+    bool warpCheck = false;
     bool uiPerfCheck = false;
     bool audioScrollCheck = false;
     bool projectScrollCheck = false;
@@ -319,6 +321,7 @@ int main(int argc, char** argv) {
     QString projectArgument;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--selftest") == 0) selftest = true;
+        else if (std::strcmp(argv[i], "--warpcheck") == 0) warpCheck = true;
         else if (std::strcmp(argv[i], "--uiperfcheck") == 0) uiPerfCheck = true;
         else if (std::strcmp(argv[i], "--audio-scroll-check") == 0) audioScrollCheck = true;
         else if (std::strcmp(argv[i], "--project-scroll-check") == 0) projectScrollCheck = true;
@@ -371,7 +374,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    const bool headless = workspaceMotionCheck || mixerWheelCheck || tempoCheck || pluginBatchCheck || offlineCheck || pluginInteractionCheck || mixerScrollCheck || projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
+    const bool headless = warpCheck || workspaceMotionCheck || mixerWheelCheck || tempoCheck || pluginBatchCheck || offlineCheck || pluginInteractionCheck || mixerScrollCheck || projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
                           crashtest || recovercheck;
     if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) {
         QByteArray chromiumFlags;
@@ -1119,6 +1122,12 @@ int main(int argc, char** argv) {
     if (!headless && !recoveredAtStartup && !externalLaunchRequest)
         window.openConfiguredStartupTemplate();
 
+    if (warpCheck) {
+        const bool ok = window.checkWarpForTest();
+        window.endRecoverySessionForTest();
+        return ok ? 0 : 72;
+    }
+
     // DAW_SHOT_PLUGIN_EDITOR names a scanned plugin (substring match): it is
     // loaded onto the first track and its editor opened. The only way to check
     // a natively embedded plugin GUI without a person sitting at the screen,
@@ -1576,7 +1585,12 @@ int main(int argc, char** argv) {
         // independently runnable.
         // the full UI selftest also exercises platform codecs, file watching
         // and WebEngine, which may be unavailable on a sanitizer machine.
-        if (qEnvironmentVariableIsSet("DAW_SELFTEST_SETTINGS_ONLY")) {
+        if (qEnvironmentVariableIsSet("DAW_SELFTEST_TRACK_MIXER_ONLY")) {
+            window.populateDemo();
+            if (!window.checkTrackMixerSyncForTest() ||
+                !window.checkTrackRowHeightsForTest()) return 12;
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_SETTINGS_ONLY")) {
             window.openSettings(SettingsWindow::kInterfaceTab);
             if (!window.checkSettingsViewportForTest()) {
                 std::fprintf(stderr,
@@ -1591,6 +1605,7 @@ int main(int argc, char** argv) {
             window.populateDemo();
             if (!window.checkTimelineClipGesturesForTest() ||
                 !window.checkTempoScrubForTest() ||
+                !window.checkPositionScrubForTest() ||
                 !window.checkContextSyncForTest()) {
                 std::fprintf(stderr,
                              "focused interaction selftest failed\n");
@@ -1644,6 +1659,22 @@ int main(int argc, char** argv) {
                 return 31;
             }
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if(qEnvironmentVariableIsSet("DAW_SELFTEST_MIDI_ONLY")) {
+#ifdef DAW_ENABLE_COLLABORATION
+            QString recoveryError;
+            if(!collab::CloudMidiRecordingCoordinator::checkPersistenceForTest(&recoveryError)) {
+                std::fprintf(stderr,"%s\n",recoveryError.toUtf8().constData());return 3;
+            }
+#endif
+            window.populateDemo();window.openDemoSampler();QApplication::processEvents();
+            if(!window.checkTypingKeyboard() || !window.checkLayoutIndependentShortcuts()) {
+                std::fprintf(stderr,"MIDI input and shortcut checks failed\n");return 3;
+            }
+            window.activateWindow();QApplication::processEvents();
+            window.openFirstMidiClip();
+            if(!window.checkMidiInput()) {std::fprintf(stderr,"MIDI device routing checks failed\n");return 3;}
+            if(!window.checkPianoRollForTest())return 19;
+            QTimer::singleShot(0,&app,[]{QApplication::quit();});
         } else if (qEnvironmentVariableIsSet(
                        "DAW_SELFTEST_PIANO_ROLL_ONLY")) {
             window.populateDemo();
@@ -1746,7 +1777,7 @@ int main(int argc, char** argv) {
         }
         // Adding a track must not shrink the ones already there — the header
         // column is a second view of the same lanes and has to keep step.
-        if (!window.checkTrackRowHeightsForTest()) {
+        if (!window.checkTrackMixerSyncForTest() || !window.checkTrackRowHeightsForTest()) {
             std::fprintf(stderr, "the track headers do not match their lanes\n");
             return 12;
         }

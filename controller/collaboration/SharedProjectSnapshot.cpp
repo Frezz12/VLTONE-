@@ -1,4 +1,5 @@
 #include "collaboration/SharedProjectSnapshot.hpp"
+#include "collaboration/MidiContentJson.hpp"
 
 #include "ProjectSerializer.hpp"
 #include "cloud/CloudDocumentProjection.hpp"
@@ -552,6 +553,15 @@ audio::Result serializeSharedProjectSnapshot(
          encodeTombstones(document.deletedPluginInserts, pluginTombstone)},
         {"fieldWriters", std::move(writers)},
     };
+    if (!document.preparedMidi.empty()) {
+        root["preparedMidi"]=json::object();
+        for(const auto& [key,part]:document.preparedMidi) root["preparedMidi"][key]=json{
+            {"recordingId",part.recordingId},{"contentId",part.contentId},{"index",part.index},{"count",part.count},{"content",midiContentToJson(part.content)}};
+    }
+    if (!document.midiHistory.empty()) {
+        root["midiHistory"]=json::object();
+        for(const auto& [key,content]:document.midiHistory) root["midiHistory"][key]=midiContentToJson(content);
+    }
     try {
         bytes = root.dump();
     } catch (const std::exception& error) {
@@ -578,6 +588,8 @@ audio::Result deserializeSharedProjectSnapshot(
         return invalid(std::string("invalid shared snapshot JSON: ") +
                        error.what());
     }
+    const auto preparedMidi=root.value("preparedMidi",json::object()); root.erase("preparedMidi");
+    const auto midiHistory=root.value("midiHistory",json::object()); root.erase("midiHistory");
     if (!exactKeys(root,
                    {"format", "schemaVersion", "projectFormatVersion",
                     "serverSequence", "project", "deletedTracks",
@@ -595,6 +607,23 @@ audio::Result deserializeSharedProjectSnapshot(
         return invalid("shared snapshot envelope is invalid");
     }
     SharedProjectDocument parsed;
+    if (!preparedMidi.is_object() || !midiHistory.is_object()) return invalid("invalid MIDI preparation");
+    try {
+        for(const auto& [key,value]:preparedMidi.items()) {
+            PrepareMidiPart part;
+            if(!exactKeys(value,{"recordingId","contentId","index","count","content"})) return invalid("invalid MIDI part");
+            part.recordingId=value.at("recordingId"); part.contentId=value.at("contentId"); part.index=value.at("index"); part.count=value.at("count");
+            if(!isUuid(part.recordingId) || !isUuid(part.contentId) || part.count==0 || part.count>1024 || part.index>=part.count || key!=part.contentId+":"+std::to_string(part.index) || !midiContentFromJson(value.at("content"),part.content)) return invalid("invalid MIDI part");
+            parsed.preparedMidi.emplace(key,std::move(part));
+        }
+        for(const auto& [key,value]:midiHistory.items()) {
+            ClipModel content;
+            if(key.size()!=73 || !isUuid(key.substr(0,36)) || !isUuid(key.substr(37)) || !midiContentFromJson(value,content)) return invalid("invalid MIDI history");
+            parsed.midiHistory.emplace(key,std::move(content));
+            parsed.appliedOperationIds.insert(key.substr(0,36));
+        }
+    } catch (...) { return invalid("invalid MIDI preparation"); }
+
     if (!sequenceValue(root.at("serverSequence"), parsed.confirmedSequence))
         return invalid("shared snapshot sequence is invalid");
     const audio::Result decodedProject =

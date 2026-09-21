@@ -390,31 +390,47 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec, Project
             spec.sourceClipIds.begin(), spec.sourceClipIds.end());
         const std::unordered_set<std::string> trackIds(
             spec.sourceTrackIds.begin(), spec.sourceTrackIds.end());
-        std::unordered_set<std::string> patternOwners;
+        std::unordered_set<std::string> selectedPatterns;
         for (const TrackModel& track : project.tracks) {
             if (!trackIds.empty() && !trackIds.contains(track.id)) continue;
             for (const ClipModel& clip : track.clips)
-                if (clip.kind == ClipKind::Pattern)
-                    patternOwners.insert(clip.id);
+                if (clip.kind == ClipKind::Pattern &&
+                    (clipIds.empty() || clipIds.contains(clip.id)))
+                    selectedPatterns.insert(clip.id);
         }
-        patternOwners.insert(clipIds.begin(), clipIds.end());
 
         std::unordered_set<std::string> sourceChannels = trackIds;
+        std::unordered_set<std::string> gateOwners;
+        std::unordered_set<std::string> mutedOwners;
         for (TrackModel& track : project.tracks) {
             bool channelHasSource = false;
             for (ClipModel& clip : track.clips) {
                 if (clip.kind == ClipKind::Automation) continue;
+                if (clip.kind == ClipKind::Pattern && clip.muted)
+                    mutedOwners.insert(clip.id);
                 const bool allowed = !clipIds.empty()
                     ? (clipIds.contains(clip.id) ||
                        (!clip.patternClipId.empty() &&
-                        patternOwners.contains(clip.patternClipId)))
+                        selectedPatterns.contains(clip.patternClipId)))
                     : (trackIds.contains(track.id) ||
                        (!clip.patternClipId.empty() &&
-                        patternOwners.contains(clip.patternClipId)));
-                clip.muted = !allowed;
-                channelHasSource |= allowed;
+                        selectedPatterns.contains(clip.patternClipId)));
+                clip.muted = clip.muted || !allowed;
+                channelHasSource |= allowed && !clip.muted;
+                if (allowed && !clip.muted && !clip.patternClipId.empty())
+                    gateOwners.insert(clip.patternClipId);
             }
             if (channelHasSource) sourceChannels.insert(track.id);
+        }
+        // A selected child needs its Pattern clip as a playback gate. Keeping
+        // that gate open must not admit its unselected sibling sources.
+        for (TrackModel& track : project.tracks) {
+            for (ClipModel& clip : track.clips) {
+                if (clip.kind != ClipKind::Pattern ||
+                    !gateOwners.contains(clip.id)) continue;
+                clip.muted = mutedOwners.contains(clip.id);
+                sourceChannels.insert(track.id);
+            }
         }
         for (TrackModel& track : project.tracks) {
             track.soloed = sourceChannels.contains(track.id);

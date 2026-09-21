@@ -135,7 +135,7 @@ const PluginDescriptor &descriptorFor(Kind kind) noexcept {
             d.uid = d.path = uids[i];
             d.name = names[i];
             d.vendor = "VLTONE";
-            d.version = i == int(Kind::DoublerPro) ? "1.0" : "2.0";
+            d.version = i == int(Kind::DoublerPro) ? "2.0" : "3.0";
             d.stateSchemaVersion = 1;
             d.category = isDoubler(Kind(i)) ? "Effect|Modulation|Stereo" : "Effect|Modulation";
             d.mainInputChannels = d.mainOutputChannels = 2;
@@ -273,11 +273,11 @@ std::uint32_t ModulationInstance::tailSamples() const noexcept {
     const double filterTail = 14.0 / (2 * dsp::pi * low);
     double seconds = filterTail;
     if (m_kind == Kind::Doubler)
-        seconds += .040;
+        seconds += .044;
     else if (m_kind == Kind::DoublerPro)
         seconds += .4 * std::ceil(std::log(1.e-6) / std::log(.18)) + .1;
     else if (m_kind == Kind::Chorus)
-        seconds += .034;
+        seconds += .039;
     else if (m_kind == Kind::Flanger)
         seconds += .0085 * std::ceil(std::log(1.e-6) / std::log(.58));
     else
@@ -371,18 +371,18 @@ void DoublerInstance::resetDsp() noexcept {
     constexpr double base[]{13, 19, 27, 34};
     for (unsigned i = 0; i < 4; ++i) {
         m_wander[i].reset(0x9e3779b9u * (i + 1), rate);
-        m_reads[i] = (base[i] + (.4 + 3.2 * smoothed[1]) * m_wander[i].from) * .001 * rate;
+        m_reads[i] = (base[i] + (.8 + 6.4 * smoothed[1]) * m_wander[i].from) * .001 * rate;
     }
 }
 std::array<double, 2> DoublerInstance::sample(double l, double r, bool stereo) noexcept {
     const double mid = .5 * (l + r), side = .5 * (l - r);
     m_delay.write(mid);
     constexpr double base[]{13, 19, 27, 34};
-    constexpr double maxStep = 0.0069075; // no voice exceeds about 12 cents of motion
+    constexpr double maxStep = 0.0138; // twice the former humanization range, bounded to about 24 cents
     double voices[4];
     for (unsigned i = 0; i < 4; ++i) {
         const double movement = m_wander[i].next(rate);
-        const double requested = (base[i] + (.4 + 3.2 * smoothed[1]) * movement) * .001 * rate;
+        const double requested = (base[i] + (.8 + 6.4 * smoothed[1]) * movement) * .001 * rate;
         m_reads[i] += std::clamp(requested - m_reads[i], -maxStep, maxStep);
         voices[i] = m_delay.read(m_reads[i]);
         positions[i] = float(movement);
@@ -401,7 +401,7 @@ std::array<double, 2> DoublerInstance::sample(double l, double r, bool stereo) n
     // Triangle inequality reserves room for existing Side, including correlation
     // between it and our addition. Never narrow or repair the original signal.
     const double budget = std::max(0., .7 * std::sqrt(m_midEnergy) - std::sqrt(m_sideEnergy));
-    const double width = smoothed[0] * (1.8 - .8 * smoothed[0]);
+    const double width = std::min(1., 2 * smoothed[0] * (1.8 - .8 * smoothed[0]));
     const double target = std::min(2.2 * width,
                                    width * budget / std::sqrt(std::max(1.e-20, m_addEnergy)));
     const double pole = target < m_gain ? m_gainAttack : m_gainRelease;
@@ -507,7 +507,7 @@ void ChorusInstance::resetDsp() noexcept {
     for (unsigned i = 0; i < 4; ++i) {
         m_phases[i] = i * .25;
         m_reads[i] =
-            (base[i] + 4.5 * smoothed[2] * std::sin(2 * dsp::pi * m_phases[i])) * .001 * rate;
+            (base[i] + 9 * smoothed[2] * std::sin(2 * dsp::pi * m_phases[i])) * .001 * rate;
     }
 }
 std::array<double, 2> ChorusInstance::sample(double l, double r, bool stereo) noexcept {
@@ -519,14 +519,14 @@ std::array<double, 2> ChorusInstance::sample(double l, double r, bool stereo) no
     for (unsigned i = 0; i < 4; ++i) {
         advancePhase(m_phases[i], smoothed[1] * detune[i] / rate);
         const double wave = std::sin(2 * dsp::pi * m_phases[i]);
-        const double requested = (base[i] + 4.5 * smoothed[2] * wave) * .001 * rate;
-        m_reads[i] += std::clamp(requested - m_reads[i], -.0103, .0103);
+        const double requested = (base[i] + 9 * smoothed[2] * wave) * .001 * rate;
+        m_reads[i] += std::clamp(requested - m_reads[i], -.0206, .0206);
         // Each channel keeps its own source, with mirrored voice weights.
         wet[0] += m_delays[0].read(m_reads[i]) * (stereo ? 1 - pan[i] : .5) * .5;
         wet[1] += m_delays[1].read(m_reads[i]) * (stereo ? pan[i] : .5) * .5;
         positions[i] = float(wave);
     }
-    const double mix = .65 * smoothed[0] * (2 - smoothed[0]);
+    const double mix = std::min(.85, 1.3 * smoothed[0] * (2 - smoothed[0]));
     const double dryGain = std::cos(.5 * dsp::pi * mix);
     const double wetGain = 1.4 * std::sin(.5 * dsp::pi * mix);
     double input[]{l, r};
@@ -556,12 +556,12 @@ void FlangerInstance::resetDsp() noexcept {
 std::array<double, 2> FlangerInstance::sample(double l, double r, bool stereo) noexcept {
     advancePhase(m_phase, smoothed[1] / rate);
     const double feedback = .58 * smoothed[2] * (1 - .35 * smoothed[3]);
-    const double mix = .5 * smoothed[0] * (2 - smoothed[0]);
+    const double mix = std::min(.5, smoothed[0] * (2 - smoothed[0]));
     const double level = 1 / std::sqrt((1 - mix) * (1 - mix) + mix * mix);
     double input[]{l, r}, output[2];
     for (unsigned ch = 0; ch < 2; ++ch) {
         const double wave = std::sin(2 * dsp::pi * m_phase + (stereo ? ch * dsp::pi / 6 : 0));
-        const double delay = 1.6 * std::exp2(2.4 * smoothed[2] * wave) * .001 * rate;
+        const double delay = 1.6 * std::exp2(2.4 * std::min(1., 2 * smoothed[2]) * wave) * .001 * rate;
         if (!controlPhase) {
             m_tones[ch].tune(0, 12000 - 7500 * smoothed[3], rate);
             m_feedbackTones[ch].tune(120, 12000 - 7500 * smoothed[3], rate);
@@ -589,7 +589,7 @@ void PhaserInstance::resetDsp() noexcept {
 std::array<double, 2> PhaserInstance::sample(double l, double r, bool stereo) noexcept {
     advancePhase(m_phase, smoothed[1] / rate);
     const double feedback = .40 * smoothed[2] * (1 - .5 * smoothed[3]);
-    const double mix = .5 * smoothed[0] * (2 - smoothed[0]);
+    const double mix = std::min(.5, smoothed[0] * (2 - smoothed[0]));
     const double level = 1 / std::sqrt((1 - mix) * (1 - mix) + mix * mix);
     constexpr double offsets[]{-1.2, -.85, -.5, -.15, .15, .5, .85, 1.2};
     double input[]{l, r}, output[2];
@@ -598,7 +598,7 @@ std::array<double, 2> PhaserInstance::sample(double l, double r, bool stereo) no
         double x = input[ch] + feedback * m_feedback[ch];
         for (unsigned i = 0; i < 8; ++i) {
             if (!controlPhase) {
-                const double hz = std::clamp(900 * std::exp2(offsets[i] + 2.2 * smoothed[2] * wave),
+                const double hz = std::clamp(900 * std::exp2(offsets[i] + 2.2 * std::min(1., 2 * smoothed[2]) * wave),
                                              120., std::min(8000., rate * .4));
                 const double g = std::tan(dsp::pi * hz / rate);
                 m_coefficientSteps[ch][i] = ((g - 1) / (g + 1) - m_coefficients[ch][i]) / 16;

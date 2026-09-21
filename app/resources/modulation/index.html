@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' qrc:; style-src 'self' 'unsafe-inline'; font-src qrc:; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>VLT Modulation</title><link rel="stylesheet" href="modulation.css">
+<script defer src="qrc:///qtwebchannel/qwebchannel.js"></script><script defer src="modulation.js"></script></head>
+<body><main id="instrument" aria-label="Modulation effects">
+<header><div class="brand"><b>VLT</b><span id="title">MODULATION</span><i>STEREO EFFECTS</i></div><div class="tools">
+<select id="preset" aria-label="Preset"><option>Init</option></select>
+<button id="library" title="Preset library" aria-label="Preset library"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4zM8 4v6h8V4M8 20v-6h8v6"/></svg></button>
+<button id="active" class="power" aria-label="Enable plugin" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0"/></svg></button></div></header>
+<div id="cards" class="cards" aria-label="Signal chain"></div>
+<section id="equalizer" hidden aria-label="Filter and equalizer">
+<div class="eq-heading"><button id="eq-power" class="power" aria-label="Enable EQ" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0"/></svg></button>
+<button id="eq-toggle" aria-expanded="false" aria-controls="eq-content"><span>FILTER &amp; EQ</span><small id="eq-summary">4 BANDS · LOW CUT · HIGH CUT</small><svg class="mini-response" viewBox="0 0 180 30"><path id="mini-curve"/></svg><svg class="chevron" viewBox="0 0 20 20"><path d="m5 7 5 5 5-5"/></svg></button></div>
+<div id="eq-content" hidden><div class="eq-plot"><svg id="eq-graph" viewBox="0 0 920 200" preserveAspectRatio="none" aria-label="Equalizer response"><defs><linearGradient id="eq-fill" x2="0" y2="1"><stop stop-color="#bba3ff" stop-opacity=".19"/><stop offset="1" stop-color="#bba3ff" stop-opacity="0"/></linearGradient></defs><g id="eq-grid"></g><path id="eq-area" fill="url(#eq-fill)"/><path id="eq-curve"/><g id="eq-handles"></g></svg></div>
+<div class="eq-inspector"><select id="eq-band" aria-label="Selected band"><option>Low Cut</option><option>Low</option><option>Low Mid</option><option>High Mid</option><option>High</option><option>High Cut</option></select>
+<button id="band-power" aria-pressed="true">On</button><label>Frequency <input id="eq-frequency" type="number" min="20" max="20000" step="1"> Hz</label><label>Gain <input id="eq-gain" type="number" min="-18" max="18" step=".1"> dB</label><label>Q <input id="eq-q" type="number" min=".1" max="30" step=".1"></label><span id="eq-hint">Drag a point · scroll for Q</span></div></div></section>
+<footer><span id="chain-label">CHORUS → DOUBLER → FLANGER → PHASER</span><span class="live"><i></i><span id="live-label">READY</span></span></footer>
+</main>
+<dialog id="preset-dialog"><form method="dialog"><div class="dialog-title">Preset library<button aria-label="Close">×</button></div></form><label>Preset name<input id="preset-name" maxlength="48" autocomplete="off"></label><div class="dialog-actions"><button id="save-preset">Save</button><button id="replace-preset">Replace</button><button id="rename-preset">Rename</button><button id="delete-preset">Delete</button></div><p id="preset-status" role="status"></p></dialog>
+<div id="context-menu" role="menu" hidden><button id="automate" role="menuitem">Create automation</button><button id="reset" role="menuitem">Reset to default</button><button id="move-left" role="menuitem" hidden>Move left</button><button id="move-right" role="menuitem" hidden>Move right</button></div>
+<div id="announcement" class="sr-only" aria-live="polite"></div>
+</body></html>

@@ -13,6 +13,7 @@
 #include <QMenu>
 #include <QPixmap>
 #include <QPainter>
+#include <QRegion>
 #include <QSettings>
 #include <QStyle>
 #include <QWindow>
@@ -126,16 +127,11 @@ bool checkPluginPickerForTest(QString* error, const QString& screenshotPath) {
     menu->popup(root.mapToGlobal(QPoint(10, 10)));
     QApplication::processEvents();
     const auto roundedPopup = [&](QWidget* popup) {
-        // QWidget::grab deliberately ignores the window mask. Render with the
-        // actual QWindow mask, matching the native compositor's visible contour.
-        if (!popup->windowHandle() || popup->windowHandle()->mask() != popup->mask()) return false;
-        QImage image(popup->size() * popup->devicePixelRatioF(), QImage::Format_ARGB32_Premultiplied);
-        image.setDevicePixelRatio(popup->devicePixelRatioF());
-        image.fill(Qt::transparent);
-        QPainter painter(&image);
-        painter.setClipRegion(popup->windowHandle()->mask());
-        painter.drawPixmap(QPoint(), popup->grab());
-        painter.end();
+        // Rounded QRegion masks stair-step at fractional display scales. The
+        // actual rendered surface must have transparent, antialiased corners.
+        if (!popup->windowHandle() || !popup->windowHandle()->mask().isEmpty() ||
+            !popup->mask().isEmpty()) return false;
+        const QImage image = popup->grab().toImage();
         if (qEnvironmentVariableIsSet("DAW_SELFTEST_VERBOSE"))
             std::fprintf(stderr, "popup corners: %s %dx%d alpha=%d/%d/%d/%d center=%d translucent=%d mask=%d visible=%d\n",
             popup->metaObject()->className(), image.width(), image.height(),
@@ -148,9 +144,16 @@ bool checkPluginPickerForTest(QString* error, const QString& screenshotPath) {
         for (const QPoint point : {image.rect().topLeft(), image.rect().topRight(),
                                    image.rect().bottomLeft(), image.rect().bottomRight()})
             if (image.pixelColor(point).alpha() != 0) return false;
-        return image.pixelColor(image.rect().center()).alpha() > 0;
+        bool antialiased = false;
+        const int corner = qRound(7 * popup->devicePixelRatioF());
+        for (int y = 0; y < corner; ++y)
+            for (int x = 0; x < corner; ++x) {
+                const int alpha = image.pixelColor(x, y).alpha();
+                antialiased |= alpha > 0 && alpha < 255;
+            }
+        return antialiased && image.pixelColor(image.rect().center()).alpha() == 255;
     };
-    if (!roundedPopup(menu.get())) return fail("plugin picker has opaque square corners");
+    if (!roundedPopup(menu.get())) return fail("plugin picker corners are not cleanly rounded");
     if (!search->hasFocus()) return fail("search did not receive popup focus");
     QKeyEvent recordOverride(QEvent::ShortcutOverride, Qt::Key_R,
                              Qt::NoModifier, QStringLiteral("r"));
@@ -242,7 +245,7 @@ bool checkPluginPickerForTest(QString* error, const QString& screenshotPath) {
 
     // QComboBox uses a separate native container around the styled list. Test
     // that actual container, as well as ordinary QMenus, across theme changes
-    // and popup recreation/resizing (the intermittent black-corner case).
+    // and popup recreation/resizing.
     const Theme originalTheme = th();
     struct RestoreTheme {
         Theme value;
@@ -258,6 +261,12 @@ bool checkPluginPickerForTest(QString* error, const QString& screenshotPath) {
     QMenu ordinary(&root);
     ordinary.addAction(QStringLiteral("First option"));
     ordinary.addAction(QStringLiteral("Second option"));
+    auto* checked = ordinary.addAction(QStringLiteral("Checked option"));
+    checked->setCheckable(true);
+    checked->setChecked(true);
+    ordinary.addSeparator();
+    ordinary.addMenu(QStringLiteral("More options"))->addAction(QStringLiteral("Nested option"));
+    ordinary.addAction(QStringLiteral("Unavailable option"))->setEnabled(false);
     for (const auto& theme : ThemeManager::instance().presets()) {
         // One light and the original dark palette are enough to catch backing
         // colors leaking through; keep this interaction check inexpensive.
@@ -266,13 +275,18 @@ bool checkPluginPickerForTest(QString* error, const QString& screenshotPath) {
         for (int pass = 0; pass < 2; ++pass) {
             ordinary.popup(root.mapToGlobal(QPoint(20, 80)));
             QApplication::processEvents();
-            if (!roundedPopup(&ordinary)) return fail("ordinary menu has opaque square corners");
+            if (!roundedPopup(&ordinary)) return fail("ordinary menu corners are not cleanly rounded");
+            if (!screenshotPath.isEmpty() && pass == 0) {
+                ordinary.setActiveAction(ordinary.actions().first());
+                ordinary.grab().save(screenshotPath + QStringLiteral(".%1.context.png").arg(theme.id));
+                combo.grab().save(screenshotPath + QStringLiteral(".%1.control.png").arg(theme.id));
+            }
             ordinary.hide();
             combo.showPopup();
             QApplication::processEvents();
-            if (!roundedPopup(combo.view()->window())) return fail("combo popup has opaque square corners");
+            if (!roundedPopup(combo.view()->window())) return fail("combo popup corners are not cleanly rounded");
             if (!screenshotPath.isEmpty() && pass == 0)
-                combo.view()->window()->grab().save(screenshotPath + QStringLiteral(".combo.png"));
+                combo.view()->window()->grab().save(screenshotPath + QStringLiteral(".%1.combo.png").arg(theme.id));
             combo.hidePopup();
             combo.addItem(QStringLiteral("An additional option changes the popup height"));
         }

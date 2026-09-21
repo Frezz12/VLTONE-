@@ -29,6 +29,7 @@ inline std::size_t estimatedProjectBytes(const ProjectModel& project) {
             (track.instrument.parameters.capacity() + track.instrument.rightParameters.capacity()) * sizeof(InsertParameter);
         for (const auto& clip : track.clips) {
             bytes += clip.name.size() + clip.id.size() + clip.filePath.size() +
+                clip.warp.markers.capacity() * sizeof(WarpMarker) +
                 clip.notes.capacity() * sizeof(NoteModel) +
                 clip.lanes.capacity() * sizeof(ControllerLane) +
                 clip.takes.capacity() * sizeof(TakeModel) +

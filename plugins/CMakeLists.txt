@@ -27,6 +27,7 @@ set(DAW_PLUGINHOST_SOURCES
     Internal/PitchCorrectorInstance.cpp
     Internal/PitchCorrectorDSP.cpp
     Internal/ModulationInstance.cpp
+    Internal/ModulationRackInstance.cpp
     Internal/GraphitInstance.cpp
     Internal/GravityInstance.cpp
     Internal/InternalFactory.cpp

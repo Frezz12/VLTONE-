@@ -192,7 +192,6 @@ private:
     QWidget* m_wrapper = nullptr;
     ui::IconButton* m_power = nullptr;
     QLabel* m_pluginName = nullptr;
-    QLabel* m_pluginFormat = nullptr;
     QComboBox* m_channelMode = nullptr;
     QToolButton* m_leftChannel = nullptr;
     QToolButton* m_rightChannel = nullptr;

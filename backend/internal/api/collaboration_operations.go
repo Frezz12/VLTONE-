@@ -52,7 +52,7 @@ func (s *Server) appendCollaborationOperation(ctx context.Context,
 	input collab.AppendOperationInput) (model.ProjectOperation, bool, error) {
 	if input.Kind == "recording.commit" &&
 		(!s.Config.CollabRecordingEnabled ||
-			input.SchemaVersion != collab.CollaborationCommandSchemaV3) {
+			input.SchemaVersion < collab.CollaborationCommandSchemaV3) {
 		if s.metrics != nil {
 			s.metrics.rejections.Add(1)
 		}

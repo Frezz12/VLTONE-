@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DSP/Simd.hpp"
+#include "DSP/Curve.hpp"
 #include "Graph/Node.hpp"
 #include "Midi/MidiEvent.hpp"
 #include "Common/RealtimeSnapshot.hpp"
@@ -32,6 +33,8 @@ struct MidiNote {
     std::uint8_t velocity = 100;
     std::uint8_t channel = 0;
     float pan = 0.0f;             ///< per-note stereo position, -1 ... 1
+    std::uint8_t releaseVelocity = 0;
+    std::uint64_t startOrder = 0, endOrder = 0;
 };
 
 /// Plays MIDI clips: turns a list of notes into note-on and note-off events at
@@ -42,6 +45,19 @@ struct MidiNote {
 class MidiClipPlayerNode : public Node {
 public:
     using NoteList = std::vector<MidiNote>;
+    struct ControlPoint {
+        double beats = 0, value = 0;
+        curve::Shape shape = curve::Shape::Linear;
+        double curve = 0;
+        std::uint64_t order = 0;
+    };
+    struct ControlCurve {
+        double startBeats = 0, endBeats = 0, defaultValue = 0;
+        int cc = 1, channel = 0, key = 0;
+        std::vector<ControlPoint> points;
+    };
+    using ControlCurves = std::vector<ControlCurve>;
+    void setControllers(std::shared_ptr<const ControlCurves> curves) { m_controllers.publish(std::move(curves)); }
 
 private:
     /// Control-thread-prepared interval index. `subtreeMaxEnd[mid]` is the
@@ -172,6 +188,7 @@ public:
         if (!(samplesPerBeat > 0.0)) return;
 
         if (!context.playing) {
+            releaseControllers(*context.midiOutput);
             // Stopped mid-note: release whatever was sounding, or the synth
             // holds it forever. This is why the node tracks what it started.
             // Live notes are not in that list — they end when the key is let
@@ -188,6 +205,7 @@ public:
         const double blockStartBeats = context.transport.ppqPosition;
         const double blockEndBeats =
             blockStartBeats + double(context.frames) / samplesPerBeat;
+        playControllers(context, blockStartBeats, blockEndBeats, samplesPerBeat);
 
         auto schedule = m_schedule.read();
         if (!schedule || !schedule->notes) return;
@@ -230,9 +248,9 @@ public:
                                         : FrameCount((sounding.endBeats -
                                                       blockStartBeats) *
                                                      samplesPerBeat);
-                if (context.midiOutput->push(MidiEvent::noteOff(
+                if (pushOrdered(*context.midiOutput, sounding.endOrder, MidiEvent::noteOff(
                         std::min(offset, context.frames - 1), sounding.channel,
-                        sounding.key))) {
+                        sounding.key, sounding.releaseVelocity))) {
                     m_sounding[i] = m_sounding.back();
                     m_sounding.pop_back();
                 } else {
@@ -259,29 +277,35 @@ public:
             const bool endsThisBlock = endBeats < blockEndBeats;
             if (!endsThisBlock && m_sounding.size() >= kMaxSounding) continue;
 
-            const bool started = context.midiOutput->push(MidiEvent::noteOn(
+            const bool started = pushOrdered(*context.midiOutput, note.startOrder, MidiEvent::noteOn(
                 std::min(onOffset, context.frames - 1), note.channel, note.key,
                 note.velocity, note.pan));
             if (!started) continue;
             if (endsThisBlock) {
                 const auto offOffset =
                     FrameCount((endBeats - blockStartBeats) * samplesPerBeat);
-                context.midiOutput->push(MidiEvent::noteOff(
-                    std::min(offOffset, context.frames - 1), note.channel, note.key));
+                pushOrdered(*context.midiOutput, note.endOrder, MidiEvent::noteOff(
+                    std::min(offOffset, context.frames - 1), note.channel, note.key, note.releaseVelocity));
             } else {
-                m_sounding.push_back(Sounding{note.key, note.channel, endBeats});
+                m_sounding.push_back(Sounding{note.key, note.channel, endBeats, note.releaseVelocity, note.endOrder});
             }
         }
         context.midiOutput->sort();
     }
 
 private:
+    static bool pushOrdered(MidiBuffer& out, std::uint64_t order, MidiEvent event) noexcept {
+        event.musicalOrder = order;
+        return out.push(event);
+    }
     static constexpr std::size_t kMaxSounding = 128;
 
     struct Sounding {
         std::uint8_t key;
         std::uint8_t channel;
         double endBeats;
+        std::uint8_t releaseVelocity = 0;
+        std::uint64_t endOrder = 0;
     };
 
     void chaseActiveNotes(const NoteSchedule& schedule, std::size_t first,
@@ -313,10 +337,10 @@ private:
                                 (endBeats - blockStartBeats) * samplesPerBeat);
                             out.push(MidiEvent::noteOff(
                                 std::min(offOffset, frames - 1), note.channel,
-                                note.key));
+                                note.key, note.releaseVelocity));
                         } else {
                             m_sounding.push_back(
-                                Sounding{note.key, note.channel, endBeats});
+                                Sounding{note.key, note.channel, endBeats, note.releaseVelocity, note.endOrder});
                         }
                     }
                 }
@@ -391,6 +415,79 @@ private:
     }
 
     std::string m_name;
+    RealtimeSnapshot<ControlCurves> m_controllers;
+    const ControlCurves* m_controllerSnapshot = nullptr;
+    std::array<int, 8192> m_controllerValues{};
+    std::array<bool, 16> m_sustainChannels{};
+    std::array<bool, 16> m_bendChannels{};
+
+    void releaseControllers(MidiBuffer& out) noexcept {
+        for (int ch = 0; ch < 16; ++ch) {
+            if (m_sustainChannels[ch] && out.push({0, std::uint8_t(0xb0 | ch), 64, 0}))
+                m_sustainChannels[ch] = false;
+            if (m_bendChannels[ch] && out.push({0, std::uint8_t(0xe0 | ch), 0, 64}))
+                m_bendChannels[ch] = false;
+        }
+        m_controllerSnapshot = nullptr;
+    }
+
+    void playControllers(const ProcessContext& context, double begin, double end, double samplesPerBeat) {
+        auto curves = m_controllers.read();
+        const bool discontinuity = !m_hasPosition || std::abs(begin - m_expectedBeats) > 1e-6 ||
+                                   m_controllerSnapshot != curves.get();
+        if (discontinuity) { releaseControllers(*context.midiOutput); m_controllerValues.fill(-1); }
+        m_controllerSnapshot = curves.get();
+        if (!curves) return;
+        for (std::size_t i = 0; i < std::min(curves->size(), m_controllerValues.size()); ++i) {
+            const auto& c = (*curves)[i];
+            if (c.channel < 0 || c.channel > 15 || c.points.empty()) continue;
+            const auto send = [&](double beat, double value, std::uint64_t order, bool force) {
+                const int v = int(std::lround(std::clamp(value, 0.0, 1.0) * (c.cc == -2 ? 16383 : 127)));
+                if (!force && m_controllerValues[i] == v) return;
+                MidiEvent event;
+                event.frameOffset = FrameCount(std::clamp((beat - begin) * samplesPerBeat, 0.0, double(context.frames - 1)));
+                event.musicalOrder = order;
+                if (c.cc >= 0) { event.status = std::uint8_t(0xb0 | c.channel); event.data1 = std::uint8_t(c.cc); event.data2 = std::uint8_t(v); }
+                else if (c.cc == -2) { event.status = std::uint8_t(0xe0 | c.channel); event.data1 = v & 127; event.data2 = (v >> 7) & 127; }
+                else if (c.cc == -3) { event.status = std::uint8_t(0xd0 | c.channel); event.data1 = std::uint8_t(v); }
+                else if (c.cc == -4) { event.status = std::uint8_t(0xa0 | c.channel); event.data1 = std::uint8_t(c.key); event.data2 = std::uint8_t(v); }
+                else if (c.cc == -5) { event.status = std::uint8_t(0xc0 | c.channel); event.data1 = std::uint8_t(v); }
+                else return;
+                if (context.midiOutput->push(event)) {
+                    m_controllerValues[i] = v;
+                    if (c.cc == 64) m_sustainChannels[c.channel] = v >= 64;
+                    if (c.cc == -2) m_bendChannels[c.channel] = v != 8192;
+                }
+            };
+            if (begin >= c.endBeats && m_controllerValues[i] >= 0) {
+                if (c.cc == 64) send(begin, 0, 0, true);
+                if (c.cc == -2) send(begin, 8192.0 / 16383.0, 0, true);
+                m_controllerValues[i] = -1;
+            }
+            if (end <= c.startBeats || begin >= c.endBeats) continue;
+            const double at = std::max(begin, c.startBeats);
+            auto next = std::lower_bound(c.points.begin(), c.points.end(), at,
+                [](const auto& p, double beat) { return p.beats < beat; });
+            if (next == c.points.end() || next->beats > at) {
+                if (next != c.points.begin()) {
+                    const auto& previous = *std::prev(next);
+                    double value = previous.value;
+                    if (next != c.points.end() && next->beats > previous.beats)
+                        value = previous.value + (next->value - previous.value) * curve::shapeT(
+                            (at - previous.beats) / (next->beats - previous.beats), previous.shape, previous.curve);
+                    send(at, value, 0, discontinuity);
+                } else if (!c.points.front().order) send(at, c.defaultValue, 0, discontinuity);
+            }
+            while (next != c.points.end() && next->beats < std::min(end, c.endBeats)) {
+                send(next->beats, next->value, next->order, true); ++next;
+            }
+            if (c.endBeats < end) {
+                if (c.cc == 64) send(c.endBeats, 0, 0, true);
+                if (c.cc == -2) send(c.endBeats, 8192.0 / 16383.0, 0, true);
+                m_controllerValues[i] = -1;
+            }
+        }
+    }
     RealtimeSnapshot<NoteSchedule> m_schedule;
     /// What this node has started and not yet ended. A vector, not a set: it
     /// holds a handful of entries and `process` must not allocate, so the

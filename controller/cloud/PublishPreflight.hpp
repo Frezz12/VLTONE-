@@ -12,6 +12,7 @@ enum class PublishIssueKind {
     UnknownInternalPlugin,
     MissingEntityId,
     InvalidAssetIdentity,
+    LocalWarp,
 };
 
 struct PublishIssue {

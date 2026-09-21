@@ -90,7 +90,7 @@ signals:
     void cpuStatusBarVisibilityChanged(bool visible);
     /// How selected tracks are tinted changed on the Themes tab.
     void selectionTintChanged();
-    /// Grid/cursor preferences changed; repaint without rebuilding the style.
+    /// Grid, clip and cursor preferences changed; repaint without rebuilding the style.
     void timelineAppearanceChanged();
     /// A local arrangement/header image, GIF, video or presentation changed.
     void themeBackgroundSettingsChanged();
@@ -121,6 +121,7 @@ private:
     void exportCurrentTheme();
     void applySelectedSavedTheme();
     void refreshShortcutEditors();
+    void refreshNavigationAppearance();
     /// Push the working palette to the app (live), persisting it as "custom".
     void applyEditTheme();
     /// Repaint every colour swatch from the working palette.
@@ -131,6 +132,9 @@ private:
     QTreeWidget* m_navigation = nullptr;
     QStackedWidget* m_pages = nullptr;
     QHash<int, QTreeWidgetItem*> m_navigationItems;
+    QLabel* m_pageIcon = nullptr;
+    QLabel* m_pageTitle = nullptr;
+    QLabel* m_pageDescription = nullptr;
     RecordingSettingsPage* m_recordingPage = nullptr;
     AudioSettingsPage* m_audioPage = nullptr;
     QuickImportSettingsPage* m_quickImportPage = nullptr;

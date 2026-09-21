@@ -80,6 +80,14 @@ bool startsFreshPointerRoute(QEvent::Type type, Qt::MouseButtons buttons) {
     return type == QEvent::MouseButtonPress || type == QEvent::MouseButtonDblClick ||
            (type == QEvent::MouseMove && buttons == Qt::NoButton);
 }
+void clearPressedPointer(QPointer<QWidget>& pressed) {
+    const QPointer<QWidget> previous = pressed;
+    pressed = nullptr;
+    if (previous) {
+        QEvent ungrab(QEvent::UngrabMouse);
+        QCoreApplication::sendEvent(previous, &ungrab);
+    }
+}
 bool isScrollViewport(QWidget* widget) {
     auto* scroll = widget ? qobject_cast<QAbstractScrollArea*>(widget->parentWidget()) : nullptr;
     return scroll && scroll->viewport() == widget;
@@ -90,8 +98,7 @@ QWidget* pointerTarget(QPointer<QWidget>& pressed, QEvent::Type type,
     // consumed by that window, leaving our compatibility-surface grab stale.
     // A new physical press always starts a new gesture and must be hit-tested
     // at its current position. A no-button move also repairs a lost release.
-    if (startsFreshPointerRoute(type, buttons))
-        pressed = nullptr;
+    if (startsFreshPointerRoute(type, buttons)) clearPressedPointer(pressed);
     return pressed ? pressed.data() : hit;
 }
 
@@ -151,7 +158,15 @@ struct WorkspaceSurface::FrameMailbox {
     WorkspaceSurface* owner = nullptr;
 };
 bool WorkspaceSurface::checkPointerRoutingForTest() {
-    QWidget combo, apply;
+    class GrabSpy final : public QWidget {
+    public:
+        int ungrabs = 0;
+        bool event(QEvent* event) override {
+            if (event->type() == QEvent::UngrabMouse) ++ungrabs;
+            return QWidget::event(event);
+        }
+    } combo;
+    QWidget apply;
     QPointer<QWidget> pressed = &combo;
     const bool freshPress = pointerTarget(pressed, QEvent::MouseButtonPress,
                                           Qt::LeftButton, &apply) == &apply && !pressed;
@@ -202,6 +217,7 @@ bool WorkspaceSurface::checkPointerRoutingForTest() {
         !sendEventWhileAlive(owner, &receiver, &event);
 
     return freshPress && staleReleaseHeals && activeDragKeepsGrab &&
+           combo.ungrabs == 2 &&
            wheelClimbsToScroller && scrollViewportRecognized &&
            reentrantDeletionDetected;
 }
@@ -698,13 +714,8 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
         // Native QDrag takes over the gesture and consumes the release. The
         // compatibility widget must lose its implicit grab too; otherwise a
         // queued pressed move after the drop goes back to the old insert.
-        const QPointer<QWidget> pressed = m_pressed;
-        m_pressed = nullptr;
+        clearPressedPointer(m_pressed);
         m_quickGrabVisual = 0;
-        if (pressed) {
-            QEvent ungrab(QEvent::UngrabMouse);
-            QCoreApplication::sendEvent(pressed, &ungrab);
-        }
         if (event->type() == QEvent::DragEnter) updateHover(nullptr, QCursor::pos());
     }
     if (auto* mouse = dynamic_cast<QMouseEvent*>(event);
@@ -712,7 +723,7 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
         // Repair grabs before deciding whether an interactive Quick child owns
         // this event. Otherwise a popup-stale QWidget grab can also block a
         // fresh click from reaching an embedded browser or media control.
-        m_pressed = nullptr;
+        clearPressedPointer(m_pressed);
         m_quickGrabVisual = 0;
     }
     if (m_quickGrabVisual && (event->type() == QEvent::MouseMove || event->type() == QEvent::MouseButtonRelease)) {

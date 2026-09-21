@@ -3,6 +3,8 @@
 
 #include <QImage>
 #include <QPainter>
+#include <QPainterPath>
+#include <QSettings>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -12,6 +14,12 @@
 
 namespace ui {
 namespace {
+WaveformStyle& cachedWaveformStyle() {
+    static WaveformStyle style = QSettings().value(kWaveformStyleSetting).toInt() ==
+            int(WaveformStyle::Smooth) ? WaveformStyle::Smooth : WaveformStyle::Crisp;
+    return style;
+}
+
 constexpr int kTilePixels = 256;
 // Geometry is cheap to clip on the GPU. Larger vector tiles keep scene-node
 // and stencil submissions bounded without changing the CPU raster tile size.
@@ -23,6 +31,8 @@ struct RasterKey {
     qint64 tile;
     QRgb color;
     bool reversed;
+    bool sampleDetail;
+    WaveformStyle style;
     bool operator==(const RasterKey&) const = default;
 };
 struct RasterHash {
@@ -30,7 +40,8 @@ struct RasterHash {
         std::size_t hash = std::hash<std::uint64_t>{}(key.source);
         const auto add = [&](std::size_t v) { hash ^= v + 0x9e3779b9 + (hash << 6) + (hash >> 2); };
         for (double v : key.values) add(std::hash<double>{}(v));
-        add(std::hash<qint64>{}(key.tile)); add(key.color); add(key.reversed);
+        add(std::hash<qint64>{}(key.tile)); add(key.color); add(key.reversed); add(key.sampleDetail);
+        add(std::size_t(key.style));
         return hash;
     }
 };
@@ -64,15 +75,13 @@ template<class Asset> struct TileCache {
 thread_local TileCache<QImage> rasterCache;
 thread_local TileCache<QVector<graphics::SceneVertex>> geometryCache;
 
-// Average coverage of a straight envelope edge across one physical pixel.
-// Integrating the clipped line preserves antialiasing without sending a many-
-// thousand-vertex filled polygon through QPainter's general path rasterizer.
+// Integrate a sloping edge over a physical pixel without blurring the body.
 double edgeCoverage(double a, double b) {
     if (a >= 1.0 && b >= 1.0) return 1.0;
     if (a <= 0.0 && b <= 0.0) return 0.0;
-    if (std::abs(a - b) < 1e-9) return std::clamp((a + b) * 0.5, 0.0, 1.0);
+    if (std::abs(a - b) < 1e-9) return std::clamp((a + b) * .5, 0.0, 1.0);
     const auto integral = [](double v) {
-        return v <= 0.0 ? 0.0 : v >= 1.0 ? v - 0.5 : v * v * 0.5;
+        return v <= 0.0 ? 0.0 : v >= 1.0 ? v - .5 : v * v * .5;
     };
     return (integral(b) - integral(a)) / (b - a);
 }
@@ -82,119 +91,189 @@ struct PeakSource {
     std::span<const daw::WaveformPeaks::Level> levels;
     double bucketsPerSecond;
     bool magnitudes = false;
+    const daw::engine::SampleBuffer* samples = nullptr;
 };
-QVector<graphics::SceneVertex> makeGeometryTile(const PeakSource& source, double duration, const RasterKey& key) {
-    const auto [offset, secondsPerPixel, gain, height, dpr, reverseDuration] = key.values;
-    (void)reverseDuration;
-    auto minima = source.minima, maxima = source.maxima;
-    double bps = source.bucketsPerSecond;
-    const double step = secondsPerPixel / dpr;
-    for (const auto& level : source.levels) {
-        if (step * level.bucketsPerSecond < 1.) break;
-        minima = level.minima; maxima = level.maxima; bps = level.bucketsPerSecond;
-    }
-    const auto count = std::min(minima.size(), maxima.size());
-    if (!count) return {};
-    const double half = std::max(0., height * .5 - 1.);
-    const auto edge = [&](double pixel) {
-        double at = offset + pixel * step;
-        if (key.reversed) at = duration - at;
-        double lo = 0, hi = 0;
-        if (at >= 0 && at <= duration) {
-            const double bucket = std::clamp(at * bps, 0., double(count - 1));
-            const auto a = std::size_t(bucket), b = std::min(count - 1, a + 1);
-            const double mix = bucket - a;
-            lo = minima[a] * (1 - mix) + minima[b] * mix;
-            hi = maxima[a] * (1 - mix) + maxima[b] * mix;
-            const double nextAt = at + (key.reversed ? -step : step);
-            const auto other = std::size_t(std::clamp(nextAt * bps, 0., double(count - 1)));
-            for (auto i = std::min(a, other); i <= std::max(a, other); ++i) {
-                lo = std::min(lo, double(minima[i])); hi = std::max(hi, double(maxima[i]));
-            }
-            if (source.magnitudes) lo = -hi;
+
+// Both renderers use the same source extrema and style at each pixel boundary.
+struct PeakColumns {
+    PeakSource source;
+    double duration, offset, step, gain, height, dpr;
+    bool reversed;
+    bool smooth;
+    bool readSamples;
+    int aggregateLevel = -1;
+    std::size_t aggregateSpan = 1;
+
+    PeakColumns(PeakSource input, double seconds, const RasterKey& key)
+        : source(input), duration(seconds), offset(key.values[0]),
+          step(key.values[1] / key.values[4]), gain(key.values[2]),
+          height(key.values[3]), dpr(key.values[4]), reversed(key.reversed),
+          smooth(key.style == WaveformStyle::Smooth),
+          readSamples(input.samples && input.samples->channels() &&
+                      step * input.bucketsPerSecond < 1.0) {
+        for (const auto& level : input.levels) {
+            if (step * level.bucketsPerSecond < 4.0) break;
+            ++aggregateLevel;
+            aggregateSpan *= 4;
         }
-        return std::pair{float(height * .5 - std::clamp(hi * gain, -1., 1.) * half),
-                         float(height * .5 - std::clamp(lo * gain, -1., 1.) * half)};
-    };
+    }
+
+    std::pair<double, double> at(double pixel) const {
+        const double mid = height * dpr * .5;
+        const std::pair<double, double> silence = smooth ? std::pair{mid, mid} : std::pair{0., 0.};
+        const auto count = readSamples ? source.samples->frames()
+                                      : std::min(source.minima.size(), source.maxima.size());
+        if (!count) return silence;
+        const double a = offset + pixel * step, b = a + step;
+        const double from = reversed ? duration - b : a;
+        const double to = reversed ? duration - a : b;
+        if (to <= 0.0 || from >= duration) return silence;
+        const double rate = readSamples ? source.samples->sampleRate() : source.bucketsPerSecond;
+        const auto first = std::min(count - 1, std::size_t(std::max(0.0, from) * rate));
+        const auto last = std::min(count, std::max(first + 1,
+            std::size_t(std::ceil(std::min(duration, to) * rate))));
+        const auto value = [&](std::size_t frame) {
+            double sum = 0.0;
+            for (std::size_t ch = 0; ch < source.samples->channels(); ++ch)
+                sum += source.samples->channel(ch)[frame];
+            return sum / source.samples->channels();
+        };
+        double lo = readSamples ? value(first) : source.minima[first];
+        double hi = readSamples ? lo : source.maxima[first];
+        if (smooth && step * rate < 1.0) {
+            const auto next = std::min(count - 1, first + 1);
+            const double fraction = std::clamp(std::max(0.0, from) * rate - first, 0.0, 1.0);
+            lo += ((readSamples ? value(next) : source.minima[next]) - lo) * fraction;
+            hi += ((readSamples ? value(next) : source.maxima[next]) - hi) * fraction;
+        } else for (auto i = first + 1; i < last;) {
+            // Coarse peaks are exact only for complete aligned blocks. Refine
+            // either edge instead of borrowing extrema from the next pixel.
+            // This keeps the contour identical on both sides of an LOD switch.
+            int level = readSamples ? -1 : aggregateLevel;
+            std::size_t span = readSamples ? 1 : aggregateSpan;
+            while (level >= 0 && (i % span != 0 || span > last - i)) {
+                --level;
+                span /= 4;
+            }
+            const double low = readSamples ? value(i) : level < 0 ? source.minima[i]
+                : source.levels[level].minima[i / span];
+            const double high = readSamples ? low : level < 0 ? source.maxima[i]
+                : source.levels[level].maxima[i / span];
+            lo = std::min(lo, low);
+            hi = std::max(hi, high);
+            i += span;
+        }
+        if (source.magnitudes) lo = -hi;
+        if (lo == 0.0 && hi == 0.0) return silence;
+        const double scale = std::max(0.0, height * .5 - 1.0) * dpr;
+        const double limit = std::ceil(height * dpr);
+        const double top = std::clamp(mid - std::clamp(hi * gain, -1.0, 1.0) * scale, 0.0, limit - 1.0);
+        const double bottom = std::clamp(mid - std::clamp(lo * gain, -1.0, 1.0) * scale,
+                                         top + (smooth ? 0.0 : 1.0), limit);
+        return {top, bottom};
+    }
+};
+
+QVector<graphics::SceneVertex> makeGeometryTile(const PeakSource& source, double duration, const RasterKey& key) {
+    const PeakColumns columns(source, duration, key);
     QVector<graphics::SceneVertex> triangles;
     triangles.reserve(kGeometryTilePixels * 6);
-    auto previous = edge(double(key.tile) * kGeometryTilePixels);
     for (int pixel = 0; pixel < kGeometryTilePixels; ++pixel) {
-        const auto next = edge(double(key.tile) * kGeometryTilePixels + pixel + 1);
-        const auto x = float(pixel / dpr), nextX = float((pixel + 1) / dpr);
-        triangles << graphics::SceneVertex{x, previous.first, 0, 0} << graphics::SceneVertex{x, previous.second, 0, 0}
-                  << graphics::SceneVertex{nextX, next.first, 0, 0} << graphics::SceneVertex{nextX, next.first, 0, 0}
-                  << graphics::SceneVertex{x, previous.second, 0, 0} << graphics::SceneVertex{nextX, next.second, 0, 0};
-        previous = next;
+        const auto [top, bottom] = columns.at(double(key.tile) * kGeometryTilePixels + pixel);
+        const auto [endTop, endBottom] = columns.smooth
+            ? columns.at(double(key.tile) * kGeometryTilePixels + pixel + 1) : std::pair{top, bottom};
+        if (top == bottom && endTop == endBottom) continue;
+        const auto x = float(pixel / columns.dpr), nextX = float((pixel + 1) / columns.dpr);
+        const auto y = float(top / columns.dpr), nextY = float(bottom / columns.dpr);
+        const auto endY = float(endTop / columns.dpr), endNextY = float(endBottom / columns.dpr);
+        triangles << graphics::SceneVertex{x, y, 0, 0} << graphics::SceneVertex{x, nextY, 0, 0}
+                  << graphics::SceneVertex{nextX, endY, 0, 0} << graphics::SceneVertex{nextX, endY, 0, 0}
+                  << graphics::SceneVertex{x, nextY, 0, 0} << graphics::SceneVertex{nextX, endNextY, 0, 0};
     }
     ++geometryCache.stats.tileBuilds;
     return triangles;
 }
-QImage makeTile(const PeakSource& peaks, double duration, const RasterKey& key) {
-    const auto [offset, secondsPerPixel, gain, height, dpr, reverseDuration] = key.values;
-    (void)reverseDuration;
-    const int pixelHeight = int(std::ceil(height * dpr));
-    QImage image(kTilePixels, pixelHeight, QImage::Format_ARGB32_Premultiplied);
-    image.setDevicePixelRatio(dpr); image.fill(Qt::transparent);
+
+QImage makeTile(const PeakSource& source, double duration, const RasterKey& key) {
+    const PeakColumns columns(source, duration, key);
+    QImage image(kTilePixels, int(std::ceil(columns.height * columns.dpr)), QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(columns.dpr); image.fill(Qt::transparent);
     if (image.isNull()) return image;
-    auto minima = peaks.minima;
-    auto maxima = peaks.maxima;
-    double bps = peaks.bucketsPerSecond;
-    const double step = secondsPerPixel / dpr;
-    for (const auto& level : peaks.levels) {
-        if (step * level.bucketsPerSecond < 1.0) break;
-        minima = level.minima; maxima = level.maxima; bps = level.bucketsPerSecond;
-    }
-    const auto count = std::min(minima.size(), maxima.size());
-    if (!count) return image;
-    const double mid = height * dpr * 0.5;
-    const double halfHeight = (height * 0.5 - 1.0) * dpr;
-    const auto edge = [&](double pixel) {
-        const double at = offset + pixel * step;
-        const double seconds = key.reversed ? duration - at : at;
-        const double next = seconds + (key.reversed ? -step : step);
-        double lo = 0.0, hi = 0.0;
-        if (std::max(seconds, next) >= 0.0 && std::min(seconds, next) <= duration) {
-            const double start = std::max(0.0, std::min(seconds, next) * bps);
-            const double end = std::max(seconds, next) * bps;
-            if (end - start >= 1.0) {
-                const auto first = std::min(count - 1, std::size_t(start));
-                const auto last = std::max(first + 1, std::min(count, std::size_t(std::max(0.0, std::ceil(end)))));
-                for (auto i = first; i < last; ++i) {
-                    lo = std::min(lo, double(peaks.magnitudes ? -minima[i] : minima[i])); hi = std::max(hi, double(maxima[i]));
-                }
-            } else {
-                const auto first = std::min(count - 1, std::size_t(start));
-                const auto nextBucket = std::min(count - 1, first + 1);
-                const double fraction = std::clamp(start - double(first), 0.0, 1.0);
-                lo = (minima[first] + (minima[nextBucket] - minima[first]) * fraction) * (peaks.magnitudes ? -1.0 : 1.0);
-                hi = maxima[first] + (maxima[nextBucket] - maxima[first]) * fraction;
-            }
-        }
-        const double top = mid - std::clamp(hi * gain, -1.0, 1.0) * halfHeight;
-        return std::pair{top, std::max(top, mid - std::clamp(lo * gain, -1.0, 1.0) * halfHeight)};
-    };
-    const double startPixel = double(key.tile) * kTilePixels;
-    auto previous = edge(startPixel);
-    const QRgb opaque = qPremultiply(key.color);
+    const QRgb color = qPremultiply(key.color);
     for (int x = 0; x < kTilePixels; ++x) {
-        const auto next = edge(startPixel + x + 1.0);
-        const int first = std::clamp(int(std::floor(std::min(previous.first, next.first))), 0, pixelHeight);
-        const int last = std::clamp(int(std::ceil(std::max(previous.second, next.second))), 0, pixelHeight);
-        for (int y = first; y < last; ++y) {
-            const double coverage = std::clamp(
-                edgeCoverage(previous.second - y, next.second - y) -
-                edgeCoverage(previous.first - y, next.first - y), 0.0, 1.0);
-            const int alpha = int(std::lround(qAlpha(key.color) * coverage));
-            reinterpret_cast<QRgb*>(image.scanLine(y))[x] = coverage >= 1.0 ? opaque
-                : qPremultiply(qRgba(qRed(key.color), qGreen(key.color), qBlue(key.color), alpha));
+        const auto [top, bottom] = columns.at(double(key.tile) * kTilePixels + x);
+        const auto [endTop, endBottom] = columns.smooth
+            ? columns.at(double(key.tile) * kTilePixels + x + 1) : std::pair{top, bottom};
+        for (int y = int(std::floor(std::min(top, endTop))); y < int(std::ceil(std::max(bottom, endBottom))); ++y) {
+            const double coverage = columns.smooth
+                ? std::clamp(edgeCoverage(bottom - y, endBottom - y) -
+                             edgeCoverage(top - y, endTop - y), 0.0, 1.0)
+                : std::clamp(std::min(bottom, double(y + 1)) -
+                                               std::max(top, double(y)), 0.0, 1.0);
+            reinterpret_cast<QRgb*>(image.scanLine(y))[x] = coverage >= 1.0
+                ? color : qPremultiply(qRgba(qRed(key.color), qGreen(key.color),
+                    qBlue(key.color), int(std::lround(qAlpha(key.color) * coverage))));
         }
-        previous = next;
     }
     ++rasterCache.stats.tileBuilds;
     return image;
 }
+
+// At sample zoom, show the actual held sample values with horizontal treads
+// and vertical risers. The caller supplies already decoded audio; painting
+// never loads a file or allocates another copy of it.
+bool paintSampleTrace(QPainter& p, const QRectF& area, const PeakPaint& how) {
+    const auto* samples = how.samples;
+    const double dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
+    if (!samples || !samples->frames() || !samples->channels() ||
+        !(how.secondsPerPixel > 0.0) || !std::isfinite(how.sourceStartSeconds) ||
+        !std::isfinite(how.gain) || !(samples->sampleRate() > 0.0) ||
+        how.secondsPerPixel * samples->sampleRate() / dpr > 1.0) return false;
+    QRectF visible = area.intersected(QRectF(how.clipLeft, area.top(), how.clipRight - how.clipLeft, area.height()));
+    if (p.hasClipping()) visible = visible.intersected(p.clipBoundingRect());
+    if (visible.isEmpty()) return true;
+    const double rate = samples->sampleRate();
+    const double duration = samples->frames() / rate;
+    const auto sourceAt = [&](double x) {
+        const double t = how.sourceStartSeconds + (x - area.left()) * how.secondsPerPixel;
+        return how.reversed ? duration - t : t;
+    };
+    const double a = sourceAt(visible.left()), b = sourceAt(visible.right());
+    const auto first = std::size_t(std::clamp(std::floor(std::min(a, b) * rate) - 1.0, 0.0, double(samples->frames())));
+    const auto last = std::size_t(std::clamp(std::ceil(std::max(a, b) * rate) + 1.0, 0.0, double(samples->frames())));
+    p.save();
+    p.setClipRect(visible, Qt::IntersectClip);
+    const bool smooth = how.style == WaveformStyle::Smooth;
+    p.setRenderHint(QPainter::Antialiasing, smooth);
+    p.setPen(QPen(how.color, 1.0 / dpr, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin));
+    p.drawLine(QPointF(visible.left(), area.center().y()), QPointF(visible.right(), area.center().y()));
+    QPainterPath line;
+    for (auto frame = first; frame < last; ++frame) {
+        double value = 0.0;
+        for (std::size_t ch = 0; ch < samples->channels(); ++ch) value += samples->channel(ch)[frame];
+        value = std::clamp(value * how.gain / samples->channels(), -1.0, 1.0);
+        const double position = area.center().y() - value * (area.height() * .5 - 1.0);
+        const double y = smooth ? position : std::round(position * dpr) / dpr;
+        const auto x = [&](std::size_t index) {
+            const double t = how.reversed ? duration - index / rate : index / rate;
+            return area.left() + (t - how.sourceStartSeconds) / how.secondsPerPixel;
+        };
+        if (frame == first) line.moveTo(x(frame), y);
+        else line.lineTo(x(frame), y);
+        if (!smooth || frame + 1 == last) line.lineTo(x(frame + 1), y);
+    }
+    p.setBrush(Qt::NoBrush);
+    p.drawPath(line);
+    p.restore();
+    return true;
+}
 } // namespace
+
+WaveformStyle waveformStyle() { return cachedWaveformStyle(); }
+void setWaveformStyle(WaveformStyle style) {
+    cachedWaveformStyle() = style == WaveformStyle::Smooth ? style : WaveformStyle::Crisp;
+    QSettings().setValue(kWaveformStyleSetting, int(cachedWaveformStyle()));
+}
 
 WaveformPaintStats waveformPaintStatsForTest() { return rasterCache.stats; }
 WaveformPaintStats waveformGeometryStatsForTest() { return geometryCache.stats; }
@@ -232,7 +311,7 @@ static void paintEnvelope(QPainter& p, const PeakSource& source, std::uint64_t i
             const bool cacheable = id && readsUntil < stableUntil;
             const RasterKey key{id,
                 {how.sourceStartSeconds, how.secondsPerPixel, std::clamp(double(how.gain), 0., 8.),
-                 area.height(), dpr, how.reversed ? duration : 0.}, tile, how.color.rgba(), how.reversed};
+                 area.height(), dpr, how.reversed ? duration : 0.}, tile, how.color.rgba(), how.reversed, source.samples != nullptr, how.style};
             const QPointF at(area.left() + tile * tileWidth, area.top());
             if (cacheable) if (const auto* cached = geometryCache.find(key)) {
                 scene->appendLocalGeometry(*cached, at, how.color);
@@ -250,15 +329,22 @@ static void paintEnvelope(QPainter& p, const PeakSource& source, std::uint64_t i
     const auto last = qint64(std::ceil((right - area.left()) / tileWidth));
     p.save();
     p.setClipRect(QRectF(left, area.top(), right - left, area.height()), Qt::IntersectClip);
-    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    p.setRenderHint(QPainter::Antialiasing, false);
+    p.setRenderHint(QPainter::SmoothPixmapTransform, false);
+    // Snap once so every tile shares the same device-pixel phase, including
+    // tiles on opposite sides of the viewport origin during fractional pans.
+    const QTransform device = p.deviceTransform();
+    const QPointF pixel = device.map(area.topLeft());
+    const QPointF origin = device.inverted().map(
+        QPointF(std::floor(pixel.x() + .5), std::floor(pixel.y() + .5)));
     for (auto tile = first; tile < last; ++tile) {
         const double readsUntil = how.sourceStartSeconds +
             ((tile + 1) * kTilePixels + 1.0) * how.secondsPerPixel / dpr;
         const bool cacheable = id && readsUntil < stableUntil;
         const RasterKey key{id,
             {how.sourceStartSeconds, how.secondsPerPixel, std::clamp(double(how.gain), 0.0, 8.0),
-             area.height(), dpr, how.reversed ? duration : 0.0}, tile, how.color.rgba(), how.reversed};
-        const QPointF at(area.left() + tile * tileWidth, area.top());
+             area.height(), dpr, how.reversed ? duration : 0.0}, tile, how.color.rgba(), how.reversed, source.samples != nullptr, how.style};
+        const QPointF at = origin + QPointF(tile * tileWidth, 0.0);
         if (cacheable) {
             if (const auto* cached = rasterCache.find(key)) { p.drawImage(at, *cached); continue; }
         }
@@ -271,8 +357,9 @@ static void paintEnvelope(QPainter& p, const PeakSource& source, std::uint64_t i
 
 void paintPeaks(QPainter& p, const daw::WaveformPeaks* peaks, const QRectF& area,
                 const PeakPaint& how) {
+    if (paintSampleTrace(p, area, how)) return;
     const PeakSource source = peaks ? PeakSource{peaks->minima, peaks->maxima,
-        peaks->levels, peaks->bucketsPerSecond} : PeakSource{{}, {}, {}, 0.0};
+        peaks->levels, peaks->bucketsPerSecond, false, how.samples} : PeakSource{{}, {}, {}, 0.0};
     paintEnvelope(p, source, peaks ? peaks->geometryId : 0,
         peaks ? peaks->durationSeconds : 0.0, std::numeric_limits<double>::infinity(), area, how);
 }

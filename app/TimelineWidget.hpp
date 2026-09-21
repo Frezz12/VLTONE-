@@ -32,6 +32,7 @@
 
 namespace daw { class EngineController; }
 namespace daw { struct WaveformPeaks; }
+namespace daw::engine { class SampleBuffer; }
 namespace daw { struct RecordingSpan; struct RecordingPreview; }
 namespace ui { class SelectionModel; class ThemeMediaBackground; }
 class QScrollBar;
@@ -244,6 +245,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     /// Where a lane starts on screen, for the headless check that the header
     /// column is in step with the lanes.
     bool checkClipIndexForTest() const;
+    static bool checkClipTrimPreviewForTest();
     bool checkAdaptiveGridForTest();
     bool checkGridAppearanceForTest();
     bool checkGestureGridStabilityForTest();
@@ -278,6 +280,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     /// Headless check only: the vertical centre of one visible lane, so a test
     /// can click on a lane it has just created.
     int laneCentreForTest(int lane) const;
+    static bool checkInterruptedPointerGestureForTest();
     /// Geometry probes for the real-mouse region drag check.
     double regionStartSecondsForTest() const { return m_regionStart; }
     int regionFirstLaneForTest() const { return m_regionLaneA; }
@@ -327,6 +330,7 @@ signals:
     void openPatternRequested(const QString& patternId);
     /// A plain audio clip wants the shared Sample/Clip Editor.
     void openSampleEditorRequested(const QString& trackId, const QString& clipId);
+    void openWarpEditorRequested(const QString& trackId, const QString& clipId);
     void openAutomationEditorRequested(const QString& trackId,
                                        const QString& clipId);
     /// Analyze exactly the audible range of an audio clip. The shell owns the
@@ -362,6 +366,8 @@ protected:
     void dropEvent(class QDropEvent*) override;
 
 private:
+    bool hasActivePointerGesture() const;
+    void finishInterruptedPointerGesture();
     const std::vector<daw::TrackRow>& visibleRows() const;
     mutable bool m_laneGeometryValid = false;
     mutable std::vector<daw::TrackRow> m_layoutRows;
@@ -656,7 +662,8 @@ private:
     void drawPeaks(QPainter& p, const daw::WaveformPeaks* peaks,
                    double sourceStartSeconds, const QRectF& area, float gain,
                    const QColor& color, double timeStretch = 1.0,
-                   bool reversed = false);
+                   bool reversed = false,
+                   const daw::engine::SampleBuffer* samples = nullptr);
     /// One take's material inside `area` (the clip's full width), placed at the
     /// take's own offset into the clip.
     void drawTakeAudio(QPainter& p, const daw::ClipModel& clip,
@@ -842,6 +849,7 @@ private:
     // it is navigation, so grabbing the canvas must never select, seek or edit
     // a clip underneath it.
     bool m_panning = false;
+    QPointF m_lastPointerPosition;
     QPointF m_panLastPosition;
     double m_panVerticalRemainder = 0.0;
     bool m_dragging = false;

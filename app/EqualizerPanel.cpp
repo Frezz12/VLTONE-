@@ -838,16 +838,12 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
             mixColors(field, t.accent, 0.20), t.dark ? 238 : 246);
         setStyleSheet(QString(R"(
 #EqualizerPanel QComboBox {
-    background: %1; border: 1px solid %2; border-radius: 9px;
+    background: %1; border: 1px solid %2; border-radius: 0;
     padding: 3px 10px; color: %3; min-height: 22px;
 }
 #EqualizerPanel QComboBox:hover { border-color: %4; background: %6; }
 #EqualizerPanel QComboBox:focus { border-color: %4; background: %8; }
 #EqualizerPanel QComboBox::drop-down { width: 16px; border: none; }
-#EqualizerPanel QComboBox QAbstractItemView {
-    background: %9; border: 1px solid %2; border-radius: 8px;
-    padding: 3px; selection-background-color: %4; color: %3;
-}
 #EqualizerPanel QPushButton {
     background: %1; border: 1px solid %2; border-radius: 9px;
     padding: 3px 12px; color: %3; min-height: 22px;
@@ -858,16 +854,6 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
 #EqualizerPanel QPushButton:checked { background: %4; border-color: %4; color: %7; }
 #EqualizerPanel QPushButton:disabled { color: %5; background: %1; }
 #EqualizerPanel QCheckBox { color: %3; spacing: 6px; }
-#EqualizerPanel QCheckBox::indicator {
-    width: 14px; height: 14px; border-radius: 5px;
-    border: 1px solid %2; background: %1;
-}
-#EqualizerPanel QCheckBox::indicator:hover { border-color: %4; }
-#EqualizerPanel QCheckBox::indicator:checked {
-    background: %4; border-color: %4;
-}
-#EqualizerPanel QCheckBox::indicator:focus { border-color: %4; }
-#EqualizerPanel QCheckBox::indicator:disabled { border-color: %2; background: %6; }
 #EqualizerBandLabel { color: %4; font-weight: 700; letter-spacing: 0.6px; }
 #EqualizerDynamicsPanel {
     background: transparent; border-top: 1px solid %2;
@@ -884,7 +870,7 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
         t.textSecondary.name(),
         rgba(mixColors(field, t.textPrimary, 0.10), t.dark ? 228 : 242),
         (t.accent.value() > 150 ? QColor(18, 20, 24) : QColor(245, 246, 248))
-            .name(), pressedField, field.name()));
+            .name(), pressedField));
     };
     restyle();
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, restyle);

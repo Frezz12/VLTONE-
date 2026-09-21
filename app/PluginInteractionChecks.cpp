@@ -25,6 +25,7 @@
 #include <QEventLoop>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QPixmap>
 #include <QQuickWindow>
 #include <QTimer>
 #include <QScopeGuard>
@@ -116,6 +117,8 @@ bool MainWindow::checkPluginWindowPolicyForTest() {
     frame->move(700, 200);
     check(editor->isEditorInitialized(), "editor finishes loading");
     check(exposed(frame), "editor opens above the workspace");
+    const QString headerShot = qEnvironmentVariable("DAW_PLUGIN_HEADER_SCREENSHOT");
+    if (!headerShot.isEmpty()) frame->grab().save(headerShot);
     // Native activation may change the OS stack while QWidget's sibling order
     // still puts the editor last. Reproduce that drift without opening a second
     // plugin, then use the same open request as a mixer/inspector insert button.

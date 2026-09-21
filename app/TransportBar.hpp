@@ -82,6 +82,7 @@ public:
     /// shortcuts, or restored workspace state. These setters never echo the
     /// state back through the corresponding signals.
     void setMixerVisible(bool visible);
+    void setWarpVisible(bool visible);
     void setInspectorVisible(bool visible);
     void setBrowserVisible(bool visible);
     void setWebVisible(bool visible);
@@ -101,6 +102,7 @@ signals:
     void playPauseRequested();
     void stopRequested();
     void recordRequested();
+    void restoreMidiRequested();
     void returnToStartRequested();
     void nudgeRequested(int bars);
     void loopToggled(bool on);
@@ -125,6 +127,7 @@ signals:
     void importRequested();
     void exportRequested();
     void mixerToggled(bool on);
+    void warpRequested();
     void inspectorToggled(bool on);
     void browserToggled(bool on);
     void webToggled(bool on);
@@ -197,6 +200,7 @@ private:
     ui::IconButton* m_snapButton = nullptr;
     ui::IconButton* m_typingKeysButton = nullptr;
     ui::IconButton* m_mixerPanelButton = nullptr;
+    ui::IconButton* m_warpButton = nullptr;
     ui::IconButton* m_inspectorPanelButton = nullptr;
     ui::IconButton* m_browserPanelButton = nullptr;
     ui::IconButton* m_detachMixerButton = nullptr;

@@ -31,9 +31,11 @@ int main(int argc, char** argv) {
         peaks.minima.push_back(-.2f - .1f * std::sin(i * .07));
         peaks.maxima.push_back(.4f + .3f * std::sin(i * .03));
     }
+    for (auto style : {ui::WaveformStyle::Crisp, ui::WaveformStyle::Smooth})
     for (int dpr : {1, 2}) for (bool reversed : {false, true}) {
         ui::resetWaveformPaintCacheForTest();
         ui::PeakPaint how;
+        how.style = style;
         how.secondsPerPixel = .0125; how.clipLeft = 0; how.clipRight = 1000;
         how.color = Qt::white; how.reversed = reversed;
         auto record = [&](double left, std::uint64_t identity) {
@@ -47,6 +49,9 @@ int main(int argc, char** argv) {
             return recorder.takeMeshes();
         };
         const auto first = record(-73.25, peaks.geometryId);
+        how.style = style == ui::WaveformStyle::Crisp ? ui::WaveformStyle::Smooth : ui::WaveformStyle::Crisp;
+        check(!same(first, record(-73.25, peaks.geometryId)), "style switch replaces cached GPU contour");
+        how.style = style;
         const auto before = ui::waveformGeometryStatsForTest();
         const auto moved = record(-76.5, peaks.geometryId);
         const auto after = ui::waveformGeometryStatsForTest();

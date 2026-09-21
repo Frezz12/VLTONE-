@@ -13,6 +13,7 @@
 #include <QColorDialog>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCursor>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -58,6 +59,9 @@ public:
         setAlignment(Qt::AlignRight);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         setFixedHeight(kClipParameterFieldHeight);
+        // Receive the first move with no buttons if the release was lost.
+        setMouseTracking(true);
+        lineEdit()->setMouseTracking(true);
         lineEdit()->installEventFilter(this);
         endInteraction();
         connect(this, &QDoubleSpinBox::editingFinished, this,
@@ -90,8 +94,12 @@ protected:
 
 private:
     void endInteraction() {
+        if (m_dragging) m_cursorDrag.finish(QCursor::pos());
+        else m_cursorDrag.cancel();
         m_pressed = false;
         m_dragging = false;
+        // Clear the gesture before releasing: UngrabMouse is synchronous.
+        if (QWidget::mouseGrabber() == this) releaseMouse();
         setReadOnly(true);
         // Tab remains available, while an ordinary drag leaves DAW shortcuts
         // with the arrangement instead of taking keyboard focus.
@@ -161,9 +169,13 @@ private:
             auto* mouse = static_cast<QMouseEvent*>(event);
             if (mouse->button() != Qt::LeftButton) return false;
             m_startValue = m_scrubValue = value();
-            m_lastY = mouse->globalPosition().y();
+            m_cursorDrag.begin(mouse->globalPosition());
+            m_pendingPixels = 0.0;
             m_pressed = true;
             m_dragging = false;
+            // Presses usually land on the embedded line editor. Keep their
+            // subsequent moves/releases with this field, including outside it.
+            grabMouse();
             setCursor(Qt::ClosedHandCursor);
             lineEdit()->setCursor(Qt::ClosedHandCursor);
             event->accept();
@@ -173,31 +185,40 @@ private:
             auto* mouse = static_cast<QMouseEvent*>(event);
             if (!(mouse->buttons() & Qt::LeftButton)) {
                 finishInteraction();
-                return false;
+                event->accept();
+                return true;
             }
-            const qreal delta = m_lastY - mouse->globalPosition().y();
-            if (m_dragging || std::abs(delta) >= 3.0) {
-                m_dragging = true;
-                m_lastY = mouse->globalPosition().y();
-                const double sensitivity =
-                    mouse->modifiers() & Qt::ShiftModifier ? 0.025 : 0.25;
-                // Incremental deltas allow immediate reversal at either limit
-                // and do not jump when Shift is pressed during a gesture.
-                m_scrubValue = std::clamp(
-                    m_scrubValue + delta * singleStep() * sensitivity,
-                    minimum(), maximum());
-                setValue(std::round(m_scrubValue / singleStep()) * singleStep());
-            }
+            scrub(mouse);
             event->accept();
             return true;
         }
         if (event->type() == QEvent::MouseButtonRelease && m_pressed &&
             static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton) {
+            scrub(static_cast<QMouseEvent*>(event));
             finishInteraction();
             event->accept();
             return true;
         }
         return false;
+    }
+
+    void scrub(const QMouseEvent* mouse) {
+        m_pendingPixels -= m_cursorDrag.takeDelta(mouse->globalPosition()).y();
+        if (!m_dragging && std::abs(m_pendingPixels) < 3.0) return;
+        if (!m_dragging) {
+            m_dragging = true;
+            setCursor(Qt::BlankCursor);
+            lineEdit()->setCursor(Qt::BlankCursor);
+        }
+        const double sensitivity =
+            mouse->modifiers() & Qt::ShiftModifier ? 0.025 : 0.25;
+        // Incremental deltas allow immediate reversal at either limit
+        // and do not jump when Shift is pressed during a gesture.
+        m_scrubValue = std::clamp(
+            m_scrubValue + m_pendingPixels * singleStep() * sensitivity,
+            minimum(), maximum());
+        m_pendingPixels = 0.0;
+        setValue(std::round(m_scrubValue / singleStep()) * singleStep());
     }
 
     bool isNumericKey(const QKeyEvent* key) const {
@@ -210,7 +231,8 @@ private:
 
     double m_startValue = 0.0;
     double m_scrubValue = 0.0;
-    qreal m_lastY = 0.0;
+    ui::LockedCursorDrag m_cursorDrag;
+    qreal m_pendingPixels = 0.0;
     bool m_pressed = false;
     bool m_dragging = false;
 };
@@ -234,17 +256,17 @@ public:
     ClipCheckBox(const QString& text, QWidget* parent) : QCheckBox(parent) {
         setAccessibleName(text);
         auto* row = new QHBoxLayout(this);
-        row->setContentsMargins(22, 0, 0, 0);
+        row->setContentsMargins(40, 0, 0, 0);
         auto* label = new QLabel(text, this);
         label->setWordWrap(true);
         label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         label->setAttribute(Qt::WA_TransparentForMouseEvents);
         row->addWidget(label);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        setMinimumHeight(20);
+        setMinimumHeight(22);
     }
-    QSize sizeHint() const override { return layout()->sizeHint().expandedTo({0, 20}); }
-    QSize minimumSizeHint() const override { return {40, 20}; }
+    QSize sizeHint() const override { return layout()->sizeHint().expandedTo({0, 22}); }
+    QSize minimumSizeHint() const override { return {58, 22}; }
 protected:
     bool hitButton(const QPoint& point) const override { return rect().contains(point); }
 };

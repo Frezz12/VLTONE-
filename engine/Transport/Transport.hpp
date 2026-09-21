@@ -61,6 +61,24 @@ public:
     SamplePos position() const noexcept {
         return m_position.load(std::memory_order_acquire);
     }
+    /// Input timestamp -> unwrapped musical time, independent of UI delivery.
+    /// Published by the audio thread; a loop never resets this clock.
+    double inputBeatsAt(std::uint64_t ns) const noexcept {
+        for (int attempt = 0; attempt != 3; ++attempt) {
+            const auto before = m_inputSequence.load(std::memory_order_acquire);
+            if (before & 1) continue;
+            const auto at = m_inputNs.load(std::memory_order_relaxed);
+            const double begin = m_inputBeat.load(std::memory_order_relaxed);
+            const double duration = m_inputDuration.load(std::memory_order_relaxed);
+            const double bpm = m_inputTempo.load(std::memory_order_relaxed);
+            std::atomic_thread_fence(std::memory_order_acquire);
+            if (before != m_inputSequence.load(std::memory_order_relaxed)) continue;
+            if (!isPlaying()) return begin + duration * bpm / 60.0;
+            const double elapsed = ns > at ? double(ns - at) / 1e9 : 0.0;
+            return begin + std::clamp(elapsed, 0.0, duration) * bpm / 60.0;
+        }
+        return m_inputEndBeat.load(std::memory_order_acquire);
+    }
     double positionSeconds() const noexcept {
         const SampleRate rate = sampleRate();
         return rate > 0.0 ? double(position()) / rate : 0.0;
@@ -191,6 +209,17 @@ public:
             if (end > begin && next >= end) next = begin + (next - begin) % (end - begin);
         }
         const double rate = sampleRate();
+        const double inputDuration = rate > 0.0 ? double(frames) / rate : 0.0;
+        const double inputBegin = m_inputEndBeat.load(std::memory_order_relaxed);
+        const double inputTempo = tempo();
+        m_inputSequence.fetch_add(1, std::memory_order_acq_rel);
+        std::atomic_thread_fence(std::memory_order_release);
+        m_inputNs.store(std::uint64_t(presentationNowNs()), std::memory_order_relaxed);
+        m_inputBeat.store(inputBegin, std::memory_order_relaxed);
+        m_inputDuration.store(inputDuration, std::memory_order_relaxed);
+        m_inputTempo.store(inputTempo, std::memory_order_relaxed);
+        m_inputEndBeat.store(inputBegin + inputDuration * inputTempo / 60.0, std::memory_order_release);
+        m_inputSequence.fetch_add(1, std::memory_order_release);
         const auto timestamp = m_outputTimeNs > 0 && rate > 0
             ? m_outputTimeNs + std::int64_t(double(m_outputFrameOffset) * 1e9 / rate)
             : presentationNowNs();
@@ -216,6 +245,8 @@ public:
     }
 
 private:
+    std::atomic<std::uint64_t> m_inputSequence{0}, m_inputNs{0};
+    std::atomic<double> m_inputBeat{0}, m_inputDuration{0}, m_inputTempo{120}, m_inputEndBeat{0};
     BackgroundPlaybackLease m_backgroundLease;
     std::atomic<TransportState> m_state{TransportState::Stopped};
     std::atomic<SamplePos> m_position{0};

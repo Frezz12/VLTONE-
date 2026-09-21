@@ -5,12 +5,15 @@
 
 #include <algorithm>
 #include <limits>
+#include <cmath>
 
 namespace daw::plugins {
 
 /// The same SIMD kernels the engine's own nodes use — a plugin node moves the
 /// same audio around and has no reason to hand-roll its copies and sums.
 namespace dsp = engine::dsp;
+// Synchronous notifications from processing describe playback, not a hand on a control.
+static thread_local const PluginNode* processingPlugin=nullptr;
 
 PluginNode::PluginNode(std::string name, std::unique_ptr<PluginInstance> instance)
     : m_name(std::move(name)), m_instance(std::move(instance)), m_sink(*this) {
@@ -214,6 +217,11 @@ void PluginNode::resume() {
 }
 
 void PluginNode::Sink::push(const PluginEvent& event) noexcept {
+    // A plugin may echo an automation value back through its output event list.
+    // The original host gesture has already been captured; playback must not
+    // become a second live gesture on the next UI pump.
+    if(processingPlugin==&m_owner && event.kind==PluginEvent::Kind::ParamValue &&
+       std::any_of(m_owner.m_blockEvents.begin(),m_owner.m_blockEvents.end(),[&](const auto& input){return input.kind==PluginEvent::Kind::ParamValue && input.paramIndex==event.paramIndex && input.value==event.value;}))return;
     if (m_owner.m_currentMidiOutput &&
         (event.kind == PluginEvent::Kind::NoteOn ||
          event.kind == PluginEvent::Kind::NoteOff ||
@@ -226,31 +234,31 @@ void PluginNode::Sink::push(const PluginEvent& event) noexcept {
         if (event.kind == PluginEvent::Kind::NoteOn) {
             midi.status = engine::MidiEvent::kNoteOn | channel;
             midi.data1 = std::uint8_t(std::clamp<int>(event.key, 0, 127));
-            midi.data2 = std::uint8_t(std::clamp(event.value, 0.0, 1.0) * 127.0);
+            midi.data2 = std::uint8_t(std::lround(std::clamp(event.value, 0.0, 1.0) * 127.0));
         } else if (event.kind == PluginEvent::Kind::NoteOff ||
                    event.kind == PluginEvent::Kind::NoteChoke) {
             midi.status = engine::MidiEvent::kNoteOff | channel;
             midi.data1 = std::uint8_t(std::clamp<int>(event.key, 0, 127));
-            midi.data2 = std::uint8_t(std::clamp(event.value, 0.0, 1.0) * 127.0);
+            midi.data2 = std::uint8_t(std::lround(std::clamp(event.value, 0.0, 1.0) * 127.0));
         } else if (event.kind == PluginEvent::Kind::PolyPressure) {
             midi.status = engine::MidiEvent::kPolyPressure | channel;
             midi.data1 = std::uint8_t(std::clamp<int>(event.key, 0, 127));
-            midi.data2 = std::uint8_t(std::clamp(event.value, 0.0, 1.0) * 127.0);
+            midi.data2 = std::uint8_t(std::lround(std::clamp(event.value, 0.0, 1.0) * 127.0));
         } else if (event.paramIndex <= 127) {
             midi.status = engine::MidiEvent::kControlChange | channel;
             midi.data1 = std::uint8_t(event.paramIndex);
-            midi.data2 = std::uint8_t(std::clamp(event.value, 0.0, 1.0) * 127.0);
+            midi.data2 = std::uint8_t(std::lround(std::clamp(event.value, 0.0, 1.0) * 127.0));
         } else if (event.paramIndex == 128) {
             midi.status = engine::MidiEvent::kChannelPressure | channel;
-            midi.data1 = std::uint8_t(std::clamp(event.value, 0.0, 1.0) * 127.0);
+            midi.data1 = std::uint8_t(std::lround(std::clamp(event.value, 0.0, 1.0) * 127.0));
         } else if (event.paramIndex == 129) {
-            const int bend = int(std::clamp(event.value, 0.0, 1.0) * 16383.0);
+            const int bend = int(std::lround(std::clamp(event.value, 0.0, 1.0) * 16383.0));
             midi.status = engine::MidiEvent::kPitchBend | channel;
             midi.data1 = std::uint8_t(bend & 0x7F);
             midi.data2 = std::uint8_t((bend >> 7) & 0x7F);
         } else if (event.paramIndex == 130) {
             midi.status = engine::MidiEvent::kProgramChange | channel;
-            midi.data1 = std::uint8_t(std::clamp(event.value, 0.0, 1.0) * 127.0);
+            midi.data1 = std::uint8_t(std::lround(std::clamp(event.value, 0.0, 1.0) * 127.0));
         } else {
             return;
         }
@@ -300,6 +308,7 @@ void PluginNode::requestMainThreadPump() noexcept {
 }
 
 void PluginNode::onParameterChanged(std::uint32_t index, double plainValue) noexcept {
+    if(processingPlugin==this)return;
     PluginEvent event;
     event.kind = PluginEvent::Kind::ParamValue;
     event.paramIndex = index;
@@ -794,7 +803,7 @@ void PluginNode::process(const engine::ProcessContext& context) {
                         std::clamp(double(note.notePan), -1.0, 1.0);
                 } else if (note.isNoteOff()) {
                     converted.kind = PluginEvent::Kind::NoteOff;
-                    converted.value = 0.0;
+                    converted.value = double(note.data2) / 127.0;
                 } else if (note.type() == engine::MidiEvent::kControlChange) {
                     converted.kind = PluginEvent::Kind::MidiController;
                     converted.paramIndex = note.data1;
@@ -833,6 +842,12 @@ void PluginNode::process(const engine::ProcessContext& context) {
     // stepping. Automation is the last thing added, so when the block's event
     // budget runs out it is the breakpoints that are dropped — the block-start
     // value still lands, and the parameter is never left stale.
+    if ((m_overrideWasPlaying && !context.playing) ||
+        (context.playing && context.transport.ppqPosition < m_overrideLastBeat))
+        m_overrideEpoch.fetch_add(1, std::memory_order_acq_rel);
+    m_overrideWasPlaying = context.playing; m_overrideLastBeat = context.transport.ppqPosition;
+    const auto overrides = m_automationOverrides.read();
+    const auto overrideEpoch = m_overrideEpoch.load(std::memory_order_acquire);
     if (automation) {
         const AutomationCurves* curves = automation.get();
         const double tempo =
@@ -863,6 +878,9 @@ void PluginNode::process(const engine::ProcessContext& context) {
 
         for (std::size_t ci = 0; ci < curveCount; ++ci) {
             const AutomationCurve& curve = (*curves)[ci];
+            if (overrides && std::any_of(overrides->begin(), overrides->end(), [&](const auto& entry) {
+                    return entry.first == curve.parameterIndex && entry.second == overrideEpoch;
+                })) continue;
             std::size_t& cursor = m_curveCursor[ci];
 
             // A curve with no breakpoints still has a value — its default —
@@ -975,8 +993,10 @@ void PluginNode::process(const engine::ProcessContext& context) {
     // tail but no longer owns the MIDI path: forwarding both its transformed
     // events and the transparent dry stream would duplicate notes downstream.
     m_currentMidiOutput = bypassed ? nullptr : context.midiOutput;
-    const PluginProcessDisposition disposition =
-        m_instance->process(processContext);
+    const auto* previousProcessingPlugin=processingPlugin;
+    processingPlugin=this;
+    const PluginProcessDisposition disposition = m_instance->process(processContext);
+    processingPlugin=previousProcessingPlugin;
     m_currentMidiOutput = nullptr;
     if (disposition == PluginProcessDisposition::Error) {
         m_processFailed.store(true, std::memory_order_relaxed);
