@@ -26,6 +26,7 @@ struct State {
     bool processing = false;
     bool automated = false;
     int shellIndex = 0;
+    int editorIdleCalls = 0;
     void* editorParent = nullptr;
     ERect editorRect{0, 0, 120, 320};
 };
@@ -83,6 +84,7 @@ VstIntPtr dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
             else if (index == 1) copyText(ptr, "Host Tempo");
             else if (index == 2) copyText(ptr, "Host PPQ");
             else if (index == 3) copyText(ptr, "Transport");
+            else if (index == 4) copyText(ptr, "Editor Idle Calls");
             return 1;
         case effGetParamLabel:
             copyText(ptr, index == 1 ? "BPM" : "");
@@ -141,7 +143,9 @@ VstIntPtr dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         case effEditClose:
             self.editorParent = nullptr;
             return 1;
-        case effEditIdle: return self.editorParent ? 1 : 0;
+        case effEditIdle:
+            if (self.editorParent) ++self.editorIdleCalls;
+            return self.editorParent ? 1 : 0;
         default: return 0;
     }
 }
@@ -161,6 +165,7 @@ float getParameter(AEffect* effect, VstInt32 index) {
     if (index == 1) return self.observedTempo;
     if (index == 2) return self.observedPpq;
     if (index == 3) return self.observedTransport;
+    if (index == 4) return float(self.editorIdleCalls) / 1000.0f;
     return 0.0f;
 }
 
@@ -208,7 +213,7 @@ AEffect* makeEffect(audioMasterCallback host, Kind kind) {
     effect.setParameter = &setParameter;
     effect.getParameter = &getParameter;
     effect.numPrograms = 1;
-    effect.numParams = kind == Kind::Effect ? 4 : (kind == Kind::Instrument ? 1 : 0);
+    effect.numParams = kind == Kind::Effect ? 5 : (kind == Kind::Instrument ? 1 : 0);
     effect.numInputs = kind == Kind::Instrument ? 0 : 2;
     effect.numOutputs = kind == Kind::Shell ? 0 : 2;
     effect.flags = effFlagsCanReplacing;

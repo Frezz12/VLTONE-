@@ -368,7 +368,7 @@ int main() {
                 break;
             }
         }
-        check(copiedPattern && copiedPattern->name == "Beat copy" &&
+        check(copiedPattern && copiedPattern->name == "Beat" &&
                   copiedSource && copiedSource->name == "tone" &&
                   copiedSource->instrument.uid == "daw.sampler" &&
                   copiedSource->instrument.id != originalSamplerSlot,
@@ -2909,6 +2909,8 @@ int main() {
               "duplicateTrack adds a track");
         const daw::TrackModel* d = r.project().findTrack(dup);
         const daw::TrackModel* s = r.project().findTrack(src);
+        check(d && s && d->name == s->name,
+              "duplicate keeps the track name");
         check(d && s && d->clips.size() == s->clips.size() &&
                   !d->clips.empty() && d->clips.front().id != s->clips.front().id,
               "duplicate copies clips with fresh ids");
@@ -2924,6 +2926,8 @@ int main() {
         const daw::TrackModel* empty = r.project().findTrack(dupEmpty);
         check(empty && empty->clips.empty() && !empty->inserts.empty(),
               "clip-free duplicate keeps the channel and plugins but no clips");
+        check(empty && empty->name == "Src",
+              "clip-free duplicate keeps the track name");
 
         r.undo();
         check(r.project().findTrack(dupEmpty) == nullptr,
@@ -2949,7 +2953,7 @@ int main() {
             folder, /*withInserts=*/true, /*withClips=*/false);
         const std::vector<std::string> copied = daw::subtreeOf(r.project(), copy);
         const daw::TrackModel* copyRoot = r.project().findTrack(copy);
-        check(copyRoot && copyRoot->name == "Band copy" && copied.size() == 3,
+        check(copyRoot && copyRoot->name == "Band" && copied.size() == 3,
               "duplicating a folder copies its complete nested hierarchy");
         bool hierarchyMapped = true;
         bool lanesEmpty = true;

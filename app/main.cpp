@@ -5,6 +5,7 @@
 #include "SamplerPanel.hpp"
 #include "OfflineRenderDialog.hpp"
 #include "PluginBatchDialog.hpp"
+#include "PluginEditorWindow.hpp"
 #include "TransportBar.hpp"
 #include "ChannelStrip.hpp"
 #include "InternalEditorFrame.hpp"
@@ -1585,7 +1586,12 @@ int main(int argc, char** argv) {
         // independently runnable.
         // the full UI selftest also exercises platform codecs, file watching
         // and WebEngine, which may be unavailable on a sanitizer machine.
-        if (qEnvironmentVariableIsSet("DAW_SELFTEST_TRACK_MIXER_ONLY")) {
+        if (qEnvironmentVariableIsSet("DAW_SELFTEST_PLUGIN_IDLE_ONLY")) {
+            if (!PluginEditorWindow::checkIdleForTest(
+                    *window.collaborationEngineController(),
+                    qEnvironmentVariable("DAW_TEST_VST_SHELL_PATH").toStdString())) return 12;
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_TRACK_MIXER_ONLY")) {
             window.populateDemo();
             if (!window.checkTrackMixerSyncForTest() ||
                 !window.checkTrackRowHeightsForTest()) return 12;
@@ -1685,6 +1691,11 @@ int main(int argc, char** argv) {
                              "focused Piano Roll and MIDI Tools selftest failed\n");
                 return 19;
             }
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet(
+                       "DAW_SELFTEST_EDIT_CHORD_ONLY")) {
+            window.populateDemo();
+            if (!window.checkEditChordRoutingForTest()) return 26;
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
         } else {
         // Build every secondary window too: they are where the tables, the

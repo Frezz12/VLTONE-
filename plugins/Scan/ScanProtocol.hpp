@@ -15,9 +15,10 @@ namespace daw::plugins {
 /// reasonably want to open and read when a plugin refuses to appear.
 namespace scan {
 
-/// Bumped whenever the descriptor schema changes. Cache entries written by an
-/// older version are ignored, which forces a rescan without asking the user.
-inline constexpr int kSchemaVersion = 1;
+/// Bumped when the descriptor schema or compatibility validation changes.
+/// Version 2 retries entries from before the VST3 connection-order fix,
+/// including plugins blacklisted after three failed initialization attempts.
+inline constexpr int kSchemaVersion = 2;
 
 /// Serialise one descriptor. Returns a JSON object as text.
 std::string descriptorToJson(const PluginDescriptor& descriptor);

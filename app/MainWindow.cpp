@@ -8232,6 +8232,28 @@ bool MainWindow::checkPianoRollForTest() {
 }
 
 bool MainWindow::checkEditChordRoutingForTest() {
+    QSet<const QAction*> menuActions;
+    const auto collectMenu = [&](const auto& self, const QMenu* menu) -> void {
+        for (QAction* action : menu->actions()) {
+            menuActions.insert(action);
+            if (action->menu()) self(self, action->menu());
+        }
+    };
+    for (QAction* action : menuBar()->actions())
+        if (action->menu()) collectMenu(collectMenu, action->menu());
+    for (const ShortcutManager::Command& command : m_shortcuts->commands()) {
+#if defined(Q_OS_MACOS)
+        // Qt moves these standard actions into the native application menu.
+        if (command.id == QLatin1String("app.quit") ||
+            command.id == QLatin1String("app.settings")) continue;
+#endif
+        if (!menuActions.contains(command.action)) {
+            std::fprintf(stderr, "command missing from menus: %s\n",
+                         qPrintable(command.id));
+            return false;
+        }
+    }
+
     // Reproduces the macOS routing exactly: Cocoa owns the system menu bar and
     // triggers a menu item's key equivalent itself, whichever window is in
     // front and without asking the focused widget first. So the check triggers
@@ -8378,6 +8400,47 @@ bool MainWindow::checkEditChordRoutingForTest() {
     if (clipCount() != clipsBefore - 1) {
         std::fprintf(stderr,
                      "with the arrangement in front Cut no longer cuts clips\n");
+        return false;
+    }
+    m_controller.undo();
+    syncViews();
+
+    // A clip can stay selected while the track command fires. Cmd+D must
+    // duplicate its track on the first press, leaving clip repeat to Cmd+B.
+    m_trackList->setSelectedTrack(QString::fromStdString(trackId));
+    onSelectionChanged(QString::fromStdString(trackId));
+    m_timeline->selectClips({ui::ClipSel{QString::fromStdString(trackId),
+                                         QString::fromStdString(clipId)}});
+    m_timeline->setFocus();
+    QApplication::processEvents();
+    const std::size_t trackCountBeforeDuplicate =
+        m_controller.project().tracks.size();
+    if (!fire("track.duplicate") ||
+        m_controller.project().tracks.size() != trackCountBeforeDuplicate + 1 ||
+        clipCount() != clipsBefore ||
+        !m_controller.project().findTrack(m_selectedTrackId.toStdString()) ||
+        m_controller.project().findTrack(m_selectedTrackId.toStdString())->name !=
+            m_controller.project().findTrack(trackId)->name) {
+        std::fprintf(stderr, "Cmd+D did not duplicate the selected track\n");
+        return false;
+    }
+    const QString firstDuplicateId = m_selectedTrackId;
+    if (!fire("track.duplicate") ||
+        m_controller.project().tracks.size() != trackCountBeforeDuplicate + 2 ||
+        m_selectedTrackId == firstDuplicateId || clipCount() != clipsBefore) {
+        std::fprintf(stderr, "a second Cmd+D did not duplicate the new track\n");
+        return false;
+    }
+    m_controller.undo();
+    m_controller.undo();
+    syncViews();
+
+    m_timeline->selectClips({ui::ClipSel{QString::fromStdString(trackId),
+                                         QString::fromStdString(clipId)}});
+    if (!fire("edit.repeatClips") ||
+        m_controller.project().tracks.size() != trackCountBeforeDuplicate ||
+        clipCount() != clipsBefore + 1) {
+        std::fprintf(stderr, "Cmd+B did not repeat only the selected clip\n");
         return false;
     }
     m_controller.undo();
@@ -9027,6 +9090,8 @@ void MainWindow::buildLayout() {
                         .arg(ui::channelstrippresets::displayName(path)),
                     4000);
             });
+    connect(m_browser, &FileBrowserPanel::sampleLoadRequested, this,
+            &MainWindow::loadBrowserSample);
     connect(m_browser, &FileBrowserPanel::projectTemplateActivated, this,
             &MainWindow::createProjectFromTemplatePath);
     connect(m_browser, &FileBrowserPanel::projectTemplateTracksRequested, this,
@@ -10738,16 +10803,49 @@ void MainWindow::buildSemanticCommands() {
                   kBrowser = tr("Browser"), kTrack = tr("Track"),
                   kEditors = tr("Editors");
 
-    // These actions do not need another menu. Adding them to the window gives
-    // a user-assigned shortcut the same scope as the fixed toolbar control;
-    // triggering them calls the control's existing state transition.
-    auto bind = [this](const char* rawId, const QString& label,
+    const auto topMenu = [this](const char* name) {
+        return menuBar()->findChild<QMenu*>(QString::fromLatin1(name));
+    };
+    QMenu* transport = topMenu("CommandMenu.Transport");
+    QMenu* edit = topMenu("CommandMenu.Edit");
+    QMenu* view = topMenu("CommandMenu.View");
+    QMenu* tools = topMenu("CommandMenu.Tools");
+    QMenu* track = topMenu("CommandMenu.Track");
+    QMenu* browser = topMenu("CommandMenu.Browser");
+    QMenu* navigation = transport->addMenu(tr("Navigation"));
+    QMenu* playback = transport->addMenu(tr("Playback Behavior"));
+    QMenu* snap = edit->addMenu(tr("Snap and Grid"));
+    QMenu* grid = snap->addMenu(tr("Grid Division"));
+    QMenu* timeDisplay = view->addMenu(tr("Time Display"));
+    QMenu* automation = view->addMenu(tr("Automation Lanes"));
+    QMenu* secondaryTool = tools->addMenu(tr("Secondary Tool"));
+    QMenu* creation = tools->addMenu(tr("Automation Creation"));
+    QMenu* editors = view->addMenu(kEditors);
+
+    // Each semantic command owns one QAction shared by the menu and shortcut
+    // registry, so rebinding and clicking it take the same path.
+    auto bind = [&, this](const char* rawId, const QString& label,
                        const QString& category, const QString& description,
                        const QString& helpId, Risk risk, auto&& run,
                        const QKeySequence& shortcut = QKeySequence()) {
         const QString id = QString::fromLatin1(rawId);
         auto* action = new QAction(label, this);
-        QWidget::addAction(action);
+        QMenu* menu = nullptr;
+        if (id == QLatin1String("transport.rewindBar") ||
+            id == QLatin1String("transport.forwardBar")) menu = navigation;
+        else if (id.startsWith(QLatin1String("transport.playback")) ||
+                 id.startsWith(QLatin1String("transport.playFromClip"))) menu = playback;
+        else if (id.startsWith(QLatin1String("edit.grid."))) menu = grid;
+        else if (id.startsWith(QLatin1String("edit.snap"))) menu = snap;
+        else if (id.startsWith(QLatin1String("view.time"))) menu = timeDisplay;
+        else if (id.startsWith(QLatin1String("view.automation."))) menu = automation;
+        else if (id.startsWith(QLatin1String("tool.secondary"))) menu = secondaryTool;
+        else if (id.startsWith(QLatin1String("tool.automationCreation"))) menu = creation;
+        else if (id.startsWith(QLatin1String("browser."))) menu = browser;
+        else if (id.startsWith(QLatin1String("editor."))) menu = editors;
+        else if (id.startsWith(QLatin1String("track."))) menu = track;
+        if (menu) menu->addAction(action);
+        else QWidget::addAction(action);
         ShortcutManager::Metadata metadata;
         metadata.description = description;
         metadata.helpId = helpId;
@@ -10967,6 +11065,7 @@ void MainWindow::buildMenus() {
             &QAction::triggered, this, &QWidget::close);
 
     auto* edit = menuBar()->addMenu(tr("&Edit"));
+    edit->setObjectName(QStringLiteral("CommandMenu.Edit"));
     connect(addCommand(edit, "edit.undo", tr("&Undo"), kEdit, QKeySequence::Undo),
             &QAction::triggered, this, &MainWindow::onUndo);
     connect(addCommand(edit, "edit.redo", tr("&Redo"), kEdit, QKeySequence::Redo),
@@ -11028,8 +11127,19 @@ void MainWindow::buildMenus() {
             &QAction::triggered, this, [this] {
                 if (m_timeline->duplicateActiveTake()) markDirty();
             });
+    edit->addSeparator();
+    connect(addCommand(edit, "edit.selectionActions",
+                       tr("Actions for Selection…"), kEdit),
+            &QAction::triggered, this, [this] {
+                QTimer::singleShot(0, this, [this] {
+                    if (m_timeline->showSelectedClipActionsMenu()) return;
+                    if (m_trackList->showSelectedTrackActionsMenu()) return;
+                    statusBar()->showMessage(tr("Select a clip or track first"), 2000);
+                });
+            });
 
     auto* track = menuBar()->addMenu(tr("&Track"));
+    track->setObjectName(QStringLiteral("CommandMenu.Track"));
     connect(addCommand(track, "track.addAudio", tr("Add &Audio Track"), kTrack,
                        QKeySequence(tr("Ctrl+Alt+A"))),
             &QAction::triggered, this, &MainWindow::onAddAudioTrack);
@@ -11046,6 +11156,13 @@ void MainWindow::buildMenus() {
     connect(addCommand(track, "track.duplicate", tr("&Duplicate"), kTrack,
                        QKeySequence(tr("Ctrl+D"))),
             &QAction::triggered, this, &MainWindow::onDuplicateSelectedTrack);
+    connect(addCommand(track, "track.actions", tr("More Track Actions…"), kTrack),
+            &QAction::triggered, this, [this] {
+                QTimer::singleShot(0, this, [this] {
+                    if (!m_trackList->showSelectedTrackActionsMenu())
+                        statusBar()->showMessage(tr("Select a track first"), 2000);
+                });
+            });
     QAction* removeAct = addCommand(track, "track.remove", tr("&Remove Selected"),
                                     kTrack, QKeySequence::Delete);
     // The physical "delete" key on Mac laptops is Backspace — bind both so
@@ -11085,6 +11202,7 @@ void MainWindow::buildMenus() {
             &QAction::triggered, this, &MainWindow::onClearSolos);
 
     auto* transport = menuBar()->addMenu(tr("Trans&port"));
+    transport->setObjectName(QStringLiteral("CommandMenu.Transport"));
     connect(addCommand(transport, "transport.playPause", tr("Play / Pause"),
                        kTransport, QKeySequence(Qt::Key_Space)),
             &QAction::triggered, this, &MainWindow::onPlayPause);
@@ -11313,6 +11431,7 @@ void MainWindow::buildMenus() {
 #endif
 
     auto* view = menuBar()->addMenu(tr("&View"));
+    view->setObjectName(QStringLiteral("CommandMenu.View"));
     auto* fullScreen = addCommand(view, "view.fullScreen", tr("Full Screen"), kView,
                                   QKeySequence(Qt::Key_F11));
     fullScreen->setCheckable(true);
@@ -11425,6 +11544,7 @@ void MainWindow::buildMenus() {
 
     // Tool selection (also reachable from the transport chip).
     auto* tools = menuBar()->addMenu(tr("Too&ls"));
+    tools->setObjectName(QStringLiteral("CommandMenu.Tools"));
     connect(addCommand(tools, "tool.select", tr("Pointer Tool"), kTools,
                        QKeySequence(Qt::Key_1)),
             &QAction::triggered, this, [this] { setEditTool(0); });
@@ -11456,6 +11576,33 @@ void MainWindow::buildMenus() {
     m_typingKeyboardAction->setCheckable(true);
     connect(m_typingKeyboardAction, &QAction::toggled, this,
             &MainWindow::setTypingKeyboardEnabled);
+
+    auto* browser = menuBar()->addMenu(tr("&Browser"));
+    browser->setObjectName(QStringLiteral("CommandMenu.Browser"));
+    connect(addCommand(browser, "browser.selectionActions",
+                       tr("Actions for Browser Selection…"), tr("Browser")),
+            &QAction::triggered, this, [this] {
+                QTimer::singleShot(0, this, [this] {
+                    if (!m_browser->showSelectedItemActionsMenu())
+                        statusBar()->showMessage(tr("Select a browser item first"), 2000);
+                });
+            });
+    connect(addCommand(browser, "browser.addTab", tr("Add Icon Tab…"),
+                       tr("Browser")),
+            &QAction::triggered, this, [this] {
+                QTimer::singleShot(0, m_browser, [this] {
+                    m_browser->showAddTabMenu();
+                });
+            });
+    connect(addCommand(browser, "browser.tabActions",
+                       tr("Current Icon Tab Actions…"), tr("Browser")),
+            &QAction::triggered, this, [this] {
+                QTimer::singleShot(0, this, [this] {
+                    if (!m_browser->showCurrentTabActionsMenu())
+                        statusBar()->showMessage(tr("Select an icon tab first"), 2000);
+                });
+            });
+    browser->addSeparator();
 
     auto* settings = menuBar()->addMenu(tr("&Settings"));
     connect(addCommand(settings, "app.settings", tr("&Settings…"), kApp,
@@ -12642,6 +12789,8 @@ bool MainWindow::checkBrowser(const QString& folder, const QString& audioFile,
     auto* searchSurface = findChild<ui::graphics::WorkspaceSurface*>();
     if (!m_browser->checkSearchForTest(searchSurface ? searchSurface->quickWindow() : nullptr))
         return fail("file/plugin search regression");
+    if (!m_browser->checkOrganizationForTest(audioFile))
+        return fail("Favorites/collections/icon tabs regression");
     if (!openDemoBrowser(folder, audioFile))
         return fail("demo file was not found in the tree");
     if (!m_browser->containersAreNavigationOnlyForTest())
@@ -12716,6 +12865,24 @@ bool MainWindow::checkBrowser(const QString& folder, const QString& audioFile,
     // Put the audio row back before checking its real drag payload below.
     if (!m_browser->showFolderForTest(folder, audioFile, /*persist=*/false))
         return fail("audio file could not be reselected after MIDI preview");
+
+    // Enter takes the selected audio through the browser signal and the
+    // shell's current-target routing. It must be one undoable MIDI-channel
+    // load, not another preview or a new arrangement clip.
+    const std::string sampleTarget =
+        m_controller.addTrack(daw::TrackKind::Instrument, "Browser Enter");
+    syncViews();
+    selectTrackFromHeader(QString::fromStdString(sampleTarget));
+    const std::size_t sampleLoadUndo = m_controller.undoDepth();
+    if (!m_browser->loadSelectedSampleForTest())
+        return fail("Enter was not accepted for the selected audio file");
+    const auto* loadedTarget = m_controller.project().findTrack(sampleTarget);
+    if (!loadedTarget || loadedTarget->instrument.uid != "daw.sampler" ||
+        m_controller.undoDepth() != sampleLoadUndo + 1) {
+        return fail("Enter did not load one Sampler into the selected MIDI channel");
+    }
+    m_controller.undo();
+    syncViews();
 
     // What a drag out of the browser would carry, fed straight into the
     // arrangement's real drop handler: this is the whole chain the user's
@@ -13729,6 +13896,8 @@ void MainWindow::openPianoRoll(const QString& trackId, const QString& clipId) {
         });
     }
     m_pianoRoll->setClip(trackId, clipId);
+    m_browserSampleTargetTrackId = trackId;
+    m_browserSampleTargetPreservesSampler = false;
 #ifdef DAW_ENABLE_COLLABORATION
     registerPianoRollPresence();
 #endif
@@ -13759,7 +13928,13 @@ void MainWindow::openPattern(const QString& patternId) {
             if (localFileDirty) markDirty();
         });
         connect(m_patternWindow, &PatternWindow::sourceSelectionChanged,
-                this, &MainWindow::updateLocalProcessingActions);
+                this, [this] {
+            const QString source = m_patternWindow->selectedSourceTrackId();
+            m_browserSampleTargetTrackId = source.isEmpty()
+                ? m_selectedTrackId : source;
+            m_browserSampleTargetPreservesSampler = !source.isEmpty();
+            updateLocalProcessingActions();
+        });
         connect(m_patternWindow, &PatternWindow::openPianoRollRequested, this,
                 &MainWindow::openPianoRoll);
         connect(m_patternWindow, &PatternWindow::openPluginEditorRequested, this,
@@ -13782,6 +13957,44 @@ void MainWindow::openPattern(const QString& patternId) {
     }
     m_patternWindow->setPattern(patternId);
     presentInternalWindow(m_patternWindow);
+}
+
+void MainWindow::loadBrowserSample(const QString& path) {
+    if (!ui::isAudioFile(path)) return;
+
+    const QString name = QFileInfo(path).completeBaseName();
+    const bool patternTarget = m_browserSampleTargetPreservesSampler &&
+        m_patternWindow && m_patternWindow->isVisible() &&
+        m_patternWindow->selectedSourceTrackId() ==
+            m_browserSampleTargetTrackId;
+    if (patternTarget) {
+        if (!m_patternWindow->replaceSelectedSample(path)) {
+            statusBar()->showMessage(tr("The sample could not be loaded"), 4000);
+            return;
+        }
+        statusBar()->showMessage(
+            tr("Replaced the Pattern layer sample with “%1”").arg(name), 3000);
+        return;
+    }
+
+    const QString targetId = m_browserSampleTargetPreservesSampler
+        ? m_selectedTrackId : m_browserSampleTargetTrackId;
+    const auto* track =
+        m_controller.project().findTrack(targetId.toStdString());
+    if (!track || !daw::trackAccepts(track->kind, daw::ClipKind::Midi)) {
+        statusBar()->showMessage(
+            tr("Select a Pattern layer or MIDI channel before loading a sample"),
+            4000);
+        return;
+    }
+    if (!m_controller.loadInstrumentSampler(track->id, path.toStdString())) {
+        statusBar()->showMessage(tr("The sample could not be loaded"), 4000);
+        return;
+    }
+    syncViews();
+    markDirty({targetId});
+    statusBar()->showMessage(
+        tr("Loaded “%1” into the selected MIDI channel").arg(name), 3000);
 }
 
 void MainWindow::setEditTool(int index) {
@@ -15438,19 +15651,6 @@ void MainWindow::onAddSendTrack() {
     markDirty();
 }
 void MainWindow::onDuplicateSelectedTrack() {
-    QWidget* focus = QApplication::focusWidget();
-    const bool timelineFocused =
-        m_timeline && focus &&
-        (focus == m_timeline || m_timeline->isAncestorOf(focus));
-    if (timelineFocused && m_timeline->duplicateActiveTake()) {
-        markDirty();
-        return;
-    }
-    if (timelineFocused && m_timeline->duplicateSelection()) {
-        markDirty();
-        return;
-    }
-
     const QStringList selection = selectedTrackIds();
     const QString trackId = !m_selectedTrackId.isEmpty()
                                 ? m_selectedTrackId
@@ -15751,6 +15951,8 @@ void MainWindow::onClearMutes() {
 
 void MainWindow::onSelectionChanged(const QString& trackId) {
     m_selectedTrackId = trackId;
+    m_browserSampleTargetTrackId = trackId;
+    m_browserSampleTargetPreservesSampler = false;
     m_timeline->setSelectedTrack(trackId);
     // The lanes show the whole selection, not just the row the panels follow.
     m_timeline->setSelectedTracks(m_trackList ? m_trackList->selectedTrackIds()

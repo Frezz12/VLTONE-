@@ -1,0 +1,4 @@
+./multipart.go
+./objectstore.go
+./s3.go
+./verified_multipart.go

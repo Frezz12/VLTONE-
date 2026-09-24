@@ -1548,6 +1548,11 @@ bool PatternWindow::replaceSample(const QString& trackId,
     return true;
 }
 
+bool PatternWindow::replaceSelectedSample(const QString& path) {
+    return !m_primaryId.isEmpty() && ui::isAudioFile(path) &&
+           replaceSample(m_primaryId, path);
+}
+
 void PatternWindow::chooseReplacementSample(const QString& trackId) {
     const QString path = QFileDialog::getOpenFileName(
         this, tr("Replace Pattern Sample"), QString(), ui::audioNameFilter());

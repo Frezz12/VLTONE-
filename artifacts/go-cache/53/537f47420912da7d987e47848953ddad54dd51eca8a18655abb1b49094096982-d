@@ -1,0 +1,23 @@
+# test log
+getenv VLT_TEST_DATABASE_URL
+getenv VLT_TEST_DATABASE_URL
+getenv GOTMPDIR
+open C:\Users\FrezzY\AppData\Local\Temp\TestCrashArtifactStreamcrash.log.log1672079017\001\bundle-2623822304.part
+open C:\Users\FrezzY\AppData\Local\Temp\TestCrashArtifactStreamcrash.log.log1672079017\001\bundle.log
+open C:\Users\FrezzY\AppData\Local\Temp
+getenv GOTMPDIR
+open C:\Users\FrezzY\AppData\Local\Temp\TestCrashArtifactStreamcrash.log.bin29742810\001\bundle-716873909.part
+open C:\Users\FrezzY\AppData\Local\Temp\TestCrashArtifactStreamcrash.log.bin29742810\001\bundle.bin
+open C:\Users\FrezzY\AppData\Local\Temp
+getenv GOTMPDIR
+open C:\Users\FrezzY\AppData\Local\Temp\TestCrashArtifactStreamcrash.json.json4284547931\001\bundle-603617890.part
+open C:\Users\FrezzY\AppData\Local\Temp\TestCrashArtifactStreamcrash.json.json4284547931\001\bundle.json
+open C:\Users\FrezzY\AppData\Local\Temp
+getenv GOTMPDIR
+open C:\Users\FrezzY\AppData\Local\Temp\TestCrashArtifactStreamcrash.log.bin#012712697548\001\bundle-2864623590.part
+open C:\Users\FrezzY\AppData\Local\Temp\TestCrashArtifactStreamcrash.log.bin#012712697548\001\bundle.bin
+open C:\Users\FrezzY\AppData\Local\Temp
+getenv GOTMPDIR
+open C:\Users\FrezzY\AppData\Local\Temp\TestCrashArtifactStream3260102333\001\bundle-2071928097.part
+open C:\Users\FrezzY\AppData\Local\Temp\TestCrashArtifactStream3260102333\001
+open C:\Users\FrezzY\AppData\Local\Temp

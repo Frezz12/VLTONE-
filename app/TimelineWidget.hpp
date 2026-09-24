@@ -154,6 +154,8 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
 
     /// True when at least one clip is selected in the arrangement.
     bool hasClipSelection() const { return !m_selection.isEmpty(); }
+    /// Open the same actions as a right-click on the primary selected clip.
+    bool showSelectedClipActionsMenu();
 
     /// Select these clips from outside — the same state a click would leave,
     /// including what the selection model then publishes. Anything not found in

@@ -26,6 +26,10 @@ public:
     void setPattern(const QString& patternId);
     const QString& patternId() const { return m_patternId; }
     const QStringList& selectedSourceTrackIds() const { return m_selectedIds; }
+    const QString& selectedSourceTrackId() const { return m_primaryId; }
+    /// Replace the selected layer's audio while retaining an existing
+    /// Sampler instance and all of its controls.
+    bool replaceSelectedSample(const QString& path);
     void refresh();
     bool checkInteractionGesturesForTest();
     static bool checkEditingForTest();

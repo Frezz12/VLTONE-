@@ -553,7 +553,6 @@ private:
     /// selection into copies only after the pointer clears the drag threshold.
     bool m_duplicateDragPending = false;
     bool m_duplicateDragCreated = false;
-    bool m_shiftClickDeselectPending = false;
     QPointF m_movePress;
     /// Latest visible geometry for a resize. `m_resizeOrig` remains the
     /// immutable delta source while this vector follows the pointer.

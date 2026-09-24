@@ -2194,6 +2194,16 @@ void TrackListWidget::contextMenuEvent(QContextMenuEvent* ev) {
     }
 }
 
+bool TrackListWidget::showSelectedTrackActionsMenu() {
+    const QString id = !m_selectedId.isEmpty()
+                           ? m_selectedId
+                           : (m_selectedIds.isEmpty() ? QString{} : m_selectedIds.front());
+    if (id.isEmpty() || !m_controller->project().findTrack(id.toStdString()))
+        return false;
+    showTrackContextMenu(id, QCursor::pos());
+    return true;
+}
+
 void TrackListWidget::showTrackContextMenu(const QString& id,
                                            const QPoint& globalPos) {
     const auto* track = m_controller->project().findTrack(id.toStdString());
@@ -2262,6 +2272,9 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
         dup = menu.addAction(isPattern ? tr("Duplicate Pattern")
                               : isFolder ? tr("Duplicate Folder")
                                          : tr("Duplicate Track"));
+        if (auto* command = window()->findChild<QAction*>(
+                QStringLiteral("track.duplicate")))
+            dup->setShortcut(command->shortcut());
         if (!isFolder && !isPattern) {
             dupNoFx =
                 menu.addAction(tr("Duplicate Track (without plugins)"));
@@ -2320,6 +2333,9 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
                      : (isPattern ? tr("Delete Pattern")
                                   : isFolder ? tr("Delete Folder")
                                              : tr("Delete Track")));
+    if (auto* command = window()->findChild<QAction*>(
+            QStringLiteral("track.remove")))
+        del->setShortcut(command->shortcut());
     // The creation items belong here too: right-clicking a track is the
     // obvious place to look for "add another one", and hunting for a patch of
     // empty column to click is not a thing anyone should have to do.

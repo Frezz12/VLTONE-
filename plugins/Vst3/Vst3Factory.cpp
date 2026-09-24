@@ -246,8 +246,20 @@ std::unique_ptr<PluginInstance> Vst3Factory::create(
 
     IPluginFactory* factory = module->factory();
     Vst::IComponent* component = nullptr;
-    const tresult created = factory->createInstance(
+    tresult created = factory->createInstance(
         cid, Vst::IComponent::iid, reinterpret_cast<void**>(&component));
+    if (created == kNoInterface) {
+        // MiniFreak V creates IPluginBase, then exposes IComponent through
+        // queryInterface, just like the controller fallback in initialize().
+        IPluginBase* rawBase = nullptr;
+        created = factory->createInstance(
+            cid, IPluginBase::iid, reinterpret_cast<void**>(&rawBase));
+        IPtr<IPluginBase> base = owned(rawBase);
+        if (created == kResultOk && base) {
+            created = base->queryInterface(Vst::IComponent::iid,
+                                           reinterpret_cast<void**>(&component));
+        }
+    }
     if (created != kResultOk || !component) {
         if (diagnose)
             std::fprintf(stderr,

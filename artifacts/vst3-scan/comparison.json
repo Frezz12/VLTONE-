@@ -1,0 +1,173 @@
+[
+  {
+    "Name": "Analog Lab V",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 4.01,
+    "AfterSeconds": 2.56
+  },
+  {
+    "Name": "Augmented BRASS",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 2.23,
+    "AfterSeconds": 1.92
+  },
+  {
+    "Name": "Augmented GRAND PIANO",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 2.59,
+    "AfterSeconds": 2.1
+  },
+  {
+    "Name": "Buchla Easel V",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 1.29,
+    "AfterSeconds": 1.06
+  },
+  {
+    "Name": "CMI V",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 2.05,
+    "AfterSeconds": 1.82
+  },
+  {
+    "Name": "DX7 V",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 1.8,
+    "AfterSeconds": 1.41
+  },
+  {
+    "Name": "Farfisa V",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 1.84,
+    "AfterSeconds": 1.26
+  },
+  {
+    "Name": "Jun-6 V",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 1.44,
+    "AfterSeconds": 1.08
+  },
+  {
+    "Name": "MiniFreak V",
+    "Before": 2,
+    "After": 2,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 0.14,
+    "AfterSeconds": 0.1
+  },
+  {
+    "Name": "Modular V3",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 1.9,
+    "AfterSeconds": 1.14
+  },
+  {
+    "Name": "OP-Xa V",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 1.59,
+    "AfterSeconds": 1.19
+  },
+  {
+    "Name": "Pigments",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 4.61,
+    "AfterSeconds": 4.66
+  },
+  {
+    "Name": "SEM V2",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 1.33,
+    "AfterSeconds": 0.98
+  },
+  {
+    "Name": "SQ80 V",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 1.5,
+    "AfterSeconds": 1.32
+  },
+  {
+    "Name": "Solina V2",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 2.07,
+    "AfterSeconds": 1.11
+  },
+  {
+    "Name": "Synthi V",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 1.78,
+    "AfterSeconds": 1.71
+  },
+  {
+    "Name": "Vocoder V",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 2.0,
+    "AfterSeconds": 1.45
+  },
+  {
+    "Name": "Wurli V2",
+    "Before": 0,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 1.61,
+    "AfterSeconds": 1.12
+  },
+  {
+    "Name": "ZENOLOGY",
+    "Before": -1073741819,
+    "After": 0,
+    "BeforeTimeout": false,
+    "AfterTimeout": false,
+    "BeforeSeconds": 15.98,
+    "AfterSeconds": 17.83
+  }
+]

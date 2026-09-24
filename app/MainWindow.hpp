@@ -711,6 +711,9 @@ private:
     void setWarpVisible(bool visible);
     /// Show the compact editor for a Pattern container.
     void openPattern(const QString& patternId);
+    /// Enter in the browser applies the audio file to the most recently
+    /// selected Pattern layer or MIDI channel.
+    void loadBrowserSample(const QString& path);
     bool canOpenSelectedEditor() const;
     void openSelectedEditor();
     /// Set the arrangement edit tool (0 Select … 7 Glue)
@@ -992,6 +995,8 @@ private:
     PianoRollWindow* m_pianoRoll = nullptr;
     InternalEditorFrame* m_pianoRollFrame = nullptr;
     PatternWindow* m_patternWindow = nullptr;
+    QString m_browserSampleTargetTrackId;
+    bool m_browserSampleTargetPreservesSampler = false;
     /// Every application-owned modeless window now uses InternalEditorFrame.
     /// The content pointer remains the feature registry's identity; the frame
     /// owns geometry, stacking and custom chrome.

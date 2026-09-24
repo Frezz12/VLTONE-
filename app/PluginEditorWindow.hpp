@@ -89,6 +89,8 @@ public:
     /// produce — so these open it, pump it, and read back what it is showing.
     void setParameterDockVisibleForTest(bool visible);
     void pollForTest();
+    static bool checkIdleForTest(daw::EngineController& controller,
+                                const std::string& fixturePath);
     QStringList parameterDockOrderForTest() const;
     QString parameterDockActiveForTest() const { return m_dockActive; }
     /// Exercise the same screen-bound clamp as a real native editor without
@@ -233,6 +235,7 @@ private:
     QString m_dockActive;
     QString m_sidechainSignature;
     QTimer* m_poll = nullptr;            // refreshes wrapper + fallback panel
+    QTimer* m_editorIdle = nullptr;      // periodic legacy VST editor service
     bool m_refreshingWrapper = false;
     bool m_embedded = false;
     /// The last size accepted or reported by the plugin itself. This remains

@@ -14,6 +14,8 @@ class PreviewLoader;
 class WaveformStrip;
 class QLabel;
 class QLineEdit;
+class QHBoxLayout;
+class QPoint;
 class QTimer;
 namespace ui { class IconButton; }
 
@@ -43,6 +45,9 @@ public:
     void setPreviewLoopEnabled(bool enabled);
     void setAutoPreviewEnabled(bool enabled);
     bool hasPreviewableSelection() const;
+    bool showSelectedItemActionsMenu();
+    void showAddTabMenu();
+    bool showCurrentTabActionsMenu();
 
     /// Scale the browser's own interface — rows, icons, labels and the search
     /// field — without touching the rest of the window. `step` is a multiplier
@@ -88,8 +93,13 @@ public:
     /// for its package-filtered result.
     QStringList searchForTest(const QString& query);
     bool checkSearchForTest(QObject* keyboardTarget = nullptr);
+    /// Headless regression for Favorites/custom collections, icon-tab limits,
+    /// shortcut membership and inherited folder colours.
+    bool checkOrganizationForTest(const QString& filePath);
     bool selectedProjectTemplateForTest() const;
     bool activateSelectedProjectTemplateForTest();
+    /// Headless check only: press Enter on the selected audio row.
+    bool loadSelectedSampleForTest();
 
 signals:
     /// Something worth a line in the status bar.
@@ -101,6 +111,8 @@ signals:
     /// A browser preset was activated and should be applied to the currently
     /// selected mixer channel by the shell.
     void channelStripPresetActivated(const QString& path);
+    /// Enter on an audio file: load it into the last selected Pattern/MIDI target.
+    void sampleLoadRequested(const QString& path);
     void projectTemplateActivated(const QString& path);
     void projectTemplateTracksRequested(const QString& path);
 
@@ -113,6 +125,13 @@ protected:
 
 private:
     QWidget* buildHeader();
+    QWidget* buildTabs();
+    void rebuildTabs();
+    void activateCollection(const QString& collectionId, bool persist = true);
+    void createTab();
+    void pinCollectionAsTab(const QString& collectionId);
+    QString chooseTabIcon(const QString& current = {});
+    void showTabMenu(const QString& collectionId, const QPoint& globalPosition);
     /// Set the caption under the waveform, elided to the panel's width with the
     /// full text kept as the tooltip.
     void setFileLabel(const QString& text, const QString& tip = {});
@@ -141,6 +160,8 @@ private:
     PreviewLoader* m_loader = nullptr;
     MidiPreviewLoader* m_midiLoader = nullptr;
     QLineEdit* m_searchField = nullptr;
+    QWidget* m_tabsBar = nullptr;
+    QHBoxLayout* m_tabsLayout = nullptr;
     QWidget* m_previewBar = nullptr;
     WaveformStrip* m_strip = nullptr;
     QLabel* m_fileLabel = nullptr;
@@ -155,6 +176,7 @@ private:
     QTimer* m_playheadTimer = nullptr;
 
     QString m_selectedPath;
+    QString m_activeCollection;
     /// Whether the decode in flight was started in order to be heard. A
     /// selection with auto-preview off still decodes — for the waveform — and
     /// must stay silent.

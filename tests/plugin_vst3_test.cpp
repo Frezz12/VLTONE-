@@ -189,7 +189,8 @@ int main() {
     // ── Instantiate, and look at the two halves ──
     {
         auto instance = factory.create(descriptor);
-        check(instance != nullptr, "the plugin instantiates");
+        check(instance != nullptr,
+              "the plugin connects both halves before the initial state handshake");
         if (!instance) {
             std::printf("\nFAILURES PRESENT\n");
             return 1;
@@ -425,9 +426,9 @@ int main() {
     }
 
     // ── Preset-wide controller changes ──
-    // FabFilter-style preset browsers update the controller and send only
-    // kParamValuesChanged. The host must copy that complete snapshot into the
-    // processor on the next block, not merely repaint its generic controls.
+    // A native preset changes DSP internally and invalidates the host's cache.
+    // Arturia also exposes MIDI helper parameters whose zero readbacks must
+    // never be echoed into DSP as volume/program-change events.
     {
 #if defined(_WIN32)
         ::_putenv_s("DAW_TEST_VST3_PRESET_RESTART", "1");
@@ -442,6 +443,8 @@ int main() {
 #endif
         check(preset != nullptr, "the preset-restart fixture instantiates");
         if (preset) {
+            check(preset->pendingParameterEvents().empty(),
+                  "a pending preset notification does not synthesize edits for offline clones");
             PluginProcessInfo setup{48000.0, kBlock, false};
             check(preset->activate(setup), "the preset-restart fixture activates");
             preset->startProcessing();
@@ -460,9 +463,64 @@ int main() {
             preset->process(context);
             check(std::fabs(outputLeft[0] - 0.5f) < 1e-6f &&
                       std::fabs(outputLeft[kPluginLatency] - 0.75f) < 1e-6f,
-                  "kParamValuesChanged synchronizes the preset from controller to DSP");
-            preset->stopProcessing();
-            preset->deactivate();
+                  "preset audio survives activation without replaying zero-valued MIDI helpers");
+            auto node = std::make_unique<PluginNode>("preset", std::move(preset));
+            auto* live = node->instance();
+            for (int flags : {int(Steinberg::Vst::kParamValuesChanged),
+                              int(Steinberg::Vst::kParamValuesChanged |
+                                  Steinberg::Vst::kParamTitlesChanged)}) {
+                const auto generation = PluginMainThreadWork::generation();
+                const auto text = std::to_string(flags);
+#if defined(_WIN32)
+                ::_putenv_s("DAW_TEST_VST3_RESTART_FLAGS", text.c_str());
+#else
+                ::setenv("DAW_TEST_VST3_RESTART_FLAGS", text.c_str(), 1);
+#endif
+                live->setParameterFromHost(1, 0.25);
+#if defined(_WIN32)
+                ::_putenv_s("DAW_TEST_VST3_RESTART_FLAGS", "");
+#else
+                ::unsetenv("DAW_TEST_VST3_RESTART_FLAGS");
+#endif
+                check(PluginMainThreadWork::generation() != generation,
+                      "a preset notification wakes the main-thread pump");
+                check(live->pendingParameterEvents().empty(),
+                      "preset refresh has no queued processor edits before it is serviced");
+                const bool metadata = (flags & Steinberg::Vst::kParamTitlesChanged) != 0;
+                check(node->takeRestartRequested() == metadata,
+                      "value-only preset changes do not restart the processor");
+                live->pumpMainThread();
+                if (metadata) {
+                    live->stopProcessing();
+                    live->deactivate();
+                    check(live->activate(setup), "combined preset/metadata refresh activates");
+                    live->startProcessing();
+                }
+                PluginEvent notification;
+                bool offsetRefreshed = false;
+                while (node->popNotification(notification))
+                    offsetRefreshed |= notification.paramIndex == 1 &&
+                                       std::abs(notification.value - 0.25) < 1e-9;
+                check(offsetRefreshed, "the host receives the new preset parameter values");
+                live->process(context);
+                check(std::abs(outputLeft[0] - (metadata ? 0.25f : 0.5f)) < 1e-6f &&
+                          std::abs(outputLeft[kPluginLatency] - 0.5f) < 1e-6f,
+                      "preset cache refresh preserves sound and value-only changes preserve tails");
+            }
+            PluginEvent volume;
+            volume.kind = PluginEvent::Kind::MidiController;
+            volume.paramIndex = Steinberg::Vst::kCtrlVolume;
+            volume.value = 0;
+            context.inputEvents = std::span<const PluginEvent>(&volume, 1);
+            live->process(context);
+            check(outputLeft.back() == 0,
+                  "an explicit MIDI CC7 event still reaches the processor");
+            volume.value = 1;
+            live->process(context);
+            check(std::abs(outputLeft.back() - 0.5f) < 1e-6f,
+                  "restoring MIDI volume makes the preset audible again");
+            live->stopProcessing();
+            live->deactivate();
         }
     }
 
@@ -498,11 +556,10 @@ int main() {
             const auto result = engine.renderOffline(0, totalFrames, block,
                 [&](const auto& audio, auto frames) {
                     bool correct = true;
-                    // The sink sends the notification after block one was
-                    // serviced. Block two services it; block three receives
-                    // the new controller values without resetting the delay.
+                    // The fixture changes its own DSP and then invalidates
+                    // the host cache. The next block already has the preset.
                     const float offset = flags == int(Steinberg::Vst::kParamValuesChanged) &&
-                        received >= 2 * block ? 0.5f : 0.25f;
+                        received >= block ? 0.5f : 0.25f;
                     for (unsigned i = 0; i < frames; ++i)
                         correct &= std::abs(audio.data(0)[i] - offset -
                             (received + i < kPluginLatency ? 0.0f : 1.0f)) < 1e-6f;

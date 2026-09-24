@@ -6914,7 +6914,34 @@ void TimelineWidget::wheelEvent(QWheelEvent* ev) {
     ev->accept();
 }
 
+bool TimelineWidget::showSelectedClipActionsMenu() {
+    if (m_selection.isEmpty()) return false;
+    const ClipRef selected = m_selection.front();
+    const daw::ClipModel* clip = findClipModel(selected.trackId, selected.clipId);
+    const int lane = laneForTrackId(selected.trackId);
+    if (!clip || lane < 0) return false;
+    ensureLaneVisible(lane);
+    QRectF body = clipRect(lane, *clip);
+    if (body.right() < 20 || body.left() >= width() - 20) {
+        setHorizontalScroll(std::max(0.0, clip->startSeconds -
+                                             width() / (4.0 * m_pixelsPerSecond)));
+        body = clipRect(lane, *clip);
+    }
+    const QPoint at(std::clamp(int(body.left() + std::min(10.0, body.width() / 2)),
+                               1, std::max(1, width() - 2)),
+                    std::clamp(int(body.center().y()), 1,
+                               std::max(1, height() - 2)));
+    m_suppressContextMenu = false;
+    QContextMenuEvent event(QContextMenuEvent::Other, at, QCursor::pos());
+    contextMenuEvent(&event);
+    return true;
+}
+
 void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
+    const auto useCommandShortcut = [this](QAction* action, const char* id) {
+        if (auto* command = window()->findChild<QAction*>(QString::fromLatin1(id)))
+            action->setShortcut(command->shortcut());
+    };
     if (m_suppressContextMenu) {
         m_suppressContextMenu = false;
         ev->accept();
@@ -7016,7 +7043,7 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
         }
 
         QAction* bounce = menu.addAction(tr("Bounce in Place…"));
-        bounce->setShortcut(QKeySequence(tr("Ctrl+Alt+C")));
+        useCommandShortcut(bounce, "timeline.bounce_in_place");
         bounce->setEnabled(m_localProcessingEnabled);
         bounce->setToolTip(m_localProcessingEnabled
                                ? tr("Render and insert the selected material")
@@ -7054,9 +7081,12 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
         }
         menu.addSeparator();
         QAction* repeat = menu.addAction(tr("Repeat Clip"));
+        useCommandShortcut(repeat, "edit.repeatClips");
         QAction* muteClip = menu.addAction(
             clip && clip->muted ? tr("Unmute Clip") : tr("Mute Clip"));
+        useCommandShortcut(muteClip, "edit.muteClips");
         QAction* del = menu.addAction(tr("Delete Clip"));
+        useCommandShortcut(del, "track.remove");
         // With several clips selected, offer to delete them all.
         QAction* delAll = nullptr;
         if (m_selection.size() > 1 && isClipSelected(hit.clipId)) {
@@ -7191,7 +7221,7 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
     QAction* bounceRegion = nullptr;
     if (m_regionActive) {
         bounceRegion = menu.addAction(tr("Bounce in Place…"));
-        bounceRegion->setShortcut(QKeySequence(tr("Ctrl+Alt+C")));
+        useCommandShortcut(bounceRegion, "timeline.bounce_in_place");
         bounceRegion->setEnabled(m_localProcessingEnabled);
         bounceRegion->setToolTip(m_localProcessingEnabled
                                      ? tr("Render the selected region")

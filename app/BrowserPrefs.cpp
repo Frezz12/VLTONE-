@@ -1,9 +1,15 @@
 #include "BrowserPrefs.hpp"
 
 #include <QDir>
+#include <QCoreApplication>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSettings>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QUuid>
 
 #include <algorithm>
 
@@ -13,6 +19,82 @@ namespace {
 
 QString key(const char* name) {
     return QStringLiteral("browser/") + QLatin1String(name);
+}
+
+QString cleanPath(const QString& path) {
+    if (path.trimmed().isEmpty()) return {};
+    return QFileInfo(path).absoluteFilePath();
+}
+
+bool samePath(const QString& a, const QString& b) {
+#if defined(Q_OS_WIN)
+    return cleanPath(a).compare(cleanPath(b), Qt::CaseInsensitive) == 0;
+#else
+    return cleanPath(a) == cleanPath(b);
+#endif
+}
+
+QVector<Collection> readCollections() {
+    QVector<Collection> out;
+    const auto document = QJsonDocument::fromJson(
+        QSettings().value(key("collections")).toByteArray());
+    if (document.isArray()) {
+        for (const QJsonValue& value : document.array()) {
+            const QJsonObject object = value.toObject();
+            Collection collection;
+            collection.id = object.value(QStringLiteral("id")).toString();
+            collection.name = object.value(QStringLiteral("name")).toString().trimmed();
+            collection.color = object.value(QStringLiteral("color")).toString();
+            for (const QJsonValue& path : object.value(QStringLiteral("paths")).toArray()) {
+                const QString clean = cleanPath(path.toString());
+                if (!clean.isEmpty() && std::none_of(collection.paths.cbegin(),
+                                                     collection.paths.cend(),
+                    [&clean](const QString& existing) { return samePath(existing, clean); }))
+                    collection.paths.append(clean);
+            }
+            if (!collection.id.isEmpty() && !collection.name.isEmpty() &&
+                std::none_of(out.cbegin(), out.cend(), [&collection](const Collection& existing) {
+                    return existing.id == collection.id;
+                }))
+                out.append(collection);
+        }
+    }
+
+    const QString favorite = QStringLiteral("favorites");
+    auto it = std::find_if(out.begin(), out.end(), [&favorite](const Collection& collection) {
+        return collection.id == favorite;
+    });
+    if (it == out.end()) {
+        out.prepend({favorite,
+                     QCoreApplication::translate("FileBrowserTree", "Favorites"),
+                     {}, {}});
+    } else {
+        it->name = QCoreApplication::translate("FileBrowserTree", "Favorites");
+        if (it != out.begin()) std::rotate(out.begin(), it, it + 1);
+    }
+    return out;
+}
+
+void writeCollections(const QVector<Collection>& collections) {
+    QJsonArray array;
+    for (const Collection& collection : collections) {
+        QJsonArray paths;
+        for (const QString& path : collection.paths) paths.append(path);
+        QJsonObject object;
+        object.insert(QStringLiteral("id"), collection.id);
+        object.insert(QStringLiteral("name"), collection.name);
+        object.insert(QStringLiteral("color"), collection.color);
+        object.insert(QStringLiteral("paths"), paths);
+        array.append(object);
+    }
+    QSettings().setValue(key("collections"),
+                         QJsonDocument(array).toJson(QJsonDocument::Compact));
+}
+
+QJsonObject readFolderColors() {
+    const auto document = QJsonDocument::fromJson(
+        QSettings().value(key("folderColors")).toByteArray());
+    return document.isObject() ? document.object() : QJsonObject{};
 }
 
 /// What a first run shows, so the panel is not an empty box: the user's Music
@@ -29,6 +111,214 @@ QStringList defaultFolders() {
 }
 
 } // namespace
+
+QString favoritesId() { return QStringLiteral("favorites"); }
+
+QVector<Collection> collections() { return readCollections(); }
+
+QString createCollection(const QString& name) {
+    const QString cleanName = name.trimmed();
+    if (cleanName.isEmpty()) return {};
+    auto current = readCollections();
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    current.append({id, cleanName, {}, {}});
+    writeCollections(current);
+    return id;
+}
+
+bool renameCollection(const QString& id, const QString& name) {
+    if (id.isEmpty() || id == favoritesId() || name.trimmed().isEmpty()) return false;
+    auto current = readCollections();
+    for (Collection& collection : current) {
+        if (collection.id != id) continue;
+        collection.name = name.trimmed();
+        writeCollections(current);
+        return true;
+    }
+    return false;
+}
+
+bool removeCollection(const QString& id) {
+    if (id.isEmpty() || id == favoritesId()) return false;
+    auto current = readCollections();
+    const auto end = std::remove_if(current.begin(), current.end(),
+                                    [&id](const Collection& collection) {
+                                        return collection.id == id;
+                                    });
+    if (end == current.end()) return false;
+    current.erase(end, current.end());
+    writeCollections(current);
+    removeTab(id);
+    if (activeCollection() == id) setActiveCollection({});
+    return true;
+}
+
+bool addToCollection(const QString& id, const QString& path) {
+    const QString clean = cleanPath(path);
+    if (id.isEmpty() || clean.isEmpty() || !QFileInfo::exists(clean)) return false;
+    auto current = readCollections();
+    for (Collection& collection : current) {
+        if (collection.id != id) continue;
+        if (std::any_of(collection.paths.cbegin(), collection.paths.cend(),
+                        [&clean](const QString& existing) {
+                            return samePath(existing, clean);
+                        })) return false;
+        collection.paths.append(clean);
+        writeCollections(current);
+        return true;
+    }
+    return false;
+}
+
+bool removeFromCollection(const QString& id, const QString& path) {
+    auto current = readCollections();
+    for (Collection& collection : current) {
+        if (collection.id != id) continue;
+        const auto end = std::remove_if(collection.paths.begin(), collection.paths.end(),
+                                        [&path](const QString& existing) {
+                                            return samePath(existing, path);
+                                        });
+        if (end == collection.paths.end()) return false;
+        collection.paths.erase(end, collection.paths.end());
+        writeCollections(current);
+        return true;
+    }
+    return false;
+}
+
+void setCollectionColor(const QString& id, const QString& color) {
+    auto current = readCollections();
+    for (Collection& collection : current) {
+        if (collection.id != id) continue;
+        collection.color = color;
+        writeCollections(current);
+        return;
+    }
+}
+
+QVector<Tab> tabs() {
+    QVector<Tab> out;
+    const auto available = readCollections();
+    const auto exists = [&available](const QString& id) {
+        return std::any_of(available.cbegin(), available.cend(),
+                           [&id](const Collection& collection) {
+                               return collection.id == id;
+                           });
+    };
+    const auto document = QJsonDocument::fromJson(
+        QSettings().value(key("tabs")).toByteArray());
+    if (!document.isArray()) return out;
+    for (const QJsonValue& value : document.array()) {
+        const QJsonObject object = value.toObject();
+        const QString id = object.value(QStringLiteral("collectionId")).toString();
+        if (id.isEmpty() || !exists(id) ||
+            std::any_of(out.cbegin(), out.cend(), [&id](const Tab& tab) {
+                return tab.collectionId == id;
+            })) continue;
+        out.append({id, object.value(QStringLiteral("icon")).toString(
+                            QStringLiteral("folder"))});
+        if (out.size() >= kMaxTabs - 1) break;
+    }
+    return out;
+}
+
+void writeTabs(const QVector<Tab>& tabs) {
+    QJsonArray array;
+    for (const Tab& tab : tabs) {
+        QJsonObject object;
+        object.insert(QStringLiteral("collectionId"), tab.collectionId);
+        object.insert(QStringLiteral("icon"), tab.icon);
+        array.append(object);
+    }
+    QSettings().setValue(key("tabs"),
+                         QJsonDocument(array).toJson(QJsonDocument::Compact));
+}
+
+bool addTab(const QString& collectionId, const QString& icon) {
+    auto current = tabs();
+    if (current.size() >= kMaxTabs - 1 ||
+        std::any_of(current.cbegin(), current.cend(), [&collectionId](const Tab& tab) {
+            return tab.collectionId == collectionId;
+        })) return false;
+    const auto available = readCollections();
+    if (std::none_of(available.cbegin(), available.cend(),
+                     [&collectionId](const Collection& collection) {
+                         return collection.id == collectionId;
+                     })) return false;
+    current.append({collectionId, icon.isEmpty() ? QStringLiteral("folder") : icon});
+    writeTabs(current);
+    return true;
+}
+
+void removeTab(const QString& collectionId) {
+    auto current = tabs();
+    current.erase(std::remove_if(current.begin(), current.end(),
+                                 [&collectionId](const Tab& tab) {
+                                     return tab.collectionId == collectionId;
+                                 }), current.end());
+    writeTabs(current);
+    if (activeCollection() == collectionId) setActiveCollection({});
+}
+
+void setTabIcon(const QString& collectionId, const QString& icon) {
+    auto current = tabs();
+    for (Tab& tab : current) {
+        if (tab.collectionId != collectionId) continue;
+        tab.icon = icon.isEmpty() ? QStringLiteral("folder") : icon;
+        writeTabs(current);
+        return;
+    }
+}
+
+QString activeCollection() {
+    const QString stored = QSettings().value(key("activeCollection")).toString();
+    if (stored.isEmpty()) return {};
+    const auto current = tabs();
+    return std::any_of(current.cbegin(), current.cend(), [&stored](const Tab& tab) {
+        return tab.collectionId == stored;
+    }) ? stored : QString{};
+}
+
+void setActiveCollection(const QString& collectionId) {
+    QSettings().setValue(key("activeCollection"), collectionId);
+}
+
+QString directFolderColor(const QString& folder) {
+    const QString clean = cleanPath(folder);
+    const QJsonObject colors = readFolderColors();
+    for (auto it = colors.constBegin(); it != colors.constEnd(); ++it)
+        if (samePath(it.key(), clean)) return it.value().toString();
+    return {};
+}
+
+QString folderColor(const QString& folder) {
+    QString current = cleanPath(folder);
+    while (!current.isEmpty()) {
+        const QString color = directFolderColor(current);
+        if (!color.isEmpty()) return color;
+        const QString parent = QFileInfo(current).dir().absolutePath();
+        if (samePath(parent, current)) break;
+        current = parent;
+    }
+    return {};
+}
+
+void setFolderColor(const QString& folder, const QString& color) {
+    const QString clean = cleanPath(folder);
+    if (clean.isEmpty()) return;
+    QJsonObject colors = readFolderColors();
+    QString storedKey;
+    for (auto it = colors.constBegin(); it != colors.constEnd(); ++it) {
+        if (samePath(it.key(), clean)) {
+            storedKey = it.key();
+            break;
+        }
+    }
+    if (!storedKey.isEmpty()) colors.remove(storedKey);
+    if (!color.isEmpty()) colors.insert(clean, color);
+    QSettings().setValue(key("folderColors"),
+                         QJsonDocument(colors).toJson(QJsonDocument::Compact));
+}
 
 QStringList folders() {
     QSettings settings;

@@ -7718,7 +7718,6 @@ std::string EngineController::duplicateTrack(const std::string& trackId,
         std::vector<TrackModel> copies = mintConnectedTrackCopies(
             m_project, sourceIds, withInserts, withClips);
         if (copies.empty()) return {};
-        copies.front().name += " copy";
         const std::string copyRootId = copies.front().id;
         const bool pattern = m_project.tracks[index].kind == TrackKind::Pattern;
         const bool folder = isFolder(m_project.tracks[index]);
@@ -7815,7 +7814,6 @@ std::string EngineController::duplicateTrack(const std::string& trackId,
 
     if (cloudProjectBound()) {
         TrackModel copy = mintTrackCopy(m_project.tracks[index], withInserts);
-        copy.name += " copy";
         auto batch = std::make_shared<collab::BatchCommand>();
         if (!appendSharedTrack(batch, copy, trackId) ||
             !sharedBatchApplies(m_project, batch)) {
@@ -7829,7 +7827,6 @@ std::string EngineController::duplicateTrack(const std::string& trackId,
 
     TrackModel copy = m_project.tracks[index];
     copy.id = newUuid();
-    copy.name = copy.name + " copy";
     // A copied source stays inside the same Pattern/folder. Apart from being
     // what Duplicate normally means, this also keeps its summing route intact.
     copy.parentId = m_project.tracks[index].parentId;

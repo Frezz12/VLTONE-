@@ -103,6 +103,8 @@ public:
     QString selectedTrackId() const { return m_selectedId; }
     /// Everything selected, in display order.
     QStringList selectedTrackIds() const { return m_selectedIds; }
+    /// Open the same actions as a right-click on the primary selected track.
+    bool showSelectedTrackActionsMenu();
     void setSelectedTrack(const QString& id);
     void setSelectedTracks(const QStringList& ids, const QString& primary = {});
 

@@ -1,0 +1,3 @@
+VST3: 'C:\Program Files\Common Files\VST3\Arturia\MiniFreak V.vst3' advertises 1 classes
+VST3 MiniFreak V: createInstance returned -2147467262 and no component
+daw_scan: plugin could not be initialized

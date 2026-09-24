@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QColor>
 #include <QHash>
 #include <QSet>
 #include <memory>
@@ -8,6 +9,7 @@
 #include <QVector>
 
 class QFileSystemWatcher;
+namespace ui::browserprefs { struct Collection; }
 
 /// The browser's file tree: the folders the user chose, and what is inside them.
 ///
@@ -20,6 +22,8 @@ class QFileSystemWatcher;
 class FileBrowserTree : public QTreeWidget {
     Q_OBJECT
 public:
+    /// Open the selected item's existing right-click actions.
+    bool showSelectedItemActionsMenu();
     /// What a row is, which decides how it is drawn and whether it can be
     /// dragged anywhere.
     ///
@@ -34,6 +38,7 @@ public:
         ChannelStripPreset,
         ProjectTemplate,
         Other,
+        Collection,
         PluginGroup,
         Plugin
     };
@@ -62,6 +67,10 @@ public:
     /// single "Plugins" root, which is dropped entirely when the list is empty
     /// — an empty folder that can never fill up is worse than no folder.
     void setPlugins(const QVector<PluginEntry>& plugins);
+    /// Empty selects the permanent all-folders view; otherwise show one
+    /// virtual collection as an icon-tab destination.
+    void setCollectionFilter(const QString& collectionId);
+    QString collectionFilter() const { return m_collectionFilter; }
     /// Re-read every open folder from disk.
     void refresh();
 
@@ -99,6 +108,8 @@ signals:
     void fileSelected(const QString& path);
     /// A file row was double-clicked.
     void fileActivated(const QString& path);
+    /// Enter on an audio row applies it to the current Pattern/MIDI target.
+    void sampleLoadRequested(const QString& path);
     /// A `.vlts` row was double-clicked. It is applied to the selected channel,
     /// never sent to the audio preview path.
     void channelStripPresetActivated(const QString& path);
@@ -108,6 +119,12 @@ signals:
     /// Keyboard/context-menu alternative to dragging a template into the
     /// arrangement: append its tracks to the current project.
     void projectTemplateTracksRequested(const QString& path);
+    /// A collection, its contents or a folder colour changed. The panel uses
+    /// this to rebuild the icon tabs while the tree refreshes itself.
+    void organizationChanged();
+    /// A collection row asked to become an icon tab. The panel owns the icon
+    /// chooser because the tab strip lives there.
+    void tabRequested(const QString& collectionId);
     /// Something worth saying in the status bar (an unreadable folder, a
     /// capped search).
     void statusMessage(const QString& text);
@@ -119,6 +136,8 @@ protected:
     void startDrag(Qt::DropActions supportedActions) override;
     void keyPressEvent(class QKeyEvent* event) override;
     void contextMenuEvent(class QContextMenuEvent* event) override;
+    void drawBranches(class QPainter* painter, const QRect& rect,
+                      const QModelIndex& index) const override;
 
 private:
     void populate(QTreeWidgetItem* parent, const QString& path);
@@ -128,7 +147,9 @@ private:
     void collapseNode(QTreeWidgetItem* item);
     /// Re-read one directory in place, keeping selection and open children.
     void reloadNode(QTreeWidgetItem* item);
-    QTreeWidgetItem* makeItem(const QString& path, bool isDirectory, int cachedKind = -1);
+    QTreeWidgetItem* makeItem(const QString& path, bool isDirectory,
+                              int cachedKind = -1,
+                              const QColor& inheritedFolderColor = {});
     struct DirectoryResult;
     void applyDirectoryChunk(const std::shared_ptr<DirectoryResult>& result);
     quint64 m_loadSerial = 0;
@@ -146,10 +167,13 @@ private:
     void rebuildRoots();
     /// The synthetic plugin root, or null when there are no plugins.
     QTreeWidgetItem* buildPluginRoot(const QString& query = {});
+    QTreeWidgetItem* buildCollectionRoot(
+        const ui::browserprefs::Collection& collection);
 
     QStringList m_roots;
     QString m_presetRoot;
     QVector<PluginEntry> m_plugins;
+    QString m_collectionFilter;
     QFileSystemWatcher* m_watcher = nullptr;
     /// Folders being watched, so the fd cost stays bounded and known.
     QStringList m_watched;

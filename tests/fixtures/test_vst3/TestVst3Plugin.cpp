@@ -27,6 +27,7 @@
 #include <pluginterfaces/vst/ivstevents.h>
 #include <pluginterfaces/vst/ivstmidicontrollers.h>
 #include <pluginterfaces/vst/ivsthostapplication.h>
+#include <pluginterfaces/vst/ivstmessage.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -50,6 +51,7 @@ constexpr float kMissingBusSentinel = -999.0f;
 
 constexpr ParamID kGainId = 100;
 constexpr ParamID kOffsetId = 101;
+constexpr ParamID kMidiVolumeId = 102;
 constexpr double kGainMax = 2.0;
 
 // Fixed class ids. Arbitrary, but they must never change: a project file that
@@ -75,7 +77,8 @@ double offsetFromNormalized(double normalized) { return normalized * 2.0 - 1.0; 
 
 // ── Processor ──────────────────────────────────────────────────────────────
 
-class TestProcessor : public U::Implements<U::Directly<IComponent, IAudioProcessor>,
+class TestProcessor : public U::Implements<U::Directly<IComponent, IAudioProcessor,
+                                                       IConnectionPoint>,
                                            U::Indirectly<IPluginBase>> {
 public:
     explicit TestProcessor(int32 outputChannels = 2, bool instrument = false)
@@ -98,6 +101,16 @@ public:
             if (m_host->getName(name) != kResultOk || name[0] != 'V') std::abort();
         }
     }
+
+    tresult PLUGIN_API connect(IConnectionPoint* other) override {
+        m_connection = other;
+        return kResultOk;
+    }
+    tresult PLUGIN_API disconnect(IConnectionPoint*) override {
+        m_connection = nullptr;
+        return kResultOk;
+    }
+    tresult PLUGIN_API notify(IMessage*) override { return kResultOk; }
 
     tresult PLUGIN_API getControllerClassId(TUID classId) override {
         std::memcpy(classId, kControllerUID, sizeof(TUID));
@@ -179,6 +192,8 @@ public:
         return kResultOk;
     }
     tresult PLUGIN_API getState(IBStream* stream) override {
+        // Both halves must be connected before their initial state handshake.
+        if (!m_connection) std::abort();
         if (!stream) return kInvalidArgument;
         if (std::getenv("DAW_TEST_VST3_FAIL_SAVE_STATE")) return kResultFalse;
         const double values[2] = {m_gain, m_offset};
@@ -214,6 +229,20 @@ public:
         const int32 frames = data.numSamples;
         float** out = data.outputs[0].channelBuffers32;
 
+        // MIDI helper readbacks are not persistent synth parameters. Like
+        // Arturia's CC7 helper, the controller reads zero until an event, but
+        // sending that zero to the processor really mutes the instrument.
+        if (data.inputParameterChanges) {
+            for (int32 q = 0; q < data.inputParameterChanges->getParameterCount(); ++q) {
+                auto* queue = data.inputParameterChanges->getParameterData(q);
+                if (!queue || queue->getParameterId() != kMidiVolumeId) continue;
+                int32 offset = 0;
+                ParamValue value = 0;
+                if (queue->getPoint(queue->getPointCount() - 1, offset, value) == kResultOk)
+                    m_midiVolume = value;
+            }
+        }
+
         if (m_instrument) {
             const int32 queueCount = data.inputParameterChanges
                                          ? data.inputParameterChanges->getParameterCount()
@@ -237,7 +266,8 @@ public:
                 }
             }
             for (int32 ch = 0; ch < m_outputChannels; ++ch) {
-                for (int32 i = 0; i < frames; ++i) out[ch][i] = m_voice * float(m_gain);
+                for (int32 i = 0; i < frames; ++i)
+                    out[ch][i] = m_voice * float(m_gain * m_midiVolume);
             }
             return kResultOk;
         }
@@ -351,7 +381,7 @@ public:
                 const float sample = input[ch][i] + sidechain[ch][i];
                 const float delayed = ring[slot];
                 ring[slot] = sample;
-                out[ch][i] = float(delayed * m_gain + m_offset);
+                out[ch][i] = float((delayed * m_gain + m_offset) * m_midiVolume);
             }
             m_writePosition = (slot + 1) % kLatency;
         }
@@ -360,6 +390,7 @@ public:
 
     double gain() const { return m_gain; }
     double offset() const { return m_offset; }
+    void applyPreset(double gain, double offset) { m_gain = gain; m_offset = offset; }
 
 private:
     std::vector<float> m_delay;
@@ -367,25 +398,41 @@ private:
     int32 m_writePosition = 0;
     double m_gain = 1.0;
     double m_offset = 0.0;
+    double m_midiVolume = 1.0;
     bool m_instrument = false;
     bool m_active = false;
     bool m_eventInputActive = false;
     bool m_audioOutputActive = false;
     bool m_sidechainActive = false;
     bool m_initialized = false;
+    IConnectionPoint* m_connection = nullptr;
     IPtr<IHostApplication> m_host;
     float m_voice = 0.0f;
 };
 
 // ── Controller ─────────────────────────────────────────────────────────────
 
-class TestController : public U::Implements<U::Directly<IEditController, IMidiMapping>,
+class TestController : public U::Implements<U::Directly<IEditController, IMidiMapping,
+                                                        IConnectionPoint>,
                                             U::Indirectly<IPluginBase>> {
 public:
     tresult PLUGIN_API initialize(FUnknown*) override { return kResultOk; }
     tresult PLUGIN_API terminate() override { return kResultOk; }
 
+    tresult PLUGIN_API connect(IConnectionPoint* other) override {
+        m_connection = other;
+        return kResultOk;
+    }
+    tresult PLUGIN_API disconnect(IConnectionPoint*) override {
+        m_connection = nullptr;
+        return kResultOk;
+    }
+    tresult PLUGIN_API notify(IMessage*) override { return kResultOk; }
+
     tresult PLUGIN_API setComponentState(IBStream* stream) override {
+        // Reproduce controllers that dereference the processor established by
+        // connect(), such as ZENOLOGY, instead of tolerating the wrong order.
+        if (!m_connection) std::abort();
         if (!stream) return kInvalidArgument;
         double values[2] = {1.0, 0.0};
         int32 read = 0;
@@ -410,9 +457,10 @@ public:
             m_pendingPreset = false;
             m_gain = 0.25;
             m_offset = 0.5;
+            applyPresetToProcessor();
             m_handler->restartComponent(kParamValuesChanged);
         }
-        return 2;
+        return m_hasMidiHelper ? 3 : 2;
     }
     tresult PLUGIN_API getParameterInfo(int32 index, ParameterInfo& info) override {
         std::memset(&info, 0, sizeof(info));
@@ -425,6 +473,10 @@ public:
             info.id = kOffsetId;
             copyUtf16(info.title, "Offset", 128);
             info.defaultNormalizedValue = 0.5;              // plain 0.0
+        } else if (index == 2 && m_hasMidiHelper) {
+            info.id = kMidiVolumeId;
+            copyUtf16(info.title, "MIDI CC7 helper", 128);
+            return kResultOk;
         } else {
             return kInvalidArgument;
         }
@@ -447,13 +499,16 @@ public:
     }
 
     ParamValue PLUGIN_API normalizedParamToPlain(ParamID id, ParamValue normalized) override {
+        if (id == kMidiVolumeId) return normalized;
         return id == kGainId ? gainFromNormalized(normalized)
                              : offsetFromNormalized(normalized);
     }
     ParamValue PLUGIN_API plainParamToNormalized(ParamID id, ParamValue plain) override {
+        if (id == kMidiVolumeId) return plain;
         return id == kGainId ? plain / kGainMax : (plain + 1.0) / 2.0;
     }
     ParamValue PLUGIN_API getParamNormalized(ParamID id) override {
+        if (id == kMidiVolumeId) return 0.0;
         return plainParamToNormalized(id, id == kGainId ? m_gain : m_offset);
     }
     tresult PLUGIN_API setParamNormalized(ParamID id, ParamValue value) override {
@@ -463,17 +518,18 @@ public:
         if (m_handler) {
             if (std::getenv("DAW_TEST_VST3_EDITOR_EDIT"))
                 m_handler->performEdit(id, value);
-            if (const char* flags = std::getenv("DAW_TEST_VST3_RESTART_FLAGS"))
+            if (const char* flags = std::getenv("DAW_TEST_VST3_RESTART_FLAGS")) {
+                if (std::atoi(flags) & kParamValuesChanged) applyPresetToProcessor();
                 m_handler->restartComponent(std::atoi(flags));
+            }
         }
         return kResultOk;
     }
 
     tresult PLUGIN_API setComponentHandler(IComponentHandler* handler) override {
         m_handler = handler;
-        // Test-only preset browser: it changes the controller wholesale and
-        // reports one kParamValuesChanged, exactly as commercial synth preset
-        // menus do (there are no individual performEdit calls).
+        // Test-only preset browser: changes both halves internally, then asks
+        // the host to refresh its cache without individual performEdit calls.
         m_pendingPreset = m_handler && std::getenv("DAW_TEST_VST3_PRESET_RESTART");
         return kResultOk;
     }
@@ -488,12 +544,22 @@ public:
             id = kGainId;
             return kResultTrue;
         }
+        if (busIndex == 0 && controller == kCtrlVolume && m_hasMidiHelper) {
+            id = kMidiVolumeId;
+            return kResultTrue;
+        }
         return kResultFalse;
     }
 
 private:
+    void applyPresetToProcessor() {
+        if (auto* processor = dynamic_cast<TestProcessor*>(m_connection))
+            processor->applyPreset(m_gain, m_offset);
+    }
     IComponentHandler* m_handler = nullptr;
+    IConnectionPoint* m_connection = nullptr;
     bool m_pendingPreset = false;
+    bool m_hasMidiHelper = std::getenv("DAW_TEST_VST3_PRESET_RESTART") != nullptr;
     double m_gain = 1.0;
     double m_offset = 0.0;
 };
@@ -560,6 +626,11 @@ public:
 
     tresult PLUGIN_API createInstance(FIDString cid, FIDString iid, void** obj) override {
         if (!obj) return kInvalidArgument;
+        if (std::getenv("DAW_TEST_VST3_COMPONENT_VIA_BASE") &&
+            std::memcmp(iid, IComponent::iid, sizeof(TUID)) == 0) {
+            *obj = nullptr;
+            return kNoInterface;
+        }
         // The cast to the interface matters: `U::Implements` puts its own base
         // first, so the most-derived pointer is not the interface pointer.
         if (std::memcmp(cid, kProcessorUID, sizeof(TUID)) == 0) {

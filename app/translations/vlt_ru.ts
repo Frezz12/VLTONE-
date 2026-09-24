@@ -821,7 +821,7 @@ Anything changed since — by the assistant or by you — is undone as well. One
     </message>
     <message>
         <source>Velocity</source>
-        <translation>Скорость</translation>
+        <translation>Громкость</translation>
     </message>
     <message>
         <source>Skip</source>
@@ -837,7 +837,7 @@ Anything changed since — by the assistant or by you — is undone as well. One
     </message>
     <message>
         <source>Velocity ramp</source>
-        <translation>Рампа скорости</translation>
+        <translation>Кривая громкости</translation>
     </message>
     <message>
         <source>Swing</source>
@@ -845,7 +845,7 @@ Anything changed since — by the assistant or by you — is undone as well. One
     </message>
     <message>
         <source>Humanize velocity</source>
-        <translation>Гуманизация скорости</translation>
+        <translation>Гуманизация громкости</translation>
     </message>
     <message>
         <source>Humanize timing</source>
@@ -932,7 +932,7 @@ Anything changed since — by the assistant or by you — is undone as well. One
     </message>
     <message>
         <source>Velocity</source>
-        <translation>Скорость</translation>
+        <translation>Громкость</translation>
     </message>
     <message>
         <source>Pulling the unaccented notes down is what makes an accent audible without the part getting louder overall.</source>
@@ -2994,7 +2994,7 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     </message>
     <message>
         <source>Velocity and pan</source>
-        <translation>Скорость и панорама</translation>
+        <translation>Громкость и панорама</translation>
     </message>
     <message>
         <source>Length and transpose</source>
@@ -4278,6 +4278,94 @@ Up to 10 MB</source>
         <source>Stop</source>
         <translation>Стоп</translation>
     </message>
+    <message>
+        <source>%1 tab</source>
+        <translation>Вкладка «%1»</translation>
+    </message>
+    <message>
+        <source>All folders</source>
+        <translation>Все папки</translation>
+    </message>
+    <message>
+        <source>Add an icon tab</source>
+        <translation>Добавить вкладку-иконку</translation>
+    </message>
+    <message>
+        <source>Add browser tab</source>
+        <translation>Добавить вкладку браузера</translation>
+    </message>
+    <message>
+        <source>Folder</source>
+        <translation>Папка</translation>
+    </message>
+    <message>
+        <source>Favorite</source>
+        <translation>Избранное</translation>
+    </message>
+    <message>
+        <source>Waveform</source>
+        <translation>Волна</translation>
+    </message>
+    <message>
+        <source>MIDI</source>
+        <translation>MIDI</translation>
+    </message>
+    <message>
+        <source>Synth</source>
+        <translation>Синтезатор</translation>
+    </message>
+    <message>
+        <source>Microphone</source>
+        <translation>Микрофон</translation>
+    </message>
+    <message>
+        <source>Headphones</source>
+        <translation>Наушники</translation>
+    </message>
+    <message>
+        <source>Layers</source>
+        <translation>Слои</translation>
+    </message>
+    <message>
+        <source>The browser can have up to eight tabs</source>
+        <translation>В браузере может быть не больше восьми вкладок</translation>
+    </message>
+    <message>
+        <source>Open %1 as a tab</source>
+        <translation>Открыть «%1» как вкладку</translation>
+    </message>
+    <message>
+        <source>New Collection Folder…</source>
+        <translation>Новая папка-коллекция…</translation>
+    </message>
+    <message>
+        <source>New Collection Folder</source>
+        <translation>Новая папка-коллекция</translation>
+    </message>
+    <message>
+        <source>Name for the sample shortcuts:</source>
+        <translation>Название папки для ссылок на сэмплы:</translation>
+    </message>
+    <message>
+        <source>Change Icon…</source>
+        <translation>Изменить иконку…</translation>
+    </message>
+    <message>
+        <source>Rename Folder…</source>
+        <translation>Переименовать папку…</translation>
+    </message>
+    <message>
+        <source>Remove Icon Tab</source>
+        <translation>Убрать вкладку-иконку</translation>
+    </message>
+    <message>
+        <source>Rename Folder</source>
+        <translation>Переименовать папку</translation>
+    </message>
+    <message>
+        <source>Name:</source>
+        <translation>Название:</translation>
+    </message>
 </context>
 <context>
     <name>FileBrowserTree</name>
@@ -4329,6 +4417,86 @@ Up to 10 MB</source>
         <source>Project templates, Channel Strip templates, and other presets
 %1</source>
         <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Favorites</source>
+        <translation>Избранное</translation>
+    </message>
+    <message>
+        <source>Empty — right-click a file to add it</source>
+        <translation>Пусто — добавьте файл через контекстное меню</translation>
+    </message>
+    <message>
+        <source>This collection is empty</source>
+        <translation>Эта коллекция пуста</translation>
+    </message>
+    <message>
+        <source>Add to Folder</source>
+        <translation>Добавить в папку</translation>
+    </message>
+    <message>
+        <source>Remove from %1</source>
+        <translation>Убрать из «%1»</translation>
+    </message>
+    <message>
+        <source>Choose Folder Color…</source>
+        <translation>Выбрать цвет папки…</translation>
+    </message>
+    <message>
+        <source>Use Default Color</source>
+        <translation>Цвет по умолчанию</translation>
+    </message>
+    <message>
+        <source>Remove Icon Tab</source>
+        <translation>Убрать вкладку-иконку</translation>
+    </message>
+    <message>
+        <source>Show as Icon Tab…</source>
+        <translation>Показать вкладкой-иконкой…</translation>
+    </message>
+    <message>
+        <source>Rename Folder…</source>
+        <translation>Переименовать папку…</translation>
+    </message>
+    <message>
+        <source>Delete Collection Folder</source>
+        <translation>Удалить папку-коллекцию</translation>
+    </message>
+    <message>
+        <source>New Collection Folder…</source>
+        <translation>Новая папка-коллекция…</translation>
+    </message>
+    <message>
+        <source>Added %1 to %2</source>
+        <translation>«%1» добавлен в «%2»</translation>
+    </message>
+    <message>
+        <source>Added to collection</source>
+        <translation>Добавлено в коллекцию</translation>
+    </message>
+    <message>
+        <source>Folder Color</source>
+        <translation>Цвет папки</translation>
+    </message>
+    <message>
+        <source>Rename Folder</source>
+        <translation>Переименовать папку</translation>
+    </message>
+    <message>
+        <source>Name:</source>
+        <translation>Название:</translation>
+    </message>
+    <message>
+        <source>Delete “%1”? The original files will not be changed.</source>
+        <translation>Удалить «%1»? Исходные файлы не изменятся.</translation>
+    </message>
+    <message>
+        <source>New Collection Folder</source>
+        <translation>Новая папка-коллекция</translation>
+    </message>
+    <message>
+        <source>Name for the sample shortcuts:</source>
+        <translation>Название папки для ссылок на сэмплы:</translation>
     </message>
 </context>
 <context>
@@ -5372,6 +5540,78 @@ Up to 10 MB</source>
 </context>
 <context>
     <name>MainWindow</name>
+    <message>
+        <source>Navigation</source>
+        <translation>Навигация</translation>
+    </message>
+    <message>
+        <source>Playback Behavior</source>
+        <translation>Поведение воспроизведения</translation>
+    </message>
+    <message>
+        <source>Snap and Grid</source>
+        <translation>Привязка и сетка</translation>
+    </message>
+    <message>
+        <source>Grid Division</source>
+        <translation>Деление сетки</translation>
+    </message>
+    <message>
+        <source>Time Display</source>
+        <translation>Отображение времени</translation>
+    </message>
+    <message>
+        <source>Automation Lanes</source>
+        <translation>Дорожки автоматизации</translation>
+    </message>
+    <message>
+        <source>Secondary Tool</source>
+        <translation>Дополнительный инструмент</translation>
+    </message>
+    <message>
+        <source>Automation Creation</source>
+        <translation>Создание автоматизации</translation>
+    </message>
+    <message>
+        <source>Actions for Selection…</source>
+        <translation>Действия с выделением…</translation>
+    </message>
+    <message>
+        <source>More Track Actions…</source>
+        <translation>Другие действия с дорожкой…</translation>
+    </message>
+    <message>
+        <source>Select a clip or track first</source>
+        <translation>Сначала выберите клип или дорожку</translation>
+    </message>
+    <message>
+        <source>Select a track first</source>
+        <translation>Сначала выберите дорожку</translation>
+    </message>
+    <message>
+        <source>&amp;Browser</source>
+        <translation>&amp;Браузер</translation>
+    </message>
+    <message>
+        <source>Actions for Browser Selection…</source>
+        <translation>Действия с выбранным элементом браузера…</translation>
+    </message>
+    <message>
+        <source>Add Icon Tab…</source>
+        <translation>Добавить вкладку со значком…</translation>
+    </message>
+    <message>
+        <source>Current Icon Tab Actions…</source>
+        <translation>Действия с текущей вкладкой…</translation>
+    </message>
+    <message>
+        <source>Select a browser item first</source>
+        <translation>Сначала выберите элемент браузера</translation>
+    </message>
+    <message>
+        <source>Select an icon tab first</source>
+        <translation>Сначала выберите вкладку со значком</translation>
+    </message>
     <message>
         <source>Key sent to %1 VLT Pitch instance(s).</source>
         <translation>Тональность передана в экземпляры VLT Pitch: %1.</translation>
@@ -7647,6 +7887,22 @@ The current project has not been changed.</source>
         <source>Plugins applied to the selection</source>
         <translation>Плагины добавлены ко всему выделению</translation>
     </message>
+    <message>
+        <source>The sample could not be loaded</source>
+        <translation>Не удалось загрузить сэмпл</translation>
+    </message>
+    <message>
+        <source>Replaced the Pattern layer sample with “%1”</source>
+        <translation>Сэмпл слоя Pattern заменён на «%1»</translation>
+    </message>
+    <message>
+        <source>Select a Pattern layer or MIDI channel before loading a sample</source>
+        <translation>Перед загрузкой сэмпла выберите слой Pattern или MIDI-канал</translation>
+    </message>
+    <message>
+        <source>Loaded “%1” into the selected MIDI channel</source>
+        <translation>«%1» загружен в выбранный MIDI-канал</translation>
+    </message>
 </context>
 <context>
     <name>MixerWidget</name>
@@ -7691,7 +7947,7 @@ The current project has not been changed.</source>
     </message>
     <message>
         <source>Velocity</source>
-        <translation>Скорость</translation>
+        <translation>Громкость</translation>
     </message>
     <message>
         <source>Note pan</source>
@@ -8655,7 +8911,7 @@ Click to load. Drag onto Audio FX.</source>
     </message>
     <message>
         <source>VEL</source>
-        <translation>СКОРОСТЬ</translation>
+        <translation>ГРОМК.</translation>
     </message>
     <message>
         <source>1–127</source>
@@ -8675,7 +8931,7 @@ Click to load. Drag onto Audio FX.</source>
     </message>
     <message>
         <source>velocity %1</source>
-        <translation>скорость %1</translation>
+        <translation>громкость %1</translation>
     </message>
     <message>
         <source>pan centre</source>
@@ -8742,7 +8998,7 @@ Click to load. Drag onto Audio FX.</source>
     </message>
     <message>
         <source>What the lane along the bottom edits: note velocity, note pan, or a controller curve.</source>
-        <translation>Что редактирует полоса внизу: скорость ноты, панорамирование ноты или кривую контроллера.</translation>
+        <translation>Параметр нижней полосы: громкость ноты, панорама или кривая контроллера.</translation>
     </message>
     <message>
         <source>Add a controller lane</source>
@@ -8870,7 +9126,7 @@ Click to load. Drag onto Audio FX.</source>
     </message>
     <message>
         <source>Velocity</source>
-        <translation>Скорость</translation>
+        <translation>Громкость</translation>
     </message>
     <message>
         <source>Pan</source>
@@ -9014,11 +9270,11 @@ Click to load. Drag onto Audio FX.</source>
     </message>
     <message>
         <source>Set Velocity</source>
-        <translation>Установить скорость</translation>
+        <translation>Установить громкость</translation>
     </message>
     <message>
         <source>Velocity (1–127):</source>
-        <translation>Скорость (1–127):</translation>
+        <translation>Громкость (1–127):</translation>
     </message>
     <message>
         <source>Scale…</source>
@@ -9026,7 +9282,7 @@ Click to load. Drag onto Audio FX.</source>
     </message>
     <message>
         <source>Scale Velocity</source>
-        <translation>Скорость по масштабу</translation>
+        <translation>Масштабировать громкость</translation>
     </message>
     <message>
         <source>Percent:</source>
@@ -9038,7 +9294,7 @@ Click to load. Drag onto Audio FX.</source>
     </message>
     <message>
         <source>Velocity Ramp</source>
-        <translation>Кривая скорости</translation>
+        <translation>Кривая громкости</translation>
     </message>
     <message>
         <source>From:</source>
@@ -10560,7 +10816,7 @@ This session also contains a finished cloud recording awaiting upload. Restore a
     </message>
     <message>
         <source>Groove velocity</source>
-        <translation>Скорость грува</translation>
+        <translation>Громкость грува</translation>
     </message>
 </context>
 <context>
@@ -10630,7 +10886,7 @@ This session also contains a finished cloud recording awaiting upload. Restore a
     </message>
     <message>
         <source>Velocity</source>
-        <translation>Скорость</translation>
+        <translation>Громкость</translation>
     </message>
     <message>
         <source>Pitch</source>
@@ -12763,7 +13019,7 @@ Reassign it to &quot;%3&quot;?</source>
     </message>
     <message>
         <source>Velocity taper</source>
-        <translation>Затухание по скорости</translation>
+        <translation>Затухание громкости</translation>
     </message>
     <message>
         <source>Notes starting within this of each other count as one chord. Anything further apart is a separate event and is left alone.</source>
@@ -14204,7 +14460,7 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     </message>
     <message>
         <source>Change Note Velocity</source>
-        <translation>Изменить скорость ноты</translation>
+        <translation>Изменить громкость ноты</translation>
     </message>
     <message>
         <source>Delete Notes</source>

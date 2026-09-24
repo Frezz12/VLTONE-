@@ -382,6 +382,13 @@ if(DAW_BUILD_TESTS)
     add_test(NAME tempo_scrub_ui_test COMMAND $<TARGET_FILE:daw> --tempocheck)
     add_test(NAME mixer_fader_input_test COMMAND $<TARGET_FILE:daw> --mixerwheelcheck)
     add_test(NAME midi_input_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    if(DAW_ENABLE_VST)
+        add_dependencies(daw daw_test_vst_shell)
+        add_test(NAME plugin_editor_idle_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+        set_tests_properties(plugin_editor_idle_ui_test PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_PLUGIN_IDLE_ONLY=1;DAW_TEST_VST_SHELL_PATH=$<TARGET_FILE:daw_test_vst_shell>"
+            TIMEOUT 60 RUN_SERIAL TRUE)
+    endif()
     set_tests_properties(midi_input_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_MIDI_ONLY=1"
         TIMEOUT 90 RUN_SERIAL TRUE)

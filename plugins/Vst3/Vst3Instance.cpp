@@ -147,14 +147,17 @@ bool Vst3Instance::initialize(IPluginFactory* factory) {
         }
     };
     m_handler.onRestart = [this](int32 flags) {
-        m_restartFlags.fetch_or(flags, std::memory_order_release);
+        const int32 previous = m_restartFlags.fetch_or(flags, std::memory_order_release);
+        if ((flags & kParamValuesChanged) && !(previous & kParamValuesChanged))
+            PluginMainThreadWork::request();
         auto* listener = m_listener.load(std::memory_order_acquire);
         if (flags & kLatencyChanged) {
             m_restartLatency.store(true, std::memory_order_release);
             if (listener) listener->onLatencyChanged();
         }
         if ((flags & kReloadComponent) && listener) listener->onReloadRequested();
-        if ((flags & ~kReloadComponent) != 0 && listener) listener->onRestartRequested();
+        if ((flags & ~(kReloadComponent | kParamValuesChanged)) != 0 && listener)
+            listener->onRestartRequested();
     };
 
     auto* hostContext = static_cast<IHostApplication*>(&m_hostContext);
@@ -208,14 +211,6 @@ bool Vst3Instance::initialize(IPluginFactory* factory) {
     if (m_controller) {
         m_controller->setComponentHandler(&m_handler);
 
-        // Hand the controller the processor's state, so the editor opens
-        // showing what the processor is actually doing rather than defaults.
-        auto stream = owned(new vst3::MemoryStream);
-        if (m_component->getState(stream) == kResultOk) {
-            stream->rewind();
-            m_controller->setComponentState(stream);
-        }
-
         // Wire the two halves together when they are separate objects.
         m_componentPoint = FUnknownPtr<IConnectionPoint>(m_component);
         m_controllerPoint = FUnknownPtr<IConnectionPoint>(m_controller);
@@ -225,6 +220,14 @@ bool Vst3Instance::initialize(IPluginFactory* factory) {
         } else {
             m_componentPoint = nullptr;
             m_controllerPoint = nullptr;
+        }
+
+        // Connect before handing over state: controllers such as ZENOLOGY
+        // need the processor handshake during setComponentState.
+        auto stream = owned(new vst3::MemoryStream);
+        if (m_component->getState(stream) == kResultOk) {
+            stream->rewind();
+            m_controller->setComponentState(stream);
         }
     }
 
@@ -341,18 +344,15 @@ void Vst3Instance::readParameters() {
     }
 }
 
-void Vst3Instance::captureControllerValuesForProcessor() {
-    m_pendingParameterValues.clear();
-    m_parameterSyncPending.store(false, std::memory_order_release);
-    if (!m_controller) return;
-
-    m_pendingParameterValues.reserve(m_parameterIds.size());
-    for (ParamID id : m_parameterIds) {
-        m_pendingParameterValues.push_back(
-            std::clamp(m_controller->getParamNormalized(id), 0.0, 1.0));
+void Vst3Instance::notifyControllerValues() {
+    auto* listener = m_listener.load(std::memory_order_acquire);
+    if (!m_controller || !listener) return;
+    // kParamValuesChanged invalidates the host's cache. It is not performEdit:
+    // the plugin already loaded its preset. Echoing every value into process()
+    // also fires MIDI helpers (Arturia's CC7 mirror reads zero), muting notes.
+    for (std::uint32_t i = 0; i < m_parameterIds.size(); ++i) {
+        listener->onParameterChanged(i, parameterValue(i));
     }
-    m_parameterSyncPending.store(!m_pendingParameterValues.empty(),
-                                 std::memory_order_release);
 }
 
 double Vst3Instance::toPlain(std::uint32_t index, double normalized) const {
@@ -574,20 +574,13 @@ bool Vst3Instance::activate(const PluginProcessInfo& info) {
     m_sampleRate = info.sampleRate;
 
     const int32 restartFlags = m_restartFlags.exchange(0, std::memory_order_acq_rel);
-    if (restartFlags & (kParamTitlesChanged | kParamValuesChanged)) {
+    if (restartFlags & kParamTitlesChanged) {
         readParameters();
     }
     if (restartFlags & (kMidiCCAssignmentChanged | kParamTitlesChanged)) {
         readMidiMappings();
     }
     readBuses();
-
-    if (restartFlags & kParamValuesChanged) {
-        // A preset browser normally changes the controller wholesale and then
-        // emits one restart flag, not one performEdit per parameter. Capture
-        // that complete snapshot while the processor is inactive.
-        captureControllerValuesForProcessor();
-    }
 
     // Bus arrangements and activation belong to the inactive state. A number
     // of instruments snapshot their event/audio topology in setActive(true).
@@ -613,14 +606,7 @@ bool Vst3Instance::activate(const PluginProcessInfo& info) {
 
     refreshLatency();
     m_restartLatency.store(false, std::memory_order_release);
-    if ((restartFlags & kParamValuesChanged) && m_controller) {
-        if (auto* listener = m_listener.load(std::memory_order_acquire)) {
-            for (std::uint32_t index = 0; index < m_pendingParameterValues.size(); ++index) {
-                listener->onParameterChanged(index,
-                                             toPlain(index, m_pendingParameterValues[index]));
-            }
-        }
-    }
+    if (restartFlags & kParamValuesChanged) notifyControllerValues();
     return true;
 }
 
@@ -671,9 +657,13 @@ void Vst3Instance::setParameterFromHost(std::uint32_t index, double plainValue) 
 }
 
 void Vst3Instance::pumpMainThread() {
-    // Restart-sensitive data is refreshed from activate(), after the engine's
-    // RenderGate has stopped process(). Reading/replacing the conversion and
-    // bus tables here would race the audio thread.
+    // Reading controller values does not change the audio thread's tables or
+    // stop voices. Combined metadata/structural changes are handled under the
+    // RenderGate by activate() or serviceOfflineRestart().
+    const int32 flags = m_restartFlags.load(std::memory_order_acquire);
+    if (flags != kParamValuesChanged) return;
+    m_restartFlags.fetch_and(~kParamValuesChanged, std::memory_order_acq_rel);
+    notifyControllerValues();
 }
 
 bool Vst3Instance::serviceOfflineRestart() {
@@ -694,13 +684,7 @@ bool Vst3Instance::serviceOfflineRestart() {
         m_outputChanges->reserve(capacity);
     }
     if (flags & (kMidiCCAssignmentChanged | kParamTitlesChanged)) readMidiMappings();
-    if (flags & kParamValuesChanged) {
-        captureControllerValuesForProcessor();
-        if (auto* listener = m_listener.load(std::memory_order_acquire)) {
-            for (std::uint32_t i = 0; i < m_pendingParameterValues.size(); ++i)
-                listener->onParameterChanged(i, toPlain(i, m_pendingParameterValues[i]));
-        }
-    }
+    if (flags & kParamValuesChanged) notifyControllerValues();
     return false;
 }
 
@@ -708,23 +692,9 @@ bool Vst3Instance::serviceOfflineRestart() {
 
 std::vector<PluginEvent> Vst3Instance::pendingParameterEvents() {
     std::vector<PluginEvent> events;
-    // Same order as process(): a preset snapshot, then individual editor
-    // changes, then PluginNode's host events. Read only explicitly pending
-    // values; the complete controller mirror may be stale after loadState.
-    const bool presetRequested = (m_restartFlags.load(std::memory_order_acquire) &
-                                  kParamValuesChanged) != 0;
-    if (presetRequested || m_parameterSyncPending.load(std::memory_order_acquire)) {
-        for (std::uint32_t i = 0; i < m_parameterIds.size(); ++i) {
-            if (!presetRequested && i >= m_pendingParameterValues.size()) break;
-            PluginEvent event;
-            event.kind = PluginEvent::Kind::ParamValue;
-            event.paramIndex = i;
-            event.value = toPlain(i, presetRequested
-                ? m_controller->getParamNormalized(m_parameterIds[i])
-                : m_pendingParameterValues[i]);
-            events.push_back(event);
-        }
-    }
+    // Only performEdit values are pending processor input. Preset/cache
+    // notifications must not turn controller readbacks into queued edits in
+    // offline clones either: component state already contains the preset.
     std::vector<QueuedEdit> edits;
     edits.reserve(1024); // Allocate before touching the live queue.
     QueuedEdit edit;
@@ -967,15 +937,6 @@ PluginProcessDisposition Vst3Instance::process(
     m_outputChanges->clear();
     m_events->clear();
     m_outputEvents->clear();
-    if (m_parameterSyncPending.exchange(false, std::memory_order_acq_rel)) {
-        const std::size_t count =
-            std::min(m_parameterIds.size(), m_pendingParameterValues.size());
-        for (std::size_t index = 0; index < count; ++index) {
-            if (vst3::ParamValueQueue* queue = m_inputChanges->begin(m_parameterIds[index])) {
-                queue->add(0, m_pendingParameterValues[index]);
-            }
-        }
-    }
     QueuedEdit edit;
     while (m_editorEdits.pop(edit)) {
         if (edit.parameterIndex >= m_parameterIds.size()) continue;

@@ -23,6 +23,7 @@
 #include <cmath>
 #include <QCloseEvent>
 #include <QEvent>
+#include <QEventLoop>
 #include <QHideEvent>
 #include <cstdio>
 #include <cstdlib>
@@ -146,6 +147,10 @@ constexpr int kDockWidth = 208;
 /// GUI of their own, and only while the window is open.
 constexpr int kPollMs = 200;
 
+// Legacy VST editors advance their own animations from effEditIdle, even
+// without automation callbacks or a running transport (e.g. groove preview).
+constexpr int kEditorIdleMs = 20;
+
 /// Plugin instances are constructed synchronously, but CLAP/VST3/AU may queue
 /// main-thread work while their controller and preset settle. Let that work
 /// drain before asking them to manufacture a native GUI.
@@ -217,6 +222,21 @@ PluginEditorWindow::PluginEditorWindow(daw::EngineController* controller,
     m_poll->setInterval(kPollMs);
     connect(m_poll, &QTimer::timeout, this,
             &PluginEditorWindow::pollEditorState);
+
+    m_editorIdle = new QTimer(this);
+    m_editorIdle->setTimerType(Qt::PreciseTimer);
+    m_editorIdle->setInterval(kEditorIdleMs);
+    connect(m_editorIdle, &QTimer::timeout, this, [this] {
+        // Re-resolve the slot: replacement/undo can retire the old instance
+        // before this window is detached. Never pump the cached pointer.
+        auto* plugin = instance();
+        if (m_closing || !m_embedded || !isVisible() || isMinimized() ||
+            !plugin || plugin != m_openedOn || !plugin->isEditorOpen()) {
+            m_editorIdle->stop();
+            return;
+        }
+        plugin->pumpMainThread();
+    });
 
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             &PluginEditorWindow::applyTheme);
@@ -729,6 +749,7 @@ void PluginEditorWindow::finishEditorContent() {
     m_rebuildingEditorContent = false;
     hideLoadingState();
     prepareForPresentation();
+    syncPollTimer();
 }
 
 void PluginEditorWindow::refreshWrapper() {
@@ -804,6 +825,7 @@ void PluginEditorWindow::refreshWrapper() {
 }
 
 void PluginEditorWindow::detachFromPlugin() {
+    if (m_editorIdle) m_editorIdle->stop();
     ++m_loadGeneration;
     m_pendingEditorPlugin = nullptr;
     m_editorReady = false;
@@ -834,6 +856,18 @@ void PluginEditorWindow::pollEditorState() {
 void PluginEditorWindow::syncPollTimer() {
     if (!m_poll) return;
     const bool shouldPoll = isVisible() && !isMinimized();
+    auto* plugin = instance();
+    const bool needsIdle = shouldPoll && !m_closing && m_editorReady &&
+        m_embedded && plugin && plugin == m_openedOn && plugin->isEditorOpen() &&
+        plugin->descriptor().format == daw::plugins::Format::Vst;
+    // This is deliberately independent of pumpPluginEvents' wake-generation
+    // fast path and of the slow wrapper/parameter poll. Only the live VST
+    // editor needs a periodic turn; the rest of the project stays event-driven.
+    if (needsIdle) {
+        if (!m_editorIdle->isActive()) m_editorIdle->start();
+    } else {
+        m_editorIdle->stop();
+    }
     if (!shouldPoll) {
         m_poll->stop();
         return;
@@ -890,6 +924,7 @@ void PluginEditorWindow::closeEvent(QCloseEvent* event) {
 
 void PluginEditorWindow::hideEvent(QHideEvent* event) {
     if (m_poll) m_poll->stop();
+    if (m_editorIdle) m_editorIdle->stop();
     QWidget::hideEvent(event);
 }
 
@@ -1322,6 +1357,70 @@ void PluginEditorWindow::setParameterDockVisibleForTest(bool visible) {
 
 void PluginEditorWindow::pollForTest() {
     pollEditorState();
+}
+
+bool PluginEditorWindow::checkIdleForTest(daw::EngineController& controller,
+                                         const std::string& fixturePath) {
+    auto* factory = daw::plugins::factoryFor(daw::plugins::Format::Vst);
+    if (!factory) return false;
+    const auto descriptors = factory->inspect(fixturePath);
+    const auto found = std::find_if(descriptors.begin(), descriptors.end(),
+        [](const auto& d) { return d.uid == "54465831"; });
+    if (found == descriptors.end()) return false;
+    const auto track = controller.addTrack(daw::TrackKind::Audio, "Editor idle test");
+    const auto slot = controller.addInsert(track, *found);
+    auto* plugin = controller.insertInstance(track, slot);
+    if (!plugin) return false;
+    auto* editor = new PluginEditorWindow(&controller, QString::fromStdString(track),
+                                          QString::fromStdString(slot));
+    const auto wait = [](int ms) {
+        QEventLoop loop;
+        QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+        loop.exec();
+    };
+    const auto calls = [&] { return int(std::lround(plugin->parameterValue(4) * 1000)); };
+    editor->show();
+    editor->initializeEditor();
+    wait(1000);
+    bool ok = editor->isEmbedded() && editor->m_editorIdle->isActive();
+
+    // Same stopped-transport scenario as a plugin's own groove preview. With
+    // the dedicated timer paused, only the old generation-gated path remains.
+    editor->m_editorIdle->stop();
+    int before = calls();
+    wait(400);
+    const int oldPathCalls = calls() - before;
+    editor->syncPollTimer();
+    before = calls();
+    const auto scans = controller.pluginEventScanCountForTest();
+    wait(400);
+    const int visibleCalls = calls() - before;
+    const auto fullScans = controller.pluginEventScanCountForTest() - scans;
+    ok &= visibleCalls >= 10 && fullScans <= 2;
+
+    editor->hide();
+    before = calls();
+    wait(200);
+    const int hiddenCalls = calls() - before;
+    ok &= !editor->m_editorIdle->isActive() && hiddenCalls <= 1;
+    editor->show();
+    before = calls();
+    wait(400);
+    const int restoredCalls = calls() - before;
+    ok &= restoredCalls >= 10;
+    editor->detachFromPlugin();
+    before = calls();
+    wait(100);
+    ok &= !editor->m_editorIdle->isActive() && calls() == before;
+
+    std::fprintf(stderr,
+        "%s plugin editor idle: old=%d/400ms, visible=%d/400ms, hidden=%d/200ms, "
+        "restored=%d/400ms, full slot scans=%llu\n", ok ? "PASS" : "FAIL",
+        oldPathCalls, visibleCalls, hiddenCalls, restoredCalls,
+        static_cast<unsigned long long>(fullScans));
+    delete editor;
+    controller.removeTrack(track);
+    return ok;
 }
 
 QStringList PluginEditorWindow::parameterDockOrderForTest() const {

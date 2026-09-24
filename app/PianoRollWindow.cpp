@@ -133,6 +133,15 @@ bool isPrimaryEditChord(const QKeyEvent* event) {
 #endif
 }
 
+bool hasPrimarySelectionModifier(Qt::KeyboardModifiers modifiers) {
+#if defined(Q_OS_MACOS)
+    return modifiers.testFlag(Qt::ControlModifier) ||
+           modifiers.testFlag(Qt::MetaModifier);
+#else
+    return modifiers.testFlag(Qt::ControlModifier);
+#endif
+}
+
 bool isPianoRollEditShortcut(const QKeyEvent* event) {
     if (!isPrimaryEditChord(event)) return false;
     switch (editShortcutKey(event)) {
@@ -595,7 +604,6 @@ void PianoRollView::setClip(const QString& trackId, const QString& clipId) {
     m_moveWorking.clear();
     m_duplicateDragPending = false;
     m_duplicateDragCreated = false;
-    m_shiftClickDeselectPending = false;
     m_geometryPaintNotes.clear();
     m_noteUpdateScratch.clear();
     m_laneOrig.clear();
@@ -1282,14 +1290,36 @@ bool PianoRollView::checkInteractionGesturesForTest() {
     m_pxPerBeat = 220.0;
     m_scrollX = 0.0;
 
-    // The group handle is absent for one note and separated to the right when
-    // the second note joins the selection.
+    // Individual modifier-clicks build a scattered selection. Ctrl/Cmd toggles
+    // one note; Shift extends the set and keeps an already selected note in it,
+    // matching clip selection on the arrangement.
     mt::Notes handleNotes = {makeNote("handle-a", 0.5, 0.5),
                              makeNote("handle-b", 1.5, 0.5)};
     replaceNotes(handleNotes, "Prepare Stretch Handle Check");
-    m_selected = {QStringLiteral("handle-a")};
+    m_selected.clear();
+    m_primary.clear();
+    clickGrid(noteRect(handleNotes[0]).center());
     const bool singleHidden = stretchHandleRect().isNull();
-    m_selected.insert(QStringLiteral("handle-b"));
+    pointer(QEvent::MouseButtonPress, noteRect(handleNotes[1]).center(),
+            Qt::ShiftModifier);
+    pointer(QEvent::MouseButtonRelease, noteRect(handleNotes[1]).center(),
+            Qt::ShiftModifier);
+    pointer(QEvent::MouseButtonPress, noteRect(handleNotes[0]).center(),
+            Qt::ControlModifier);
+    pointer(QEvent::MouseButtonRelease, noteRect(handleNotes[0]).center(),
+            Qt::ControlModifier);
+    const bool ctrlRemovedOne = m_selected == QSet<QString>{
+        QStringLiteral("handle-b")};
+    pointer(QEvent::MouseButtonPress, noteRect(handleNotes[0]).center(),
+            Qt::ControlModifier);
+    pointer(QEvent::MouseButtonRelease, noteRect(handleNotes[0]).center(),
+            Qt::ControlModifier);
+    pointer(QEvent::MouseButtonPress, noteRect(handleNotes[1]).center(),
+            Qt::ShiftModifier);
+    pointer(QEvent::MouseButtonRelease, noteRect(handleNotes[1]).center(),
+            Qt::ShiftModifier);
+    const bool discreteSelection = ctrlRemovedOne && m_selected == QSet<QString>{
+        QStringLiteral("handle-a"), QStringLiteral("handle-b")};
     const QRectF groupHandle = stretchHandleRect();
     const double notesRight = std::max(noteRect(handleNotes[0]).right(),
                                        noteRect(handleNotes[1]).right());
@@ -1406,6 +1436,86 @@ bool PianoRollView::checkInteractionGesturesForTest() {
         ceilingClip && daw::midiNotes(*ceilingClip).size() == 2 &&
         daw::midiNotes(*ceilingClip)[0].velocity == 127 &&
         daw::midiNotes(*ceilingClip)[1].velocity == 127;
+
+    // Recorded chord timing/velocities from the velocity-selection regression,
+    // shifted into this viewport. Its stalks are less than one pixel apart.
+    mt::Notes recordedChord = {
+        makeNote("recorded-d", 0.5, 3.3950302),
+        makeNote("recorded-fs", 0.5010239372, 3.3235128),
+        makeNote("recorded-a", 0.5033452874, 2.9618278),
+        makeNote("recorded-b", 0.5041326483, 3.2032736),
+        makeNote("separate-note", 2.0, 0.5)};
+    const std::array<int, 5> chordPitches{62, 66, 69, 59, 72};
+    const std::array<int, 5> chordVelocities{70, 95, 77, 74, 88};
+    for (std::size_t i = 0; i < recordedChord.size(); ++i) {
+        recordedChord[i].pitch = chordPitches[i];
+        recordedChord[i].velocity = chordVelocities[i];
+    }
+    bool recordedLaneSelection = true;
+    m_showVelocityLane = true;
+    for (const auto param : {LaneParam::Velocity, LaneParam::Pan}) {
+        m_laneParam = param;
+        for (const bool group : {false, true}) {
+            for (const int direction : {-1, 1}) {
+                replaceNotes(recordedChord, "Prepare Recorded Chord Lane Check");
+                const QString upper = QStringLiteral("recorded-a");
+                m_selected = {upper};
+                if (group) m_selected.insert(QStringLiteral("recorded-fs"));
+                m_primary = upper;
+                const auto selection = m_selected;
+                // Aim slightly right of the overlapping stalks, where the
+                // unselected B is closer than the selected upper A.
+                const QPointF pressAt(laneHandle(recordedChord[3]).x() + 2.0,
+                                      laneHandle(recordedChord[2]).y());
+                bool correct = handleAt(pressAt) == upper &&
+                    handleAt(laneHandle(recordedChord[4])) ==
+                        QStringLiteral("separate-note") &&
+                    handleAt(QPointF(beatsToX(3.0), pressAt.y())).isEmpty();
+                lostReleaseMouse(QEvent::MouseButtonPress, pressAt,
+                                 Qt::LeftButton, Qt::LeftButton);
+                correct &= m_selected == selection && m_primary == upper;
+                const double delta = direction *
+                    (param == LaneParam::Velocity ? 12.0 / 127.0 : 0.125);
+                const QPointF moveAt(pressAt.x(), laneValueToY(
+                    laneValueOf(recordedChord[2]) + delta));
+                lostReleaseMouse(QEvent::MouseMove, moveAt,
+                                 Qt::NoButton, Qt::LeftButton);
+                lostReleaseMouse(QEvent::MouseButtonRelease, moveAt,
+                                 Qt::LeftButton, Qt::NoButton);
+                mt::Notes expected = recordedChord;
+                for (auto& n : expected) {
+                    if (!selection.contains(QString::fromStdString(n.id))) continue;
+                    if (param == LaneParam::Velocity) n.velocity += direction * 12;
+                    else n.pan += float(direction * 0.25);
+                }
+                correct &= m_selected == selection && clip() &&
+                    daw::midiNotes(*clip()) == expected &&
+                    m_controller->undoLabel() == "Edit Notes";
+                m_controller->undo();
+                correct &= clip() && daw::midiNotes(*clip()) == recordedChord;
+                m_controller->redo();
+                correct &= clip() && daw::midiNotes(*clip()) == expected;
+                recordedLaneSelection &= correct;
+                if (!correct)
+                    std::fprintf(stderr,
+                        "recorded chord lane failed: param=%d group=%d direction=%d\n",
+                        int(param), int(group), direction);
+            }
+        }
+    }
+    // With no selection the nearest column remains directly selectable; notes
+    // drawn exactly on the grid still give the selected chord tone priority.
+    replaceNotes(recordedChord, "Prepare Lane Hit Check");
+    m_selected.clear();
+    recordedLaneSelection &= handleAt(laneHandle(recordedChord[3])) ==
+        QStringLiteral("recorded-b");
+    for (std::size_t i = 0; i < 4; ++i) recordedChord[i].startBeats = 0.5;
+    replaceNotes(recordedChord, "Prepare Grid Chord Lane Check");
+    m_selected = {QStringLiteral("recorded-a")};
+    recordedLaneSelection &= handleAt(laneHandle(recordedChord[3])) ==
+        QStringLiteral("recorded-a");
+    m_showVelocityLane = false;
+    m_laneParam = LaneParam::Velocity;
 
     // A multi-note delete must be a single history entry. Undo/redo should
     // move the whole chord together, matching the one gesture that removed it.
@@ -1651,14 +1761,17 @@ bool PianoRollView::checkInteractionGesturesForTest() {
         const QString laneId = QString::fromStdString(coalescingLaneId);
         m_controller->setLanePoints(
             m_trackId.toStdString(), m_clipId.toStdString(), coalescingLaneId,
-            {{0.5, 0.2}, {1.5, 0.8}});
+            {{0.5, 0.2}, {0.504, 0.23}, {1.5, 0.8}});
         m_showVelocityLane = true;
         m_laneParam = LaneParam::Controller;
         m_laneId = laneId;
         cancelControllerLaneWrite();
 
+        const bool closeControllerPoints =
+            lanePointAt(QPointF(beatsToX(0.5), laneValueToY(0.2))) == 0 &&
+            lanePointAt(QPointF(beatsToX(0.504), laneValueToY(0.23))) == 1;
         const std::size_t writesBefore = m_controllerLaneModelWrites;
-        const QPointF controllerPressAt(beatsToX(0.5), laneValueToY(0.2));
+        const QPointF controllerPressAt(beatsToX(0.504), laneValueToY(0.23));
         QMouseEvent controllerPress(
             QEvent::MouseButtonPress, controllerPressAt,
             QPointF(mapToGlobal(controllerPressAt.toPoint())), Qt::LeftButton,
@@ -1692,6 +1805,7 @@ bool PianoRollView::checkInteractionGesturesForTest() {
         controllerLaneWrites = m_controllerLaneModelWrites - writesBefore;
 
         bool finalPointApplied = false;
+        bool neighbourUnchanged = false;
         if (const auto* lane = controllerLane()) {
             finalPointApplied = std::any_of(
                 lane->points.begin(), lane->points.end(),
@@ -1699,9 +1813,13 @@ bool PianoRollView::checkInteractionGesturesForTest() {
                     return std::abs(point.beats - finalBeat) < 1e-9 &&
                            std::abs(point.value - finalValue) < 1e-9;
                 });
+            neighbourUnchanged = lane->points.size() == 3 &&
+                lane->points.front().beats == 0.5 &&
+                lane->points.front().value == 0.2;
         }
         controllerLaneCoalesced =
-            stormStayedQueued && controllerLaneWrites == 1 && finalPointApplied &&
+            closeControllerPoints && stormStayedQueued &&
+            controllerLaneWrites == 1 && finalPointApplied && neighbourUnchanged &&
             m_controllerLaneWriteTimer && !m_controllerLaneWriteTimer->isActive() &&
             !m_controllerLaneWritePending && m_laneWorkingPoints.empty();
         m_controller->removeControllerLane(m_trackId.toStdString(),
@@ -1749,10 +1867,12 @@ bool PianoRollView::checkInteractionGesturesForTest() {
                     blankRightClearsSelection &&
                     eraseDeferred && sweptAll && ctrlBorrowsSelection &&
                     leftEraseDeferred && leftSweptAll &&
-                    brushSafe && brushProperties && singleHidden && groupOffset &&
+                    brushSafe && brushProperties && singleHidden &&
+                    discreteSelection && groupOffset &&
                     groupTrim && groupTrimAtomic && copiesMovedTogether &&
                     duplicateUndoAtomic && dynamicsPreserved &&
                     velocityAtomic && velocityCeilingIndependent &&
+                    recordedLaneSelection &&
                     deletedTogether && undoneTogether && redoneTogether &&
                     repeatChains && loopRepeatChains && shortcutsRouted &&
                     previewCommitExact &&
@@ -2136,14 +2256,20 @@ int PianoRollView::lanePointAt(const QPointF& pos) const {
         [](const daw::AutomationPoint& point, double beat) {
             return point.beats < beat;
         });
+    int best = -1;
+    double bestDistance = kHandleGrabPx + 2.0;
     for (auto point = first; point != lane->points.end(); ++point) {
         if (point->beats > atBeat + marginBeats) break;
         const size_t i = std::size_t(point - lane->points.begin());
         const QPointF at(beatsToX(lane->points[i].beats),
                          laneValueToY(lane->points[i].value));
-        if (QLineF(at, pos).length() <= kHandleGrabPx + 2.0) return int(i);
+        const double distance = QLineF(at, pos).length();
+        if (distance <= bestDistance) {
+            bestDistance = distance;
+            best = int(i);
+        }
     }
-    return -1;
+    return best;
 }
 
 void PianoRollView::queueControllerLanePoint(const QPointF& pos,
@@ -4254,9 +4380,10 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
     }
     const bool snapOn = m_snapEnabled != bool(ev->modifiers() & Qt::AltModifier);
     const bool additive = ev->modifiers() & Qt::ShiftModifier;
+    const bool toggle = !additive &&
+        hasPrimarySelectionModifier(ev->modifiers());
     m_duplicateDragPending = false;
     m_duplicateDragCreated = false;
-    m_shiftClickDeselectPending = false;
 
     // The right button erases in every mode; the Erase tool uses the same
     // stroke with the left button. Holding and sweeping rubs out a run of notes.
@@ -4335,6 +4462,11 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
 
         const QString hit = handleAt(pos);
         if (hit.isEmpty()) return;
+        if (toggle) {
+            toggleSelected(hit);
+            update();
+            return;
+        }
         // Grabbing an unselected handle selects that note first, so a drag can
         // still only ever move notes that are selected.
         if (!m_selected.contains(hit)) {
@@ -4402,6 +4534,12 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
         const auto* n = note(hit);
         if (!n) return;
 
+        if (toggle) {
+            toggleSelected(hit);
+            update();
+            return;
+        }
+
         const bool wasSelected = m_selected.contains(hit);
         if (additive && !wasSelected) toggleSelected(hit);
         // Clicking a note that is already part of a multi-selection keeps the
@@ -4418,7 +4556,6 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
         m_resizingLeft = m_resizing && onLeftEdge && !onEdge;
         m_moving = !m_resizing;
         m_duplicateDragPending = additive;
-        m_shiftClickDeselectPending = additive && wasSelected;
         m_movePress = pos;
         m_resizeOrig.clear();
         m_moveWorking.clear();
@@ -4632,7 +4769,6 @@ void PianoRollView::mouseMoveEvent(QMouseEvent* ev) {
         m_primary = copiedPrimary;
         m_duplicateDragPending = false;
         m_duplicateDragCreated = true;
-        m_shiftClickDeselectPending = false;
         emit selectionChanged();
     }
 
@@ -4745,8 +4881,6 @@ void PianoRollView::mouseReleaseEvent(QMouseEvent* ev) {
                               Qt::LeftButton, ev->modifiers());
         mouseMoveEvent(&finalMove);
     }
-    if (m_duplicateDragPending && m_shiftClickDeselectPending)
-        toggleSelected(m_primary);
     // One signal per gesture, not per move: the moves themselves are live edits.
     const bool changed =
         (m_moving && !m_duplicateDragPending) || m_resizing || m_laneDragging ||
@@ -4791,7 +4925,6 @@ void PianoRollView::mouseReleaseEvent(QMouseEvent* ev) {
     m_moveWorking.clear();
     m_duplicateDragPending = false;
     m_duplicateDragCreated = false;
-    m_shiftClickDeselectPending = false;
     m_geometryPaintNotes.clear();
     m_laneDragging = false;
     m_marquee = false;
@@ -5177,8 +5310,9 @@ QString PianoRollView::noteAt(const QPointF& pos, bool* onRightEdge,
 QString PianoRollView::handleAt(const QPointF& pos) const {
     const auto* c = clip();
     if (!c) return {};
-    // Nearest stalk horizontally: the lane is a column per note, so anywhere in
-    // the column grabs it rather than only the circle itself.
+    // The whole column is draggable. Prefer a selected stalk within the grab
+    // radius: recorded chords have slightly different onsets, so an invisible
+    // subpixel distance must not redirect a drag to an unselected chord tone.
     const auto& index = notePaintIndexFor(daw::midiNotes(*c));
     std::size_t bestIndex = 0;
     bool bestSelected = false;
@@ -5192,14 +5326,12 @@ QString PianoRollView::handleAt(const QPointF& pos) const {
                          [&](const daw::NoteModel& n,
                              std::size_t candidateIndex) {
         const double distance = std::abs(beatsToX(n.startBeats) - pos.x());
-        if (distance > bestDistance) return;
-        // On a tie prefer a selected note, so a stack of unisons stays editable.
+        if (distance > kHandleGrabPx) return;
         const bool selected = m_selected.contains(QString::fromStdString(n.id));
-        const bool closer = distance < bestDistance;
-        const bool tiedSelected =
-            distance == bestDistance && selected &&
-            (!bestSelected || candidateIndex > bestIndex);
-        if (closer || tiedSelected) {
+        if (best.isEmpty() || (selected && !bestSelected) ||
+            (selected == bestSelected &&
+             (distance < bestDistance ||
+              (distance == bestDistance && candidateIndex > bestIndex)))) {
             bestDistance = distance;
             best = QString::fromStdString(n.id);
             bestIndex = candidateIndex;

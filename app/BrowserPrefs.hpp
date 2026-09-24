@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QStringList>
+#include <QVector>
 
 /// Everything the file browser remembers, in one place.
 ///
@@ -11,6 +12,47 @@
 /// before the panel exists). Generalises the `static persist…()` idiom the
 /// recording page uses. Every key lives under "browser/".
 namespace ui::browserprefs {
+
+/// A virtual browser folder. It owns references to files, never copies or
+/// moves them, so adding a sample is instant and cannot change the library on
+/// disk. The built-in `favorites` collection is always returned first.
+struct Collection {
+    QString id;
+    QString name;
+    QString color;
+    QStringList paths;
+};
+
+/// An icon-only shortcut to a collection. The all-folders tab is implicit and
+/// permanent; these are the optional tabs beside it.
+struct Tab {
+    QString collectionId;
+    QString icon;
+};
+
+inline constexpr int kMaxTabs = 8; // including the permanent all-folders tab
+
+QString favoritesId();
+QVector<Collection> collections();
+QString createCollection(const QString& name);
+bool renameCollection(const QString& id, const QString& name);
+bool removeCollection(const QString& id);
+bool addToCollection(const QString& id, const QString& path);
+bool removeFromCollection(const QString& id, const QString& path);
+void setCollectionColor(const QString& id, const QString& color);
+
+QVector<Tab> tabs();
+bool addTab(const QString& collectionId, const QString& icon);
+void removeTab(const QString& collectionId);
+void setTabIcon(const QString& collectionId, const QString& icon);
+QString activeCollection();
+void setActiveCollection(const QString& collectionId);
+
+/// A colour assigned to a real folder. `folderColor` walks towards the root,
+/// so nested folders inherit the nearest colour unless they override it.
+QString directFolderColor(const QString& folder);
+QString folderColor(const QString& folder);
+void setFolderColor(const QString& folder, const QString& color);
 
 /// The roots the tree shows. Absolute paths, in the order the user added them.
 QStringList folders();

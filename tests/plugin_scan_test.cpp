@@ -229,6 +229,13 @@ int main() {
               "a changed timestamp invalidates the entry");
         check(readGood && !PluginCache::isCurrent(*readGood, 4321, 5678),
               "a changed size invalidates the entry");
+        PluginCacheEntry oldBlacklist = good;
+        oldBlacklist.ok = false;
+        oldBlacklist.blacklisted = true;
+        oldBlacklist.attempts = 3;
+        oldBlacklist.schemaVersion = plugins::scan::kSchemaVersion - 1;
+        check(!PluginCache::isCurrent(oldBlacklist, 1234, 5678),
+              "a compatibility revision invalidates a repeatedly blacklisted entry");
     }
 
     // ── A corrupt cache costs a rescan, not a crash ──

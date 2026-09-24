@@ -84,6 +84,11 @@ int main() try {
     {
         const auto d = descriptor(Format::Vst3, DAW_TEST_VST3_PATH);
         {
+            Environment baseOnly("DAW_TEST_VST3_COMPONENT_VIA_BASE");
+            require(bool(factoryFor(Format::Vst3)->create(d)),
+                    "a factory exposing IComponent through IPluginBase initializes");
+        }
+        {
             Environment failure("DAW_TEST_VST3_FAIL_INITIALIZE");
             require(!factoryFor(Format::Vst3)->create(d), "failed initialization is not terminated twice");
         }

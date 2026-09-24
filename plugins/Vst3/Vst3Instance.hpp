@@ -147,11 +147,6 @@ private:
     std::array<std::array<std::int32_t, Steinberg::Vst::kCountCtrlNumber>, 16>
         m_midiParameterMappings{};
     engine::LockFreeSPSCQueue<QueuedEdit, 1024> m_editorEdits;
-    /// A preset may replace hundreds of controller values at once and report
-    /// only kParamValuesChanged. These normalized values are captured while
-    /// rendering is gated, then delivered to the processor in one audio block.
-    std::vector<Steinberg::Vst::ParamValue> m_pendingParameterValues;
-    std::atomic<bool> m_parameterSyncPending{false};
 
     std::atomic<PluginListener*> m_listener{nullptr};
     std::atomic<std::uint32_t> m_latency{0};
@@ -167,7 +162,7 @@ private:
     bool m_separateController = false;
     bool m_componentInitialized = false;
 
-    void captureControllerValuesForProcessor();
+    void notifyControllerValues();
 
     /// Same rule as CLAP: every bus the plugin declared has to be handed over,
     /// because the plugin indexes `data.inputs[i]` itself.
