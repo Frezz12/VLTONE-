@@ -344,6 +344,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/me/diagnostics-consent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Record an explicit optional choice or withdrawal. Requires web session, same origin and CSRF token. Withdrawal never requires accepting newer terms. */
+        put: operations["updateDiagnosticConsent"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/me/quota": {
         parameters: {
             query?: never;
@@ -2461,6 +2478,13 @@ export interface components {
             service: "vlt-studio";
             /** @constant */
             api_version: "v1";
+            registration_legal: {
+                version: string;
+                ready: boolean;
+            };
+            /** @description Operational availability of account registration; does not assert legal publication readiness. */
+            registration_enabled: boolean;
+            /** @description Legacy desktop entitlement field; registration uses registration_legal.version. */
             consent_version: string;
             /** @constant */
             offline_hours: 72;
@@ -2498,6 +2522,13 @@ export interface components {
             /** @constant */
             consent_accepted: true;
             consent_version: string;
+            /** @constant */
+            terms_accepted: true;
+            terms_version: string;
+            /** @default false */
+            diagnostics_accepted: boolean;
+            /** @description Required current revision when diagnostics_accepted is true. */
+            diagnostics_version?: string;
         };
         PasswordResetConfirmRequest: {
             token: string;
@@ -2518,6 +2549,14 @@ export interface components {
             consent_version?: string;
             /** Format: date-time */
             consent_accepted_at?: string;
+            terms_version?: string;
+            /** Format: date-time */
+            terms_accepted_at?: string | null;
+            diagnostics_consent_version?: string;
+            /** Format: date-time */
+            diagnostics_accepted_at?: string | null;
+            /** Format: date-time */
+            diagnostics_revoked_at?: string | null;
             /** Format: date-time */
             created_at?: string;
         };
@@ -2925,7 +2964,7 @@ export interface components {
             /** @constant */
             format: "internal";
             /** @enum {unknown} */
-            uid: "daw.sampler" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser";
+            uid: "daw.sampler" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
             vendor: string;
             pluginVersion: string;
             stateSchemaVersion: number;
@@ -3246,7 +3285,7 @@ export interface components {
             };
             insert?: {
                 /** @enum {unknown} */
-                uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser";
+                uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
             };
         });
         pluginRefPayload: {
@@ -3283,7 +3322,7 @@ export interface components {
             };
             replacement?: {
                 /** @enum {unknown} */
-                uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser";
+                uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
             };
         });
         pluginPropertyPayload: {
@@ -4195,7 +4234,7 @@ export interface components {
                     /** @constant */
                     format: "internal";
                     /** @enum {unknown} */
-                    uid: "daw.sampler" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser";
+                    uid: "daw.sampler" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
                     vendor: string;
                     pluginVersion: string;
                     stateSchemaVersion: number;
@@ -4231,7 +4270,7 @@ export interface components {
                     };
                     insert?: {
                         /** @enum {unknown} */
-                        uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser";
+                        uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
                     };
                 });
                 pluginRefPayload: {
@@ -4268,7 +4307,7 @@ export interface components {
                     };
                     replacement?: {
                         /** @enum {unknown} */
-                        uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser";
+                        uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
                     };
                 });
                 pluginPropertyPayload: {
@@ -5667,6 +5706,37 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["AccountSession"];
+        };
+    };
+    updateDiagnosticConsent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    accepted: boolean;
+                    /** @description Current document revision; required when accepting. */
+                    version?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Current diagnostic preference */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        enabled: boolean;
+                    };
+                };
+            };
+            422: components["responses"]["Error"];
         };
     };
     getMyQuota: {

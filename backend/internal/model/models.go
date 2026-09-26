@@ -15,20 +15,25 @@ const (
 )
 
 type User struct {
-	ID                   uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
-	Email                string    `gorm:"not null" json:"email"`
-	EmailKey             string    `gorm:"uniqueIndex;not null" json:"-"`
-	Nickname             string    `gorm:"not null" json:"nickname"`
-	NicknameKey          string    `gorm:"uniqueIndex;not null" json:"-"`
-	PasswordHash         string    `gorm:"not null" json:"-"`
-	Locale               string    `gorm:"not null;default:en" json:"locale"`
-	Status               string    `gorm:"not null;default:active" json:"status"`
-	CollaborationEnabled bool      `gorm:"not null;default:false" json:"collaboration_enabled"`
-	ConsentVersion       string    `gorm:"not null" json:"consent_version"`
-	ConsentAcceptedAt    time.Time `gorm:"not null" json:"consent_accepted_at"`
-	ConsentIP            string    `gorm:"not null" json:"-"`
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	ID                        uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	Email                     string     `gorm:"not null" json:"email"`
+	EmailKey                  string     `gorm:"uniqueIndex;not null" json:"-"`
+	Nickname                  string     `gorm:"not null" json:"nickname"`
+	NicknameKey               string     `gorm:"uniqueIndex;not null" json:"-"`
+	PasswordHash              string     `gorm:"not null" json:"-"`
+	Locale                    string     `gorm:"not null;default:en" json:"locale"`
+	Status                    string     `gorm:"not null;default:active" json:"status"`
+	CollaborationEnabled      bool       `gorm:"not null;default:false" json:"collaboration_enabled"`
+	ConsentVersion            string     `gorm:"not null" json:"consent_version"`
+	ConsentAcceptedAt         time.Time  `gorm:"not null" json:"consent_accepted_at"`
+	ConsentIP                 string     `gorm:"not null" json:"-"`
+	TermsVersion              string     `gorm:"not null;default:''" json:"terms_version"`
+	TermsAcceptedAt           *time.Time `json:"terms_accepted_at"`
+	DiagnosticsConsentVersion string     `gorm:"not null;default:''" json:"diagnostics_consent_version"`
+	DiagnosticsAcceptedAt     *time.Time `json:"diagnostics_accepted_at"`
+	DiagnosticsRevokedAt      *time.Time `json:"diagnostics_revoked_at"`
+	CreatedAt                 time.Time  `json:"created_at"`
+	UpdatedAt                 time.Time  `json:"updated_at"`
 }
 
 type AdminUser struct {
@@ -391,4 +396,15 @@ type BrowserBackground struct {
 	SHA256    string    `json:"sha256"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// LegalAcceptance records each affirmative choice or withdrawal separately.
+type LegalAcceptance struct {
+	ID         uuid.UUID `gorm:"type:uuid;primaryKey"`
+	UserID     uuid.UUID `gorm:"type:uuid;not null"`
+	Purpose    string    `gorm:"not null"`
+	Version    string    `gorm:"not null"`
+	Action     string    `gorm:"not null"`
+	OccurredAt time.Time `gorm:"not null"`
+	IP         string    `gorm:"not null"`
 }

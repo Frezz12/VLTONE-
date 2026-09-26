@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "../styles/tokens.css";
 @import "../styles/marketing.css";
+@import "../styles/capabilities.css";
 
 /* Releases */
 .releases-main, .release-detail-main { width: min(1240px, 100%); margin: 0 auto; padding: 30px clamp(18px, 4vw, 48px) 110px; }
@@ -178,6 +179,8 @@
 .manual-problems > div { padding: 13px 14px; border-left: 2px solid var(--vlt-danger); background: rgba(224, 75, 75, .055); }
 .manual-problems strong { color: #ffb5b5; font-size: 12px; }
 .manual-gallery { display: grid; gap: 14px; margin-top: 26px; }
+.manual-gallery-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 18px; }
+.manual-gallery-grid figure > button { aspect-ratio: 3 / 2; }
 .manual-gallery figure { margin: 0; }
 .manual-gallery figure > button { position: relative; display: block; width: 100%; aspect-ratio: var(--shot-ratio); overflow: hidden; border: 0; border-radius: 0; background: var(--vlt-surface-well); }
 .manual-gallery figure img { object-fit: contain; }
@@ -243,6 +246,7 @@
   .mac-dialog-actions .vlt-button { width: 100%; }
 }
 @media (max-width: 560px) {
+  .manual-gallery-grid { grid-template-columns: 1fr; }
   .manual-category-head, .manual-chapter > header { grid-template-columns: 1fr; }
   .manual-chapter { padding: 24px 18px; }
   .manual-shortcuts { grid-template-columns: 1fr; }
@@ -261,3 +265,52 @@
 @media (prefers-contrast: more) {
   .release-note-groups, .release-version-list, .vlt-topbar, .manual-chapter { border-color: var(--vlt-text); }
 }
+
+/* Shared editorial system for the public pages. */
+.download-hero { border-radius: 8px; background: #171b20; min-height: 550px; }
+.download-hero h1, .release-detail-hero h1, .release-archive > header h2 { font-weight: 500; }
+.download-preview { margin-right: -8%; padding-top: 0; }
+.download-preview img { border-radius: 5px; }
+.release-version-row { border-top: 1px solid var(--vlt-border); }
+.vlt-auth-wrap { background: radial-gradient(ellipse at 18% 20%, #26354355, transparent 45%); padding-top: 56px; }
+.vlt-auth-card { width: min(580px, 100%); background: #191c20; border: 1px solid #ffffff19; border-radius: 10px; padding: clamp(24px, 4vw, 46px); }
+.vlt-auth-card::before { display: none; }
+.vlt-auth-card .vlt-title { font-size: clamp(32px, 4vw, 42px); font-weight: 500; line-height: 1.12; }
+.vlt-auth-card .vlt-subtitle { font-size: 14px; }
+.vlt-auth-card .vlt-button { border-radius: 5px; background: #bce0ff; border-color: #bce0ff; color: #101112; box-shadow: none; min-height: 48px; }
+.vlt-auth-card .vlt-input { background: #111316; border-radius: 5px; font-size: 16px; }
+.auth-legal { display: grid; gap: 14px; border-top: 1px solid var(--vlt-border); padding-top: 20px; }
+.auth-legal .vlt-checkbox { font-size: 12px; line-height: 1.65; min-height: 28px; }
+.auth-legal .vlt-checkbox input { margin-top: 3px; }
+.auth-legal a { text-decoration: underline; text-underline-offset: 3px; }
+.auth-privacy-note { font-size: 12px; color: var(--vlt-text-muted); margin: 0; line-height: 1.7; }
+.auth-fields { display: grid; gap: 18px; padding: 0; margin: 0; border: 0; min-width: 0; }
+.form-status { font-size: 13px; line-height: 1.65; padding: 14px 16px; background: #bce0ff0a; border: 1px solid #bce0ff30; border-radius: 5px; }
+.privacy-account { padding-block: 22px; border-top: 1px solid var(--vlt-border); }
+.privacy-account h2 { margin: 0 0 12px; font-size: 22px; }
+.privacy-account p { max-width: 660px; font-size: 14px; line-height: 1.7; color: var(--vlt-text-muted); }
+
+/* Legal documents stay readable without filling the marketing pages with text. */
+.legal-main { width: min(1230px, calc(100% - 48px)); margin: 0 auto; padding-block: 40px 96px; }
+.legal-heading { padding-block: 30px 36px; max-width: 860px; }
+.legal-heading h1 { font-weight: 500; font-size: clamp(34px, 5.4vw, 64px); line-height: 1.08; letter-spacing: -.05em; margin: 20px 0; text-wrap: balance; }
+.legal-heading > p { font-size: 17px; color: var(--vlt-text-muted); line-height: 1.65; max-width: 650px; }
+.legal-draft { padding: 18px 22px; border: 1px solid #bce0ff35; border-radius: 6px; background: #bce0ff09; margin-bottom: 40px; color: #bdc9d3; font-size: 14px; line-height: 1.65; }
+.legal-layout { display: grid; grid-template-columns: 255px minmax(0, 720px); gap: 7%; align-items: start; }
+.legal-toc { position: sticky; top: 110px; }
+.legal-toc nav { display: grid; gap: 3px; margin-top: 16px; }
+.legal-toc nav a, .legal-other a { display: flex; align-items: center; min-height: 44px; font-size: 13px; color: #b6c2cd; line-height: 1.5; }
+.legal-other { display: grid; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--vlt-border); }
+.legal-other a { color: #9ba4b0; gap: 8px; }
+.legal-body { min-width: 0; }
+.legal-operator { display: grid; gap: 8px; padding: 24px; border: 1px solid var(--vlt-border); border-radius: 6px; background: #191d22; }
+.legal-operator strong { font-size: 20px; font-weight: 500; }
+.legal-operator a { overflow-wrap: anywhere; }
+.legal-body section[id] { padding-top: 38px; scroll-margin-top: 100px; }
+.legal-body h2 { display: flex; align-items: baseline; gap: 16px; margin: 0 0 16px; font-size: 25px; line-height: 1.25; font-weight: 500; letter-spacing: -.025em; }
+.legal-body h2 > span { font: 12px/1 var(--vlt-font-mono); color: #8c99a6; }
+.legal-body p { margin: 12px 0 0; color: #b4bdc7; font-size: 15px; line-height: 1.85; }
+.legal-contact { margin-top: 42px; border-top: 1px solid var(--vlt-border); padding-top: 30px; }
+.legal-contact .text-link { color: #bce0ff; }
+@media (max-width: 760px) { .legal-main { width: calc(100% - 40px); } .legal-layout { grid-template-columns: 1fr; gap: 30px; } .legal-toc { position: static; } .legal-toc nav { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; } .legal-other { display: none; } .legal-heading { padding-top: 20px; } .legal-body h2 { font-size: 23px; } .legal-operator { padding: 20px; } }
+@media print { .vlt-topbar, .site-footer, .legal-toc, .skip-link, .legal-main > .text-link { display: none; } .legal-main { width: 100%; padding: 0; color: #000; } .legal-layout { display: block; } .legal-body p, .legal-heading p { color: #000; } .legal-body section { break-inside: avoid; } }

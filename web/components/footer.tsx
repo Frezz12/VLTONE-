@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { BrandMark } from "./brand-mark";
+import { CookieSettingsButton } from "./cookie-notice";
 
 export function Footer({ locale }: { locale: string }) {
   const ru = locale === "ru";
@@ -14,6 +15,7 @@ export function Footer({ locale }: { locale: string }) {
       <Link href="/bug-report">{ru ? "Сообщить о баге" : "Report a bug"}</Link>
       <Link href="/account">{ru ? "Личный кабинет" : "Your account"}</Link>
     </nav>
-    <div className="footer-bottom"><span>© {new Date().getFullYear()} VLTone</span><span>{ru ? "Программа для создания музыки · Windows и macOS" : "Music creation software · Windows and macOS"}</span><span>vltstudio.ru</span></div>
+    <div className="footer-legal"><Link href="/terms">{ru ? "Пользовательское соглашение" : "Terms of use"}</Link><Link href="/privacy">{ru ? "Персональные данные" : "Privacy policy"}</Link><Link href="/consent">{ru ? "Согласие на обработку данных" : "Data processing consent"}</Link><CookieSettingsButton locale={locale} /><a href="mailto:vltmscw@outlook.com">vltmscw@outlook.com</a></div>
+    <div className="footer-bottom"><span>© {new Date().getFullYear()} VLTone</span><span>{ru ? "Музыка начинается с тебя." : "Music starts with you."}</span><span>vltstudio.ru</span></div>
   </div></footer>;
 }

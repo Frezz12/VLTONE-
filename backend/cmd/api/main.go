@@ -53,6 +53,7 @@ func main() {
 	stop, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go server.RunCollaborationMaintenance(stop)
+	go server.RunPrivacyMaintenance(stop)
 	<-stop.Done()
 	server.ShutdownCollaboration()
 	ctx, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)

@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { screenshotVersion } from "@/lib/screenshot-version";
 import Link from "next/link";
 import { ArrowRight, CalendarDays, PackageOpen, Sparkles } from "lucide-react";
 import { ReleaseDownloads } from "@/components/release-downloads";
@@ -30,7 +31,7 @@ export default async function ReleasesPage({ params }: { params: Promise<{ local
           <p className="download-account-note">{ru ? "После установки войдите с аккаунтом VLTone." : "Sign in with your VLTone account after installation."} <Link href="/register">{ru ? "Создать аккаунт" : "Create an account"}<ArrowRight size={13} aria-hidden /></Link></p>
         </div>
         <figure className="download-preview">
-          <Image src={`/images/workspace-dark-${locale}.png`} width={1600} height={1000} sizes="(max-width: 900px) 94vw, 54vw" priority alt={ru ? "Интерфейс VLTone" : "VLTone interface"} />
+          <Image src={`/images/studio/workspace-${locale}.webp?v=${screenshotVersion}`} width={1600} height={1000} sizes="(max-width: 900px) 94vw, 54vw" loading="eager" fetchPriority="high" alt={ru ? "Интерфейс VLTone" : "VLTone interface"} />
           <figcaption>VLTone · Windows · macOS</figcaption>
         </figure>
       </header>

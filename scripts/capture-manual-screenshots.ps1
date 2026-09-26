@@ -85,22 +85,27 @@ $states = @(
     @{ Name = "automation-editor"; Env = @{ DAW_SHOT_AUTOMATION_EDITOR = "select" } },
     @{ Name = "ai-chat"; Env = @{ DAW_SHOT_AI = "complete" } },
     @{ Name = "ai-music"; Env = @{ DAW_SHOT_AI = "music" } },
+    @{ Name = "notebook"; Env = @{ DAW_SHOT_NOTEBOOK = "timed"; DAW_SHOT_DELAY = "900" } },
     @{ Name = "web"; Env = @{ DAW_SHOT_WEB = "1"; DAW_SHOT_DELAY = "1000" } },
     @{ Name = "export-mix"; Env = @{ DAW_SHOT_EXPORT = "mix" } },
     @{ Name = "export-stems"; Env = @{ DAW_SHOT_EXPORT = "stems" } },
     @{ Name = "recovery"; Env = @{ DAW_SHOT_RECOVERY = "1" } },
     @{ Name = "settings-audio"; Env = @{ DAW_SHOT_SETTINGS = "0" } },
-    @{ Name = "settings-transport"; Env = @{ DAW_SHOT_SETTINGS = "1" } },
-    @{ Name = "settings-recording"; Env = @{ DAW_SHOT_SETTINGS = "2" } },
-    @{ Name = "settings-context"; Env = @{ DAW_SHOT_SETTINGS = "3" } },
-    @{ Name = "settings-browser"; Env = @{ DAW_SHOT_SETTINGS = "4" } },
-    @{ Name = "settings-ai"; Env = @{ DAW_SHOT_SETTINGS = "6" } },
-    @{ Name = "settings-account"; Env = @{ DAW_SHOT_SETTINGS = "7" } },
-    @{ Name = "settings-language"; Env = @{ DAW_SHOT_SETTINGS = "8" } },
-    @{ Name = "settings-recovery"; Env = @{ DAW_SHOT_SETTINGS = "9" } },
-    @{ Name = "settings-themes"; Env = @{ DAW_SHOT_SETTINGS = "10" } },
-    @{ Name = "settings-theme-editor"; Env = @{ DAW_SHOT_SETTINGS = "11" } },
-    @{ Name = "settings-shortcuts"; Env = @{ DAW_SHOT_SETTINGS = "12" } }
+    @{ Name = "settings-transport"; Env = @{ DAW_SHOT_SETTINGS = "2" } },
+    @{ Name = "settings-recording"; Env = @{ DAW_SHOT_SETTINGS = "3" } },
+    @{ Name = "settings-context"; Env = @{ DAW_SHOT_SETTINGS = "4" } },
+    @{ Name = "settings-browser"; Env = @{ DAW_SHOT_SETTINGS = "5" } },
+    @{ Name = "settings-ai"; Env = @{ DAW_SHOT_SETTINGS = "7" } },
+    @{ Name = "settings-account"; Env = @{ DAW_SHOT_SETTINGS = "8" } },
+    @{ Name = "settings-language"; Env = @{ DAW_SHOT_SETTINGS = "9" } },
+    @{ Name = "settings-recovery"; Env = @{ DAW_SHOT_SETTINGS = "10" } },
+    @{ Name = "settings-themes"; Env = @{ DAW_SHOT_SETTINGS = "11" } },
+    @{ Name = "settings-theme-editor"; Env = @{ DAW_SHOT_SETTINGS = "12" } },
+    @{ Name = "settings-shortcuts"; Env = @{ DAW_SHOT_SETTINGS = "13" } },
+    @{ Name = "settings-quick-import"; Env = @{ DAW_SHOT_SETTINGS = "1" } },
+    @{ Name = "settings-notebook"; Env = @{ DAW_SHOT_SETTINGS = "6" } },
+    @{ Name = "settings-interface"; Env = @{ DAW_SHOT_SETTINGS = "14" } },
+    @{ Name = "settings-mixer"; Env = @{ DAW_SHOT_SETTINGS = "15" } }
 )
 
 $shotKeys = @(
@@ -109,7 +114,7 @@ $shotKeys = @(
     "DAW_SHOT_BROWSER_PLUGINS", "DAW_SHOT_CLIP_EDITOR", "DAW_SHOT_RECORD", "DAW_SHOT_TAKE",
     "DAW_SHOT_PIANOROLL", "DAW_SHOT_PATTERN", "DAW_SHOT_SAMPLER", "DAW_SHOT_MIXER",
     "DAW_SHOT_MENU", "DAW_SHOT_PLUGIN_SEARCH", "DAW_SHOT_PLUGINS", "DAW_SHOT_AUTOMATION",
-    "DAW_SHOT_AUTOMATION_EDITOR", "DAW_SHOT_AI", "DAW_SHOT_WEB", "DAW_SHOT_EXPORT",
+    "DAW_SHOT_AUTOMATION_EDITOR", "DAW_SHOT_AI", "DAW_SHOT_NOTEBOOK", "DAW_SHOT_WEB", "DAW_SHOT_EXPORT",
     "DAW_SHOT_RECOVERY", "DAW_SHOT_SETTINGS", "DAW_SHOT_EQUALIZER", "DAW_SHOT_DELAY"
 )
 
@@ -159,10 +164,10 @@ try {
             }
         }
     }
-    if ($files.Count -lt 80) {
-        throw "Expected at least 80 screenshots, found $($files.Count)."
+    if ($files.Count -lt 90) {
+        throw "Expected at least 90 screenshots, found $($files.Count)."
     }
-    Write-Host "Manual screenshots ready: 80 files in $OutputRoot"
+    Write-Host "Manual screenshots ready: 90 files in $OutputRoot"
 } finally {
     foreach ($key in $shotKeys + @("DAW_PREF_DIR", "DAW_SHOT_SIZE")) {
         [Environment]::SetEnvironmentVariable($key, $null, "Process")

@@ -23,6 +23,7 @@ import (
 	"vltstudio/backend/internal/auth"
 	"vltstudio/backend/internal/config"
 	"vltstudio/backend/internal/database"
+	"vltstudio/backend/internal/legal"
 	"vltstudio/backend/internal/model"
 	"vltstudio/backend/internal/quota"
 	"vltstudio/backend/migrations"
@@ -131,8 +132,13 @@ func TestPostgresAccountFlow(t *testing.T) {
 	}
 	sqlDB, _ := db.DB()
 	t.Cleanup(func() { _ = sqlDB.Close() })
+	profile := legal.Current
+	profile.OperatorAddress = "Test postal address"
+	profile.RKNNotificationConfirmed = true
+	profile.ProcessorsReviewed = true
 	cfg := config.Config{
-		Environment: "development", PublicOrigin: "http://localhost:3000",
+		LegalProfile: profile,
+		Environment:  "development", PublicOrigin: "http://localhost:3000",
 		AdminOrigin: "http://localhost:3001", DesktopAPIOrigin: "http://localhost:8080",
 		StorageRoot: t.TempDir(), ConsentVersion: "2026-08-23", SigningSeed: make([]byte, 32),
 		AIGlobalMonthlyLimit: 100_000_000,
@@ -146,7 +152,9 @@ func TestPostgresAccountFlow(t *testing.T) {
 	registration := map[string]any{
 		"email": "Test@Example.COM", "nickname": "ＶＬＴТест", "password": password,
 		"password_confirmation": password, "locale": "ru", "consent_accepted": true,
-		"consent_version": cfg.ConsentVersion,
+		"consent_version": profile.Version,
+		"terms_accepted":  true, "terms_version": profile.Version,
+		"diagnostics_accepted": true, "diagnostics_version": profile.Version,
 	}
 	created := performJSON(router, http.MethodPost, "/v1/web/auth/register", registration, "203.0.113.10:1234", nil, nil)
 	if created.Status != http.StatusCreated {
@@ -162,6 +170,15 @@ func TestPostgresAccountFlow(t *testing.T) {
 	}
 	if user.Nickname != "ＶＬＴТест" || user.NicknameKey != "vltтест" {
 		t.Fatalf("nickname spelling/key were not preserved: %q/%q", user.Nickname, user.NicknameKey)
+	}
+	var decisions []model.LegalAcceptance
+	if err := db.Where("user_id = ?", user.ID).Find(&decisions).Error; err != nil || len(decisions) != 3 {
+		t.Fatalf("registration must record three independent decisions: %v, %v", decisions, err)
+	}
+	for _, decision := range decisions {
+		if decision.Version != profile.Version || decision.Action != "accepted" || decision.IP != "203.0.113.10" || decision.OccurredAt.IsZero() {
+			t.Fatalf("incomplete decision evidence: %+v", decision)
+		}
 	}
 
 	duplicate := registration
@@ -275,6 +292,40 @@ func TestPostgresAccountFlow(t *testing.T) {
 	rejected := performJSON(router, http.MethodPost, "/v1/desktop/telemetry/batch", forbiddenPayload, "203.0.113.23:1234", nil, map[string]string{"Authorization": "Bearer " + access})
 	if rejected.Status != http.StatusUnprocessableEntity {
 		t.Fatalf("forbidden telemetry field was accepted: %d %v", rejected.Status, rejected.Body)
+	}
+	webHeaders := map[string]string{"Origin": cfg.PublicOrigin, "X-CSRF-Token": csrf}
+	consentPath := "/v1/me/diagnostics-consent"
+	withoutCSRF := performJSON(router, http.MethodPut, consentPath, map[string]any{"accepted": false}, "203.0.113.10:1234", created.Cookies, nil)
+	if withoutCSRF.Status != http.StatusForbidden {
+		t.Fatalf("diagnostic decision accepted without CSRF: %v", withoutCSRF)
+	}
+	for i := 0; i < 2; i++ {
+		withdrawn := performJSON(router, http.MethodPut, consentPath, map[string]any{"accepted": false}, "203.0.113.10:1234", created.Cookies, webHeaders)
+		if withdrawn.Status != http.StatusOK || withdrawn.Body["enabled"] != false {
+			t.Fatalf("withdrawal failed: %v", withdrawn)
+		}
+	}
+	var revokedCount int64
+	if err := db.Model(&model.LegalAcceptance{}).Where("user_id = ? AND purpose = 'diagnostics' AND action = 'revoked'", user.ID).Count(&revokedCount).Error; err != nil || revokedCount != 1 {
+		t.Fatalf("withdrawal must be recorded once: %d, %v", revokedCount, err)
+	}
+	for _, path := range []string{"/v1/desktop/telemetry/batch", "/v1/desktop/crashes"} {
+		blocked := performJSON(router, http.MethodPost, path, batch, "203.0.113.23:1234", nil, telemetryHeaders)
+		if blocked.Status != http.StatusForbidden || blocked.Body["code"] != "diagnostics_consent_required" {
+			t.Fatalf("issued reporter token bypassed withdrawal: %s %+v", path, blocked)
+		}
+	}
+	stillActive := performJSON(router, http.MethodGet, "/v1/desktop/me", nil, "203.0.113.23:1234", nil, map[string]string{"Authorization": "Bearer " + access})
+	if stillActive.Status != http.StatusOK {
+		t.Fatalf("withdrawal disabled account access: %v", stillActive)
+	}
+	stale := performJSON(router, http.MethodPut, consentPath, map[string]any{"accepted": true, "version": "old"}, "203.0.113.10:1234", created.Cookies, webHeaders)
+	if stale.Status != http.StatusUnprocessableEntity {
+		t.Fatalf("outdated diagnostic document accepted: %v", stale)
+	}
+	enabled := performJSON(router, http.MethodPut, consentPath, map[string]any{"accepted": true, "version": profile.Version}, "203.0.113.10:1234", created.Cookies, webHeaders)
+	if enabled.Status != http.StatusOK || enabled.Body["enabled"] != true {
+		t.Fatalf("new affirmative choice failed: %v", enabled)
 	}
 
 	// Managed AI is authorized once per provider request. The desktop receives
@@ -551,5 +602,34 @@ func TestPostgresAccountFlow(t *testing.T) {
 		}
 		checkDesktopRefreshRetry(t, server, router, login.Body["refresh_token"].(string))
 	})
+
+	// Re-enabling does not cancel deletion of diagnostics collected before the
+	// withdrawal. Run maintenance against this isolated database only.
+	if err := server.cleanupExpiredDiagnostics(ctx, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"telemetry_samples", "telemetry_events", "telemetry_sessions"} {
+		var remaining int64
+		if err := db.Table(table).Where("user_id = ?", user.ID).Count(&remaining).Error; err != nil || remaining != 0 {
+			t.Fatalf("withdrawn %s retained after re-enable: %d, %v", table, remaining, err)
+		}
+	}
+	newReport := model.CrashReport{ID: uuid.New(), UserID: user.ID, DeviceID: storedDevice.ID, Platform: "macos", OccurredAt: time.Now().UTC()}
+	if err := db.Create(&newReport).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := server.cleanupExpiredDiagnostics(ctx, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	var crashCount int64
+	if err := db.Model(&model.CrashReport{}).Where("id = ?", newReport.ID).Count(&crashCount).Error; err != nil || crashCount != 1 {
+		t.Fatalf("new diagnostics removed by historical withdrawal: %d, %v", crashCount, err)
+	}
+	if err := server.cleanupExpiredDiagnostics(ctx, time.Now().UTC().Add(91*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.CrashReport{}).Where("id = ?", newReport.ID).Count(&crashCount).Error; err != nil || crashCount != 0 {
+		t.Fatalf("expired diagnostics retained: %d, %v", crashCount, err)
+	}
 
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import type { APIError, AccountSession, Device, Quota } from "@vlt/api-client";
+import { DiagnosticsPreference } from "./diagnostics-preference";
 import { api } from "@vlt/api-client";
 import { Laptop, LogOut, RefreshCw, X } from "lucide-react";
 import { useTranslations } from "next-intl";
@@ -64,5 +65,6 @@ export function AccountPanel({ locale }: { locale: string }) {
       <section className="vlt-card vlt-card-pad vlt-stack"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">{t("tokens")}</h2><RefreshCw size={16} className="vlt-muted" aria-hidden /></div><div><div className="quota-line"><span>{t("used")}: <span className="vlt-code">{number.format(account.quota.used_tokens)}</span></span><span>{t("remaining")}: <span className="vlt-code">{number.format(account.quota.remaining_tokens)}</span></span></div><div className="vlt-progress" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${percent}%` }} /></div><p className="vlt-subtitle">{t("reset", { date: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(account.quota.ends_at)) })} UTC</p></div></section>
     </div>
     <section className="vlt-card vlt-card-pad vlt-stack"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">{t("devices")}</h2><span className="vlt-badge">{devices.length} / 2</span></div><div className="device-list">{devices.length === 0 && <p className="vlt-muted">{t("empty")}</p>}{devices.map((device) => <div className="device-row" key={device.id}><div className="vlt-row"><Laptop size={18} className="vlt-muted" aria-hidden /><div><strong>{device.display_name || device.platform}</strong><div className="vlt-muted">{device.os_version} · VLTone {device.app_version} · {new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(device.last_seen_at))}</div></div></div><button className="vlt-button vlt-button-danger" onClick={() => revoke(device.id)}><X size={15} aria-hidden /> {t("revoke")}</button></div>)}</div></section>
+    <DiagnosticsPreference user={account.user} csrf={account.csrf_token} locale={locale} />
   </main>;
 }

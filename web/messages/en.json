@@ -132,8 +132,9 @@
     "metaTitle": "VLTone capabilities — recording, MIDI, mixing, plugins, and AI",
     "metaDescription": "A complete overview of VLTone capabilities: audio recording and editing, MIDI, instruments, mixing, automation, plugins, AI, export, and project recovery.",
     "eyebrow": "VLTone capabilities",
-    "title": "Everything for music. One continuous flow.",
-    "intro": "VLTone takes a project from the first recording to the finished file. Below is a detailed, honest overview of the tools already available in the current open beta.",
+    "title": "From the first note",
+    "titleAccent": "to the final mix.",
+    "intro": "Record, write, and mix. All the tools in your studio, together in one project.",
     "join": "Join the beta",
     "explore": "Explore capabilities",
     "statusLabel": "Open beta",
@@ -144,12 +145,16 @@
     "directoryTitle": "From recording to the finished file.",
     "directoryCopy": "Each section explains what a capability is for, lists the tools available today, and links directly to the relevant chapter of the complete manual.",
     "contentsLabel": "Capability contents",
-    "manualLink": "Open this manual section",
+    "manualLink": "How it works",
+    "details": "All tools",
     "items": {
       "recording": {
         "tag": "Audio",
-        "title": "Audio recording and editing",
-        "lead": "Record vocals and live instruments directly into the arrangement, preserve useful takes, and shape the material without leaving the project.",
+        "nav": "Recording",
+        "title": "Record and shape.",
+        "lead": "Vocals, instruments, and takes, right in the arrangement. Trim, stretch, and bring your best moments together.",
+        "highlights": ["Monitoring", "Takes", "Time stretch"],
+        "caption": "Arrangement · audio tracks and takes",
         "points": [
           "Select an input, arm and monitor the required track, and record against the metronome and project tempo.",
           "Layer multiple takes while keeping the source material available so you can build the strongest performance.",
@@ -159,8 +164,11 @@
       },
       "midi": {
         "tag": "MIDI",
-        "title": "MIDI, Piano Roll, and instruments",
-        "lead": "Create melodies, chords, and rhythmic parts with the mouse, computer keyboard, or an external MIDI controller.",
+        "nav": "MIDI",
+        "title": "Notes, beats, ideas.",
+        "lead": "Draw melodies in the Piano Roll, build beats, or play a MIDI keyboard. Give your samples a voice of their own.",
+        "highlights": ["Piano Roll", "Patterns", "Sampler"],
+        "caption": "Piano Roll · notes and velocity",
         "points": [
           "Use the Piano Roll to create, select, move, and edit notes inside a MIDI clip.",
           "Program rhythms in the Pattern editor and manage sound sources directly from each row.",
@@ -170,8 +178,11 @@
       },
       "mixing": {
         "tag": "Mix",
-        "title": "Mixer, routing, and export",
-        "lead": "Balance a multitrack project, organize shared processing, and prepare the material for release or the next production stage.",
+        "nav": "Mixing",
+        "title": "Every sound in place.",
+        "lead": "Shape the balance, effects, and automation. Export a finished mix or individual stems.",
+        "highlights": ["Bus / Send", "Automation", "Mix / Stems"],
+        "caption": "Mixer · channels, effects, and master",
         "points": [
           "Channel strips include gain, inserts, sends, pan, fader, meters, mute, solo, record, and monitoring states.",
           "Bus and Send tracks plus summing folders support group and parallel processing without duplicating identical chains.",
@@ -181,8 +192,11 @@
       },
       "plugins": {
         "tag": "Plugins",
-        "title": "Plugins and built-in processing",
-        "lead": "Expand a project with familiar instruments and effects while isolating problematic plugins until they can be checked again.",
+        "nav": "Plugins",
+        "title": "Plugins and effects.",
+        "lead": "Your favorite instruments, external effects, and a built-in equalizer, together in your project.",
+        "highlights": ["VST / VST3", "CLAP", "AU · macOS"],
+        "caption": "Plugin Manager",
         "points": [
           "Use CLAP, VST, and VST3 plugins; Audio Unit is also available on macOS.",
           "Plugin Manager controls search paths, scanning, rescanning, and the blacklist for unstable modules.",
@@ -192,8 +206,11 @@
       },
       "ai": {
         "tag": "AI",
-        "title": "Project AI assistant",
-        "lead": "Describe a goal in everyday language and the assistant uses permitted project context to run controlled interface commands.",
+        "nav": "AI",
+        "title": "An extra pair of hands.",
+        "lead": "Describe your task. Get help with tracks, MIDI, and processing, with actions you can undo.",
+        "highlights": ["Chat", "Commands", "Undo"],
+        "caption": "AI assistant · chat and actions",
         "points": [
           "Chat can explain the project and perform available actions involving tracks, clips, MIDI, and processing.",
           "Results and errors remain in the transcript, while completed operations stay visible in history and support Undo.",
@@ -203,8 +220,11 @@
       },
       "recovery": {
         "tag": "Reliability",
-        "title": "Projects, Undo, and recovery",
-        "lead": "VLTone preserves project structure and helps you return to work when the application exits unexpectedly.",
+        "nav": "Projects",
+        "title": "Pick up where you left off.",
+        "lead": "Edit history, portable projects, and recovery after an unexpected shutdown.",
+        "highlights": ["Undo", "Recovery", "Portability"],
+        "caption": "Project recovery after a crash",
         "points": [
           "A project stores tracks, clips, MIDI, automation, routing, and plugin state, with structural edits participating in Undo.",
           "The background recovery journal captures state regularly and offers restoration on the next launch after a failure.",
@@ -214,8 +234,8 @@
       }
     },
     "ctaLabel": "Try VLTone",
-    "ctaTitle": "Start with the current beta.",
-    "ctaCopy": "Install the latest release, build your first project, and tell us what should improve next.",
+    "ctaTitle": "Your next track starts here.",
+    "ctaCopy": "VLTone for Windows and macOS. Open beta.",
     "download": "Download VLTone",
     "guide": "Complete manual"
   },
@@ -233,10 +253,17 @@
     "forgot": "Forgot your password?",
     "noAccount": "No account yet?",
     "hasAccount": "Already registered?",
-    "consent": "I accept the privacy policy and indefinite diagnostic-data retention, version {version}.",
     "working": "Please wait…",
     "registerCopy": "Create your open beta account. Then download VLTone and sign in to the app with the same email and password.",
-    "loginCopy": "Sign in to your VLTone account. Use the same email and password in the app."
+    "loginCopy": "Sign in to your VLTone account. Use the same email and password in the app.",
+    "termsLabel": "I accept the <terms>terms of use</terms>.",
+    "consentLabel": "I separately <consent>consent to processing my account data</consent>.",
+    "diagnosticsLabel": "I <diagnostics>consent to diagnostic data processing</diagnostics> to help improve VLTone. Optional.",
+    "privacyNote": "Purposes, retention and withdrawal: <privacy>privacy policy</privacy>. Documents open in a new tab.",
+    "legalLoading": "Loading registration terms…",
+    "legalUnavailable": "Could not verify the registration terms. Refresh the page and try again.",
+    "passwordMismatch": "Passwords do not match.",
+    "requestFailed": "The request failed. Please try again."
   },
   "Account": {
     "title": "Your account",
@@ -295,7 +322,7 @@
             "id": "first-launch",
             "title": "First launch",
             "intro": "VLTone verifies your account, audio system, and available plugins before opening the main workspace.",
-            "preparation": "Connect your audio interface before launch and make sure the internet is available for Demo entitlement verification.",
+            "preparation": "Connect your audio interface before launch. You will need internet access to sign in to your account.",
             "steps": [
               "Sign in to your VLTone account if the saved session cannot be restored.",
               "Wait for safe plugin scanning; the current file and total progress appear in the startup window.",
@@ -324,11 +351,11 @@
           {
             "id": "workspace",
             "title": "Workspace",
-            "intro": "The arrangement is central, tracks and Browser sit to the left, Mixer opens below, Web and AI can open on the right, and the context panel follows selection.",
+            "intro": "The arrangement is central, tracks and Browser sit to the left, and Mixer opens below. Web, Notebook, and AI can open on the right; the context panel follows selection.",
             "steps": [
               "Use track headers for selection, mute, solo, volume, pan, and record state.",
               "Drag clips along the timeline; the vertical playhead shows playback position.",
-              "Toggle Mixer, Inspector, Context Panel, Browser, Web, and AI from View.",
+              "Toggle Mixer, Inspector, Context Panel, Browser, Web, Notebook, and AI from View.",
               "Double-click a clip to open its matching audio, piano-roll, or pattern editor."
             ],
             "result": "You know where to edit project structure, track sound, and the contents of a selected clip.",
@@ -559,6 +586,13 @@
             "result": "Notes and timed lines remain available while working on the composition.",
             "notes": [
               "Use the dedicated button to pause an animated notebook background. The gear button opens notebook settings."
+            ],
+            "figures": [
+              {
+                "slug": "notebook",
+                "alt": "VLTone Notebook with the timed text tab",
+                "caption": "The Timed text tab beside the arrangement."
+              }
             ]
           }
         ]
@@ -578,6 +612,7 @@
               "Select a file to see its waveform and preview it.",
               "Drag it onto an Audio track or empty space to make a new one.",
               "Use File → Import Audio for a standard file dialog.",
+              "For a new project from a template, configure Settings → Quick Import, then use File → Quick Import Audio… or drop an audio file on the VLTone icon.",
               "Stop preview before comparing with the project if the signals overlap."
             ],
             "result": "The file is an audio clip ready for movement, trimming, and processing.",
@@ -1322,14 +1357,13 @@
           {
             "id": "settings",
             "title": "All application settings",
-            "intro": "Settings contains Audio, Transport, Recording, Context Panel, Browser, AI, Account, Language, Recovery, Themes, Theme Editor, and Keyboard Shortcuts.",
+            "intro": "Settings groups controls under Application, Audio & Recording, Workspace, Appearance, and Account & AI.",
             "steps": [
-              "Audio: device, I/O, sample rate, and buffer.",
-              "Transport and Recording: metronome, count-in, takes, and monitoring.",
-              "Context Panel and Browser: tools, position, preview, and MIDI tempo policy.",
-              "AI and Account: models, custom endpoint, quota, and session.",
-              "Language, Recovery, Themes, and Theme Editor: locale, safety, and appearance.",
-              "Keyboard Shortcuts: find a command, assign a key, and resolve conflicts."
+              "Application → General, Language, Keyboard Shortcuts, Recovery: startup project, display updates, locale, shortcuts, and recovery.",
+              "Audio & Recording → Audio, Recording, Transport: devices, buffer, take mode, metronome, and time display.",
+              "Workspace → Browser, Quick Import, Context Panel, Mixer, Notebook: files, fast import, tools, channel width, and notes.",
+              "Appearance → Themes, Theme Editor: ready-made themes, colours, and type.",
+              "Account & AI → Account, AI: session, access, quota, and model connections."
             ],
             "result": "The application is configured for your hardware, language, and workflow.",
             "shortcuts": [
@@ -1342,6 +1376,12 @@
               "Some language and font changes require a restart; the page tells you when."
             ],
             "figures": [
+              {
+                "slug": "settings-interface",
+                "alt": "General application settings",
+                "caption": "General: startup project, refresh rate, and graphics quality.",
+                "ratio": "8 / 7"
+              },
               {
                 "slug": "settings-audio",
                 "alt": "Audio settings",
@@ -1373,6 +1413,24 @@
                 "ratio": "8 / 7"
               },
               {
+                "slug": "settings-quick-import",
+                "alt": "Quick Import settings",
+                "caption": "Quick Import: template, audio track, BPM and key detection.",
+                "ratio": "8 / 7"
+              },
+              {
+                "slug": "settings-mixer",
+                "alt": "Mixer settings",
+                "caption": "Mixer: channel width and the default-size reset.",
+                "ratio": "8 / 7"
+              },
+              {
+                "slug": "settings-notebook",
+                "alt": "Notebook settings",
+                "caption": "Notebook: background, visibility, and local fonts.",
+                "ratio": "8 / 7"
+              },
+              {
                 "slug": "settings-ai",
                 "alt": "AI settings",
                 "caption": "AI: managed models and custom connections.",
@@ -1381,7 +1439,7 @@
               {
                 "slug": "settings-account",
                 "alt": "Account settings",
-                "caption": "Account: Demo entitlement, AI quota, and sign-out.",
+                "caption": "Account: session status, access, and AI quota.",
                 "ratio": "8 / 7"
               },
               {

@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
-import { ArrowDown, ArrowUpRight, History, Mic2, Piano, PlugZap, Plus, SlidersHorizontal, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUpRight, ArrowRight, AudioLines, Piano, SlidersHorizontal, Plus } from "lucide-react";
 import { getTranslations, setRequestLocale } from "next-intl/server";
+import { StudioGallery, ProductShot } from "@/components/product-gallery";
+import { studioContent } from "@/lib/studio-content";
 import { siteMetadata, siteUrl } from "@/lib/seo";
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }): Promise<Metadata> {
@@ -15,93 +16,56 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
   const { locale } = await params;
   setRequestLocale(locale);
   const t = await getTranslations("Home");
-  const features = ["recording", "midi", "mixing", "plugins", "ai", "recovery"] as const;
-  const featureIcons = { recording: Mic2, midi: Piano, mixing: SlidersHorizontal, plugins: PlugZap, ai: Sparkles, recovery: History };
-  const overviewMoments = ["capture", "arrange", "finish"] as const;
-  const steps = ["register", "download", "signin"] as const;
-  const stepLinks = ["/register", "/releases", "/manual#first-launch"] as const;
-  const questions = ["what", "who", "beta", "start", "platforms", "feedback"] as const;
-  const structuredData = {
-    "@context": "https://schema.org",
-    "@graph": [
-      { "@type": "WebSite", "@id": `${siteUrl}/#website`, name: "VLTone", url: siteUrl, inLanguage: ["ru", "en"] },
-      {
-        "@type": "SoftwareApplication", "@id": `${siteUrl}/#software`, name: "VLTone",
-        url: siteUrl, description: t("metaDescription"),
-        applicationCategory: "MultimediaApplication", applicationSubCategory: "Digital Audio Workstation",
-        operatingSystem: "Windows, macOS", inLanguage: ["ru", "en"],
-        releaseNotes: `${siteUrl}/releases`,
-        featureList: features.map((key) => t(`features.${key}.title`)),
-      },
-    ],
-  };
+  const c = studioContent(locale);
+  const ru = locale === "ru";
+  const icons = [AudioLines, Piano, SlidersHorizontal];
+  const structuredData = { "@context": "https://schema.org", "@graph": [
+    { "@type": "WebSite", name: "VLTone", url: siteUrl, inLanguage: ["ru", "en"] },
+    { "@type": "SoftwareApplication", name: "VLTone", url: siteUrl, description: t("metaDescription"), applicationCategory: "MultimediaApplication", operatingSystem: "Windows, macOS", featureList: c.workflow.map(item => item.title) },
+  ] };
 
-  return <main id="main-content" className="marketing-main">
+  return <main id="main-content" className="marketing-main studio-home">
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData).replace(/</g, "\\u003c") }} />
-    <section className="hero-frame" aria-labelledby="hero-title">
-      <figure className="hero-product" data-reveal="120"><Image src={`/images/workspace-dark-${locale}.png`} width={1600} height={1000} sizes="(max-width: 700px) 100vw, (max-width: 1200px) 58vw, 730px" priority alt={t("productAlt")} /><figcaption>{t("productCaption")}</figcaption></figure>
-      <div className="hero-copy-panel" data-reveal="0">
-        <span className="section-label">{t("kicker")}</span>
-        <h1 id="hero-title">VLTone<span>{t("title")}</span></h1>
-        <p>{t("copy")}</p>
-        <div className="hero-actions">
-          <Link className="vlt-button" href="/register"><ArrowUpRight size={15} aria-hidden />{t("create")}</Link>
-          <Link className="text-link" href="#overview">{t("discover")}<ArrowDown size={14} aria-hidden /></Link>
+    <section className="studio-hero" aria-labelledby="hero-title">
+      <div className="studio-container">
+        <div className="hero-topline"><span className="section-label">{c.eyebrow}</span><span className="status-dot">{t("betaTag")}</span></div>
+        <div className="hero-editorial">
+          <h1 id="hero-title"><span>VLTone.</span><br />{c.title}</h1>
+          <div className="hero-copy-panel"><p>{c.intro}</p><div className="hero-actions"><Link className="vlt-button" href="/register">{c.start}<ArrowUpRight size={18} aria-hidden /></Link><a className="text-link" href="#overview">{c.explore}<ArrowDown size={16} aria-hidden /></a></div><span className="platform-caption">Windows & macOS</span></div>
         </div>
+        <StudioGallery locale={locale} items={c.gallery} />
       </div>
-      <div className="hero-caption" data-reveal="180"><span>{t("heroCaption")}</span><span>Windows · macOS</span></div>
+      <div className="format-strip" aria-label={c.compatibility}><span>AUDIO + MIDI</span><span>VST / VST3</span><span>CLAP</span><span>AU <small>macOS</small></span><span>{c.export}</span></div>
     </section>
-
-    <section id="overview" className="home-section overview-section" aria-labelledby="overview-title" data-reveal>
-      <header className="overview-intro">
-        <span className="section-label">{t("overviewLabel")}</span>
-        <h2 id="overview-title">{t("overviewTitle")}</h2>
-        <p>{t("overviewCopy")}</p>
-      </header>
-      <div className="overview-detail">
-        <p>{t("audienceCopy")}</p>
-        <Link className="text-link" href="/manual">{t("manual")}<ArrowUpRight size={14} aria-hidden /></Link>
-      </div>
-      <div className="overview-flow">
-        {overviewMoments.map((key) => <article key={key}>
-          <h3>{t(`overviewMoments.${key}.title`)}</h3>
-          <p>{t(`overviewMoments.${key}.copy`)}</p>
-        </article>)}
+    <section id="overview" className="studio-light" aria-labelledby="workflow-title">
+      <div className="studio-container section-space">
+        <header className="editorial-heading"><div><span className="section-label">01 / {c.workflowLabel}</span><h2 id="workflow-title">{c.workflowTitle}</h2></div><Link className="text-link" href="/capabilities">{c.allFeatures}<ArrowUpRight size={18} aria-hidden /></Link></header>
+        <div className="workflow-grid">{c.workflow.map((item, index) => {
+          const Icon = icons[index];
+          return <article className="workflow-card" key={item.id}>
+            <ProductShot locale={locale} name={item.shot} alt={item.alt} />
+            <div className="workflow-copy"><span className="workflow-number">0{index + 1}<Icon size={20} strokeWidth={1.5} aria-hidden /></span><h3>{item.title}</h3><p>{item.copy}</p><Link href={`/capabilities#${item.id}`} className="text-link">{item.link}<ArrowRight size={16} aria-hidden /></Link></div>
+          </article>;
+        })}</div>
       </div>
     </section>
-
-    <section id="features" className="home-section" aria-labelledby="features-title">
-      <header className="section-heading" data-reveal>
-        <div><span className="section-label">{t("featuresLabel")}</span><h2 id="features-title">{t("featuresTitle")}</h2></div>
-        <div className="section-heading-copy"><p>{t("featuresCopy")}</p><Link className="text-link" href="/capabilities">{t("featuresMore")}<ArrowUpRight size={14} aria-hidden /></Link></div>
-      </header>
-      <div className="feature-directory">{features.map((key, index) => {
-        const FeatureIcon = featureIcons[key];
-        return <Link className="feature-entry" href={`/capabilities#${key}`} key={key} data-reveal={String(index * 45)}>
-          <span className="feature-icon"><FeatureIcon size={27} strokeWidth={1.45} aria-hidden /></span>
-          <span className="feature-entry-copy"><span className="pill-tag">{t(`features.${key}.tag`)}</span><strong>{t(`features.${key}.title`)}</strong><span>{t(`features.${key}.copy`)}</span></span>
-          <ArrowUpRight size={17} aria-hidden />
-        </Link>;
-      })}</div>
-      <div className="features-beta-note" data-reveal><span className="pill-tag">{t("betaTag")}</span><p>{t("featuresBeta")}</p><Link className="text-link" href="/capabilities">{t("featuresMore")}<ArrowUpRight size={14} aria-hidden /></Link></div>
+    <section className="studio-tools studio-container section-space" aria-labelledby="tools-title">
+      <header className="editorial-heading"><div><span className="section-label">02 / {c.toolsLabel}</span><h2 id="tools-title">{c.toolsTitle}</h2></div><p>{c.toolsCopy}</p></header>
+      <div className="instrument-grid">{c.tools.map(item => <article className={`instrument-card instrument-${item.shot}`} key={item.shot}>
+        <div><span className="section-label">{item.label}</span><h3>{item.title}</h3><p>{item.copy}</p></div>
+        <ProductShot locale={locale} name={item.shot} alt={item.alt} />
+        <Link className="text-link" href={item.href}>{c.openGuide}<ArrowUpRight size={16} aria-hidden /></Link>
+      </article>)}</div>
+      <div className="studio-extras">{c.extras.map(item => <Link href={item.href} key={item.title}><span>{item.tag}</span><strong>{item.title}</strong><ArrowUpRight size={20} aria-hidden /></Link>)}</div>
     </section>
-
-    <section id="beta" className="home-section beta-section" aria-labelledby="beta-title">
-      <div className="beta-intro" data-reveal><span className="section-label">{t("betaLabel")}</span><span className="pill-tag">{t("betaTag")}</span><h2 id="beta-title">{t("betaTitle")}</h2><p>{t("betaCopy")}</p></div>
-      <ol className="beta-steps">{steps.map((key, index) => <li key={key} data-reveal={String(index * 70)}>
-        <h3>{t(`steps.${key}.title`)}</h3><p>{t(`steps.${key}.copy`)}</p>
-        <a className="text-link" href={stepLinks[index]}>{t(`steps.${key}.link`)}<ArrowUpRight size={14} aria-hidden /></a>
-      </li>)}</ol>
-      <div className="beta-note" data-reveal><p>{t("betaNote")}</p><Link className="text-link" href="/bug-report">{t("reportBug")}<ArrowUpRight size={14} aria-hidden /></Link></div>
+    <section id="beta" className="studio-light" aria-labelledby="beta-title">
+      <div className="studio-container section-space">
+        <header className="editorial-heading"><div><span className="section-label">03 / {c.betaLabel}</span><h2 id="beta-title">{c.betaTitle}</h2></div><p>{c.betaCopy}</p></header>
+        <ol className="beta-steps">{c.steps.map((step, index) => <li key={step.href}><span className="step-index">0{index + 1}</span><h3>{step.title}</h3><p>{step.copy}</p><Link className="text-link" href={step.href}>{step.link}<ArrowUpRight size={16} aria-hidden /></Link></li>)}</ol>
+        <div className="beta-footnote"><span className="status-dot">{t("betaTag")}</span><p>{c.betaNote}</p><Link className="text-link" href="/bug-report">{t("reportBug")}<ArrowUpRight size={15} aria-hidden /></Link></div>
+        <div className="studio-faq"><h2>{c.faqTitle}</h2><div className="faq-list">{["platforms", "start", "beta"].map(key => <details key={key}><summary>{t(`faq.${key}.question`)}<Plus size={18} aria-hidden /></summary><p>{t(`faq.${key}.answer`)}</p></details>)}</div></div>
+      </div>
     </section>
-
-    <section id="faq" className="home-section faq-section" aria-labelledby="faq-title">
-      <div data-reveal><span className="section-label">{t("faqLabel")}</span><h2 id="faq-title">{t("faqTitle")}</h2></div>
-      <div className="faq-list">{questions.map((key, index) => <details key={key} data-reveal={String(index * 45)}><summary>{t(`faq.${key}.question`)}<Plus size={17} aria-hidden /></summary><p>{t(`faq.${key}.answer`)}</p></details>)}</div>
-    </section>
-
-    <section className="home-section home-cta" aria-labelledby="cta-title" data-reveal>
-      <span className="section-label">{t("ctaLabel")}</span><h2 id="cta-title">{t("ctaTitle")}</h2><div className="hero-actions"><Link className="vlt-button" href="/register"><ArrowUpRight size={15} aria-hidden />{t("create")}</Link><a className="text-link" href="/releases">{t("download")}<ArrowUpRight size={14} aria-hidden /></a></div>
-    </section>
+    <section className="studio-cta studio-container" aria-labelledby="cta-title"><span className="section-label">{ru ? "Твоя следующая идея" : "Your next idea"}</span><h2 id="cta-title">{c.cta}</h2><div className="hero-actions"><Link className="vlt-button" href="/register">{c.start}<ArrowUpRight size={18} aria-hidden /></Link><Link className="text-link" href="/releases">{t("download")}<ArrowDown size={16} aria-hidden /></Link></div></section>
   </main>;
 }

@@ -212,6 +212,33 @@ paths:
       operationId: getMe
       security: [{ webCookie: [] }]
       responses: { "200": { $ref: "#/components/responses/AccountSession" } }
+  /v1/me/diagnostics-consent:
+    put:
+      operationId: updateDiagnosticConsent
+      description: Record an explicit optional choice or withdrawal. Requires web session, same origin and CSRF token. Withdrawal never requires accepting newer terms.
+      security: [{ webCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [accepted]
+              properties:
+                accepted: { type: boolean }
+                version: { type: string, description: Current document revision; required when accepting. }
+      responses:
+        "200":
+          description: Current diagnostic preference
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled]
+                properties:
+                  enabled: { type: boolean }
+        "422": { $ref: "#/components/responses/Error" }
   /v1/me/quota:
     get:
       operationId: getMyQuota
@@ -1902,11 +1929,19 @@ components:
         sort_order: { type: integer }
     Meta:
       type: object
-      required: [service, api_version, consent_version, offline_hours, access_token_minutes, public_key, collaboration]
+      required: [service, api_version, consent_version, registration_legal, registration_enabled, offline_hours, access_token_minutes, public_key, collaboration]
       properties:
         service: { const: vlt-studio }
         api_version: { const: v1 }
-        consent_version: { type: string }
+        registration_legal:
+          type: object
+          additionalProperties: false
+          required: [version, ready]
+          properties:
+            version: { type: string }
+            ready: { type: boolean }
+        registration_enabled: { type: boolean, description: Operational availability of account registration; does not assert legal publication readiness. }
+        consent_version: { type: string, description: Legacy desktop entitlement field; registration uses registration_legal.version. }
         offline_hours: { const: 72 }
         access_token_minutes: { const: 15 }
         public_key: { type: string }
@@ -1933,7 +1968,7 @@ components:
     RegisterRequest:
       type: object
       additionalProperties: false
-      required: [email, nickname, password, password_confirmation, locale, consent_accepted, consent_version]
+      required: [email, nickname, password, password_confirmation, locale, consent_accepted, consent_version, terms_accepted, terms_version]
       properties:
         email: { type: string, format: email }
         nickname: { type: string, minLength: 3, maxLength: 32 }
@@ -1942,6 +1977,10 @@ components:
         locale: { type: string, enum: [ru, en] }
         consent_accepted: { const: true }
         consent_version: { type: string }
+        terms_accepted: { const: true }
+        terms_version: { type: string }
+        diagnostics_accepted: { type: boolean, default: false }
+        diagnostics_version: { type: string, description: Required current revision when diagnostics_accepted is true. }
     PasswordResetConfirmRequest:
       type: object
       additionalProperties: false
@@ -1962,6 +2001,11 @@ components:
         collaboration_enabled: { type: boolean }
         consent_version: { type: string }
         consent_accepted_at: { type: string, format: date-time }
+        terms_version: { type: string }
+        terms_accepted_at: { type: [string, "null"], format: date-time }
+        diagnostics_consent_version: { type: string }
+        diagnostics_accepted_at: { type: [string, "null"], format: date-time }
+        diagnostics_revoked_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
     Quota:
       type: object

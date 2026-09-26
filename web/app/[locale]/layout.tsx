@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { locales } from "@/i18n/request";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
+import { CookieNotice } from "@/components/cookie-notice";
 import { MotionEffects } from "@/components/motion-effects";
 import localFont from "next/font/local";
 import { siteUrl } from "@/lib/seo";
@@ -31,7 +32,7 @@ export default async function LocaleLayout({ children, params }: Readonly<{ chil
       <body className={inter.variable}>
         <NextIntlClientProvider messages={messages}>
           <MotionEffects />
-          <div className="vlt-shell"><Header locale={locale} />{children}<Footer locale={locale} /></div>
+          <div className="vlt-shell"><Header locale={locale} />{children}<Footer locale={locale} /><CookieNotice locale={locale} /></div>
         </NextIntlClientProvider>
       </body>
     </html>

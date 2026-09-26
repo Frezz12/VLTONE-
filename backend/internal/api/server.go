@@ -160,6 +160,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/v1/me", s.me)
 		r.Get("/v1/me/quota", s.meQuota)
 		r.Get("/v1/me/devices", s.meDevices)
+		r.With(s.webCSRF).Put("/v1/me/diagnostics-consent", s.updateDiagnosticsConsent)
 		r.With(s.webCSRF).Delete("/v1/me/devices/{deviceID}", s.revokeOwnDevice)
 		r.With(s.webCSRF).Post("/v1/bug-reports", s.createBugReport)
 	})
@@ -171,8 +172,8 @@ func (s *Server) Router() http.Handler {
 	})
 	r.Group(func(r chi.Router) {
 		r.Use(s.desktopOrReporterAuth)
-		r.Post("/v1/desktop/telemetry/batch", s.telemetryBatch)
-		r.Post("/v1/desktop/crashes", s.createCrashReport)
+		r.With(s.requireDiagnosticsConsent).Post("/v1/desktop/telemetry/batch", s.telemetryBatch)
+		r.With(s.requireDiagnosticsConsent).Post("/v1/desktop/crashes", s.createCrashReport)
 	})
 	r.Group(func(r chi.Router) {
 		r.Use(s.desktopAuth)
@@ -353,8 +354,10 @@ func (s *Server) requireOrigin(admin bool) func(http.Handler) http.Handler {
 func (s *Server) meta(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"service": "vlt-studio", "api_version": "v1",
-		"consent_version": s.Config.ConsentVersion,
-		"offline_hours":   72, "access_token_minutes": 15,
+		"consent_version":    s.Config.ConsentVersion,
+		"registration_legal": map[string]any{"version": s.Config.LegalProfile.Version, "ready": s.Config.LegalProfile.Ready()},
+		"registration_enabled": s.Config.LegalProfile.AllowsRegistration(),
+		"offline_hours":      72, "access_token_minutes": 15,
 		"public_key": s.Signer.PublicKeyBase64(),
 		"collaboration": map[string]any{
 			"enabled": s.Config.CollaborationEnabled, "protocol": collab.CollaborationProtocolV4,

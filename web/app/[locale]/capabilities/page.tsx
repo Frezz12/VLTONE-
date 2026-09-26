@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowDown, ArrowUpRight, History, Mic2, Piano, PlugZap, SlidersHorizontal, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUpRight, History, Mic2, Piano, PlugZap, Plus, SlidersHorizontal, Sparkles } from "lucide-react";
 import { getTranslations, setRequestLocale } from "next-intl/server";
+import { ProductShot } from "@/components/product-gallery";
 import { siteMetadata, siteUrl } from "@/lib/seo";
 
 const capabilityKeys = ["recording", "midi", "mixing", "plugins", "ai", "recovery"] as const;
 const capabilityIcons = { recording: Mic2, midi: Piano, mixing: SlidersHorizontal, plugins: PlugZap, ai: Sparkles, recovery: History };
+const capabilityShots = { recording: "workspace", midi: "piano", mixing: "mixer", plugins: "plugins", ai: "ai", recovery: "recovery" };
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }): Promise<Metadata> {
   const { locale } = await params;
@@ -30,54 +32,62 @@ export default async function CapabilitiesPage({ params }: { params: Promise<{ l
 
   return <main id="main-content" className="capabilities-main">
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData).replace(/</g, "\\u003c") }} />
-    <section className="capabilities-hero" aria-labelledby="capabilities-title">
-      <div data-reveal>
-        <span className="section-label">{t("eyebrow")}</span>
-        <h1 id="capabilities-title">{t("title")}</h1>
-        <p>{t("intro")}</p>
-        <div className="hero-actions">
-          <Link className="vlt-button" href="/register"><ArrowUpRight size={15} aria-hidden />{t("join")}</Link>
-          <Link className="text-link" href="#capability-list">{t("explore")}<ArrowDown size={14} aria-hidden /></Link>
+    <div className="studio-container">
+      <section className="capabilities-hero" aria-labelledby="capabilities-title">
+        <div className="capabilities-topline">
+          <span className="section-label">{t("eyebrow")}</span>
+          <span className="capabilities-beta status-dot">{t("statusLabel")}</span>
         </div>
-      </div>
-      <aside className="capabilities-beta" data-reveal="80">
-        <span className="pill-tag">{t("statusLabel")}</span>
-        <h2>{t("statusTitle")}</h2>
-        <p>{t("statusCopy")}</p>
-        <Link className="text-link" href="/releases">{t("releases")}<ArrowUpRight size={14} aria-hidden /></Link>
-      </aside>
-    </section>
+        <div className="capabilities-intro">
+          <h1 id="capabilities-title">{t("title")}<span>{t("titleAccent")}</span></h1>
+          <div className="capabilities-intro-copy">
+            <p>{t("intro")}</p>
+            <Link className="vlt-button" href="/releases">{t("download")}<ArrowUpRight size={17} aria-hidden /></Link>
+            <span className="platform-caption">Windows & macOS</span>
+          </div>
+        </div>
+      </section>
 
-    <section id="capability-list" className="capabilities-directory" aria-labelledby="directory-title">
-      <header className="capabilities-directory-heading" data-reveal>
-        <span className="section-label">{t("directoryLabel")}</span>
-        <h2 id="directory-title">{t("directoryTitle")}</h2>
-        <p>{t("directoryCopy")}</p>
-      </header>
-      <nav className="capabilities-toc" aria-label={t("contentsLabel")} data-reveal>
-        {capabilityKeys.map((key) => <a href={`#${key}`} key={key}>{t(`items.${key}.title`)}</a>)}
+      <nav className="capabilities-toc" aria-label={t("contentsLabel")}>
+        {capabilityKeys.map((key, index) => <a href={`#${key}`} key={key}>
+          <span className="capability-nav-number" aria-hidden>0{index + 1}</span>
+          {t(`items.${key}.nav`)}<ArrowDown size={13} aria-hidden />
+        </a>)}
       </nav>
-      <div className="capability-list">
+
+      <div id="capability-list" className="capability-list">
         {capabilityKeys.map((key, index) => {
           const Icon = capabilityIcons[key];
           const points = t.raw(`items.${key}.points`) as string[];
-          return <article id={key} className="capability-detail" key={key} data-reveal={String(index * 45)}>
-            <span className="capability-detail-icon"><Icon size={29} strokeWidth={1.4} aria-hidden /></span>
-            <div>
-              <span className="pill-tag">{t(`items.${key}.tag`)}</span>
-              <h2>{t(`items.${key}.title`)}</h2>
+          const highlights = t.raw(`items.${key}.highlights`) as string[];
+          const primary = index < 3;
+          const visual = <figure className="capability-visual">
+            <ProductShot locale={locale} name={capabilityShots[key]} alt={t(`items.${key}.caption`)} eager={index === 0} />
+            <figcaption>{t(`items.${key}.caption`)}</figcaption>
+          </figure>;
+
+          return <article id={key} className={`capability-detail ${primary ? "capability-primary" : "capability-extra"}`} aria-labelledby={`${key}-title`} key={key}>
+            {!primary && visual}
+            <div className="capability-copy">
+              <div className="capability-eyebrow"><span>0{index + 1} / {t(`items.${key}.tag`)}</span><Icon size={20} strokeWidth={1.5} aria-hidden /></div>
+              <h2 id={`${key}-title`}>{t(`items.${key}.title`)}</h2>
               <p className="capability-lead">{t(`items.${key}.lead`)}</p>
-              <ul>{points.map((point) => <li key={point}>{point}</li>)}</ul>
+              <p className="capability-highlights">{highlights.map((highlight) => <span key={highlight}>{highlight}</span>)}</p>
+              <details className="capability-specs">
+                <summary>{t("details")}<Plus size={16} aria-hidden /></summary>
+                <ul>{points.map((point) => <li key={point}>{point}</li>)}</ul>
+              </details>
               <Link className="text-link" href={`/manual#${t(`items.${key}.manualAnchor`)}`}>{t("manualLink")}<ArrowUpRight size={14} aria-hidden /></Link>
             </div>
+            {primary && visual}
           </article>;
         })}
       </div>
-    </section>
 
-    <section className="capabilities-cta" aria-labelledby="capabilities-cta-title" data-reveal>
-      <div><span className="section-label">{t("ctaLabel")}</span><h2 id="capabilities-cta-title">{t("ctaTitle")}</h2><p>{t("ctaCopy")}</p></div>
-      <div className="hero-actions"><Link className="vlt-button" href="/releases"><ArrowUpRight size={15} aria-hidden />{t("download")}</Link><Link className="text-link" href="/manual">{t("guide")}<ArrowUpRight size={14} aria-hidden /></Link></div>
-    </section>
+      <section className="capabilities-cta" aria-labelledby="capabilities-cta-title">
+        <div><span className="section-label">{t("ctaLabel")}</span><h2 id="capabilities-cta-title">{t("ctaTitle")}</h2><p>{t("ctaCopy")}</p></div>
+        <div className="hero-actions"><Link className="vlt-button" href="/releases">{t("download")}<ArrowUpRight size={17} aria-hidden /></Link><Link className="text-link" href="/manual">{t("guide")}<ArrowUpRight size={14} aria-hidden /></Link></div>
+      </section>
+    </div>
   </main>;
 }

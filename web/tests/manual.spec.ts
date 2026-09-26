@@ -5,6 +5,7 @@ test("manual navigation, search, deep links, and locale switch", async ({ page }
   await page.goto("/manual");
   await expect(page.getByRole("heading", { name: "Инструкция VLTone" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Инструкция" })).toHaveAttribute("href", "/manual");
+  await page.getByRole("button", { name: "Только необходимые" }).click();
 
   await page.getByRole("button", { name: "Open in English" }).click();
   await expect(page).toHaveURL(/\/manual$/);

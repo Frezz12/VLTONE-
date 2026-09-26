@@ -13,9 +13,11 @@ import (
 	"github.com/google/uuid"
 
 	"vltstudio/backend/internal/auth"
+	"vltstudio/backend/internal/legal"
 )
 
 type Config struct {
+	LegalProfile         legal.Profile
 	Environment          string
 	HTTPAddr             string
 	DatabaseURL          string
@@ -76,6 +78,7 @@ type Config struct {
 
 func Load() (Config, error) {
 	c := Config{
+		LegalProfile:         legal.Current,
 		Environment:          env("APP_ENV", "development"),
 		HTTPAddr:             env("HTTP_ADDR", ":8080"),
 		DatabaseURL:          env("DATABASE_URL", "postgres://vlt:vlt@localhost:5432/vltstudio?sslmode=disable"),

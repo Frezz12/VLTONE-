@@ -10,25 +10,25 @@ export default function proxy(request: NextRequest) {
 
   if (request.headers.get(internalRewriteHeader) === "1") return NextResponse.next();
 
-  // Keep old localized links working, but never expose the locale in the
-  // canonical URL. Visiting one also updates the saved language preference.
+  // Keep old localized links working without writing a language cookie before
+  // the visitor has made a choice. The query parameter is only for this view.
   if (locales.includes(segment as (typeof locales)[number])) {
     const target = request.nextUrl.clone();
     target.pathname = pathname.slice(segment.length + 1) || "/";
-    const response = NextResponse.redirect(target);
-    response.cookies.set(localeCookie, segment, { maxAge: 60 * 60 * 24 * 365, path: "/", sameSite: "lax" });
-    return response;
+    target.searchParams.set("lang", segment);
+    return NextResponse.redirect(target);
   }
 
   const savedLocale = request.cookies.get(localeCookie)?.value;
-  const locale: Locale = locales.includes(savedLocale as Locale) ? savedLocale as Locale : "ru";
+  const requestedLocale = request.nextUrl.searchParams.get("lang");
+  const locale: Locale = locales.includes(requestedLocale as Locale) ? requestedLocale as Locale
+    : locales.includes(savedLocale as Locale) ? savedLocale as Locale : "ru";
   const target = request.nextUrl.clone();
   target.protocol = "http:";
   target.pathname = `/${locale}${pathname === "/" ? "" : pathname}`;
   const headers = new Headers(request.headers);
   headers.set(internalRewriteHeader, "1");
   const response = NextResponse.rewrite(target, { request: { headers } });
-  if (!savedLocale) response.cookies.set(localeCookie, locale, { maxAge: 60 * 60 * 24 * 365, path: "/", sameSite: "lax" });
   return response;
 }
 

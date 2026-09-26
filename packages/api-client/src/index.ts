@@ -16,6 +16,11 @@ export type User = {
   collaboration_enabled: boolean;
   consent_version: string;
   consent_accepted_at: string;
+  terms_version?: string;
+  terms_accepted_at?: string | null;
+  diagnostics_consent_version?: string;
+  diagnostics_accepted_at?: string | null;
+  diagnostics_revoked_at?: string | null;
   created_at: string;
 };
 

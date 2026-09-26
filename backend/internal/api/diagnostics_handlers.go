@@ -97,6 +97,9 @@ func (s *Server) telemetryBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	accepted := 0
 	err := s.DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
+		if err := lockDiagnosticConsent(tx, user.ID); err != nil {
+			return err
+		}
 		for _, event := range input.Events {
 			if event.EventID == uuid.Nil || event.SessionID == uuid.Nil || event.OccurredAt.IsZero() {
 				return errors.New("event identifiers and time are required")
@@ -130,6 +133,10 @@ func (s *Server) telemetryBatch(w http.ResponseWriter, r *http.Request) {
 		return tx.Model(&device).Update("last_seen_at", time.Now().UTC()).Error
 	})
 	if err != nil {
+		if errors.Is(err, errDiagnosticsConsentRequired) {
+			writeError(w, r, http.StatusForbidden, "diagnostics_consent_required", "Optional diagnostics are disabled.", nil)
+			return
+		}
 		writeError(w, r, http.StatusUnprocessableEntity, "telemetry_batch_invalid", "Telemetry batch was rejected: "+err.Error(), nil)
 		return
 	}
@@ -357,9 +364,18 @@ func (s *Server) createCrashReport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.DB.Create(&report).Error; err != nil {
+	if err := s.DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
+		if err := lockDiagnosticConsent(tx, report.UserID); err != nil {
+			return err
+		}
+		return tx.Create(&report).Error
+	}); err != nil {
 		if report.ArtifactPath != "" {
 			os.RemoveAll(filepath.Dir(report.ArtifactPath))
+		}
+		if errors.Is(err, errDiagnosticsConsentRequired) {
+			writeError(w, r, http.StatusForbidden, "diagnostics_consent_required", "Optional diagnostics are disabled.", nil)
+			return
 		}
 		writeError(w, r, http.StatusInternalServerError, "crash_report_failed", "Crash report could not be saved.", nil)
 		return

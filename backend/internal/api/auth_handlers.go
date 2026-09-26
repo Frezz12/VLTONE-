@@ -27,6 +27,10 @@ type registerRequest struct {
 	Locale               string `json:"locale"`
 	ConsentAccepted      bool   `json:"consent_accepted"`
 	ConsentVersion       string `json:"consent_version"`
+	TermsAccepted        bool   `json:"terms_accepted"`
+	TermsVersion         string `json:"terms_version"`
+	DiagnosticsAccepted  bool   `json:"diagnostics_accepted"`
+	DiagnosticsVersion   string `json:"diagnostics_version"`
 }
 
 type loginRequest struct {
@@ -35,6 +39,10 @@ type loginRequest struct {
 }
 
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
+	if !s.Config.LegalProfile.AllowsRegistration() {
+		writeError(w, r, http.StatusServiceUnavailable, "legal_documents_pending", "Registration is not yet available. Please check back later.", nil)
+		return
+	}
 	now := time.Now().UTC()
 	ip := requestIP(r)
 	if !s.limiter.Allow("register-hour:"+ip, 3, time.Hour, now) ||
@@ -65,8 +73,11 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	if input.Locale != "ru" && input.Locale != "en" {
 		input.Locale = "en"
 	}
-	if !input.ConsentAccepted || input.ConsentVersion != s.Config.ConsentVersion {
-		fields["consent_accepted"] = "The current diagnostics and privacy consent is required."
+	for key, message := range validateRegistrationLegal(input, s.Config.LegalProfile.Version) {
+		fields[key] = message
+	}
+	if input.DiagnosticsAccepted && !s.Config.LegalProfile.Ready() {
+		fields["diagnostics_accepted"] = "Optional diagnostics are not available yet. Leave this choice unchecked."
 	}
 	if len(fields) != 0 {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_failed", "Check the highlighted fields.", fields)
@@ -82,10 +93,23 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		Nickname: nickname, NicknameKey: nicknameKey, PasswordHash: passwordHash,
 		Locale: input.Locale, Status: model.UserActive,
 		ConsentVersion: input.ConsentVersion, ConsentAcceptedAt: now, ConsentIP: ip,
+		TermsVersion: input.TermsVersion, TermsAcceptedAt: &now,
+	}
+	if input.DiagnosticsAccepted {
+		user.DiagnosticsConsentVersion = input.DiagnosticsVersion
+		user.DiagnosticsAcceptedAt = &now
 	}
 	err = s.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&user).Error; err != nil {
 			return err
+		}
+		for _, purpose := range []string{"account", "terms", "diagnostics"} {
+			if purpose == "diagnostics" && !input.DiagnosticsAccepted {
+				continue
+			}
+			if err := tx.Create(&model.LegalAcceptance{ID: uuid.New(), UserID: user.ID, Purpose: purpose, Version: s.Config.LegalProfile.Version, Action: "accepted", OccurredAt: now, IP: ip}).Error; err != nil {
+				return err
+			}
 		}
 		var plan model.Plan
 		if err := tx.Where("code = ?", model.PlanDemo).First(&plan).Error; err != nil {
