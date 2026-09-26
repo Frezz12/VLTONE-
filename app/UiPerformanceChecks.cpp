@@ -167,6 +167,85 @@ bool TimelineWidget::checkGridAppearanceForTest() {
             std::fprintf(stderr, "grid/cursor raster failed at DPR %.1f (full=%d, half=%d, cursor=%d)\n",
                          double(dpr), full, half, cursorInk);
     }
+    // Compare the actual selected and unselected lane rasters, including the
+    // translucent sub-beat grid. A correct stacking order alone used to pass
+    // while selection made those lines nearly disappear into the lane wash.
+    {
+        const Theme savedTheme = th();
+        const auto savedTint = ui::selectionTint();
+        daw::EngineController controller;
+        controller.initialize(48000.0, 512, false);
+        auto& project = const_cast<daw::ProjectModel&>(controller.project());
+        project.tempo = 120.0;
+        project.tracks.clear();
+        for (quint32 color : {0xe66157u, 0x91bf54u, 0xdaa24du, 0x529ddfu}) {
+            daw::TrackModel track;
+            track.id = "grid-selection-" + std::to_string(project.tracks.size());
+            track.color = color;
+            project.tracks.push_back(track);
+        }
+        project.invalidateTrackIndex();
+        TimelineWidget timeline(&controller);
+        timeline.resize(320, 400);
+        timeline.m_pixelsPerSecond = 80.0;
+        timeline.m_gridBeats = 0.25;
+        timeline.m_scrollY = 17;
+        ui::setGridLineWidth(ui::kGridLineWidthDefault);
+        for (const QString& themeId : {QStringLiteral("dark"), QStringLiteral("light")}) {
+            ThemeManager::instance().setThemeId(themeId, false);
+            const Theme preset = th();
+            for (bool coloredGrid : {false, true}) {
+                Theme palette = preset;
+                if (coloredGrid) {
+                    palette.gridLine = preset.dark ? QColor(64, 45, 54) : QColor(203, 211, 230);
+                    palette.gridLineStrong = preset.dark ? QColor(98, 65, 80) : QColor(163, 178, 207);
+                }
+                ThemeManager::instance().applyCustomTheme(palette, false);
+                for (auto tint : {ui::SelectionTint::TrackColour, ui::SelectionTint::Neutral}) {
+                    ui::setSelectionTint(tint);
+                    for (qreal dpr : {1.0, 1.5, 2.0}) {
+                        const auto render = [&](bool selected, int opacity) {
+                            timeline.m_selectedTrackId = selected ? QStringLiteral("grid-selection-0") : QString();
+                            timeline.m_selectedTrackIds = selected
+                                ? QStringList{QStringLiteral("grid-selection-1"), QStringLiteral("grid-selection-2")}
+                                : QStringList{};
+                            ui::setGridOpacity(opacity);
+                            QImage raster(QSize(320 * dpr, 400 * dpr), QImage::Format_ARGB32_Premultiplied);
+                            raster.setDevicePixelRatio(dpr);
+                            raster.fill(palette.background);
+                            QPainter p(&raster);
+                            p.setClipRect(QRect(0, timeline.rulerHeight(), 320, 400 - timeline.rulerHeight()));
+                            timeline.drawLanes(p);
+                            return raster;
+                        };
+                        const QImage idle = render(false, 75), idleBase = render(false, 0);
+                        const QImage selected = render(true, 75), selectedBase = render(true, 0);
+                        int largestLoss = 0;
+                        for (int lane = 0; lane < 4; ++lane) {
+                            const int y = int((timeline.laneTop(lane) + timeline.laneHeightAt(lane) / 2) * dpr);
+                            for (int x = 0; x < idle.width(); ++x) {
+                                const QColor a = idle.pixelColor(x, y), aBase = idleBase.pixelColor(x, y);
+                                const QColor b = selected.pixelColor(x, y), bBase = selectedBase.pixelColor(x, y);
+                                for (auto component : {&QColor::red, &QColor::green, &QColor::blue}) {
+                                    const int before = (a.*component)() - (aBase.*component)();
+                                    const int after = (b.*component)() - (bBase.*component)();
+                                    largestLoss = std::max(largestLoss, std::abs(before - after));
+                                }
+                                if (lane == 3) ok &= a == b; // no spill into the unselected neighbour
+                            }
+                        }
+                        ok &= largestLoss <= 2; // integer blending / antialiasing rounding only
+                        if (largestLoss > 2)
+                            std::fprintf(stderr, "selected grid contrast changed: %s colored=%d tint=%d DPR=%.1f delta=%d\n",
+                                         qPrintable(themeId), int(coloredGrid), int(tint), double(dpr), largestLoss);
+                    }
+                }
+            }
+        }
+        ui::setSelectionTint(savedTint);
+        if (savedTheme.id == QLatin1String("custom")) ThemeManager::instance().applyCustomTheme(savedTheme, false);
+        else ThemeManager::instance().setThemeId(savedTheme.id, false);
+    }
     m_staticDirty = {};
     m_staticFrameValid = true;
     // Deliver the same notification as a palette change, without replacing
@@ -189,9 +268,11 @@ bool TimelineWidget::checkAdaptiveGridForTest() {
     const int savedDenominator = project.timeSigDenominator;
     const double savedScale = m_pixelsPerSecond, savedScroll = m_scrollSeconds;
     const double savedGrid = m_gridBeats;
-    const bool savedSnap = m_snapEnabled, savedBars = m_showBars;
+    const bool savedSnap = m_snapEnabled;
+    const auto savedRuler = m_rulerFormat;
     bool ok = true;
-    m_gridBeats = -1.0; m_snapEnabled = true; m_showBars = true;
+    m_gridBeats = -1.0; m_snapEnabled = true;
+    setRulerFormat(ui::RulerFormat::Bars);
     for (double tempo : {120.0, 240.0, 300.0}) {
         project.tempo = tempo;
         for (const auto meter : {std::pair{4, 4}, std::pair{3, 4}, std::pair{6, 8}, std::pair{7, 8}}) {
@@ -214,13 +295,13 @@ bool TimelineWidget::checkAdaptiveGridForTest() {
                 // Inspect actual grid pixels after a fractional viewport pan.
                 // Beat/bar overlays must not secretly reintroduce dense lines.
                 m_scrollSeconds = stepSeconds * 0.375;
-                QImage raster(width(), ui::kRulerHeight + 5, QImage::Format_ARGB32_Premultiplied);
+                QImage raster(width(), rulerHeight() + 5, QImage::Format_ARGB32_Premultiplied);
                 raster.fill(Qt::transparent);
                 { QPainter p(&raster); p.setClipRect(raster.rect()); drawGrid(p); }
                 int lastLine = -1, lines = 0;
                 bool inside = false;
                 for (int x = 0; x < raster.width(); ++x) {
-                    const bool ink = qAlpha(raster.pixel(x, ui::kRulerHeight + 2)) > 0;
+                    const bool ink = qAlpha(raster.pixel(x, rulerHeight() + 2)) > 0;
                     if (ink && !inside) {
                         if (lastLine >= 0) ok &= x - lastLine >= stepPixels - 1.01;
                         // Snapping and rendered lines share the same bar-1 origin.
@@ -252,7 +333,8 @@ bool TimelineWidget::checkAdaptiveGridForTest() {
     m_gridBeats = 0.0;
     ok &= snapSeconds() == 0.0;
     m_gridBeats = savedGrid; m_pixelsPerSecond = savedScale; m_scrollSeconds = savedScroll;
-    m_snapEnabled = savedSnap; m_showBars = savedBars;
+    m_snapEnabled = savedSnap;
+    setRulerFormat(savedRuler);
     project.tempo = savedTempo; project.timeSigNumerator = savedNumerator;
     project.timeSigDenominator = savedDenominator;
     if (!ok) std::fprintf(stderr, "adaptive grid spacing, raster alignment or snap check failed\n");
@@ -637,7 +719,8 @@ bool checkUiScaling() {
     TimelineWidget gridProbe(&controller);
     gridProbe.resize(200, 120);
     check(gridProbe.checkGridAppearanceForTest(),
-          "grid width/opacity, invisible-grid snapping and crisp playhead at 100/150/200% scale");
+          "grid width/opacity, selected-lane contrast, invisible-grid snapping and crisp playhead at 100/150/200% scale");
+    if (qEnvironmentVariableIsSet("VLT_GRID_APPEARANCE_CHECK_ONLY")) return ok;
     check(gridProbe.checkGestureGridStabilityForTest(),
           "clip gestures keep the grid on its stable retained-tile origin");
     check(gridProbe.checkMoveGuidePaintForTest(),
@@ -862,7 +945,7 @@ bool checkUiScaling() {
     controller.seekSeconds(20.125);
     const double playheadAnchor = controller.presentationPositionSeconds();
     QCursor::setPos(timeline.mapToGlobal(
-        QPoint(500, ui::kRulerHeight / 2)));
+        QPoint(500, timeline.rulerHeight() / 2)));
     timeline.zoomBy(1.3);
     check(near(centreTime(), playheadAnchor),
           "zoom over the timeline header centres the playhead despite selection");

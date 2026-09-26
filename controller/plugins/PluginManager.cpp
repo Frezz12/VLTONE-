@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <unordered_map>
 
@@ -370,6 +371,11 @@ std::string PluginManager::currentScanPath() const {
     return m_currentPath;
 }
 
+std::string PluginManager::lastScanError() const {
+    std::lock_guard<std::mutex> lock(m_currentMutex);
+    return m_scanError;
+}
+
 std::vector<PluginManager::Candidate> PluginManager::collectCandidates() const {
     std::vector<Candidate> candidates;
     for (plugins::PluginFactory* factory : plugins::availableFactories()) {
@@ -406,8 +412,14 @@ void PluginManager::startScan(bool rescanAll) {
     if (m_scanning.exchange(true, std::memory_order_acq_rel)) return;
     waitForScan();   // join a previous, already-finished worker
     m_cancel.store(false, std::memory_order_release);
+    m_finished.store(false, std::memory_order_release);
     m_scanned.store(0, std::memory_order_relaxed);
     m_total.store(0, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(m_currentMutex);
+        m_currentPath.clear();
+        m_scanError.clear();
+    }
     m_worker = std::thread([this, rescanAll] { scanWorker(rescanAll); });
 }
 
@@ -420,8 +432,31 @@ void PluginManager::waitForScan() {
 }
 
 void PluginManager::scanWorker(bool rescanAll) {
+    const auto startedAt = std::chrono::steady_clock::now();
     const std::vector<Candidate> candidates = collectCandidates();
     m_total.store(std::uint32_t(candidates.size()), std::memory_order_relaxed);
+
+    bool scannerVerified = false;
+    std::uint32_t reused = 0;
+    std::uint32_t inspected = 0;
+    std::uint32_t unsaved = 0;
+    bool cacheWriteFailed = false;
+    auto lastSavedAt = startedAt;
+    const auto failScan = [this](std::string error) {
+        std::lock_guard<std::mutex> lock(m_currentMutex);
+        m_scanError = std::move(error);
+        std::fprintf(stderr, "Plugin scan stopped: %s\n", m_scanError.c_str());
+    };
+    const auto checkpoint = [&] {
+        if (!save()) {
+            cacheWriteFailed = true;
+            failScan("Could not save the plugin cache. Check that its folder is writable.");
+            return false;
+        }
+        unsaved = 0;
+        lastSavedAt = std::chrono::steady_clock::now();
+        return true;
+    };
 
     for (const Candidate& candidate : candidates) {
         if (m_cancel.load(std::memory_order_acquire)) break;
@@ -440,14 +475,40 @@ void PluginManager::scanWorker(bool rescanAll) {
                 m_cache.find(candidate.format, candidate.path);
             const bool reusableSuccess = existing && existing->ok &&
                                          !existing->blacklisted;
-            const bool repeatedlyBroken = existing && existing->blacklisted &&
-                                          existing->attempts >= 3;
-            if (existing && (reusableSuccess || repeatedlyBroken) &&
+            // Old hosts interpreted a schema mismatch as a plugin failure.
+            // Repair those entries once with a verified scanner, including
+            // ones that had already exhausted the old automatic retry limit.
+            const bool legacyProtocolFailure = existing &&
+                !existing->scannerVerified &&
+                existing->failureReason == "the scanner returned nothing usable";
+            const bool reusableFailure = existing && existing->blacklisted &&
+                                         !legacyProtocolFailure;
+            if (existing && (reusableSuccess || reusableFailure) &&
                 PluginCache::isCurrent(*existing, size, modified)) {
+                ++reused;
                 m_scanned.fetch_add(1, std::memory_order_relaxed);
                 continue;   // unchanged on disk: no process launch at all
             }
         }
+
+        // Lazy on purpose: a warm cache needs no helper process at all. A
+        // missing or stale helper is an installation error, never grounds to
+        // replace hundreds of healthy entries with blacklist records.
+        if (!scannerVerified) {
+            const ScanProcessResult probe = ScanProcess::run(
+                m_scannerPath, {"--protocol"},
+                std::min(m_timeout, std::chrono::milliseconds(5000)));
+            std::vector<PluginDescriptor> protocol;
+            if (!probe.succeeded() ||
+                !plugins::scan::decodeResult(probe.output, protocol)) {
+                failScan("The plugin scanner is missing or incompatible. "
+                         "Rebuild or reinstall VLTONE together with daw_scan. " +
+                         probe.failureReason);
+                break;
+            }
+            scannerVerified = true;
+        }
+        if (m_cancel.load(std::memory_order_acquire)) break;
 
         PluginCacheEntry entry;
         entry.format = candidate.format;
@@ -455,6 +516,7 @@ void PluginManager::scanWorker(bool rescanAll) {
         entry.fileSize = size;
         entry.fileModifiedTime = modified;
         entry.schemaVersion = plugins::scan::kSchemaVersion;
+        entry.scannerVerified = true;
 
         const std::vector<std::string> arguments = {
             "--inspect",
@@ -463,6 +525,12 @@ void PluginManager::scanWorker(bool rescanAll) {
         };
         const ScanProcessResult result =
             ScanProcess::run(m_scannerPath, arguments, m_timeout);
+        if (m_cancel.load(std::memory_order_acquire)) break;
+        if (!result.started) {
+            failScan("Could not start the plugin scanner. " + result.failureReason);
+            break;
+        }
+        ++inspected;
 
         if (result.succeeded() &&
             plugins::scan::decodeResult(result.output, entry.plugins) &&
@@ -477,6 +545,7 @@ void PluginManager::scanWorker(bool rescanAll) {
                 candidate.format != Format::Unknown) {
                 std::vector<PluginDescriptor> validated;
                 for (const PluginDescriptor& descriptor : entry.plugins) {
+                    if (m_cancel.load(std::memory_order_acquire)) break;
                     const std::vector<std::string> validateArguments = {
                         "--validate",
                         "--format=" + std::string(plugins::toString(candidate.format)),
@@ -485,6 +554,11 @@ void PluginManager::scanWorker(bool rescanAll) {
                     };
                     const ScanProcessResult validation =
                         ScanProcess::run(m_scannerPath, validateArguments, m_timeout);
+                    if (!validation.started) {
+                        failScan("Could not start the plugin scanner. " +
+                                 validation.failureReason);
+                        break;
+                    }
                     std::vector<PluginDescriptor> confirmed;
                     if (validation.succeeded() &&
                         plugins::scan::decodeResult(validation.output, confirmed) &&
@@ -513,6 +587,10 @@ void PluginManager::scanWorker(bool rescanAll) {
                                       : result.failureReason;
         }
 
+        // An interrupted multi-class bundle is retried next time. Completed
+        // bundles are checkpointed; cancellation must not blacklist a class.
+        if (m_cancel.load(std::memory_order_acquire) || !lastScanError().empty()) break;
+
         if (!entry.ok) entry.blacklisted = true;
 
         {
@@ -526,13 +604,25 @@ void PluginManager::scanWorker(bool rescanAll) {
             m_cache.put(std::move(entry));
         }
         m_scanned.fetch_add(1, std::memory_order_relaxed);
+        ++unsaved;
+        // Keep completed work even if startup is interrupted or the app exits
+        // unexpectedly. Bound writes during scans of many very small files.
+        if (inspected == 1 || unsaved >= 8 ||
+            std::chrono::steady_clock::now() - lastSavedAt >= std::chrono::seconds(2)) {
+            if (!checkpoint()) break;
+        }
     }
 
     {
         std::lock_guard<std::mutex> lock(m_currentMutex);
         m_currentPath.clear();
     }
-    save();
+    if (unsaved != 0 && !cacheWriteFailed) checkpoint();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - startedAt).count();
+    std::fprintf(stderr, "Plugin scan: %u cached, %u inspected, %lld ms%s\n",
+                 reused, inspected, static_cast<long long>(elapsed),
+                 m_cancel.load(std::memory_order_acquire) ? " (cancelled)" : "");
     m_catalogueRevision.fetch_add(1, std::memory_order_release);
     m_scanning.store(false, std::memory_order_release);
     m_finished.store(true, std::memory_order_release);

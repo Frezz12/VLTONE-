@@ -1,5 +1,6 @@
 #pragma once
 #include "graphics/ScenePaintSource.hpp"
+#include "TimelineRuler.hpp"
 
 #include <QList>
 #include <QPoint>
@@ -17,8 +18,8 @@ class QShowEvent;
 class QToolButton;
 namespace ui { class IconButton; class ThemeMediaBackground; }
 
-/// The top chrome: three compact control blocks centred as one cluster, with
-/// independent workspace docks pinned to the outer edges.
+/// A continuous console above the context strip, with a recessed, labelled
+/// readout between the transport and editing controls.
 class TransportBar : public QWidget , public ui::graphics::ScenePaintSource {
     Q_OBJECT
 public:
@@ -33,6 +34,7 @@ public:
     /// Re-read tempo after a project load / undo.
     void syncTempo();
     static bool checkTempoInteractionForTest();
+    static bool checkHeaderInteractionForTest(const QString& screenshotPath = {});
     /// Re-open the local header image/GIF/video selected in Themes settings.
     void reloadBackgroundSettings();
     /// Apply the saved top readout style immediately.
@@ -44,7 +46,11 @@ public:
     double gridBeats() const;
     int gridIndex() const { return m_gridIndex; }
     void setGridIndex(int index);
-    bool showsBars() const { return m_showBars; }
+    bool showsBars() const { return ui::rulerShowsBars(m_rulerFormat); }
+    bool showsTime() const { return ui::rulerShowsTime(m_rulerFormat); }
+    ui::RulerFormat rulerFormat() const { return m_rulerFormat; }
+    /// Select ruler rows without changing the independent position counter.
+    void setRulerFormat(ui::RulerFormat format);
     void setTimeDisplayBars(bool bars);
     bool positionShowsBars() const { return m_positionShowsBars; }
     /// Change only the compact playhead readout. The timeline ruler keeps its
@@ -158,6 +164,7 @@ private:
     void updateResponsiveLayout();
     void applyTheme();
     void updatePositionStyle();
+    void updateRulerControls();
     void commitPositionEdit(QLineEdit* edit, bool musical);
     void syncTimeSignature();
     void chooseCustomTimeSignature();
@@ -182,9 +189,10 @@ private:
     QWidget* m_transportGroup = nullptr;
     QWidget* m_lcdScreen = nullptr;
     QWidget* m_positionGroup = nullptr;
-    /// Tempo, time signature, grid and time format in one 2x2 socket.
+    /// Labelled tempo, time signature, grid and ruler cells.
     QWidget* m_statsGroup = nullptr;
     int m_lastReadoutCenterX = -1;
+    QLabel* m_positionLabel = nullptr;
     QLabel* m_tempoIcon = nullptr;
     QLabel* m_signatureIcon = nullptr;
     QLabel* m_gridIcon = nullptr;
@@ -227,11 +235,11 @@ private:
     int m_gridIndex = 5;      // 1/16
     int m_toolIndex = 0;      // 0 Select … 7 Glue
     bool m_snapEnabled = true;
-    bool m_showBars = true;
+    ui::RulerFormat m_rulerFormat = ui::RulerFormat::Bars;
     bool m_positionShowsBars = true;
     bool m_recordEngaged = false;   // armed and waiting for R
     bool m_positionRecording = false;
-    bool m_plainPanelStyle = false;
+    bool m_plainPanelStyle = true;
     int m_typingOctave = 5;         // shown in the typing keyboard's tooltip
     bool m_tempoEditing = false;
     std::size_t m_tempoUndoDepth = 0;

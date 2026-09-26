@@ -24,6 +24,9 @@ struct PluginCacheEntry {
 
     bool ok = false;
     bool blacklisted = false;
+    /// Distinguishes real plugin failures from legacy cache entries written
+    /// when an incompatible scanner's output was blamed on the plugin.
+    bool scannerVerified = false;
     std::string failureReason;
     int attempts = 0;
 

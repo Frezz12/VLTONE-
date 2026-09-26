@@ -2,6 +2,7 @@
 #include "graphics/GraphicsPreferences.hpp"
 #include "UiFrameClock.hpp"
 #include <QSpinBox>
+#include "MixerPreferences.hpp"
 #include "AiSettingsPage.hpp"
 #include "AccountSettingsPage.hpp"
 #include "BrowserSettingsPage.hpp"
@@ -103,8 +104,9 @@ constexpr SettingsPageAppearance kPageAppearance[] = {
     {icons::Glyph::Brush, QT_TRANSLATE_NOOP("SettingsWindow", "Create your own palette with a live preview.")},
     {icons::Glyph::Key, QT_TRANSLATE_NOOP("SettingsWindow", "Find commands and customize keyboard shortcuts.")},
     {icons::Glyph::Gear, QT_TRANSLATE_NOOP("SettingsWindow", "Startup, graphics and editing preferences.")},
+    {icons::Glyph::Mixer, QT_TRANSLATE_NOOP("SettingsWindow", "Channel width and console layout.")},
 };
-static_assert(std::size(kPageAppearance) == SettingsWindow::kInterfaceTab + 1);
+static_assert(std::size(kPageAppearance) == SettingsWindow::kMixerTab + 1);
 
 enum class ColorSection {
     Surfaces,
@@ -294,6 +296,8 @@ double contrastRatio(const QColor& foreground, const QColor& background) {
 QString presetDisplayName(const Theme& theme) {
     if (theme.id == QLatin1String("dark")) return QCoreApplication::translate(
         "SettingsWindow", "Dark");
+    if (theme.id == QLatin1String("studio-gray")) return QCoreApplication::translate(
+        "SettingsWindow", "Studio Gray");
     if (theme.id == QLatin1String("light")) return QCoreApplication::translate(
         "SettingsWindow", "Light");
     if (theme.id == QLatin1String("solarized-light")) return QCoreApplication::translate(
@@ -529,6 +533,7 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     addPage(buildThemeEditorTab());
     addPage(buildShortcutsTab());
     addPage(buildInterfaceTab());
+    addPage(buildMixerTab());
 
     m_navigation = new QTreeWidget(this);
     m_navigation->setObjectName(QStringLiteral("SettingsNavigation"));
@@ -574,6 +579,7 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
              {{tr("Browser"), kBrowserTab},
               {tr("Quick Import"), kQuickImportTab},
               {tr("Context Panel"), kContextPanelTab},
+              {tr("Mixer"), kMixerTab},
               {tr("Notebook"), kNotebookTab}});
     addGroup(tr("Appearance"),
              {{tr("Themes"), kThemesTab},
@@ -656,7 +662,7 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
 
     const int savedPage = QSettings().value(
         QStringLiteral("ui/settingsPage"), int(kInterfaceTab)).toInt();
-    showTab(std::clamp(savedPage, 0, int(kInterfaceTab)));
+    showTab(std::clamp(savedPage, 0, int(kMixerTab)));
 
     // The workspace supplies the final bounds after this dialog is embedded.
     // Standalone dialogs are constrained in showEvent once their host is known.
@@ -2387,6 +2393,61 @@ void SettingsWindow::refreshShortcutEditors() {
         QSignalBlocker block(it.value());
         it.value()->setKeySequence(m_shortcuts->shortcut(it.key()));
     }
+}
+
+QWidget* SettingsWindow::buildMixerTab() {
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    auto* group = new QGroupBox(tr("Channel strips"), page);
+    auto* form = new QFormLayout(group);
+    auto* controls = new QWidget(group);
+    auto* row = new QHBoxLayout(controls);
+    row->setContentsMargins(0, 0, 0, 0);
+    auto* slider = new ui::GlassSlider(Qt::Horizontal, controls);
+    slider->setObjectName(QStringLiteral("MixerChannelWidthSlider"));
+    slider->setAccessibleName(tr("Channel width"));
+    slider->setRange(ui::MixerPreferences::kMinimumWidth, ui::MixerPreferences::kMaximumWidth);
+    slider->setPageStep(5);
+    auto* value = new QSpinBox(controls);
+    value->setObjectName(QStringLiteral("MixerChannelWidthValue"));
+    value->setAccessibleName(tr("Channel width"));
+    value->setRange(slider->minimum(), slider->maximum());
+    value->setSuffix(tr(" px"));
+    value->setKeyboardTracking(false);
+    row->addWidget(slider, 1);
+    row->addWidget(value);
+    form->addRow(tr("Channel width"), controls);
+    auto* hint = new QLabel(tr("Narrow channels show more tracks. Wider channels leave more room "
+                              "for names and controls. Changes apply immediately and are saved "
+                              "for every project."), group);
+    hint->setWordWrap(true);
+    form->addRow(hint);
+    auto* reset = new QPushButton(tr("Reset to %1 px").arg(ui::MixerPreferences::kDefaultWidth), group);
+    reset->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+    reset->setObjectName(QStringLiteral("MixerChannelWidthReset"));
+    form->addRow(reset);
+    auto& preferences = ui::MixerPreferences::instance();
+    const auto reload = [slider, value, reset](int width) {
+        const QSignalBlocker a(slider), b(value);
+        slider->setValue(width);
+        value->setValue(width);
+        reset->setEnabled(width != ui::MixerPreferences::kDefaultWidth);
+    };
+    reload(preferences.channelWidth());
+    connect(slider, &QSlider::valueChanged, &preferences, &ui::MixerPreferences::setChannelWidth);
+    connect(value, &QSpinBox::valueChanged, &preferences, &ui::MixerPreferences::setChannelWidth);
+    connect(reset, &QPushButton::clicked, group, [&preferences] {
+        preferences.setChannelWidth(ui::MixerPreferences::kDefaultWidth);
+    });
+    connect(&preferences, &ui::MixerPreferences::channelWidthChanged, page, reload);
+    layout->addWidget(group);
+    auto* heightHint = new QLabel(tr("Drag the top edge of the mixer to change its height. "
+                                    "Faders use the available height; a short mixer scrolls "
+                                    "to keep every control accessible."), page);
+    heightHint->setWordWrap(true);
+    layout->addWidget(heightHint);
+    layout->addStretch();
+    return page;
 }
 
 QWidget* SettingsWindow::buildInterfaceTab() {

@@ -270,6 +270,9 @@ list(REMOVE_ITEM DAW_APP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.hpp")
 
 qt_add_executable(daw ${DAW_APP_SOURCES})
+# A targeted app build must not leave an older scanner beside the new host.
+# They share a wire protocol and the plugin compatibility checks.
+add_dependencies(daw daw_scan)
 foreach(modulation_target daw modulation_ui_test)
     if(TARGET ${modulation_target})
         qt_add_resources(${modulation_target} "${modulation_target}_modulation_ui"
@@ -381,7 +384,14 @@ if(DAW_BUILD_TESTS)
     add_test(NAME plugin_batch_ui_test COMMAND $<TARGET_FILE:daw> --pluginbatchcheck)
     add_test(NAME tempo_scrub_ui_test COMMAND $<TARGET_FILE:daw> --tempocheck)
     add_test(NAME mixer_fader_input_test COMMAND $<TARGET_FILE:daw> --mixerwheelcheck)
+    add_test(NAME clip_library_ui_test COMMAND $<TARGET_FILE:daw> --cliplibrarycheck)
+    set_tests_properties(clip_library_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 60 RUN_SERIAL TRUE)
     add_test(NAME midi_input_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    add_test(NAME recording_context_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    set_tests_properties(recording_context_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_RECORD_CONTEXT_ONLY=1"
+        TIMEOUT 60 RUN_SERIAL TRUE)
     if(DAW_ENABLE_VST)
         add_dependencies(daw daw_test_vst_shell)
         add_test(NAME plugin_editor_idle_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
@@ -392,6 +402,17 @@ if(DAW_BUILD_TESTS)
     set_tests_properties(midi_input_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_MIDI_ONLY=1"
         TIMEOUT 90 RUN_SERIAL TRUE)
+    foreach(menu_locale en ru)
+        add_test(NAME command_menu_${menu_locale}_ui_test
+                 COMMAND $<TARGET_FILE:daw> --selftest --language ${menu_locale})
+        set_tests_properties(command_menu_${menu_locale}_ui_test PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_EDIT_CHORD_ONLY=1"
+            TIMEOUT 90 RUN_SERIAL TRUE)
+        if(WIN32)
+            set_tests_properties(command_menu_${menu_locale}_ui_test PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endif()
+    endforeach()
     add_test(NAME track_mixer_sync_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
     add_test(NAME warp_panel_test COMMAND $<TARGET_FILE:daw> --warpcheck)
     set_tests_properties(warp_panel_test PROPERTIES
@@ -421,7 +442,7 @@ if(DAW_BUILD_TESTS)
         # CTest does not inherit the Qt SDK's bin directory on clean Windows
         # runners. Without this, the loader opens an invisible error dialog for
         # a missing Qt6Core.dll and the headless test appears to time out.
-        set_tests_properties(midi_input_ui_test warp_panel_test collaboration_client_selftest track_creation_ui_test plugin_picker_ui_test offline_render_ui_test plugin_batch_ui_test tempo_scrub_ui_test mixer_fader_input_test track_mixer_sync_ui_test PROPERTIES
+        set_tests_properties(midi_input_ui_test recording_context_ui_test warp_panel_test collaboration_client_selftest track_creation_ui_test plugin_picker_ui_test offline_render_ui_test plugin_batch_ui_test tempo_scrub_ui_test mixer_fader_input_test track_mixer_sync_ui_test clip_library_ui_test PROPERTIES
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()

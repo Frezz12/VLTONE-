@@ -176,6 +176,7 @@ void MeterNode::process(const ProcessContext& context) noexcept {
     // not leave the old right-channel peak visible in the UI.
     m_peakL.store(left, std::memory_order_relaxed);
     m_peakR.store(right, std::memory_order_relaxed);
+    m_peakHold.observe(std::max(left, right));
 }
 
 } // namespace daw::engine

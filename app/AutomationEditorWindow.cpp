@@ -994,6 +994,27 @@ void AutomationEditorWindow::buildTargetRow(QVBoxLayout* outer) {
     outer->addWidget(bar);
 }
 
+void AutomationEditorWindow::populateActionsMenu(QMenu& menu) {
+    menu.addAction(tr("Select All"), m_view, &AutomationCurveView::selectAll);
+    auto* clearSelection = menu.addAction(tr("Clear Selection"), m_view, &AutomationCurveView::clearSelection);
+    clearSelection->setEnabled(m_view->hasSelection());
+    menu.addSeparator();
+    menu.addAction(tr("LFO…"), this, &AutomationEditorWindow::showLfoDialog);
+    auto* shapes = menu.addMenu(tr("Shape"));
+    if (m_shapeActions) shapes->addActions(m_shapeActions->actions());
+    const auto choices = [this, &menu](const QString& title, QComboBox* combo) {
+        auto* submenu = menu.addMenu(title);
+        for (int i = 0; i < combo->count(); ++i) {
+            auto* action = submenu->addAction(combo->itemText(i));
+            action->setCheckable(true);
+            action->setChecked(combo->currentIndex() == i);
+            connect(action, &QAction::triggered, this, [combo, i] { combo->setCurrentIndex(i); });
+        }
+    };
+    choices(tr("Snap"), m_snap);
+    choices(tr("New point"), m_shape);
+}
+
 void AutomationEditorWindow::buildToolbar(QVBoxLayout* outer) {
     auto* bar = new QWidget(this);
     bar->setObjectName(QStringLiteral("PluginWrapper"));
@@ -1068,6 +1089,7 @@ void AutomationEditorWindow::buildToolbar(QVBoxLayout* outer) {
     // Room for the popup arrow the style draws inside the button.
     tools->setMinimumWidth(74);
     auto* menu = new QMenu(tools);
+    m_shapeActions = menu;
     const auto add = [this, menu](const QString& label, const QString& undoLabel,
                                   std::function<at::Points(at::Points, at::Range)> run) {
         QAction* action = menu->addAction(label);

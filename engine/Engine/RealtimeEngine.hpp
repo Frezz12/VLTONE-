@@ -5,6 +5,8 @@
 #include "Nodes/PlaybackNodes.hpp"
 #include "Transport/Transport.hpp"
 #include "RealtimeMetrics.hpp"
+#include "DSP/PeakHold.hpp"
+#include "DSP/LoudnessMeter.hpp"
 
 #include <array>
 #include <atomic>
@@ -122,6 +124,10 @@ public:
     /// Master output level of the last block (0…1), for the UI.
     float masterPeakLeft() const noexcept { return m_masterPeakL.load(std::memory_order_relaxed); }
     float masterPeakRight() const noexcept { return m_masterPeakR.load(std::memory_order_relaxed); }
+    float masterPeakHold() const noexcept { return m_masterPeakHold.value(); }
+    void resetMasterPeakHold() noexcept { m_masterPeakHold.reset(); }
+    LoudnessLevels masterLoudness() const noexcept { return m_masterLoudness.levels(); }
+    void resetMasterLoudness() noexcept { m_masterLoudness.requestReset(); }
     /// Log-spaced master-bus energy from 63 Hz to 10 kHz. Each value is a
     /// smoothed linear RMS level; the UI is responsible only for its dB-to-pixel
     /// mapping, never for inventing frequency motion from a broadband peak.
@@ -200,6 +206,8 @@ private:
 
     std::atomic<float> m_masterPeakL{0.0f};
     std::atomic<float> m_masterPeakR{0.0f};
+    PeakHold m_masterPeakHold;
+    LoudnessMeter m_masterLoudness;
     std::array<SpectrumBandFilter, kMasterSpectrumBandCount> m_spectrumFilters;
     std::array<std::atomic<float>, kMasterSpectrumBandCount> m_masterSpectrum{};
     std::atomic<unsigned> m_masterSpectrumConsumers{0};

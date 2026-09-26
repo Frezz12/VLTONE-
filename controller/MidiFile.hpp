@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-/// Reading Standard MIDI Files.
+/// Reading and writing notes in Standard MIDI Files.
 ///
 /// Pure: no Qt, no engine, no document. It turns bytes into notes measured in
 /// beats — which is already `NoteModel`'s unit, so nothing here needs a tempo to
@@ -26,6 +26,7 @@ struct Note {
     int velocity = 100;
     int channel = 0;
     int track = 0;
+    int releaseVelocity = 0;
 };
 
 struct File {
@@ -37,7 +38,7 @@ struct File {
     /// More than one set-tempo event: only the first is reported, so a caller
     /// that adopts the tempo can say the rest were dropped.
     bool hasTempoChanges = false;
-    double lengthBeats = 0.0;    ///< end of the last note
+    double lengthBeats = 0.0;    ///< includes trailing silence before end-of-track
     /// Sorted by start, then pitch. Merged across every track in the file.
     std::vector<Note> notes;
     /// One entry per MTrk chunk, in file order; empty string when the track
@@ -56,5 +57,10 @@ bool parse(const std::string& path, File& out, std::string& error);
 /// Parse from memory — what the tests drive, so they need no fixture files.
 bool parseBytes(const std::uint8_t* data, std::size_t size, File& out,
                 std::string& error);
+
+/// Encode the notes as a type-0 Standard MIDI File. The caller owns atomic
+/// disk writes. Timing is in beats; muted notes should be omitted by the caller.
+bool encode(const File& file, std::vector<std::uint8_t>& bytes,
+            std::string& error, int numerator = 4, int denominator = 4);
 
 } // namespace daw::midifile

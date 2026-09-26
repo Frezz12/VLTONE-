@@ -44,16 +44,16 @@ QString canonicalUuid(const QString& value) {
 QString styleSheet() {
     const Theme& t = th();
     return QString(R"(
-QGroupBox { border: 1px solid %SEP%; border-radius: 8px; margin-top: 9px;
+QGroupBox { border: 1px solid %SEP%; border-radius: %RADIUS%px; margin-top: 9px;
             padding-top: 10px; }
 QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px;
                    color: %TEXT2%; font-size: 11px; font-weight: 700; }
 QListWidget, QTreeWidget { background: %WELL%; border: 1px solid %SEP%;
-                           border-radius: 7px;
+                           border-radius: %RADIUS%px;
                            alternate-background-color: %ALT%; outline: none; }
 QListWidget::item, QTreeWidget::item { padding: 3px 6px; border: none; }
 QListWidget::item:selected, QTreeWidget::item:selected { background: %ACCENT%;
-                                                         color: white; }
+                                                         color: %ACCENT_TEXT%; }
 QScrollArea { background: transparent; border: none; }
 QProgressBar { background: %WELL%; border: none; border-radius: 3px;
                text-align: center; color: %TEXT2%; font-size: 10px; }
@@ -63,12 +63,13 @@ QProgressBar::chunk { background: %ACCENT%; border-radius: 3px; }
 #CollabError { color: %ERROR%; font-size: 11px; }
 #CollabCode { color: %TEXT1%; font-size: 21px; font-weight: 600;
               letter-spacing: 3px; background: %WELL%;
-              border: 1px solid %SEP%; border-radius: 8px; padding: 10px 14px; }
-)")
+              border: 1px solid %SEP%; border-radius: %RADIUS%px; padding: 10px 14px; }
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%WELL%", t.well().name())
         .replace("%ALT%", mixColors(t.well(), t.surface, 0.45).name())
         .replace("%SEP%", t.separator().name())
         .replace("%ACCENT%", t.accent.name())
+        .replace("%ACCENT_TEXT%", t.accentText().name())
         .replace("%WARN%", Theme::cycle().name())
         .replace("%ERROR%", Theme::record().name())
         .replace("%TEXT1%", t.textPrimary.name())

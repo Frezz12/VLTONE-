@@ -4,8 +4,10 @@
 #include <QSet>
 #include <QHash>
 #include <QWidget>
+#include "MixerPreferences.hpp"
 
 #include <functional>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -23,22 +25,31 @@ class QMenu;
 class RoutingField;
 class QToolButton;
 class QVBoxLayout;
+class QHBoxLayout;
+class QGridLayout;
+class QBoxLayout;
+class LoudnessDisplay;
 namespace ui { class FaderWidget; class PanKnob; class LevelMeter; class MsrButton;
                class IconButton; class Knob; }
 
-/// A full console channel strip: colour header, I/O routing, insert (Audio FX)
-/// slots, aux sends, pan, fader + stereo meter, mute/solo/record and a name
-/// plate. Used both in the mixer and in the left inspector, where it shows the
+/// A full console channel strip: named header, I/O routing, instrument/Audio FX
+/// slots, aux sends, pan, fader + stereo meter and mute/solo/record.
+/// Used both in the mixer and in the left inspector, where it shows the
 /// selected track.
 class ChannelStrip : public QWidget {
     Q_OBJECT
 public:
+    static constexpr int kWidth = ui::MixerPreferences::kDefaultWidth;
+    /// Routing, instrument/LUFS, FX and sends occupy separate shared mixer rows.
+    using RackHeights = std::array<int, 4>;
     ChannelStrip(daw::EngineController* controller, const QString& trackId,
                  bool master, QWidget* parent = nullptr,
-                 bool insertsOnly = false);
+                 bool insertsOnly = false, int insertSlots = 0);
 
     const QString& trackId() const { return m_trackId; }
     bool isMaster() const { return m_master; }
+    /// Mixer-wide slot count; zero in the constructor keeps the standalone fit.
+    int insertSlotCount() const { return m_insertSlotCount; }
 
     void setSelected(bool selected);
     /// In the mixer the strip stretches when the pane is taller than it needs.
@@ -49,9 +60,13 @@ public:
     /// Slightly tighten vertical rhythm for the Inspector. All sections remain
     /// present; the surrounding Inspector scrolls instead of crushing them.
     void setInspectorCompact(bool compact);
+    void setStripWidth(int width);
     /// Height at which the whole console (I/O, inserts, sends, pan, fader) is
     /// visible. This is also the strip's minimum.
-    int naturalHeight() const { return m_naturalHeight; }
+    int naturalHeight() const { return m_naturalHeight + m_rackExtraHeight; }
+    const RackHeights& rackNaturalHeights() const { return m_rackNaturalHeights; }
+    /// Align every rack section across the mixer; the inspector uses its own fit.
+    void setRackHeights(const RackHeights& heights);
     /// Push meter levels from the UI timer.
     void refreshMeter();
     /// What the strip's fader is *showing*, for the headless check that a level
@@ -59,6 +74,7 @@ public:
     double faderGainForTest() const;
     static bool checkDragLifecycleForTest();
     static bool checkFaderInputForTest();
+    static bool checkGroupInputsForTest();
     /// Re-read volume/pan/flags from the document (after undo, load, …).
     void syncFromModel();
     bool hasActiveGesture() const;
@@ -69,6 +85,8 @@ public:
 signals:
     void selectRequested(const QString& trackId);
     void edited(bool localFileDirty = true);
+    /// Group IN edits another channel's output; recovery must dirty that source.
+    void trackRoutingEdited(const QString& sourceTrackId);
     /// A send was added/removed — the owner should rebuild this strip.
     void structureChanged();
     /// A loaded insert was clicked: open its editor. The strip does not own
@@ -91,6 +109,7 @@ protected:
     void dragLeaveEvent(class QDragLeaveEvent*) override;
     void dropEvent(class QDropEvent*) override;
     void paintEvent(QPaintEvent*) override;
+    void resizeEvent(QResizeEvent*) override;
     void contextMenuEvent(QContextMenuEvent*) override;
 
 private:
@@ -120,7 +139,6 @@ private:
     QWidget* buildSends();
     QWidget* buildFaderRow();
     QWidget* buildButtons();
-    QWidget* buildNamePlate();
     /// How a well's title behaves as a drag handle, and what the well itself
     /// accepts. Grouped because a well either takes part in strip-to-strip
     /// dragging or does not, and threading five more arguments through
@@ -180,16 +198,20 @@ private:
                                      const QPoint& toGlobal);
     void finishInsertBypassPaint();
     void populateInputMenu(class QMenu* menu);
+    void populateGroupInputMenu(QMenu* menu);
     void populateOutputMenu(QMenu* menu);
     void populateAddSendMenu(QMenu* menu);
     void applyTheme();
     void updateReadouts();
-    void updateNamePlate(const QString& name, std::uint32_t color);
+    void updateResponsiveLayout();
+    void resetPeakHold();
+    void updateHeader(const QString& name, std::uint32_t color);
 
     daw::EngineController* m_controller = nullptr;
     QString m_trackId;
     bool m_master = false;
     bool m_insertsOnly = false;
+    int m_insertSlotCount = 0;
     bool m_selected = false;
 
     QHash<QString, ui::Knob*> m_sendKnobs;
@@ -201,14 +223,28 @@ private:
     ui::MsrButton* m_monitor = nullptr;
     QLabel* m_gainLabel = nullptr;
     QLabel* m_panLabel = nullptr;
+    QToolButton* m_peakLabel = nullptr;
     QLabel* m_headerName = nullptr;
     QWidget* m_headerSwatch = nullptr;
-    QLabel* m_namePlate = nullptr;
-    QString m_namePlateStyleKey;
+    QString m_headerSwatchStyleKey;
     RoutingField* m_inputButton = nullptr;
     RoutingField* m_outputButton = nullptr;
     ui::IconButton* m_monoButton = nullptr;   // mono (1 ring) / stereo (2 rings)
     QVBoxLayout* m_mainLayout = nullptr;
+    QVBoxLayout* m_levelLayout = nullptr;
+    QGridLayout* m_panLayout = nullptr;
+    QHBoxLayout* m_faderLayout = nullptr;
+    QBoxLayout* m_readoutLayout = nullptr;
+    QWidget* m_panSection = nullptr;
+    int m_stripWidth = kWidth;
+    int m_layoutWidth = 0;
+    bool m_denseLayout = false;
+    QWidget* m_rack = nullptr;
+    std::array<QWidget*, 4> m_rackSections{};
+    LoudnessDisplay* m_loudness = nullptr;
+    RackHeights m_rackNaturalHeights{};
+    int m_rackNaturalHeight = 0;
+    int m_rackExtraHeight = 0;
 
     /// Values before the first live update of the current physical gesture.
     /// Intermediate pixels never enter history; release commits these once.

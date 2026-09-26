@@ -1,5 +1,8 @@
 #include "AudioImportPreparation.hpp"
 #include "TimelineWidget.hpp"
+#include "ClipLibraryDrag.hpp"
+#include <QDrag>
+#include "MenuActions.hpp"
 #include <QScopedValueRollback>
 #include "graphics/SceneRecordingTag.hpp"
 #include "ScrollInput.hpp"
@@ -653,11 +656,11 @@ void TimelineWidget::moveClipDragToLane(int grabbedLane) {
 
 void TimelineWidget::autoScrollMarquee(const QPoint& pointer) {
     const int bottom = std::max(
-        ui::kRulerHeight,
+        rulerHeight(),
         height() - m_bottomInset - kTimelineScrollExtent);
     int delta = 0;
-    if (pointer.y() < ui::kRulerHeight) {
-        delta = -std::clamp((ui::kRulerHeight - pointer.y()) / 3, 2, 32);
+    if (pointer.y() < rulerHeight()) {
+        delta = -std::clamp((rulerHeight() - pointer.y()) / 3, 2, 32);
     } else if (pointer.y() > bottom) {
         delta = std::clamp((pointer.y() - bottom) / 3, 2, 32);
     }
@@ -720,6 +723,24 @@ void TimelineWidget::clearClipSelection() {
     m_selection.clear();
     m_selectedClipId.clear();
     update();
+}
+
+bool TimelineWidget::clearSelectionOnBackground(const QPoint& pos) {
+    if (!rect().contains(pos) || pos.y() < rulerHeight()) return false;
+    ClipHit clip;
+    TakeHit take;
+    PointHit point;
+    if (hitTestClip(pos, clip) || hitTestTake(pos, take) ||
+        hitTestAutomationPoint(pos, point)) return false;
+
+    m_regionActive = false;
+    clearClipSelection();
+    // Publishing an empty clip list leaves a track context intact. An explicit
+    // background click dismisses either context so the armed recording setup
+    // can return. The header's primary track stays the recording/input target.
+    if (m_selectionModel) m_selectionModel->clear();
+    update();
+    return true;
 }
 
 bool TimelineWidget::deleteSelectedClips() {
@@ -1288,7 +1309,7 @@ void TimelineWidget::drawKnifeGuide(QPainter& p) {
     if (tool() != Tool::Knife || !underMouse()) return;
 
     const QPoint pos = mapFromGlobal(QCursor::pos());
-    if (!rect().contains(pos) || pos.y() < ui::kRulerHeight) return;
+    if (!rect().contains(pos) || pos.y() < rulerHeight()) return;
 
     ClipHit hit;
     if (!hitTestClip(pos, hit)) return;
@@ -1377,7 +1398,23 @@ void TimelineWidget::setWaveformScale(double scale) {
 }
 
 void TimelineWidget::setShowBars(bool showBars) {
-    m_showBars = showBars;
+    setRulerFormat(showBars ? ui::RulerFormat::Bars : ui::RulerFormat::Time);
+}
+
+int TimelineWidget::rulerHeight() const {
+    return ui::kRulerHeight +
+        (m_rulerFormat == ui::RulerFormat::BarsAndTime ? ui::kRulerRowHeight : 0);
+}
+
+void TimelineWidget::setRulerFormat(ui::RulerFormat format) {
+    format = ui::rulerFormatFromInt(int(format));
+    if (m_rulerFormat == format) return;
+    const int previousHeight = rulerHeight();
+    m_rulerFormat = format;
+    m_staticFrameValid = false;
+    layoutNavigationControls();
+    if (rulerHeight() != previousHeight) emit rulerHeightChanged(rulerHeight());
+    clampVerticalScroll();
     update();
 }
 
@@ -1385,7 +1422,7 @@ std::optional<double> TimelineWidget::liveZoomPointerX() const {
     const QPoint local = mapFromGlobal(QCursor::pos());
     const int viewportWidth = std::max(1, width() - kTimelineScrollExtent);
     if (local.x() < 0 || local.x() > viewportWidth ||
-        local.y() < ui::kRulerHeight ||
+        local.y() < rulerHeight() ||
         local.y() >= height() - m_bottomInset)
         return std::nullopt;
     return double(local.x());
@@ -1601,16 +1638,16 @@ void TimelineWidget::invalidateTrack(const QString& trackId) {
         }
 }
 int TimelineWidget::laneAt(int yy) const {
-    if (yy < ui::kRulerHeight) return -1;
+    if (yy < rulerHeight()) return -1;
     visibleRows();
-    const int y = yy - ui::kRulerHeight + m_scrollY;
+    const int y = yy - rulerHeight() + m_scrollY;
     const auto it = std::upper_bound(m_laneOffsets.begin(), m_laneOffsets.end(), y);
     const int index = int(it - m_laneOffsets.begin()) - 1;
     return index >= 0 && index < int(m_layoutRows.size()) ? index : -1;
 }
 int TimelineWidget::laneTop(int lane) const {
     visibleRows();
-    return ui::kRulerHeight - m_scrollY + m_laneOffsets[size_t(std::clamp(lane, 0, int(m_layoutRows.size())))];
+    return rulerHeight() - m_scrollY + m_laneOffsets[size_t(std::clamp(lane, 0, int(m_layoutRows.size())))];
 }
 int TimelineWidget::laneHeightAt(int lane) const {
     visibleRows();
@@ -1642,7 +1679,7 @@ int TimelineWidget::visibleLaneHeight() const {
     // covering are taken off it. The bottom scrollbar is real viewport chrome,
     // too, so the final lane must be able to scroll above it rather than hide
     // behind it.
-    return std::max(0, height() - ui::kRulerHeight - m_bottomInset -
+    return std::max(0, height() - rulerHeight() - m_bottomInset -
                            kTimelineScrollExtent);
 }
 
@@ -1696,11 +1733,11 @@ void TimelineWidget::layoutNavigationControls() {
         0, horizontalY, std::max(0, width() - kTimelineScrollExtent),
         kTimelineScrollExtent);
     m_verticalScrollBar->setGeometry(
-        std::max(0, width() - kTimelineScrollExtent), ui::kRulerHeight,
+        std::max(0, width() - kTimelineScrollExtent), rulerHeight(),
         kTimelineScrollExtent,
-        std::max(0, horizontalY - ui::kRulerHeight));
+        std::max(0, horizontalY - rulerHeight()));
     m_horizontalScrollBar->setVisible(bottom >= kTimelineScrollExtent);
-    m_verticalScrollBar->setVisible(horizontalY > ui::kRulerHeight);
+    m_verticalScrollBar->setVisible(horizontalY > rulerHeight());
     m_horizontalScrollBar->raise();
     m_verticalScrollBar->raise();
 }
@@ -1768,7 +1805,7 @@ void TimelineWidget::ensureLaneVisible(int lane) {
     if (lane < 0 || lane >= int(rows.size())) return;
     // laneTop is in screen coordinates, so the arithmetic is done in content
     // coordinates: where the lane sits inside the stack of lanes.
-    const int top = laneTop(lane) - ui::kRulerHeight + m_scrollY;
+    const int top = laneTop(lane) - rulerHeight() + m_scrollY;
     const int bottom = top + laneHeightAt(lane);
     if (top < m_scrollY) setVerticalScroll(top);
     else if (bottom > m_scrollY + visibleLaneHeight())
@@ -2095,6 +2132,12 @@ void TimelineWidget::renameTake(const TakeHit& hit) {
 /// its own. Deleting the audio file lives here rather than on the row's × chip:
 /// it is the one action undo cannot walk back, so it asks first.
 void TimelineWidget::showTakeMenu(const TakeHit& hit, const QPoint& globalPos) {
+    QMenu menu(this);
+    populateTakeMenu(menu, hit);
+    menu.exec(globalPos);
+}
+
+void TimelineWidget::populateTakeMenu(QMenu& menu, const TakeHit& hit) {
     const daw::ClipModel* clip = findClipModel(hit.trackId, hit.clipId);
     const daw::TakeModel* take =
         clip ? daw::findTake(*clip, hit.takeId.toStdString()) : nullptr;
@@ -2105,7 +2148,6 @@ void TimelineWidget::showTakeMenu(const TakeHit& hit, const QPoint& globalPos) {
     const int index = hit.takeIndex;
     const int count = int(clip->takes.size());
 
-    QMenu menu(this);
     QAction* pick = menu.addAction(tr("Use for Whole Clip"));
     // Soloing a take used to be a chip on the row. The chips are gone — the row
     // is audio now, and the pointer over it is always the comp brush — so the
@@ -2144,58 +2186,62 @@ void TimelineWidget::showTakeMenu(const TakeHit& hit, const QPoint& globalPos) {
     delFile->setEnabled(clip->kind == daw::ClipKind::Audio &&
                         !take->filePath.empty());
 
-    QAction* chosen = menu.exec(globalPos);
-    if (!chosen) return;
+    ui::connectMenuActions(menu, this, [=, this](QAction* chosen) mutable {
+        const auto* clip = findClipModel(hit.trackId, hit.clipId);
+        const auto* take = clip ? daw::findTake(*clip, hit.takeId.toStdString()) : nullptr;
+        if (!take) return;
+        if (!chosen) return;
 
-    for (const auto& [action, rgb] : colorActions) {
-        if (chosen != action) continue;
-        m_controller->setTakeColor(trackId, clipId, takeId, rgb);
+        for (const auto& [action, rgb] : colorActions) {
+            if (chosen != action) continue;
+            m_controller->setTakeColor(trackId, clipId, takeId, rgb);
+            emit projectEdited();
+            update();
+            return;
+        }
+
+        if (chosen == pick) {
+            m_controller->selectTake(trackId, clipId, takeId);
+        } else if (chosen == solo) {
+            if (soloed) m_controller->setSoloTake({}, {}, {});
+            else m_controller->setSoloTake(trackId, clipId, takeId);
+            update();
+            return;   // auditioning is not an edit to the document
+        } else if (chosen == rename) {
+            renameTake(hit);
+            return;
+        } else if (chosen == colors->menuAction()) {
+            return;
+        } else if (chosen == dup) {
+            m_controller->duplicateTake(trackId, clipId, takeId);
+            emit laneHeightsChanged();
+        } else if (chosen == mute) {
+            m_controller->setTakeMuted(trackId, clipId, takeId, !take->muted);
+        } else if (chosen == up || chosen == down) {
+            m_controller->moveTake(trackId, clipId, takeId,
+                                   size_t(index + (chosen == up ? -1 : 1)));
+        } else if (chosen == del) {
+            m_controller->removeTake(trackId, clipId, takeId, false);
+            emit laneHeightsChanged();
+        } else if (chosen == delFile) {
+            // The file may still be referenced by another take (a duplicate shares
+            // it) — the controller checks and keeps it if so. Say what will happen
+            // either way, because undo cannot bring a file back.
+            const auto answer = QMessageBox::question(
+                this, tr("Delete audio file"),
+                tr("Delete \"%1\" and erase its audio file from disk?\n\n"
+                   "Undo will restore the take but not the file.")
+                    .arg(QString::fromStdString(take->name)),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+            if (answer != QMessageBox::Yes) return;
+            m_controller->removeTake(trackId, clipId, takeId, true);
+            emit laneHeightsChanged();
+        } else {
+            return;
+        }
         emit projectEdited();
         update();
-        return;
-    }
-
-    if (chosen == pick) {
-        m_controller->selectTake(trackId, clipId, takeId);
-    } else if (chosen == solo) {
-        if (soloed) m_controller->setSoloTake({}, {}, {});
-        else m_controller->setSoloTake(trackId, clipId, takeId);
-        update();
-        return;   // auditioning is not an edit to the document
-    } else if (chosen == rename) {
-        renameTake(hit);
-        return;
-    } else if (chosen == colors->menuAction()) {
-        return;
-    } else if (chosen == dup) {
-        m_controller->duplicateTake(trackId, clipId, takeId);
-        emit laneHeightsChanged();
-    } else if (chosen == mute) {
-        m_controller->setTakeMuted(trackId, clipId, takeId, !take->muted);
-    } else if (chosen == up || chosen == down) {
-        m_controller->moveTake(trackId, clipId, takeId,
-                               size_t(index + (chosen == up ? -1 : 1)));
-    } else if (chosen == del) {
-        m_controller->removeTake(trackId, clipId, takeId, false);
-        emit laneHeightsChanged();
-    } else if (chosen == delFile) {
-        // The file may still be referenced by another take (a duplicate shares
-        // it) — the controller checks and keeps it if so. Say what will happen
-        // either way, because undo cannot bring a file back.
-        const auto answer = QMessageBox::question(
-            this, tr("Delete audio file"),
-            tr("Delete \"%1\" and erase its audio file from disk?\n\n"
-               "Undo will restore the take but not the file.")
-                .arg(QString::fromStdString(take->name)),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (answer != QMessageBox::Yes) return;
-        m_controller->removeTake(trackId, clipId, takeId, true);
-        emit laneHeightsChanged();
-    } else {
-        return;
-    }
-    emit projectEdited();
-    update();
+    });
 }
 
 /// Extend the stroke to the pointer and hand the whole swept range to the take
@@ -2513,11 +2559,11 @@ void TimelineWidget::refreshRecordingFrame() {
     const auto& project = m_controller->project();
     const auto& rows = visibleRows();
     QRegion current;
-    const QRect viewport(0, ui::kRulerHeight, width(), visibleLaneHeight());
+    const QRect viewport(0, rulerHeight(), width(), visibleLaneHeight());
     for (std::size_t lane = 0; lane < rows.size(); ++lane) {
         const auto& track = project.tracks[rows[lane].index];
         if (std::find(targets.begin(), targets.end(), track.id) == targets.end()) continue;
-        const int y = ui::kRulerHeight - m_scrollY + m_laneOffsets[lane];
+        const int y = rulerHeight() - m_scrollY + m_laneOffsets[lane];
         current += QRect(0, y - 2, width(), m_laneOffsets[lane + 1] - m_laneOffsets[lane] + 4).intersected(viewport);
     }
     // Restoring the static plate also erases an old overlay on stop, after a
@@ -2531,7 +2577,8 @@ void TimelineWidget::refreshRecordingFrame() {
 
 // ── Painting ───────────────────────────────────────────────────────────────
 
-void TimelineWidget::drawGrid(QPainter& p) {
+void TimelineWidget::drawGrid(QPainter& p, const QColor& laneBase,
+                              const QColor& laneFill) {
     if (ui::gridOpacity() == 0) return;
     p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
@@ -2553,6 +2600,16 @@ void TimelineWidget::drawGrid(QPainter& p) {
     const double leftSec = std::max(0.0, xToSeconds(dirtyLeft));
     const double rightSec = xToSeconds(dirtyRight);
     const Theme& t = th();
+    const auto gridColor = [&](const QColor& color) {
+        if (!laneBase.isValid() || !laneFill.isValid()) return color;
+        // Keep the line's separation from the background when selection tints
+        // a lane. Painting an unchanged, translucent grid over a brighter wash
+        // alone loses that contrast, even though the stacking order is right.
+        return QColor(std::clamp(color.red() + laneFill.red() - laneBase.red(), 0, 255),
+                      std::clamp(color.green() + laneFill.green() - laneBase.green(), 0, 255),
+                      std::clamp(color.blue() + laneFill.blue() - laneBase.blue(), 0, 255),
+                      color.alpha());
+    };
 
     const int barStride = gridBarStride();
     const bool overview = m_gridBeats < 0.0 && barStride > 1;
@@ -2569,12 +2626,12 @@ void TimelineWidget::drawGrid(QPainter& p) {
         // Centre hairlines on a physical pixel, so subpixel widths stay fine
         // instead of spreading across two pixels on a 100% display.
         const qreal x = (std::floor(secondsToX(time) * dpr) + 0.5) / dpr;
-        p.drawLine(QPointF(x, ui::kRulerHeight), QPointF(x, height()));
+        p.drawLine(QPointF(x, rulerHeight()), QPointF(x, height()));
     };
     if (!overview && grid > 0.0) {
         const double stepSeconds = grid * secondsPerBeat;
         if (stepSeconds * m_pixelsPerSecond >= kMinGridSpacingPx) {
-            p.setPen(QPen(mixColors(t.gridLine, t.background, 0.45), lineWidth));
+            p.setPen(QPen(gridColor(mixColors(t.gridLine, t.background, 0.45)), lineWidth));
             long first = long(std::floor(leftSec / stepSeconds));
             if (first < 0) first = 0;
             for (long i = first;; ++i) {
@@ -2592,7 +2649,7 @@ void TimelineWidget::drawGrid(QPainter& p) {
     // Fine beat lines disappear with subdivisions in the overview. Enumerate
     // bars separately: a 7/8 bar boundary is not an integer quarter-note beat.
     if (showBeats) {
-        p.setPen(QPen(t.gridLine, lineWidth));
+        p.setPen(QPen(gridColor(t.gridLine), lineWidth));
         const long firstBeat = std::max(0L, long(std::floor(leftSec / secondsPerBeat)));
         for (long beat = firstBeat; beat * secondsPerBeat <= rightSec; ++beat) {
             const double time = beat * secondsPerBeat;
@@ -2600,7 +2657,7 @@ void TimelineWidget::drawGrid(QPainter& p) {
         }
     }
     const long firstBarGroup = std::max(0L, long(std::floor(leftSec / barStep)));
-    p.setPen(QPen(t.gridLineStrong, lineWidth));
+    p.setPen(QPen(gridColor(t.gridLineStrong), lineWidth));
     for (long group = firstBarGroup; group * barStep <= rightSec; ++group) {
         drawLine(group * barStep);
     }
@@ -2673,8 +2730,8 @@ void TimelineWidget::drawCycleStrip(QPainter& p) {
     if (on) {
         QColor wash = cycle;
         wash.setAlpha(t.dark ? 16 : 22);
-        p.fillRect(QRect(left, ui::kRulerHeight, std::max(1, right - left),
-                         height() - ui::kRulerHeight),
+        p.fillRect(QRect(left, rulerHeight(), std::max(1, right - left),
+                         height() - rulerHeight()),
                    wash);
     }
 
@@ -2720,21 +2777,25 @@ void TimelineWidget::drawRuler(QPainter& p) {
     const double rightSec = xToSeconds(dirtyRight);
     const Theme& t = th();
 
-    QLinearGradient rulerFill(0, 0, 0, ui::kRulerHeight);
+    QLinearGradient rulerFill(0, 0, 0, rulerHeight());
     rulerFill.setColorAt(0.0, mixColors(t.surfaceElevated, t.toolbarBackground, 0.30));
     rulerFill.setColorAt(1.0, mixColors(t.surface, t.toolbarBackground, 0.45));
-    p.fillRect(QRect(0, 0, width(), ui::kRulerHeight), rulerFill);
+    p.fillRect(QRect(0, 0, width(), rulerHeight()), rulerFill);
     drawCycleStrip(p);
     p.setPen(QPen(t.sectionDivider(), 1));
     // The neighbouring QSS borders occupy their last in-bounds pixel. Drawing
     // at y == height was half clipped and made the join look one pixel lower.
-    p.drawLine(0, ui::kRulerHeight - 1, width(), ui::kRulerHeight - 1);
+    p.drawLine(0, rulerHeight() - 1, width(), rulerHeight() - 1);
 
     QFont f = p.font();
     f.setPixelSize(10);
     p.setFont(f);
 
-    if (m_showBars) {
+    if (ui::rulerShowsBars(m_rulerFormat)) {
+        const int rowBottom = ui::kLoopStripHeight + ui::kRulerRowHeight;
+        p.save();
+        p.setClipRect(QRect(0, ui::kLoopStripHeight, width(), ui::kRulerRowHeight),
+                      Qt::IntersectClip);
         const double barSeconds = secondsPerBeat * beatsPerBar;
         const double pixelsPerBar = barSeconds * m_pixelsPerSecond;
         const int barStride = gridBarStride();
@@ -2747,14 +2808,24 @@ void TimelineWidget::drawRuler(QPainter& p) {
             if (time > rightSec) break;
             const int x = secondsToX(time);
             p.setPen(QPen(t.gridLineStrong, 1));
-            p.drawLine(x, ui::kRulerHeight - 8, x, ui::kRulerHeight);
+            p.drawLine(x, rowBottom - 8, x, rowBottom - 1);
             if (bar % labelStride == 0) {
                 p.setPen(t.textSecondary);
-                p.drawText(x + 4, ui::kRulerHeight - 10,
+                p.drawText(x + 4, rowBottom - 10,
                            QString::number(bar + 1));
             }
         }
-    } else {
+        p.restore();
+    }
+    if (ui::rulerShowsTime(m_rulerFormat)) {
+        const int rowBottom = rulerHeight();
+        const int rowTop = rowBottom - ui::kRulerRowHeight;
+        p.save();
+        p.setClipRect(QRect(0, rowTop, width(), ui::kRulerRowHeight), Qt::IntersectClip);
+        if (ui::rulerShowsBars(m_rulerFormat)) {
+            p.setPen(QPen(mixColors(t.surface, t.sectionDivider(), 0.6), 1));
+            p.drawLine(0, rowTop, width(), rowTop);
+        }
         // Seconds ruler: pick a step that keeps labels ~70 px apart.
         const double raw = 70.0 / m_pixelsPerSecond;
         const double steps[] = {0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120};
@@ -2769,12 +2840,13 @@ void TimelineWidget::drawRuler(QPainter& p) {
             if (time > rightSec) break;
             const int x = secondsToX(time);
             p.setPen(QPen(t.gridLineStrong, 1));
-            p.drawLine(x, ui::kRulerHeight - 8, x, ui::kRulerHeight);
+            p.drawLine(x, rowBottom - 8, x, rowBottom - 1);
             p.setPen(t.textSecondary);
             const int mins = int(time) / 60;
-            p.drawText(x + 4, ui::kRulerHeight - 10,
+            p.drawText(x + 4, rowBottom - 10,
                        QString::asprintf("%d:%04.1f", mins, time - mins * 60));
         }
+        p.restore();
     }
 }
 
@@ -2787,12 +2859,19 @@ void TimelineWidget::drawLanes(QPainter& p) {
     const auto rowIntersectsPaint = [&](int y, int height) {
         return paintRegion.intersects(QRect(0, y, width(), height + 1));
     };
+    struct SelectedLaneGrid {
+        QRect rect;
+        QColor base;
+        QColor fill;
+    };
+    QRegion selectedGridRegion;
+    std::vector<SelectedLaneGrid> selectedGrids;
 
     int laneIndex = 0;
     // The same origin `laneTop` uses: the lane stack scrolls under a fixed
     // ruler, and a second accumulator that forgot the offset would leave the
     // lane fills standing still while their clips moved.
-    int laneY = ui::kRulerHeight - m_scrollY;
+    int laneY = rulerHeight() - m_scrollY;
     for (const auto& row : rows) {
         const auto& track = project.tracks[row.index];
         const int laneH = m_laneOffsets[size_t(laneIndex) + 1] - m_laneOffsets[size_t(laneIndex)];
@@ -2815,7 +2894,11 @@ void TimelineWidget::drawLanes(QPainter& p) {
             if (selected) {
                 const QColor wash =
                     ui::selectionWash(colorFromRgb(track.color));
-                lane = mixColors(lane, wash, t.dark ? 0.14 : 0.09);
+                const QColor base = lane;
+                lane = mixColors(lane, wash, t.dark ? 0.08 : 0.06);
+                const QRect gridRect(0, laneY, width(), laneH);
+                selectedGrids.push_back({gridRect, base, lane});
+                selectedGridRegion += gridRect;
                 if (hasTimelineBackground())
                     lane.setAlpha(t.dark ? 154 : 190);
                 QColor selectedEdge =
@@ -2841,11 +2924,21 @@ void TimelineWidget::drawLanes(QPainter& p) {
         ++laneIndex;
     }
 
-    // Grid lines are drawn under the clips but over the lane fills.
+    // Grid lines stay above every lane wash and below clips. The disjoint
+    // regions paint each line only once, preserving the user's grid opacity.
+    p.save();
+    p.setClipRegion(paintRegion.subtracted(selectedGridRegion), Qt::IntersectClip);
     drawGrid(p);
+    p.restore();
+    for (const auto& grid : selectedGrids) {
+        p.save();
+        p.setClipRect(grid.rect, Qt::IntersectClip);
+        drawGrid(p, grid.base, grid.fill);
+        p.restore();
+    }
 
     laneIndex = 0;
-    laneY = ui::kRulerHeight - m_scrollY;
+    laneY = rulerHeight() - m_scrollY;
     struct PaintedClip {
         const daw::ClipModel* model = nullptr;
         QRectF body;
@@ -3216,15 +3309,19 @@ void TimelineWidget::paintCurveAt(const QPoint& pos, bool snapOn) {
     update();
 }
 
-void TimelineWidget::showAutomationMenu(const PointHit& hit,
-                                       const QPoint& globalPos) {
+void TimelineWidget::showAutomationMenu(const PointHit& hit, const QPoint& globalPos) {
+    QMenu menu(this);
+    populateAutomationMenu(menu, hit);
+    menu.exec(globalPos);
+}
+
+void TimelineWidget::populateAutomationMenu(QMenu& menu, const PointHit& hit) {
     const daw::ClipModel* clip = findClipModel(hit.trackId, hit.clipId);
     if (!clip) return;
     const std::vector<daw::AutomationPoint> before = clip->automation.points;
     const bool activeBefore = clip->automation.active;
     std::vector<daw::AutomationPoint> points = before;
 
-    QMenu menu(this);
     QAction* remove = nullptr;
     if (hit.index >= 0 && std::size_t(hit.index) < points.size()) {
         remove = menu.addAction(tr("Delete Point"));
@@ -3266,40 +3363,42 @@ void TimelineWidget::showAutomationMenu(const PointHit& hit,
     edit->setToolTip(tr("Generators, and the fields that point this curve at "
                         "something else"));
 
-    QAction* chosen = menu.exec(globalPos);
-    if (!chosen) return;
+    ui::connectMenuActions(menu, this, [=, this](QAction* chosen) mutable {
+        if (!findClipModel(hit.trackId, hit.clipId)) return;
+        if (!chosen) return;
 
-    if (chosen == edit) {
-        emit openAutomationEditorRequested(hit.trackId, hit.clipId);
-        return;
-    }
-    if (chosen == remove) {
-        points.erase(points.begin() + hit.index);
-    } else if (chosen == clear) {
-        points.clear();
-    } else if (chosen == smooth) {
-        for (daw::AutomationPoint& point : points) {
-            point.shape = daw::AutomationSegment::SCurve;
-            point.curve = 0.0;
+        if (chosen == edit) {
+            emit openAutomationEditorRequested(hit.trackId, hit.clipId);
+            return;
         }
-    } else if (segment >= 0 && std::size_t(segment) < points.size()) {
-        daw::AutomationPoint& at = points[std::size_t(segment)];
-        if (chosen == linear) at.shape = daw::AutomationSegment::Linear;
-        else if (chosen == hold) at.shape = daw::AutomationSegment::Hold;
-        else if (chosen == curve) at.shape = daw::AutomationSegment::SCurve;
-        else if (chosen == straighten) at.curve = 0.0;
-        else return;
-    } else {
-        return;
-    }
+        if (chosen == remove) {
+            points.erase(points.begin() + hit.index);
+        } else if (chosen == clear) {
+            points.clear();
+        } else if (chosen == smooth) {
+            for (daw::AutomationPoint& point : points) {
+                point.shape = daw::AutomationSegment::SCurve;
+                point.curve = 0.0;
+            }
+        } else if (segment >= 0 && std::size_t(segment) < points.size()) {
+            daw::AutomationPoint& at = points[std::size_t(segment)];
+            if (chosen == linear) at.shape = daw::AutomationSegment::Linear;
+            else if (chosen == hold) at.shape = daw::AutomationSegment::Hold;
+            else if (chosen == curve) at.shape = daw::AutomationSegment::SCurve;
+            else if (chosen == straighten) at.curve = 0.0;
+            else return;
+        } else {
+            return;
+        }
 
-    m_controller->setAutomationPoints(hit.trackId.toStdString(),
-                                      hit.clipId.toStdString(), points);
-    m_controller->commitAutomationEdit(hit.trackId.toStdString(),
-                                       hit.clipId.toStdString(), before,
-                                       "Edit Automation", activeBefore);
-    emit projectEdited();
-    update();
+        m_controller->setAutomationPoints(hit.trackId.toStdString(),
+                                          hit.clipId.toStdString(), points);
+        m_controller->commitAutomationEdit(hit.trackId.toStdString(),
+                                           hit.clipId.toStdString(), before,
+                                           "Edit Automation", activeBefore);
+        emit projectEdited();
+        update();
+    });
 }
 
 int TimelineWidget::laneCentreForTest(int lane) const {
@@ -4316,8 +4415,8 @@ void TimelineWidget::drawCountIn(QPainter& p) {
                   std::max(0.001, beatSeconds);
     const double swell = 1.0 - 0.18 * std::min(1.0, intoBeat * 2.0);
 
-    const QRectF area(0, ui::kRulerHeight, width(),
-                      height() - ui::kRulerHeight);
+    const QRectF area(0, rulerHeight(), width(),
+                      height() - rulerHeight());
     p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
 
@@ -4769,7 +4868,7 @@ QRect TimelineWidget::timedNotebookTextRect() const {
     if (!m_timedNotebookTextEnabled || m_timedNotebookCues.isEmpty()) return {};
     const int viewportBottom =
         height() - m_bottomInset - kTimelineScrollExtent - 16;
-    if (viewportBottom - ui::kRulerHeight < 118 || width() < 260) return {};
+    if (viewportBottom - rulerHeight() < 118 || width() < 260) return {};
     const int panelWidth = std::min(760, width() - 40);
     return QRect((width() - panelWidth) / 2, viewportBottom - 100,
                  panelWidth, 100);
@@ -4920,8 +5019,8 @@ void TimelineWidget::drawStaticFrame(QPainter& p,
                             local.setRenderHint(QPainter::Antialiasing, true);
                             // Retain the whole on-screen height once. The outer
                             // laneRegion clips it as the mixer covers/reveals it.
-                            local.setClipRect(QRect(0, ui::kRulerHeight, tileWidth,
-                                std::max(0, height() - kTimelineScrollExtent - ui::kRulerHeight)));
+                            local.setClipRect(QRect(0, rulerHeight(), tileWidth,
+                                std::max(0, height() - kTimelineScrollExtent - rulerHeight())));
                             drawLanes(local);
                         });
                 }
@@ -4971,12 +5070,12 @@ void TimelineWidget::drawRecordingOverlays(QPainter& p) {
     const auto& project = m_controller->project();
     const auto& rows = visibleRows();
     p.save();
-    p.setClipRect(QRect(0, ui::kRulerHeight, width(), visibleLaneHeight()), Qt::IntersectClip);
+    p.setClipRect(QRect(0, rulerHeight(), width(), visibleLaneHeight()), Qt::IntersectClip);
     const QRegion dirty = p.clipRegion();
     for (std::size_t lane = 0; lane < rows.size(); ++lane) {
         const auto& track = project.tracks[rows[lane].index];
         if (std::find(targets.begin(), targets.end(), track.id) == targets.end()) continue;
-        const int y = ui::kRulerHeight - m_scrollY + m_laneOffsets[lane];
+        const int y = rulerHeight() - m_scrollY + m_laneOffsets[lane];
         const int height = m_laneOffsets[lane + 1] - m_laneOffsets[lane];
         if (!dirty.intersects(QRect(0, y, width(), height))) continue;
         const int bodyHeight = ui::laneHeightFor(track.height);
@@ -5086,7 +5185,7 @@ void TimelineWidget::paintScene(QPainter& p, const QRegion& paintRegion) {
             // is cheap and may change label spacing at a digit boundary.
             m_staticDirty += QRegion(QRect(0, 0, edge, height())) |
                 QRegion(QRect(width() - edge, 0, edge, height())) |
-                QRegion(QRect(0, 0, width(), ui::kRulerHeight + 2));
+                QRegion(QRect(0, 0, width(), rulerHeight() + 2));
             scrolledPlate = true;
         } else {
             m_staticFrameValid = false;
@@ -5178,7 +5277,7 @@ void TimelineWidget::updateCursor(const QPoint& pos) {
                                                         : Qt::SizeHorCursor);
         return;
     }
-    if (pos.y() < ui::kRulerHeight) {
+    if (pos.y() < rulerHeight()) {
         setCursor(Qt::SizeHorCursor);   // scrub
         return;
     }
@@ -5261,7 +5360,6 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
     if (hasActivePointerGesture()) finishInterruptedPointerGesture();
     m_lastPointerPosition = ev->position();
     setFocus(Qt::MouseFocusReason);
-    if (ev->button() != Qt::RightButton) m_suppressContextMenu = false;
     if (ev->button() == Qt::MiddleButton) {
         m_panning = true;
         m_panLastPosition = ev->position();
@@ -5274,13 +5372,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         return;
     const QPoint pos = ev->position().toPoint();
     if (ev->button() == Qt::RightButton) {
-        // Keep the existing blank-space deselection, but let clips use their
-        // normal context menu. The Piano Roll owns its separate right eraser.
-        if (pos.y() < ui::kRulerHeight) return;
-        ClipHit hit;
-        if (!hitTestClip(pos, hit)) {
-            m_suppressContextMenu = true;
-            clearClipSelection();
+        if (clearSelectionOnBackground(pos)) {
             ev->accept();
         }
         return;
@@ -5336,7 +5428,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         return;
     }
 
-    if (pos.y() < ui::kRulerHeight) {
+    if (pos.y() < rulerHeight()) {
         m_scrubbing = true;
         const bool snapOn =
             m_snapEnabled && !(ev->modifiers() & Qt::AltModifier);
@@ -6549,6 +6641,40 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
         return;
     }
 
+    // The arrangement uses a precise in-place gesture. Crossing into the
+    // browser turns it into a native COPY drag and rolls back all provisional
+    // placements, including Pattern members and lane crossings.
+    QWidget* dropTarget = QApplication::widgetAt(ev->globalPosition().toPoint());
+    while (dropTarget && !dropTarget->property("clipLibraryDropTarget").toBool())
+        dropTarget = dropTarget->parentWidget();
+    if (dropTarget && m_projectGestureLabel != tr("Duplicate Clips") &&
+        (pos-m_dragPressPosition).manhattanLength() >= QApplication::startDragDistance()) {
+        const auto origin = std::find_if(m_dragOrigins.begin(), m_dragOrigins.end(),
+            [this](const auto& item) { return item.clipId == m_dragClipId; });
+        if (origin == m_dragOrigins.end()) return;
+        const QString track = origin->trackId, clip = origin->clipId;
+        m_controller->cancelClipPositionEdit();
+        m_clipPositionEditOpen = false; m_projectGestureChanged = false;
+        finishProjectGesture();
+        for (auto& selected : m_selection)
+            for (const auto& initial : m_dragOrigins)
+                if (selected.clipId == initial.clipId) selected.trackId = initial.trackId;
+        m_dragTrackId = track; m_dragging = false; m_moveGuidesActive = false;
+        m_dragOrigins.clear(); m_dragOriginalStarts.clear(); m_duplicateDragPending = false;
+        unsetCursor(); update();
+        auto* drag = new QDrag(this);
+        drag->setMimeData(ui::cliplibrary::timelineMime(track, clip));
+        if (const auto* model = findClipModel(track,clip)) {
+            const QRect area = clipRect(laneForTrackId(track), *model).toAlignedRect().intersected(rect());
+            if (!area.isEmpty()) drag->setPixmap(grab(area).scaled(240,72,Qt::KeepAspectRatio,Qt::SmoothTransformation));
+        }
+        drag->setHotSpot(QPoint(16,16));
+        emit clipSelected(track,clip);
+        drag->exec(Qt::CopyAction,Qt::CopyAction);
+        drag->deleteLater();
+        update(); return;
+    }
+
     if (m_duplicateDragPending) {
         if ((pos - m_dragPressPosition).manhattanLength() <
             QApplication::startDragDistance()) {
@@ -6837,7 +6963,7 @@ bool TimelineWidget::event(QEvent* e) {
         auto* g = static_cast<QNativeGestureEvent*>(e);
         if (g->gestureType() == Qt::ZoomNativeGesture) {
             const std::optional<double> pointerX =
-                g->position().y() >= ui::kRulerHeight
+                g->position().y() >= rulerHeight()
                     ? std::optional<double>(g->position().x())
                     : std::nullopt;
             zoomBy(1.0 + g->value(), pointerX);
@@ -6886,7 +7012,7 @@ void TimelineWidget::wheelEvent(QWheelEvent* ev) {
     if (ev->phase() == Qt::ScrollBegin) m_wheelScrollRemainder = 0.0;
     if (ev->modifiers() & Qt::ControlModifier) {
         const std::optional<double> pointerX =
-            ev->position().y() >= ui::kRulerHeight
+            ev->position().y() >= rulerHeight()
                 ? std::optional<double>(ev->position().x())
                 : std::nullopt;
         zoomBy(ui::wheelZoomFactor(*ev), pointerX);
@@ -6914,189 +7040,181 @@ void TimelineWidget::wheelEvent(QWheelEvent* ev) {
     ev->accept();
 }
 
-bool TimelineWidget::showSelectedClipActionsMenu() {
-    if (m_selection.isEmpty()) return false;
-    const ClipRef selected = m_selection.front();
-    const daw::ClipModel* clip = findClipModel(selected.trackId, selected.clipId);
-    const int lane = laneForTrackId(selected.trackId);
-    if (!clip || lane < 0) return false;
-    ensureLaneVisible(lane);
-    QRectF body = clipRect(lane, *clip);
-    if (body.right() < 20 || body.left() >= width() - 20) {
-        setHorizontalScroll(std::max(0.0, clip->startSeconds -
-                                             width() / (4.0 * m_pixelsPerSecond)));
-        body = clipRect(lane, *clip);
-    }
-    const QPoint at(std::clamp(int(body.left() + std::min(10.0, body.width() / 2)),
-                               1, std::max(1, width() - 2)),
-                    std::clamp(int(body.center().y()), 1,
-                               std::max(1, height() - 2)));
-    m_suppressContextMenu = false;
-    QContextMenuEvent event(QContextMenuEvent::Other, at, QCursor::pos());
-    contextMenuEvent(&event);
+bool TimelineWidget::createClipAt(const QString& trackId, daw::ClipKind kind, double seconds) {
+    const auto* track = m_controller->project().findTrack(trackId.toStdString());
+    if (!track || !daw::trackAccepts(track->kind, kind)) return false;
+    const double start = std::max(0.0, snap(seconds, m_snapEnabled));
+    const std::string id = kind == daw::ClipKind::Midi
+        ? m_controller->addMidiClip(trackId.toStdString(), start)
+        : kind == daw::ClipKind::Pattern
+            ? m_controller->addPatternClip(trackId.toStdString(), start) : std::string{};
+    if (id.empty()) return false;
+    emit projectEdited();
+    update();
     return true;
 }
 
-void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
+bool TimelineWidget::populateSelectedClipActionsMenu(QMenu& menu) {
+    if (m_selection.isEmpty()) return false;
+    const ClipRef selected = m_selection.front();
+    const auto* clip = findClipModel(selected.trackId, selected.clipId);
+    if (!clip) return false;
+    ClipHit hit;
+    hit.trackId = selected.trackId;
+    hit.clipId = selected.clipId;
+    hit.kind = clip->kind;
+    populateClipActionsMenu(menu, hit);
+    return true;
+}
+
+bool TimelineWidget::showSelectedClipActionsMenu() {
+    QMenu menu(this);
+    if (!populateSelectedClipActionsMenu(menu)) return false;
+    menu.exec(QCursor::pos());
+    return true;
+}
+
+void TimelineWidget::populateClipActionsMenu(QMenu& menu, const ClipHit& hit) {
+    auto* save = menu.addAction(tr("Save to project clips"));
+    save->setObjectName(QStringLiteral("SaveClipToLibrary"));
+    connect(save, &QAction::triggered, this, [this,hit] {
+        emit saveClipToLibraryRequested(hit.trackId,hit.clipId);
+    });
+    menu.addSeparator();
     const auto useCommandShortcut = [this](QAction* action, const char* id) {
         if (auto* command = window()->findChild<QAction*>(QString::fromLatin1(id)))
-            action->setShortcut(command->shortcut());
+            ui::showCommandShortcut(action, command);
     };
-    if (m_suppressContextMenu) {
-        m_suppressContextMenu = false;
-        ev->accept();
-        return;
+    QAction* openRoll = nullptr;
+    QAction* openPattern = nullptr;
+    QAction* warpAudio = nullptr;
+    QAction* detectBpm = nullptr;
+    QAction* detectKey = nullptr;
+    QAction* detectBoth = nullptr;
+    if (hit.kind == daw::ClipKind::Midi) {
+        openRoll = menu.addAction(tr("Open Piano Roll"));
+        menu.addSeparator();
+    } else if (hit.kind == daw::ClipKind::Pattern) {
+        openPattern = menu.addAction(tr("Open Pattern Editor"));
+        menu.addSeparator();
+    } else if (hit.kind == daw::ClipKind::Audio) {
+        warpAudio = menu.addAction(tr("Warp Audio"));
+        warpAudio->setObjectName("WarpAudioAction");
+        menu.setToolTipsVisible(true);
+        const auto reason = m_controller->warpUnavailableReason(hit.trackId.toStdString(), hit.clipId.toStdString());
+        warpAudio->setEnabled(reason.empty());
+        warpAudio->setToolTip(QString::fromStdString(reason));
+        detectBpm = menu.addAction(tr("Detect BPM…"));
+        detectKey = menu.addAction(tr("Detect Key…"));
+        detectBoth = menu.addAction(tr("Detect BPM && Key…"));
+        menu.addSeparator();
     }
-    // Take rows first: they are inside a lane but below the clip bodies, so a
-    // right-click there is about the take, not the clip above it.
-    TakeHit takeHit;
-    if (hitTestTake(ev->pos(), takeHit)) {
-        showTakeMenu(takeHit, ev->globalPos());
-        return;
-    }
 
-    // A curve, before the clip that carries it: on an automation lane the
-    // interior belongs to the breakpoints, and a right-click there is about the
-    // point or the run under it.
-    if (PointHit point; hitTestAutomationPoint(ev->pos(), point)) {
-        showAutomationMenu(point, ev->globalPos());
-        return;
-    }
-
-    ClipHit hit;
-    if (hitTestClip(ev->pos(), hit)) {
-        QMenu menu(this);
-        QAction* openRoll = nullptr;
-        QAction* openPattern = nullptr;
-        QAction* warpAudio = nullptr;
-        QAction* detectBpm = nullptr;
-        QAction* detectKey = nullptr;
-        QAction* detectBoth = nullptr;
-        if (hit.kind == daw::ClipKind::Midi) {
-            openRoll = menu.addAction(tr("Open Piano Roll"));
-            menu.addSeparator();
-        } else if (hit.kind == daw::ClipKind::Pattern) {
-            openPattern = menu.addAction(tr("Open Pattern Editor"));
-            menu.addSeparator();
-        } else if (hit.kind == daw::ClipKind::Audio) {
-            warpAudio = menu.addAction(tr("Warp Audio"));
-            warpAudio->setObjectName("WarpAudioAction");
-            menu.setToolTipsVisible(true);
-            const auto reason = m_controller->warpUnavailableReason(hit.trackId.toStdString(), hit.clipId.toStdString());
-            warpAudio->setEnabled(reason.empty());
-            warpAudio->setToolTip(QString::fromStdString(reason));
-            detectBpm = menu.addAction(tr("Detect BPM…"));
-            detectKey = menu.addAction(tr("Detect Key…"));
-            detectBoth = menu.addAction(tr("Detect BPM && Key…"));
-            menu.addSeparator();
-        }
-
-        const daw::ClipModel* clip = findClipModel(hit.trackId, hit.clipId);
-        // Right-click anywhere inside an existing fade to switch its processing
-        // without having to hit the tiny corner knob precisely.
-        Fade menuFade = Fade::None;
-        QAction* gainFade = nullptr;
-        QAction* tapeFade = nullptr;
-        if (clip && clip->kind == daw::ClipKind::Audio) {
-            const double at = xToSeconds(ev->pos().x());
-            const double end = clip->startSeconds + clip->durationSeconds;
-            if (clip->fadeInSeconds > 0.0 &&
-                at >= clip->startSeconds &&
-                at <= clip->startSeconds + clip->fadeInSeconds) {
-                menuFade = Fade::In;
-            } else if (clip->fadeOutSeconds > 0.0 &&
-                       at >= end - clip->fadeOutSeconds && at <= end) {
-                menuFade = Fade::Out;
+    const daw::ClipModel* clip = findClipModel(hit.trackId, hit.clipId);
+    if (clip && clip->kind == daw::ClipKind::Audio) {
+        for (const bool fadeIn : {true, false}) {
+            QMenu* fades = menu.addMenu(fadeIn ? tr("Fade In") : tr("Fade Out"));
+            fades->setEnabled(fadeIn ? clip->fadeInSeconds > 0.0
+                                     : clip->fadeOutSeconds > 0.0);
+            const auto current = fadeIn ? clip->fadeInMode : clip->fadeOutMode;
+            for (const auto mode : {daw::ClipFadeMode::Gain, daw::ClipFadeMode::Tape}) {
+                auto* action = fades->addAction(mode == daw::ClipFadeMode::Gain
+                    ? tr("Volume Fade") : fadeIn ? tr("Speed Up (Tape Start)")
+                                                : tr("Speed Down (Tape Stop)"));
+                action->setCheckable(true);
+                action->setChecked(current == mode);
+                connect(action, &QAction::triggered, this, [this, hit, fadeIn, mode] {
+                    m_controller->setClipFadeMode(hit.trackId.toStdString(),
+                        hit.clipId.toStdString(), fadeIn, mode);
+                    emit projectEdited();
+                    update();
+                });
             }
-            if (menuFade != Fade::None) {
-                QMenu* fadeMenu = menu.addMenu(
-                    menuFade == Fade::In ? tr("Fade In") : tr("Fade Out"));
-                gainFade = fadeMenu->addAction(tr("Volume Fade"));
-                tapeFade = fadeMenu->addAction(
-                    menuFade == Fade::In ? tr("Speed Up (Tape Start)")
-                                         : tr("Speed Down (Tape Stop)"));
-                gainFade->setCheckable(true);
-                tapeFade->setCheckable(true);
-                const daw::ClipFadeMode current = menuFade == Fade::In
-                                                      ? clip->fadeInMode
-                                                      : clip->fadeOutMode;
-                gainFade->setChecked(current == daw::ClipFadeMode::Gain);
-                tapeFade->setChecked(current == daw::ClipFadeMode::Tape);
-                menu.addSeparator();
-            }
-        }
-
-        // Comp actions, on a layered clip only.
-        QAction* expand = nullptr;
-        QAction* flatten = nullptr;
-        QAction* commit = nullptr;
-        QAction* crop = nullptr;
-        QAction* unused = nullptr;
-        if (clip && daw::isLayered(*clip)) {
-            expand = menu.addAction(clip->expanded ? tr("Close Comp Editor")
-                                                   : tr("Open Comp Editor"));
-            flatten = menu.addAction(tr("Flatten Comp to New Take"));
-            commit = menu.addAction(tr("Commit Comp…"));
-            crop = menu.addAction(tr("Crop Takes to Comp…"));
-            unused = menu.addAction(tr("Delete Unused Takes"));
-            menu.addSeparator();
-        }
-
-        QAction* bounce = menu.addAction(tr("Bounce in Place…"));
-        useCommandShortcut(bounce, "timeline.bounce_in_place");
-        bounce->setEnabled(m_localProcessingEnabled);
-        bounce->setToolTip(m_localProcessingEnabled
-                               ? tr("Render and insert the selected material")
-                               : tr("Local-only in v1"));
-        QAction* offline = menu.addAction(tr("Offline Render…"));
-        bool offlineEligible = hit.kind == daw::ClipKind::Audio;
-        if (isClipSelected(hit.clipId)) {
-            for (const ClipRef& selected : m_selection) {
-                const daw::ClipModel* item =
-                    findClipModel(selected.trackId, selected.clipId);
-                if (!item || item->kind != daw::ClipKind::Audio) {
-                    offlineEligible = false;
-                    break;
-                }
-            }
-        }
-        offline->setEnabled(m_localProcessingEnabled && offlineEligible);
-        offline->setToolTip(!m_localProcessingEnabled
-                                ? tr("Local-only in v1")
-                                : tr("Available for audio clips only"));
-        QAction* restoreOffline = nullptr;
-        QAction* sharedPlugins = nullptr;
-        if (m_selection.size() > 1 && isClipSelected(hit.clipId) && offlineEligible) {
-            std::vector<daw::EngineController::PluginBatchTarget> targets;
-            for (const auto& selected : m_selection)
-                targets.push_back({selected.trackId.toStdString(), selected.clipId.toStdString()});
-            sharedPlugins = menu.addAction(tr("Shared Plugins…"));
-            sharedPlugins->setEnabled(m_localProcessingEnabled && m_controller->validatePluginBatch(targets, 1).isOk());
-        }
-        if (clip && clip->kind == daw::ClipKind::Audio &&
-            (!clip->offlineHistory.empty() || !clip->offlineProcess.empty())) {
-            restoreOffline = menu.addAction(tr("Restore Original Audio"));
-            restoreOffline->setEnabled(m_localProcessingEnabled);
-            restoreOffline->setToolTip(tr("Return this clip to its first version before Offline Render"));
         }
         menu.addSeparator();
-        QAction* repeat = menu.addAction(tr("Repeat Clip"));
-        useCommandShortcut(repeat, "edit.repeatClips");
-        QAction* muteClip = menu.addAction(
-            clip && clip->muted ? tr("Unmute Clip") : tr("Mute Clip"));
-        useCommandShortcut(muteClip, "edit.muteClips");
-        QAction* del = menu.addAction(tr("Delete Clip"));
-        useCommandShortcut(del, "track.remove");
-        // With several clips selected, offer to delete them all.
-        QAction* delAll = nullptr;
-        if (m_selection.size() > 1 && isClipSelected(hit.clipId)) {
-            delAll = menu.addAction(
-                tr("Delete %1 Selected Clips").arg(m_selection.size()));
+    }
+
+    // Comp actions, on a layered clip only.
+    QAction* expand = nullptr;
+    QAction* flatten = nullptr;
+    QAction* commit = nullptr;
+    QAction* crop = nullptr;
+    QAction* unused = nullptr;
+    if (clip && daw::isLayered(*clip)) {
+        expand = menu.addAction(clip->expanded ? tr("Close Comp Editor")
+                                               : tr("Open Comp Editor"));
+        flatten = menu.addAction(tr("Flatten Comp to New Take"));
+        commit = menu.addAction(tr("Commit Comp…"));
+        crop = menu.addAction(tr("Crop Takes to Comp…"));
+        unused = menu.addAction(tr("Delete Unused Takes"));
+        menu.addSeparator();
+    }
+
+    QAction* bounce = menu.addAction(tr("Bounce in Place…"));
+    useCommandShortcut(bounce, "timeline.bounce_in_place");
+    bounce->setEnabled(m_localProcessingEnabled);
+    bounce->setToolTip(m_localProcessingEnabled
+                           ? tr("Render and insert the selected material")
+                           : tr("Local-only in v1"));
+    QAction* offline = menu.addAction(tr("Offline Render…"));
+    bool offlineEligible = hit.kind == daw::ClipKind::Audio;
+    if (isClipSelected(hit.clipId)) {
+        for (const ClipRef& selected : m_selection) {
+            const daw::ClipModel* item =
+                findClipModel(selected.trackId, selected.clipId);
+            if (!item || item->kind != daw::ClipKind::Audio) {
+                offlineEligible = false;
+                break;
+            }
         }
-        QAction* chosen = menu.exec(ev->globalPos());
+    }
+    offline->setEnabled(m_localProcessingEnabled && offlineEligible);
+    QAction* silence = nullptr;
+    if (hit.kind == daw::ClipKind::Audio) {
+        silence = menu.addAction(tr("Strip Silence…"));
+        silence->setObjectName("StripSilenceAction");
+        useCommandShortcut(silence, "timeline.strip_silence");
+        silence->setEnabled(m_localProcessingEnabled && offlineEligible && !m_controller->isRecording());
+        silence->setToolTip(m_localProcessingEnabled ? tr("Remove silence from the selected audio clips")
+                                                    : tr("Local-only in v1"));
+    }
+    offline->setToolTip(!m_localProcessingEnabled
+                            ? tr("Local-only in v1")
+                            : tr("Available for audio clips only"));
+    QAction* restoreOffline = nullptr;
+    QAction* sharedPlugins = nullptr;
+    if (m_selection.size() > 1 && isClipSelected(hit.clipId) && offlineEligible) {
+        std::vector<daw::EngineController::PluginBatchTarget> targets;
+        for (const auto& selected : m_selection)
+            targets.push_back({selected.trackId.toStdString(), selected.clipId.toStdString()});
+        sharedPlugins = menu.addAction(tr("Shared Plugins…"));
+        sharedPlugins->setEnabled(m_localProcessingEnabled && m_controller->validatePluginBatch(targets, 1).isOk());
+    }
+    if (clip && clip->kind == daw::ClipKind::Audio &&
+        (!clip->offlineHistory.empty() || !clip->offlineProcess.empty())) {
+        restoreOffline = menu.addAction(tr("Restore Original Audio"));
+        restoreOffline->setEnabled(m_localProcessingEnabled);
+        restoreOffline->setToolTip(tr("Return this clip to its first version before Offline Render"));
+    }
+    menu.addSeparator();
+    QAction* repeat = menu.addAction(tr("Repeat Clip"));
+    useCommandShortcut(repeat, "edit.repeatClips");
+    QAction* muteClip = menu.addAction(
+        clip && clip->muted ? tr("Unmute Clip") : tr("Mute Clip"));
+    useCommandShortcut(muteClip, "edit.muteClips");
+    QAction* del = menu.addAction(tr("Delete Clip"));
+    // With several clips selected, offer to delete them all.
+    QAction* delAll = nullptr;
+    if (m_selection.size() > 1 && isClipSelected(hit.clipId)) {
+        delAll = menu.addAction(
+            tr("Delete %1 Selected Clips").arg(m_selection.size()));
+    }
+    ui::connectMenuActions(menu, this, [=, this](QAction* chosen) {
+        const auto* clip = findClipModel(hit.trackId, hit.clipId);
+        if (!clip) return;
         const std::string trackId = hit.trackId.toStdString();
         const std::string clipId = hit.clipId.toStdString();
-        if (chosen == bounce || chosen == offline) {
+        if (chosen == bounce || chosen == offline || (silence && chosen == silence)) {
             if (!isClipSelected(hit.clipId)) {
                 m_selection = {ClipRef{hit.trackId, hit.clipId}};
                 m_selectedClipId = hit.clipId;
@@ -7105,6 +7223,8 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
             }
             if (chosen == bounce)
                 emit bounceInPlaceRequested();
+            else if (chosen == silence)
+                emit stripSilenceRequested();
             else
                 emit offlineRenderRequested();
         } else if (sharedPlugins && chosen == sharedPlugins) {
@@ -7117,18 +7237,6 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
                 emit projectEdited();
                 update();
             }
-        } else if (chosen == gainFade && gainFade) {
-            m_controller->setClipFadeMode(trackId, clipId,
-                                          menuFade == Fade::In,
-                                          daw::ClipFadeMode::Gain);
-            emit projectEdited();
-            update();
-        } else if (chosen == tapeFade && tapeFade) {
-            m_controller->setClipFadeMode(trackId, clipId,
-                                          menuFade == Fade::In,
-                                          daw::ClipFadeMode::Tape);
-            emit projectEdited();
-            update();
         } else if (chosen == warpAudio && warpAudio) {
             emit openWarpEditorRequested(hit.trackId, hit.clipId);
         } else if (chosen == openRoll && openRoll) {
@@ -7210,6 +7318,70 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
             emit projectEdited();
             update();
         }
+    });
+
+    // These have no reliable screen coordinate when opened from the menu bar.
+    // Name each target explicitly and use the same builders as right-click.
+    if (clip && daw::isLayered(*clip)) {
+        auto* takes = menu.addMenu(tr("Takes"));
+        for (int i = 0; i < int(clip->takes.size()); ++i) {
+            const auto& take = clip->takes[std::size_t(i)];
+            auto* actions = takes->addMenu(QString::fromStdString(take.name));
+            populateTakeMenu(*actions, TakeHit{hit.trackId, hit.clipId,
+                QString::fromStdString(take.id), i, {}});
+        }
+    }
+    if (clip && clip->kind == daw::ClipKind::Automation) {
+        auto* automation = menu.addMenu(tr("Automation"));
+        PointHit point;
+        point.trackId = hit.trackId;
+        point.clipId = hit.clipId;
+        populateAutomationMenu(*automation, point);
+        auto* points = automation->addMenu(tr("Points"));
+        for (int i = 0; i < int(clip->automation.points.size()); ++i) {
+            auto* actions = points->addMenu(tr("Point %1").arg(i + 1));
+            point.index = i;
+            connect(actions, &QMenu::aboutToShow, this, [this, actions, point] {
+                ui::clearMenu(*actions);
+                populateAutomationMenu(*actions, point);
+            });
+        }
+        points->setEnabled(!clip->automation.points.empty());
+    }
+}
+
+void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
+    const auto useCommandShortcut = [this](QAction* action, const char* id) {
+        if (auto* command = window()->findChild<QAction*>(QString::fromLatin1(id)))
+            ui::showCommandShortcut(action, command);
+    };
+    // Native secondary-click delivery can arrive without a preceding right
+    // mouse press. Keyboard-invoked menus retain their normal creation actions.
+    if (ev->reason() == QContextMenuEvent::Mouse && clearSelectionOnBackground(ev->pos())) {
+        ev->accept();
+        return;
+    }
+    // Take rows first: they are inside a lane but below the clip bodies, so a
+    // right-click there is about the take, not the clip above it.
+    TakeHit takeHit;
+    if (hitTestTake(ev->pos(), takeHit)) {
+        showTakeMenu(takeHit, ev->globalPos());
+        return;
+    }
+
+    // A curve, before the clip that carries it: on an automation lane the
+    // interior belongs to the breakpoints, and a right-click there is about the
+    // point or the run under it.
+    if (PointHit point; hitTestAutomationPoint(ev->pos(), point)) {
+        showAutomationMenu(point, ev->globalPos());
+        return;
+    }
+
+    ClipHit hit;
+    if (hitTestClip(ev->pos(), hit)) {
+        QMenu menu(this);
+        populateClipActionsMenu(menu, hit);
+        menu.exec(ev->globalPos());
         return;
     }
 
@@ -7252,24 +7424,10 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
         emit bounceInPlaceRequested();
         return;
     }
-    if (chosen == addMidiClip) {
-        const std::string clipId = m_controller->addMidiClip(
-            laneTrackId.toStdString(),
-            std::max(0.0, snap(xToSeconds(ev->pos().x()), m_snapEnabled)));
-        if (!clipId.empty()) {
-            emit projectEdited();
-            update();
-        }
-        return;
-    }
-    if (chosen == addPatternClip) {
-        const std::string clipId = m_controller->addPatternClip(
-            laneTrackId.toStdString(),
-            std::max(0.0, snap(xToSeconds(ev->pos().x()), m_snapEnabled)));
-        if (!clipId.empty()) {
-            emit projectEdited();
-            update();
-        }
+    if (chosen == addMidiClip || chosen == addPatternClip) {
+        createClipAt(laneTrackId, chosen == addMidiClip ? daw::ClipKind::Midi
+                                                       : daw::ClipKind::Pattern,
+                     xToSeconds(ev->pos().x()));
         return;
     }
     if (const auto spec = trackKinds.constFind(chosen);
@@ -7325,6 +7483,11 @@ std::optional<daw::plugins::PluginDescriptor> TimelineWidget::pluginFromMime(
 }
 
 void TimelineWidget::dragEnterEvent(QDragEnterEvent* ev) {
+    if (const auto id = ui::cliplibrary::libraryId(ev->mimeData()); !id.isEmpty()) {
+        if (!m_controller->libraryClip(id.toStdString())) return;
+        m_dropActive = true; m_dropLane = laneAt(ev->position().toPoint().y());
+        ev->setDropAction(Qt::CopyAction); ev->accept(); update(); return;
+    }
     if (!mimeHasImportable(ev->mimeData()) && !mimeHasPlugin(ev->mimeData()) &&
         projectTemplateFromMime(ev->mimeData()).isEmpty())
         return;
@@ -7337,6 +7500,16 @@ void TimelineWidget::dragEnterEvent(QDragEnterEvent* ev) {
 }
 
 void TimelineWidget::dragMoveEvent(QDragMoveEvent* ev) {
+    if (const auto id = ui::cliplibrary::libraryId(ev->mimeData()); !id.isEmpty()) {
+        const auto* entry = m_controller->libraryClip(id.toStdString());
+        if (!entry || entry->tracks.empty() || entry->tracks.front().clips.empty()) { ev->ignore(); return; }
+        m_dropLane = laneAt(ev->position().toPoint().y());
+        const auto* target = m_controller->project().findTrack(trackIdForLane(m_dropLane).toStdString());
+        if (target && !daw::trackAccepts(target->kind, entry->tracks.front().clips.front().kind)) {
+            m_dropActive = false; ev->ignore(); update(); return;
+        }
+        m_dropActive = true; ev->setDropAction(Qt::CopyAction); ev->accept(); update(); return;
+    }
     if (!projectTemplateFromMime(ev->mimeData()).isEmpty()) {
         m_dropClip = {};
         m_dropLane = -1;
@@ -7375,6 +7548,20 @@ void TimelineWidget::dropEvent(QDropEvent* ev) {
     m_dropActive = false;
     const ClipRef overClip = m_dropClip;
     m_dropClip = {};
+    if (const auto id = ui::cliplibrary::libraryId(ev->mimeData()); !id.isEmpty()) {
+        const QPoint pos = ev->position().toPoint();
+        const bool snapOn = m_snapEnabled && !(ev->modifiers() & Qt::ControlModifier);
+        const double at = std::max(0.0,snap(xToSeconds(pos.x()),snapOn));
+        daw::EngineController::ClipAddress restored;
+        const auto result = m_controller->restoreLibraryClip(id.toStdString(),
+            trackIdForLane(laneAt(pos.y())).toStdString(),at,restored);
+        if (!result) { emit operationStatus(tr("Could not restore clip: %1").arg(QString::fromStdString(result.message()))); ev->ignore(); update(); return; }
+        ev->setDropAction(Qt::CopyAction); ev->accept();
+        emit tracksChanged();
+        selectClips({{QString::fromStdString(restored.trackId),QString::fromStdString(restored.clipId)}});
+        emit clipSelected(QString::fromStdString(restored.trackId),QString::fromStdString(restored.clipId));
+        emit projectEdited(); emit operationStatus(tr("Saved clip restored")); update(); return;
+    }
 
     if (const QString templ = projectTemplateFromMime(ev->mimeData());
         !templ.isEmpty()) {

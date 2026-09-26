@@ -21,6 +21,7 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -33,6 +34,41 @@
 
 namespace {
 constexpr int kClipParameterFieldHeight = 20;
+
+class ClipNameLabel final : public QLabel {
+public:
+    explicit ClipNameLabel(QWidget* parent) : QLabel(parent) {
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    }
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setPen(palette().color(QPalette::WindowText));
+        painter.drawText(contentsRect(), Qt::AlignLeft | Qt::AlignVCenter,
+                         fontMetrics().elidedText(text(), Qt::ElideRight,
+                                                  contentsRect().width()));
+    }
+};
+
+class ClipFormLabel final : public QLabel {
+public:
+    ClipFormLabel(const QString& text, QWidget* parent) : QLabel(text, parent) {
+        setWordWrap(true);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    }
+    QSize minimumSizeHint() const override {
+        return {0, QLabel::minimumSizeHint().height()};
+    }
+};
+
+void addClipFormField(QFormLayout* form, const QString& text, QWidget* field) {
+    auto* label = new ClipFormLabel(text, field->parentWidget());
+    label->setBuddy(field);
+    // Both rows span the full column. QFormLayout's wrapped label role can
+    // otherwise reserve only a word's width and introduce unnecessary wraps.
+    form->addRow(label);
+    form->addRow(field);
+}
 
 void scrollInspector(QWidget* source, QWheelEvent* event) {
     for (QWidget* parent = source->parentWidget(); parent; parent = parent->parentWidget()) {
@@ -275,7 +311,7 @@ void configureClipForm(QFormLayout* form) {
     form->setContentsMargins(0, 0, 0, 0);
     form->setVerticalSpacing(2);
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-    // At the inspector's 152 px width, translated labels and numeric units
+    // In the narrow inspector, translated labels and numeric units
     // need separate lines. Do not let their combined minimum widths overflow.
     form->setRowWrapPolicy(QFormLayout::WrapAllRows);
 }
@@ -307,7 +343,7 @@ void InspectorWidget::buildUi() {
     m_header->setFixedHeight(ui::kRulerHeight);
     auto* head = new QHBoxLayout(m_header);
     head->setContentsMargins(8, 0, 4, 0);
-    head->setSpacing(6);
+    head->setSpacing(4);
     auto* title = new QLabel(tr("INSPECTOR"), m_header);
     title->setObjectName("InspectorTitle");
     m_collapseButton = new ui::IconButton(icons::Glyph::Sidebar,
@@ -322,10 +358,11 @@ void InspectorWidget::buildUi() {
     // ── Expanded content ──
     m_content = new QWidget(this);
     auto* col = new QVBoxLayout(m_content);
-    col->setContentsMargins(8, 8, 8, 8);
-    col->setSpacing(6);
+    col->setContentsMargins(6, 6, 6, 6);
+    col->setSpacing(5);
 
     m_nameEdit = new QLineEdit(m_content);
+    m_nameEdit->setObjectName(QStringLiteral("InspectorTrackName"));
     m_nameEdit->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     m_nameEdit->setPlaceholderText(tr("Track name"));
     // Same reasoning as the tempo field: nothing should own the keyboard until
@@ -342,7 +379,7 @@ void InspectorWidget::buildUi() {
 
     auto* colorRow = new QHBoxLayout;
     colorRow->setContentsMargins(0, 0, 0, 0);
-    colorRow->setSpacing(6);
+    colorRow->setSpacing(4);
     m_colorSwatch = new QWidget(m_content);
     m_colorSwatch->setFixedHeight(18);
     m_colorSwatch->setCursor(Qt::PointingHandCursor);
@@ -360,6 +397,8 @@ void InspectorWidget::buildUi() {
     m_clipsLabel = new QLabel(m_content);
     m_kindLabel->setWordWrap(true);
     m_kindLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_clipsLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_clipsLabel->setWordWrap(true);
 
     col->addWidget(ui::sectionLabel(tr("Track"), m_content));
     col->addWidget(m_nameEdit);
@@ -419,7 +458,7 @@ QDoubleSpinBox* InspectorWidget::addClipSpin(
     const QString help = tr("Drag up or down to adjust. Hold Shift for finer changes. Double-click or press Enter to type a value.");
     spin->setToolTip(label + QStringLiteral("\n") + help);
     spin->setAccessibleDescription(help);
-    form->addRow(label, spin);
+    addClipFormField(form, label, spin);
     m_clipSpins.insert(parameterId, spin);
     connect(spin, &QDoubleSpinBox::valueChanged, this,
             [this, spin, parameterId](double shown) {
@@ -448,14 +487,12 @@ QWidget* InspectorWidget::buildClipSection() {
     auto* section = new QWidget(m_content);
     section->setObjectName(QStringLiteral("InspectorClipSection"));
     auto* col = new QVBoxLayout(section);
-    col->setContentsMargins(6, 6, 6, 6);
+    col->setContentsMargins(5, 5, 5, 5);
     col->setSpacing(5);
 
     col->addWidget(ui::sectionLabel(tr("Audio clip"), section));
-    m_clipNameLabel = new QLabel(section);
+    m_clipNameLabel = new ClipNameLabel(section);
     m_clipNameLabel->setObjectName(QStringLiteral("InspectorClipName"));
-    m_clipNameLabel->setWordWrap(true);
-    m_clipNameLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     col->addWidget(m_clipNameLabel);
 
     auto* stretchTool = new QPushButton(tr("Stretch"), section);
@@ -477,7 +514,7 @@ QWidget* InspectorWidget::buildClipSection() {
                            tr("Vocal"), tr("Complex")});
     stretchMode->setAccessibleName(tr("Stretch mode"));
     stretchMode->setToolTip(tr("Stretch, Loop, Vocal and Complex follow project BPM and preserve clip length in beats. Resample keeps the original duration in seconds."));
-    playback->addRow(tr("Mode"), stretchMode);
+    addClipFormField(playback, tr("Mode"), stretchMode);
     m_clipCombos.insert(QStringLiteral("stretch.mode"), stretchMode);
 
     addClipSpin(playback, tr("Time"), QStringLiteral("stretch.time"),
@@ -491,7 +528,7 @@ QWidget* InspectorWidget::buildClipSection() {
     loopMode->setObjectName(QStringLiteral("InspectorLoopMode"));
     loopMode->addItems({tr("Off"), tr("Forward"), tr("Ping-Pong")});
     loopMode->setAccessibleName(tr("Loop mode"));
-    playback->addRow(tr("Loop"), loopMode);
+    addClipFormField(playback, tr("Loop"), loopMode);
     m_clipCombos.insert(QStringLiteral("loop.mode"), loopMode);
 
     auto* reverse = new ClipCheckBox(tr("Reverse"), section);
@@ -559,7 +596,7 @@ QWidget* InspectorWidget::buildClipSection() {
     auto* reverbType = new ClipModeComboBox(m_clipAdvanced);
     reverbType->addItems({tr("Room"), tr("Hall")});
     reverbType->setAccessibleName(tr("Reverb type"));
-    tone->addRow(tr("Reverb"), reverbType);
+    addClipFormField(tone, tr("Reverb"), reverbType);
     m_clipCombos.insert(QStringLiteral("pre.rev.type"), reverbType);
     addClipSpin(tone, tr("Reverb amount"), QStringLiteral("pre.rev"),
                 0.0, 100.0, 1.0, 0, QStringLiteral("%"), 0.01);
@@ -582,16 +619,6 @@ QWidget* InspectorWidget::buildClipSection() {
     addToggle(tr("Normalize"), QStringLiteral("pre.normalize"));
     addToggle(tr("Fade stereo"), QStringLiteral("pre.fadestereo"));
     addToggle(tr("Swap stereo"), QStringLiteral("pre.swap"));
-
-    for (auto* form : {playback, source, tone}) {
-        for (int row = 0; row < form->rowCount(); ++row) {
-            const auto* item = form->itemAt(row, QFormLayout::LabelRole);
-            if (auto* label = item ? qobject_cast<QLabel*>(item->widget()) : nullptr) {
-                label->setWordWrap(true);
-                label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-            }
-        }
-    }
 
     auto connectCombo = [this](QComboBox* combo, const QString& parameterId) {
         connect(combo, &QComboBox::currentIndexChanged, this,
@@ -639,6 +666,12 @@ bool InspectorWidget::eventFilter(QObject* watched, QEvent* event) {
         return true;
     }
     return QWidget::eventFilter(watched, event);
+}
+
+void InspectorWidget::setHeaderHeight(int height) {
+    height = std::max(ui::kRulerHeight, height);
+    m_header->setFixedHeight(height);
+    m_header->layout()->setContentsMargins(8, 0, 4, height - ui::kRulerHeight);
 }
 
 void InspectorWidget::setCollapsed(bool collapsed) {
@@ -735,7 +768,10 @@ void InspectorWidget::rebuild() {
             m_controller->project(), m_trackId.toStdString()));
         m_strip->setStretchable(false);
         m_strip->setInspectorCompact(true);
+        m_strip->setFixedWidth(kChannelWidth);
         connect(m_strip, &ChannelStrip::edited, this, &InspectorWidget::edited);
+        connect(m_strip, &ChannelStrip::trackRoutingEdited, this,
+                [this](const QString&) { emit edited(); });
         connect(m_strip, &ChannelStrip::editorRequested, this,
                 &InspectorWidget::pluginEditorRequested);
         connect(m_strip, &ChannelStrip::automateControlRequested, this,
@@ -775,6 +811,7 @@ void InspectorWidget::loadProperties() {
         m_clipId.clear();
         m_clipSection->hide();
         m_nameEdit->clear();
+        m_nameEdit->setToolTip({});
         m_kindLabel->setText(tr("No track selected"));
         m_clipsLabel->clear();
         m_colorSwatch->setStyleSheet(
@@ -784,6 +821,7 @@ void InspectorWidget::loadProperties() {
 
     if (!m_nameEdit->hasFocus())
         m_nameEdit->setText(QString::fromStdString(track->name));
+    m_nameEdit->setToolTip(QString::fromStdString(track->name));
     m_kindLabel->setText(
         tr("Type  %1").arg(QString::fromStdString(daw::toString(track->kind))));
     m_clipsLabel->setText(tr("Clips  %1").arg(track->clips.size()));
@@ -884,26 +922,29 @@ void InspectorWidget::applyTheme() {
 #InspectorTitle { color: %TEXT2%; font-size: 10px; font-weight: 700;
                   letter-spacing: 0.6px; }
 #InspectorPanel QLabel { color: %TEXT2%; font-size: 10px; }
+#InspectorTrackName { padding: 2px 4px; font-size: 11px; }
+#InspectorScrollArea QScrollBar:vertical { width: 6px; margin: 2px 0; }
 #InspectorClipSection { background: %WELL%; border: 1px solid %SEP%;
-                        border-radius: 6px; }
+                        border-radius: %RADIUS%px; }
 #InspectorClipName { color: %TEXT%; font-weight: 600; }
 #InspectorClipSection QCheckBox QLabel { color: %TEXT%; }
-#InspectorStretchTool { min-height: 18px; padding: 1px 4px; font-size: 11px; }
+#InspectorStretchTool { min-height: 18px; padding: 1px 3px; font-size: 10px; }
 #InspectorMoreClipSettings { color: %TEXT2%; background: transparent;
                              border: none; text-align: left; padding: 1px 0;
-                             min-height: 20px; font-size: 11px; }
+                             min-height: 20px; font-size: 10px; }
 #InspectorMoreClipSettings:hover, #InspectorMoreClipSettings:focus {
     color: %ACCENT%;
 }
 #InspectorClipSection QComboBox, #InspectorClipSection QDoubleSpinBox {
-    min-height: 16px; padding: 1px 4px; border-radius: 4px;
-    font-size: 11px; font-weight: 400;
+    min-height: 16px; padding: 1px 4px; border-radius: %RADIUS%px;
+    font-size: 10px; font-weight: 400;
 }
+#InspectorClipSection QComboBox::drop-down { width: 16px; }
 #InspectorClipSection QDoubleSpinBox QLineEdit {
     background: transparent; border: none; padding: 0; min-height: 0;
-    font-size: 11px;
+    font-size: 10px;
 }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%SURFACE%", t.surface.name())
         .replace("%TOOLBAR%", t.toolbarBackground.name())
         .replace("%HEADER%", mixColors(t.toolbarBackground,

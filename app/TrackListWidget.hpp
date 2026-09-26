@@ -1,5 +1,7 @@
 #pragma once
 
+class QMenu;
+
 #include <QRect>
 #include <QSet>
 #include <QString>
@@ -44,6 +46,7 @@ public:
     /// Put the arrangement actions into the ruler. The ruler owns the widget
     /// afterwards and keeps the project-wide M/S controls pinned on the right.
     void setRulerActions(QWidget* actions);
+    void setRulerHeight(int height);
 
     void rebuild();
     void refreshMeters();
@@ -105,6 +108,7 @@ public:
     QStringList selectedTrackIds() const { return m_selectedIds; }
     /// Open the same actions as a right-click on the primary selected track.
     bool showSelectedTrackActionsMenu();
+    bool populateSelectedTrackActionsMenu(QMenu& menu);
     void setSelectedTrack(const QString& id);
     void setSelectedTracks(const QStringList& ids, const QString& primary = {});
 
@@ -204,6 +208,7 @@ private:
     void applyHighlight();
     void applyTheme();
     void showTrackContextMenu(const QString& id, const QPoint& globalPos);
+    void populateTrackActionsMenu(QMenu& menu, const QString& id);
     /// Adapt a row to the resizable column. Level and pan become a compact
     /// round pair before either control has to disappear.
     void applyRowAdaptivity(const Row& row);

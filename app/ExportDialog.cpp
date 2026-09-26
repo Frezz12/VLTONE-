@@ -234,7 +234,7 @@ void ExportDialog::buildUi() {
 
     auto* header = new ui::GlassPanel(this);
     header->setShadowMargin(4);
-    header->setCornerRadius(16);
+    header->setCornerRadius(Theme::cornerRadius);
     header->setSubtleVerticalGradient(true);
     auto* headerRow = new QHBoxLayout(header);
     m_headerRow = headerRow;
@@ -597,7 +597,7 @@ void ExportDialog::buildUi() {
 
     auto* footer = new ui::GlassPanel(this);
     footer->setShadowMargin(4);
-    footer->setCornerRadius(14);
+    footer->setCornerRadius(Theme::cornerRadius);
     footer->setSubtleVerticalGradient(true);
     auto* footerLayout = new QVBoxLayout(footer);
     footerLayout->setContentsMargins(18, 14, 18, 14);
@@ -1230,18 +1230,18 @@ void ExportDialog::applyTheme() {
 QWidget { font-size: %FONT%px; }
 #ExportDialog, #ExportPage, QScrollArea { background: %BG%; color: %TEXT%; }
 QLabel, QCheckBox, QRadioButton { color: %TEXT%; background: transparent; }
-QGroupBox { background: %SURFACE%; border: 1px solid %SEP%; border-radius: 14px;
+QGroupBox { background: %SURFACE%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
             margin-top: 0; padding: 34px 16px 16px; }
 QGroupBox::title { subcontrol-origin: margin; left: 16px; top: 12px; padding: 0;
                    color: %TEXT%; font-size: %FONT%px; font-weight: 600; }
 QLineEdit, QComboBox, QDoubleSpinBox { background: %INPUT%; color: %TEXT%;
-    border: 1px solid %SEP%; border-radius: 7px; padding: 7px 9px; min-height: 20px;
+    border: 1px solid %SEP%; border-radius: %RADIUS%px; padding: 7px 9px; min-height: 20px;
     selection-background-color: %ACCENT%; selection-color: %ACCENT_INK%; }
 QLineEdit { placeholder-text-color: %PLACEHOLDER%; }
-QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus { border-color: %ACCENT%; }
+QLineEdit:focus, QDoubleSpinBox:focus { border-color: %ACCENT%; }
 QLineEdit:disabled, QComboBox:disabled, QDoubleSpinBox:disabled { color: %MUTED%; }
 QPushButton { background: %ELEVATED%; color: %TEXT%; border: 1px solid %SEP%;
-    border-radius: 8px; padding: 7px 12px; min-height: 20px; }
+    border-radius: %RADIUS%px; padding: 7px 12px; min-height: 20px; }
 QPushButton:hover { background: %HOVER%; border-color: %ACCENT%; }
 QPushButton:pressed { background: %TINT%; }
 QPushButton:focus { border-color: %ACCENT%; }
@@ -1251,8 +1251,8 @@ QRadioButton::indicator:unchecked {
     border: 1px solid %CONTROL_BORDER%; background: %WELL%; width: 12px; height: 12px; border-radius: 7px; }
 QRadioButton::indicator:hover { border-color: %ACCENT%; }
 QCheckBox:disabled, QRadioButton:disabled { color: %MUTED%; }
-QCheckBox:focus, QRadioButton:focus { color: %TEXT%; background: %TINT%; border-radius: 4px; }
-#ExportCover { background: %INPUT%; border: 1px dashed %CONTROL_BORDER%; border-radius: 12px; padding: 4px;
+QCheckBox:focus, QRadioButton:focus { color: %TEXT%; background: %TINT%; border-radius: %RADIUS%px; }
+#ExportCover { background: %INPUT%; border: 1px dashed %CONTROL_BORDER%; border-radius: %RADIUS%px; padding: 4px;
     min-width: 114px; max-width: 114px; min-height: 114px; max-height: 114px; }
 #ExportCover:hover { background: %HOVER%; border-style: solid; }
 #ExportCover:disabled { background: %WELL%; border-color: %SEP%; }
@@ -1265,11 +1265,11 @@ QCheckBox:focus, QRadioButton:focus { color: %TEXT%; background: %TINT%; border-
 #ExportTrackTitle { font-size: %TITLE%px; font-weight: 600; }
 #ExportSubtitle, #ExportCoverHint { color: %TEXT2%; }
 #ExportFormatBadge { color: %TEXT%; background: transparent; border: none; padding: 8px 0; }
-QTabWidget::pane { background: %SURFACE%; border: 1px solid %SEP%; border-radius: 12px; padding: 8px; }
-QTabBar::tab { color: %TEXT2%; background: transparent; padding: 9px 16px; margin: 0 4px 8px 0; border-radius: 7px; }
+QTabWidget::pane { background: %SURFACE%; border: 1px solid %SEP%; border-radius: %RADIUS%px; padding: 8px; }
+QTabBar::tab { color: %TEXT2%; background: transparent; padding: 9px 16px; margin: 0 4px 8px 0; border-radius: %RADIUS%px; }
 QTabBar::tab:selected { color: %TEXT%; background: %ELEVATED%; }
 QTabBar::tab:hover { background: %TINT%; }
-QListWidget { background: %WELL%; border: 1px solid %SEP%; border-radius: 7px;
+QListWidget { background: %WELL%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
               alternate-background-color: %ALT%; color: %TEXT%; }
 QListWidget::item { padding: 5px 6px; border: none; }
 QListWidget::item:selected { background: %TINT%; color: %TEXT%; }
@@ -1278,7 +1278,7 @@ QProgressBar::chunk { background: %TINT%; border-radius: 5px; }
 #ExportSummary { color: %TEXT%; font-size: %SUMMARY%px; font-weight: 600; }
 #ExportStatus { color: %TEXT2%; }
 #ExportWarning { color: %WARN%; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
                        .replace("%FONT%", QString::number(bodySize))
                        .replace("%HEADING%", QString::number(bodySize + 10))
                        .replace("%TITLE%", QString::number(bodySize + 4))

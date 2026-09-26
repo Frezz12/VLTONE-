@@ -1490,6 +1490,14 @@ Anything changed since — by the assistant or by you — is undone as well. One
         <source>Sample &amp; Hold</source>
         <translation>Выборка и хранение</translation>
     </message>
+    <message>
+        <source>Select All</source>
+        <translation>Выделить всё</translation>
+    </message>
+    <message>
+        <source>Clear Selection</source>
+        <translation>Снять выделение</translation>
+    </message>
 </context>
 <context>
     <name>BottomBar</name>
@@ -1904,6 +1912,38 @@ Will be skipped: %3</source>
 <context>
     <name>ChannelStrip</name>
     <message>
+        <source>Incoming tracks and buses</source>
+        <translation>Входящие треки и шины</translation>
+    </message>
+    <message>
+        <source>Incoming tracks and buses:
+%1</source>
+        <translation>Входящие треки и шины:
+%1</translation>
+    </message>
+    <message>
+        <source>Route this channel into the group. Uncheck to send it to Master.</source>
+        <translation>Направить канал в группу. Снимите галочку, чтобы вернуть его на мастер.</translation>
+    </message>
+    <message>
+        <source>No other channels</source>
+        <translation>Других каналов нет</translation>
+    </message>
+    <message>
+        <source>Sources: %1</source>
+        <translation>Входы: %1</translation>
+    </message>
+    <message>
+        <source>PK %1</source>
+        <translation>ПИК %1</translation>
+    </message>
+    <message>
+        <source>Maximum peak: %1 dBFS
+Click to reset</source>
+        <translation>Максимальный пик: %1 dBFS
+Нажмите для сброса</translation>
+    </message>
+    <message>
         <source>Stereo</source>
         <translation>Стерео</translation>
     </message>
@@ -2285,6 +2325,18 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <source>%1 is an instrument. Drop it on a MIDI or Pattern track.</source>
         <translation>%1 — инструмент. Перетащите его на MIDI-дорожку или дорожку паттерна.</translation>
     </message>
+  <message>
+    <source>More actions</source>
+    <translation>Другие действия</translation>
+  </message>
+  <message>
+    <source>Switch to post-fader</source>
+    <translation>Переключить после фейдера</translation>
+  </message>
+  <message>
+    <source>Switch to pre-fader</source>
+    <translation>Переключить до фейдера</translation>
+  </message>
 </context>
 <context>
     <name>ChordDialog</name>
@@ -2739,16 +2791,16 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <translation>Еще не подключено</translation>
     </message>
     <message>
-        <source>Start recording (R)</source>
-        <translation>Начать запись (R)</translation>
+        <source>Start recording</source>
+        <translation>Начать запись</translation>
     </message>
     <message>
-        <source>Cancel the count-in (R)</source>
-        <translation>Отменить подсчет (R)</translation>
+        <source>Cancel the count-in</source>
+        <translation>Отменить отсчёт</translation>
     </message>
     <message>
-        <source>Stop recording (R)</source>
-        <translation>Остановить запись (R)</translation>
+        <source>Stop recording</source>
+        <translation>Остановить запись</translation>
     </message>
     <message>
         <source>Clips: %1</source>
@@ -2777,6 +2829,18 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message>
         <source>Shared Plugins…</source>
         <translation>Общие плагины…</translation>
+    </message>
+    <message>
+        <source>Strip Silence…</source>
+        <translation>Strip Silence…</translation>
+    </message>
+    <message>
+        <source>Strip Silence settings…</source>
+        <translation>Настройки Strip Silence…</translation>
+    </message>
+    <message>
+        <source>Auto Silence — trim silence after recording</source>
+        <translation>Auto Silence — удалять тишину после записи</translation>
     </message>
 </context>
 <context>
@@ -3019,6 +3083,14 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message>
         <source>MIDI trigger (mock)</source>
         <translation>MIDI-триггер (имитация)</translation>
+    </message>
+    <message>
+        <source>Strip Silence</source>
+        <translation>Strip Silence</translation>
+    </message>
+    <message>
+        <source>Auto Silence and settings</source>
+        <translation>Auto Silence и настройки</translation>
     </message>
 </context>
 <context>
@@ -4162,6 +4234,16 @@ Up to 10 MB</source>
 </context>
 <context>
     <name>FileBrowserPanel</name>
+    <message><source>CLIPS</source><translation>КЛИПЫ</translation></message>
+    <message><source>Project clips</source><translation>Клипы проекта</translation></message>
+    <message><source>Search saved clips…</source><translation>Поиск сохранённых клипов…</translation></message>
+    <message><source>Save a copy
+Release to keep this clip in the project</source><translation>Сохранить копию
+Отпустите, чтобы сохранить клип в проекте</translation></message>
+    <message><source>Could not restore clip: %1</source><translation>Не удалось восстановить клип: %1</translation></message>
+    <message><source>Could not save clip: %1</source><translation>Не удалось сохранить клип: %1</translation></message>
+    <message><source>Saved clip restored</source><translation>Сохранённый клип восстановлен</translation></message>
+    <message><source>Clip copy saved in this project</source><translation>Копия клипа сохранена в проекте</translation></message>
     <message>
         <source>Search files and plugins…</source>
         <translation>Поиск файлов и плагинов…</translation>
@@ -4335,6 +4417,14 @@ Up to 10 MB</source>
         <translation>Открыть «%1» как вкладку</translation>
     </message>
     <message>
+        <source>Open Folder as Icon Tab…</source>
+        <translation>Открыть папку вкладкой-иконкой…</translation>
+    </message>
+    <message>
+        <source>Open Folder as Icon Tab</source>
+        <translation>Открыть папку вкладкой-иконкой</translation>
+    </message>
+    <message>
         <source>New Collection Folder…</source>
         <translation>Новая папка-коллекция…</translation>
     </message>
@@ -4453,6 +4543,10 @@ Up to 10 MB</source>
     <message>
         <source>Show as Icon Tab…</source>
         <translation>Показать вкладкой-иконкой…</translation>
+    </message>
+    <message>
+        <source>Open Folder as Icon Tab…</source>
+        <translation>Открыть папку вкладкой-иконкой…</translation>
     </message>
     <message>
         <source>Rename Folder…</source>
@@ -5541,6 +5635,10 @@ Up to 10 MB</source>
 <context>
     <name>MainWindow</name>
     <message>
+        <source>Plugin scan could not finish. Open Plugin Manager for details.</source>
+        <translation>Не удалось завершить сканирование. Подробности — в менеджере плагинов.</translation>
+    </message>
+    <message>
         <source>Navigation</source>
         <translation>Навигация</translation>
     </message>
@@ -6447,6 +6545,14 @@ Up to 10 MB</source>
     <message>
         <source>Display the transport and ruler position as clock time.</source>
         <translation>Показывать позицию транспорта и линейки как время.</translation>
+    </message>
+    <message>
+        <source>Show Bars and Time</source>
+        <translation>Показывать такты и время</translation>
+    </message>
+    <message>
+        <source>Display bars and clock time in two ruler rows.</source>
+        <translation>Показывать такты и время в двух рядах линейки.</translation>
     </message>
     <message>
         <source>Enable Snap</source>
@@ -7903,6 +8009,98 @@ The current project has not been changed.</source>
         <source>Loaded “%1” into the selected MIDI channel</source>
         <translation>«%1» загружен в выбранный MIDI-канал</translation>
     </message>
+    <message>
+        <source>Selection Actions</source>
+        <translation>Действия с выделением</translation>
+    </message>
+    <message>
+        <source>Selected Track Actions</source>
+        <translation>Действия с выбранной дорожкой</translation>
+    </message>
+    <message>
+        <source>Browser Selection Actions</source>
+        <translation>Действия с выбранным элементом браузера</translation>
+    </message>
+    <message>
+        <source>Current Icon Tab Actions</source>
+        <translation>Действия с текущей вкладкой</translation>
+    </message>
+    <message>
+        <source>No applicable selection</source>
+        <translation>Нет подходящего выделения</translation>
+    </message>
+    <message>
+        <source>Piano Roll Actions</source>
+        <translation>Действия в пианоролле</translation>
+    </message>
+    <message>
+        <source>Pattern Editor Actions</source>
+        <translation>Действия в редакторе паттернов</translation>
+    </message>
+    <message>
+        <source>Open the Piano Roll first</source>
+        <translation>Сначала откройте пианоролл</translation>
+    </message>
+    <message>
+        <source>Select a source in the Pattern Editor first</source>
+        <translation>Сначала выберите источник в редакторе паттернов</translation>
+    </message>
+    <message>
+        <source>Show Counter as Bars</source>
+        <translation>Показывать счётчик в тактах</translation>
+    </message>
+    <message>
+        <source>Show Counter as Time</source>
+        <translation>Показывать счётчик в единицах времени</translation>
+    </message>
+    <message>
+        <source>Display the position counter in bars and beats without changing the ruler.</source>
+        <translation>Показывать счётчик позиции в тактах и долях, не меняя линейку.</translation>
+    </message>
+    <message>
+        <source>Display the position counter as clock time without changing the ruler.</source>
+        <translation>Показывать счётчик позиции в единицах времени, не меняя линейку.</translation>
+    </message>
+    <message>
+        <source>Stretch</source>
+        <translation>Растяжение</translation>
+    </message>
+    <message>
+        <source>Glue</source>
+        <translation>Склейка</translation>
+    </message>
+    <message>
+        <source>Add MIDI Clip at Playhead</source>
+        <translation>Добавить MIDI-клип у курсора воспроизведения</translation>
+    </message>
+    <message>
+        <source>Add Pattern Clip at Playhead</source>
+        <translation>Добавить клип паттерна у курсора воспроизведения</translation>
+    </message>
+    <message>
+        <source>Automation Editor Actions</source>
+        <translation>Действия в редакторе автоматизации</translation>
+    </message>
+    <message>
+        <source>Open an Automation Editor first</source>
+        <translation>Сначала откройте редактор автоматизации</translation>
+    </message>
+    <message>
+        <source>Strip Silence…</source>
+        <translation>Strip Silence…</translation>
+    </message>
+    <message>
+        <source>Remove silence from the selected audio clips</source>
+        <translation>Удалить тишину из выбранных аудиоклипов</translation>
+    </message>
+    <message>
+        <source>Strip Silence complete</source>
+        <translation>Удаление тишины завершено</translation>
+    </message>
+    <message>
+        <source>Auto Silence: audio retained without trimming. %1</source>
+        <translation>Auto Silence: запись сохранена без обрезки. %1</translation>
+    </message>
 </context>
 <context>
     <name>MixerWidget</name>
@@ -7917,6 +8115,26 @@ The current project has not been changed.</source>
     <message>
         <source>Mixer settings</source>
         <translation>Настройки микшера</translation>
+    </message>
+    <message>
+        <source>Master</source>
+        <translation>Мастер</translation>
+    </message>
+    <message>
+        <source>Hide master channel</source>
+        <translation>Скрыть мастер-канал</translation>
+    </message>
+    <message>
+        <source>Show master channel</source>
+        <translation>Показать мастер-канал</translation>
+    </message>
+    <message>
+        <source>Drag right to hide Master. Click to toggle.</source>
+        <translation>Потяните вправо, чтобы скрыть мастер-канал. Нажатие скрывает или показывает его.</translation>
+    </message>
+    <message>
+        <source>Drag left to show Master. Click to toggle.</source>
+        <translation>Потяните влево, чтобы показать мастер-канал. Нажатие скрывает или показывает его.</translation>
     </message>
 </context>
 <context>
@@ -8882,9 +9100,17 @@ Click to load. Drag onto Audio FX.</source>
         <source>MIDI could not be applied</source>
         <translation>Не удалось применить MIDI</translation>
     </message>
+    <message>
+        <source>Source</source>
+        <translation>Источник</translation>
+    </message>
 </context>
 <context>
     <name>PianoRollView</name>
+    <message>
+        <source>Local range for copying and repeating notes. Double-click to clear; the timeline loop is unchanged.</source>
+        <translation>Область для копирования и повтора нот. Двойной щелчок убирает выделение. Луп таймлайна не меняется.</translation>
+    </message>
     <message>
         <source>Note Colour</source>
         <translation>Цвет нот</translation>
@@ -8980,6 +9206,19 @@ Click to load. Drag onto Audio FX.</source>
 </context>
 <context>
     <name>PianoRollWindow</name>
+    <message><source>Piano roll settings</source><translation>Настройки редактора нот</translation></message>
+    <message><source>Import MIDI File…</source><translation>Импорт MIDI-файла…</translation></message>
+    <message><source>Export MIDI File…</source><translation>Экспорт MIDI-файла…</translation></message>
+    <message><source>Replace this clip's notes; the project tempo stays unchanged. Undo restores the original notes.</source><translation>Заменить ноты этого клипа, сохранив темп проекта. Отмена вернёт исходные ноты.</translation></message>
+    <message><source>Export the audible notes in this clip as a MIDI file.</source><translation>Экспортировать звучащие ноты этого клипа в MIDI-файл.</translation></message>
+    <message><source>MIDI files (*.mid *.midi);;All files (*)</source><translation>MIDI-файлы (*.mid *.midi);;Все файлы (*)</translation></message>
+    <message><source>MIDI files (*.mid *.midi)</source><translation>MIDI-файлы (*.mid *.midi)</translation></message>
+    <message><source>Could not import MIDI</source><translation>Не удалось импортировать MIDI</translation></message>
+    <message><source>Could not export MIDI</source><translation>Не удалось экспортировать MIDI</translation></message>
+    <message><source>Could not read the MIDI file: %1</source><translation>Не удалось прочитать MIDI-файл: %1</translation></message>
+    <message><source>Could not create the MIDI file: %1</source><translation>Не удалось создать MIDI-файл: %1</translation></message>
+    <message><source>This MIDI file contains no notes.</source><translation>В этом MIDI-файле нет нот.</translation></message>
+    <message><source>The MIDI clip is no longer available or cannot be edited.</source><translation>MIDI-клип больше недоступен или его нельзя редактировать.</translation></message>
     <message>
         <source>Piano Roll</source>
         <translation>Редактор нот</translation>
@@ -9886,6 +10125,10 @@ Click to load. Drag onto Audio FX.</source>
 </context>
 <context>
     <name>PluginManagerWindow</name>
+    <message>
+        <source>Scan stopped. Hover for details.</source>
+        <translation>Сканирование остановлено. Наведите курсор, чтобы узнать причину.</translation>
+    </message>
     <message>
         <source>Plugin Manager — %1</source>
         <translation>Менеджер плагинов — %1</translation>
@@ -11059,6 +11302,14 @@ Off: recording never touches monitoring — a track is only heard live if you sw
 Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inverts the mode for that take only. E opens the comp editor on the selected clip; hold A and click a layer to audition it.</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Strip Silence settings…</source>
+        <translation>Настройки Strip Silence…</translation>
+    </message>
+    <message>
+        <source>Auto Silence — trim silence after recording</source>
+        <translation>Auto Silence — удалять тишину после записи</translation>
+    </message>
 </context>
 <context>
     <name>RecoverySettingsPage</name>
@@ -11802,6 +12053,10 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
 </context>
 <context>
     <name>SettingsWindow</name>
+    <message>
+        <source>Studio Gray</source>
+        <translation>Студийная серая</translation>
+    </message>
     <message>
         <source>Close</source>
         <translation>Закрыть</translation>
@@ -12868,6 +13123,38 @@ Reassign it to &quot;%3&quot;?</source>
         <source>Plugin menu background</source>
         <translation>Фон меню плагинов</translation>
     </message>
+  <message>
+    <source>Channel width and console layout.</source>
+    <translation>Ширина каналов и компоновка микшера.</translation>
+  </message>
+  <message>
+    <source>Mixer</source>
+    <translation>Микшер</translation>
+  </message>
+  <message>
+    <source>Channel strips</source>
+    <translation>Полосы каналов</translation>
+  </message>
+  <message>
+    <source>Channel width</source>
+    <translation>Ширина канала</translation>
+  </message>
+  <message>
+    <source> px</source>
+    <translation> пкс</translation>
+  </message>
+  <message>
+    <source>Narrow channels show more tracks. Wider channels leave more room for names and controls. Changes apply immediately and are saved for every project.</source>
+    <translation>Узкие полосы позволяют видеть больше каналов. Широкие оставляют больше места для названий и элементов управления. Изменения применяются сразу и сохраняются для всех проектов.</translation>
+  </message>
+  <message>
+    <source>Reset to %1 px</source>
+    <translation>Сбросить до %1 пкс</translation>
+  </message>
+  <message>
+    <source>Drag the top edge of the mixer to change its height. Faders use the available height; a short mixer scrolls to keep every control accessible.</source>
+    <translation>Чтобы изменить высоту микшера, перетащите его верхнюю границу. Фейдеры занимают доступную высоту; при недостатке места все элементы доступны через прокрутку.</translation>
+  </message>
 </context>
 <context>
     <name>SpectrumMeter</name>
@@ -13238,6 +13525,9 @@ Reassign it to &quot;%3&quot;?</source>
 </context>
 <context>
     <name>TimelineWidget</name>
+    <message><source>Save to project clips</source><translation>Сохранить в клипы проекта</translation></message>
+    <message><source>Could not restore clip: %1</source><translation>Не удалось восстановить клип: %1</translation></message>
+    <message><source>Saved clip restored</source><translation>Сохранённый клип восстановлен</translation></message>
     <message>
         <source>Timeline horizontal scroll</source>
         <translation>Горизонтальная прокрутка таймлайна</translation>
@@ -13608,6 +13898,30 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <source>Shared Plugins…</source>
         <translation>Общие плагины…</translation>
     </message>
+    <message>
+        <source>Takes</source>
+        <translation>Дубли</translation>
+    </message>
+    <message>
+        <source>Automation</source>
+        <translation>Автоматизация</translation>
+    </message>
+    <message>
+        <source>Points</source>
+        <translation>Точки</translation>
+    </message>
+    <message>
+        <source>Point %1</source>
+        <translation>Точка %1</translation>
+    </message>
+    <message>
+        <source>Strip Silence…</source>
+        <translation>Strip Silence…</translation>
+    </message>
+    <message>
+        <source>Remove silence from the selected audio clips</source>
+        <translation>Удалить тишину из выбранных аудиоклипов</translation>
+    </message>
 </context>
 <context>
     <name>ToolDialog</name>
@@ -13888,6 +14202,26 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
 </context>
 <context>
     <name>TransportBar</name>
+    <message>
+        <source>Bars and time</source>
+        <translation>Такты и время</translation>
+    </message>
+    <message>
+        <source>Timeline ruler — %1</source>
+        <translation>Линейка таймлайна — %1</translation>
+    </message>
+    <message>
+        <source>Meter</source>
+        <translation>Размер</translation>
+    </message>
+    <message>
+        <source>Grid</source>
+        <translation>Сетка</translation>
+    </message>
+    <message>
+        <source>Ruler</source>
+        <translation>Линейка</translation>
+    </message>
     <message>
         <source>Stretch</source>
         <translation>Растягивание</translation>
@@ -14224,6 +14558,14 @@ Restart: when playback is paused, Space jumps back to the position where the cur
 </context>
 <context>
     <name>UndoCommands</name>
+    <message><source>Save Clip to Library</source><translation>Сохранить клип в хранилище</translation></message>
+    <message><source>Rename Library Clip</source><translation>Переименовать сохранённый клип</translation></message>
+    <message><source>Remove Library Clip</source><translation>Удалить сохранённый клип</translation></message>
+    <message><source>Restore Library Clip</source><translation>Восстановить сохранённый клип</translation></message>
+    <message>
+        <source>Set Track Output</source>
+        <translation>Изменить выход трека</translation>
+    </message>
     <message><source>Change Modulation Parameter</source><translation>Изменить параметр модуляции</translation></message>
     <message><source>Apply Modulation Preset</source><translation>Применить пресет модуляции</translation></message>
     <message>
@@ -14533,6 +14875,10 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message>
         <source>Change Note Length</source>
         <translation>Изменить длину ноты</translation>
+    </message>
+    <message>
+        <source>Strip Silence</source>
+        <translation>Удалить тишину</translation>
     </message>
 </context>
 <context>
@@ -15502,6 +15848,10 @@ Double-click to rename</source>
 <context>
     <name>ui::LevelMeter</name>
     <message>
+        <source>Peak level · click to reset the maximum and clip indicator</source>
+        <translation>Пиковый уровень · нажмите, чтобы сбросить максимум и индикатор перегрузки</translation>
+    </message>
+    <message>
         <source>Level · click to clear the clip indicator</source>
         <translation>Уровень · нажмите, чтобы сбросить индикатор клипа</translation>
     </message>
@@ -16307,6 +16657,233 @@ Use File → Save as Template… to create one.</source>
     <message>
         <source>The project could not accept the VLT Pitch settings.</source>
         <translation>Не удалось применить настройки VLT Pitch к проекту.</translation>
+    </message>
+</context>
+<context>
+    <name>ClipLibraryView</name>
+    <message><source>Audio</source><translation>Аудио</translation></message>
+    <message><source>Automation</source><translation>Автоматизация</translation></message>
+    <message><source>%1 beats</source><translation>%1 долей</translation></message>
+    <message><source>Waveform preview</source><translation>Превью волны</translation></message>
+    <message><source>Saved clips</source><translation>Сохранённые клипы</translation></message>
+    <message><source>%1
+Drag to the timeline, or right-click to restore.</source><translation>%1
+Перетащите на таймлайн или нажмите правой кнопкой для восстановления.</translation></message>
+    <message><source>Drag a clip here to keep a copy.
+Saved with this project.</source><translation>Перетащите сюда клип, чтобы сохранить копию.
+Хранится вместе с проектом.</translation></message>
+    <message><source>No matching clips</source><translation>Клипы не найдены</translation></message>
+    <message><source>Insert at original position</source><translation>Вставить на исходное место</translation></message>
+    <message><source>Insert on a new track at playhead</source><translation>Вставить на новую дорожку у курсора</translation></message>
+    <message><source>Rename…</source><translation>Переименовать…</translation></message>
+    <message><source>Rename saved clip</source><translation>Переименовать сохранённый клип</translation></message>
+    <message><source>Name</source><translation>Название</translation></message>
+    <message><source>Remove from saved clips</source><translation>Удалить из сохранённых клипов</translation></message>
+</context>
+<context>
+    <name>StripSilenceDialog</name>
+    <message>
+        <source>Silence boundaries preview</source>
+        <translation>Предпросмотр границ тишины</translation>
+    </message>
+    <message>
+        <source>Threshold %1 dB</source>
+        <translation>Порог %1 дБ</translation>
+    </message>
+    <message>
+        <source>Auto Silence settings</source>
+        <translation>Настройки Auto Silence</translation>
+    </message>
+    <message>
+        <source>Clean up recorded audio automatically with these settings.</source>
+        <translation>Автоматически удалять тишину после записи с этими настройками.</translation>
+    </message>
+    <message>
+        <source>Remove silence and keep every sound in its original position.</source>
+        <translation>Удаление тишины с сохранением положения каждого звука на таймлайне.</translation>
+    </message>
+    <message>
+        <source>Preview clip</source>
+        <translation>Клип для предпросмотра</translation>
+    </message>
+    <message>
+        <source>Threshold</source>
+        <translation>Порог</translation>
+    </message>
+    <message>
+        <source>Sound must reach this level to open a region. Analysis is before Clip FX.</source>
+        <translation>Участок начинается, когда сигнал достигает этого уровня. Анализ выполняется до Clip FX.</translation>
+    </message>
+    <message>
+        <source> dB</source>
+        <translation> дБ</translation>
+    </message>
+    <message>
+        <source> ms</source>
+        <translation> мс</translation>
+    </message>
+    <message>
+        <source>Before sound</source>
+        <translation>До звука</translation>
+    </message>
+    <message>
+        <source>Keep this much audio before each detected onset.</source>
+        <translation>Запас перед началом каждого обнаруженного звука.</translation>
+    </message>
+    <message>
+        <source>Hysteresis</source>
+        <translation>Гистерезис</translation>
+    </message>
+    <message>
+        <source>Once a region opens, retain its quieter tail this many dB below the threshold.</source>
+        <translation>После начала звука сохранять его затухание до уровня на столько дБ ниже порога.</translation>
+    </message>
+    <message>
+        <source>After sound</source>
+        <translation>После звука</translation>
+    </message>
+    <message>
+        <source>Keep this much audio after each detected tail.</source>
+        <translation>Запас после окончания каждого обнаруженного звука.</translation>
+    </message>
+    <message>
+        <source>Minimum silence</source>
+        <translation>Мин. тишина</translation>
+    </message>
+    <message>
+        <source>Shorter pauses stay inside the same region.</source>
+        <translation>Более короткие паузы остаются внутри фрагмента.</translation>
+    </message>
+    <message>
+        <source>Edge fades</source>
+        <translation>Фейды по краям</translation>
+    </message>
+    <message>
+        <source>Add short volume fades at new cuts to prevent clicks.</source>
+        <translation>Добавлять короткие фейды на новых срезах, чтобы избежать щелчков.</translation>
+    </message>
+    <message>
+        <source>Minimum sound</source>
+        <translation>Мин. звук</translation>
+    </message>
+    <message>
+        <source>Discard shorter fragments, such as isolated clicks or noise.</source>
+        <translation>Убирать более короткие фрагменты, например отдельные щелчки или шум.</translation>
+    </message>
+    <message>
+        <source>Align edges to grid</source>
+        <translation>Края по сетке</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>Выкл.</translation>
+    </message>
+    <message>
+        <source>%1 beats</source>
+        <translation>%1 долей</translation>
+    </message>
+    <message>
+        <source>Expand edges outward to the project grid. Onsets and tails are never cut short.</source>
+        <translation>Расширять края до сетки проекта, сохраняя начало и затухание звуков.</translation>
+    </message>
+    <message>
+        <source>Split internal silence</source>
+        <translation>Вырезать паузы внутри</translation>
+    </message>
+    <message>
+        <source>Off: trim only the beginning and end of each clip.</source>
+        <translation>Если выключено, обрезается только начало и конец клипа.</translation>
+    </message>
+    <message>
+        <source>Auto Silence after recording</source>
+        <translation>Auto Silence после записи</translation>
+    </message>
+    <message>
+        <source>Apply these settings to recorded audio when recording stops. Recording and cleanup share one Undo.</source>
+        <translation>Применять эти настройки к аудио после остановки записи. Запись и обработка отменяются одним действием.</translation>
+    </message>
+    <message>
+        <source>Silence analysis result</source>
+        <translation>Результат анализа тишины</translation>
+    </message>
+    <message>
+        <source>Reset settings</source>
+        <translation>Сбросить настройки</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Закрыть</translation>
+    </message>
+    <message>
+        <source>Done</source>
+        <translation>Готово</translation>
+    </message>
+    <message>
+        <source>Apply</source>
+        <translation>Применить</translation>
+    </message>
+    <message>
+        <source>Select an audio clip to preview silence boundaries.
+These settings are shared with Auto Silence.</source>
+        <translation>Выберите аудиоклип для предпросмотра границ.
+Эти же настройки используются в Auto Silence.</translation>
+    </message>
+    <message>
+        <source>Audio could not be analyzed.</source>
+        <translation>Не удалось проанализировать аудио.</translation>
+    </message>
+    <message>
+        <source>The same settings will be applied to %1 clips. Choose a clip to preview its boundaries.</source>
+        <translation>Настройки применятся к %1 клипам. Выберите клип для предпросмотра его границ.</translation>
+    </message>
+    <message>
+        <source>Apply to %1 clips</source>
+        <translation>Применить к %1 клипам</translation>
+    </message>
+    <message>
+        <source>Analyzing audio…</source>
+        <translation>Анализ аудио…</translation>
+    </message>
+    <message>
+        <source>Preparing the waveform. You can adjust the settings now.</source>
+        <translation>Подготовка волны. Уже можно менять настройки.</translation>
+    </message>
+    <message>
+        <source>Last settings are remembered. Auto Silence processes audio clips only.</source>
+        <translation>Последние настройки запоминаются. Auto Silence обрабатывает только аудио.</translation>
+    </message>
+    <message>
+        <source>No sound above the threshold. This clip will be removed; Undo restores it.</source>
+        <translation>Звука выше порога нет. Клип будет удалён; его можно вернуть отменой.</translation>
+    </message>
+    <message>
+        <source>No silence to remove with these settings.</source>
+        <translation>С этими настройками тишины для удаления нет.</translation>
+    </message>
+    <message>
+        <source>%1 fragments · %2 s of silence removed
+Colored regions stay in place. The original audio file is preserved.</source>
+        <translation>Фрагментов: %1 · Удалится %2 с тишины
+Цветные участки останутся на месте. Исходный аудиофайл сохранится.</translation>
+    </message>
+    <message>
+        <source>Strip Silence</source>
+        <translation>Strip Silence</translation>
+    </message>
+</context>
+<context>
+    <name>LoudnessDisplay</name>
+    <message>
+        <source>Master loudness (LUFS)
+M · 400 ms: %1
+S · 3 s: %2
+I · since reset: %3
+I measures during playback. Click to reset.</source>
+        <translation>Громкость мастера (LUFS)
+M · 400 мс: %1
+S · 3 с: %2
+I · с момента сброса: %3
+I измеряется при воспроизведении. Нажмите для сброса.</translation>
     </message>
 </context>
 </TS>

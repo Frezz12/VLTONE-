@@ -31,6 +31,7 @@ public:
     /// Sampler instance and all of its controls.
     bool replaceSelectedSample(const QString& path);
     void refresh();
+    bool populateActionsMenu(QMenu& menu);
     bool checkInteractionGesturesForTest();
     static bool checkEditingForTest();
 
@@ -80,6 +81,7 @@ private:
     bool replaceSourceNotes(const QString& trackId,
                             std::vector<daw::NoteModel> notes,
                             double lengthBeats, const std::string& label);
+    void populateSelectionMenu(QMenu& menu, const QString& trackId);
     void showSelectionMenu(const QString& trackId, const QPoint& globalPos);
     void beginRowGesture(const QString& trackId, const QPoint& globalPos,
                          Qt::KeyboardModifiers modifiers);

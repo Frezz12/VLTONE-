@@ -46,6 +46,7 @@ Status RealtimeEngine::prepare(SampleRate sampleRate, FrameCount maxBlockSize,
     m_prepareInfo.offline = offline;
     m_transport.setSampleRate(sampleRate);
     prepareMasterSpectrum(sampleRate);
+    m_masterLoudness.prepare(sampleRate);
 
     m_offlineStorage.assign(std::size_t(channels) * maxBlockSize, 0.0f);
     m_offlinePointers.resize(channels);
@@ -148,14 +149,16 @@ Status RealtimeEngine::commitGraph(bool reconfigureNodes) {
 
 void RealtimeEngine::updateMasterMeters(const AudioBlock& output,
                                         FrameCount frames) noexcept {
-    if (output.numChannels() > 0) {
-        m_masterPeakL.store(dsp::peak(output.channel(0).first(frames)),
-                            std::memory_order_relaxed);
-    }
-    if (output.numChannels() > 1) {
-        m_masterPeakR.store(dsp::peak(output.channel(1).first(frames)),
-                            std::memory_order_relaxed);
-    }
+    const float left = output.numChannels() > 0
+        ? dsp::peak(output.channel(0).first(frames)) : 0.0f;
+    const float right = output.numChannels() > 1
+        ? dsp::peak(output.channel(1).first(frames)) : 0.0f;
+    m_masterPeakL.store(left, std::memory_order_relaxed);
+    m_masterPeakR.store(right, std::memory_order_relaxed);
+    m_masterPeakHold.observe(std::max(left, right));
+    // Read the final master output, after its inserts/fader. M/S remain live
+    // for monitoring; I accumulates only while the transport is running.
+    m_masterLoudness.process(output, frames, m_transport.isPlaying());
 
     if (m_masterSpectrumConsumers.load(std::memory_order_acquire) == 0) {
         if (m_masterSpectrumActive) {

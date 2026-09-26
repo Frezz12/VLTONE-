@@ -1012,11 +1012,10 @@ QTabBar::tab:selected { color: %3; border-bottom-color: %2; }
 QTabBar::tab:focus { background: %8; }
 #NotebookSaveStatus { color: %4; font-size: 11px; }
 #NotebookSaveStatus[error="true"] { color: %5; }
-QComboBox, QToolButton { background: %6; color: %3; border: 1px solid %7; border-radius: 7px; padding: 3px 7px; }
-QComboBox { border-radius: 0; }
-QComboBox:focus, QToolButton:focus { border: 2px solid %2; }
+QComboBox, QToolButton { background: %6; color: %3; border: 1px solid %7; border-radius: %RADIUS%px; padding: 3px 7px; }
+QComboBox:focus, QToolButton:focus { border: 1px solid %7; }
 QToolButton:hover { background: %8; }
-)CSS")
+)CSS").replace("%RADIUS%", QString::number(Theme::cornerRadius))
                                  .arg(chrome.name(), edge.name(),
                                       theme.textPrimary.name(),
                                       theme.textSecondary.name(),
@@ -1036,13 +1035,13 @@ QToolButton:hover { background: %8; }
 #NotebookTimedTextTitle { color: %3; font-size: 11px; font-weight: 700; letter-spacing: 1.3px; }
 #NotebookTimedTextHelp, #NotebookTimedTextStatus, #NotebookCuePosition { color: %4; font-size: 11px; }
 #NotebookTimedTextStatus[error="true"] { color: %5; }
-QTableWidget { background: %6; alternate-background-color: %7; color: %3; border: 1px solid %2; border-radius: 8px; gridline-color: %2; }
+QTableWidget { background: %6; alternate-background-color: %7; color: %3; border: 1px solid %2; border-radius: %RADIUS%px; gridline-color: %2; }
 QTableWidget::item:selected { background: %8; color: %3; }
 QHeaderView::section { background: %7; color: %4; border: 0; border-bottom: 1px solid %2; padding: 5px; }
-#NotebookCuePreview { color: %3; background: %7; padding: 8px; border-radius: 6px; }
-QLineEdit { background: %6; color: %3; border: 1px solid %2; border-radius: 6px; padding: 6px; }
-QComboBox:focus, QPushButton:focus, QLineEdit:focus { border: 2px solid %9; }
-)CSS")
+#NotebookCuePreview { color: %3; background: %7; padding: 8px; border-radius: %RADIUS%px; }
+QLineEdit { background: %6; color: %3; border: 1px solid %2; border-radius: %RADIUS%px; padding: 6px; }
+QPushButton:focus, QLineEdit:focus { border: 2px solid %9; }
+)CSS").replace("%RADIUS%", QString::number(Theme::cornerRadius))
                                              .arg(
                                                  panel.name(QColor::HexArgb),
                                                  theme.separator().name(),

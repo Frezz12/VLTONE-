@@ -648,21 +648,21 @@ void OfflineRenderDialog::applyTheme() {
 #OfflineRenderProgress { background: %WELL%; border: none; border-radius: 2px; }
 #OfflineRenderProgress::chunk { background: %ACCENT%; border-radius: 2px; }
 #OfflinePresetPanel, #OfflineClipsPanel {
-    background: %SURFACE%; border: 1px solid %SEP%; border-radius: 10px;
+    background: %SURFACE%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
 }
 #OfflinePresetTitle { color: %TEXT%; font-weight: 600; }
 #OfflinePresetSave {
     background: transparent; color: %TEXT2%; border: 1px solid %SEP%;
-    border-radius: 6px; padding: 2px 8px;
+    border-radius: %RADIUS%px; padding: 2px 8px;
 }
 #OfflinePresetSave:hover { color: %TEXT%; background: %HOVER%; border-color: %ACCENT%; }
 #OfflinePresetCards {
     background: %WELL%; color: %TEXT%; border: 1px solid %SEP%;
-    border-radius: 7px; outline: none;
+    border-radius: %RADIUS%px; outline: none;
 }
 #OfflinePresetCards::item {
     background: %ELEVATED%; color: %TEXT%; border: 1px solid %SEP%;
-    border-radius: 7px; padding: 5px; margin: 2px;
+    border-radius: %RADIUS%px; padding: 5px; margin: 2px;
 }
 #OfflinePresetCards::item:hover { background: %HOVER%; border-color: %ACCENT%; }
 #OfflinePresetCards::item:selected { background: %SELECTED%; border-color: %ACCENT%; }
@@ -674,12 +674,12 @@ void OfflineRenderDialog::applyTheme() {
 }
 #OfflineRenderClips {
     background: %WELL%; color: %TEXT%; border: 1px solid %SEP%;
-    border-radius: 7px; alternate-background-color: %ALT%; outline: none;
+    border-radius: %RADIUS%px; alternate-background-color: %ALT%; outline: none;
 }
 #OfflineRenderClips::item { border: none; padding: 4px 6px; }
 #OfflineRenderClips::item:selected { background: %SELECTED%; color: %TEXT%; }
 #OfflineAutoRender, #OfflineRenderStart {
-    min-height: 20px; padding: 3px 10px; border-radius: 7px;
+    min-height: 20px; padding: 3px 10px; border-radius: %RADIUS%px;
 }
 #OfflineAutoRender:checked, #OfflineRenderStart {
     background: %SELECTED%; color: %TEXT%; border: 1px solid %ACCENT%;
@@ -687,7 +687,7 @@ void OfflineRenderDialog::applyTheme() {
 }
 #OfflineAutoRender:checked:hover, #OfflineRenderStart:hover { background: %HOVER%; }
 #OfflineAutoRender:disabled, #OfflineRenderStart:disabled { color: %TEXT2%; border-color: %SEP%; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%BG%", t.background.name())
         .replace("%SURFACE%", t.surface.name())
         .replace("%ELEVATED%", t.surfaceElevated.name())

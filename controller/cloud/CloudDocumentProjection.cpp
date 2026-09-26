@@ -99,6 +99,11 @@ CloudDocumentProjection projectForCloudSnapshotV1(const ProjectModel& source) {
     }
 
     ProjectModel& document = projection.document;
+    if (!document.clipLibrary.empty()) {
+        projection.blockers.push_back({CloudProjectionIssueKind::PublishBlocker,
+            "project/clipLibrary", "Project clip libraries are not supported by the current cloud format."});
+        document.clipLibrary.clear();
+    }
     document.coverImagePath.clear();
     document.loopStartSeconds = 0.0;
     document.loopEndSeconds = 0.0;
@@ -186,6 +191,10 @@ CloudDocumentProjection projectForCloudSnapshotV1(const ProjectModel& source) {
 
 bool containsLocalPathOrUiState(const ProjectModel& document,
                                 std::string* firstLocation) {
+    if (!document.clipLibrary.empty()) {
+        if (firstLocation) *firstLocation = "project/clipLibrary";
+        return true;
+    }
     if (!document.coverImagePath.empty()) {
         if (firstLocation) *firstLocation = "project/cover";
         return true;

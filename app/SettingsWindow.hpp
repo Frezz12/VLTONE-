@@ -57,6 +57,7 @@ public:
         kThemeEditorTab,
         kShortcutsTab,
         kInterfaceTab,
+        kMixerTab,
     };
 
     /// Bring a specific settings page to the front.
@@ -108,6 +109,7 @@ private:
     void constrainToScreen();
     QWidget* buildThemesTab();
     QWidget* buildInterfaceTab();
+    QWidget* buildMixerTab();
     QWidget* buildThemeEditorTab();
     QWidget* buildShortcutsTab();
     QWidget* buildLanguageTab();

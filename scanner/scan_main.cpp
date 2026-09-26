@@ -8,6 +8,7 @@
 // died" answers itself.
 //
 // Usage:
+//   daw_scan --protocol
 //   daw_scan --list-paths --format=clap
 //   daw_scan --enumerate  --format=clap --dir=<directory>
 //   daw_scan --inspect    --format=clap --path=<bundle>
@@ -108,6 +109,13 @@ int scannerMain(const std::vector<std::string>& arguments) {
 #endif
     // Before anything, and certainly before any plugin is loaded.
     claimResultChannel();
+
+    // The host checks compatibility once before opening any plugins. Keep
+    // this independent of format factories and third-party module loading.
+    if (hasFlag(arguments, "--protocol")) {
+        writeResult(scan::encodeResult({}));
+        return 0;
+    }
 
     // ── Harness probes ──
     //

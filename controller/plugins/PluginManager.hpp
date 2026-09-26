@@ -83,6 +83,9 @@ public:
     float scanProgress() const noexcept;
     /// The file being inspected right now, for a status line.
     std::string currentScanPath() const;
+    /// A scanner installation or cache write failure, not a plugin failure.
+    /// Such errors stop the scan without blacklisting the current plugin.
+    std::string lastScanError() const;
     /// True exactly once after a scan finishes, so the UI knows to refresh.
     bool takeScanFinished() noexcept {
         return m_finished.exchange(false, std::memory_order_acq_rel);
@@ -147,6 +150,7 @@ private:
     std::atomic<std::uint32_t> m_total{0};
     mutable std::mutex m_currentMutex;
     std::string m_currentPath;
+    std::string m_scanError;
 };
 
 } // namespace daw

@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -153,6 +154,86 @@ public:
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     constexpr int kPPQ = 96;
+
+    // A repeated key releases before its next attack; end-of-track silence
+    // is part of the exported phrase.
+    {
+        mf::File source;
+        source.firstTempoBpm = 123;
+        source.lengthBeats = 12;
+        source.trackNames = {"Keys"};
+        source.notes = {{60, 0, 1, 1, 3, 0, 47}, {60, 1, 1, 127, 3, 0, 12},
+                        {67, 1, 0.5, 72, 5, 0, 5}};
+        Bytes bytes;
+        std::string error;
+        mf::File result;
+        check(mf::encode(source, bytes, error, 7, 8) && parse(bytes, result, error),
+              "encoder creates a readable Standard MIDI File");
+        check(result.notes.size() == 3 && near(result.lengthBeats, 12) &&
+              std::abs(result.firstTempoBpm - 123) < 0.001 && result.trackNames.front() == "Keys",
+              "tempo, track name and trailing silence survive export");
+        if (result.notes.size() == 3) for (std::size_t i = 0; i < 3; ++i) {
+            check(result.notes[i].pitch == source.notes[i].pitch &&
+                  near(result.notes[i].startBeats, source.notes[i].startBeats) &&
+                  near(result.notes[i].lengthBeats, source.notes[i].lengthBeats) &&
+                  result.notes[i].velocity == source.notes[i].velocity &&
+                  result.notes[i].releaseVelocity == source.notes[i].releaseVelocity &&
+                  result.notes[i].channel == source.notes[i].channel,
+                  "adjacent and simultaneous notes retain timing and MIDI values");
+        }
+        source.notes.front().startBeats = std::numeric_limits<double>::quiet_NaN();
+        check(!mf::encode(source, bytes, error) && bytes.empty(),
+              "non-finite timing cannot create a corrupt export");
+        source.notes.front().startBeats = 1e12;
+        check(!mf::encode(source, bytes, error) && bytes.empty(),
+              "MIDI timing overflow is rejected before writing");
+        source.notes.front().startBeats = 0;
+        {
+            daw::EngineController controller;
+            controller.initialize(48000, 512, false);
+            const auto pattern = controller.addPattern("Import owner");
+            const auto track = controller.addTrack(daw::TrackKind::Midi, "Keys");
+            controller.moveTrackToFolder(track, pattern);
+            const auto clip = controller.addMidiClip(track, 0, 1);
+            const auto before = controller.project().findTrack(track)->clips.front();
+            const auto beforeOwner = controller.project().findTrack(pattern)->clips.front();
+            auto shortNotes = source;
+            shortNotes.notes.front().lengthBeats = 1.0 / 960.0;
+            const auto depth = controller.undoDepth();
+            check(controller.replaceMidiClipFromFile(track, clip, shortNotes),
+                  "replacement imports into an existing Pattern source");
+            const auto& after = controller.project().findTrack(track)->clips.front();
+            const auto& owner = controller.project().findTrack(pattern)->clips.front();
+            check(near(daw::midiNotes(after).front().lengthBeats, 1.0 / 960.0) &&
+                  owner.durationSeconds >= after.durationSeconds && controller.undoDepth() == depth + 1,
+                  "short MIDI notes retain timing and Pattern owner extends in one undo");
+            controller.undo();
+            check(daw::midiNotes(controller.project().findTrack(track)->clips.front()) == daw::midiNotes(before) &&
+                  near(controller.project().findTrack(track)->clips.front().durationSeconds, before.durationSeconds) &&
+                  near(controller.project().findTrack(pattern)->clips.front().durationSeconds, beforeOwner.durationSeconds),
+                  "undo restores Pattern source and owner together");
+        }
+        for (auto outcome : {daw::collab::SharedMutationResult::Submitted,
+                             daw::collab::SharedMutationResult::Blocked}) {
+            daw::EngineController controller;
+            controller.initialize(48000, 512, false);
+            const auto track = controller.addTrack(daw::TrackKind::Midi, "Keys");
+            const auto clip = controller.addMidiClip(track, 2, 1);
+            daw::NoteModel old; old.id = daw::newUuid(); old.pitch = 48;
+            controller.setClipNotes(track, clip, {old}, "Fixture");
+            const auto depth = controller.undoDepth();
+            CaptureMutationSink sink; sink.result = outcome;
+            controller.attachSharedMutationSink(sink);
+            const bool accepted = controller.replaceMidiClipFromFile(track, clip, source);
+            const auto* batch = sink.bodies.size() == 1
+                ? std::get_if<std::shared_ptr<daw::collab::BatchCommand>>(&sink.bodies.front()) : nullptr;
+            check(accepted == (outcome == daw::collab::SharedMutationResult::Submitted) && batch &&
+                  controller.undoDepth() == depth &&
+                  daw::midiNotes(controller.project().findTrack(track)->clips.front()) == std::vector{old},
+                  "shared replacement submits one batch without local history or mutation");
+            controller.detachSharedMutationSink(sink);
+        }
+    }
 
     // ── Format 0: one track, one note ──
     {

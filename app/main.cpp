@@ -1,5 +1,7 @@
 #include "UiPerformanceChecks.hpp"
 #include "MainWindow.hpp"
+#include "ClipLibraryChecks.hpp"
+#include "StripSilenceDialog.hpp"
 #include "CreateTracksDialog.hpp"
 #include "PatternWindow.hpp"
 #include "SamplerPanel.hpp"
@@ -303,7 +305,10 @@ int main(int argc, char** argv) {
     bool offlineCheck = false;
     bool pluginBatchCheck = false;
     bool tempoCheck = false;
+    bool headerCheck = false;
     bool mixerWheelCheck = false;
+    bool clipLibraryCheck = false;
+    bool stripSilenceCheck = false;
     bool editorCheck = false;
     bool collaborationSelftest = false;
     bool updateSelftest = false;
@@ -333,7 +338,10 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--offlinecheck") == 0) offlineCheck = true;
         else if (std::strcmp(argv[i], "--pluginbatchcheck") == 0) pluginBatchCheck = true;
         else if (std::strcmp(argv[i], "--tempocheck") == 0) tempoCheck = true;
+        else if (std::strcmp(argv[i], "--headercheck") == 0) headerCheck = true;
         else if (std::strcmp(argv[i], "--mixerwheelcheck") == 0) mixerWheelCheck = true;
+        else if (std::strcmp(argv[i], "--cliplibrarycheck") == 0) clipLibraryCheck = true;
+        else if (std::strcmp(argv[i], "--stripsilencecheck") == 0) stripSilenceCheck = true;
         else if (std::strcmp(argv[i], "--patterncheck") == 0) patternCheck = true;
         else if (std::strcmp(argv[i], "--editorcheck") == 0) editorCheck = true;
         else if (std::strcmp(argv[i], "--trackcreationcheck") == 0) trackCreationCheck = true;
@@ -375,7 +383,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    const bool headless = warpCheck || workspaceMotionCheck || mixerWheelCheck || tempoCheck || pluginBatchCheck || offlineCheck || pluginInteractionCheck || mixerScrollCheck || projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
+    const bool headless = stripSilenceCheck || clipLibraryCheck || headerCheck || warpCheck || workspaceMotionCheck || mixerWheelCheck || tempoCheck || pluginBatchCheck || offlineCheck || pluginInteractionCheck || mixerScrollCheck || projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
                           crashtest || recovercheck;
     if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) {
         QByteArray chromiumFlags;
@@ -588,8 +596,15 @@ int main(int argc, char** argv) {
         screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString()) ? 0 : 68;
     if (pluginBatchCheck) return PluginBatchDialog::checkForTest(
         screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString()) ? 0 : 69;
+    if (headerCheck) return TransportBar::checkHeaderInteractionForTest(
+        screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString()) ? 0 : 73;
     if (tempoCheck) return TransportBar::checkTempoInteractionForTest() ? 0 : 70;
-    if (mixerWheelCheck) return ChannelStrip::checkFaderInputForTest() ? 0 : 71;
+    if (clipLibraryCheck) return checkClipLibraryForTest(
+        screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString()) ? 0 : 74;
+    if (stripSilenceCheck) return StripSilenceDialog::checkForTest(
+        screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString()) ? 0 : 75;
+    if (mixerWheelCheck) return
+        ChannelStrip::checkFaderInputForTest() && MixerWidget::checkLayoutForTest() ? 0 : 71;
     if (patternCheck) return PatternWindow::checkEditingForTest() ? 0 : 19;
     if (selftest) {
         QString fontError;
@@ -1138,6 +1153,13 @@ int main(int argc, char** argv) {
 
     if (screenshotPath) {
         window.populateDemo();
+        if (const char* ruler = std::getenv("DAW_SHOT_RULER")) {
+            if (auto* transport = window.findChild<TransportBar*>())
+                transport->setRulerFormat(
+                    std::strcmp(ruler, "both") == 0 ? ui::RulerFormat::BarsAndTime :
+                    std::strcmp(ruler, "time") == 0 ? ui::RulerFormat::Time :
+                                                    ui::RulerFormat::Bars);
+        }
         if (std::getenv("DAW_SHOT_REDUCE_MOTION"))
             QSettings().setValue(QStringLiteral("ui/reduceMotion"), true);
         if (std::getenv("DAW_SHOT_REDUCE_TRANSPARENCY"))
@@ -1152,6 +1174,8 @@ int main(int argc, char** argv) {
             if (std::strcmp(mixer, "off") == 0) window.setMixerShownForShot(false);
             else window.setMixerHeightForShot(std::atoi(mixer));
         }
+        if (qEnvironmentVariableIsSet("DAW_SHOT_MIXER_WIDTH"))
+            ui::MixerPreferences::instance().setChannelWidth(qEnvironmentVariableIntValue("DAW_SHOT_MIXER_WIDTH"));
         if (const char* many = std::getenv("DAW_SHOT_TRACKS"))
             window.addDemoTracks(std::atoi(many));
         // DAW_SHOT_NEST=n buries a track n folders deep, which is the only way
@@ -1522,6 +1546,19 @@ int main(int argc, char** argv) {
             }
             if (target == &window && qEnvironmentVariableIntValue("DAW_SHOT_WORKSPACE") == 1)
                 target = window.centralWidget();
+            // Exercise the real demo audio so console reviews include live
+            // stereo bars and the audio-side maximum, without an audio device.
+            if (qEnvironmentVariableIsSet("DAW_SHOT_METERS")) {
+                auto* engine = window.collaborationEngineController();
+                engine->seekSeconds(1.12);
+                engine->play();
+                audio::AudioBuffer input(2, 256), output(2, 256);
+                input.clear();
+                for (int block = 0; block < 8; ++block)
+                    engine->processDeviceBlockForTest(input, output, 256);
+                for (auto* strip : window.findChildren<ChannelStrip*>()) strip->refreshMeter();
+                engine->stop();
+            }
             // QWidget::grab does not include a native Quick child. Read the
             // scene only for this explicit screenshot command, never at runtime.
             if (auto* surface = target->findChild<ui::graphics::WorkspaceSurface*>())
@@ -1590,6 +1627,24 @@ int main(int argc, char** argv) {
             if (!PluginEditorWindow::checkIdleForTest(
                     *window.collaborationEngineController(),
                     qEnvironmentVariable("DAW_TEST_VST_SHELL_PATH").toStdString())) return 12;
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_RECORD_CONTEXT_ONLY")) {
+            window.populateDemo();
+            if (!window.checkRecordingContextForTest() || !window.checkTypingKeyboard()) return 75;
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_RULER_ONLY")) {
+            window.populateDemo();
+            if (!window.checkTimelineRulersForTest()) return 74;
+            auto* transport = window.findChild<TransportBar*>();
+            transport->setRulerFormat(ui::RulerFormat::BarsAndTime);
+            if (!window.checkTimelineClipGesturesForTest() ||
+                !window.checkContextSyncForTest()) return 74;
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_HEADER_ONLY")) {
+            window.populateDemo();
+            if (!window.checkWebBrowserForTest(QDir::temp().filePath("daw_demo_tone.wav")) ||
+                !window.checkTempoScrubForTest() || !window.checkPositionScrubForTest()) return 73;
+            std::fprintf(stderr, "PASS Header: Web/AI layout, workspace disclosure and transport editing\n");
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
         } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_TRACK_MIXER_ONLY")) {
             window.populateDemo();
@@ -1839,6 +1894,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "the playhead position scrub interaction failed\n");
             return 37;
         }
+        if (!window.checkTimelineRulersForTest()) return 74;
         // Dropping files on the arrangement: the routing decides what kind of
         // track a file needs, and nothing but a real drop exercises it.
         {

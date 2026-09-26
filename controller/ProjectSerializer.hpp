@@ -53,7 +53,7 @@ public:
     /// reader defaults every field, which makes the format additive-tolerant in
     /// both directions — v1-v6 files load here, while additive fields remain
     /// ignorable by older readers.
-    static constexpr int kFormatVersion = 9; // MIDI performance channels and take automation
+    static constexpr int kFormatVersion = 10; // Project-local clip library
 
     /// Write `project` into the package directory `packageDir` (created if
     /// needed). Referenced audio is copied into `<packageDir>/Content/`.

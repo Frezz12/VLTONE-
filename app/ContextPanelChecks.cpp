@@ -4,6 +4,7 @@
 #include "SelectionModel.hpp"
 #include "Theme.hpp"
 #include "ToolPanel.hpp"
+#include "UiConstants.hpp"
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -32,7 +33,7 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     ToolPanel strip;
     strip.setBrowserVisible(false);
     strip.setInspectorZoneWidth(30);
-    strip.resize(1000, 44);
+    strip.resize(1000, ui::kToolPanelHeight);
     ui::SelectionModel selection;
     ContextPanel panel(m_controller, &selection, &strip);
     strip.watchContextPanel(&panel);
@@ -171,8 +172,9 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     panel.openPluginSearch();
     { QEventLoop loop; QTimer::singleShot(360, &loop, &QEventLoop::quit); loop.exec(); }
     auto* search = panel.findChild<PluginQuickAdder*>();
+    // Eight-pixel flare and fourteen-pixel end padding remain on each side.
     if (!check(search && search->isExpanded() && search->isVisible() && fits() &&
-               search->width() <= right - left - 46,
+               search->width() <= right - left - 44,
                "hidden plugin action opens a search that fits the narrow strip")) return false;
     search->closeSearch();
     panel.relayout();

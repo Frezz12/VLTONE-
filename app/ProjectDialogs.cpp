@@ -549,25 +549,26 @@ void ProjectSaveDialog::applyTheme() {
 #ProjectDialogTitle { color: %2; }
 #ProjectDialogSecondary, #ProjectCardSecondary { color: %3; }
 #ProjectCover, #ProjectCardCover {
-    background: %4; border: 1px solid %5; border-radius: 12px;
+    background: %4; border: 1px solid %5; border-radius: %RADIUS%px;
 }
 #ProjectSaveDialog QLineEdit {
     min-height: 30px; color: %2; background: %4;
-    border: 1px solid %5; border-radius: 7px; padding: 0 9px;
+    border: 1px solid %5; border-radius: %RADIUS%px; padding: 0 9px;
 }
 #ProjectSaveDialog QLineEdit:focus { border-color: %6; }
 #ProjectDestination {
     color: %3; background: %4; border: 1px solid %5;
-    border-radius: 7px; padding: 9px;
+    border-radius: %RADIUS%px; padding: 9px;
 }
 #ProjectError { color: %7; }
 #ProjectPrimaryButton {
-    min-height: 32px; color: white; background: %6;
-    border: 1px solid %6; border-radius: 8px; padding: 0 18px;
+    min-height: 32px; color: %ACCENT_TEXT%; background: %6;
+    border: 1px solid %6; border-radius: %RADIUS%px; padding: 0 18px;
     font-weight: 600;
 }
 #ProjectPrimaryButton:disabled { color: %3; background: %4; border-color: %5; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
+        .replace("%ACCENT_TEXT%", t.accentText().name())
         .arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),
              t.well().name(), t.separator().name(), t.accent.name(),
              Theme::record().name()));
@@ -735,22 +736,23 @@ void ProjectOpenDialog::applyTheme() {
 #ProjectDialogTitle, #ProjectCardName { color: %2; }
 #ProjectDialogSecondary, #ProjectCardSecondary, #ProjectCardPath { color: %3; }
 #ProjectCard {
-    background: %4; border: 1px solid %5; border-radius: 12px;
+    background: %4; border: 1px solid %5; border-radius: %RADIUS%px;
 }
 #ProjectCardCover {
-    background: %6; border: 1px solid %5; border-radius: 9px;
+    background: %6; border: 1px solid %5; border-radius: %RADIUS%px;
 }
 #ProjectEmptyState {
     color: %3; background: %4; border: 1px dashed %5;
-    border-radius: 12px; padding: 24px;
+    border-radius: %RADIUS%px; padding: 24px;
 }
 #ProjectPrimaryButton {
-    min-height: 32px; color: white; background: %7;
-    border: 1px solid %7; border-radius: 8px; padding: 0 18px;
+    min-height: 32px; color: %ACCENT_TEXT%; background: %7;
+    border: 1px solid %7; border-radius: %RADIUS%px; padding: 0 18px;
     font-weight: 600;
 }
 #ProjectPrimaryButton:focus { border: 2px solid %8; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
+        .replace("%ACCENT_TEXT%", t.accentText().name())
         .arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),
              t.surface.name(), t.separator().name(), t.well().name(),
              t.accent.name(), t.accentHighlight.name()));
@@ -931,25 +933,26 @@ void ProjectTemplateSaveDialog::applyTheme() {
 #ProjectDialogTitle { color: %2; }
 #ProjectDialogSecondary, #TemplateMediaName { color: %3; }
 #TemplateMediaPreview {
-    background: %4; border: 1px solid %5; border-radius: 14px;
+    background: %4; border: 1px solid %5; border-radius: %RADIUS%px;
 }
 #ProjectTemplateSaveDialog QLineEdit {
     min-height: 32px; color: %2; background: %4;
-    border: 1px solid %5; border-radius: 8px; padding: 0 10px;
+    border: 1px solid %5; border-radius: %RADIUS%px; padding: 0 10px;
 }
 #ProjectTemplateSaveDialog QLineEdit:focus { border-color: %6; }
 #ProjectDestination {
     color: %3; background: %4; border: 1px solid %5;
-    border-radius: 7px; padding: 9px;
+    border-radius: %RADIUS%px; padding: 9px;
 }
 #ProjectError { color: %7; }
 #ProjectPrimaryButton {
-    min-height: 32px; color: white; background: %6;
-    border: 1px solid %6; border-radius: 8px; padding: 0 18px;
+    min-height: 32px; color: %ACCENT_TEXT%; background: %6;
+    border: 1px solid %6; border-radius: %RADIUS%px; padding: 0 18px;
     font-weight: 600;
 }
 #ProjectPrimaryButton:disabled { color: %3; background: %4; border-color: %5; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
+        .replace("%ACCENT_TEXT%", t.accentText().name())
         .arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),
              t.well().name(), t.separator().name(), t.accent.name(),
              Theme::record().name()));
@@ -1201,33 +1204,34 @@ void ProjectTemplateOpenDialog::applyTheme() {
 #ProjectTemplateList { background: transparent; border: none; outline: none; }
 #ProjectTemplateList::item { border: none; padding: 0; }
 #TemplateListCard {
-    background: %4; border: 1px solid %5; border-radius: 12px;
+    background: %4; border: 1px solid %5; border-radius: %RADIUS%px;
 }
 #TemplateListCard[selected="true"] {
     background: %6; border-color: %7;
 }
 #TemplateListThumbnail, #TemplateMediaPreview {
-    background: %8; border: 1px solid %5; border-radius: 10px;
+    background: %8; border: 1px solid %5; border-radius: %RADIUS%px;
 }
 #TemplateDetails {
-    background: %4; border: 1px solid %5; border-radius: 14px;
+    background: %4; border: 1px solid %5; border-radius: %RADIUS%px;
 }
 #ProjectEmptyState {
     color: %3; background: %4; border: 1px dashed %5;
-    border-radius: 12px; padding: 24px;
+    border-radius: %RADIUS%px; padding: 24px;
 }
 #ProjectPrimaryButton {
-    min-height: 34px; color: white; background: %7;
-    border: 1px solid %7; border-radius: 8px; padding: 0 18px;
+    min-height: 34px; color: %ACCENT_TEXT%; background: %7;
+    border: 1px solid %7; border-radius: %RADIUS%px; padding: 0 18px;
     font-weight: 600;
 }
 #ProjectPrimaryButton:disabled { color: %3; background: %8; border-color: %5; }
 #TemplateDeleteButton {
     min-height: 34px; color: %2; background: transparent;
-    border: 1px solid %5; border-radius: 8px; padding: 0 13px;
+    border: 1px solid %5; border-radius: %RADIUS%px; padding: 0 13px;
 }
 #TemplateDeleteButton:hover { border-color: %9; color: %9; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
+        .replace("%ACCENT_TEXT%", t.accentText().name())
         .arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),
              t.surface.name(), t.separator().name(), t.surfaceElevated.name(),
              t.accent.name(), t.well().name(), Theme::record().name()));

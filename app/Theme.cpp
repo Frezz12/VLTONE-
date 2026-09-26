@@ -65,6 +65,32 @@ Theme make(const char* id, const char* name, bool dark,
 
 QColor grey(int v) { return QColor(v, v, v); }
 
+double relativeLuminance(const QColor& colour) {
+    const auto channel = [](double value) {
+        return value <= 0.04045 ? value / 12.92
+                               : std::pow((value + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * channel(colour.redF()) +
+           0.7152 * channel(colour.greenF()) +
+           0.0722 * channel(colour.blueF());
+}
+
+Theme studioGray() {
+    // Midtone neutral surfaces let coloured tracks and signal meters carry
+    // meaning. The silver accent uses dark ink on filled controls; text and
+    // thin grid lines stay distinct from the surrounding grey plates.
+    Theme t = make("studio-gray", "Studio Gray", true,
+                   grey(88), grey(100), grey(108),
+                   grey(250), grey(242),
+                   grey(240), grey(255),
+                   grey(232), grey(255),
+                   grey(112), grey(144), QColor(240, 240, 240, 48),
+                   grey(72), grey(100));
+    t.headerBackground = t.surface;
+    t.pluginMenuBackground = grey(86);
+    return t;
+}
+
 } // namespace
 
 QColor Theme::well() const {
@@ -87,6 +113,17 @@ QColor Theme::sectionDivider() const {
     // A trace of the product accent keeps the large structural lines from
     // looking like generic grey dividers, while staying neutral at a glance.
     return mixColors(line, accent, dark ? 0.08 : 0.05);
+}
+
+QColor Theme::accentText() const {
+    const QColor darkInk(18, 18, 20);
+    const QColor lightInk(250, 250, 252);
+    const double luminance = relativeLuminance(accent);
+    const double darkContrast = (luminance + 0.05) /
+                                (relativeLuminance(darkInk) + 0.05);
+    const double lightContrast = (relativeLuminance(lightInk) + 0.05) /
+                                 (luminance + 0.05);
+    return darkContrast >= lightContrast ? darkInk : lightInk;
 }
 
 QColor Theme::ink(int alpha) const {
@@ -123,6 +160,7 @@ ThemeManager::ThemeManager() {
              QColor(128, 191, 255), QColor(184, 190, 198),
              grey(51), grey(77), QColor(74, 143, 217, 77),
              grey(13), grey(26)),
+        studioGray(),
         // Clean cool neutrals give panels a visible hierarchy without turning
         // the workspace into a flat grey sheet. Saturated blue carries active
         // state; the warm playhead remains easy to find in a dense project.
@@ -154,11 +192,11 @@ ThemeManager::ThemeManager() {
              QColor(33, 31, 26), QColor(46, 41, 36)),
     };
 
-    // The header colour is a first-class, separately editable field. Presets
-    // don't list it (to keep the make() table compact), so default it to the
-    // transport background — the two matched before this field existed.
+    // Header colour remains separately editable. The standard dark header is
+    // graphite; other palettes retain their existing surface colours.
     for (auto& p : m_presets)
-        if (!p.headerBackground.isValid()) p.headerBackground = p.transportBackground;
+        if (!p.headerBackground.isValid())
+            p.headerBackground = p.id == QLatin1String("dark") ? grey(40) : p.transportBackground;
 
     QSettings settings;
     const QString saved = settings.value("ui/themeId", "dark").toString();
@@ -508,7 +546,10 @@ void ThemeManager::apply() {
     p.setColor(QPalette::ButtonText, t.textPrimary);
     p.setColor(QPalette::BrightText, Qt::white);
     p.setColor(QPalette::Highlight, t.accent);
-    p.setColor(QPalette::HighlightedText, t.dark ? Qt::white : Qt::white);
+    p.setColor(QPalette::HighlightedText, t.accentText());
+    p.setColor(QPalette::Accent, t.accent);
+    p.setColor(QPalette::Link, t.accent);
+    p.setColor(QPalette::LinkVisited, t.accentHighlight);
     p.setColor(QPalette::ToolTipBase, t.surfaceElevated);
     p.setColor(QPalette::ToolTipText, t.textPrimary);
     p.setColor(QPalette::Disabled, QPalette::Text, t.textSecondary);
@@ -535,7 +576,7 @@ bool ThemeManager::eventFilter(QObject* object, QEvent* event) {
                        : nullptr;
         }();
         if (setCornerPreference) {
-            const auto preference = DWMWCP_DONOTROUND;
+            const auto preference = DWMWCP_ROUND;
             setCornerPreference(reinterpret_cast<HWND>(widget->winId()),
                                 DWMWA_WINDOW_CORNER_PREFERENCE, &preference,
                                 sizeof(preference));
@@ -557,8 +598,7 @@ bool ThemeManager::eventFilter(QObject* object, QEvent* event) {
     }
     // Let QSS antialias the rounded popup against its transparent backing.
     // A rounded QRegion would quantize the curve to whole logical pixels.
-    if (tooltip) widget->setMask(QRegion(widget->rect()));
-    else widget->clearMask();
+    widget->clearMask();
     return false;
 }
 
@@ -569,19 +609,6 @@ QString ThemeManager::styleSheet() const {
             .arg(col.red()).arg(col.green()).arg(col.blue())
             .arg(QString::number(col.alphaF(), 'f', 3));
     };
-    const auto relativeLuminance = [](const QColor& colour) {
-        const auto channel = [](double value) {
-            return value <= 0.04045
-                       ? value / 12.92
-                       : std::pow((value + 0.055) / 1.055, 2.4);
-        };
-        return 0.2126 * channel(colour.redF()) +
-               0.7152 * channel(colour.greenF()) +
-               0.0722 * channel(colour.blueF());
-    };
-    const QColor accentText = relativeLuminance(t.accent) > 0.179
-                                  ? QColor(18, 18, 20)
-                                  : QColor(250, 250, 252);
     const QColor popup = mixColors(t.surface, t.background, t.dark ? 0.55 : 0.35);
 
     // Thin borders and flat surfaces keep the application's dense controls legible.
@@ -589,12 +616,12 @@ QString ThemeManager::styleSheet() const {
 QWidget { color: %TEXT%; font-size: 12px; }
 QMainWindow, QDialog { background: %BG%; }
 QMenuBar { background: %TOOLBAR%; border: none; }
-QMenuBar::item { padding: 4px 10px; background: transparent; border-radius: 5px; }
+QMenuBar::item { padding: 4px 10px; background: transparent; border-radius: %RADIUS%px; }
 QMenuBar::item:selected { background: %ACCENT_SOFT%; }
 /* Compact, opaque popups with a small, antialiased corner and inset selection. */
-QMenu { background: %POPUP%; border: 1px solid %POPUP_BORDER%; border-radius: 6px;
+QMenu { background: %POPUP%; border: 1px solid %POPUP_BORDER%; border-radius: %RADIUS%px;
         padding: 4px; }
-QMenu::item { min-height: 18px; padding: 1px 22px 1px 8px; border-radius: 3px;
+QMenu::item { min-height: 18px; padding: 1px 22px 1px 8px; border-radius: %RADIUS%px;
               font-size: 12px; }
 QMenu::item:selected { background: %POPUP_HOVER%; color: %TEXT%; }
 QMenu::item:checked { color: %ACCENT_HL%; font-weight: 600; }
@@ -612,7 +639,7 @@ QStatusBar QLabel { color: %TEXT2%; font-size: 11px; }
 QStatusBar::item { border: none; }
 
 QToolTip { background: %ELEV%; color: %TEXT%; border: 1px solid %SEP%;
-           border-radius: 0; padding: 4px 6px; }
+           border-radius: %RADIUS%px; padding: 4px 6px; }
 
 QScrollArea, QAbstractScrollArea { background: transparent; border: none; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
@@ -623,7 +650,7 @@ QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 
 QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
-    background: %WELL%; border: 1px solid %SEP%; border-radius: 6px;
+    background: %WELL%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
     padding: 3px 7px; selection-background-color: %ACCENT%;
 }
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {
@@ -633,12 +660,12 @@ QCheckBox { spacing: 7px; min-height: 20px; }
 QCheckBox:disabled { color: %TEXT2%; }
 /* Compact closed controls; their lists use the shared popup surface below. */
 QComboBox {
-    background: %WELL%; border: 1px solid %SEP%; border-radius: 0;
+    background: %WELL%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
     padding: 3px 9px; min-height: 20px; color: %TEXT%; font-weight: 500;
     selection-background-color: %ACCENT%;
 }
 QComboBox:hover { background: %HOVER%; border-color: %HOVER%; }
-QComboBox:focus, QComboBox:on { border: 1px solid %ACCENT%; }
+QComboBox:focus, QComboBox:on { border: 1px solid %SEP%; }
 QComboBox:disabled { color: %TEXT2%; }
 QComboBox::drop-down { border: none; width: 22px; }
 QComboBox::down-arrow { image: url(:/icons/popup-chevron-%APPEARANCE%.svg); width: 12px; height: 12px; }
@@ -646,21 +673,21 @@ QComboBox::down-arrow { image: url(:/icons/popup-chevron-%APPEARANCE%.svg); widt
    object with different contents. */
 QComboBoxPrivateContainer { background: transparent; border: none; }
 QComboBox QAbstractItemView {
-    background: %POPUP%; border: 1px solid %POPUP_BORDER%; border-radius: 6px;
+    background: %POPUP%; border: 1px solid %POPUP_BORDER%; border-radius: %RADIUS%px;
     selection-background-color: %POPUP_HOVER%; selection-color: %TEXT%;
     outline: none; padding: 4px;
 }
 QComboBox QAbstractItemView::item { min-height: 18px; padding: 1px 7px;
-                                    border-radius: 3px; }
+                                    border-radius: %RADIUS%px; }
 QComboBox QAbstractItemView::item:selected { background: %POPUP_HOVER%; color: %TEXT%; }
 
 QPushButton {
-    background: %ELEV%; border: 1px solid %SEP%; border-radius: 6px;
+    background: %ELEV%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
     padding: 4px 12px; font-weight: 500;
 }
 QPushButton:hover { background: %ELEV_HOVER%; }
 QPushButton:pressed { background: %ACCENT_SOFT%; }
-QPushButton:checked { background: %ACCENT%; color: white; border-color: %ACCENT%; }
+QPushButton:checked { background: %ACCENT%; color: %ACCENT_TEXT%; border-color: %ACCENT%; }
 QPushButton:disabled { color: %TEXT2%; }
 QPushButton[accentAction="true"] {
     background: %ACCENT%; color: %ACCENT_TEXT%; border-color: %ACCENT%;
@@ -672,7 +699,7 @@ QPushButton[accentAction="true"]:disabled {
     background: %ELEV%; color: %TEXT2%; border-color: %SEP%;
 }
 
-QToolButton { background: transparent; border: none; border-radius: 6px; padding: 3px; font-weight: 500; }
+QToolButton { background: transparent; border: none; border-radius: %RADIUS%px; padding: 3px; font-weight: 500; }
 QToolButton:hover { background: %HOVER%; }
 QToolButton:checked { background: %ACCENT_SOFT%; }
 
@@ -682,7 +709,7 @@ QSplitter::handle:hover { background: %ACCENT_SOFT%; }
 QDockWidget { titlebar-close-icon: none; titlebar-normal-icon: none; }
 QDockWidget::title { background: %TOOLBAR%; padding: 5px 8px; border-bottom: 1px solid %SEP%; }
 
-QGroupBox { border: 1px solid %SEP%; border-radius: 8px; margin-top: 14px; padding-top: 6px; }
+QGroupBox { border: 1px solid %SEP%; border-radius: %RADIUS%px; margin-top: 14px; padding-top: 6px; }
 QGroupBox::title { subcontrol-origin: margin; left: 10px; color: %TEXT2%; font-weight: 600; }
 
 QLabel[role="section"] { color: %TEXT2%; font-size: 10px; font-weight: 500; }
@@ -697,7 +724,7 @@ QTreeWidget#SettingsNavigation {
 }
 QTreeWidget#SettingsNavigation::item {
     padding: 0 6px; border: 1px solid transparent;
-    border-left: 2px solid transparent; border-radius: 3px;
+    border-left: 2px solid transparent; border-radius: %RADIUS%px;
 }
 QTreeWidget#SettingsNavigation::item:hover { background: %HOVER%; }
 QTreeWidget#SettingsNavigation::item:selected {
@@ -705,9 +732,9 @@ QTreeWidget#SettingsNavigation::item:selected {
 }
 QTreeWidget#SettingsNavigation::item:focus { border-color: %ACCENT%; }
 QWidget#SettingsPageHeader { border-bottom: 1px solid %SEP%; }
-QLabel#SettingsPageIcon { background: %ACCENT_SOFT%; border-radius: 4px; }
+QLabel#SettingsPageIcon { background: %ACCENT_SOFT%; border-radius: %RADIUS%px; }
 SettingsWindow QGroupBox {
-    background: %SURFACE%; border-radius: 4px; margin-top: 18px; padding-top: 8px;
+    background: %SURFACE%; border-radius: %RADIUS%px; margin-top: 18px; padding-top: 8px;
 }
 SettingsWindow QGroupBox::title { color: %TEXT%; padding: 0 4px; }
 
@@ -755,7 +782,7 @@ QSlider::handle:vertical:hover, QSlider::handle:vertical:pressed {
                                 stop:0 %GLASS_LIT%, stop:1 %GLASS_HI%);
 }
 QSlider::groove:vertical:focus { border: 1px solid %ACCENT%; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%TEXT%", c(t.textPrimary))
         .replace("%APPEARANCE%", t.dark ? QStringLiteral("dark") : QStringLiteral("light"))
         .replace("%TEXT2%", c(t.textSecondary))
@@ -763,7 +790,7 @@ QSlider::groove:vertical:focus { border: 1px solid %ACCENT%; }
         .replace("%SURFACE%", c(t.surface))
         .replace("%ELEV_HOVER%", c(mixColors(t.surfaceElevated, t.textPrimary, 0.10)))
         .replace("%ELEV%", c(t.surfaceElevated))
-        .replace("%ACCENT_TEXT%", c(accentText))
+        .replace("%ACCENT_TEXT%", c(t.accentText()))
         .replace("%TOOLBAR%", c(t.toolbarBackground))
         .replace("%SEP%", c(t.separator()))
         .replace("%SECTION%", c(t.sectionDivider()))

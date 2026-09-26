@@ -1,6 +1,5 @@
 #include "TransportBar.hpp"
 #include "Controls.hpp"
-#include "GlassPanel.hpp"
 #include "Icons.hpp"
 #include "Theme.hpp"
 #include "ThemeMediaBackground.hpp"
@@ -15,34 +14,30 @@
 
 #include <QAction>
 #include <QActionGroup>
-#include <QButtonGroup>
 #include <QCoreApplication>
 #include <QCursor>
 #include <QGuiApplication>
-#include <QEasingCurve>
 #include <QEvent>
-#include <QGridLayout>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QHideEvent>
 #include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
-#include <QLinearGradient>
 #include <QLineEdit>
+#include <QLinearGradient>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
-#include <QPainterPath>
-#include <QPixmap>
-#include <QRadialGradient>
 #include <QResizeEvent>
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QShowEvent>
 #include <QStyle>
+#include <QStyleOption>
 #include <QToolButton>
-#include <QVariantAnimation>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <cmath>
@@ -50,29 +45,19 @@
 
 namespace {
 
-// The compact console leaves enough room around its glass plate for a soft
-// shadow, while its two wells remain large enough to read at a glance.
-constexpr int kLcdHeight = 44;
-constexpr int kLcdShadow = 4;
+// One quiet console, with larger hit targets around a labelled readout.
+constexpr int kBlockHeight = 44;
+constexpr int kButtonSize = 32;
+constexpr int kPositionFontPx = 21;
+constexpr int kStatsFontPx = 15;
+constexpr int kChipFontPx = 12;
+constexpr int kCompactClusterGap = 8;
 
-// The chassis: one bezel around transport, readout and tools. Its plate is
-// inset by the shadow it casts onto the header, and every plate inside it is
-// centred in the band the chassis margins leave.
-constexpr int kChassisHeight = 70;
-constexpr int kChassisShadow = 4;
-constexpr int kChassisRadius = 18;
-constexpr int kBlockHeight = 44;      // transport and tool groups
-constexpr int kBlockShadow = 4;
-constexpr int kBlockRadius = 11;
-
-// The readout type scale. These sizes are applied twice on purpose: once
-// through setFont(), which is what carries the family and the tabular-figure
-// feature, and once as a `font-size` declaration, because the application-wide
-// sheet has a `QWidget { font-size: 12px }` rule and a style sheet always wins
-// over setFont() for the properties it declares.
-constexpr int kPositionFontPx = 23;
-constexpr int kStatsFontPx = 14;
-constexpr int kChipFontPx = 13;
+int compactPositionWidth() {
+    const QFont font = ui::transportDisplayFont(kPositionFontPx, QFont::Normal);
+    return int(std::ceil(QFontMetricsF(font)
+        .horizontalAdvance(QStringLiteral("999.16.999")))) + 20;
+}
 
 QString gridDivisionName(const ui::GridDivision& division) {
     if (division.beats < 0.0)
@@ -441,430 +426,197 @@ QIcon toolIcon(int index, const QColor& color, int size) {
     return icons::icon(kTools[index].glyph, color, size);
 }
 
-QIcon toolChipIcon(int index, const QColor& color) {
-    QIcon result;
-    for (int scale = 1; scale <= 3; ++scale) {
-        QPixmap pixmap(24 * scale, 18 * scale);
-        pixmap.setDevicePixelRatio(scale);
-        pixmap.fill(Qt::transparent);
-        QPainter painter(&pixmap);
-        icons::svgIcon(QStringLiteral("caret-down.svg"), color, 7)
-            .paint(&painter, QRect(0, 6, 7, 7));
-        toolIcon(index, color, 16).paint(&painter, QRect(8, 1, 16, 16));
-        painter.end();
-        result.addPixmap(pixmap);
-    }
-    return result;
-}
-
-void paintHeaderInsetSurface(QWidget* surface) {
-    QPainter painter(surface);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-
-    const Theme& t = th();
-    const QRectF panel = QRectF(surface->rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    QPainterPath shape;
-    shape.addRoundedRect(panel, 11, 11);
-
-    const QColor base = mixColors(t.headerBackground, t.surfaceElevated, 0.48);
-    QLinearGradient fill(0, panel.top(), 0, panel.bottom());
-    fill.setColorAt(0.0, mixColors(base, t.textPrimary, 0.045));
-    fill.setColorAt(1.0, mixColors(base, t.background, 0.10));
-    painter.fillPath(shape, fill);
-
-    // Dark at the upper edge and a hairline reflected edge below are the two
-    // cues that make the surface read as inset rather than floating glass.
-    const QColor rim = mixColors(t.separator(), t.headerBackground, 0.24);
-    painter.setPen(QPen(rim, 1));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawPath(shape);
-
-    painter.save();
-    painter.setClipPath(shape);
-    QColor upper = t.background;
-    upper.setAlpha(150);
-    painter.setPen(QPen(upper, 1));
-    painter.drawLine(QPointF(panel.left() + 8, panel.top() + 1),
-                     QPointF(panel.right() - 8, panel.top() + 1));
-    QColor lower(255, 255, 255);
-    lower.setAlpha(t.dark ? 18 : 120);
-    painter.setPen(QPen(lower, 1));
-    painter.drawLine(QPointF(panel.left() + 8, panel.bottom() - 1),
-                     QPointF(panel.right() - 8, panel.bottom() - 1));
-    painter.restore();
-}
-
-/// The LCD's recessed socket. The outer GlassPanel supplies refraction and a
-/// soft shadow; this inner layer supplies the dark cavity, inset bevel, and a
-/// restrained reflected edge without turning each value into another pill.
-///
-/// The playhead readout asks for setBacklit(): the same socket, but lit from
-/// behind by the project colour and ringed in it, so the one number the eye
-/// keeps returning to reads as a powered screen rather than another label.
-class LcdInsetWell final : public QWidget {
+// Qt styles can replace a checkmark with an action's icon. Keep both visible
+// so the current tool remains identifiable independently of colour.
+class ToolSelectorMenu final : public QMenu {
 public:
-    explicit LcdInsetWell(QWidget* parent = nullptr) : QWidget(parent) {
-        setAttribute(Qt::WA_StyledBackground, false);
-        connect(&ThemeManager::instance(), &ThemeManager::changed, this,
-                QOverload<>::of(&QWidget::update));
-    }
-
-    void setBacklit(bool backlit) {
-        if (m_backlit == backlit) return;
-        m_backlit = backlit;
-        update();
-    }
-
-    void setPlain(bool plain) {
-        if (m_plain == plain) return;
-        m_plain = plain;
-        update();
-    }
-
-    /// Score a groove down the cavity at this fraction of its width, so one
-    /// socket can carry two columns of readings instead of two sockets with a
-    /// gap between them. Zero, the default, leaves the cavity unbroken.
-    void setColumnDivider(qreal fraction) {
-        if (qFuzzyCompare(m_divider + 1.0, fraction + 1.0)) return;
-        m_divider = fraction;
-        update();
-    }
-
+    using QMenu::QMenu;
 protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-
-        const Theme& theme = th();
-        const QRectF cavity = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        constexpr qreal radius = 9.0;
-        QPainterPath shape;
-        shape.addRoundedRect(cavity, radius, radius);
-
-        QLinearGradient depth(0, cavity.top(), 0, cavity.bottom());
-        if (m_plain) {
-            // Monochrome follows the active header instead of forcing a black
-            // LCD into every palette. Its separation comes from a quiet tonal
-            // step and outline; there is no coloured light source.
-            const QColor base = mixColors(theme.headerBackground,
-                                          theme.surfaceElevated,
-                                          theme.dark ? 0.34 : 0.48);
-            depth.setColorAt(0.0,
-                             mixColors(base, theme.background,
-                                       theme.dark ? 0.10 : 0.04));
-            depth.setColorAt(0.55, base);
-            depth.setColorAt(1.0,
-                             mixColors(base, theme.textPrimary,
-                                       theme.dark ? 0.025 : 0.035));
-        } else if (m_backlit) {
-            // A lit panel is not a darker hole: the glass itself carries the
-            // colour, densest at the bottom where it would be thickest.
-            depth.setColorAt(0.0, mixColors(theme.well(), theme.accent,
-                                            theme.dark ? 0.14 : 0.025));
-            depth.setColorAt(0.55, mixColors(theme.well(), theme.accent,
-                                             theme.dark ? 0.18 : 0.04));
-            depth.setColorAt(1.0, mixColors(theme.well(), theme.accent,
-                                            theme.dark ? 0.24 : 0.055));
-        } else {
-            depth.setColorAt(0.0,
-                             mixColors(theme.well(), theme.background, 0.46));
-            depth.setColorAt(0.46,
-                             mixColors(theme.well(), theme.background, 0.25));
-            depth.setColorAt(1.0,
-                             mixColors(theme.well(), theme.surfaceElevated,
-                                       0.16));
+    void paintEvent(QPaintEvent* event) override {
+        QMenu::paintEvent(event);
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(QPen(th().textPrimary, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        for (QAction* action : actions()) {
+            if (!action->isChecked()) continue;
+            const QRect r = actionGeometry(action);
+            const qreal x = r.right() - 14;
+            const qreal y = r.center().y();
+            p.drawPolyline(QPolygonF{QPointF(x - 4, y), QPointF(x - 1, y + 3),
+                                     QPointF(x + 4, y - 3)});
         }
-        painter.fillPath(shape, depth);
-
-        // Each cavity is softly backlit by the active project colour. The
-        // values use the same hue, so the glow feels reflected by the glass
-        // instead of painted around the text.
-        if (!m_plain) {
-            QRadialGradient glow(cavity.center(), cavity.width() * 0.68);
-            QColor glowCore = theme.accent;
-            glowCore.setAlpha(m_backlit ? (theme.dark ? 70 : 12)
-                                        : (theme.dark ? 34 : 6));
-            QColor glowEdge = glowCore;
-            glowEdge.setAlpha(0);
-            glow.setColorAt(0.0, glowCore);
-            glow.setColorAt(1.0, glowEdge);
-            painter.fillPath(shape, glow);
-        }
-
-        painter.save();
-        painter.setClipPath(shape);
-        QColor innerShadow = theme.background;
-        innerShadow.setAlpha(m_plain ? (theme.dark ? 92 : 42)
-                                     : (theme.dark ? 185 : 72));
-        painter.setPen(QPen(innerShadow, 1.2));
-        painter.drawLine(QPointF(cavity.left() + radius, cavity.top() + 1),
-                         QPointF(cavity.right() - radius, cavity.top() + 1));
-        painter.drawLine(QPointF(cavity.left() + 1, cavity.top() + radius),
-                         QPointF(cavity.left() + 1,
-                                 cavity.bottom() - radius));
-
-        // Light bounces white whatever the palette is. Using the ink colour
-        // here drew a second dark line under every well on a light theme,
-        // which read as another shadow rather than as a lit lower lip.
-        QColor reflection(255, 255, 255);
-        reflection.setAlpha(m_plain ? (theme.dark ? 18 : 74)
-                                    : (theme.dark ? 22 : 170));
-        painter.setPen(QPen(reflection, 1.0));
-        painter.drawLine(QPointF(cavity.left() + radius,
-                                 cavity.bottom() - 1),
-                         QPointF(cavity.right() - radius,
-                                 cavity.bottom() - 1));
-
-        if (!m_plain) {
-            QLinearGradient sheen(0, cavity.top() + 2, 0, cavity.center().y());
-            sheen.setColorAt(0.0,
-                             QColor(255, 255, 255, theme.dark ? 18 : 54));
-            sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(sheen);
-            painter.drawRoundedRect(cavity.adjusted(2, 2, -2,
-                                                     -cavity.height() * 0.48),
-                                    radius - 2, radius - 2);
-        }
-
-        // The groove between two columns of readings: a dark line with a
-        // reflected one beside it, the same pair that makes the header wells
-        // read as stamped rather than drawn on.
-        if (m_divider > 0.0) {
-            const qreal x =
-                std::round(cavity.left() + cavity.width() * m_divider) + 0.5;
-            const qreal top = cavity.top() + 5;
-            const qreal bottom = cavity.bottom() - 5;
-            QColor groove = theme.background;
-            groove.setAlpha(m_plain ? (theme.dark ? 92 : 58)
-                                    : (theme.dark ? 150 : 90));
-            painter.setBrush(Qt::NoBrush);
-            painter.setPen(QPen(groove, 1.0));
-            painter.drawLine(QPointF(x, top), QPointF(x, bottom));
-            QColor lip = theme.textPrimary;
-            lip.setAlpha(m_plain ? (theme.dark ? 20 : 34)
-                                 : (theme.dark ? 18 : 38));
-            painter.setPen(QPen(lip, 1.0));
-            painter.drawLine(QPointF(x + 1, top), QPointF(x + 1, bottom));
-        }
-        painter.restore();
-
-        painter.setBrush(Qt::NoBrush);
-        if (m_plain) {
-            painter.setPen(QPen(mixColors(theme.separator(), theme.textPrimary,
-                                         theme.dark ? 0.08 : 0.04), 1.0));
-        } else if (m_backlit) {
-            // A halo one step outside the ring: the light a lit panel throws
-            // back onto the socket it is seated in.
-            QColor halo = theme.accent;
-            halo.setAlpha(theme.dark ? 60 : 18);
-            painter.setPen(QPen(halo, 1.0));
-            painter.drawRoundedRect(cavity.adjusted(-1, -1, 1, 1), radius + 1,
-                                    radius + 1);
-            QColor ring = theme.accent;
-            ring.setAlpha(theme.dark ? 190 : 125);
-            painter.setPen(QPen(ring, 1.4));
-        } else {
-            painter.setPen(QPen(mixColors(theme.separator(), theme.background,
-                                         theme.dark ? 0.38 : 0.18),
-                                1.0));
-        }
-        painter.drawPath(shape);
     }
-
-private:
-    bool m_backlit = false;
-    bool m_plain = false;
-    qreal m_divider = 0.0;
 };
 
-/// The frame the whole console sits in: one machined bezel around transport,
-/// readout and tools, instead of three plates parked separately on the header.
-/// It is painted rather than made of glass — the three plates inside already
-/// refract what is behind them, and a fourth capture underneath them would buy
-/// a second host render for a surface the eye reads as solid metal anyway.
-class TransportChassis final : public QWidget {
+// Keep QToolButton/QMenu semantics while drawing a quiet, explicit disclosure.
+class ToolSelectorButton final : public QToolButton {
 public:
-    explicit TransportChassis(QWidget* parent = nullptr) : QWidget(parent) {
-        setAttribute(Qt::WA_StyledBackground, false);
-        connect(&ThemeManager::instance(), &ThemeManager::changed, this,
-                QOverload<>::of(&QWidget::update));
+    ToolSelectorButton(bool primary, QWidget* parent)
+        : QToolButton(parent), m_primary(primary) {
+        m_modifier = QKeySequence(Qt::ControlModifier).toString(QKeySequence::NativeText);
+        m_modifierWidth = primary ? 0 :
+            QFontMetrics(ui::transportControlFont(11)).horizontalAdvance(m_modifier) + 6;
+        setFixedSize(42 + m_modifierWidth, kButtonSize);
+        setAttribute(Qt::WA_Hover);
     }
-
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, true);
-
-        const Theme& t = th();
-        const QRectF plate =
-            QRectF(rect())
-                .adjusted(kChassisShadow, kChassisShadow, -kChassisShadow,
-                          -kChassisShadow)
-                .adjusted(0.5, 0.5, -0.5, -0.5);
-        QPainterPath shape;
-        shape.addRoundedRect(plate, kChassisRadius, kChassisRadius);
-
-        // Stacked, ever-fainter copies of the outline approximate a gaussian
-        // at a fraction of its cost — the same trick GlassPanel uses, so the
-        // bezel and the plates inside it sit on the header with one weight.
-        for (int i = kChassisShadow; i >= 1; --i) {
-            QPainterPath halo;
-            halo.addRoundedRect(plate.adjusted(-i, -i * 0.6, i, i * 1.2),
-                                kChassisRadius + i, kChassisRadius + i);
-            p.fillPath(halo, QColor(0, 0, 0, t.dark ? 10 : 7));
+        p.setRenderHint(QPainter::Antialiasing);
+        const auto& t = th();
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        QColor fill = mixColors(t.headerBackground, t.well(), 0.24);
+        if (underMouse()) fill = mixColors(fill, t.textPrimary, 0.06);
+        p.setPen(QPen(mixColors(t.headerBackground, t.textPrimary, 0.11), 1));
+        p.setBrush(fill);
+        p.drawRoundedRect(r, Theme::cornerRadius, Theme::cornerRadius);
+        int x = 7;
+        if (!m_primary) {
+            p.setFont(ui::transportControlFont(11));
+            p.setPen(t.textSecondary);
+            p.drawText(QRect(3, 0, m_modifierWidth, height()), Qt::AlignCenter, m_modifier);
+            x += m_modifierWidth;
         }
-
-        // Keep the whole connecting plate at the former upper-face colour.
-        // A vertical grade made the three modules look as if they were sitting
-        // on a dark shelf instead of sharing one quiet support.
-        const QColor body =
-            mixColors(t.headerBackground, t.textPrimary, 0.07);
-        p.fillPath(shape, body);
-
-        // Two strokes keep the bezel legible: a dark inner groove and one
-        // uniform light rim, without reintroducing a top-to-bottom gradient.
-        p.setBrush(Qt::NoBrush);
-        QColor lip = t.background;
-        lip.setAlpha(t.dark ? 110 : 60);
-        p.setPen(QPen(lip, 1.0));
-        p.drawRoundedRect(plate.adjusted(2, 2, -2, -2), kChassisRadius - 2,
-                          kChassisRadius - 2);
-
-        QColor edge = mixColors(QColor(255, 255, 255), t.textPrimary, 0.25);
-        edge.setAlphaF(t.dark ? 0.30 : 0.70);
-        QPen rim(edge, 1.0);
-        rim.setJoinStyle(Qt::RoundJoin);
-        p.setPen(rim);
-        p.drawPath(shape);
+        icon().paint(&p, QRect(x, (height() - 18) / 2, 18, 18));
+        p.setPen(QPen(t.textSecondary, 1.3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const qreal cx = width() - 8;
+        const qreal cy = height() / 2.0;
+        p.drawPolyline(QPolygonF{QPointF(cx - 2.5, cy - 1),
+                                 QPointF(cx, cy + 1.5), QPointF(cx + 2.5, cy - 1)});
+        QStyleOption focus;
+        focus.initFrom(this);
+        if (hasFocus() && (focus.state & QStyle::State_KeyboardFocusChange)) {
+            p.setPen(QPen(t.textSecondary, 1));
+            p.setBrush(Qt::NoBrush);
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1),
+                              Theme::cornerRadius - 1, Theme::cornerRadius - 1);
+        }
     }
+private:
+    bool m_primary;
+    QString m_modifier;
+    int m_modifierWidth = 0;
 };
 
-/// A shallow well punched into the header. The left instance can crop its
-/// action row down to one disclosure button; animating the well itself (rather
-/// than translating loose buttons over the header) keeps the control feeling
-/// like part of the chrome throughout the transition.
+// The same workspace commands can live inline or in an anchored popup. Moving
+// their host preserves button state and signal connections across resizes.
 class HeaderInsetPanel final : public QWidget {
     Q_DECLARE_TR_FUNCTIONS(HeaderInsetPanel)
 public:
     explicit HeaderInsetPanel(bool collapsible, QWidget* parent = nullptr)
         : QWidget(parent), m_collapsible(collapsible) {
-        setFixedHeight(34);
-        setAttribute(Qt::WA_StyledBackground, false);
-
+        setFixedHeight(kBlockHeight);
         m_row = new QHBoxLayout(this);
-        m_row->setContentsMargins(4, 3, 4, 3);
-        m_row->setSpacing(2);
-
-        if (m_collapsible) {
-            m_reveal = new ui::IconButton(
-                icons::Glyph::Layers, tr("Show workspace controls"), this);
+        m_row->setContentsMargins(5, 6, 5, 6);
+        m_row->setSpacing(3);
+        if (collapsible) {
+            m_reveal = new ui::IconButton(icons::Glyph::Layers, tr("Show workspace controls"), this);
             m_reveal->setObjectName(QStringLiteral("HeaderDockReveal"));
             m_reveal->setAccessibleName(tr("Workspace controls"));
             m_reveal->setFocusPolicy(Qt::StrongFocus);
             m_reveal->setCheckable(true);
-            m_reveal->setButtonSize(28, 28);
+            m_reveal->setButtonSize(kButtonSize, kButtonSize);
             m_row->addWidget(m_reveal);
+            m_popup = new QFrame(this, Qt::Popup | Qt::FramelessWindowHint);
+            m_popup->setObjectName(QStringLiteral("HeaderWorkspacePopup"));
+            m_popup->setAttribute(Qt::WA_TranslucentBackground);
+            auto* popupLayout = new QHBoxLayout(m_popup);
+            popupLayout->setContentsMargins(6, 6, 6, 6);
+            m_popup->installEventFilter(this);
+            m_actionHost = new QWidget(this);
+            m_actionRow = new QHBoxLayout(m_actionHost);
+            m_actionRow->setContentsMargins(0, 0, 0, 0);
+            m_actionRow->setSpacing(2);
+            m_row->addWidget(m_actionHost);
             connect(m_reveal, &QAbstractButton::toggled, this,
-                    [this](bool expanded) { setExpanded(expanded, true); });
+                    [this](bool expanded) { setExpanded(expanded); });
         }
-
-        connect(&ThemeManager::instance(), &ThemeManager::changed, this,
-                QOverload<>::of(&QWidget::update));
     }
-
     void addAction(QWidget* action) {
-        if (!action) return;
-        m_actions.push_back(action);
-        m_row->addWidget(action);
+        (m_collapsible ? m_actionRow : m_row)->addWidget(action);
     }
-
     void finish() {
-        m_row->invalidate();
-        m_row->activate();
-        const QMargins margins = m_row->contentsMargins();
-        m_collapsedWidth = m_collapsible && m_reveal
-                               ? margins.left() + m_reveal->width() +
-                                     margins.right()
-                               : m_row->sizeHint().width();
-        m_expandedWidth = std::max(m_collapsedWidth, m_row->sizeHint().width());
-        setFixedWidth(m_expandedWidth);
-        if (m_collapsible) {
-            m_expanded = true;
-            setExpanded(false, false);
-        }
+        if (m_collapsible) m_actionHost->hide();
+        fitWidth();
     }
-
     void setGeometryChangedCallback(std::function<void()> callback) {
         m_geometryChanged = std::move(callback);
     }
-
+    void setInlineBudget(int budget) {
+        if (!m_collapsible) return;
+        const QMargins margins = m_row->contentsMargins();
+        const int collapsedWidth = margins.left() + margins.right() + m_reveal->width();
+        const bool popup = m_actionRow->sizeHint().width() + collapsedWidth + m_row->spacing() > budget;
+        if (popup == m_popupMode) return;
+        m_popupMode = popup;
+        // Closing on a mode change also releases Qt's popup mouse grab.
+        setExpanded(false);
+    }
 protected:
-    void paintEvent(QPaintEvent*) override { paintHeaderInsetSurface(this); }
-
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched == m_popup && event->type() == QEvent::Hide) {
+            QSignalBlocker block(m_reveal);
+            m_reveal->setChecked(false);
+            m_reveal->setToolTip(tr("Show workspace controls"));
+            m_reveal->setAccessibleName(tr("Show workspace controls"));
+            if (isVisible()) m_reveal->setFocus(Qt::PopupFocusReason);
+        }
+        return QWidget::eventFilter(watched, event);
+    }
 private:
-    void setExpanded(bool expanded, bool animate) {
-        if (!m_collapsible || m_expanded == expanded) return;
-        m_expanded = expanded;
-
-        if (m_reveal && m_reveal->isChecked() != expanded) {
+    void fitWidth() {
+        m_row->invalidate();
+        m_row->activate();
+        setFixedWidth(m_row->sizeHint().width());
+    }
+    void setExpanded(bool expanded) {
+        {
             QSignalBlocker block(m_reveal);
             m_reveal->setChecked(expanded);
         }
-        if (m_reveal) {
-            const QString tip = expanded ? tr("Hide workspace controls")
-                                         : tr("Show workspace controls");
-            m_reveal->setToolTip(tip);
-            m_reveal->setAccessibleName(tip);
+        const QString tip = expanded ? tr("Hide workspace controls") : tr("Show workspace controls");
+        m_reveal->setToolTip(tip);
+        m_reveal->setAccessibleName(tip);
+        if (!expanded) {
+            m_popup->hide();
+            m_actionHost->hide();
+        } else if (m_popupMode) {
+            m_popup->layout()->addWidget(m_actionHost);
+            m_actionHost->show();
+            const auto& t = th();
+            m_popup->setStyleSheet(QStringLiteral(
+                "QFrame#HeaderWorkspacePopup { background: %1; border: 1px solid %2; border-radius: %3px; }")
+                .arg(t.headerBackground.name(), t.separator().name()).arg(Theme::cornerRadius));
+            m_popup->adjustSize();
+            // Anchor below the entire header, not below the shorter button
+            // group. Native frame rounding differs between 1x and Retina.
+            QPoint origin(mapToGlobal(QPoint()).x(),
+                parentWidget()->mapToGlobal(QPoint(0, parentWidget()->height() + 4)).y());
+            if (auto* screen = QGuiApplication::screenAt(origin)) {
+                const QRect bounds = screen->availableGeometry();
+                origin.setX(std::clamp(origin.x(), bounds.left(),
+                    std::max(bounds.left(), bounds.right() - m_popup->width() + 1)));
+                origin.setY(std::clamp(origin.y(), bounds.top(),
+                    std::max(bounds.top(), bounds.bottom() - m_popup->height() + 1)));
+            }
+            m_popup->move(origin);
+            m_popup->show();
+            if (auto* first = m_actionHost->findChild<ui::IconButton*>())
+                first->setFocus(Qt::PopupFocusReason);
+        } else {
+            m_row->addWidget(m_actionHost);
+            m_actionHost->show();
         }
-
-        if (expanded) {
-            for (QWidget* action : m_actions) action->show();
-            m_row->invalidate();
-            m_row->activate();
-            m_expandedWidth =
-                std::max(m_collapsedWidth, m_row->sizeHint().width());
-        }
-
-        const int target = expanded ? m_expandedWidth : m_collapsedWidth;
-        if (!animate) {
-            setFixedWidth(target);
-            if (!expanded)
-                for (QWidget* action : m_actions) action->hide();
-            if (m_geometryChanged) m_geometryChanged();
-            return;
-        }
-
-        if (!m_animation) {
-            m_animation = new QVariantAnimation(this);
-            m_animation->setDuration(180);
-            connect(m_animation, &QVariantAnimation::valueChanged, this,
-                    [this](const QVariant& value) {
-                        setFixedWidth(value.toInt());
-                        if (m_geometryChanged) m_geometryChanged();
-                    });
-            connect(m_animation, &QVariantAnimation::finished, this, [this] {
-                if (!m_expanded)
-                    for (QWidget* action : m_actions) action->hide();
-                if (m_geometryChanged) m_geometryChanged();
-            });
-        }
-        m_animation->stop();
-        m_animation->setStartValue(width());
-        m_animation->setEndValue(target);
-        m_animation->setEasingCurve(expanded ? QEasingCurve::OutCubic
-                                             : QEasingCurve::InOutCubic);
-        m_animation->start();
+        fitWidth();
+        if (m_geometryChanged) m_geometryChanged();
     }
-
     bool m_collapsible = false;
-    bool m_expanded = false;
-    int m_collapsedWidth = 0;
-    int m_expandedWidth = 0;
+    bool m_popupMode = true;
     QHBoxLayout* m_row = nullptr;
+    QHBoxLayout* m_actionRow = nullptr;
+    QWidget* m_actionHost = nullptr;
+    QFrame* m_popup = nullptr;
     ui::IconButton* m_reveal = nullptr;
-    QList<QWidget*> m_actions;
-    QVariantAnimation* m_animation = nullptr;
     std::function<void()> m_geometryChanged;
 };
 
@@ -882,24 +634,22 @@ TransportBar::TransportBar(daw::EngineController* controller, QWidget* parent)
     m_altToolIndex =
         std::clamp(QSettings().value(ui::kAltEditToolSetting, 1).toInt(),
                    0, kToolCount - 1);
+    m_rulerFormat = ui::rulerFormatFromInt(
+        QSettings().value(ui::kRulerFormatSetting, int(ui::RulerFormat::Bars)).toInt());
     setFixedHeight(ui::kTransportHeight);
     setAttribute(Qt::WA_StyledBackground, false);
     m_backgroundMedia = new ui::ThemeMediaBackground(this);
     connect(m_backgroundMedia, &ui::ThemeMediaBackground::frameChanged, this,
             [this](bool) { update(); });
 
-    // Build the trailing controls first, then restore the original three-part
-    // composition: transport, glass LCD, and editing tools. Their shared
-    // wrapper centres the complete cluster rather than any individual block.
+    // Transparent layout groups keep the complete control row centred.
     m_rightGroup = buildRightGroup();
     m_pill = buildPill();
     m_pill->setParent(this);
     m_pill->raise();
 
-    // Window controls used to consume a whole strip at the bottom of the
-    // workspace. They now sit in shallow header wells at the outer edges: the
-    // left one discloses the less frequent commands, while Web and AI remain
-    // one-click actions on the right.
+    // Workspace commands stay at the edges; the left group can disclose into
+    // a popup when the row has no room for its expanded width.
     m_leftDock = buildLeftDock();
     m_rightDock = buildRightDock();
     m_leftDock->raise();
@@ -927,7 +677,7 @@ QWidget* TransportBar::buildLeftDock() {
         button->setObjectName(QString::fromLatin1(objectName));
         button->setAccessibleName(tip);
         button->setFocusPolicy(Qt::StrongFocus);
-        button->setButtonSize(28, 28);
+        button->setButtonSize(kButtonSize, kButtonSize);
         return button;
     };
 
@@ -1007,7 +757,7 @@ QWidget* TransportBar::buildRightDock() {
     m_webPanelButton->setAccessibleName(tr("Web browser"));
     m_webPanelButton->setFocusPolicy(Qt::StrongFocus);
     m_webPanelButton->setCheckable(true);
-    m_webPanelButton->setButtonSize(28, 28);
+    m_webPanelButton->setButtonSize(kButtonSize, kButtonSize);
     connect(m_webPanelButton, &QAbstractButton::toggled, this,
             &TransportBar::webToggled);
     panel->addAction(m_webPanelButton);
@@ -1018,7 +768,7 @@ QWidget* TransportBar::buildRightDock() {
     m_notebookPanelButton->setAccessibleName(tr("Notebook"));
     m_notebookPanelButton->setFocusPolicy(Qt::StrongFocus);
     m_notebookPanelButton->setCheckable(true);
-    m_notebookPanelButton->setButtonSize(28, 28);
+    m_notebookPanelButton->setButtonSize(kButtonSize, kButtonSize);
     connect(m_notebookPanelButton, &QAbstractButton::toggled, this,
             &TransportBar::notebookToggled);
     panel->addAction(m_notebookPanelButton);
@@ -1029,7 +779,7 @@ QWidget* TransportBar::buildRightDock() {
     m_aiPanelButton->setAccessibleName(tr("AI assistant"));
     m_aiPanelButton->setFocusPolicy(Qt::StrongFocus);
     m_aiPanelButton->setCheckable(true);
-    m_aiPanelButton->setButtonSize(28, 28);
+    m_aiPanelButton->setButtonSize(kButtonSize, kButtonSize);
     connect(m_aiPanelButton, &QAbstractButton::toggled, this,
             &TransportBar::aiToggled);
     panel->addAction(m_aiPanelButton);
@@ -1039,23 +789,20 @@ QWidget* TransportBar::buildRightDock() {
 }
 
 QWidget* TransportBar::buildRightGroup() {
-    auto* box = new ui::GlassPanel(this);
+    auto* box = new QWidget(this);
     box->setObjectName(QStringLiteral("HeaderToolGroup"));
     box->setAccessibleName(tr("Editing tools"));
-    box->setShadowMargin(kBlockShadow);
-    box->setCornerRadius(kBlockRadius);
-    box->setSubtleVerticalGradient(true);
     box->setFixedHeight(kBlockHeight);
     auto* row = new QHBoxLayout(box);
-    row->setContentsMargins(9, 8, 9, 8);
-    row->setSpacing(2);
+    row->setContentsMargins(0, 6, 0, 6);
+    row->setSpacing(4);
 
     m_snapButton = new ui::IconButton(icons::Glyph::Magnet, tr("Snap to grid"),
                                       box);
     m_snapButton->setObjectName(QStringLiteral("SnapButton"));
     m_snapButton->setAccessibleName(tr("Snap to grid"));
     m_snapButton->setFocusPolicy(Qt::StrongFocus);
-    m_snapButton->setButtonSize(28, 28);
+    m_snapButton->setButtonSize(kButtonSize, kButtonSize);
     m_snapButton->setCheckable(true);
     m_snapButton->setChecked(m_snapEnabled);
     connect(m_snapButton, &QAbstractButton::toggled, this, [this](bool on) {
@@ -1067,28 +814,28 @@ QWidget* TransportBar::buildRightGroup() {
                                             box);
     m_typingKeysButton->setObjectName(QStringLiteral("MidiKeyboardButton"));
     m_typingKeysButton->setFocusPolicy(Qt::StrongFocus);
-    m_typingKeysButton->setButtonSize(28, 28);
+    m_typingKeysButton->setButtonSize(kButtonSize, kButtonSize);
     m_typingKeysButton->setCheckable(true);
     setTypingKeyboardOctave(m_typingOctave);
     connect(m_typingKeysButton, &QAbstractButton::toggled, this,
             &TransportBar::typingKeyboardToggled);
 
     auto buildToolChip = [this, box](bool primary) {
-        auto* chip = new QToolButton(box);
+        auto* chip = new ToolSelectorButton(primary, box);
         chip->setObjectName(primary ? "PrimaryToolChip" : "SecondaryToolChip");
         chip->setPopupMode(QToolButton::InstantPopup);
         chip->setCursor(Qt::PointingHandCursor);
         chip->setFocusPolicy(Qt::StrongFocus);
-        chip->setFixedSize(36, 28);
         chip->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        chip->setIconSize(QSize(24, 18));
+        chip->setIconSize(QSize(18, 18));
 
-        auto* menu = new QMenu(chip);
+        auto* menu = new ToolSelectorMenu(chip);
         auto* group = new QActionGroup(menu);
         group->setExclusive(true);
         for (int i = 0; i < kToolCount; ++i) {
             QAction* action = menu->addAction(
-                toolIcon(i, th().textPrimary, 14), translatedToolName(i));
+                toolIcon(i, th().textPrimary, 18), translatedToolName(i) +
+                    (primary ? QStringLiteral("\t%1").arg(i + 1) : QString()));
             action->setCheckable(true);
             group->addAction(action);
             (primary ? m_toolActions : m_altToolActions).push_back(action);
@@ -1097,7 +844,13 @@ QWidget* TransportBar::buildRightGroup() {
                 else setSecondaryToolIndex(i);
             });
         }
+        menu->setObjectName(QStringLiteral("HeaderToolMenu"));
         chip->setMenu(menu);
+        connect(menu, &QMenu::aboutToShow, this, [this, primary, menu] {
+            const auto& actions = primary ? m_toolActions : m_altToolActions;
+            const int selected = primary ? m_toolIndex : m_altToolIndex;
+            menu->setActiveAction(actions.value(selected));
+        });
         return chip;
     };
 
@@ -1117,31 +870,25 @@ QWidget* TransportBar::buildRightGroup() {
 }
 
 QWidget* TransportBar::buildPill() {
-    auto* pill = new TransportChassis(this);
+    auto* pill = new QWidget(this);
     pill->setObjectName(QStringLiteral("TransportPill"));
     pill->setAccessibleName(tr("Transport console"));
-    pill->setFixedHeight(kChassisHeight);
+    pill->setFixedHeight(kBlockHeight);
 
-    // The chassis margins are its shadow plus the bezel it shows around the
-    // plates; what is left is one band every block is vertically centred in.
     auto* row = new QHBoxLayout(pill);
-    row->setContentsMargins(kChassisShadow + 10, kChassisShadow + 5,
-                            kChassisShadow + 10, kChassisShadow + 5);
-    row->setSpacing(10);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(16);
 
-    auto* transportPanel = new ui::GlassPanel(pill);
+    auto* transportPanel = new QWidget(pill);
     m_transportGroup = transportPanel;
     m_transportGroup->setObjectName(QStringLiteral("TransportGroup"));
     m_transportGroup->setAccessibleName(tr("Transport controls"));
-    transportPanel->setShadowMargin(kBlockShadow);
-    transportPanel->setCornerRadius(kBlockRadius);
-    transportPanel->setSubtleVerticalGradient(true);
     m_transportGroup->setFixedHeight(kBlockHeight);
     auto* buttonRow = new QHBoxLayout(m_transportGroup);
-    buttonRow->setContentsMargins(9, 8, 9, 8);
-    buttonRow->setSpacing(2);
+    buttonRow->setContentsMargins(0, 6, 0, 6);
+    buttonRow->setSpacing(3);
 
-    constexpr int kBtn = 28;
+    constexpr int kBtn = kButtonSize;
     m_toStartButton = new ui::IconButton(icons::Glyph::SkipStart,
                                          tr("Return to start"), transportPanel);
     m_toStartButton->setObjectName(QStringLiteral("TransportToStart"));
@@ -1163,12 +910,13 @@ QWidget* TransportBar::buildPill() {
     connect(m_stopButton, &QAbstractButton::clicked, this,
             &TransportBar::stopRequested);
 
-    // Play stays the primary action but flat — an accent-tinted glyph, not a
-    // filled circle, so the transport block reads slim.
+    // A softly filled square gives Play a stable place in the control row.
     m_playButton = new ui::IconButton(icons::Glyph::Play, tr("Play"),
                                       transportPanel);
     m_playButton->setObjectName(QStringLiteral("TransportPlay"));
     m_playButton->setAccentTint(true);
+    m_playButton->setProminent(true);
+    m_playButton->setCheckable(true);
     m_playButton->setButtonSize(kBtn, kBtn);
     connect(m_playButton, &QAbstractButton::clicked, this,
             &TransportBar::playPauseRequested);
@@ -1202,6 +950,7 @@ QWidget* TransportBar::buildPill() {
                                       transportPanel);
     m_loopButton->setObjectName(QStringLiteral("TransportLoop"));
     m_loopButton->setCheckable(true);
+    m_loopButton->setActiveColor(Theme::cycle());
     m_loopButton->setButtonSize(kBtn, kBtn);
     connect(m_loopButton, &QAbstractButton::toggled, this,
             &TransportBar::loopToggled);
@@ -1222,64 +971,52 @@ QWidget* TransportBar::buildPill() {
         buttonRow->addWidget(button);
     }
 
-    auto* centerPanel = new ui::GlassPanel(pill);
+    auto* centerPanel = new QWidget(pill);
     m_lcdScreen = centerPanel;
     m_lcdScreen->setObjectName(QStringLiteral("LcdScreen"));
     m_lcdScreen->setAccessibleName(tr("Project transport settings"));
-    centerPanel->setShadowMargin(kLcdShadow);
-    centerPanel->setCornerRadius(kBlockRadius);
-    centerPanel->setSubtleVerticalGradient(true);
-    centerPanel->setFixedHeight(kLcdHeight + 2 * kLcdShadow);
+    centerPanel->setFixedHeight(kBlockHeight);
     auto* glassRow = new QHBoxLayout(centerPanel);
-    glassRow->setContentsMargins(kLcdShadow + 5, kLcdShadow + 2,
-                                 kLcdShadow + 5, kLcdShadow + 2);
-    glassRow->setSpacing(5);
+    glassRow->setContentsMargins(8, 0, 8, 0);
+    glassRow->setSpacing(8);
 
     m_positionGroup = buildPositionGroup();
     glassRow->addWidget(m_positionGroup, 0, Qt::AlignVCenter);
+    glassRow->addWidget(ui::separatorLine(Qt::Vertical, 26, centerPanel), 0, Qt::AlignVCenter);
 
-    // Tempo, signature, grid and time format used to be two sockets with a gap
-    // between them. Four readings of the same kind belong in one: a 2x2 field
-    // split by a groove, which is both shorter and easier to scan.
-    auto* statsSection = new LcdInsetWell(centerPanel);
+    auto* statsSection = new QWidget(centerPanel);
     m_statsGroup = statsSection;
     statsSection->setObjectName(QStringLiteral("StatsSection"));
-    statsSection->setAccessibleName(
-        tr("Tempo, time signature, grid and time display"));
-    statsSection->setFixedSize(188, 40);
-    statsSection->setColumnDivider(0.5);
-    auto* statsGrid = new QGridLayout(statsSection);
-    statsGrid->setContentsMargins(6, 1, 6, 1);
-    statsGrid->setHorizontalSpacing(8);
-    statsGrid->setVerticalSpacing(0);
-
-    // Every cell is an icon and its value on one 16 px line. The icon lives in
-    // its own label rather than inside the control, so a QLineEdit and a
-    // QToolButton line up on the same baseline in the same column.
-    const auto addStatsCell = [statsSection, statsGrid](QLabel*& icon,
+    statsSection->setAccessibleName(tr("Tempo, time signature, grid and time display"));
+    statsSection->setFixedHeight(kBlockHeight);
+    auto* statsRow = new QHBoxLayout(statsSection);
+    statsRow->setContentsMargins(0, 0, 0, 0);
+    statsRow->setSpacing(6);
+    const auto addStatsCell = [statsSection, statsRow](QLabel*& icon,
                                                         QWidget* value,
-                                                        int line, int column) {
+                                                        int, int) {
+        if (statsRow->count())
+            statsRow->addWidget(ui::separatorLine(Qt::Vertical, 24, statsSection), 0, Qt::AlignVCenter);
         auto* cell = new QWidget(statsSection);
-        cell->setFixedHeight(19);
-        auto* cellRow = new QHBoxLayout(cell);
-        cellRow->setContentsMargins(0, 1, 0, 1);
-        cellRow->setSpacing(2);
+        auto* cellRow = new QVBoxLayout(cell);
+        cellRow->setContentsMargins(0, 2, 0, 2);
+        cellRow->setSpacing(0);
         icon = new QLabel(cell);
-        icon->setFixedSize(16, 16);
+        icon->setFixedHeight(12);
+        icon->setFont(ui::transportControlFont(10));
         icon->setAlignment(Qt::AlignCenter);
         icon->setAttribute(Qt::WA_TransparentForMouseEvents);
         value->setParent(cell);
-        cellRow->addWidget(icon);
-        cellRow->addWidget(value);
-        statsGrid->addWidget(cell, line, column);
+        cellRow->addWidget(icon, 0, Qt::AlignHCenter);
+        cellRow->addWidget(value, 0, Qt::AlignHCenter);
+        statsRow->addWidget(cell);
     };
 
     auto* tempoEdit = new TempoScrubEdit(QStringLiteral("120"), statsSection);
     m_tempoEdit = tempoEdit;
     m_tempoEdit->setObjectName(QStringLiteral("TempoField"));
-    m_tempoEdit->setFont(ui::transportControlFont(kStatsFontPx,
-                                                  QFont::DemiBold));
-    m_tempoEdit->setFixedSize(66, 19);
+    m_tempoEdit->setFont(ui::transportControlFont(kStatsFontPx));
+    m_tempoEdit->setFixedSize(68, 28);
     m_tempoEdit->setFrame(false);
     m_tempoEdit->setAlignment(Qt::AlignCenter);
     m_tempoEdit->setAccessibleName(tr("Tempo in BPM"));
@@ -1307,9 +1044,8 @@ QWidget* TransportBar::buildPill() {
     m_timeSignatureButton->setPopupMode(QToolButton::InstantPopup);
     m_timeSignatureButton->setCursor(Qt::PointingHandCursor);
     m_timeSignatureButton->setFocusPolicy(Qt::StrongFocus);
-    m_timeSignatureButton->setFixedSize(66, 19);
-    m_timeSignatureButton->setFont(ui::transportControlFont(
-        kStatsFontPx, QFont::DemiBold));
+    m_timeSignatureButton->setFixedSize(52, 28);
+    m_timeSignatureButton->setFont(ui::transportControlFont(kStatsFontPx));
     m_timeSignatureButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     m_timeSignatureButton->setAccessibleName(tr("Project time signature"));
     auto* signatureMenu = new QMenu(m_timeSignatureButton);
@@ -1342,7 +1078,7 @@ QWidget* TransportBar::buildPill() {
     m_gridButton->setPopupMode(QToolButton::InstantPopup);
     m_gridButton->setCursor(Qt::PointingHandCursor);
     m_gridButton->setFocusPolicy(Qt::StrongFocus);
-    m_gridButton->setFixedSize(66, 19);
+    m_gridButton->setFixedSize(68, 28);
     m_gridButton->setFont(ui::transportControlFont(kChipFontPx));
     m_gridButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     auto* gridMenu = new QMenu(m_gridButton);
@@ -1367,36 +1103,39 @@ QWidget* TransportBar::buildPill() {
     addStatsCell(m_gridIcon, m_gridButton, 0, 1);
 
     m_timeFormatButton = new QToolButton(statsSection);
-    m_timeFormatButton->setObjectName(QStringLiteral("GridChip"));
+    m_timeFormatButton->setObjectName(QStringLiteral("RulerFormatButton"));
     m_timeFormatButton->setPopupMode(QToolButton::InstantPopup);
     m_timeFormatButton->setCursor(Qt::PointingHandCursor);
     m_timeFormatButton->setFocusPolicy(Qt::StrongFocus);
-    m_timeFormatButton->setFixedSize(66, 19);
+    m_timeFormatButton->setFixedSize(52, 28);
     m_timeFormatButton->setFont(ui::transportControlFont(kChipFontPx));
-    m_timeFormatButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_timeFormatButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    m_timeFormatButton->setIconSize(QSize(18, 18));
     auto* timeMenu = new QMenu(m_timeFormatButton);
-    auto* timeGroup = new QActionGroup(timeMenu);
-    timeGroup->setExclusive(true);
-    const struct { const char* label; bool bars; } kFormats[] = {
-        {QT_TRANSLATE_NOOP("TransportBar", "Bars"), true},
-        {QT_TRANSLATE_NOOP("TransportBar", "Time"), false}};
+    const struct { const char* label; ui::RulerFormat format; } kFormats[] = {
+        {QT_TRANSLATE_NOOP("TransportBar", "Bars"), ui::RulerFormat::Bars},
+        {QT_TRANSLATE_NOOP("TransportBar", "Time"), ui::RulerFormat::Time}};
     for (const auto& fmt : kFormats) {
         QAction* action = timeMenu->addAction(
             QCoreApplication::translate("TransportBar", fmt.label));
         action->setCheckable(true);
-        action->setChecked(fmt.bars == m_showBars);
-        action->setData(fmt.bars);
-        timeGroup->addAction(action);
-        const bool bars = fmt.bars;
+        action->setData(int(fmt.format));
+        const int flag = int(fmt.format);
         connect(action, &QAction::triggered, this,
-                [this, bars] { setTimeDisplayBars(bars); });
+                [this, flag](bool checked) {
+                    const int next = checked ? int(m_rulerFormat) | flag
+                                             : int(m_rulerFormat) & ~flag;
+                    if (next) setRulerFormat(ui::rulerFormatFromInt(next));
+                    else updateRulerControls();
+                });
     }
+    timeMenu->addSeparator();
+    auto* both = timeMenu->addAction(tr("Bars and time"));
+    both->setData(int(ui::RulerFormat::BarsAndTime));
+    connect(both, &QAction::triggered, this,
+            [this] { setRulerFormat(ui::RulerFormat::BarsAndTime); });
     m_timeFormatButton->setMenu(timeMenu);
-    m_timeFormatButton->setText(m_showBars ? tr("Bars") : tr("Time"));
-    const QString timeDescription =
-        tr("Time display — %1").arg(m_timeFormatButton->text());
-    m_timeFormatButton->setToolTip(timeDescription);
-    m_timeFormatButton->setAccessibleName(timeDescription);
+    updateRulerControls();
     addStatsCell(m_formatIcon, m_timeFormatButton, 1, 1);
 
     glassRow->addWidget(statsSection, 0, Qt::AlignVCenter);
@@ -1409,24 +1148,25 @@ QWidget* TransportBar::buildPill() {
 }
 
 QWidget* TransportBar::buildPositionGroup() {
-    auto* group = new LcdInsetWell(this);
+    auto* group = new QWidget(this);
     group->setObjectName(QStringLiteral("PositionSection"));
-    group->setFixedSize(144, 40);
-    // The one reading the eye keeps coming back to. It is the only socket that
-    // is lit from behind, which is what makes it findable without hunting.
-    group->setBacklit(true);
-    // One inset on every side. The counter used to sit in a field two pixels
-    // wider on the right than the socket was deep, which reads as a slip.
-    auto* row = new QHBoxLayout(group);
-    row->setContentsMargins(4, 4, 4, 4);
-    row->setSpacing(4);
+    group->setFixedSize(144, kBlockHeight);
+    auto* row = new QVBoxLayout(group);
+    row->setContentsMargins(0, 2, 0, 2);
+    row->setSpacing(0);
+    m_positionLabel = new QLabel(m_positionShowsBars ? tr("Bars") : tr("Time"), group);
+    m_positionLabel->setFixedHeight(12);
+    m_positionLabel->setFont(ui::transportControlFont(10));
+    m_positionLabel->setAlignment(Qt::AlignCenter);
+    m_positionLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    row->addWidget(m_positionLabel);
 
     auto* scrub = new PositionScrubEdit(QStringLiteral("1.1.000"), group);
     m_positionValue = scrub;
     m_positionValue->setObjectName(QStringLiteral("BarsPosition"));
     m_positionValue->setFont(
-        ui::transportDisplayFont(kPositionFontPx, QFont::Bold));
-    m_positionValue->setFixedSize(136, 32);
+        ui::transportDisplayFont(kPositionFontPx, QFont::Normal));
+    m_positionValue->setFixedSize(136, 28);
     m_positionValue->setFrame(false);
     m_positionValue->setAlignment(Qt::AlignCenter);
     m_positionValue->setMaxLength(24);
@@ -1519,27 +1259,45 @@ void TransportBar::setSnapEnabled(bool enabled) {
 }
 
 void TransportBar::setTimeDisplayBars(bool bars) {
-    const bool changed = m_showBars != bars;
-    m_showBars = bars;
-    if (m_timeFormatButton) {
-        m_timeFormatButton->setText(bars ? tr("Bars") : tr("Time"));
-        const QString description =
-            tr("Time display — %1").arg(bars ? tr("Bars") : tr("Time"));
-        m_timeFormatButton->setToolTip(description);
-        m_timeFormatButton->setAccessibleName(description);
-        if (m_timeFormatButton->menu()) {
-            for (QAction* action : m_timeFormatButton->menu()->actions()) {
-                if (action->data().isValid())
-                    action->setChecked(action->data().toBool() == bars);
-            }
+    setRulerFormat(bars ? ui::RulerFormat::Bars : ui::RulerFormat::Time);
+    setPositionDisplayBars(bars);
+}
+
+void TransportBar::setRulerFormat(ui::RulerFormat format) {
+    format = ui::rulerFormatFromInt(int(format));
+    if (m_rulerFormat == format) return;
+    m_rulerFormat = format;
+    updateRulerControls();
+    QSettings().setValue(ui::kRulerFormatSetting, int(format));
+    emit timeFormatChanged();
+}
+
+void TransportBar::updateRulerControls() {
+    if (!m_timeFormatButton) return;
+    const bool both = m_rulerFormat == ui::RulerFormat::BarsAndTime;
+    m_timeFormatButton->setIcon(icons::icon(
+        both ? icons::Glyph::Layers
+             : showsBars() ? icons::Glyph::GridDivision : icons::Glyph::Clock,
+        th().textPrimary, 18));
+    const QString description = tr("Timeline ruler — %1").arg(
+        both ? tr("Bars and time") : showsBars() ? tr("Bars") : tr("Time"));
+    m_timeFormatButton->setToolTip(description);
+    m_timeFormatButton->setAccessibleName(description);
+    if (auto* menu = m_timeFormatButton->menu()) {
+        for (QAction* action : menu->actions()) {
+            if (!action->isCheckable()) continue;
+            const int flag = action->data().toInt();
+            const QSignalBlocker blocker(action);
+            action->setChecked((int(m_rulerFormat) & flag) != 0);
+            // Keep at least one row visible; the other row can always be added.
+            action->setEnabled(int(m_rulerFormat) != flag);
         }
     }
-    setPositionDisplayBars(bars);
-    if (changed) emit timeFormatChanged();
 }
 
 void TransportBar::setPositionDisplayBars(bool bars) {
     m_positionShowsBars = bars;
+    if (m_positionLabel) m_positionLabel->setText(bars ? tr("Bars") : tr("Time"));
     if (m_positionValue) {
         m_positionValue->setAccessibleName(
             bars ? tr("Playhead musical position")
@@ -1560,7 +1318,7 @@ void TransportBar::setToolIndex(int index) {
     if (index != m_toolIndex) QSettings().setValue(ui::kEditToolSetting, index);
     m_toolIndex = index;
     if (m_toolButton) {
-        m_toolButton->setIcon(toolChipIcon(index, th().accent));
+        m_toolButton->setIcon(toolIcon(index, th().textPrimary, 18));
         const QString description =
             tr("%1 tool — on the pointer. 1…8 switch it.")
                 .arg(translatedToolName(index));
@@ -1578,9 +1336,9 @@ void TransportBar::setSecondaryToolIndex(int index) {
         QSettings().setValue(ui::kAltEditToolSetting, index);
     m_altToolIndex = index;
     if (m_altToolButton) {
-        // Drawn in the secondary ink, so the pair reads as "this one, and this
-        // one while you hold the key" rather than as two equal tools.
-        m_altToolButton->setIcon(toolChipIcon(index, th().textPrimary));
+        // The modifier symbol on the button distinguishes this tool from the
+        // primary pointer without adding another persistent colour accent.
+        m_altToolButton->setIcon(toolIcon(index, th().textPrimary, 18));
         const QString description =
             tr("%1 tool — while %2 is held.")
                 .arg(translatedToolName(index),
@@ -1610,196 +1368,80 @@ void TransportBar::toggleMetronome() {
 
 void TransportBar::reloadPanelStyle() {
     m_plainPanelStyle = QSettings().value(
-        ui::kTransportPanelStyleSetting, QStringLiteral("neon")).toString() ==
+        ui::kTransportPanelStyleSetting, QStringLiteral("plain")).toString() ==
         QLatin1String("plain");
     applyTheme();
 }
 
 void TransportBar::applyTheme() {
     const Theme& t = th();
-    for (QWidget* well : {m_positionGroup, m_statsGroup}) {
-        if (well) static_cast<LcdInsetWell*>(well)->setPlain(m_plainPanelStyle);
+    const QColor ink = m_plainPanelStyle ? t.textPrimary
+        : mixColors(t.accent, t.textPrimary, t.dark ? 0.35 : 0.10);
+    const QColor hover = mixColors(t.well(), t.textPrimary, t.dark ? 0.10 : 0.07);
+    const QColor pressed = mixColors(t.headerBackground, t.textPrimary, 0.14);
+    setStyleSheet(QStringLiteral(R"(
+#TransportPill, #TransportGroup, #HeaderToolGroup, #LcdScreen,
+#PositionSection, #StatsSection { background: transparent; border: none; }
+#LcdScreen QLabel { background: transparent; color: %8; font-size: 10px; }
+#TempoField, #TimeSignatureButton, #GridChip, #RulerFormatButton {
+    background: transparent; color: %2; border: 1px solid transparent;
+    border-radius: %RADIUS%px; padding: 0 3px; font-size: 15px;
+    selection-background-color: %ACCENT%; selection-color: %ACCENT_TEXT%;
+}
+#GridChip { font-size: 12px; }
+#TempoField:hover, #TimeSignatureButton:hover, #GridChip:hover, #RulerFormatButton:hover { background: %3; }
+#TempoField:focus { border-color: %4; }
+#GridChip::menu-indicator, #TimeSignatureButton::menu-indicator, #RulerFormatButton::menu-indicator { image: none; width: 0; }
+QMenu#HeaderToolMenu {
+    background: %6; color: %1; border: 1px solid %7;
+    border-radius: %RADIUS%px; padding: 5px; font-size: 13px;
+}
+QMenu#HeaderToolMenu::item { min-height: 22px; padding: 4px 32px 4px 8px; border-radius: %RADIUS%px; font-size: 13px; }
+QMenu#HeaderToolMenu::item:checked { color: %1; font-weight: 600; }
+QMenu#HeaderToolMenu::item:selected { background: %5; }
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
+          .replace("%ACCENT%", t.accent.name())
+          .replace("%ACCENT_TEXT%", t.accentText().name())
+          .arg(t.textPrimary.name(), ink.name(), hover.name(),
+          t.accentHighlight.name(), pressed.name(), t.headerBackground.name(),
+          t.separator().name(), t.textSecondary.name()));
+    m_tempoIcon->setText(QStringLiteral("BPM"));
+    m_signatureIcon->setText(tr("Meter"));
+    m_gridIcon->setText(tr("Grid"));
+    m_formatIcon->setText(tr("Ruler"));
+    for (auto* button : findChildren<ui::IconButton*>()) {
+        button->setProperty("consoleButton", true);
+        if (button->accessibleName().isEmpty()) button->setAccessibleName(button->toolTip());
+        button->update();
     }
-
-    if (m_pill) {
-        const QColor nested =
-            mixColors(t.surfaceElevated, t.headerBackground, 0.45);
-        const QColor panelBorder =
-            mixColors(t.separator(), t.textPrimary, 0.08);
-        const QColor field = mixColors(t.well(), t.surfaceElevated, 0.26);
-        const QColor hover =
-            mixColors(t.surfaceElevated, t.textPrimary, 0.14);
-        const QColor fieldHover = mixColors(field, t.textPrimary, 0.10);
-        const QColor displayInk = mixColors(
-            t.accent, t.textPrimary, t.dark ? 0.25 : 0.52);
-        const QColor focus(t.accent.red(), t.accent.green(), t.accent.blue(),
-                           220);
-        const QColor accentSoft = mixColors(
-            nested, t.accent, t.dark ? 0.20 : 0.08);
-
-        // Keep the LCD recognisably glass, but calm the theme colour locally.
-        // No other GlassPanel in the application is affected.
-        if (auto* lcd = qobject_cast<ui::GlassPanel*>(m_lcdScreen))
-            lcd->setAccentColor(m_plainPanelStyle
-                ? mixColors(t.headerBackground, t.surfaceElevated, 0.48)
-                : mixColors(t.accent, t.surfaceElevated,
-                            t.dark ? 0.24 : 0.72));
-        for (QWidget* group : {m_transportGroup, m_rightGroup}) {
-            if (auto* glass = qobject_cast<ui::GlassPanel*>(group))
-                glass->setAccentColor(
-                    mixColors(t.accent, t.surfaceElevated,
-                              t.dark ? 0.55 : 0.80));
-        }
-
-        // Its own %1..%3, applied separately: adding them to the sheet below
-        // would push it past nine markers again.
-        const QString typeScale =
-            QStringLiteral("#BarsPosition { font-size: %1px; }"
-                           "#TempoField, #TimeSignatureButton { font-size: %2px; }"
-                           "#GridChip { font-size: %3px; }")
-                .arg(kPositionFontPx)
-                .arg(kStatsFontPx)
-                .arg(kChipFontPx);
-
-        setStyleSheet(typeScale + QString(R"(
-#TransportPill { background: transparent; }
-#TransportGroup, #HeaderToolGroup {
-    background: transparent; border: none;
-}
-#LcdScreen QLabel { color: %3; background: transparent; }
-#PositionSection, #StatsSection {
-    background: transparent; border: none; border-radius: 7px;
-}
-#BarsPosition, #TempoField, #TimeSignatureButton, #GridChip {
-    background: transparent; border: 1px solid transparent; border-radius: 7px;
-    padding: 1px 3px; color: %3; selection-background-color: %8;
-}
-#BarsPosition { padding: 0 7px; font-weight: 700; }
-#TempoField { font-weight: 600; }
-#BarsPosition:hover, #TempoField:hover, #TimeSignatureButton:hover, #GridChip:hover {
-    background: %5;
-}
-#BarsPosition:focus, #TempoField:focus, #TimeSignatureButton:focus, #GridChip:focus {
-    border-color: %6; background: %4;
-}
-#PrimaryToolChip, #SecondaryToolChip {
-    background: %1; border: 1px solid %2; border-radius: 9px;
-    padding: 0; color: %3;
-}
-#PrimaryToolChip:hover, #SecondaryToolChip:hover { background: %7; }
-#PrimaryToolChip:focus, #SecondaryToolChip:focus { border-color: %6; }
-#PrimaryToolChip { background: %9; border-color: %6; }
-#GridChip::menu-indicator, #TimeSignatureButton::menu-indicator,
-#PrimaryToolChip::menu-indicator, #SecondaryToolChip::menu-indicator {
-    image: none; width: 0;
-}
-)")
-            // Contiguous %1..%9, in this order — see the note above.
-            .arg(nested.name(), panelBorder.name(), displayInk.name(),
-                  field.name(), fieldHover.name(),
-                  focus.name(QColor::HexArgb), hover.name(), t.accent.name(),
-                  accentSoft.name()));
-    }
-    // Monochrome uses theme-aware ink so it remains readable on both dark and
-    // light headers. It has no forced black fill and no coloured glow.
-    if (m_lcdScreen) {
-        const QColor monoInk = t.ink();
-        const QColor monoHover = mixColors(t.headerBackground, monoInk, 0.08);
-        const QColor monoFocus = mixColors(t.headerBackground,
-                                           t.surfaceElevated, 0.55);
-        QColor monoOutline = monoInk;
-        monoOutline.setAlpha(t.dark ? 150 : 125);
-        const QColor monoSelection = mixColors(t.headerBackground, monoInk,
-                                               t.dark ? 0.28 : 0.18);
-        m_lcdScreen->setStyleSheet(m_plainPanelStyle
-        ? QStringLiteral(R"(
-#LcdScreen QLabel { color: %1; }
-#BarsPosition, #TempoField, #TimeSignatureButton, #GridChip {
-    color: %1; selection-color: %1; selection-background-color: %4;
-}
-#BarsPosition:hover, #TempoField:hover, #TimeSignatureButton:hover, #GridChip:hover {
-    background: %2;
-}
-#BarsPosition:focus, #TempoField:focus, #TimeSignatureButton:focus, #GridChip:focus {
-    border-color: %3; background: %2;
-}
-)").arg(monoInk.name(), monoHover.name(QColor::HexArgb),
-         monoOutline.name(QColor::HexArgb), monoSelection.name())
-        : QString());
+    if (m_snapButton) m_snapButton->setIcon(icons::svgIcon(QStringLiteral("magnet-straight.svg"), t.textPrimary, 18));
+    if (m_typingKeysButton) m_typingKeysButton->setIcon(icons::svgIcon(QStringLiteral("piano-keys.svg"), t.textPrimary, 18));
+    if (m_metroButton) m_metroButton->setIcon(icons::svgIcon(QStringLiteral("metronome.svg"), t.textPrimary, 18));
+    if (m_toolButton) m_toolButton->setIcon(toolIcon(m_toolIndex, t.textPrimary, 18));
+    if (m_altToolButton) m_altToolButton->setIcon(toolIcon(m_altToolIndex, t.textPrimary, 18));
+    updateRulerControls();
+    for (int i = 0; i < kToolCount; ++i) {
+        if (i < m_toolActions.size()) m_toolActions[i]->setIcon(toolIcon(i, t.textPrimary, 18));
+        if (i < m_altToolActions.size()) m_altToolActions[i]->setIcon(toolIcon(i, t.textPrimary, 18));
     }
     updatePositionStyle();
-    // One label per reading in the 2x2 field, so the icons stay put while the
-    // values beside them change width.
-    const std::pair<QLabel*, const char*> statsIcons[] = {
-        {m_tempoIcon, "metronome.svg"},
-        {m_signatureIcon, "dots-nine.svg"},
-        {m_gridIcon, "grid-four.svg"},
-        {m_formatIcon, "clock.svg"}};
-    for (const auto& [label, file] : statsIcons) {
-        if (!label) continue;
-        label->setPixmap(
-            icons::svgIcon(QLatin1String(file),
-                           m_plainPanelStyle ? t.ink() : t.textSecondary, 16)
-                .pixmap(QSize(16, 16)));
-    }
-    if (m_snapButton)
-        m_snapButton->setIcon(
-            icons::svgIcon(QStringLiteral("magnet-straight.svg"), t.textPrimary, 18));
-    if (m_typingKeysButton)
-        m_typingKeysButton->setIcon(
-            icons::svgIcon(QStringLiteral("piano-keys.svg"), t.textPrimary, 18));
-    if (m_metroButton)
-        m_metroButton->setIcon(
-            icons::svgIcon(QStringLiteral("metronome.svg"), t.textPrimary, 18));
-    if (m_toolButton && m_toolIndex >= 0 && m_toolIndex < kToolCount)
-        m_toolButton->setIcon(toolChipIcon(
-            m_toolIndex,
-            mixColors(t.accent, t.textPrimary, t.dark ? 0.12 : 0.30)));
-    if (m_altToolButton && m_altToolIndex >= 0 && m_altToolIndex < kToolCount)
-        m_altToolButton->setIcon(toolChipIcon(m_altToolIndex, t.textPrimary));
-    for (int i = 0; i < m_toolActions.size() && i < kToolCount; ++i) {
-        if (m_toolActions[i])
-            m_toolActions[i]->setIcon(toolIcon(i, t.textPrimary, 14));
-    }
-    for (int i = 0; i < m_altToolActions.size() && i < kToolCount; ++i) {
-        if (m_altToolActions[i])
-            m_altToolActions[i]->setIcon(toolIcon(i, t.textPrimary, 14));
-    }
+    updateResponsiveLayout();
     update();
 }
 
 void TransportBar::updatePositionStyle() {
     if (!m_positionGroup || !m_positionValue) return;
     const Theme& t = th();
-    const QColor background = m_plainPanelStyle
-        ? mixColors(t.headerBackground, t.surfaceElevated, 0.48)
-        : mixColors(t.well(), t.surfaceElevated, 0.26);
-    // Brighter than the values around it: this socket is backlit, so its ink
-    // has to stay ahead of its own glow.
-    const QColor text = m_plainPanelStyle ? t.ink() : m_positionRecording
-                            ? Theme::record()
-                            : mixColors(t.accent, t.textPrimary,
-                                        t.dark ? 0.10 : 0.34);
-    const QColor hover = m_plainPanelStyle
-        ? mixColors(background, t.ink(), 0.08) : mixColors(
-        background, m_positionRecording ? Theme::record() : t.accent, 0.14);
-    const QColor focus = m_plainPanelStyle ? t.ink()
-        : m_positionRecording ? Theme::record() : t.accent;
-    const QColor selection = m_plainPanelStyle
-        ? mixColors(background, t.ink(), t.dark ? 0.28 : 0.18) : focus;
-    const QString style =
-        QString("#PositionSection { background: transparent; border: none; "
-                "border-radius: 7px; } "
-                "#BarsPosition { background: transparent; border: 1px solid "
-                "transparent; border-radius: 7px; color: %1; padding: 0 7px; "
-                "font-size: %5px; "
-                "selection-background-color: %6; } "
-                "#BarsPosition:hover { background: %3; } "
-                "#BarsPosition:focus { border-color: %2; background: %4; }")
-            .arg(text.name(), focus.name(), hover.name(QColor::HexArgb),
-                  background.name(), QString::number(kPositionFontPx),
-                  selection.name());
-    m_positionGroup->setStyleSheet(style);
+    const QColor ink = m_positionRecording ? Theme::record()
+        : m_plainPanelStyle ? t.textPrimary : mixColors(t.accent, t.textPrimary, 0.35);
+    m_positionGroup->setStyleSheet(QStringLiteral(
+        "#BarsPosition { background: transparent; border: 1px solid transparent; "
+        "border-radius: 4px; color: %1; padding: 0 5px; font-size: %2px; "
+        "font-weight: 400; selection-color: %1; selection-background-color: %3; }"
+        "#BarsPosition:hover { background: %3; }"
+        "#BarsPosition:focus { border-color: %4; }")
+        .arg(ink.name(), QString::number(kPositionFontPx),
+             mixColors(t.headerBackground, t.textPrimary, 0.10).name(), t.accentHighlight.name()));
 }
 
 void TransportBar::paintEvent(QPaintEvent*) {
@@ -1808,11 +1450,14 @@ void TransportBar::paintEvent(QPaintEvent*) {
 }
 
 void TransportBar::paintScene(QPainter& p, const QRegion&) {
-    p.setRenderHint(QPainter::Antialiasing, true);
     const Theme& t = th();
-    // The header has its own colour (per-theme `headerBackground`); compact
-    // glass modules float above it without changing the workspace geometry.
-    p.fillRect(rect(), t.headerBackground);
+    // The context plate shares this surface; its darker travel rail below
+    // keeps the moving controls distinct from their backdrop.
+    QLinearGradient surface(0, 0, 0, height());
+    surface.setColorAt(0, mixColors(t.headerBackground, t.surfaceElevated, 0.32));
+    surface.setColorAt(1, t.headerBackground);
+    p.fillRect(rect(), surface);
+
     if (m_backgroundEnabled && m_backgroundVisibility > 0 &&
         m_backgroundMedia && m_backgroundMedia->hasFrame()) {
         p.setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -1821,8 +1466,29 @@ void TransportBar::paintScene(QPainter& p, const QRegion&) {
         p.setOpacity(1.0);
     }
 
-    p.setPen(QPen(t.sectionDivider(), 1));
-    p.drawLine(0, height() - 1, width(), height() - 1);
+    p.setRenderHint(QPainter::Antialiasing);
+    if (m_lcdScreen) {
+        const QRectF display = QRectF(QPointF(m_lcdScreen->mapTo(this, QPoint())),
+                                      QSizeF(m_lcdScreen->size()))
+                                   .adjusted(0.5, 0.5, -0.5, -0.5);
+        QLinearGradient bed(display.topLeft(), display.bottomLeft());
+        bed.setColorAt(0, mixColors(t.headerBackground, t.well(), 0.64));
+        bed.setColorAt(1, mixColors(t.headerBackground, t.well(), 0.42));
+        QLinearGradient edge(display.topLeft(), display.bottomLeft());
+        edge.setColorAt(0, mixColors(t.headerBackground, t.well(), 0.90));
+        edge.setColorAt(1, mixColors(t.headerBackground, t.textPrimary, t.dark ? 0.10 : 0.20));
+        p.setPen(QPen(QBrush(edge), 1));
+        p.setBrush(bed);
+        p.drawRoundedRect(display, Theme::cornerRadius, Theme::cornerRadius);
+    }
+    // Peripheral commands share the same restrained, softly edged material.
+    for (QWidget* dock : {m_leftDock, m_rightDock}) {
+        if (!dock) continue;
+        const QRectF plate = QRectF(dock->geometry()).adjusted(0.5, 4.5, -0.5, -4.5);
+        p.setBrush(mixColors(t.headerBackground, t.surfaceElevated, 0.35));
+        p.setPen(QPen(mixColors(t.headerBackground, t.textPrimary, 0.09), 1));
+        p.drawRoundedRect(plate, Theme::cornerRadius, Theme::cornerRadius);
+    }
 }
 
 void TransportBar::resizeEvent(QResizeEvent* ev) {
@@ -1905,9 +1571,15 @@ int TransportBar::minimumResponsiveWidth() const {
     // panel budget cannot make the header flash during a resize.
     const int coreTransport = layoutWidth(
         m_transportGroup->layout(), {m_stopButton, m_playButton, m_recordButton});
-    const int completeCluster = layoutWidth(
-        m_pill->layout(), {m_transportGroup, m_lcdScreen, m_rightGroup}) -
-        widgetWidth(m_transportGroup) + coreTransport;
+    // Measure the compact layout, independently of the current window width.
+    // Otherwise a spacious readout raises the minimum on the next resize and
+    // unnecessarily takes space away from the Web/AI side panels.
+    const int compactLcdWidth = widgetWidth(m_lcdScreen) -
+        widgetWidth(m_positionGroup) + compactPositionWidth();
+    const QMargins clusterMargins = m_pill->layout()->contentsMargins();
+    const int completeCluster = coreTransport + compactLcdWidth +
+        widgetWidth(m_rightGroup) + clusterMargins.left() +
+        clusterMargins.right() + 2 * kCompactClusterGap;
 
     // The fixed right well is broader than the left well's collapsed state,
     // so it defines the symmetric edge reserve without making a temporarily
@@ -1931,11 +1603,8 @@ void TransportBar::updateResponsiveLayout() {
         // Reserve a three-digit bar and a two-digit beat using the actual
         // application face. Inter is wider than the old condensed fallback;
         // fixed pixel widths clipped clock readings in the compact layout.
-        const QFont displayFont = ui::transportDisplayFont(kPositionFontPx, QFont::Bold);
-        const int textWidth = int(std::ceil(QFontMetricsF(displayFont)
-            .horizontalAdvance(QStringLiteral("999.16.999"))));
-        const int fieldWidth = textWidth + 20 + (compact ? 0 : 12);
-        if (m_positionGroup) m_positionGroup->setFixedWidth(fieldWidth + 8);
+        const int fieldWidth = compactPositionWidth() + (compact ? 0 : 12);
+        if (m_positionGroup) m_positionGroup->setFixedWidth(fieldWidth);
         if (m_positionValue) m_positionValue->setFixedWidth(fieldWidth);
     };
 
@@ -1964,6 +1633,14 @@ void TransportBar::updateResponsiveLayout() {
     // measuring. On the way down the display tightens first, then secondary
     // actions disappear in one deterministic order. The three core actions
     // are never candidates.
+    const QFontMetrics statsMetrics(ui::transportControlFont(kChipFontPx));
+    int gridWidth = 0;
+    for (const auto& division : ui::gridDivisions())
+        gridWidth = std::max(gridWidth, statsMetrics.horizontalAdvance(gridDivisionName(division)) + 10);
+    m_gridButton->setFixedWidth(std::max(60, gridWidth));
+    m_timeFormatButton->setFixedWidth(std::max(44,
+        QFontMetrics(m_formatIcon->font()).horizontalAdvance(m_formatIcon->text()) + 10));
+    m_pill->layout()->setSpacing(16);
     setDisplayCompact(false);
     QWidget* const optional[] = {
         m_forwardButton, m_rewindButton, m_loopButton, m_metroButton,
@@ -1987,6 +1664,11 @@ void TransportBar::updateResponsiveLayout() {
     // Reserve the broader edge on both sides. The transport/LCD/edit cluster
     // therefore remains mathematically centred while the left well opens,
     // instead of being pushed sideways by the drawer animation.
+    if (m_leftDock) {
+        const int fullWidth = m_pill->layout()->sizeHint().width();
+        static_cast<HeaderInsetPanel*>(m_leftDock)->setInlineBudget(
+            (width() - fullWidth) / 2 - kOuterMargin - kDockGap);
+    }
     const int edgeDock = std::max(m_leftDock ? m_leftDock->width() : 0,
                                   m_rightDock ? m_rightDock->width() : 0);
     const int safeLeft = kOuterMargin + edgeDock + kDockGap;
@@ -2004,6 +1686,7 @@ void TransportBar::updateResponsiveLayout() {
 
     int pillWidth = measuredWidth();
     if (pillWidth > available) {
+        m_pill->layout()->setSpacing(kCompactClusterGap);
         setDisplayCompact(true);
         pillWidth = measuredWidth();
     }
@@ -2022,12 +1705,8 @@ void TransportBar::updateResponsiveLayout() {
         const int maxX = std::max(safeLeft, safeRight - pillWidth);
         x = std::clamp(x, safeLeft, maxX);
     } else {
-        // At the application's deliberately squeezed Web+AI test width there
-        // is not enough horizontal space for the opened drawer and even the
-        // irreducible transport readout at once. Keep the transport centred
-        // and let the short-lived drawer overlay its far-left controls; moving
-        // the timeline's principal readout would be the more disruptive
-        // failure. At normal workspace widths the reserved wells never meet.
+        // The main window enforces minimumResponsiveWidth(); this fallback
+        // only applies to an embedded header temporarily below its minimum.
         x = std::max(0, x);
     }
     m_pill->setGeometry(x, (height() - m_pill->height()) / 2, pillWidth,
@@ -2088,6 +1767,11 @@ void TransportBar::refresh() {
 
     m_playButton->setGlyph(playing ? icons::Glyph::Pause : icons::Glyph::Play);
     m_playButton->setToolTip(playing ? tr("Pause") : tr("Play"));
+    m_playButton->setAccessibleName(m_playButton->toolTip());
+    {
+        QSignalBlocker block(m_playButton);
+        m_playButton->setChecked(playing);
+    }
     // Engaged and rolling both light the button; only the shade differs, so the
     // two states are never mistaken for each other.
     if (recording) m_recordEngaged = true;
@@ -2097,15 +1781,15 @@ void TransportBar::refresh() {
         m_recordButton->setChecked(lit);
     }
     m_recordButton->setActiveColor(Theme::record());
-    // Engaged glows: the take is set up in the context panel and starts on the
-    // next press. Rolling is steady red — a light that breathes would be
-    // saying "waiting" while the machine is already recording.
+    // Console buttons draw an outline while armed and a fill while
+    // recording. Preserve the state API without a decorative pulse.
     m_recordButton->setPulse(m_recordEngaged && !recording);
     m_recordButton->setToolTip(recording  ? tr("Stop recording")
                                : m_recordEngaged
                                    ? tr("Record engaged — start from the panel "
                                         "or press R")
                                    : tr("Record"));
+    m_recordButton->setAccessibleName(m_recordButton->toolTip());
 
     // While rolling the dedicated lightweight playhead clock owns this at
     // display cadence. Avoid formatting the same position again on the slower
@@ -2296,6 +1980,159 @@ void TransportBar::syncTempo() {
     m_tempoEditing = false;
     const QString text = tempoText(m_controller->tempo());
     if (m_tempoEdit->text() != text) m_tempoEdit->setText(text);
+}
+
+bool TransportBar::checkHeaderInteractionForTest(const QString& screenshotPath) {
+    const auto fail = [](int line) {
+        std::fprintf(stderr, "Header interaction check failed at line %d\n", line);
+        return false;
+    };
+    daw::EngineController controller;
+    if (!controller.initialize(48000, 256, false)) return fail(__LINE__);
+    QWidget host;
+    host.resize(1920, 400);
+    TransportBar bar(&controller, &host);
+    host.show();
+    const auto flush = [] { QCoreApplication::processEvents(); };
+    const auto key = [](QWidget* target, int code) {
+        QKeyEvent press(QEvent::KeyPress, code, Qt::NoModifier);
+        QCoreApplication::sendEvent(target, &press);
+        QKeyEvent release(QEvent::KeyRelease, code, Qt::NoModifier);
+        QCoreApplication::sendEvent(target, &release);
+    };
+    auto* reveal = bar.findChild<ui::IconButton*>(QStringLiteral("HeaderDockReveal"));
+    auto* browser = bar.m_browserPanelButton;
+    if (!reveal || !browser) return fail(__LINE__);
+    flush();
+    const int minimumWidth = bar.minimumResponsiveWidth();
+    for (int width : {1920, 1440, 1180, minimumWidth}) {
+        host.resize(width, 400);
+        bar.resize(width, ui::kTransportHeight);
+        flush();
+        if (bar.minimumResponsiveWidth() != minimumWidth) return fail(__LINE__);
+        const QList<QWidget*> required{bar.m_stopButton, bar.m_playButton, bar.m_recordButton,
+            bar.m_positionValue, bar.m_tempoEdit, bar.m_gridButton, bar.m_timeSignatureButton,
+            bar.m_timeFormatButton, bar.m_toolButton, bar.m_altToolButton};
+        for (QWidget* widget : required) {
+            const QRect bounds(widget->mapTo(&bar, QPoint()), widget->size());
+            if (!widget->isVisible() || !bar.rect().contains(bounds)) return fail(__LINE__);
+            const bool readout = bar.m_lcdScreen->isAncestorOf(widget);
+            const int expectedY = bar.rect().center().y() + (readout ? 6 : 0);
+            if (std::abs(bounds.center().y() - expectedY) > 1) return fail(__LINE__);
+        }
+        if (bar.m_pill->geometry().intersects(bar.m_leftDock->geometry()) ||
+            bar.m_pill->geometry().intersects(bar.m_rightDock->geometry())) return fail(__LINE__);
+        const QPoint anchor = bar.readoutCenterGlobal();
+        reveal->click(); flush();
+        if (!browser->isVisible() || bar.readoutCenterGlobal() != anchor) return fail(__LINE__);
+        if (browser->window() != &host) {
+            if (browser->window()->geometry().top() < bar.mapToGlobal(QPoint(0, bar.height())).y()) {
+                std::fprintf(stderr, "Header popup: width=%d hostY=%d headerBottom=%d popupY=%d popupHeight=%d screenHeight=%d\n",
+                    width, host.y(), bar.mapToGlobal(QPoint(0, bar.height())).y(),
+                    browser->window()->y(), browser->window()->height(), host.screen()->availableGeometry().height());
+                return fail(__LINE__);
+            }
+            key(browser->window(), Qt::Key_Escape); flush();
+            if (browser->isVisible() || reveal->isChecked()) return fail(__LINE__);
+        } else {
+            if (bar.m_leftDock->geometry().intersects(bar.m_pill->geometry())) return fail(__LINE__);
+            reveal->click(); flush();
+        }
+    }
+    int primaryChanges = 0, secondaryChanges = 0;
+    QObject::connect(&bar, &TransportBar::toolChanged, &bar, [&](int) { ++primaryChanges; });
+    QObject::connect(&bar, &TransportBar::secondaryToolChanged, &bar, [&](int) { ++secondaryChanges; });
+    for (bool primary : {true, false}) {
+        auto* chip = primary ? bar.m_toolButton : bar.m_altToolButton;
+        auto* menu = chip->menu();
+        if (!menu || menu->actions().size() != kToolCount) return fail(__LINE__);
+        for (int index = 0; index < kToolCount; ++index) {
+            menu->actions()[index]->trigger();
+            const int selected = primary ? bar.m_toolIndex : bar.m_altToolIndex;
+            if (selected != index || !menu->actions()[index]->isChecked()) return fail(__LINE__);
+        }
+        if (primary) bar.setToolIndex(0); else bar.setSecondaryToolIndex(0);
+        bool navigated = false;
+        QTimer::singleShot(0, menu, [&] {
+            key(menu, Qt::Key_Down);
+            navigated = menu->activeAction() == menu->actions()[1];
+            key(menu, Qt::Key_Return);
+            menu->hide(); // Also guarantees a failed check cannot block CI.
+        });
+        chip->showMenu();
+        if (!navigated || (primary ? bar.m_toolIndex : bar.m_altToolIndex) != 1)
+            return fail(__LINE__);
+        QTimer::singleShot(0, menu, [&] { key(menu, Qt::Key_Escape); menu->hide(); });
+        chip->showMenu();
+        if ((primary ? bar.m_toolIndex : bar.m_altToolIndex) != 1) return fail(__LINE__);
+        QTimer::singleShot(0, menu, [&] {
+            const QPoint local = menu->actionGeometry(menu->actions()[5]).center();
+            const QPoint global = menu->mapToGlobal(local);
+            QMouseEvent press(QEvent::MouseButtonPress, local, global,
+                Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QMouseEvent release(QEvent::MouseButtonRelease, local, global,
+                Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(menu, &press);
+            QCoreApplication::sendEvent(menu, &release);
+            menu->hide();
+        });
+        chip->showMenu();
+        if ((primary ? bar.m_toolIndex : bar.m_altToolIndex) != 5) return fail(__LINE__);
+        bool dismissed = false;
+        QTimer::singleShot(0, menu, [&] {
+            const QPoint local(-20, -20);
+            QMouseEvent outside(QEvent::MouseButtonPress, local, menu->mapToGlobal(local),
+                Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(menu, &outside);
+            dismissed = !menu->isVisible();
+            menu->hide();
+        });
+        chip->showMenu();
+        if (!dismissed) return fail(__LINE__);
+    }
+    if (primaryChanges != 11 || secondaryChanges != 11) return fail(__LINE__);
+    bar.setToolIndex(3); bar.setSecondaryToolIndex(7);
+    TransportBar restored(&controller);
+    if (restored.m_toolIndex != 3 || restored.secondaryToolIndex() != 7) return fail(__LINE__);
+    int play = 0, stop = 0, record = 0, cycle = 0, metro = 0, snap = 0, typing = 0;
+    QObject::connect(&bar, &TransportBar::playPauseRequested, &bar, [&] { ++play; });
+    QObject::connect(&bar, &TransportBar::stopRequested, &bar, [&] { ++stop; });
+    QObject::connect(&bar, &TransportBar::recordRequested, &bar, [&] { ++record; });
+    QObject::connect(&bar, &TransportBar::loopToggled, &bar, [&](bool) { ++cycle; });
+    QObject::connect(&bar, &TransportBar::metronomeToggled, &bar, [&](bool) { ++metro; });
+    QObject::connect(&bar, &TransportBar::snapChanged, &bar, [&](bool) { ++snap; });
+    QObject::connect(&bar, &TransportBar::typingKeyboardToggled, &bar, [&](bool) { ++typing; });
+    bar.m_playButton->click(); bar.m_stopButton->click(); bar.m_recordButton->click();
+    bar.toggleCycle(); bar.toggleMetronome(); bar.m_snapButton->click(); bar.m_typingKeysButton->click();
+    if (play != 1 || stop != 1 || record != 1 || cycle != 1 || metro != 1 || snap != 1 || typing != 1)
+        return fail(__LINE__);
+    bar.setRecordEngaged(true);
+    if (!bar.m_recordButton->isChecked()) return fail(__LINE__);
+    bar.setRecordEngaged(false);
+    bar.setGridIndex(0); if (bar.gridIndex() != 0) return fail(__LINE__);
+    bar.setTimeDisplayBars(false); if (bar.showsBars()) return fail(__LINE__);
+    bar.setPositionDisplayBars(false); if (bar.positionShowsBars()) return fail(__LINE__);
+    if (!screenshotPath.isEmpty()) {
+        bar.setToolIndex(0); bar.setSecondaryToolIndex(1);
+        bar.setGridIndex(5); bar.setTimeDisplayBars(true); bar.setPositionDisplayBars(true);
+        bar.setSnapEnabled(true); bar.setTypingKeyboardActive(false);
+        bar.setCycleEnabled(false); bar.toggleMetronome();
+        host.resize(1440, 400); bar.resize(1440, ui::kTransportHeight); flush();
+        if (!bar.grab().save(screenshotPath)) return fail(__LINE__);
+        for (auto* chip : {bar.m_toolButton, bar.m_altToolButton}) {
+            QMenu* menu = chip->menu();
+            bool saved = false;
+            QTimer::singleShot(0, menu, [&] {
+                flush();
+                saved = menu->grab().save(screenshotPath +
+                    (chip == bar.m_toolButton ? QStringLiteral(".primary.png") : QStringLiteral(".secondary.png")));
+                menu->hide();
+            });
+            chip->showMenu();
+            if (!saved) return fail(__LINE__);
+        }
+    }
+    return true;
 }
 
 bool TransportBar::checkTempoInteractionForTest() {

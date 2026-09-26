@@ -120,19 +120,22 @@ int main() {
     const std::string tonePath = (dir / "tone.wav").string();
     writeTone(tonePath, 48000, 48000);
 
+    // A controller normally owns the user's on-disk plugin cache. Scan the
+    // fixture into an isolated catalogue and copy it into each controller so
+    // this test cannot rewrite real search paths or blacklist installed VSTs.
+    daw::PluginManager fixturePlugins((dir / "plugins.json").string());
+    fixturePlugins.setScannerPath(scannerPath);
+    fixturePlugins.setSearchPaths(daw::plugins::Format::Clap,
+                                 {fs::path(pluginPath).parent_path().string()});
+    fixturePlugins.startScan();
+    fixturePlugins.waitForScan();
+    check(fixturePlugins.lastScanError().empty(), "the isolated fixture scan finishes");
+
     daw::EngineController ctrl;
     check(ctrl.initialize(48000, 512, /*openDevice=*/false).isOk(),
           "the controller initialises without a device");
 
-    // Point the manager at the fixture and scan it.
-    ctrl.pluginManager().setScannerPath(scannerPath);
-    ctrl.pluginManager().setSearchPaths(
-        daw::plugins::Format::Clap,
-        {fs::path(pluginPath).parent_path().string()});
-    ctrl.pluginManager().setSearchPaths(daw::plugins::Format::Vst3, {});
-    ctrl.pluginManager().setSearchPaths(daw::plugins::Format::AudioUnit, {});
-    ctrl.pluginManager().startScan();
-    ctrl.pluginManager().waitForScan();
+    ctrl.pluginManager().copyCatalogFrom(fixturePlugins);
 
     const auto descriptor =
         ctrl.pluginManager().find(daw::plugins::Format::Clap, "com.daw.test.gain");
@@ -727,15 +730,7 @@ int main() {
 
         daw::EngineController recovered;
         recovered.initialize(48000, 512, /*openDevice=*/false);
-        recovered.pluginManager().setScannerPath(scannerPath);
-        recovered.pluginManager().setSearchPaths(
-            daw::plugins::Format::Clap,
-            {fs::path(pluginPath).parent_path().string()});
-        recovered.pluginManager().setSearchPaths(daw::plugins::Format::Vst3, {});
-        recovered.pluginManager().setSearchPaths(
-            daw::plugins::Format::AudioUnit, {});
-        recovered.pluginManager().startScan();
-        recovered.pluginManager().waitForScan();
+        recovered.pluginManager().copyCatalogFrom(fixturePlugins);
         check(recovered.restoreRecoveryProject(
                   std::move(recoveredModel), sessionDir).isOk(),
               "a crash journal activates through the full plugin-state load path");
@@ -803,14 +798,7 @@ int main() {
 
         daw::EngineController reloaded;
         reloaded.initialize(48000, 512, /*openDevice=*/false);
-        reloaded.pluginManager().setScannerPath(scannerPath);
-        reloaded.pluginManager().setSearchPaths(
-            daw::plugins::Format::Clap,
-            {fs::path(pluginPath).parent_path().string()});
-        reloaded.pluginManager().setSearchPaths(daw::plugins::Format::Vst3, {});
-        reloaded.pluginManager().setSearchPaths(daw::plugins::Format::AudioUnit, {});
-        reloaded.pluginManager().startScan();
-        reloaded.pluginManager().waitForScan();
+        reloaded.pluginManager().copyCatalogFrom(fixturePlugins);
 
         check(reloaded.openProject(packageDir).isOk(), "the project reloads");
         const std::vector<daw::InsertModel>* reloadedGravity =
@@ -1259,14 +1247,7 @@ int main() {
     {
         daw::EngineController c;
         c.initialize(48000, 512, /*openDevice=*/false);
-        c.pluginManager().setScannerPath(scannerPath);
-        c.pluginManager().setSearchPaths(
-            daw::plugins::Format::Clap,
-            {fs::path(pluginPath).parent_path().string()});
-        c.pluginManager().setSearchPaths(daw::plugins::Format::Vst3, {});
-        c.pluginManager().setSearchPaths(daw::plugins::Format::AudioUnit, {});
-        c.pluginManager().startScan();
-        c.pluginManager().waitForScan();
+        c.pluginManager().copyCatalogFrom(fixturePlugins);
 
         const std::string a = c.addTrack(daw::TrackKind::Audio, "A");
         const std::string b = c.addTrack(daw::TrackKind::Audio, "B");

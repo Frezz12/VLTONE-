@@ -50,6 +50,10 @@ public:
     void setTopAttached(bool attached);
     bool isTopAttached() const { return m_topAttached; }
 
+    /// An opaque continuation of the transport header. Attached context rows
+    /// share its exact colour and have no glass rim across the join.
+    void setConsoleSurface(bool enabled);
+
     /// Briefly wash the plate in its accent colour — the confirmation for a
     /// discrete action like Split or Duplicate.
     void flashConfirm();
@@ -109,6 +113,7 @@ private:
     int m_radius = 14;
     int m_shadowMargin = 12;
     bool m_topAttached = false;
+    bool m_consoleSurface = false;
     bool m_shadowVisible = true;
     bool m_subtleVerticalGradient = false;
     QPixmap m_backdrop;

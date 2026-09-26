@@ -1,5 +1,8 @@
 #pragma once
+
+class QMenu;
 #include "UiFrameClock.hpp"
+#include "TimelineRuler.hpp"
 #include "graphics/ScenePaintSource.hpp"
 #include "graphics/RetainedScene.hpp"
 
@@ -136,6 +139,9 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     /// is the grid the user can actually see, at the current tempo.
     double snapSeconds() const;
     void setShowBars(bool showBars);
+    void setRulerFormat(ui::RulerFormat format);
+    ui::RulerFormat rulerFormat() const { return m_rulerFormat; }
+    int rulerHeight() const;
 
     /// Scale only the painted audio envelope. Playback gain and clip gain stay
     /// untouched; 1.0 is the default waveform height.
@@ -156,6 +162,8 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     bool hasClipSelection() const { return !m_selection.isEmpty(); }
     /// Open the same actions as a right-click on the primary selected clip.
     bool showSelectedClipActionsMenu();
+    bool populateSelectedClipActionsMenu(QMenu& menu);
+    bool createClipAt(const QString& trackId, daw::ClipKind kind, double seconds);
 
     /// Select these clips from outside — the same state a click would leave,
     /// including what the selection model then publishes. Anything not found in
@@ -292,8 +300,10 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
 
 signals:
     void clipSelected(const QString& trackId, const QString& clipId);
+    void saveClipToLibraryRequested(const QString& trackId, const QString& clipId);
     void bounceInPlaceRequested();
     void offlineRenderRequested();
+    void stripSilenceRequested();
     void sharedPluginsRequested();
     /// The cycle region was dragged out or moved. The window persists it and
     /// keeps the transport's Cycle button in step.
@@ -311,6 +321,7 @@ signals:
     void projectTemplateTracksRequested(const QString& path);
     /// The lanes scrolled vertically; the header column moves with them.
     void verticalScrollChanged(int y);
+    void rulerHeightChanged(int height);
     void projectEdited();
     /// Short, non-modal feedback for an arrangement action that cannot run.
     void operationStatus(const QString& message);
@@ -433,6 +444,8 @@ private:
     double snapMoveStart(double originalStart, double rawStart,
                          bool enabled) const;
     bool hitTestClip(const QPoint& pos, ClipHit& out) const;
+    bool clearSelectionOnBackground(const QPoint& pos);
+    void populateClipActionsMenu(QMenu& menu, const ClipHit& hit);
     /// Arrangement controls preview continuously. These helpers remember only
     /// a history marker and let the controller record small, gesture-specific
     /// deltas at release. Dense MIDI/sample payloads never enter UI history.
@@ -525,6 +538,7 @@ private:
     /// Everything a take row can do that is not "swipe" or "use all of it":
     /// rename, recolour, audition, reorder, delete.
     void showTakeMenu(const TakeHit& hit, const QPoint& globalPos);
+    void populateTakeMenu(QMenu& menu, const TakeHit& hit);
     /// Ask for a new name for a take and apply it.
     void renameTake(const TakeHit& hit);
     /// Paint one take's sub-lane: mini waveform/notes drawn in the clip's own
@@ -590,7 +604,8 @@ private:
     void updateCursor(const QPoint& pos);
     void refreshToolCursor();
     void drawRuler(class QPainter& p);
-    void drawGrid(QPainter& p);
+    void drawGrid(QPainter& p, const QColor& laneBase = {},
+                  const QColor& laneFill = {});
     void drawLanes(QPainter& p);
     void drawTimelineBackground(QPainter& p);
     void drawTimedNotebookText(QPainter& p);
@@ -623,6 +638,7 @@ private:
     /// point after the controller has sorted the vector under us.
     bool isOverAutomation(const QPoint& pos) const;
     void showAutomationMenu(const PointHit& hit, const QPoint& globalPos);
+    void populateAutomationMenu(QMenu& menu, const PointHit& hit);
     static int indexOfPointAt(const daw::ClipModel& clip, double beats);
     /// One step of a freehand stroke: put a point where the pointer is and
     /// clear whatever the stroke has just passed over.
@@ -832,7 +848,7 @@ private:
     bool m_timedNotebookReduceMotion = false;
     double m_gridBeats = 0.25;      // 1/16 by default
     bool m_snapEnabled = true;
-    bool m_showBars = true;
+    ui::RulerFormat m_rulerFormat = ui::RulerFormat::Bars;
     double m_waveformScale = 1.0;
 
     Tool m_tool = Tool::Select;
@@ -994,7 +1010,6 @@ private:
     // Eraser drag from the dedicated toolbar tool.
     bool m_erasing = false;
     QPoint m_lastErasePoint;
-    bool m_suppressContextMenu = false;
 
     // Comp editor. Expanding grows the lane (see CompLayout.hpp), so the
     // animation is per *track* — one timer walks the factor and both this widget

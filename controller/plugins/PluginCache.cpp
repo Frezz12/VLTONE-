@@ -170,6 +170,7 @@ bool PluginCache::load(const std::string& path) {
         entry.schemaVersion = value.value("schema", 0);
         entry.ok = value.value("ok", false);
         entry.blacklisted = value.value("blacklisted", false);
+        entry.scannerVerified = value.value("scannerVerified", false);
         entry.failureReason = value.value("reason", std::string());
         entry.attempts = value.value("attempts", 0);
         if (entry.format == Format::Unknown || entry.path.empty()) continue;
@@ -203,6 +204,7 @@ bool PluginCache::save(const std::string& path) const {
             {"schema", entry.schemaVersion},
             {"ok", entry.ok},
             {"blacklisted", entry.blacklisted},
+            {"scannerVerified", entry.scannerVerified},
             {"reason", entry.failureReason},
             {"attempts", entry.attempts},
             {"plugins", descriptors},

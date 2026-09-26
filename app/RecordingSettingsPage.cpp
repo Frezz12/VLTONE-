@@ -1,11 +1,14 @@
 #include "RecordingSettingsPage.hpp"
 #include "EngineController.hpp"
+#include "StripSilenceDialog.hpp"
+#include "StripSilencePreferences.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QLabel>
+#include <QPushButton>
 #include <QSettings>
 #include <QVBoxLayout>
 
@@ -60,6 +63,7 @@ void RecordingSettingsPage::restore(daw::EngineController& controller) {
     // key is held at startup.
     prefs.inverted = false;
     controller.setRecordingPrefs(prefs);
+    ui::silence::restore(controller);
 }
 
 void RecordingSettingsPage::persistMode(daw::RecordMode mode) {
@@ -98,6 +102,13 @@ RecordingSettingsPage::RecordingSettingsPage(daw::EngineController* controller,
            "Off: it spans the whole clip, silent outside the recorded stretch."));
 
     m_autoExpand = new QCheckBox(tr("Open the comp editor when recording stops"));
+    m_autoSilence = new QCheckBox(tr("Auto Silence — trim silence after recording"));
+    m_silenceSettings = new QPushButton(tr("Strip Silence settings…"));
+    connect(m_silenceSettings, &QPushButton::clicked, this, [this] {
+        StripSilenceDialog dialog(*m_controller, {}, this);
+        dialog.exec();
+        reload();
+    });
 
     m_crossfade = new QDoubleSpinBox;
     m_crossfade->setRange(0.0, 20.0);
@@ -150,6 +161,7 @@ RecordingSettingsPage::RecordingSettingsPage(daw::EngineController* controller,
     form->addRow(tr("When loop recording"), m_loopMode);
     form->addRow(QString(), m_trimTakes);
     form->addRow(QString(), m_autoExpand);
+    form->addRow(m_autoSilence, m_silenceSettings);
     form->addRow(tr("Comp crossfade"), m_crossfade);
     form->addRow(tr("MIDI comp mode"), m_midiComp);
 
@@ -189,7 +201,7 @@ RecordingSettingsPage::RecordingSettingsPage(daw::EngineController* controller,
     connect(m_countIn, &QComboBox::currentIndexChanged, this, onCombo);
     connect(m_crossfade, &QDoubleSpinBox::valueChanged, this,
             [this](double) { commit(); });
-    for (QCheckBox* box : {m_trimTakes, m_autoExpand, m_recordKey,
+    for (QCheckBox* box : {m_trimTakes, m_autoExpand, m_autoSilence, m_recordKey,
                            m_autoMonitor, m_manualMonitor}) {
         connect(box, &QCheckBox::toggled, this, [this](bool) { commit(); });
     }
@@ -202,6 +214,11 @@ void RecordingSettingsPage::reload() {
     m_loopMode->setCurrentIndex(m_loopMode->findData(prefs.loopCreatesTakes));
     m_trimTakes->setChecked(prefs.trimTakesToRegion);
     m_autoExpand->setChecked(prefs.autoExpandAfterRecord);
+    m_autoSilence->setChecked(prefs.autoSilence);
+    const bool silenceAvailable = !m_controller->hasCloudProjectBinding() &&
+        !m_controller->isRecording() && !m_controller->isCountingIn();
+    m_autoSilence->setEnabled(silenceAvailable);
+    m_silenceSettings->setEnabled(silenceAvailable);
     m_crossfade->setValue(prefs.compCrossfadeMs);
     m_midiComp->setCurrentIndex(m_midiComp->findData(prefs.midiOverdubMerge));
     m_recordKey->setChecked(prefs.recordKeyArmsAndStarts);
@@ -225,6 +242,7 @@ void RecordingSettingsPage::commit() {
     prefs.loopCreatesTakes = m_loopMode->currentData().toBool();
     prefs.trimTakesToRegion = m_trimTakes->isChecked();
     prefs.autoExpandAfterRecord = m_autoExpand->isChecked();
+    prefs.autoSilence = m_autoSilence->isChecked();
     prefs.compCrossfadeMs = m_crossfade->value();
     prefs.midiOverdubMerge = m_midiComp->currentData().toBool();
     prefs.recordKeyArmsAndStarts = m_recordKey->isChecked();
@@ -243,6 +261,7 @@ void RecordingSettingsPage::commit() {
     s.setValue(kLoopTakes, prefs.loopCreatesTakes);
     s.setValue(kTrimTakes, prefs.trimTakesToRegion);
     s.setValue(kAutoExpand, prefs.autoExpandAfterRecord);
+    s.setValue("recording/autoSilence", prefs.autoSilence);
     s.setValue(kCrossfade, prefs.compCrossfadeMs);
     s.setValue(kMidiMerge, prefs.midiOverdubMerge);
     s.setValue(kRecordKey, prefs.recordKeyArmsAndStarts);

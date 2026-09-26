@@ -308,6 +308,8 @@ public:
     /// Print the dB scale down the left of the slot. Vertical faders only —
     /// there is nowhere to put it on a horizontal one.
     void setScaleVisible(bool visible);
+    /// Insets of the printed scale's end marks, for an adjacent level meter.
+    QMarginsF scaleInsets() const;
     /// Turn a horizontal header fader into a compact round level control while
     /// preserving the same gain, signals and automation gesture.
     void setCompactKnob(bool compact);
@@ -710,14 +712,22 @@ public:
     void clearClip();
 
     /// How the meter is drawn.
-    ///   Panel — a rounded, inset instrument with a clip lamp above it. What
-    ///           the mixer's channel strips use.
+    ///   Panel — a standalone rounded instrument with a clip lamp above it.
+    ///   Console — square stereo bars inside the channel's shared level well,
+    ///             aligned to the fader scale, with an audio-side clip latch.
     ///   Rail  — a single square strip filling its whole widget, meant to be
     ///           flush against an edge with no margin anywhere. The clip
     ///           indicator becomes the top of the strip itself, because a rail
     ///           has no room beside it for a separate lamp.
-    enum class Style { Panel, Rail };
+    enum class Style { Panel, Rail, Console };
     void setMeterStyle(Style style);
+    void setScaleInsets(const QMarginsF& insets) { m_scaleInsets = insets; update(); }
+    /// Console clip latch follows the audio-side maximum, even if a transient
+    /// happened between UI frames or while this view was hidden.
+    void setPeakHold(float peak);
+
+signals:
+    void peakResetRequested();
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -734,6 +744,7 @@ private:
     float m_hold[2] = {0.f, 0.f};
     QElapsedTimer m_decayClock;
     bool m_clipped = false;
+    QMarginsF m_scaleInsets;
 };
 
 /// A track-name field that stays inert until double-clicked. Clicking a track

@@ -16,6 +16,7 @@
 #include <QPainterPath>
 #include <QCursor>
 #include <QScreen>
+#include <QStyleOption>
 #include <QTimer>
 #include <QVariantAnimation>
 #include <QWheelEvent>
@@ -654,6 +655,13 @@ void IconButton::setButtonSize(int w, int h) { setFixedSize(w, h); }
 void IconButton::setPulse(bool on) {
     if (m_pulse == on) return;
     m_pulse = on;
+    // The console uses a steady outlined armed state, with no glow or
+    // animation. Other controls retain their existing pulse treatment.
+    if (property("consoleButton").toBool()) {
+        if (m_pulseAnim) m_pulseAnim->stop();
+        update();
+        return;
+    }
     if (!on) {
         if (m_pulseAnim) m_pulseAnim->stop();
         m_pulseValue = 0.0;
@@ -672,12 +680,65 @@ void IconButton::setPulse(bool on) {
     m_pulseAnim->start();
 }
 
-void IconButton::enterEvent(QEnterEvent*) { m_hoverFade.setTarget(1.0); }
-void IconButton::leaveEvent(QEvent*) { m_hoverFade.setTarget(0.0); }
+void IconButton::enterEvent(QEnterEvent*) {
+    if (property("consoleButton").toBool()) update();
+    else m_hoverFade.setTarget(1.0);
+}
+void IconButton::leaveEvent(QEvent*) {
+    if (property("consoleButton").toBool()) update();
+    else m_hoverFade.setTarget(0.0);
+}
 
 void IconButton::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
+
+    if (property("consoleButton").toBool()) {
+        const auto& t = th();
+        const QColor active = m_activeColor.isValid() ? m_activeColor : t.accent;
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        if (!isEnabled()) p.setOpacity(0.4);
+        QColor fill = Qt::transparent;
+        QColor edge = Qt::transparent;
+        if (m_prominent) {
+            fill = mixColors(t.headerBackground, active, isChecked() ? 0.72 : 0.22);
+            edge = mixColors(t.headerBackground, active, isChecked() ? 0.9 : 0.42);
+        } else if (isChecked() && !m_pulse) {
+            fill = mixColors(t.headerBackground, active, 0.22);
+            edge = mixColors(t.headerBackground, active, 0.40);
+        }
+        if (underMouse()) {
+            fill = mixColors(fill.alpha() ? fill : t.headerBackground, t.textPrimary, 0.08);
+        }
+        if (isDown()) fill = mixColors(t.headerBackground, t.well(), 0.65);
+        p.setPen(QPen(edge, 1));
+        p.setBrush(fill);
+        p.drawRoundedRect(r, Theme::cornerRadius, Theme::cornerRadius);
+        // A short underline also communicates toggled state without colour.
+        if (isChecked() && !m_prominent && !m_pulse) {
+            p.setPen(QPen(t.textPrimary, 1.5, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(QPointF(r.center().x() - 3, r.bottom() - 3),
+                       QPointF(r.center().x() + 3, r.bottom() - 3));
+        }
+        QStyleOption focus;
+        focus.initFrom(this);
+        const bool keyboardFocus = hasFocus() &&
+            (focus.state & QStyle::State_KeyboardFocusChange);
+        if (m_pulse || keyboardFocus) {
+            p.setPen(QPen(keyboardFocus ? t.textSecondary : active, 1.5));
+            p.setBrush(Qt::NoBrush);
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1),
+                              Theme::cornerRadius - 1, Theme::cornerRadius - 1);
+        }
+        QColor tint = m_prominent ? t.textPrimary : isChecked() || m_pulse
+            ? mixColors(active, t.textPrimary, t.dark ? 0.45 : 0.10)
+            : m_idleColor.isValid() ? m_idleColor : t.textPrimary;
+        const int side = m_prominent ? 20 : 18;
+        const QRect box((width() - side) / 2, (height() - side) / 2, side, side);
+        if (icon().isNull()) icons::paint(p, m_glyph, box, tint);
+        else icon().paint(&p, box);
+        return;
+    }
 
     // isDown() flips instantly; the fade gives the press its release tail, so a
     // quick click still reads as a press rather than a flicker.
@@ -689,7 +750,7 @@ void IconButton::paintEvent(QPaintEvent*) {
     const QColor active = m_activeColor.isValid() ? m_activeColor : t.accent;
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     const qreal radius = (m_prominent || property("circular").toBool())
-                             ? r.height() / 2.0 : 6.0;
+                             ? r.height() / 2.0 : Theme::cornerRadius;
 
     auto plate = [&](const QColor& c) {
         if (c.alpha() <= 0) return;
@@ -749,7 +810,7 @@ void IconButton::paintEvent(QPaintEvent*) {
 
     QColor tint = (isChecked() || m_pulse)
                       ? active
-                      : (m_prominent ? Qt::white
+                      : (m_prominent ? (active == t.accent ? t.accentText() : QColor(Qt::white))
                                      : (m_idleColor.isValid() ? m_idleColor
                                                               : t.textPrimary));
     if (m_accentTint && !isChecked() && !m_prominent) tint = t.accent;
@@ -1034,6 +1095,10 @@ QRectF FaderWidget::capRect(double position) const {
                : QRectF(axis - cap.width() / 2.0,
                         column.center().y() - cap.height() / 2.0, cap.width(),
                         cap.height());
+}
+
+QMarginsF FaderWidget::scaleInsets() const {
+    return QMarginsF(0.0, knobPos(1.0), 0.0, height() - knobPos(0.0));
 }
 
 void FaderWidget::paintScale(QPainter& p) const {
@@ -2926,10 +2991,23 @@ void LevelMeter::setPeaks(float left, float right) {
 
 void LevelMeter::clearClip() {
     m_clipped = false;
+    if (m_style == Style::Console) m_hold[0] = m_hold[1] = 0.0f;
     update();
 }
 
-void LevelMeter::mousePressEvent(QMouseEvent*) { clearClip(); }
+void LevelMeter::mousePressEvent(QMouseEvent* event) {
+    if (event->button() != Qt::LeftButton) return;
+    clearClip();
+    emit peakResetRequested();
+    event->accept();
+}
+
+void LevelMeter::setPeakHold(float peak) {
+    const bool clipped = peak >= 1.0f;
+    if (clipped == m_clipped) return;
+    m_clipped = clipped;
+    update();
+}
 
 namespace {
 /// Linear amplitude → 0…1 meter travel, on **the fader's scale**.
@@ -2958,7 +3036,7 @@ float meterStop(double db) {
 void LevelMeter::drawBar(QPainter& p, const QRectF& r, float level,
                          float hold) const {
     const Theme& t = th();
-    const qreal radius = m_style == Style::Rail ? 0.0 : 2.0;
+    const qreal radius = m_style == Style::Panel ? 2.0 : 0.0;
     p.setPen(Qt::NoPen);
     p.setBrush(t.well());
     p.drawRoundedRect(r, radius, radius);
@@ -3007,6 +3085,10 @@ void LevelMeter::setMeterStyle(Style style) {
         setMinimumHeight(0);
         setMinimumWidth(0);
     }
+    if (style == Style::Console) {
+        setFixedWidth(m_channels == 2 ? 18 : 9);
+        setToolTip(tr("Peak level · click to reset the maximum and clip indicator"));
+    }
     update();
 }
 
@@ -3015,6 +3097,23 @@ void LevelMeter::paintEvent(QPaintEvent*) {
 }
 void LevelMeter::paintScene(QPainter& p, const QRegion&) {
     p.setRenderHint(QPainter::Antialiasing, m_style == Style::Panel);
+
+    if (m_style == Style::Console) {
+        const QRectF area = QRectF(rect()).marginsRemoved(m_scaleInsets);
+        const qreal gap = 2.0;
+        const qreal barWidth = (area.width() - gap * (m_channels - 1)) / m_channels;
+        for (int channel = 0; channel < m_channels; ++channel) {
+            const QRectF bar(area.left() + channel * (barWidth + gap),
+                             area.top(), barWidth, area.height());
+            drawBar(p, bar, m_level[channel], m_hold[channel]);
+            // A quiet unity mark is shared with the fader's 0 dB position.
+            const qreal unity = bar.bottom() - bar.height() * meterScale(1.0f);
+            p.fillRect(QRectF(bar.left(), unity, bar.width(), 1.0), th().ink(70));
+            p.fillRect(QRectF(bar.left(), area.top() - 7.0, bar.width(), 3.0),
+                       m_clipped ? Theme::record() : mixColors(th().separator(), th().well(), 0.4));
+        }
+        return;
+    }
 
     if (m_style == Style::Rail) {
         // One strip, edge to edge, square. The two-bar version at this width

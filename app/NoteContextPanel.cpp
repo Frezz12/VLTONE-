@@ -5,6 +5,7 @@
 #include "Icons.hpp"
 #include "PianoRollWindow.hpp"
 #include "Theme.hpp"
+#include "UiConstants.hpp"
 
 #include <QColorDialog>
 #include <QHBoxLayout>
@@ -28,9 +29,10 @@ namespace {
 // one component that happens to appear in two places.
 constexpr int kRowHeight = 20;
 constexpr int kButton = 22;
-constexpr int kPadding = 7;
+constexpr int kPadding = 4;
 constexpr int kEndPadding = 14;
-constexpr int kShadow = 9;
+constexpr int kShadow = 8;
+static_assert(kRowHeight + 2 * kPadding + ui::kContextBottomGap == ui::kToolPanelHeight);
 
 constexpr int kSpringMs = 300;
 
@@ -100,6 +102,9 @@ NoteContextPanel::NoteContextPanel(PianoRollView* view, QWidget* parent)
     m_follow = QSettings().value("contextPanel/followSelection", true).toBool();
     // This is now a peer of the arrangement plate in the same tool strip.
     setTopAttached(true);
+    setConsoleSurface(true);
+    setShadowMargin(kShadow);
+    setCornerRadius(8);
     setShadowVisible(false);
     setAccentColor(th().accent);
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
@@ -452,7 +457,7 @@ void NoteContextPanel::relayout() {
     }
     setBackdropFrozen(false);
     setGeometry(targetGeometry());
-    setCornerRadius(plateRect().height() / 2);
+    setCornerRadius(8);
     layoutSelf();
 }
 
@@ -498,7 +503,7 @@ QRect NoteContextPanel::targetGeometry() const {
         const QRect current = geometry();
         return QRect(current.center().x(), top, 1, current.height());
     }
-    const int height = kRowHeight + 2 * kPadding + kShadow;
+    const int height = kRowHeight + 2 * kPadding + ui::kContextBottomGap;
 
     int limitLeft = 12;
     int limitRight = std::max(12, host->width() - 12);
@@ -590,7 +595,7 @@ void NoteContextPanel::transitionTo(QWidget* next, Context context) {
             m_outgoing->deleteLater();
             m_outgoing = nullptr;
         }
-        setCornerRadius(plateRect().height() / 2);
+        setCornerRadius(8);
         layoutSelf();
         update();
     });

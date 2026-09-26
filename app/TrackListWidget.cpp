@@ -1,5 +1,6 @@
 #include "UiPerformance.hpp"
 #include "TrackListWidget.hpp"
+#include "MenuActions.hpp"
 #include "ScrollInput.hpp"
 #include "CompLayout.hpp"
 #include "Controls.hpp"
@@ -1053,6 +1054,15 @@ QRect TrackListWidget::rowRectForTest(int index) const {
     return rowGeometry(size_t(index));
 }
 
+void TrackListWidget::setRulerHeight(int height) {
+    height = std::max(ui::kRulerHeight, height);
+    if (m_ruler->height() == height) return;
+    m_ruler->setFixedHeight(height);
+    m_rulerRow->setContentsMargins(6, 0, 6, height - ui::kRulerHeight);
+    layout()->activate();
+    layoutRows();
+}
+
 void TrackListWidget::setVerticalScroll(int y) {
     if (y == m_scrollY) return;
     m_scrollY = y;
@@ -1624,7 +1634,7 @@ void TrackListWidget::showDropFeedback() {
         indicator->showFolder(rowGeometry(size_t(m_dropFolderRow)));
         return;
     }
-    int y = ui::kRulerHeight;
+    int y = m_ruler->height();
     if (m_dropRow >= int(m_rows.size())) {
         if (!m_rows.empty()) y = rowGeometry(m_rows.size() - 1).bottom();
     } else if (m_dropRow >= 0) {
@@ -1765,7 +1775,7 @@ bool TrackListWidget::updateBrowserDropTarget(const QPoint& posInList,
 
     auto* indicator = static_cast<DropIndicator*>(m_indicator);
     if (!m_projectTemplateDropPath.isEmpty()) {
-        int y = ui::kRulerHeight;
+        int y = m_ruler->height();
         if (!m_rows.empty()) y = rowGeometry(m_rows.size() - 1).bottom();
         indicator->showLine(QRect(4, y - 1, width() - 8, 3));
     } else if (m_pluginDropRow < 0) {
@@ -2204,8 +2214,21 @@ bool TrackListWidget::showSelectedTrackActionsMenu() {
     return true;
 }
 
-void TrackListWidget::showTrackContextMenu(const QString& id,
-                                           const QPoint& globalPos) {
+void TrackListWidget::showTrackContextMenu(const QString& id, const QPoint& globalPos) {
+    QMenu menu(this);
+    populateTrackActionsMenu(menu, id);
+    menu.exec(globalPos);
+}
+
+bool TrackListWidget::populateSelectedTrackActionsMenu(QMenu& menu) {
+    const QString id = !m_selectedId.isEmpty() ? m_selectedId
+        : m_selectedIds.isEmpty() ? QString{} : m_selectedIds.front();
+    if (!m_controller->project().findTrack(id.toStdString())) return false;
+    populateTrackActionsMenu(menu, id);
+    return true;
+}
+
+void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
     const auto* track = m_controller->project().findTrack(id.toStdString());
     if (!track) return;
     const bool isFolder = daw::isFolder(*track);
@@ -2213,7 +2236,6 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
     const bool channel = daw::carriesAudio(*track);
     const int selected = int(m_selectedIds.size());
 
-    QMenu menu(this);
     QAction* sharedPlugins = nullptr;
     if (selected > 1 && m_selectedIds.contains(id)) {
         std::vector<daw::EngineController::PluginBatchTarget> targets;
@@ -2274,7 +2296,7 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
                                          : tr("Duplicate Track"));
         if (auto* command = window()->findChild<QAction*>(
                 QStringLiteral("track.duplicate")))
-            dup->setShortcut(command->shortcut());
+            ui::showCommandShortcut(dup, command);
         if (!isFolder && !isPattern) {
             dupNoFx =
                 menu.addAction(tr("Duplicate Track (without plugins)"));
@@ -2333,122 +2355,122 @@ void TrackListWidget::showTrackContextMenu(const QString& id,
                      : (isPattern ? tr("Delete Pattern")
                                   : isFolder ? tr("Delete Folder")
                                              : tr("Delete Track")));
-    if (auto* command = window()->findChild<QAction*>(
-            QStringLiteral("track.remove")))
-        del->setShortcut(command->shortcut());
     // The creation items belong here too: right-clicking a track is the
     // obvious place to look for "add another one", and hunting for a patch of
     // empty column to click is not a thing anyone should have to do.
     menu.addSeparator();
     const auto trackKinds = ui::addTrackKindItems(menu);
 
-    QAction* chosen = menu.exec(globalPos);
-    if (sharedPlugins && chosen == sharedPlugins) { emit sharedPluginsRequested(); return; }
-    if (freeze && chosen == freeze) {
-        if (frozen) m_controller->unfreezeTrack(id.toStdString());
-        else {
-            QProgressDialog progress(tr("Freezing track…"), tr("Cancel"), 0, 1000, window());
-            progress.setWindowTitle(tr("Freeze Track"));
-            progress.setWindowModality(Qt::WindowModal);
-            progress.setMinimumDuration(0);
-            progress.setAutoClose(false);
-            daw::rendering::Report report;
-            const auto result = m_controller->freezeTrack(id.toStdString(),
-                [&](const daw::rendering::Progress& state) {
-                    progress.setValue(int(std::clamp(state.fraction, 0.0, 1.0) * 1000));
-                    QApplication::processEvents();
-                    return !progress.wasCanceled();
-                }, report);
-            progress.close();
-            if (!result) QMessageBox::warning(window(), tr("Freeze Track"),
-                QString::fromStdString(result.message()));
+    ui::connectMenuActions(menu, this, [=, this](QAction* chosen) {
+        const auto* track = m_controller->project().findTrack(id.toStdString());
+        if (!track) return;
+        if (sharedPlugins && chosen == sharedPlugins) { emit sharedPluginsRequested(); return; }
+        if (freeze && chosen == freeze) {
+            if (frozen) m_controller->unfreezeTrack(id.toStdString());
+            else {
+                QProgressDialog progress(tr("Freezing track…"), tr("Cancel"), 0, 1000, window());
+                progress.setWindowTitle(tr("Freeze Track"));
+                progress.setWindowModality(Qt::WindowModal);
+                progress.setMinimumDuration(0);
+                progress.setAutoClose(false);
+                daw::rendering::Report report;
+                const auto result = m_controller->freezeTrack(id.toStdString(),
+                    [&](const daw::rendering::Progress& state) {
+                        progress.setValue(int(std::clamp(state.fraction, 0.0, 1.0) * 1000));
+                        QApplication::processEvents();
+                        return !progress.wasCanceled();
+                    }, report);
+                progress.close();
+                if (!result) QMessageBox::warning(window(), tr("Freeze Track"),
+                    QString::fromStdString(result.message()));
+            }
+            emit orderChanged();
+            return;
         }
-        emit orderChanged();
-        return;
-    }
-    if (!chosen) return;
-    if (chosen == automationVolume || chosen == automationPan) {
-        emit automateControlRequested(id, chosen == automationPan);
-        return;
-    }
-    if (chosen == automationMute) {
-        emit automateMuteRequested(id);
-        return;
-    }
-    if (automationSends.contains(chosen)) {
-        emit automateSendRequested(id, automationSends.value(chosen));
-        return;
-    }
-    if (chosen == modeGlobal || chosen == modeOverwrite || chosen == modeLayers) {
-        m_controller->setTrackRecordMode(
-            id.toStdString(), chosen == modeOverwrite
-                                  ? daw::TrackRecordMode::Overwrite
-                              : chosen == modeLayers
-                                  ? daw::TrackRecordMode::Layers
-                                  : daw::TrackRecordMode::UseGlobal);
-        rebuild();
-        emit tracksChanged();
-        return;
-    }
-    if (chosen == colour) {
-        const QColor picked = QColorDialog::getColor(
-            colorFromRgb(track->color), this,
-            isFolder ? tr("Folder Colour") : tr("Track Colour"));
-        if (!picked.isValid()) return;
-        const uint32_t rgb = (uint32_t(picked.red()) << 16) |
-                             (uint32_t(picked.green()) << 8) |
-                             uint32_t(picked.blue());
-        // Every selected row, so recolouring six tracks is one gesture — and a
-        // folder among them takes its contents with it.
-        for (const QString& target : std::as_const(m_selectedIds))
-            m_controller->setTrackColor(target.toStdString(), rgb);
-        rebuild();
-        emit tracksChanged();
-        return;
-    }
-    if (chosen == packPlain || chosen == packSumming) {
-        emit packRequested(chosen == packSumming);
-        return;
-    }
-    if (summing && chosen == summing) {
-        m_controller->setFolderSumming(id.toStdString(), !track->summing);
-        emit orderChanged();
-        return;
-    }
-    std::string duplicatedId;
-    if (chosen == del) {
-        // A copy: removing tracks rebuilds the column, which rewrites the very
-        // list being walked.
-        const QStringList doomed = m_selectedIds;
-        for (const QString& target : doomed)
-            m_controller->removeTrack(target.toStdString());
-        m_selectedIds.clear();
-        m_selectedId.clear();
-        m_anchorId.clear();
-    } else if (dup && chosen == dup) {
-        if (isPattern)
-            duplicatedId = m_controller->duplicatePattern(
-                id.toStdString(), ui::duplicateTrackClips());
-        else
+        if (!chosen) return;
+        if (chosen == automationVolume || chosen == automationPan) {
+            emit automateControlRequested(id, chosen == automationPan);
+            return;
+        }
+        if (chosen == automationMute) {
+            emit automateMuteRequested(id);
+            return;
+        }
+        if (automationSends.contains(chosen)) {
+            emit automateSendRequested(id, automationSends.value(chosen));
+            return;
+        }
+        if (chosen == modeGlobal || chosen == modeOverwrite || chosen == modeLayers) {
+            m_controller->setTrackRecordMode(
+                id.toStdString(), chosen == modeOverwrite
+                                      ? daw::TrackRecordMode::Overwrite
+                                  : chosen == modeLayers
+                                      ? daw::TrackRecordMode::Layers
+                                      : daw::TrackRecordMode::UseGlobal);
+            rebuild();
+            emit tracksChanged();
+            return;
+        }
+        if (chosen == colour) {
+            const QColor picked = QColorDialog::getColor(
+                colorFromRgb(track->color), this,
+                isFolder ? tr("Folder Colour") : tr("Track Colour"));
+            if (!picked.isValid()) return;
+            const uint32_t rgb = (uint32_t(picked.red()) << 16) |
+                                 (uint32_t(picked.green()) << 8) |
+                                 uint32_t(picked.blue());
+            // Every selected row, so recolouring six tracks is one gesture — and a
+            // folder among them takes its contents with it.
+            for (const QString& target : std::as_const(m_selectedIds))
+                m_controller->setTrackColor(target.toStdString(), rgb);
+            rebuild();
+            emit tracksChanged();
+            return;
+        }
+        if (chosen == packPlain || chosen == packSumming) {
+            emit packRequested(chosen == packSumming);
+            return;
+        }
+        if (summing && chosen == summing) {
+            m_controller->setFolderSumming(id.toStdString(), !track->summing);
+            emit orderChanged();
+            return;
+        }
+        std::string duplicatedId;
+        if (chosen == del) {
+            // A copy: removing tracks rebuilds the column, which rewrites the very
+            // list being walked.
+            const QStringList doomed = m_selectedIds;
+            for (const QString& target : doomed)
+                m_controller->removeTrack(target.toStdString());
+            m_selectedIds.clear();
+            m_selectedId.clear();
+            m_anchorId.clear();
+        } else if (dup && chosen == dup) {
+            if (isPattern)
+                duplicatedId = m_controller->duplicatePattern(
+                    id.toStdString(), ui::duplicateTrackClips());
+            else
+                duplicatedId = m_controller->duplicateTrack(
+                    id.toStdString(), /*withInserts=*/true,
+                    ui::duplicateTrackClips());
+        } else if (dupNoFx && chosen == dupNoFx) {
             duplicatedId = m_controller->duplicateTrack(
-                id.toStdString(), /*withInserts=*/true,
+                id.toStdString(), /*withInserts=*/false,
                 ui::duplicateTrackClips());
-    } else if (dupNoFx && chosen == dupNoFx) {
-        duplicatedId = m_controller->duplicateTrack(
-            id.toStdString(), /*withInserts=*/false,
-            ui::duplicateTrackClips());
-    } else if (const auto spec = trackKinds.constFind(chosen);
-               spec != trackKinds.constEnd()) {
-        spec->create(*m_controller);
-    } else {
-        return;
-    }
-    // The shell rebuilds the header immediately, then refreshes channel strips
-    // after Qt has had a chance to paint the new structure.
-    emit orderChanged();
-    if (!duplicatedId.empty()) {
-        const QString copyId = QString::fromStdString(duplicatedId);
-        setSelectedTrack(copyId);
-        emitSelection();
-    }
+        } else if (const auto spec = trackKinds.constFind(chosen);
+                   spec != trackKinds.constEnd()) {
+            spec->create(*m_controller);
+        } else {
+            return;
+        }
+        // The shell rebuilds the header immediately, then refreshes channel strips
+        // after Qt has had a chance to paint the new structure.
+        emit orderChanged();
+        if (!duplicatedId.empty()) {
+            const QString copyId = QString::fromStdString(duplicatedId);
+            setSelectedTrack(copyId);
+            emitSelection();
+        }
+    });
 }

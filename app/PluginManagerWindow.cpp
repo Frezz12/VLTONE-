@@ -604,11 +604,19 @@ void PluginManagerWindow::refreshScanState() {
     // `takeScanFinished` is a one-shot flag, so the refresh happens exactly
     // once per scan even though this runs ten times a second.
     if (manager.takeScanFinished()) {
-        manager.save();
         refreshPlugins();
         refreshBlacklist();
         emit pluginsChanged();
     }
+    const QString error = QString::fromStdString(manager.lastScanError());
+    if (!error.isEmpty()) {
+        m_wasScanning = false;
+        m_status->setText(tr("Scan stopped. Hover for details."));
+        m_status->setToolTip(error);
+        m_status->setAccessibleDescription(error);
+        return;
+    }
+    m_status->setAccessibleDescription(QString());
     if (m_wasScanning) {
         m_wasScanning = false;
         const int found = static_cast<int>(m_plugins.size());
@@ -629,27 +637,27 @@ void PluginManagerWindow::applyTheme() {
     // Fusion and read as a different application.
     setStyleSheet(QString(R"(
 #PluginScanPanel { background: %ELEV%; border: 1px solid %SEP%;
-                   border-radius: 0; }
+                   border-radius: %RADIUS%px; }
 #PluginScanTitle { color: %TEXT%; font-size: 14px; font-weight: 700;
                    border: none; background: transparent; }
 #PluginScanPanel QCheckBox, #PluginScanPanel QLabel { border: none; background: transparent; }
 QTabWidget::pane { background: %SURFACE%; border: 1px solid %SEP%;
-                   border-radius: 0; top: -1px; }
+                   border-radius: %RADIUS%px; top: -1px; }
 QTabBar::tab { background: transparent; color: %TEXT2%; padding: 7px 16px;
-               border: 1px solid transparent; border-top-left-radius: 0;
-               border-top-right-radius: 0; }
+               border: 1px solid transparent; border-top-left-radius: %RADIUS%px;
+               border-top-right-radius: %RADIUS%px; }
 QTabBar::tab:hover { color: %TEXT%; }
 QTabBar::tab:selected { background: %SURFACE%; color: %TEXT%;
                         border-color: %SEP%; border-bottom-color: %SURFACE%; }
 
 QTableWidget, QListWidget {
-    background: %WELL%; border: 1px solid %SEP%; border-radius: 0;
+    background: %WELL%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
     alternate-background-color: %ALT%; outline: none;
 }
 QTableWidget:focus, QListWidget:focus { border-color: %ACCENT%; }
 QTableWidget::item, QListWidget::item { padding: 4px 8px; border: none; }
 QTableWidget::item:selected, QListWidget::item:selected {
-    background: %ACCENT%; color: white;
+    background: %ACCENT%; color: %ACCENT_TEXT%;
 }
 QHeaderView::section {
     background: %ELEV%; color: %TEXT2%; padding: 6px 8px;
@@ -663,13 +671,14 @@ QProgressBar { background: %WELL%; border: none; border-radius: 3px; }
 QProgressBar::chunk { background: %ACCENT%; border-radius: 3px; }
 
 #PluginScanStatus, #PluginHint { color: %TEXT2%; font-size: 12px; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%SURFACE%", t.surface.name())
         .replace("%WELL%", t.well().name())
         .replace("%ELEV%", t.surfaceElevated.name())
         .replace("%ALT%", mixColors(t.well(), t.surface, 0.45).name())
         .replace("%SEP%", t.separator().name())
         .replace("%ACCENT%", t.accent.name())
+        .replace("%ACCENT_TEXT%", t.accentText().name())
         .replace("%TEXT2%", t.textSecondary.name())
         .replace("%TEXT%", t.textPrimary.name()));
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+class QMenu;
+
 #include <QColor>
 #include <QHash>
 #include <QSet>
@@ -24,6 +26,7 @@ class FileBrowserTree : public QTreeWidget {
 public:
     /// Open the selected item's existing right-click actions.
     bool showSelectedItemActionsMenu();
+    bool populateSelectedItemActionsMenu(QMenu& menu);
     /// What a row is, which decides how it is drawn and whether it can be
     /// dragged anywhere.
     ///
@@ -125,6 +128,8 @@ signals:
     /// A collection row asked to become an icon tab. The panel owns the icon
     /// chooser because the tab strip lives there.
     void tabRequested(const QString& collectionId);
+    /// A physical folder should get its own icon tab, backed by a collection.
+    void folderTabRequested(const QString& path);
     /// Something worth saying in the status bar (an unreadable folder, a
     /// capped search).
     void statusMessage(const QString& text);
@@ -140,6 +145,7 @@ protected:
                       const QModelIndex& index) const override;
 
 private:
+    void populateItemActionsMenu(QMenu& menu, QTreeWidgetItem* item);
     void populate(QTreeWidgetItem* parent, const QString& path);
     /// Fill a node the first time it is opened (it carries a placeholder child
     /// until then, which is what draws the expander arrow).
@@ -150,6 +156,7 @@ private:
     QTreeWidgetItem* makeItem(const QString& path, bool isDirectory,
                               int cachedKind = -1,
                               const QColor& inheritedFolderColor = {});
+    QColor folderTint(const QString& directory);
     struct DirectoryResult;
     void applyDirectoryChunk(const std::shared_ptr<DirectoryResult>& result);
     quint64 m_loadSerial = 0;
@@ -184,4 +191,5 @@ private:
     QString m_resultQuery;
     QStringList m_resultPaths;
     int m_resultPluginCount = 0;
+    QHash<QString, QColor> m_folderTintCache;
 };

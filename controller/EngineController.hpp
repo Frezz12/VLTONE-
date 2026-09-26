@@ -2,6 +2,7 @@
 
 #include "MidiFile.hpp"
 #include "MidiRecording.hpp"
+#include "StripSilence.hpp"
 #include "RenderSpec.hpp"
 #include "model/Document.hpp"
 #include "recovery/RecoverySnapshot.hpp"
@@ -196,6 +197,23 @@ public:
         friend bool operator==(const ClipAddress&, const ClipAddress&) = default;
     };
 
+    struct StripSilenceSource {
+        ClipAddress address;
+        ClipModel original;
+        std::string fingerprint;
+        std::string renderedPath;
+        double durationSeconds = 0, sampleRate = 48000, tempo = 120;
+        engine::ClipPlayerNode::ClipList placements;
+    };
+    /// Prepare immutable source data on the control thread, then analyze it on
+    /// a worker. Applying validates the source again and creates one undo item.
+    audio::Result prepareStripSilence(const std::vector<ClipAddress>& clips,
+        std::vector<StripSilenceSource>& sources);
+    audio::Result applyStripSilence(const std::vector<StripSilenceSource>& sources,
+        const std::vector<std::vector<SilenceRegion>>& regions,
+        const StripSilenceSettings& settings, std::vector<ClipAddress>& created,
+        bool recordUndo = true);
+
     enum class BounceFxLayer : std::uint32_t {
         Clip = 1u << 0,
         Track = 1u << 1,
@@ -264,6 +282,17 @@ public:
     void setProjectMetadata(std::string author, std::string coverImagePath);
 
     audio::Result saveProject(const std::string& packageDir);
+    /// Copy musical content and current opaque plugin state into this project.
+    /// Source clips are untouched. Each operation is one undoable edit.
+    audio::Result saveClipToLibrary(const ClipAddress& clip, std::string& entryId);
+    bool renameLibraryClip(const std::string& entryId, const std::string& name);
+    bool removeLibraryClip(const std::string& entryId);
+    /// Empty destination creates a lane. originalPosition resolves the saved
+    /// source lane/time (recreating a lane when it no longer exists).
+    audio::Result restoreLibraryClip(const std::string& entryId,
+        const std::string& targetTrackId, double startSeconds,
+        ClipAddress& restored, bool originalPosition = false);
+    const ClipLibraryEntry* libraryClip(const std::string& entryId) const;
     /// Capture plugin state in its owning thread, then persist owned bytes on a worker.
     recovery::RecoverySnapshot prepareProjectSave();
     static audio::Result writePreparedProject(recovery::RecoverySnapshot& snapshot,
@@ -1083,6 +1112,8 @@ public:
     /// delta; the no-label overload remains a publication-only compatibility
     /// path. Calls outside this bracket keep their immediate behaviour.
     void beginClipPositionEdit();
+    /// Restore the exact pre-drag placements without creating an undo command.
+    void cancelClipPositionEdit();
     void endClipPositionEdit(const std::string& label = {});
     void setClipGain(const std::string& trackId,
                      const std::string& clipId, float gain);
@@ -1349,6 +1380,11 @@ public:
                                             double startSeconds,
                                             midifile::File* outInfo = nullptr);
 
+    /// Replace this clip's notes and fit its duration, preserving its identity,
+    /// timeline start and project tempo. One undo (also one shared batch).
+    bool replaceMidiClipFromFile(const std::string& trackId, const std::string& clipId,
+                                const midifile::File& file);
+
     // ── Live notes ──
     //
     // Notes played *now* rather than written down: a key clicked on the piano
@@ -1576,11 +1612,19 @@ public:
                              const std::string& label = "Set Master Pan");
     float masterPan() const { return m_project.masterPan; }
     float trackPeak(const std::string& trackId) const;
+    float trackPeakLeft(const std::string& trackId) const;
+    float trackPeakRight(const std::string& trackId) const;
+    float trackPeakHold(const std::string& trackId) const;
+    void resetTrackPeakHold(const std::string& trackId);
     float trackRms(const std::string& trackId) const;
     float masterPeak() const;
     float masterRms() const;
     float masterPeakLeft() const;
     float masterPeakRight() const;
+    float masterPeakHold() const;
+    engine::LoudnessLevels masterLoudness() const { return m_engine.masterLoudness(); }
+    void resetMasterLoudness() { m_engine.resetMasterLoudness(); }
+    void resetMasterPeakHold();
     engine::RealtimeEngine::MasterSpectrum masterSpectrum() const;
     void addMasterSpectrumConsumer() noexcept;
     void removeMasterSpectrumConsumer() noexcept;
@@ -1641,6 +1685,8 @@ public:
         double compCrossfadeMs = 5.0;
         /// Whether a MIDI take replaces the clip's notes or merges into them.
         bool midiOverdubMerge = false;
+        bool autoSilence = false;
+        StripSilenceSettings stripSilence;
         /// R alone arms the selected track and starts recording, instead of
         /// requiring the transport's Record button to be engaged first.
         bool recordKeyArmsAndStarts = true;
@@ -1669,6 +1715,8 @@ public:
         double loopEndSeconds = 0.0;
         bool loopCreatesTakes = true;
         bool midiOverdubMerge = false;
+        bool autoSilence = false;
+        StripSilenceSettings stripSilence;
         bool trimTakesToRegion = true;
         bool autoExpandAfterRecord = false;
         double compCrossfadeMs = 5.0;
@@ -1746,6 +1794,7 @@ public:
     std::string stopRecording();
     void markRecordingInterrupted();
     const std::string& recordingWarning() const { return m_recordingWarning; }
+    const std::string& autoSilenceWarning() const { return m_autoSilenceWarning; }
     bool isRecording() const;
     /// The tracks currently capturing, in the order recording started.
     const std::vector<std::string>& recordingTracks() const {
@@ -2296,6 +2345,13 @@ private:
     /// `saveProject`, because only this class holds the live instances.
     audio::Result writePluginState(ProjectModel& document,
                                    const std::string& packageDir);
+    audio::Result captureLibraryPlugins(std::vector<TrackModel>& tracks);
+    void appendLibraryStates(recovery::RecoverySnapshot& snapshot) const;
+    void loadLibraryStates(const std::string& packageDir,
+                           const std::string& fallbackPackageDir = {});
+    audio::Result restoreLibraryPluginStates(const std::vector<TrackModel>& tracks,
+                                             bool clipsOnlyForFirst);
+    std::unordered_map<std::string, std::vector<std::uint8_t>> m_clipLibraryStates;
     static void cleanupPluginState(const ProjectModel& document,
                             const std::string& packageDir);
     /// Restore those chunks after a load, falling back to the stored parameter
@@ -2501,6 +2557,8 @@ private:
     /// deliberately irrelevant here.
     void landCapture(TrackModel& track,
                      const FinalizedRecordingTrack& recording);
+    void stripRecordedSilence(const FinalizedRecordingTrack& recording);
+    std::string m_autoSilenceWarning;
     void landMidiCapture(TrackModel& track, const FinalizedRecordingTrack& recording);
     void captureMidiEvent(const std::string& trackId, int status, int d1, int d2,
                          std::uint64_t source, MidiInputStamp stamp, LiveMidiOrigin origin);

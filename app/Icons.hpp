@@ -41,7 +41,7 @@ enum class Glyph {
     Power, Clock, MidiKeys, CountIn,
     // Context-panel controls: an icon each, with the value only shown while it
     // is being changed.
-    Volume, Pan, FadeIn, FadeOut,
+    Volume, Pan, FadeIn, FadeOut, StripSilence,
     // Plugin quick-adder: the glass search that grows out of the "+ Add Plugin"
     // button on a selected track.
     Search, Star, Close, Mic, Eq, Synth, Plugin, Image,

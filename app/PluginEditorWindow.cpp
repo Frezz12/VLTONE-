@@ -1665,7 +1665,7 @@ PluginEditorWindow { background: %BG%; }
     color: %TEXT%;
     background: %WELL%;
     border: 1px solid %SEPARATOR%;
-    border-radius: 0;
+    border-radius: %RADIUS%px;
     padding: 2px 22px 2px 7px;
     min-height: 18px;
 }
@@ -1675,7 +1675,7 @@ PluginEditorWindow { background: %BG%; }
     color: %TEXT2%;
     background: %WELL%;
     border: 1px solid %SEPARATOR%;
-    border-radius: 0;
+    border-radius: %RADIUS%px;
     font-weight: 700;
 }
 #PluginWrapper QToolButton:hover { color: %TEXT%; border-color: %ACCENT%; }
@@ -1697,7 +1697,7 @@ PluginEditorWindow { background: %BG%; }
 #PluginParamCell {
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 6px;
+    border-radius: %RADIUS%px;
 }
 #PluginParamCell[active="true"] {
     background: %WELL%;
@@ -1710,7 +1710,7 @@ PluginEditorWindow { background: %BG%; }
     letter-spacing: 1px;
 }
 #PluginParamValue { color: %TEXT2%; font-size: 9px; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%BG%", t.background.name())
         .replace("%SURFACE%", t.surface.name())
         .replace("%ELEVATED%", t.surfaceElevated.name())

@@ -22,7 +22,7 @@ inline std::size_t estimatedProjectBytes(const ProjectModel& project) {
         return result;
     };
     bytes += inserts(project.masterInserts) + project.tracks.capacity() * sizeof(TrackModel);
-    for (const auto& track : project.tracks) {
+    const auto accountTrack = [&](const TrackModel& track) {
         bytes += track.name.size() + track.id.size() + track.clips.capacity() * sizeof(ClipModel) +
             track.sends.capacity() * sizeof(SendModel) + inserts(track.inserts) +
             inserts(track.samplerFx.inserts) +
@@ -51,6 +51,12 @@ inline std::size_t estimatedProjectBytes(const ProjectModel& project) {
                     bytes += take.notes.capacity() * sizeof(NoteModel) + take.filePath.size() + take.name.size();
             }
         }
+    };
+    for (const auto& track : project.tracks) accountTrack(track);
+    bytes += project.clipLibrary.capacity() * sizeof(ClipLibraryEntry);
+    for (const auto& entry : project.clipLibrary) {
+        bytes += entry.id.size() + entry.name.size() + entry.tracks.capacity() * sizeof(TrackModel);
+        for (const auto& track : entry.tracks) accountTrack(track);
     }
     return bytes * 2;
 }

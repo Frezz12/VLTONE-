@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 namespace fs = std::filesystem;
 using namespace daw;
@@ -27,7 +28,44 @@ static void check(bool condition, const char* what) {
     if (!condition) ++failures;
 }
 
-int main() {
+// Keep these tests independent of the user's installed plugins, including
+// when load() migrates an older cache's default search paths.
+static void useTestFolder(PluginManager& manager, const fs::path& directory) {
+    for (const auto format : {plugins::Format::Clap, plugins::Format::Vst3,
+                             plugins::Format::Vst, plugins::Format::AudioUnit}) {
+        manager.setSearchPaths(format, format == plugins::Format::Clap
+                                          ? std::vector<std::string>{directory.string()}
+                                          : std::vector<std::string>{});
+    }
+}
+
+int main(int argc, char** argv) {
+    // Child-process fixtures: an obsolete helper and a compatible helper
+    // paused inside the second bundle, for the checkpoint/cancellation test.
+    if (argc > 1) {
+        const bool checkpointProbe = fs::path(argv[0]).stem() == "checkpoint-scanner";
+        if (argc == 2 && std::string(argv[1]) == "--protocol") {
+            std::printf("{\"schema\":%d,\"plugins\":[]}\n",
+                        plugins::scan::kSchemaVersion - (checkpointProbe ? 0 : 1));
+            return 0;
+        }
+        if (checkpointProbe) {
+            for (int i = 1; i < argc; ++i) {
+                const std::string argument = argv[i];
+                if (!argument.starts_with("--path=")) continue;
+                const fs::path plugin = argument.substr(7);
+                if (plugin.filename() != "B.clap") continue;
+                std::ofstream(plugin.parent_path() / "paused") << "ready";
+                const auto deadline = std::chrono::steady_clock::now() +
+                                      std::chrono::seconds(5);
+                while (!fs::exists(plugin.parent_path() / "resume") &&
+                       std::chrono::steady_clock::now() < deadline) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+            }
+        }
+        return 2;
+    }
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     const std::string scanner = DAW_SCAN_PATH;
     const std::string pluginPath = DAW_TEST_CLAP_PATH;
@@ -93,6 +131,13 @@ int main() {
 
     // ── Running the scanner ──
     {
+        const auto protocol = ScanProcess::run(
+            scanner, {"--protocol"}, std::chrono::milliseconds(5000));
+        std::vector<plugins::PluginDescriptor> handshake;
+        check(protocol.succeeded() &&
+                  plugins::scan::decodeResult(protocol.output, handshake) && handshake.empty(),
+              "the helper proves protocol compatibility without loading a plugin");
+
         const ScanProcessResult result = ScanProcess::run(
             scanner,
             {"--inspect", "--format=clap", "--path=" + pluginPath},
@@ -191,6 +236,7 @@ int main() {
         good.fileModifiedTime = 5678;
         good.schemaVersion = plugins::scan::kSchemaVersion;
         good.ok = true;
+        good.scannerVerified = true;
         plugins::PluginDescriptor descriptor;
         descriptor.format = plugins::Format::Clap;
         descriptor.uid = "com.example.good";
@@ -223,6 +269,8 @@ int main() {
         // Incremental logic: unchanged file reuses the entry, changed does not.
         const PluginCacheEntry* readGood =
             reloaded.find(plugins::Format::Clap, "/plugins/Good.clap");
+        check(readGood && readGood->scannerVerified && readBad && !readBad->scannerVerified,
+              "the cache preserves whether the scanner protocol was verified");
         check(readGood && PluginCache::isCurrent(*readGood, 1234, 5678),
               "an unchanged file is considered current");
         check(readGood && !PluginCache::isCurrent(*readGood, 1234, 9999),
@@ -253,12 +301,14 @@ int main() {
         PluginManager manager(cachePath);
         manager.setScannerPath(scanner);
         manager.setScanTimeout(std::chrono::milliseconds(20000));
-        manager.setSearchPaths(plugins::Format::Clap, {pluginDirectory.string()});
+        manager.load();
+        useTestFolder(manager, pluginDirectory);
 
         manager.startScan();
         manager.waitForScan();
 
         check(!manager.isScanning(), "the scan finished");
+        check(manager.lastScanError().empty(), "the scan has no infrastructure error");
         check(manager.takeScanFinished(), "finishing is reported exactly once");
         check(!manager.takeScanFinished(), "and not a second time");
         check(manager.scanTotal() >= 1, "at least one candidate was found");
@@ -311,6 +361,7 @@ int main() {
         PluginManager second(cachePath);
         second.setScannerPath("/nonexistent/daw_scan");   // any launch would fail
         second.load();
+        useTestFolder(second, pluginDirectory);
         second.startScan();
         second.waitForScan();
         bool stillThere = false;
@@ -319,6 +370,71 @@ int main() {
         }
         check(stillThere,
               "an incremental rescan reuses the cache without launching the scanner");
+        check(second.lastScanError().empty() && second.scanned() == second.scanTotal(),
+              "a warm cache needs neither inspection nor a helper handshake");
+
+        // A missing helper on an explicit rescan must preserve the previous
+        // catalogue, not turn every valid plugin into a blacklist entry.
+        second.startScan(true);
+        second.waitForScan();
+        check(!second.lastScanError().empty() && second.scanned() == 0 &&
+                  second.blacklist().empty() &&
+                  second.find(plugins::Format::Clap, "com.daw.test.gain").has_value(),
+              "a missing helper stops the scan without damaging the catalogue");
+
+        second.setScannerPath(fs::absolute(argv[0]).string());
+        second.startScan(true);
+        second.waitForScan();
+        check(!second.lastScanError().empty() && second.scanned() == 0 &&
+                  second.blacklist().empty() &&
+                  second.find(plugins::Format::Clap, "com.daw.test.gain").has_value(),
+              "a successful reply in an old protocol cannot blacklist healthy plugins");
+        PluginCache preserved;
+        check(preserved.load(cachePath) && preserved.allPlugins().size() == 2,
+              "helper failures also leave the on-disk catalogue intact");
+
+        second.setScannerPath(scanner);
+        second.startScan(true);
+        second.waitForScan();
+        check(second.lastScanError().empty() && second.blacklist().empty() &&
+                  second.scanned() == second.scanTotal(),
+              "installing the matching helper clears the scan error and permits a rescan");
+
+        // Reproduce the damaged schema-2 cache left by a schema-1 scanner.
+        // Seven previous attempts must not prevent one repair with a matching
+        // helper; subsequent startups must return to the zero-launch path.
+        const auto* saved = preserved.find(plugins::Format::Clap, pluginPath);
+        check(saved != nullptr, "the fixture bundle has a persistent cache entry");
+        if (saved) {
+            PluginCacheEntry legacy = *saved;
+            legacy.ok = false;
+            legacy.blacklisted = true;
+            legacy.scannerVerified = false;
+            legacy.failureReason = "the scanner returned nothing usable";
+            legacy.attempts = 7;
+            legacy.plugins.clear();
+            preserved.put(std::move(legacy));
+            const std::string repairPath = (sandbox / "repair.json").string();
+            check(preserved.save(repairPath), "the legacy failure fixture writes");
+            PluginManager repaired(repairPath);
+            repaired.load();
+            useTestFolder(repaired, pluginDirectory);
+            repaired.setScannerPath(scanner);
+            repaired.startScan();
+            repaired.waitForScan();
+            check(repaired.lastScanError().empty() && repaired.blacklist().empty() &&
+                      repaired.find(plugins::Format::Clap, "com.daw.test.gain").has_value(),
+                  "legacy protocol failures recover even after the old retry limit");
+            PluginCache repairedCache;
+            repairedCache.load(repairPath);
+            const auto* repairedEntry = repairedCache.find(plugins::Format::Clap, pluginPath);
+            check(repairedEntry && repairedEntry->scannerVerified && repairedEntry->attempts == 0,
+                  "repair is saved with a verified scanner and reset attempt count");
+            repaired.setScannerPath("/nonexistent/daw_scan");
+            repaired.startScan();
+            repaired.waitForScan();
+            check(repaired.lastScanError().empty(), "the repaired cache is reused on the next scan");
+        }
     }
 
     // ── A bad plugin is blacklisted and the process survives ──
@@ -333,7 +449,8 @@ int main() {
         PluginManager manager(cachePath);
         manager.setScannerPath(scanner);
         manager.setScanTimeout(std::chrono::milliseconds(20000));
-        manager.setSearchPaths(plugins::Format::Clap, {badDirectory.string()});
+        manager.load();
+        useTestFolder(manager, badDirectory);
         manager.startScan();
         manager.waitForScan();
 
@@ -350,10 +467,111 @@ int main() {
             std::printf("      reason: %s\n", blocked.front().reason.c_str());
         }
 
+        // An unchanged failure is useful cached information too. It should
+        // not pay the timeout again on each of the next three startups.
+        manager.setScannerPath("/nonexistent/daw_scan");
+        manager.startScan();
+        manager.waitForScan();
+        auto attempts = [&] {
+            const auto entries = manager.blacklist();
+            return entries.size() == 1 ? entries.front().attempts : -1;
+        };
+        check(manager.lastScanError().empty() && attempts() == 1,
+              "an unchanged broken plugin is skipped immediately, without automatic retries");
+
+        manager.setScannerPath(scanner);
+        manager.startScan(true);
+        manager.waitForScan();
+        check(manager.lastScanError().empty() && attempts() == 2,
+              "an explicit full rescan can retry a blacklisted plugin");
+        std::ofstream(badDirectory / "Broken.clap", std::ios::app) << " changed";
+        manager.startScan();
+        manager.waitForScan();
+        check(manager.lastScanError().empty() && attempts() == 3,
+              "changing a blacklisted plugin on disk permits a new inspection");
+
+        // The migration must not keep retrying a real empty reply from a
+        // compatible helper just because it has the same human-readable text.
+        PluginCache verifiedFailure;
+        verifiedFailure.load(cachePath);
+        if (!verifiedFailure.entries().empty()) {
+            PluginCacheEntry emptyReply = verifiedFailure.entries().front();
+            emptyReply.failureReason = "the scanner returned nothing usable";
+            emptyReply.attempts = 1;
+            verifiedFailure.put(std::move(emptyReply));
+            verifiedFailure.save(cachePath);
+            manager.load();
+            useTestFolder(manager, badDirectory);
+            manager.setScannerPath("/nonexistent/daw_scan");
+            manager.startScan();
+            manager.waitForScan();
+            check(manager.lastScanError().empty() && attempts() == 1,
+                  "verified empty replies stay cached instead of entering a repair loop");
+        }
+
         // Un-blacklisting must make it scannable again, not merely hide it.
         manager.unblacklist(plugins::Format::Clap,
                             (badDirectory / "Broken.clap").string());
         check(manager.blacklist().empty(), "un-blacklisting removes the entry");
+        manager.setScannerPath(scanner);
+        manager.startScan();
+        manager.waitForScan();
+        check(attempts() == 1, "un-blacklisting actually enables a new inspection");
+    }
+
+    // ── Completed work survives interruption during the next plugin ──
+    {
+        const fs::path folder = sandbox / "checkpoint";
+        fs::create_directories(folder, ec);
+        std::ofstream(folder / "A.clap") << "broken A";
+        std::ofstream(folder / "B.clap") << "broken B";
+        const fs::path helper = sandbox /
+            ("checkpoint-scanner" + fs::path(argv[0]).extension().string());
+        fs::copy_file(fs::absolute(argv[0]), helper, fs::copy_options::overwrite_existing, ec);
+        check(!ec, "the checkpoint scanner fixture is available");
+
+        const std::string cachePath = (sandbox / "checkpoint.json").string();
+        PluginManager manager(cachePath);
+        manager.setScannerPath(helper.string());
+        useTestFolder(manager, folder);
+        manager.startScan();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!fs::exists(folder / "paused") && manager.isScanning() &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        PluginCache checkpoint;
+        check(fs::exists(folder / "paused") && manager.isScanning() &&
+                  checkpoint.load(cachePath) && checkpoint.entries().size() == 1 &&
+                  checkpoint.find(plugins::Format::Clap, (folder / "A.clap").string()),
+              "a completed bundle is on disk while the next one is still being scanned");
+        manager.cancelScan();
+        std::ofstream(folder / "resume") << "continue";
+        manager.waitForScan();
+        check(manager.lastScanError().empty() && manager.blacklist().size() == 1 &&
+                  checkpoint.load(cachePath) && checkpoint.entries().size() == 1,
+              "cancellation keeps completed work without blacklisting the interrupted bundle");
+
+        manager.setScannerPath(scanner);
+        manager.startScan();
+        manager.waitForScan();
+        const auto resumed = manager.blacklist();
+        check(manager.lastScanError().empty() && resumed.size() == 2 &&
+                  std::ranges::all_of(resumed, [](const auto& entry) { return entry.attempts == 1; }),
+              "a resumed scan inspects only the remaining bundle");
+    }
+
+    // ── A cache that cannot be saved must not silently restart every launch ──
+    {
+        const fs::path cacheDirectory = sandbox / "directory-instead-of-cache.json";
+        fs::create_directories(cacheDirectory, ec);
+        PluginManager manager(cacheDirectory.string());
+        manager.setScannerPath(scanner);
+        useTestFolder(manager, sandbox / "bad");
+        manager.startScan();
+        manager.waitForScan();
+        check(!manager.lastScanError().empty() && fs::is_directory(cacheDirectory),
+              "a cache write failure is reported without removing the existing path");
     }
 
     fs::remove_all(sandbox, ec);

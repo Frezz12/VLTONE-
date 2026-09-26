@@ -1,4 +1,11 @@
 #include "FileBrowserPanel.hpp"
+#include "ClipLibraryView.hpp"
+#include "ClipLibraryDrag.hpp"
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
+#include "MenuActions.hpp"
 #include "ChannelStripPresets.hpp"
 
 #include "BrowserPrefs.hpp"
@@ -122,6 +129,8 @@ FileBrowserPanel::FileBrowserPanel(daw::EngineController* controller,
     setObjectName("BrowserPanel");
     setAttribute(Qt::WA_StyledBackground, true);
     setMinimumWidth(160);
+    setAcceptDrops(true);
+    setProperty("clipLibraryDropTarget", true);
 
     auto* column = new QVBoxLayout(this);
     column->setContentsMargins(0, 0, 0, 0);
@@ -173,13 +182,33 @@ FileBrowserPanel::FileBrowserPanel(daw::EngineController* controller,
     });
     connect(m_tree, &FileBrowserTree::tabRequested, this,
             &FileBrowserPanel::pinCollectionAsTab);
+    connect(m_tree, &FileBrowserTree::folderTabRequested, this,
+            &FileBrowserPanel::pinFolderAsTab);
     column->addWidget(m_tree, 1);
+    m_clipLibrary = new ClipLibraryView(m_controller, this);
+    column->addWidget(m_clipLibrary, 1);
+    m_clipLibrary->hide();
+    connect(m_clipLibrary, &ClipLibraryView::projectEdited, this, &FileBrowserPanel::libraryEdited);
+    connect(m_clipLibrary, &ClipLibraryView::restoreRequested, this, [this](const QString& id, bool original) {
+        daw::EngineController::ClipAddress restored;
+        const auto result = m_controller->restoreLibraryClip(id.toStdString(), {},
+            m_controller->positionSeconds(), restored, original);
+        if (!result) { emit statusMessage(tr("Could not restore clip: %1").arg(QString::fromStdString(result.message()))); return; }
+        emit libraryClipRestored(QString::fromStdString(restored.trackId), QString::fromStdString(restored.clipId));
+        emit statusMessage(tr("Saved clip restored"));
+    });
+    m_clipDropHint = new QLabel(tr("Save a copy\nRelease to keep this clip in the project"), this);
+    m_clipDropHint->setAlignment(Qt::AlignCenter);
+    m_clipDropHint->setWordWrap(true);
+    m_clipDropHint->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_clipDropHint->hide();
 
     column->addWidget(buildPreviewBar());
 
     m_search = new FileSearchWorker(this);
     connect(m_search, &FileSearchWorker::results, this,
             [this](const QStringList& paths, bool truncated, bool finished) {
+                if (m_activeCollection == ui::cliplibrary::kTabId) return;
                 const int count = m_tree->showResults(
                     paths, truncated, m_searchField->text().trimmed(), !finished);
                 emit statusMessage(!finished ? tr("Searching… %1 matches").arg(count) : truncated
@@ -192,8 +221,19 @@ FileBrowserPanel::FileBrowserPanel(daw::EngineController* controller,
     m_searchTimer->setSingleShot(true);
     m_searchTimer->setInterval(kSearchDebounceMs);
     connect(m_searchTimer, &QTimer::timeout, this, [this] {
-        QStringList roots = ui::browserprefs::folders();
-        roots.prepend(ui::channelstrippresets::rootFolder());
+        if (m_activeCollection == ui::cliplibrary::kTabId) return;
+        QStringList roots;
+        if (!m_activeCollection.isEmpty()) {
+            for (const auto& collection : ui::browserprefs::collections()) {
+                if (collection.id == m_activeCollection) {
+                    roots = collection.paths;
+                    break;
+                }
+            }
+        } else {
+            roots = ui::browserprefs::folders();
+            roots.prepend(ui::channelstrippresets::rootFolder());
+        }
         roots.removeDuplicates();
         m_search->search(roots, m_searchField->text(), ui::browserprefs::ignoredExtensions());
     });
@@ -288,6 +328,7 @@ FileBrowserPanel::~FileBrowserPanel() {
 
 QWidget* FileBrowserPanel::buildHeader() {
     auto* header = new QWidget(this);
+    m_header = header;
     header->setObjectName("BrowserHeader");
     header->setFixedHeight(ui::kRulerHeight);
 
@@ -300,6 +341,7 @@ QWidget* FileBrowserPanel::buildHeader() {
     row->addWidget(title, 1);
 
     auto* add = new ui::IconButton(icons::Glyph::Plus, tr("Add a folder…"), header);
+    add->setObjectName(QStringLiteral("BrowserAddFolder"));
     add->setButtonSize(22, 20);
     connect(add, &QAbstractButton::clicked, this,
             &FileBrowserPanel::requestAddFolder);
@@ -321,14 +363,20 @@ QWidget* FileBrowserPanel::buildHeader() {
     return header;
 }
 
+void FileBrowserPanel::setHeaderHeight(int height) {
+    height = std::max(ui::kRulerHeight, height);
+    m_header->setFixedHeight(height);
+    m_header->layout()->setContentsMargins(8, 0, 4, height - ui::kRulerHeight);
+}
+
 QWidget* FileBrowserPanel::buildTabs() {
     auto* bar = new QWidget(this);
     bar->setObjectName(QStringLiteral("BrowserTabs"));
     bar->setFixedHeight(27);
     m_tabsBar = bar;
     m_tabsLayout = new QHBoxLayout(bar);
-    // Eight 20 px targets fit the browser's 160 px minimum exactly. The plus
-    // occupies the eighth slot until the final custom tab replaces it.
+    // Targets yield a few pixels at the browser's minimum width, so the
+    // permanent clips tab fits even with every custom tab present.
     m_tabsLayout->setContentsMargins(0, 2, 0, 2);
     m_tabsLayout->setSpacing(0);
     rebuildTabs();
@@ -359,7 +407,9 @@ void FileBrowserPanel::rebuildTabs() {
         button->setAutoRaise(true);
         button->setCheckable(true);
         button->setChecked(m_activeCollection == collectionId);
-        button->setFixedSize(20, 23);
+        button->setFixedHeight(23);
+        button->setMinimumWidth(16);
+        button->setMaximumWidth(20);
         button->setIconSize(QSize(13, 13));
         button->setIcon(icons::icon(glyph, tint, 13));
         button->setToolTip(label);
@@ -367,7 +417,7 @@ void FileBrowserPanel::rebuildTabs() {
         button->setFocusPolicy(Qt::StrongFocus);
         connect(button, &QToolButton::clicked, this,
                 [this, collectionId] { activateCollection(collectionId); });
-        if (!collectionId.isEmpty()) {
+        if (!collectionId.isEmpty() && collectionId != ui::cliplibrary::kTabId) {
             button->setContextMenuPolicy(Qt::CustomContextMenu);
             connect(button, &QWidget::customContextMenuRequested, this,
                     [this, button, collectionId](const QPoint& position) {
@@ -380,6 +430,7 @@ void FileBrowserPanel::rebuildTabs() {
 
     const QColor idle = th().textSecondary;
     addButton({}, tr("All folders"), icons::Glyph::Folder, idle);
+    addButton(ui::cliplibrary::kTabId, tr("Project clips"), icons::Glyph::Layers, idle);
     const auto tabs = ui::browserprefs::tabs();
     for (const auto& tab : tabs) {
         const auto* collection = collectionFor(tab.collectionId);
@@ -393,7 +444,9 @@ void FileBrowserPanel::rebuildTabs() {
         auto* add = new QToolButton(m_tabsBar);
         add->setObjectName(QStringLiteral("BrowserTabButton"));
         add->setAutoRaise(true);
-        add->setFixedSize(20, 23);
+        add->setFixedHeight(23);
+        add->setMinimumWidth(16);
+        add->setMaximumWidth(20);
         add->setIconSize(QSize(12, 12));
         add->setIcon(icons::icon(icons::Glyph::Plus, idle, 12));
         add->setToolTip(tr("Add an icon tab"));
@@ -435,6 +488,47 @@ void FileBrowserPanel::pinCollectionAsTab(const QString& collectionId) {
     activateCollection(collectionId);
 }
 
+void FileBrowserPanel::pinFolderAsTab(const QString& path) {
+    const QFileInfo info(path);
+    if (!info.isDir()) return;
+    for (const auto& collection : ui::browserprefs::collections()) {
+        if (collection.paths.size() != 1 ||
+            QFileInfo(collection.paths.first()).absoluteFilePath() != info.absoluteFilePath())
+            continue;
+        const auto tabs = ui::browserprefs::tabs();
+        if (std::any_of(tabs.cbegin(), tabs.cend(), [&collection](const auto& tab) {
+                return tab.collectionId == collection.id;
+            })) {
+            activateCollection(collection.id);
+            return;
+        }
+    }
+    if (ui::browserprefs::tabs().size() >= ui::browserprefs::kMaxTabs - 1) {
+        emit statusMessage(tr("The browser can have up to eight tabs"));
+        return;
+    }
+    const QString icon = chooseTabIcon(QStringLiteral("folder"));
+    if (!icon.isEmpty()) addFolderAsTab(info.absoluteFilePath(), icon);
+}
+
+bool FileBrowserPanel::addFolderAsTab(const QString& path, const QString& icon) {
+    const QFileInfo info(path);
+    if (!info.isDir() || icon.isEmpty()) return false;
+    const QString name = info.fileName().isEmpty() ? info.absoluteFilePath()
+                                                    : info.fileName();
+    const QString id = ui::browserprefs::createCollection(name);
+    if (id.isEmpty()) return false;
+    if (!ui::browserprefs::addToCollection(id, info.absoluteFilePath()) ||
+        !ui::browserprefs::addTab(id, icon)) {
+        ui::browserprefs::removeCollection(id);
+        return false;
+    }
+    const QString color = ui::browserprefs::folderColor(info.absoluteFilePath());
+    if (!color.isEmpty()) ui::browserprefs::setCollectionColor(id, color);
+    activateCollection(id);
+    return true;
+}
+
 void FileBrowserPanel::createTab() {
     const auto collections = ui::browserprefs::collections();
     const auto tabs = ui::browserprefs::tabs();
@@ -459,10 +553,19 @@ void FileBrowserPanel::createTab() {
     QAction* create = menu.addAction(
         icons::icon(icons::Glyph::Plus, th().textSecondary, 15),
         tr("New Collection Folder…"));
+    QAction* openFolder = menu.addAction(
+        icons::icon(icons::Glyph::Folder, th().textSecondary, 15),
+        tr("Open Folder as Icon Tab…"));
     QAction* chosen = menu.exec(QCursor::pos());
     if (!chosen) return;
     if (destinations.contains(chosen)) {
         pinCollectionAsTab(destinations.value(chosen));
+        return;
+    }
+    if (chosen == openFolder) {
+        const QString folder = QFileDialog::getExistingDirectory(
+            this, tr("Open Folder as Icon Tab"), QString());
+        if (!folder.isEmpty()) pinFolderAsTab(folder);
         return;
     }
     if (chosen != create) return;
@@ -481,6 +584,7 @@ void FileBrowserPanel::createTab() {
 }
 
 bool FileBrowserPanel::showSelectedItemActionsMenu() {
+    if (m_activeCollection == ui::cliplibrary::kTabId) return m_clipLibrary->showActions();
     return m_tree && m_tree->showSelectedItemActionsMenu();
 }
 
@@ -496,6 +600,23 @@ bool FileBrowserPanel::showCurrentTabActionsMenu() {
 
 void FileBrowserPanel::showTabMenu(const QString& collectionId,
                                    const QPoint& globalPosition) {
+    QMenu menu(this);
+    populateTabActionsMenu(menu, collectionId);
+    if (!menu.isEmpty()) menu.exec(globalPosition);
+}
+
+bool FileBrowserPanel::populateSelectedItemActionsMenu(QMenu& menu) {
+    if (m_activeCollection == ui::cliplibrary::kTabId) return m_clipLibrary->populateActions(menu);
+    return m_tree && m_tree->populateSelectedItemActionsMenu(menu);
+}
+
+bool FileBrowserPanel::populateCurrentTabActionsMenu(QMenu& menu) {
+    if (m_activeCollection.isEmpty()) return false;
+    populateTabActionsMenu(menu, m_activeCollection);
+    return !menu.isEmpty();
+}
+
+void FileBrowserPanel::populateTabActionsMenu(QMenu& menu, const QString& collectionId) {
     const auto collections = ui::browserprefs::collections();
     const auto it = std::find_if(collections.cbegin(), collections.cend(),
                                  [&collectionId](const auto& collection) {
@@ -503,44 +624,53 @@ void FileBrowserPanel::showTabMenu(const QString& collectionId,
                                  });
     if (it == collections.cend()) return;
 
-    QMenu menu(this);
     QAction* changeIcon = menu.addAction(tr("Change Icon…"));
     QAction* rename = nullptr;
     if (collectionId != ui::browserprefs::favoritesId())
         rename = menu.addAction(tr("Rename Folder…"));
     menu.addSeparator();
     QAction* remove = menu.addAction(tr("Remove Icon Tab"));
-    QAction* chosen = menu.exec(globalPosition);
-    if (chosen == changeIcon) {
-        QString current;
-        for (const auto& tab : ui::browserprefs::tabs())
-            if (tab.collectionId == collectionId) current = tab.icon;
-        const QString icon = chooseTabIcon(current);
-        if (!icon.isEmpty()) {
-            ui::browserprefs::setTabIcon(collectionId, icon);
-            rebuildTabs();
+    const QString collectionName = it->name;
+    ui::connectMenuActions(menu, this, [=, this](QAction* chosen) {
+        if (!chosen) return;
+        if (chosen == changeIcon) {
+            QString current;
+            for (const auto& tab : ui::browserprefs::tabs())
+                if (tab.collectionId == collectionId) current = tab.icon;
+            const QString icon = chooseTabIcon(current);
+            if (!icon.isEmpty()) {
+                ui::browserprefs::setTabIcon(collectionId, icon);
+                rebuildTabs();
+            }
+        } else if (rename && chosen == rename) {
+            bool accepted = false;
+            const QString name = QInputDialog::getText(
+                this, tr("Rename Folder"), tr("Name:"), QLineEdit::Normal,
+                collectionName, &accepted).trimmed();
+            if (accepted && ui::browserprefs::renameCollection(collectionId, name)) {
+                if (m_tree) m_tree->refresh();
+                rebuildTabs();
+            }
+        } else if (chosen == remove) {
+            ui::browserprefs::removeTab(collectionId);
+            if (m_activeCollection == collectionId) activateCollection({});
+            else rebuildTabs();
         }
-    } else if (chosen == rename) {
-        bool accepted = false;
-        const QString name = QInputDialog::getText(
-            this, tr("Rename Folder"), tr("Name:"), QLineEdit::Normal,
-            it->name, &accepted).trimmed();
-        if (accepted && ui::browserprefs::renameCollection(collectionId, name)) {
-            if (m_tree) m_tree->refresh();
-            rebuildTabs();
-        }
-    } else if (chosen == remove) {
-        ui::browserprefs::removeTab(collectionId);
-        if (m_activeCollection == collectionId) activateCollection({});
-        else rebuildTabs();
-    }
+    });
 }
 
 void FileBrowserPanel::activateCollection(const QString& collectionId,
                                           bool persist) {
     m_activeCollection = collectionId;
     if (persist) ui::browserprefs::setActiveCollection(collectionId);
-    if (m_tree) m_tree->setCollectionFilter(collectionId);
+    const bool library = collectionId == ui::cliplibrary::kTabId;
+    if (auto* title = findChild<QLabel*>(QStringLiteral("BrowserTitle")))
+        title->setText(library ? tr("CLIPS") : tr("BROWSER"));
+    if (auto* add = findChild<QWidget*>(QStringLiteral("BrowserAddFolder"))) add->setVisible(!library);
+    if (m_tree) { m_tree->setVisible(!library); if (!library) m_tree->setCollectionFilter(collectionId); }
+    if (m_clipLibrary) { m_clipLibrary->setVisible(library); if (library) m_clipLibrary->refresh(); }
+    if (library && m_previewBar) { stopPreview(); setPreviewVisible(false, false); }
+    if (m_searchField) m_searchField->setPlaceholderText(library ? tr("Search saved clips…") : tr("Search files and plugins…"));
     rebuildTabs();
     if (m_searchField && !m_searchField->text().trimmed().isEmpty())
         searchChanged(m_searchField->text());
@@ -634,6 +764,7 @@ void FileBrowserPanel::setFileLabel(const QString& text, const QString& tip) {
 
 void FileBrowserPanel::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
+    if (m_clipDropHint) m_clipDropHint->setGeometry(rect().adjusted(6, 64, -6, -6));
     // Re-elide against the new width; a dragged panel edge changes how much of
     // the name fits.
     setFileLabel(m_fileLabelText, m_fileLabel ? m_fileLabel->toolTip() : QString());
@@ -641,6 +772,10 @@ void FileBrowserPanel::resizeEvent(QResizeEvent* event) {
 
 void FileBrowserPanel::applyTheme() {
     const Theme& t = th();
+    if (m_clipLibrary) m_clipLibrary->setZoom(m_zoom);
+    if (m_clipDropHint) m_clipDropHint->setStyleSheet(QStringLiteral(
+        "QLabel { background: %1; color: %2; border: 1px solid %3; border-radius: 8px; padding: 12px; font-size: 12px; }")
+        .arg(t.surfaceElevated.name(), t.textPrimary.name(), t.accent.name()));
     const QString edge = m_onLeft ? QStringLiteral("border-right")
                                   : QStringLiteral("border-left");
     // Every size in the sheet below is the design size times the browser's own
@@ -659,14 +794,14 @@ void FileBrowserPanel::applyTheme() {
 #BrowserHeader { background: %HEADER%; border-bottom: 1px solid %SECTION%; }
 #BrowserTabs { background: %SURFACE%; border-bottom: 1px solid %SECTION%; }
 #BrowserTabs QToolButton#BrowserTabButton { background: transparent; border: 1px solid transparent;
-                                           border-radius: 6px; padding: 0; }
+                                           border-radius: %RADIUS%px; padding: 0; }
 #BrowserTabs QToolButton#BrowserTabButton:hover { background: %HOVER%; }
 #BrowserTabs QToolButton#BrowserTabButton:checked { background: %SELECT%; border-color: %SELECTEDGE%; }
 #BrowserTabs QToolButton#BrowserTabButton:focus { border-color: %TEXT2%; }
 #BrowserTitle { color: %TEXT2%; font-size: %TITLEPX%px; font-weight: 700;
                 letter-spacing: 0.6px; }
 #BrowserFileLabel { color: %TEXT2%; font-size: %SMALLPX%px; }
-#BrowserSearch { background: %WELL%; border: 1px solid %SEP%; border-radius: 7px;
+#BrowserSearch { background: %WELL%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
                  padding: %PADPX%px 6px; color: %TEXT1%; font-size: %BODYPX%px; }
 #BrowserSearch:focus { border-color: %ACCENT%; }
 #BrowserPreview { background: %TOOLBAR%; border-top: 1px solid %SECTION%; }
@@ -679,7 +814,7 @@ QTreeWidget::item:hover:!selected { background: %HOVER%; }
 QTreeWidget::item:selected { background: %SELECT%; color: %TEXT1%;
                              border: 1px solid %SELECTEDGE%; }
 QTreeWidget::branch { background: transparent; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
                       .replace("%TITLEPX%", px(10))
                       .replace("%SMALLPX%", px(10))
                       .replace("%BODYPX%", px(11))
@@ -926,6 +1061,19 @@ bool FileBrowserPanel::checkSearchForTest(QObject* keyboardTarget) {
     QMetaObject::invokeMethod(ignored, "editingFinished", Qt::DirectConnection);
     if (!search(QStringLiteral(".asd")) || paths != QStringList{root.filePath(QStringLiteral("Kick.wav.ASD"))})
         return fail("clearing ignored extensions did not restore files");
+    finished = false;
+    m_search->search({root.filePath(QStringLiteral("Kick.WAV")),
+                      root.filePath(QStringLiteral("nested"))},
+                     QStringLiteral("kick"));
+    if (!waitFor([&] { return finished; }) ||
+        paths != QStringList{root.filePath(QStringLiteral("Kick.WAV"))})
+        return fail("a direct file shortcut was not included in collection search");
+    finished = false;
+    m_search->search({root.filePath(QStringLiteral("nested"))},
+                     QStringLiteral("bass"));
+    if (!waitFor([&] { return finished; }) ||
+        paths != QStringList{root.filePath(QStringLiteral("nested/Bass.flac"))})
+        return fail("collection search did not descend into a folder shortcut");
     std::fprintf(stderr, "browser search: files, plugins, typing, cancellation, suffixes and live settings PASS\n");
     return true;
 }
@@ -944,10 +1092,12 @@ bool FileBrowserPanel::checkOrganizationForTest(const QString& filePath) {
     const QString parent = QFileInfo(filePath).absolutePath();
     const QString savedDirectColor = ui::browserprefs::directFolderColor(parent);
     const QString savedActive = m_activeCollection;
+    QString folderTabId;
     const QString id = ui::browserprefs::createCollection(
         QStringLiteral("Browser Test Drums"));
     if (id.isEmpty()) return fail("custom folder could not be created");
     const auto restore = qScopeGuard([&] {
+        if (!folderTabId.isEmpty()) ui::browserprefs::removeCollection(folderTabId);
         ui::browserprefs::removeCollection(id);
         ui::browserprefs::setFolderColor(parent, savedDirectColor);
         ui::browserprefs::setActiveCollection(savedActive);
@@ -987,6 +1137,54 @@ bool FileBrowserPanel::checkOrganizationForTest(const QString& filePath) {
     m_tree->setCurrentItem(m_tree->topLevelItem(0));
     if (m_tree->selectedPath() != QFileInfo(filePath).absoluteFilePath())
         return fail("collection shortcut lost normal file selection behavior");
+    if (m_tree->topLevelItem(0)->foreground(0).color() != QColor("#34A853"))
+        return fail("file shortcut did not inherit its physical folder color");
+
+    if (!ui::browserprefs::addToCollection(id, parent) ||
+        ui::browserprefs::addToCollection(id, parent))
+        return fail("folder shortcut membership is not unique");
+    m_tree->refresh();
+    QTreeWidgetItem* folderItem = nullptr;
+    for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
+        auto* item = m_tree->topLevelItem(i);
+        if (item->data(0, Qt::UserRole).toString() == parent) folderItem = item;
+    }
+    if (!folderItem || folderItem->flags().testFlag(Qt::ItemIsSelectable))
+        return fail("collection did not show the added folder as an expandable row");
+    folderItem->setExpanded(true);
+    QElapsedTimer expansion;
+    expansion.start();
+    while (expansion.elapsed() < 5000) {
+        bool found = false;
+        for (int i = 0; i < folderItem->childCount(); ++i)
+            found |= folderItem->child(i)->data(0, Qt::UserRole).toString() == filePath;
+        if (found) break;
+        QApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
+    bool tintedChild = false;
+    for (int i = 0; i < folderItem->childCount(); ++i) {
+        auto* child = folderItem->child(i);
+        if (child->data(0, Qt::UserRole).toString() == filePath &&
+            child->foreground(0).color() == QColor("#34A853")) tintedChild = true;
+    }
+    if (!tintedChild) return fail("file inside colored folder did not inherit its color");
+
+    if (ui::browserprefs::tabs().size() < ui::browserprefs::kMaxTabs - 1) {
+        if (!addFolderAsTab(parent, QStringLiteral("folder")))
+            return fail("physical folder could not become an icon tab");
+        folderTabId = m_activeCollection;
+        const auto collections = ui::browserprefs::collections();
+        const auto folderCollection = std::find_if(
+            collections.cbegin(), collections.cend(), [&folderTabId](const auto& c) {
+                return c.id == folderTabId;
+            });
+        if (folderCollection == collections.cend() ||
+            folderCollection->paths != QStringList{parent} ||
+            m_tree->topLevelItemCount() != 1 ||
+            !m_tree->topLevelItem(0)->isExpanded())
+            return fail("folder icon tab did not open its source folder");
+    }
 
     activateCollection({}, false);
     bool foundFolder = false;
@@ -999,7 +1197,7 @@ bool FileBrowserPanel::checkOrganizationForTest(const QString& filePath) {
     }
     if (!foundFolder) return fail("custom folder is missing from the main tab");
     std::fprintf(stderr,
-                 "browser organization: Favorites, collections, icon tabs and inherited colors PASS\n");
+                 "browser organization: collections, folder tabs and inherited file colors PASS\n");
     return true;
 }
 
@@ -1057,11 +1255,12 @@ void FileBrowserPanel::reloadSettings() {
     m_activeCollection = ui::browserprefs::activeCollection();
     applyTheme();
     (void)ui::projecttemplates::folder();
-    m_tree->setCollectionFilter(m_activeCollection);
+    m_tree->setCollectionFilter(m_activeCollection == ui::cliplibrary::kTabId ? QString{} : m_activeCollection);
     m_tree->setPresetRoot(ui::channelstrippresets::rootFolder());
     m_tree->setRoots(ui::browserprefs::folders());
     rebuildTabs();
     reloadPlugins();
+    activateCollection(m_activeCollection, false);
     if (m_loopButton) m_loopButton->setChecked(ui::browserprefs::previewLoop());
     if (m_autoButton) m_autoButton->setChecked(ui::browserprefs::autoPreview());
     if (m_controller) {
@@ -1073,12 +1272,14 @@ void FileBrowserPanel::reloadSettings() {
 void FileBrowserPanel::requestAddFolder() { addFolder(); }
 
 void FileBrowserPanel::refreshFolders() {
+    if (m_activeCollection == ui::cliplibrary::kTabId) { refreshClipLibrary(); return; }
     if (!m_searchField->text().trimmed().isEmpty()) searchChanged(m_searchField->text());
     else if (m_tree) m_tree->refresh();
 }
 
 bool FileBrowserPanel::hasPreviewableSelection() const {
-    return !m_selectedPath.isEmpty() && ui::isAudioFile(m_selectedPath);
+    return m_activeCollection != ui::cliplibrary::kTabId &&
+           !m_selectedPath.isEmpty() && ui::isAudioFile(m_selectedPath);
 }
 
 void FileBrowserPanel::togglePreview() {
@@ -1129,25 +1330,12 @@ void FileBrowserPanel::addFolder() {
 void FileBrowserPanel::searchChanged(const QString& query) {
     // Invalidate old results immediately, including the debounce interval.
     m_search->cancel();
+    if (m_activeCollection == ui::cliplibrary::kTabId) {
+        m_searchTimer->stop(); m_clipLibrary->setFilter(query); return;
+    }
     if (query.trimmed().isEmpty()) {
         m_searchTimer->stop();
         m_tree->showTree();
-        return;
-    }
-    if (!m_activeCollection.isEmpty()) {
-        m_searchTimer->stop();
-        QStringList matches;
-        for (const auto& collection : ui::browserprefs::collections()) {
-            if (collection.id != m_activeCollection) continue;
-            for (const QString& path : collection.paths) {
-                if (QFileInfo::exists(path) &&
-                    FileSearchWorker::matches(QFileInfo(path).fileName(), query))
-                    matches.append(path);
-            }
-            break;
-        }
-        const int count = m_tree->showResults(matches, false, query.trimmed());
-        emit statusMessage(tr("%1 matches").arg(count));
         return;
     }
     m_tree->showResults({}, false, query.trimmed(), true);
@@ -1315,4 +1503,53 @@ QStringList FileBrowserPanel::dragUrlsForTest() const {
     if (!mime) return paths;
     for (const QUrl& url : mime->urls()) paths << url.toLocalFile();
     return paths;
+}
+
+void FileBrowserPanel::showClipLibrary() {
+    if (m_searchField) m_searchField->clear();
+    activateCollection(ui::cliplibrary::kTabId);
+}
+
+void FileBrowserPanel::refreshClipLibrary() {
+    if (m_clipLibrary) m_clipLibrary->refresh();
+}
+
+bool FileBrowserPanel::saveClipToLibrary(const QString& trackId, const QString& clipId) {
+    std::string entryId;
+    const auto result = m_controller->saveClipToLibrary({trackId.toStdString(),clipId.toStdString()},entryId);
+    if (!result) { emit statusMessage(tr("Could not save clip: %1").arg(QString::fromStdString(result.message()))); return false; }
+    showClipLibrary();
+    m_clipLibrary->refresh();
+    m_clipLibrary->selectEntry(QString::fromStdString(entryId));
+    emit libraryEdited();
+    emit statusMessage(tr("Clip copy saved in this project"));
+    return true;
+}
+
+void FileBrowserPanel::dragEnterEvent(QDragEnterEvent* event) {
+    QString trackId,clipId;
+    if (!ui::cliplibrary::decodeTimeline(event->mimeData(),trackId,clipId)) return;
+    const auto* track=m_controller->project().findTrack(trackId.toStdString());
+    if (!track || std::none_of(track->clips.begin(),track->clips.end(),
+        [&](const auto& clip) { return clip.id==clipId.toStdString(); })) return;
+    event->setDropAction(Qt::CopyAction); event->accept();
+    m_clipDropHint->setGeometry(rect().adjusted(6,64,-6,-6));
+    m_clipDropHint->show(); m_clipDropHint->raise();
+}
+
+void FileBrowserPanel::dragMoveEvent(QDragMoveEvent* event) {
+    QString track,clip;
+    if (ui::cliplibrary::decodeTimeline(event->mimeData(),track,clip)) {
+        event->setDropAction(Qt::CopyAction); event->accept();
+    }
+}
+void FileBrowserPanel::dragLeaveEvent(QDragLeaveEvent* event) {
+    m_clipDropHint->hide(); event->accept();
+}
+void FileBrowserPanel::dropEvent(QDropEvent* event) {
+    m_clipDropHint->hide();
+    QString track,clip;
+    if (ui::cliplibrary::decodeTimeline(event->mimeData(),track,clip) && saveClipToLibrary(track,clip)) {
+        event->setDropAction(Qt::CopyAction); event->accept();
+    } else event->ignore();
 }

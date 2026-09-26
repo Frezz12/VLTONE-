@@ -280,6 +280,7 @@ public:
     /// It deliberately exits with the keyboard on and a key still held, so the
     /// teardown path for a note that outlives the window is exercised too.
     bool checkTypingKeyboard();
+    bool checkRecordingContextForTest();
     /// Headless check for hardware-style MIDI parsing, source overlap and the
     /// Piano Roll's live-key state; no physical device is required.
     bool checkMidiInput();
@@ -449,6 +450,8 @@ public:
     /// Exercise both playhead readouts through their drag and typed-entry
     /// paths, including conversion through the current tempo and time signature.
     bool checkPositionScrubForTest();
+    /// Ruler row choices must preserve time mapping and align the lane headers.
+    bool checkTimelineRulersForTest();
     /// Verify that application-owned modeless editors all remain bounded
     /// children of the workspace and hand focus back to the arrangement.
     bool checkAuxiliaryWindowPolicyForTest();
@@ -457,6 +460,7 @@ public:
     /// The Edit menu's chords with the piano roll in front: they must reach the
     /// notes, never the clips behind them.
     bool checkEditChordRoutingForTest();
+    bool checkCommandMenusForTest();
 
     /// Headless counterpart of the recovery prompt: find the newest leftover
     /// session under DAW_RECOVERY_ROOT and load it through the same code the
@@ -549,6 +553,8 @@ private slots:
     void onExport();
     void onBounceInPlace();
     void onOfflineRender();
+    void onStripSilence();
+    void onSilenceSettings();
     void onSharedPlugins();
     void onNewProject();
     void onNewProjectFromTemplate();
@@ -960,6 +966,7 @@ private:
     QAction* m_followPlayheadAction = nullptr;
     QAction* m_bounceInPlaceAction = nullptr;
     QAction* m_offlineRenderAction = nullptr;
+    QAction* m_stripSilenceAction = nullptr;
     QAction* m_sharedPluginsAction = nullptr;
     QTimer* m_refreshTimer = nullptr;
     /// Lightweight 60-ish Hz cursor clock. It sleeps while transport is still.

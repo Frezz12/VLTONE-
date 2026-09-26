@@ -13,7 +13,187 @@ static void check(bool value, const char *what) {
         std::exit(1);
     }
 }
+
+static engine::MidiClipPlayerNode* midiPlayerFor(const EngineController& controller,
+                                                const std::string& trackId) {
+    const auto graph = controller.routingGraph();
+    const auto* ids = controller.trackNodes(trackId);
+    if (graph && ids) {
+        for (const auto& entry : graph->nodes) {
+            if (entry.id == ids->midiClips)
+                return dynamic_cast<engine::MidiClipPlayerNode*>(entry.node);
+        }
+    }
+    return nullptr;
+}
+
+static bool hasNote(const engine::MidiBuffer& output, int key, bool on = true) {
+    for (const auto& event : output.events()) {
+        if (event.data1 == key && (on ? event.isNoteOn() : event.isNoteOff()))
+            return true;
+    }
+    return false;
+}
+
+static void checkRecordingMonitoring() {
+    EngineController controller;
+    check(controller.initialize(48000, 512, false).isOk(), "monitoring initialization");
+    controller.setTempo(120);
+    const auto track = controller.addTrack(TrackKind::Midi, "Recording");
+    const auto backing = controller.addTrack(TrackKind::Midi, "Backing");
+    const auto clip = controller.addMidiClip(track, 0, 8);
+    const auto backingClip = controller.addMidiClip(backing, 0, 8);
+    NoteModel note;
+    note.id = newUuid();
+    note.pitch = 60;
+    note.lengthBeats = 16;
+    controller.setClipNotes(track, clip, {note}, "Test notes");
+    note.id = newUuid();
+    note.pitch = 48;
+    controller.setClipNotes(backing, backingClip, {note}, "Test notes");
+
+    engine::MidiBuffer output;
+    output.reserve(512);
+    engine::ProcessContext context;
+    context.frames = 512;
+    context.sampleRate = 48000;
+    context.playing = true;
+    context.transport.tempo = 120;
+    context.midiOutput = &output;
+    const auto process = [&](const std::string& id, double beat) {
+        output.clear();
+        context.transport.ppqPosition = beat;
+        auto* player = midiPlayerFor(controller, id);
+        check(player != nullptr, "track has a MIDI player");
+        player->process(context);
+    };
+
+    controller.setTrackArmed(track, true);
+    process(track, 0);
+    check(hasNote(output, 60), "arming alone keeps timeline MIDI audible");
+    auto prefs = controller.recordingPrefs();
+    prefs.mode = RecordMode::Layers;
+    prefs.midiOverdubMerge = false;
+    controller.setRecordingPrefs(prefs);
+    check(controller.startRecording(track), "start layer monitoring");
+    controller.liveMidiInput(track, 0x90, 67, 100, 1, controller.midiInputStamp());
+    process(track, .5);
+    check(!hasNote(output, 60) && hasNote(output, 60, false) && hasNote(output, 67),
+          "new MIDI layer releases old notes and monitors only live input");
+    process(backing, .5);
+    check(hasNote(output, 48), "other tracks remain audible while recording");
+
+    for (double beat : {1.0, 0.0, 3.0}) {
+        process(track, beat);
+        check(output.empty(), "old MIDI stays silent across recording loop wraps and seeks");
+    }
+    controller.liveMidiInput(track, 0x80, 67, 25, 1, controller.midiInputStamp());
+    process(track, 3.5);
+    check(hasNote(output, 67, false) && !hasNote(output, 60),
+          "live note release survives timeline suppression");
+
+    // Preferences may change while capturing; the current take keeps the mode
+    // frozen at punch-in, including after a graph rebuild.
+    prefs.midiOverdubMerge = true;
+    controller.setRecordingPrefs(prefs);
+    controller.addTrack(TrackKind::Midi, "Added during recording");
+    process(track, 4);
+    check(output.empty(), "recording suppression survives graph rebuild and preference changes");
+    controller.finalizeRecordingCapture();
+    process(track, 4.5);
+    check(hasNote(output, 60), "punch-out chases the previous held MIDI note");
+    check(controller.project().findTrack(track)->clips.front().notes.front().pitch == 60,
+          "monitoring leaves saved notes intact");
+
+    check(controller.startRecording(track), "start explicit MIDI merge");
+    process(track, 5);
+    check(hasNote(output, 60), "explicit MIDI merge still plays the existing performance");
+    controller.finalizeRecordingCapture();
+
+    prefs.midiOverdubMerge = false;
+    prefs.mode = RecordMode::Overwrite;
+    controller.setRecordingPrefs(prefs);
+    check(controller.armCountIn({track, backing}, 1), "arm recording monitoring count-in");
+    process(track, 6);
+    check(hasNote(output, 60), "count-in does not suppress the timeline before capture");
+    check(controller.tickCountIn(1.0), "count-in starts MIDI capture");
+    process(track, 6.5);
+    check(!hasNote(output, 60), "overwrite suppresses old notes at count-in completion");
+    process(backing, 6.5);
+    check(!hasNote(output, 48), "all capturing MIDI tracks suppress old notes");
+    controller.stopRecording();
+    process(track, 7);
+    check(hasNote(output, 60), "stopping an empty take restores timeline MIDI");
+}
+
+static void checkSuppressedMidiControllers() {
+    engine::MidiClipPlayerNode player;
+    player.setNotes(std::make_shared<engine::MidiClipPlayerNode::NoteList>(
+        engine::MidiClipPlayerNode::NoteList{{0, 8, 60, 111, 2}}));
+    auto controllers = std::make_shared<engine::MidiClipPlayerNode::ControlCurves>();
+    controllers->push_back({0, 8, 0, 64, 2, 0,
+                            {{0, 1, engine::curve::Shape::Hold, 0, 1}}});
+    controllers->push_back({0, 8, 0, -2, 2, 0,
+                            {{0, 12000.0 / 16383, engine::curve::Shape::Hold, 0, 2}}});
+    player.setControllers(controllers);
+    player.prepare({48000, 512, 2});
+    engine::MidiBuffer output;
+    output.reserve(512);
+    engine::ProcessContext context;
+    context.frames = 512;
+    context.sampleRate = 48000;
+    context.playing = true;
+    context.transport.tempo = 120;
+    context.midiOutput = &output;
+    player.process(context);
+    check(hasNote(output, 60), "held timeline note starts before punch-in");
+
+    player.setTimelineSuppressed(true);
+    player.sendLiveNoteOn(60, 95, 2);
+    player.sendLiveEvent({0, 0xb2, 64, 127});
+    player.sendLiveEvent({0, 0xe2, 0, 70});
+    output.clear();
+    context.transport.ppqPosition = .5;
+    player.process(context);
+    const auto indexOf = [&](int status, int data1, int data2) {
+        const auto events = output.events();
+        for (std::size_t i = 0; i < events.size(); ++i)
+            if (events[i].status == status && events[i].data1 == data1 &&
+                events[i].data2 == data2) return i;
+        return events.size();
+    };
+    check(indexOf(0x82, 60, 0) < indexOf(0x92, 60, 95) &&
+              indexOf(0x92, 60, 95) < output.size(),
+          "punch-in releases the old same-pitch voice before the live note-on");
+    check(indexOf(0xb2, 64, 0) < indexOf(0xb2, 64, 127) &&
+              indexOf(0xb2, 64, 127) < output.size(),
+          "old sustain releases before live sustain is applied");
+    check(indexOf(0xe2, 0, 64) < indexOf(0xe2, 0, 70) &&
+              indexOf(0xe2, 0, 70) < output.size(),
+          "old pitch bend resets before live pitch bend is applied");
+    output.clear();
+    context.transport.ppqPosition = 0;
+    player.process(context);
+    check(output.empty(), "recording loop wrap does not replay old controllers or release live notes");
+    player.sendLiveNoteOff(60, 2);
+    player.sendLiveEvent({0, 0xb2, 64, 0});
+    output.clear();
+    player.process(context);
+    check(hasNote(output, 60, false) && indexOf(0xb2, 64, 0) < output.size(),
+          "live note and sustain release are forwarded during recording");
+
+    player.setTimelineSuppressed(false);
+    output.clear();
+    context.transport.ppqPosition = 1;
+    player.process(context);
+    check(hasNote(output, 60) && indexOf(0xb2, 64, 127) < output.size() &&
+              indexOf(0xe2, 12000 & 127, 12000 >> 7) < output.size(),
+          "punch-out chases held notes, sustain and pitch bend together");
+}
+
 int main() {
+    checkRecordingMonitoring();
+    checkSuppressedMidiControllers();
     MidiRecording r;
     r.event(1, 0x92, 60, 111, 0, 1);
     r.event(2, 0x92, 60, 88, .25, 2);

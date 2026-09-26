@@ -1,4 +1,5 @@
 #include "FileBrowserTree.hpp"
+#include "MenuActions.hpp"
 
 #include "ChannelStripPresets.hpp"
 #include "BrowserPrefs.hpp"
@@ -373,6 +374,7 @@ void FileBrowserTree::rebuildRoots() {
     m_restoreExpanded = QSet<QString>(open.begin(), open.end());
     m_restoreSelected = selected;
     m_showingResults = false;
+    m_folderTintCache.clear();
     for (const QString& path : m_watched) m_watcher->removePath(path);
     m_watched.clear();
     clear();
@@ -392,6 +394,8 @@ void FileBrowserTree::rebuildRoots() {
                 item->setData(0, kCollectionMemberRole, collection->id);
                 item->setToolTip(0, info.absoluteFilePath());
                 addTopLevelItem(item);
+                if (info.isDir() && collection->paths.size() == 1)
+                    item->setExpanded(true);
             }
             if (topLevelItemCount() == 0) {
                 auto* empty = new QTreeWidgetItem(
@@ -449,6 +453,14 @@ void FileBrowserTree::rebuildRoots() {
     }
 }
 
+QColor FileBrowserTree::folderTint(const QString& directory) {
+    const auto cached = m_folderTintCache.constFind(directory);
+    if (cached != m_folderTintCache.cend()) return cached.value();
+    const QColor color(ui::browserprefs::folderColor(directory));
+    m_folderTintCache.insert(directory, color);
+    return color;
+}
+
 QTreeWidgetItem* FileBrowserTree::makeItem(const QString& path, bool isDirectory,
                                            int cachedKind,
                                            const QColor& inheritedFolderColor) {
@@ -461,7 +473,7 @@ QTreeWidgetItem* FileBrowserTree::makeItem(const QString& path, bool isDirectory
     item->setData(0, kKindRole, int(kind));
     QColor folderColor;
     if (kind == Kind::Folder) {
-        folderColor = QColor(ui::browserprefs::folderColor(info.absoluteFilePath()));
+        folderColor = folderTint(info.absoluteFilePath());
         if (!folderColor.isValid()) folderColor = inheritedFolderColor;
         item->setData(0, kFolderTintRole,
                       folderColor.isValid()
@@ -473,7 +485,13 @@ QTreeWidgetItem* FileBrowserTree::makeItem(const QString& path, bool isDirectory
                                         : th().textSecondary,
                                     16));
     } else {
-        item->setIcon(0, browserIcon(kind));
+        // Children inherit their real folder's tint. Flat search results and
+        // file shortcuts have no parent row, so resolve their directory too.
+        folderColor = folderTint(info.absolutePath());
+        if (!folderColor.isValid()) folderColor = inheritedFolderColor;
+        item->setIcon(0, folderColor.isValid()
+                             ? browserIcon(glyphFor(kind), folderColor)
+                             : browserIcon(kind));
     }
 
     Qt::ItemFlags flags = Qt::ItemIsEnabled;
@@ -485,11 +503,12 @@ QTreeWidgetItem* FileBrowserTree::makeItem(const QString& path, bool isDirectory
         // Listed, as asked for, but plainly not something the project can take:
         // dimmed, and with the drag flag off rather than a drag that is refused
         // on arrival.
-        QColor dim = th().textSecondary;
+        QColor dim = folderColor.isValid() ? folderColor : th().textSecondary;
         dim.setAlpha(140);
         item->setForeground(0, dim);
     } else if (kind != Kind::Folder) {
-        item->setForeground(0, th().textPrimary);
+        item->setForeground(0, folderColor.isValid() ? folderColor
+                                                    : th().textPrimary);
     } else if (folderColor.isValid()) {
         item->setForeground(0, folderColor);
     }
@@ -539,19 +558,25 @@ void FileBrowserTree::keyPressEvent(QKeyEvent* event) {
 }
 
 bool FileBrowserTree::showSelectedItemActionsMenu() {
-    QTreeWidgetItem* item = currentItem();
-    if (!item) return false;
-    scrollToItem(item);
-    const QRect row = visualItemRect(item);
-    if (row.isEmpty()) return false;
-    QContextMenuEvent event(QContextMenuEvent::Other, row.center(),
-                            QCursor::pos());
-    contextMenuEvent(&event);
+    QMenu menu(this);
+    if (!populateSelectedItemActionsMenu(menu)) return false;
+    menu.exec(QCursor::pos());
+    return true;
+}
+
+bool FileBrowserTree::populateSelectedItemActionsMenu(QMenu& menu) {
+    if (!currentItem()) return false;
+    populateItemActionsMenu(menu, currentItem());
     return true;
 }
 
 void FileBrowserTree::contextMenuEvent(QContextMenuEvent* event) {
-    QTreeWidgetItem* item = itemAt(event ? event->pos() : QPoint{});
+    QMenu menu(this);
+    populateItemActionsMenu(menu, itemAt(event->pos()));
+    menu.exec(event->globalPos());
+}
+
+void FileBrowserTree::populateItemActionsMenu(QMenu& menu, QTreeWidgetItem* item) {
     const bool hasKind = item && item->data(0, kKindRole).isValid();
     const Kind kind = hasKind ? Kind(item->data(0, kKindRole).toInt())
                               : Kind::Other;
@@ -566,7 +591,6 @@ void FileBrowserTree::contextMenuEvent(QContextMenuEvent* event) {
     const auto* collection = findCollection(collections, collectionId);
     const auto* memberCollection = findCollection(collections, memberOf);
 
-    QMenu menu(this);
     QAction* addTracks = nullptr;
     QAction* createProject = nullptr;
     if (kind == Kind::ProjectTemplate) {
@@ -576,7 +600,8 @@ void FileBrowserTree::contextMenuEvent(QContextMenuEvent* event) {
     }
 
     QHash<QAction*, QString> addDestinations;
-    if (hasKind && !isContainer(kind) && kind != Kind::Plugin) {
+    if (hasKind && (kind == Kind::Folder || !isContainer(kind)) &&
+        kind != Kind::Plugin) {
         QMenu* addTo = menu.addMenu(tr("Add to Folder"));
         for (const auto& destination : collections) {
             QAction* action = addTo->addAction(
@@ -623,6 +648,7 @@ void FileBrowserTree::contextMenuEvent(QContextMenuEvent* event) {
     }
 
     QAction* pinTab = nullptr;
+    QAction* folderTab = nullptr;
     QAction* removeTab = nullptr;
     QAction* renameCollection = nullptr;
     QAction* deleteCollection = nullptr;
@@ -640,109 +666,121 @@ void FileBrowserTree::contextMenuEvent(QContextMenuEvent* event) {
             deleteCollection = menu.addAction(tr("Delete Collection Folder"));
         }
     }
+    if (kind == Kind::Folder) {
+        menu.addSeparator();
+        folderTab = menu.addAction(tr("Open Folder as Icon Tab…"));
+    }
 
     if (!menu.isEmpty()) menu.addSeparator();
     QAction* newCollection = menu.addAction(tr("New Collection Folder…"));
-    QAction* chosen = menu.exec(event ? event->globalPos() : QCursor::pos());
-    if (!chosen) return;
+    ui::connectMenuActions(menu, this, [=, this](QAction* chosen) {
+        // Resolve pointers into the captured value, never into the builder's
+        // temporary collection list or a tree row that refresh can destroy.
+        const auto* collection = findCollection(collections, collectionId);
+        if (!chosen) return;
 
-    if (chosen == addTracks) {
-        emit projectTemplateTracksRequested(path);
-        return;
-    }
-    if (chosen == createProject) {
-        emit projectTemplateActivated(path);
-        return;
-    }
-    if (addDestinations.contains(chosen)) {
-        const QString destinationId = addDestinations.value(chosen);
-        if (ui::browserprefs::addToCollection(destinationId, path)) {
-            const auto* destination = findCollection(collections, destinationId);
-            emit statusMessage(destination
-                ? tr("Added %1 to %2").arg(QFileInfo(path).fileName(),
-                                            destination->name)
-                : tr("Added to collection"));
+        if (chosen == addTracks) {
+            emit projectTemplateTracksRequested(path);
+            return;
+        }
+        if (chosen == createProject) {
+            emit projectTemplateActivated(path);
+            return;
+        }
+        if (addDestinations.contains(chosen)) {
+            const QString destinationId = addDestinations.value(chosen);
+            if (ui::browserprefs::addToCollection(destinationId, path)) {
+                const auto* destination = findCollection(collections, destinationId);
+                emit statusMessage(destination
+                    ? tr("Added %1 to %2").arg(QFileInfo(path).fileName(),
+                                                destination->name)
+                    : tr("Added to collection"));
+                rebuildRoots();
+                emit organizationChanged();
+            }
+            return;
+        }
+        if (chosen == removeMember) {
+            ui::browserprefs::removeFromCollection(memberOf, path);
             rebuildRoots();
             emit organizationChanged();
+            return;
         }
-        return;
-    }
-    if (chosen == removeMember) {
-        ui::browserprefs::removeFromCollection(memberOf, path);
-        rebuildRoots();
-        emit organizationChanged();
-        return;
-    }
-    if (chosen == chooseColor) {
-        QString current = kind == Kind::Collection && collection
-            ? collection->color
-            : ui::browserprefs::folderColor(path);
-        QColor initial(current);
-        if (!initial.isValid()) initial = Theme::midiAccent();
-        const QColor color = QColorDialog::getColor(
-            initial, this, tr("Folder Color"));
-        if (!color.isValid()) return;
-        if (kind == Kind::Collection)
-            ui::browserprefs::setCollectionColor(collectionId,
+        if (chosen == chooseColor) {
+            QString current = kind == Kind::Collection && collection
+                ? collection->color
+                : ui::browserprefs::folderColor(path);
+            QColor initial(current);
+            if (!initial.isValid()) initial = Theme::midiAccent();
+            const QColor color = QColorDialog::getColor(
+                initial, this, tr("Folder Color"));
+            if (!color.isValid()) return;
+            if (kind == Kind::Collection)
+                ui::browserprefs::setCollectionColor(collectionId,
+                                                      color.name(QColor::HexRgb));
+            else
+                ui::browserprefs::setFolderColor(path,
                                                   color.name(QColor::HexRgb));
-        else
-            ui::browserprefs::setFolderColor(path,
-                                              color.name(QColor::HexRgb));
-        rebuildRoots();
-        emit organizationChanged();
-        return;
-    }
-    if (chosen == clearColor) {
-        if (kind == Kind::Collection)
-            ui::browserprefs::setCollectionColor(collectionId, {});
-        else
-            ui::browserprefs::setFolderColor(path, {});
-        rebuildRoots();
-        emit organizationChanged();
-        return;
-    }
-    if (chosen == pinTab) {
-        emit tabRequested(collectionId);
-        return;
-    }
-    if (chosen == removeTab) {
-        ui::browserprefs::removeTab(collectionId);
-        emit organizationChanged();
-        return;
-    }
-    if (chosen == renameCollection && collection) {
-        bool accepted = false;
-        const QString name = QInputDialog::getText(
-            this, tr("Rename Folder"), tr("Name:"), QLineEdit::Normal,
-            collection->name, &accepted).trimmed();
-        if (accepted && ui::browserprefs::renameCollection(collectionId, name)) {
             rebuildRoots();
             emit organizationChanged();
+            return;
         }
-        return;
-    }
-    if (chosen == deleteCollection && collection) {
-        if (QMessageBox::question(
-                this, tr("Delete Collection Folder"),
-                tr("Delete “%1”? The original files will not be changed.")
-                    .arg(collection->name)) == QMessageBox::Yes) {
-            ui::browserprefs::removeCollection(collectionId);
+        if (chosen == clearColor) {
+            if (kind == Kind::Collection)
+                ui::browserprefs::setCollectionColor(collectionId, {});
+            else
+                ui::browserprefs::setFolderColor(path, {});
             rebuildRoots();
             emit organizationChanged();
+            return;
         }
-        return;
-    }
-    if (chosen == newCollection) {
-        bool accepted = false;
-        const QString name = QInputDialog::getText(
-            this, tr("New Collection Folder"),
-            tr("Name for the sample shortcuts:"), QLineEdit::Normal, {},
-            &accepted).trimmed();
-        if (accepted && !ui::browserprefs::createCollection(name).isEmpty()) {
-            rebuildRoots();
+        if (chosen == pinTab) {
+            emit tabRequested(collectionId);
+            return;
+        }
+        if (chosen == folderTab) {
+            emit folderTabRequested(path);
+            return;
+        }
+        if (chosen == removeTab) {
+            ui::browserprefs::removeTab(collectionId);
             emit organizationChanged();
+            return;
         }
-    }
+        if (chosen == renameCollection && collection) {
+            bool accepted = false;
+            const QString name = QInputDialog::getText(
+                this, tr("Rename Folder"), tr("Name:"), QLineEdit::Normal,
+                collection->name, &accepted).trimmed();
+            if (accepted && ui::browserprefs::renameCollection(collectionId, name)) {
+                rebuildRoots();
+                emit organizationChanged();
+            }
+            return;
+        }
+        if (chosen == deleteCollection && collection) {
+            if (QMessageBox::question(
+                    this, tr("Delete Collection Folder"),
+                    tr("Delete “%1”? The original files will not be changed.")
+                        .arg(collection->name)) == QMessageBox::Yes) {
+                ui::browserprefs::removeCollection(collectionId);
+                rebuildRoots();
+                emit organizationChanged();
+            }
+            return;
+        }
+        if (chosen == newCollection) {
+            bool accepted = false;
+            const QString name = QInputDialog::getText(
+                this, tr("New Collection Folder"),
+                tr("Name for the sample shortcuts:"), QLineEdit::Normal, {},
+                &accepted).trimmed();
+            if (accepted && !ui::browserprefs::createCollection(name).isEmpty()) {
+                rebuildRoots();
+                emit organizationChanged();
+            }
+        }
+    });
 }
 
 void FileBrowserTree::drawBranches(QPainter* painter, const QRect& rect,

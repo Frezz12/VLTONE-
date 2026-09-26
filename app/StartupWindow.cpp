@@ -336,11 +336,15 @@ void StartupWindow::paintEvent(QPaintEvent*) {
     painter.setRenderHint(QPainter::Antialiasing);
     const Theme& t = th();
     QLinearGradient surface(0, 0, 0, height());
-    surface.setColorAt(0, mixColors(t.headerBackground, t.surfaceElevated, 0.25));
-    surface.setColorAt(1, t.headerBackground);
+    // The lighter transport preset must not restyle the startup window.
+    const QColor background = t.id == QLatin1String("dark")
+        ? t.transportBackground : t.headerBackground;
+    surface.setColorAt(0, mixColors(background, t.surfaceElevated, 0.25));
+    surface.setColorAt(1, background);
     painter.setBrush(surface);
     painter.setPen(mixColors(t.separator(), t.textPrimary, 0.12));
-    painter.drawRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5));
+    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+                            Theme::cornerRadius, Theme::cornerRadius);
 }
 
 void StartupWindow::mousePressEvent(QMouseEvent* event) {
@@ -473,25 +477,26 @@ void StartupWindow::applyTheme() {
 #StartupLoginPanel QLabel { color: %2; }
 #StartupLoginPanel QLineEdit {
     min-height: 32px; color: %1; background: %6;
-    border: 1px solid %5; border-radius: 7px; padding: 0 8px;
+    border: 1px solid %5; border-radius: %RADIUS%px; padding: 0 8px;
 }
 #StartupLoginPanel QLineEdit:focus { border-color: %7; }
 #StartupLoginPanel QPushButton { min-height: 28px; }
-#StartupRestoreButton { color: %1; background: %4; border: 1px solid %5; border-radius: 7px; }
+#StartupRestoreButton { color: %1; background: %4; border: 1px solid %5; border-radius: %RADIUS%px; }
 #StartupRestoreButton:hover { border-color: %7; }
 #StartupRestoreButton:focus { border-color: %7; }
-#StartupLoginPanel QPushButton:flat { color: %2; background: transparent; border: 1px solid transparent; border-radius: 5px; padding: 0 4px; }
+#StartupLoginPanel QPushButton:flat { color: %2; background: transparent; border: 1px solid transparent; border-radius: %RADIUS%px; padding: 0 4px; }
 #StartupLoginPanel QPushButton:flat:hover { color: %1; background: %4; }
 #StartupLoginPanel QPushButton:flat:focus { border-color: %7; }
 #StartupLoginButton {
-    min-height: 34px; color: white; background: %7;
-    border: 1px solid %7; border-radius: 8px; font-weight: 600;
+    min-height: 34px; color: %ACCENT_TEXT%; background: %7;
+    border: 1px solid %7; border-radius: %RADIUS%px; font-weight: 600;
 }
 #StartupLoginButton:hover, #StartupLoginButton:focus { background: %8; border-color: %8; }
 #StartupLoginButton:disabled { color: %2; background: %6; border-color: %5; }
 #StartupProgress { background: %6; border: 0; border-radius: 3px; }
 #StartupProgress::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 %7, stop:1 %8); border-radius: 3px; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
+        .replace("%ACCENT_TEXT%", t.accentText().name())
         .arg(t.textPrimary.name(),
              t.textSecondary.name(), Theme::record().name(),
              t.surfaceElevated.name(), border.name(), t.well().name(),

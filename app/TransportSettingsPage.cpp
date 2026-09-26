@@ -95,7 +95,7 @@ TransportSettingsPage::TransportSettingsPage(daw::EngineController* controller,
     panelStyle->addItem(tr("Accent"), QStringLiteral("neon"));
     panelStyle->addItem(tr("Monochrome"), QStringLiteral("plain"));
     const QString savedStyle = QSettings().value(
-        ui::kTransportPanelStyleSetting, QStringLiteral("neon")).toString();
+        ui::kTransportPanelStyleSetting, QStringLiteral("plain")).toString();
     panelStyle->setCurrentIndex(savedStyle == QLatin1String("plain") ? 1 : 0);
     auto* appearanceForm = new QFormLayout;
     appearanceForm->addRow(tr("Top panel style"), panelStyle);

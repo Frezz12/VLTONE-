@@ -7,6 +7,11 @@ namespace ui {
 namespace {
 
 [[maybe_unused]] const char* const kUndoCommandNames[] = {
+    QT_TRANSLATE_NOOP("UndoCommands", "Strip Silence"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Save Clip to Library"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Rename Library Clip"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Remove Library Clip"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Restore Library Clip"),
     QT_TRANSLATE_NOOP("UndoCommands", "Change Modulation Parameter"),
     QT_TRANSLATE_NOOP("UndoCommands", "Apply Modulation Preset"),
     QT_TRANSLATE_NOOP("UndoCommands", "Add Tracks from Template"),
@@ -71,6 +76,7 @@ namespace {
     QT_TRANSLATE_NOOP("UndoCommands", "Change Note Pan"),
     QT_TRANSLATE_NOOP("UndoCommands", "Change Note Length"),
     QT_TRANSLATE_NOOP("UndoCommands", "Delete Notes"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Set Track Output"),
     QT_TRANSLATE_NOOP("UndoCommands", "Show Automation"),
     QT_TRANSLATE_NOOP("UndoCommands", "Analyze Audio Clip"),
 };

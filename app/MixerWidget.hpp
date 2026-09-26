@@ -5,6 +5,7 @@
 #include <QWidget>
 
 #include "CollaborationTypes.hpp"
+#include "ChannelStrip.hpp"
 
 #include <optional>
 #include <vector>
@@ -13,11 +14,12 @@ namespace daw { class EngineController; }
 class QHBoxLayout;
 class QLabel;
 class QScrollArea;
-class ChannelStrip;
+class QAbstractButton;
+class QToolButton;
 namespace ui { class FrameTimer; }
 
 /// The mixer console: a scrolling row of channel strips with the master strip
-/// pinned to the right, under a square, edge-to-edge command bar. It lives in
+/// independently scrollable and collapsible on the right, under a command bar. It lives in
 /// the centre column below the timeline.
 class MixerWidget : public QWidget {
     Q_OBJECT
@@ -35,6 +37,7 @@ public:
     /// The gain a strip is showing, or −1 when there is no such strip.
     double faderGainForTest(const QString& trackId) const;
     void setSelectedTrack(const QString& trackId);
+    int channelWidth() const { return m_channelWidth; }
 
     /// Presence encode/decode, mirroring TimelineWidget's pair. A pointer is
     /// described by the strip it is over and how far down that strip it sits,
@@ -48,6 +51,9 @@ public:
     /// and a channel this console does not show is hidden rather than mapped
     /// onto a neighbouring strip.
     static bool checkCollaborationPresenceForTest(QString* error = nullptr);
+    /// Heterogeneous racks stay aligned through resize, scrolling and rebuild.
+    static bool checkLayoutForTest();
+    static bool checkMasterDockForTest();
     /// Where a track's strip sits right now, for that regression.
     QRect stripRectForTrackForTest(const QString& trackId) const;
 
@@ -69,6 +75,12 @@ signals:
 private:
     bool eventFilter(QObject* object, QEvent* event) override;
     void syncVisibleStrips();
+    void applyChannelWidth(int width);
+    void setMasterVisible(bool visible);
+    void updateMasterGeometry();
+    void setMasterRevealWidth(int width);
+    void updateMasterToggle();
+    int masterExpandedWidth() const;
     void wireStrip(ChannelStrip* strip);
     QStringList m_channels;
     std::vector<ChannelStrip*> m_slots;
@@ -90,9 +102,21 @@ private:
     QWidget* m_headerAccent = nullptr;
     QWidget* m_header = nullptr;
     QScrollArea* m_scroll = nullptr;
+    QScrollArea* m_masterScroll = nullptr;
+    QWidget* m_masterDock = nullptr;
+    QWidget* m_masterColumn = nullptr;
+    QAbstractButton* m_masterHandle = nullptr;
+    QToolButton* m_masterToggle = nullptr;
+    bool m_masterVisible = true;
+    bool m_masterDragging = false;
+    int m_masterDragStartWidth = 0;
+    int m_channelWidth = ChannelStrip::kWidth;
     QWidget* m_stripsHost = nullptr;
     QHBoxLayout* m_stripsLayout = nullptr;
     QWidget* m_masterHost = nullptr;
+    QWidget* m_masterBottomGap = nullptr;
+    ChannelStrip::RackHeights m_rackHeights{};
+    int m_insertSlotCount = 2;
     std::vector<ChannelStrip*> m_strips;
     QString m_selectedTrackId;
 };

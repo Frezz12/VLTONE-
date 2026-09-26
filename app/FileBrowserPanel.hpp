@@ -1,5 +1,7 @@
 #pragma once
 
+class QMenu;
+
 #include <QHash>
 #include <QString>
 #include <QStringList>
@@ -8,6 +10,7 @@
 namespace daw { class EngineController; }
 
 class FileBrowserTree;
+class ClipLibraryView;
 class FileSearchWorker;
 class MidiPreviewLoader;
 class PreviewLoader;
@@ -29,6 +32,7 @@ namespace ui { class IconButton; }
 class FileBrowserPanel : public QWidget {
     Q_OBJECT
 public:
+    void setHeaderHeight(int height);
     explicit FileBrowserPanel(daw::EngineController* controller,
                               QWidget* parent = nullptr);
     ~FileBrowserPanel() override;
@@ -46,8 +50,13 @@ public:
     void setAutoPreviewEnabled(bool enabled);
     bool hasPreviewableSelection() const;
     bool showSelectedItemActionsMenu();
+    bool populateSelectedItemActionsMenu(QMenu& menu);
+    bool populateCurrentTabActionsMenu(QMenu& menu);
     void showAddTabMenu();
     bool showCurrentTabActionsMenu();
+    void showClipLibrary();
+    void refreshClipLibrary();
+    bool saveClipToLibrary(const QString& trackId, const QString& clipId);
 
     /// Scale the browser's own interface — rows, icons, labels and the search
     /// field — without touching the rest of the window. `step` is a multiplier
@@ -115,21 +124,30 @@ signals:
     void sampleLoadRequested(const QString& path);
     void projectTemplateActivated(const QString& path);
     void projectTemplateTracksRequested(const QString& path);
+    void libraryEdited();
+    void libraryClipRestored(const QString& trackId, const QString& clipId);
 
 protected:
     void showEvent(QShowEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void dragEnterEvent(class QDragEnterEvent* event) override;
+    void dragMoveEvent(class QDragMoveEvent* event) override;
+    void dragLeaveEvent(class QDragLeaveEvent* event) override;
+    void dropEvent(class QDropEvent* event) override;
     /// Ctrl/Cmd + wheel zooms, which is where a hand already is when a row is
     /// too small to read.
     void wheelEvent(class QWheelEvent* event) override;
 
 private:
+    void populateTabActionsMenu(QMenu& menu, const QString& collectionId);
     QWidget* buildHeader();
     QWidget* buildTabs();
     void rebuildTabs();
     void activateCollection(const QString& collectionId, bool persist = true);
     void createTab();
     void pinCollectionAsTab(const QString& collectionId);
+    void pinFolderAsTab(const QString& path);
+    bool addFolderAsTab(const QString& path, const QString& icon);
     QString chooseTabIcon(const QString& current = {});
     void showTabMenu(const QString& collectionId, const QPoint& globalPosition);
     /// Set the caption under the waveform, elided to the panel's width with the
@@ -156,10 +174,13 @@ private:
 
     daw::EngineController* m_controller = nullptr;
     FileBrowserTree* m_tree = nullptr;
+    ClipLibraryView* m_clipLibrary = nullptr;
+    QLabel* m_clipDropHint = nullptr;
     FileSearchWorker* m_search = nullptr;
     PreviewLoader* m_loader = nullptr;
     MidiPreviewLoader* m_midiLoader = nullptr;
     QLineEdit* m_searchField = nullptr;
+    QWidget* m_header = nullptr;
     QWidget* m_tabsBar = nullptr;
     QHBoxLayout* m_tabsLayout = nullptr;
     QWidget* m_previewBar = nullptr;

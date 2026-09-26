@@ -118,6 +118,10 @@ if(APPLE OR WIN32)
 endif()
 
 add_executable(controller_test controller_test.cpp)
+add_executable(clip_library_test clip_library_test.cpp)
+target_link_libraries(clip_library_test PRIVATE daw_controller)
+add_test(NAME clip_library_test COMMAND clip_library_test)
+set_tests_properties(clip_library_test PROPERTIES TIMEOUT 60)
 add_executable(plugin_batch_test plugin_batch_test.cpp)
 target_link_libraries(plugin_batch_test PRIVATE daw_controller)
 add_test(NAME plugin_batch_test COMMAND plugin_batch_test)
@@ -326,6 +330,11 @@ target_link_libraries(meter_node_test PRIVATE daw_engine)
 add_test(NAME meter_node_test COMMAND meter_node_test)
 set_tests_properties(meter_node_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
+
+add_executable(loudness_meter_test loudness_meter_test.cpp)
+target_link_libraries(loudness_meter_test PRIVATE daw_engine)
+add_test(NAME loudness_meter_test COMMAND loudness_meter_test)
+set_tests_properties(loudness_meter_test PROPERTIES TIMEOUT 60)
 
 # The piano roll's note maths: every Tools/Edit transform as a pure function,
 # plus the undoable setClipNotes they all land through.
@@ -618,6 +627,11 @@ add_executable(midi_recording_test midi_recording_test.cpp)
 target_link_libraries(midi_recording_test PRIVATE daw_controller)
 add_test(NAME midi_recording_test COMMAND midi_recording_test)
 set_tests_properties(midi_recording_test PROPERTIES TIMEOUT 60)
+
+add_executable(strip_silence_test strip_silence_test.cpp)
+target_link_libraries(strip_silence_test PRIVATE daw_controller)
+add_test(NAME strip_silence_test COMMAND strip_silence_test)
+set_tests_properties(strip_silence_test PROPERTIES TIMEOUT 60)
 
 add_executable(midi_recording_protocol_test midi_recording_protocol_test.cpp)
 target_link_libraries(midi_recording_protocol_test PRIVATE daw_controller)

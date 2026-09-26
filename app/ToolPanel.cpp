@@ -1,6 +1,7 @@
 #include "ToolPanel.hpp"
 #include "Controls.hpp"
 #include "Icons.hpp"
+#include "InspectorWidget.hpp"
 #include "Theme.hpp"
 #include "UiConstants.hpp"
 
@@ -16,6 +17,7 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSlider>
+#include <QStyleOption>
 #include <QToolButton>
 
 #include <algorithm>
@@ -41,44 +43,97 @@ int sliderForTimelineZoom(double pixelsPerSecond) {
     return int(std::lround(position * kCompactZoomSteps));
 }
 
-void paintInsetScrubber(QPainter& painter, const QWidget* control,
-                        bool pressed) {
+constexpr int kViewControlWidth = 30;
+constexpr int kViewControlHeight = 24;
+
+class TimelineViewControls final : public QWidget {
+public:
+    explicit TimelineViewControls(QWidget* parent) : QWidget(parent) {
+        setObjectName(QStringLiteral("TimelineViewControls"));
+        setFixedHeight(kViewControlHeight + 2);
+        setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+        connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+                QOverload<>::of(&QWidget::update));
+    }
+
+    void watchControl(QWidget* control) {
+        m_controls.push_back(control);
+        control->installEventFilter(this);
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::Show || event->type() == QEvent::Hide ||
+            event->type() == QEvent::Move || event->type() == QEvent::Resize)
+            update();
+        return QWidget::eventFilter(watched, event);
+    }
+
+    void paintEvent(QPaintEvent*) override {
+        QVector<QRectF> cells;
+        QRectF bounds;
+        for (const auto& control : m_controls) {
+            if (!control || !control->isVisibleTo(this)) continue;
+            const QRectF cell(control->mapTo(this, QPoint()), control->size());
+            cells.push_back(cell);
+            bounds = bounds.united(cell);
+        }
+        if (cells.isEmpty()) return;
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const Theme& theme = th();
+        const QRectF plate = bounds.adjusted(-0.5, -0.5, 0.5, 0.5);
+        QLinearGradient bed(plate.topLeft(), plate.bottomLeft());
+        bed.setColorAt(0.0, mixColors(theme.headerBackground, theme.well(), 0.32));
+        bed.setColorAt(1.0, mixColors(theme.headerBackground, theme.well(), 0.14));
+        QLinearGradient edge(plate.topLeft(), plate.bottomLeft());
+        edge.setColorAt(0.0, mixColors(theme.headerBackground, theme.well(), 0.72));
+        edge.setColorAt(1.0, mixColors(theme.headerBackground, theme.textPrimary, 0.12));
+        painter.setPen(QPen(QBrush(edge), 1.0));
+        painter.setBrush(bed);
+        painter.drawRoundedRect(plate, Theme::cornerRadius, Theme::cornerRadius);
+
+        QColor divider = theme.textPrimary;
+        divider.setAlpha(theme.dark ? 28 : 38);
+        painter.setPen(QPen(divider, 1.0));
+        for (qsizetype i = 1; i < cells.size(); ++i) {
+            const qreal x = cells[i].left() - 0.5;
+            painter.drawLine(QPointF(x, plate.top() + 7.0),
+                             QPointF(x, plate.bottom() - 7.0));
+        }
+    }
+
+private:
+    QVector<QPointer<QWidget>> m_controls;
+};
+
+void paintViewControl(QPainter& painter, const QWidget* control,
+                      icons::Glyph glyph, bool pressed) {
     painter.setRenderHint(QPainter::Antialiasing, true);
     const Theme& theme = th();
-    const QRectF plate = QRectF(control->rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    const qreal radius = 6.0;
-
-    // A small well cut into the toolbar: the cluster has no surrounding plate,
-    // so each icon reads as a direct manipulation handle rather than a slider.
-    QLinearGradient bed(plate.topLeft(), plate.bottomLeft());
-    bed.setColorAt(0.0, mixColors(theme.well(), QColor(0, 0, 0),
-                                  theme.dark ? 0.34 : 0.12));
-    bed.setColorAt(1.0, mixColors(theme.well(), theme.surfaceElevated,
-                                  pressed ? 0.02 : 0.12));
-    painter.setBrush(bed);
-    painter.setPen(QPen(mixColors(theme.separator(), QColor(0, 0, 0),
-                                  theme.dark ? 0.24 : 0.08), 1.0));
-    painter.drawRoundedRect(plate, radius, radius);
-
-    QColor innerShadow(0, 0, 0, pressed ? 92 : 58);
-    painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(innerShadow, 1.0));
-    painter.drawLine(QPointF(plate.left() + radius, plate.top() + 1.25),
-                     QPointF(plate.right() - radius, plate.top() + 1.25));
-    painter.drawLine(QPointF(plate.left() + 1.25, plate.top() + radius),
-                     QPointF(plate.left() + 1.25, plate.bottom() - radius));
-    QColor lowerEdge = theme.textPrimary;
-    lowerEdge.setAlpha(theme.dark ? 16 : 28);
-    painter.setPen(QPen(lowerEdge, 1.0));
-    painter.drawLine(QPointF(plate.left() + radius, plate.bottom() - 1.25),
-                     QPointF(plate.right() - radius, plate.bottom() - 1.25));
-    if (control->underMouse() || control->hasFocus()) {
-        QColor edge = theme.accent;
-        edge.setAlpha(pressed ? 150 : 82);
-        painter.setPen(QPen(edge, 1.0));
-        painter.drawRoundedRect(plate.adjusted(1.0, 1.0, -1.0, -1.0),
-                                radius - 1.0, radius - 1.0);
+    const QRectF cell = QRectF(control->rect()).adjusted(1.0, 1.0, -1.0, -1.0);
+    if (pressed || (control->isEnabled() && control->underMouse())) {
+        QColor fill = pressed ? QColor(0, 0, 0, theme.dark ? 40 : 22)
+                              : theme.textPrimary;
+        if (!pressed) fill.setAlpha(theme.dark ? 22 : 16);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(fill);
+        painter.drawRoundedRect(cell, Theme::cornerRadius - 3,
+                                Theme::cornerRadius - 3);
     }
+    QStyleOption option;
+    option.initFrom(control);
+    if (control->hasFocus() && (option.state & QStyle::State_KeyboardFocusChange)) {
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(theme.textPrimary, 1.0, Qt::DotLine));
+        painter.drawRoundedRect(cell, Theme::cornerRadius - 3,
+                                Theme::cornerRadius - 3);
+    }
+    const QPointF centre = QRectF(control->rect()).center();
+    icons::paint(painter, glyph,
+                 QRectF(centre.x() - 8.0, centre.y() - 8.0, 16.0, 16.0),
+                 control->isEnabled() ? theme.textPrimary : theme.textSecondary);
 }
 
 class TimelineScrubButton final : public QSlider {
@@ -89,7 +144,7 @@ public:
                         QWidget* parent)
         : QSlider(Qt::Horizontal, parent), m_glyph(glyph), m_axis(axis),
           m_resetValue(resetValue) {
-        setFixedSize(28, 24);
+        setFixedSize(kViewControlWidth, kViewControlHeight);
         setCursor(axis == Axis::Vertical ? Qt::SizeVerCursor
                                         : Qt::SizeHorCursor);
         setFocusPolicy(Qt::StrongFocus);
@@ -99,10 +154,7 @@ public:
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
-        paintInsetScrubber(painter, this, isSliderDown());
-        const QColor ink = isSliderDown() ? th().accent : th().textSecondary;
-        icons::paint(painter, m_glyph,
-                     QRectF(rect()).adjusted(5.0, 3.0, -5.0, -3.0), ink);
+        paintViewControl(painter, this, m_glyph, isSliderDown());
     }
 
     void mousePressEvent(QMouseEvent* event) override {
@@ -202,17 +254,15 @@ public:
         setObjectName(QStringLiteral("WaveformScaleButton"));
         setAccessibleName(QObject::tr("Waveform display height"));
         setFocusPolicy(Qt::StrongFocus);
-        setButtonSize(28, 24);
+        setButtonSize(kViewControlWidth, kViewControlHeight);
         setCursor(Qt::SizeVerCursor);
     }
 
 protected:
-    void paintEvent(QPaintEvent* event) override {
-        {
-            QPainter painter(this);
-            paintInsetScrubber(painter, this, m_dragging || isDown());
-        }
-        ui::IconButton::paintEvent(event);
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        paintViewControl(painter, this, icons::Glyph::Waveform,
+                         m_dragging || isDown());
     }
 
     void mousePressEvent(QMouseEvent* event) override {
@@ -317,14 +367,13 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     // Child QWidget backgrounds are not stylesheet-painted consistently by
     // the Windows backend unless the styled-background attribute is explicit.
     setAttribute(Qt::WA_StyledBackground, true);
-    // Keep the context panel's existing animation envelope so switching
-    // contexts never changes the surrounding workspace geometry.
-    setFixedHeight(44);
+    // The moving context island and the strip share one compact height.
+    setFixedHeight(ui::kToolPanelHeight);
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             QOverload<>::of(&QWidget::update));
 
     auto* row = new QHBoxLayout(this);
-    row->setContentsMargins(8, 2, 8, 2);
+    row->setContentsMargins(8, 0, 12, 1);
     row->setSpacing(4);
     m_row = row;
 
@@ -360,7 +409,7 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     iz->setContentsMargins(2, 0, 2, 0);
     iz->setSpacing(2);
     iz->addStretch(1);
-    setInspectorZoneWidth(152);
+    setInspectorZoneWidth(InspectorWidget::kExpandedWidth);
     row->addWidget(m_inspectorZone);
 
     row->addWidget(ui::separatorLine(Qt::Vertical, 18, this));
@@ -451,22 +500,30 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     // edge is a stable utility rail: waveform height first, then track height
     // and horizontal zoom, matching the visual order of what they affect.
     m_timelineZone = new QWidget(this);
+    // Centre the utility group in the rail above its bottom border. Keep it
+    // in this row when the context panel opens a taller plugin-search area.
+    m_timelineZone->setFixedHeight(ui::kToolPanelHeight - 1);
     auto* timelineLayout = new QHBoxLayout(m_timelineZone);
     timelineLayout->setContentsMargins(2, 0, 2, 0);
-    timelineLayout->setSpacing(2);
+    timelineLayout->setSpacing(0);
     timelineLayout->addStretch(1);
+    auto* viewControls = new TimelineViewControls(m_timelineZone);
+    auto* viewRow = new QHBoxLayout(viewControls);
+    viewRow->setContentsMargins(1, 1, 1, 1);
+    viewRow->setSpacing(0);
     m_waveformScale = new WaveformScaleButton(
-        [this](double scale) { emit waveformScaleChanged(scale); }, m_timelineZone);
+        [this](double scale) { emit waveformScaleChanged(scale); }, viewControls);
     auto waveformPolicy = m_waveformScale->sizePolicy();
     waveformPolicy.setRetainSizeWhenHidden(true);
     m_waveformScale->setSizePolicy(waveformPolicy);
-    timelineLayout->addWidget(m_waveformScale);
+    viewRow->addWidget(m_waveformScale);
+    viewControls->watchControl(m_waveformScale);
 
-    m_timelineSliders = new QWidget(m_timelineZone);
+    m_timelineSliders = new QWidget(viewControls);
     m_timelineSliders->setObjectName(QStringLiteral("TimelineSliderCluster"));
     auto* sliderRow = new QHBoxLayout(m_timelineSliders);
     sliderRow->setContentsMargins(0, 0, 0, 0);
-    sliderRow->setSpacing(2);
+    sliderRow->setSpacing(0);
 
     m_trackHeightSlider = new TimelineScrubButton(
         icons::Glyph::ResizeVertical, TimelineScrubButton::Axis::Vertical,
@@ -480,9 +537,7 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     m_trackHeightSlider->setToolTip(
         tr("Track height: drag the icon up or down; double-click resets"));
     sliderRow->addWidget(m_trackHeightSlider);
-    auto* sliderDivider = ui::separatorLine(Qt::Vertical, 18, m_timelineSliders);
-    sliderDivider->setObjectName(QStringLiteral("TimelineSliderDivider"));
-    sliderRow->addWidget(sliderDivider);
+    viewControls->watchControl(m_trackHeightSlider);
 
     const int defaultZoomValue = sliderForTimelineZoom(80.0);
     m_timelineZoomSlider = new TimelineScrubButton(
@@ -497,8 +552,10 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     m_timelineZoomSlider->setToolTip(
         tr("Timeline zoom: drag the icon left or right; double-click resets"));
     sliderRow->addWidget(m_timelineZoomSlider);
-    timelineLayout->addWidget(m_timelineSliders);
-    row->addWidget(m_timelineZone, 1);
+    viewControls->watchControl(m_timelineZoomSlider);
+    viewRow->addWidget(m_timelineSliders);
+    timelineLayout->addWidget(viewControls, 0, Qt::AlignVCenter);
+    row->addWidget(m_timelineZone, 1, Qt::AlignTop);
 
     connect(m_trackHeightSlider, &QSlider::sliderPressed, this, [this] {
         m_trackHeightDragging = true;
@@ -729,6 +786,10 @@ bool ToolPanel::eventFilter(QObject* watched, QEvent* event) {
 
 void ToolPanel::applyTheme() {
     const Theme& t = th();
+    // Recess the travel rail below the header-coloured context plate. Derive
+    // it from that same colour so custom palettes retain the separation too.
+    const QColor rail = mixColors(t.headerBackground, QColor(0, 0, 0),
+                                  t.dark ? 0.28 : 0.12);
     if (m_followPlayhead) {
         m_followPlayhead->setActiveColor(t.cursor);
         m_followPlayhead->setIcon(
@@ -738,5 +799,6 @@ void ToolPanel::applyTheme() {
 #ToolPanel { background: %1; border-bottom: 1px solid %2; }
 #TimelineSliderCluster { background: transparent; border: none; }
 )")
-        .arg(t.headerBackground.name(), t.sectionDivider().name()));
+        .arg(rail.name(),
+             t.sectionDivider().name()));
 }

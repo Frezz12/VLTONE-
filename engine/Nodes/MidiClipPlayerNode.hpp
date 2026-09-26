@@ -114,6 +114,11 @@ public:
         const auto schedule = m_schedule.controlCopy();
         return schedule ? schedule->notes : nullptr;
     }
+    /// Control thread: a replacement take monitors live input while the old
+    /// performance stays saved. Only the audio thread releases timeline voices.
+    void setTimelineSuppressed(bool suppressed) noexcept {
+        m_timelineSuppressed.store(suppressed, std::memory_order_relaxed);
+    }
     /// Deterministic performance-test hook: indexed subtrees inspected by the
     /// most recent discontinuity chase, including branches rejected at root.
     std::size_t lastChaseSubtreesVisitedForTest() const noexcept {
@@ -177,6 +182,18 @@ public:
             dsp::clear(context.output.channel(ch));
         }
         if (!context.midiOutput || context.frames == 0) return;
+
+        if (m_timelineSuppressed.load(std::memory_order_relaxed)) {
+            // Release the previous performance before live input, so punching
+            // in on the same key cannot cut off the new note. Never panic the
+            // whole instrument: live notes and controllers belong to the player.
+            releaseControllers(*context.midiOutput);
+            releaseAll(*context.midiOutput, 0);
+            m_hasPosition = false;
+            drainLiveEvents(*context.midiOutput);
+            context.midiOutput->sort();
+            return;
+        }
 
         // Live keys first, and whatever the transport is doing: playing a note
         // from the keyboard has nothing to do with the playhead, and this is
@@ -499,6 +516,7 @@ private:
         std::numeric_limits<std::uint64_t>::max();
     double m_expectedBeats = 0.0;
     bool m_hasPosition = false;
+    std::atomic<bool> m_timelineSuppressed{false};
 
     /// The live-key queue: fixed storage, one producer (the UI), one consumer
     /// (the audio thread). One slot is always left empty so a full queue is

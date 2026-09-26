@@ -777,6 +777,18 @@ struct TrackModel {
     TrackFreezeState freeze;
 };
 
+/// An immutable musical snapshot in this project's clip library. The first
+/// track owns the saved clip; additional tracks hold a Pattern's child parts.
+/// Plugin state uses the project's ordinary State/ files, never live instances.
+struct ClipLibraryEntry {
+    std::string id;
+    std::string name;
+    std::string sourceTrackId;
+    std::string sourceClipId;
+    double tempo = 120.0;
+    std::vector<TrackModel> tracks;
+};
+
 /// A track together with how deep it sits in the folder hierarchy.
 struct TrackRow {
     size_t index = 0;     // into ProjectModel::tracks
@@ -832,7 +844,8 @@ struct ProjectModel : ProjectMetadata {
     ProjectModel() = default;
     // Copies become ordinary editable documents, never inheriting a controller's
     // explicit cache contract or its derived lookup/row allocations.
-    ProjectModel(const ProjectModel& other) : ProjectMetadata(other), tracks(other.tracks) {}
+    ProjectModel(const ProjectModel& other)
+        : ProjectMetadata(other), tracks(other.tracks), clipLibrary(other.clipLibrary) {}
     ProjectModel(ProjectModel&&) = default;
     ProjectModel& operator=(ProjectModel&&) = default;
     ProjectModel& operator=(const ProjectModel& other) {
@@ -843,9 +856,11 @@ struct ProjectModel : ProjectMetadata {
     ProjectModel headerCopy() const {
         ProjectModel copy;
         static_cast<ProjectMetadata&>(copy) = *this;
+        copy.clipLibrary = clipLibrary;
         return copy;
     }
     std::vector<TrackModel> tracks;
+    std::vector<ClipLibraryEntry> clipLibrary;
 
     TrackModel* findTrack(const std::string& id);
     const TrackModel* findTrack(const std::string& id) const;

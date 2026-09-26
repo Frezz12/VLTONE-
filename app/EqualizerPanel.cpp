@@ -838,14 +838,14 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
             mixColors(field, t.accent, 0.20), t.dark ? 238 : 246);
         setStyleSheet(QString(R"(
 #EqualizerPanel QComboBox {
-    background: %1; border: 1px solid %2; border-radius: 0;
+    background: %1; border: 1px solid %2; border-radius: %RADIUS%px;
     padding: 3px 10px; color: %3; min-height: 22px;
 }
-#EqualizerPanel QComboBox:hover { border-color: %4; background: %6; }
-#EqualizerPanel QComboBox:focus { border-color: %4; background: %8; }
+#EqualizerPanel QComboBox:hover { border-color: %2; background: %6; }
+#EqualizerPanel QComboBox:focus { border-color: %2; }
 #EqualizerPanel QComboBox::drop-down { width: 16px; border: none; }
 #EqualizerPanel QPushButton {
-    background: %1; border: 1px solid %2; border-radius: 9px;
+    background: %1; border: 1px solid %2; border-radius: %RADIUS%px;
     padding: 3px 12px; color: %3; min-height: 22px;
 }
 #EqualizerPanel QPushButton:hover { background: %6; border-color: %4; }
@@ -859,14 +859,14 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     background: transparent; border-top: 1px solid %2;
 }
 #EqualizerPanel QPushButton#EqualizerBandClose {
-    border: none; border-radius: 10px; background: transparent;
+    border: none; border-radius: %RADIUS%px; background: transparent;
     color: %5; font-size: 15px; font-weight: 700;
     padding: 0 0 2px 0; min-width: 0; min-height: 0;
 }
 #EqualizerPanel QPushButton#EqualizerBandClose:hover {
     background: %6; color: %3;
 }
-)").arg(glassField, edge.name(), t.textPrimary.name(), t.accent.name(),
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius)).arg(glassField, edge.name(), t.textPrimary.name(), t.accent.name(),
         t.textSecondary.name(),
         rgba(mixColors(field, t.textPrimary, 0.10), t.dark ? 228 : 242),
         (t.accent.value() > 150 ? QColor(18, 20, 24) : QColor(245, 246, 248))

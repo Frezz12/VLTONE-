@@ -653,6 +653,20 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         p.drawRoundedRect(QRectF(16.2, 13.5, 3.6, 6), 1.6, 1.6);
         break;
     }
+    case Glyph::StripSilence: {
+        QPen pen(c, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        p.setPen(pen);
+        p.setBrush(Qt::NoBrush);
+        p.drawLine(QPointF(5, 4), QPointF(5, 20));
+        p.drawLine(QPointF(19, 4), QPointF(19, 20));
+        p.drawLine(QPointF(2, 12), QPointF(5, 12));
+        p.drawLine(QPointF(19, 12), QPointF(22, 12));
+        for (int i = 0; i < 3; ++i) {
+            const qreal x = 9 + i * 3, h = i == 1 ? 7 : 3;
+            p.drawLine(QPointF(x, 12 - h), QPointF(x, 12 + h));
+        }
+        break;
+    }
     case Glyph::Waveform: {
         QPen pen(c, 1.8);
         pen.setCapStyle(Qt::RoundCap);

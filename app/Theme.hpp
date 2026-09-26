@@ -16,6 +16,9 @@ class QJsonObject;
 /// Ported from the retired Swift design system so the Qt front-end keeps the
 /// same look and the same preset names.
 struct Theme {
+    // Shared by application surfaces, menus and controls; matches the transport LCD.
+    static constexpr int cornerRadius = 8;
+
     QString id;
     QString name;
     bool dark = true;
@@ -60,6 +63,8 @@ struct Theme {
     /// A stronger boundary reserved for the application's major regions. It
     /// must read at a glance without making every control border louder.
     QColor sectionDivider() const;
+    /// Legible ink for an opaque accent fill (selected rows / primary actions).
+    QColor accentText() const;
     /// Ink for marks painted straight onto the workspace — the swipe band, a
     /// region overlay, the count-in digits. White on a dark palette, near-black
     /// on a light one. Marks painted on top of a *clip* keep using white: a

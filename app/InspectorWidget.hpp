@@ -22,10 +22,12 @@ namespace ui { class IconButton; }
 class InspectorWidget : public QWidget {
     Q_OBJECT
 public:
+    void setHeaderHeight(int height);
     /// The two widths this panel ever has. Public because the tool strip above
     /// it lines its zones up with this column and has to know them — they used
     /// to be duplicated there as bare numbers.
-    static constexpr int kExpandedWidth = 152;
+    static constexpr int kExpandedWidth = 120;
+    static constexpr int kChannelWidth = 100;
     static constexpr int kRailWidth = 30;
 
     explicit InspectorWidget(daw::EngineController* controller,

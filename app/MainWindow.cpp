@@ -1,6 +1,7 @@
 #include "UiPerformance.hpp"
 #include "AudioImportPreparation.hpp"
 #include "MainWindow.hpp"
+#include "MenuActions.hpp"
 #include "WaveformStrip.hpp"
 #include "WaveformPaint.hpp"
 #include "graphics/WorkspaceSurface.hpp"
@@ -46,6 +47,7 @@
 #include "PresenceOverlay.hpp"
 #include "SessionStatusStrip.hpp"
 #include "FileBrowserPanel.hpp"
+#include "ClipLibraryView.hpp"
 #include "EqualizerPanel.hpp"
 #include "GraphitPanel.hpp"
 #include "GravityPanel.hpp"
@@ -70,6 +72,7 @@
 #include "ExportDialog.hpp"
 #include "BounceInPlaceDialog.hpp"
 #include "OfflineRenderDialog.hpp"
+#include "StripSilenceDialog.hpp"
 #include "PluginBatchDialog.hpp"
 #include "PluginManagerWindow.hpp"
 #include "PluginQuickAdder.hpp"
@@ -540,7 +543,7 @@ public:
         const Theme& t = th();
         setStyleSheet(QString(R"(
 #DownloadedAudioCard {
-    background: %SURFACE%; border: 1px solid %BORDER%; border-radius: 0;
+    background: %SURFACE%; border: 1px solid %BORDER%; border-radius: %RADIUS%px;
 }
 #DownloadedAudioHeading { color: %TEXT%; font-size: 15px; font-weight: 700; }
 #DownloadedAudioName { color: %TEXT%; font-size: 12px; font-weight: 650; }
@@ -548,23 +551,24 @@ public:
     color: %TEXT2%; font-size: 11px;
 }
 #DownloadedAudioAnalysis {
-    background: %WELL%; border: 1px solid %BORDER%; border-radius: 10px;
+    background: %WELL%; border: 1px solid %BORDER%; border-radius: %RADIUS%px;
 }
 #DownloadedAudioAnalysisTitle { color: %TEXT%; font-size: 11px; font-weight: 650; }
 QCheckBox { color: %TEXT2%; font-size: 11px; spacing: 7px; }
 #DownloadedAudioPrimary {
-    color: white; background: %ACCENT%; border: 1px solid %ACCENT%;
-    border-radius: 9px; font-weight: 650; padding: 6px 12px;
+    color: %ACCENT_TEXT%; background: %ACCENT%; border: 1px solid %ACCENT%;
+    border-radius: %RADIUS%px; font-weight: 650; padding: 6px 12px;
 }
 #DownloadedAudioPrimary:hover { background: %ACCENT_HI%; }
-QPushButton { border-radius: 9px; padding: 6px 12px; }
+QPushButton { border-radius: %RADIUS%px; padding: 6px 12px; }
 QPushButton:disabled { color: %TEXT2%; background: %WELL%; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
             .replace("%SURFACE%", t.surfaceElevated.name())
             .replace("%BORDER%", t.sectionDivider().name())
             .replace("%TEXT2%", t.textSecondary.name())
             .replace("%TEXT%", t.textPrimary.name())
             .replace("%ACCENT_HI%", t.accentHighlight.name())
+            .replace("%ACCENT_TEXT%", t.accentText().name())
             .replace("%ACCENT%", t.accent.name())
             .replace("%WELL%", t.well().name()));
     }
@@ -4353,7 +4357,7 @@ bool MainWindow::checkAutomationForTest() {
     m_timeline->ensureLaneVisible(laneRow);
     QApplication::processEvents();
     const int y = m_timeline->laneCentreForTest(laneRow);
-    if (y < ui::kRulerHeight || y > m_timeline->height()) {
+    if (y < m_timeline->rulerHeight() || y > m_timeline->height()) {
         std::fprintf(stderr, "the automation lane is off screen at y=%d\n", y);
         return false;
     }
@@ -5456,7 +5460,7 @@ bool MainWindow::checkCycleRegionForTest() {
     // band off the top of it, not the whole thing.
     {
         const QPoint at(toX, ui::kLoopStripHeight +
-                                 (ui::kRulerHeight - ui::kLoopStripHeight) / 2);
+                                 (m_timeline->rulerHeight() - ui::kLoopStripHeight) / 2);
         QMouseEvent press(QEvent::MouseButtonPress, QPointF(at),
                           QPointF(m_timeline->mapToGlobal(at)), Qt::LeftButton,
                           Qt::LeftButton, Qt::NoModifier);
@@ -5606,7 +5610,7 @@ bool MainWindow::checkCycleRegionForTest() {
             daw::visibleTracks(m_controller.project()).size() > 1 ? 1 : 0;
         const QPoint cursorProbe(
             std::max(2, regionLeft - 20),
-            probeLane == 0 ? std::max(ui::kRulerHeight + 1,
+            probeLane == 0 ? std::max(m_timeline->rulerHeight() + 1,
                                       m_timeline->height() - 2)
                            : m_timeline->laneCentreForTest(probeLane));
         for (int tool : {1, 2, 4, 5, 3}) {
@@ -6215,8 +6219,8 @@ bool MainWindow::checkTrackMixerSyncForTest() {
     if (!check(renameInHeader(id, renamed), "audio header editor is missing")) return false;
     if (!check(stripFor(id) == strip &&
                strip->findChild<QLabel*>("StripName")->text() == renamed &&
-               strip->findChild<QLabel*>("NamePlate")->text() == renamed.toUpper(),
-               "rename did not reach both labels on the existing strip")) return false;
+               !strip->findChild<QLabel*>("NamePlate"),
+               "rename did not reach the single header label on the existing strip")) return false;
     m_controller.undo();
     syncViews();
     if (!check(strip->findChild<QLabel*>("StripName")->text() == original,
@@ -6513,7 +6517,7 @@ bool MainWindow::checkTimelinePanForTest() {
     const int rowsBefore = m_timeline->verticalScroll();
     const QPoint start(m_timeline->width() / 2,
                        std::min(m_timeline->height() - 20,
-                                ui::kRulerHeight + 80));
+                                m_timeline->rulerHeight() + 80));
     const QPoint finish = start - QPoint(80, 40);
     const QPoint globalStart = m_timeline->mapToGlobal(start);
     const QPoint globalFinish = m_timeline->mapToGlobal(finish);
@@ -6546,7 +6550,7 @@ bool MainWindow::checkTimelinePanForTest() {
     m_timeline->clearClipSelection();
     const int pointerX = int(m_timeline->width() * 0.72);
     QCursor::setPos(m_timeline->mapToGlobal(
-        QPoint(pointerX, ui::kRulerHeight + 40)));
+        QPoint(pointerX, m_timeline->rulerHeight() + 40)));
     const double timeUnderPointer =
         m_timeline->horizontalScrollForTest() +
         pointerX / m_timeline->pixelsPerSecondForTest();
@@ -6570,7 +6574,7 @@ bool MainWindow::checkTimelinePanForTest() {
         break;
     }
     QCursor::setPos(m_timeline->mapToGlobal(
-        QPoint(pointerX, ui::kRulerHeight / 2)));
+        QPoint(pointerX, m_timeline->rulerHeight() / 2)));
     m_timeline->zoomBy(1.1);
     const double focusedPlayheadX =
         (m_controller.presentationPositionSeconds() -
@@ -6700,8 +6704,14 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
         QApplication::sendEvent(control, &release);
     };
     const bool compactControls =
-        trackHeightSlider->size() == QSize(28, 24) &&
-        timelineZoomSlider->size() == QSize(28, 24);
+        trackHeightSlider->size() == waveformScale->size() &&
+        timelineZoomSlider->size() == waveformScale->size() &&
+        waveformScale->width() >= 24 && waveformScale->width() <= 36 &&
+        waveformScale->height() >= 24 && waveformScale->height() <= 28 &&
+        trackHeightSlider->mapTo(m_toolPanel, trackHeightSlider->rect().center()).y() ==
+            waveformScale->mapTo(m_toolPanel, waveformScale->rect().center()).y() &&
+        timelineZoomSlider->mapTo(m_toolPanel, timelineZoomSlider->rect().center()).y() ==
+            waveformScale->mapTo(m_toolPanel, waveformScale->rect().center()).y();
 
     const auto originalHeights = [&] {
         std::vector<std::pair<std::string, double>> values;
@@ -6947,15 +6957,28 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
     };
     const auto fitsInspector = [&] {
         QApplication::processEvents();
+        const auto* strip = m_inspector->findChild<ChannelStrip*>();
         const int viewportWidth = clipScroll->viewport()->width();
         const int left = clipSection->mapTo(clipScroll->viewport(), QPoint()).x();
-        bool fits = clipScroll->widget()->width() <= viewportWidth && left >= 6 &&
+        bool fits = m_inspector->width() == InspectorWidget::kExpandedWidth &&
+                    strip && strip->width() == InspectorWidget::kChannelWidth &&
+                    clipScroll->widget()->width() <= viewportWidth && left >= 6 &&
                     left + clipSection->width() <= viewportWidth - 6 &&
                     clipScroll->horizontalScrollBar()->maximum() == 0;
+        if (!fits)
+            std::fprintf(stderr, "Inspector bounds: panel=%d strip=%d viewport=%d content=%d section=%d+%d scroll=%d\n",
+                         m_inspector->width(), strip ? strip->width() : -1, viewportWidth,
+                         clipScroll->widget()->width(), left, clipSection->width(),
+                         clipScroll->horizontalScrollBar()->maximum());
         for (auto* field : clipSection->findChildren<QWidget*>()) {
             if (!field->isVisible()) continue;
             const int x = field->mapTo(clipSection, QPoint()).x();
-            fits = fits && x >= 0 && x + field->width() <= clipSection->width();
+            const bool inside = x >= 0 && x + field->width() <= clipSection->width();
+            if (!inside)
+                std::fprintf(stderr, "Inspector field overflow: %s %s x=%d width=%d section=%d\n",
+                             field->metaObject()->className(), qPrintable(field->objectName()),
+                             x, field->width(), clipSection->width());
+            fits = fits && inside;
             if (const auto* label = qobject_cast<QLabel*>(field); label && !label->text().isEmpty())
                 fits = fits && label->width() > 0 && label->height() > 0;
         }
@@ -7373,7 +7396,7 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
     const int scrollBefore = m_timeline->verticalScroll();
     const QPoint marqueeStart(m_timeline->width() - 12,
                               m_timeline->height() - 12);
-    const QPoint marqueeOutside(marqueeStart.x(), ui::kRulerHeight - 30);
+    const QPoint marqueeOutside(marqueeStart.x(), m_timeline->rulerHeight() - 30);
     const double playheadBeforeMarquee = 0.137;
     m_controller.seekSeconds(playheadBeforeMarquee);
     send(QEvent::MouseButtonPress, marqueeStart, Qt::LeftButton,
@@ -7398,7 +7421,7 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
     m_timeline->setSnapEnabled(true);
     const double rulerGrid = m_timeline->snapSeconds();
     const QPoint rulerAt(m_timeline->width() / 3,
-                         (ui::kLoopStripHeight + ui::kRulerHeight) / 2);
+                         (ui::kLoopStripHeight + m_timeline->rulerHeight()) / 2);
     send(QEvent::MouseButtonPress, rulerAt, Qt::LeftButton, Qt::LeftButton,
          Qt::NoModifier);
     send(QEvent::MouseButtonRelease, rulerAt, Qt::LeftButton, Qt::NoButton,
@@ -7793,6 +7816,111 @@ bool MainWindow::checkTempoScrubForTest() {
            leftTextMode;
 }
 
+bool MainWindow::checkTimelineRulersForTest() {
+    auto* button = m_transport->findChild<QToolButton*>(QStringLiteral("RulerFormatButton"));
+    auto* trackHeader = m_trackList->findChild<QWidget*>(QStringLiteral("TrackListRuler"));
+    auto* inspectorHeader = m_inspector->findChild<QWidget*>(QStringLiteral("InspectorHeader"));
+    auto* browserHeader = m_browser->findChild<QWidget*>(QStringLiteral("BrowserHeader"));
+    auto* scroll = m_timeline->findChild<QScrollBar*>(QStringLiteral("TimelineVerticalScroll"));
+    if (!button || !button->menu() || !trackHeader || !inspectorHeader ||
+        !browserHeader || !scroll) return false;
+    const auto originalFormat = m_transport->rulerFormat();
+    const bool originalCounter = m_transport->positionShowsBars();
+    const double originalPosition = m_controller.positionSeconds();
+    const int originalScroll = m_timeline->verticalScroll();
+    const double originalScale = m_timeline->pixelsPerSecondForTest();
+    const double originalHorizontal = m_timeline->horizontalScrollForTest();
+    const auto restore = qScopeGuard([&] {
+        m_transport->setRulerFormat(originalFormat);
+        m_transport->setPositionDisplayBars(originalCounter);
+        m_controller.seekSeconds(originalPosition);
+        m_timeline->setVerticalScroll(originalScroll);
+    });
+    const auto fail = [](const char* reason) {
+        std::fprintf(stderr, "timeline rulers: %s\n", reason);
+        return false;
+    };
+    const auto geometryMatches = [&](int height) {
+        QApplication::processEvents();
+        if (m_timeline->rulerHeight() != height || trackHeader->height() != height ||
+            inspectorHeader->height() != height || browserHeader->height() != height ||
+            scroll->y() != height) return false;
+        for (int row = 0; row < 3; ++row) {
+            const QRect header = m_trackList->rowRectForTest(row);
+            if (header.isNull()) continue;
+            const int headerY = m_trackList->mapTo(this, header.topLeft()).y();
+            const int laneY = m_timeline->mapTo(this,
+                QPoint(0, m_timeline->laneTopForTest(row))).y();
+            if (headerY != laneY) return false;
+        }
+        return m_timeline->pixelsPerSecondForTest() == originalScale &&
+               m_timeline->horizontalScrollForTest() == originalHorizontal;
+    };
+    QAction* bars = nullptr;
+    QAction* time = nullptr;
+    QAction* both = nullptr;
+    for (QAction* action : button->menu()->actions()) {
+        if (action->data().toInt() == int(ui::RulerFormat::Bars)) bars = action;
+        if (action->data().toInt() == int(ui::RulerFormat::Time)) time = action;
+        if (action->data().toInt() == int(ui::RulerFormat::BarsAndTime)) both = action;
+    }
+    if (!bars || !time || !both) return fail("missing ruler choices");
+    m_transport->setRulerFormat(ui::RulerFormat::Bars);
+    m_transport->setPositionDisplayBars(false);
+    if (!geometryMatches(ui::kRulerHeight) || !bars->isChecked() ||
+        bars->isEnabled() || time->isChecked()) return fail("single bars row");
+    time->trigger();
+    const int dualHeight = ui::kRulerHeight + ui::kRulerRowHeight;
+    if (!geometryMatches(dualHeight) || !bars->isChecked() || !time->isChecked() ||
+        !bars->isEnabled() || !time->isEnabled() || m_transport->positionShowsBars())
+        return fail("adding time did not preserve both rows and independent counter");
+    m_timeline->setVerticalScroll(24);
+    if (!geometryMatches(dualHeight)) return fail("scrolled headers drifted");
+    const int dualScroll = m_timeline->verticalScroll();
+    for (int y : {ui::kLoopStripHeight + ui::kRulerRowHeight / 2,
+                  ui::kLoopStripHeight + ui::kRulerRowHeight * 3 / 2}) {
+        const QPoint point(std::min(220, m_timeline->width() - 20), y);
+        const QPoint global = m_timeline->mapToGlobal(point);
+        m_controller.seekSeconds(0.0);
+        QMouseEvent press(QEvent::MouseButtonPress, point, global,
+            Qt::LeftButton, Qt::LeftButton, Qt::AltModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, point, global,
+            Qt::LeftButton, Qt::NoButton, Qt::AltModifier);
+        QApplication::sendEvent(m_timeline, &press);
+        QApplication::sendEvent(m_timeline, &release);
+        const double expected = originalHorizontal + point.x() / originalScale;
+        if (std::abs(m_controller.positionSeconds() - expected) > 1e-6)
+            return fail("ruler row did not seek to the clicked time");
+    }
+    bars->trigger();
+    if (!geometryMatches(ui::kRulerHeight) || bars->isChecked() ||
+        !time->isChecked() || time->isEnabled() ||
+        m_timeline->verticalScroll() != dualScroll) return fail("removing bars row");
+    both->trigger();
+    if (!geometryMatches(dualHeight)) return fail("combined shortcut");
+    {
+        TransportBar restored(&m_controller);
+        if (restored.rulerFormat() != ui::RulerFormat::BarsAndTime)
+            return fail("ruler choice was not remembered");
+    }
+    const QString shotDirectory = qEnvironmentVariable("VLTONE_RULER_CHECK_SHOTS");
+    if (!shotDirectory.isEmpty()) {
+        grab().save(shotDirectory + "/rulers-check.png");
+        QTimer::singleShot(0, button->menu(), [&] {
+            button->menu()->grab().save(shotDirectory + "/ruler-menu.png");
+            button->grab().save(shotDirectory + "/ruler-button-open.png");
+            button->menu()->hide();
+        });
+        button->setFocus(Qt::MouseFocusReason);
+        button->showMenu();
+    }
+    time->trigger();
+    if (!geometryMatches(ui::kRulerHeight) ||
+        m_timeline->rulerFormat() != ui::RulerFormat::Bars) return fail("return to bars");
+    std::fprintf(stderr, "PASS Timeline rulers: row choices, aligned headers, scrolling, both seek rows, persistence\n");
+    return true;
+}
+
 bool MainWindow::checkPositionScrubForTest() {
     if (!m_transport || !m_timeline) return false;
     auto* position =
@@ -7831,7 +7959,7 @@ bool MainWindow::checkPositionScrubForTest() {
     };
 
     const double original = m_controller.positionSeconds();
-    const bool originalTimelineMode = m_transport->showsBars();
+    const auto originalTimelineMode = m_transport->rulerFormat();
     const bool originalPositionMode = m_transport->positionShowsBars();
     const double originalScale = m_timeline->pixelsPerSecondForTest();
     const auto waitForCursorPaint = [this](double seconds) {
@@ -7879,7 +8007,7 @@ bool MainWindow::checkPositionScrubForTest() {
         std::abs(m_controller.positionSeconds() - 3.25) < 0.001;
     m_controller.seekSeconds(original);
     m_timeline->zoomBy(originalScale / m_timeline->pixelsPerSecondForTest());
-    m_transport->setTimeDisplayBars(originalTimelineMode);
+    m_transport->setRulerFormat(originalTimelineMode);
     m_transport->setPositionDisplayBars(originalPositionMode);
     m_transport->refreshPosition();
     m_timeline->refreshPlaybackFrame();
@@ -8170,7 +8298,7 @@ bool MainWindow::checkPianoRollForTest() {
                      int(m_noteContextPanel && m_noteContextPanel->isVisible()),
                      int(m_contextPanel->isVisible()));
     }
-    const bool cycle = m_pianoRoll->checkCycleGestureForTest();
+    const bool cycle = m_pianoRoll->checkLocalRangeForTest();
     const bool history = m_pianoRoll->checkHistoryShortcutsForTest();
     const bool clipNavigation = [this] {
         daw::EngineController fixture;
@@ -8232,6 +8360,7 @@ bool MainWindow::checkPianoRollForTest() {
 }
 
 bool MainWindow::checkEditChordRoutingForTest() {
+    if (!checkCommandMenusForTest()) return false;
     QSet<const QAction*> menuActions;
     const auto collectMenu = [&](const auto& self, const QMenu* menu) -> void {
         for (QAction* action : menu->actions()) {
@@ -9062,6 +9191,13 @@ void MainWindow::buildLayout() {
     if (m_toolPanel) m_toolPanel->setBrowserZoneWidth(m_browserWidth);
     connect(m_browser, &FileBrowserPanel::statusMessage, this,
             [this](const QString& text) { statusBar()->showMessage(text, 3000); });
+    connect(m_browser, &FileBrowserPanel::libraryEdited, this, [this] { markDirty(); });
+    connect(m_browser, &FileBrowserPanel::libraryClipRestored, this, [this](const QString& track, const QString& clip) {
+        markDirty(); syncViews();
+        m_timeline->selectClips({{track,clip}});
+        m_trackList->setSelectedTrack(track);
+        onSelectionChanged(track);
+    });
     connect(m_browser, &FileBrowserPanel::settingsRequested, this,
             [this] { openSettings(SettingsWindow::kBrowserTab); });
     connect(m_browser, &FileBrowserPanel::channelStripPresetActivated, this,
@@ -9537,9 +9673,17 @@ void MainWindow::buildLayout() {
                 selectTrackFromHeader(QString::fromStdString(dialog.createdTrackIds().front()));
                 markDirty();
             });
+    const auto alignRulerHeaders = [this](int height) {
+        m_trackList->setRulerHeight(height);
+        m_inspector->setHeaderHeight(height);
+        m_browser->setHeaderHeight(height);
+    };
+    connect(m_timeline, &TimelineWidget::rulerHeightChanged, this, alignRulerHeaders);
     connect(m_transport, &TransportBar::timeFormatChanged, this, [this] {
-        m_timeline->setShowBars(m_transport->showsBars());
+        m_timeline->setRulerFormat(m_transport->rulerFormat());
     });
+    m_timeline->setRulerFormat(m_transport->rulerFormat());
+    alignRulerHeaders(m_timeline->rulerHeight());
     connect(m_transport, &TransportBar::positionChanged, this, [this] {
 #ifdef DAW_ENABLE_COLLABORATION
         if (m_collaboration && !m_applyingRemoteTransport) {
@@ -9618,6 +9762,8 @@ void MainWindow::buildLayout() {
             });
     connect(m_timeline, &TimelineWidget::projectTemplateTracksRequested, this,
             &MainWindow::addProjectTemplateTracks);
+    connect(m_timeline, &TimelineWidget::saveClipToLibraryRequested, m_browser,
+            &FileBrowserPanel::saveClipToLibrary);
     connect(m_timeline, &TimelineWidget::loopRangeChanged, this, [this] {
         // Dragging a region out arms the cycle, so the transport's lamp has to
         // follow — and a piano roll open on the same project shows the same
@@ -9644,6 +9790,9 @@ void MainWindow::buildLayout() {
             &MainWindow::onBounceInPlace);
     connect(m_timeline, &TimelineWidget::offlineRenderRequested, this,
             &MainWindow::onOfflineRender);
+    connect(m_timeline, &TimelineWidget::stripSilenceRequested, this, &MainWindow::onStripSilence);
+    connect(m_contextPanel, &ContextPanel::stripSilenceRequested, this, &MainWindow::onStripSilence);
+    connect(m_contextPanel, &ContextPanel::silenceSettingsRequested, this, &MainWindow::onSilenceSettings);
     connect(m_timeline, &TimelineWidget::sharedPluginsRequested, this, &MainWindow::onSharedPlugins);
     connect(m_trackList, &TrackListWidget::sharedPluginsRequested, this, &MainWindow::onSharedPlugins);
     connect(m_contextPanel, &ContextPanel::sharedPluginsRequested, this, &MainWindow::onSharedPlugins);
@@ -9743,7 +9892,7 @@ void MainWindow::buildLayout() {
     connect(m_mixer, &MixerWidget::pluginEditorRequested, this,
             &MainWindow::openPluginEditor);
     connect(m_mixer, &MixerWidget::settingsRequested, this,
-            [this] { openSettings(SettingsWindow::kAudioTab); });
+            [this] { openSettings(SettingsWindow::kMixerTab); });
     connect(m_mixer, &MixerWidget::automateControlRequested, this,
             [this](const QString& trackId, bool pan) {
                 daw::AutomationTarget target;
@@ -10114,6 +10263,7 @@ void MainWindow::populateDemo() {
 }
 
 void MainWindow::syncViews() {
+    if (m_browser) m_browser->refreshClipLibrary();
     if (m_warpEditor) m_warpEditor->refresh();
     ui::perf::Scope timing("syncViews.MainWindow.ms");
     if (m_transport) m_transport->refresh();
@@ -10837,7 +10987,8 @@ void MainWindow::buildSemanticCommands() {
                  id.startsWith(QLatin1String("transport.playFromClip"))) menu = playback;
         else if (id.startsWith(QLatin1String("edit.grid."))) menu = grid;
         else if (id.startsWith(QLatin1String("edit.snap"))) menu = snap;
-        else if (id.startsWith(QLatin1String("view.time"))) menu = timeDisplay;
+        else if (id.startsWith(QLatin1String("view.time")) ||
+                 id.startsWith(QLatin1String("view.position"))) menu = timeDisplay;
         else if (id.startsWith(QLatin1String("view.automation."))) menu = automation;
         else if (id.startsWith(QLatin1String("tool.secondary"))) menu = secondaryTool;
         else if (id.startsWith(QLatin1String("tool.automationCreation"))) menu = creation;
@@ -10875,6 +11026,18 @@ void MainWindow::buildSemanticCommands() {
          tr("Display the transport and ruler position as clock time."),
          QStringLiteral("transport.time-display"), Risk::Safe,
          [this] { m_transport->setTimeDisplayBars(false); });
+    bind("view.timeBoth", tr("Show Bars and Time"), kView,
+         tr("Display bars and clock time in two ruler rows."),
+         QStringLiteral("transport.time-display"), Risk::Safe,
+         [this] { m_transport->setRulerFormat(ui::RulerFormat::BarsAndTime); });
+    bind("view.positionBars", tr("Show Counter as Bars"), kView,
+         tr("Display the position counter in bars and beats without changing the ruler."),
+         QStringLiteral("transport.time-display"), Risk::Safe,
+         [this] { m_transport->setPositionDisplayBars(true); });
+    bind("view.positionClock", tr("Show Counter as Time"), kView,
+         tr("Display the position counter as clock time without changing the ruler."),
+         QStringLiteral("transport.time-display"), Risk::Safe,
+         [this] { m_transport->setPositionDisplayBars(false); });
     bind("edit.snapOn", tr("Enable Snap"), kEdit,
          tr("Make arrangement edits snap to the current grid."),
          QStringLiteral("arrangement.snap"), Risk::Safe,
@@ -10905,13 +11068,14 @@ void MainWindow::buildSemanticCommands() {
              [this, i] { m_transport->setGridIndex(i); });
     }
 
-    static constexpr std::array<const char*, 6> kSecondaryToolIds = {
+    static constexpr std::array<const char*, 8> kSecondaryToolIds = {
         "tool.secondarySelect", "tool.secondaryKnife",
         "tool.secondaryEraser", "tool.secondaryRegion",
-        "tool.secondaryMute", "tool.secondaryDraw"};
+        "tool.secondaryMute", "tool.secondaryDraw",
+        "tool.secondaryStretch", "tool.secondaryGlue"};
     const QStringList secondaryTools = {
         tr("Pointer"), tr("Knife"), tr("Eraser"), tr("Region"),
-        tr("Mute"), tr("Draw")};
+        tr("Mute"), tr("Draw"), tr("Stretch"), tr("Glue")};
     for (int i = 0; i < int(kSecondaryToolIds.size()); ++i) {
         bind(kSecondaryToolIds[std::size_t(i)],
              tr("Use %1 as Secondary Tool").arg(secondaryTools[i]), kTools,
@@ -11028,6 +11192,43 @@ void MainWindow::buildSemanticCommands() {
     connect(&m_selection, &ui::SelectionModel::changed, openEditor,
             updateEditorAvailability);
     updateEditorAvailability();
+    const auto reflectChoice = [this](QMenu* menu, const char* id, auto selected) {
+        auto* command = m_shortcuts->command(QString::fromLatin1(id));
+        if (!command) return;
+        QAction* action = command->action;
+        action->setCheckable(true);
+        const auto refresh = [action, selected] { action->setChecked(selected()); };
+        connect(menu, &QMenu::aboutToShow, action, refresh);
+        refresh();
+    };
+    reflectChoice(timeDisplay, "view.timeBars", [this] { return m_transport->rulerFormat() == ui::RulerFormat::Bars; });
+    reflectChoice(timeDisplay, "view.timeClock", [this] { return m_transport->rulerFormat() == ui::RulerFormat::Time; });
+    reflectChoice(timeDisplay, "view.timeBoth", [this] { return m_transport->rulerFormat() == ui::RulerFormat::BarsAndTime; });
+    reflectChoice(timeDisplay, "view.positionBars", [this] { return m_transport->positionShowsBars(); });
+    reflectChoice(timeDisplay, "view.positionClock", [this] { return !m_transport->positionShowsBars(); });
+    reflectChoice(snap, "edit.snapOn", [this] { return m_transport->snapEnabled(); });
+    reflectChoice(snap, "edit.snapOff", [this] { return !m_transport->snapEnabled(); });
+    for (int i = 0; i < int(kGridCommandIds.size()); ++i)
+        reflectChoice(grid, kGridCommandIds[std::size_t(i)],
+            [this, i] { return m_transport->gridIndex() == i; });
+    for (int i = 0; i < int(kSecondaryToolIds.size()); ++i)
+        reflectChoice(secondaryTool, kSecondaryToolIds[std::size_t(i)],
+            [this, i] { return m_transport->secondaryToolIndex() == i; });
+    reflectChoice(playback, "transport.playbackResume", [this] {
+        return m_controller.playbackMode() == daw::EngineController::PlaybackMode::Resume;
+    });
+    reflectChoice(playback, "transport.playbackRestart", [this] {
+        return m_controller.playbackMode() == daw::EngineController::PlaybackMode::Restart;
+    });
+    reflectChoice(playback, "transport.playFromClipOn", [this] { return m_playFromClip; });
+    reflectChoice(playback, "transport.playFromClipOff", [this] { return !m_playFromClip; });
+    reflectChoice(creation, "tool.automationCreationOn", [this] { return m_automationCreationLatched; });
+    reflectChoice(creation, "tool.automationCreationOff", [this] { return !m_automationCreationLatched; });
+    reflectChoice(browser, "browser.previewLoopOn", [] { return ui::browserprefs::previewLoop(); });
+    reflectChoice(browser, "browser.previewLoopOff", [] { return !ui::browserprefs::previewLoop(); });
+    reflectChoice(browser, "browser.autoPreviewOn", [] { return ui::browserprefs::autoPreview(); });
+    reflectChoice(browser, "browser.autoPreviewOff", [] { return !ui::browserprefs::autoPreview(); });
+
 }
 
 void MainWindow::buildMenus() {
@@ -11111,6 +11312,8 @@ void MainWindow::buildMenus() {
         edit, "timeline.offline_render", tr("Offline Render…"), kEdit);
     connect(m_offlineRenderAction, &QAction::triggered, this,
             &MainWindow::onOfflineRender);
+    m_stripSilenceAction = addCommand(edit, "timeline.strip_silence", tr("Strip Silence…"), kEdit);
+    connect(m_stripSilenceAction, &QAction::triggered, this, &MainWindow::onStripSilence);
     m_sharedPluginsAction = addCommand(edit, "edit.shared_plugins", tr("Shared Plugins…"), kEdit,
                                       QKeySequence(QStringLiteral("Ctrl+Shift+P")));
     connect(m_sharedPluginsAction, &QAction::triggered, this, &MainWindow::onSharedPlugins);
@@ -11128,6 +11331,27 @@ void MainWindow::buildMenus() {
                 if (m_timeline->duplicateActiveTake()) markDirty();
             });
     edit->addSeparator();
+    auto* createMidi = addCommand(edit, "edit.addMidiClip", tr("Add MIDI Clip at Playhead"), kEdit);
+    auto* createPattern = addCommand(edit, "edit.addPatternClip", tr("Add Pattern Clip at Playhead"), kEdit);
+    const auto creationTrack = [this] {
+        return m_selection.clips().isEmpty() ? m_selection.singleTrack()
+                                            : m_selection.singleClip().trackId;
+    };
+    connect(createMidi, &QAction::triggered, this, [this, creationTrack] {
+        m_timeline->createClipAt(creationTrack(), daw::ClipKind::Midi, m_controller.positionSeconds());
+    });
+    connect(createPattern, &QAction::triggered, this, [this, creationTrack] {
+        m_timeline->createClipAt(creationTrack(), daw::ClipKind::Pattern, m_controller.positionSeconds());
+    });
+    const auto refreshClipCreation = [this, createMidi, createPattern, creationTrack] {
+        const auto* selected = m_controller.project().findTrack(creationTrack().toStdString());
+        createMidi->setEnabled(selected && daw::trackAccepts(selected->kind, daw::ClipKind::Midi));
+        createPattern->setEnabled(selected && selected->kind == daw::TrackKind::Pattern);
+    };
+    connect(edit, &QMenu::aboutToShow, this, refreshClipCreation);
+    connect(&m_selection, &ui::SelectionModel::changed, this, refreshClipCreation);
+    refreshClipCreation();
+    edit->addSeparator();
     connect(addCommand(edit, "edit.selectionActions",
                        tr("Actions for Selection…"), kEdit),
             &QAction::triggered, this, [this] {
@@ -11137,6 +11361,41 @@ void MainWindow::buildMenus() {
                     statusBar()->showMessage(tr("Select a clip or track first"), 2000);
                 });
             });
+
+    auto* pianoActions = edit->addMenu(tr("Piano Roll Actions"));
+    pianoActions->setObjectName(QStringLiteral("CommandMenu.PianoRoll"));
+    connect(pianoActions, &QMenu::aboutToShow, this, [this, pianoActions] {
+        ui::clearMenu(*pianoActions);
+        if (m_pianoRoll && m_pianoRoll->isVisible())
+            m_pianoRoll->populateActionsMenu(*pianoActions);
+        else
+            pianoActions->addAction(tr("Open the Piano Roll first"))->setEnabled(false);
+    });
+    auto* patternActions = edit->addMenu(tr("Pattern Editor Actions"));
+    patternActions->setObjectName(QStringLiteral("CommandMenu.Pattern"));
+    connect(patternActions, &QMenu::aboutToShow, this, [this, patternActions] {
+        ui::clearMenu(*patternActions);
+        if (!m_patternWindow || !m_patternWindow->isVisible() ||
+            !m_patternWindow->populateActionsMenu(*patternActions))
+            patternActions->addAction(tr("Select a source in the Pattern Editor first"))->setEnabled(false);
+    });
+
+    auto* automationActions = edit->addMenu(tr("Automation Editor Actions"));
+    automationActions->setObjectName(QStringLiteral("CommandMenu.AutomationEditors"));
+    connect(automationActions, &QMenu::aboutToShow, this, [this, automationActions] {
+        ui::clearMenu(*automationActions);
+        auto editors = m_automationEditors.values();
+        std::sort(editors.begin(), editors.end(), [](auto* a, auto* b) {
+            return a->windowTitle() < b->windowTitle();
+        });
+        for (auto* editor : editors) {
+            if (!editor->isVisible()) continue;
+            auto* actions = automationActions->addMenu(editor->windowTitle());
+            editor->populateActionsMenu(*actions);
+        }
+        if (automationActions->isEmpty())
+            automationActions->addAction(tr("Open an Automation Editor first"))->setEnabled(false);
+    });
 
     auto* track = menuBar()->addMenu(tr("&Track"));
     track->setObjectName(QStringLiteral("CommandMenu.Track"));
@@ -11604,6 +11863,34 @@ void MainWindow::buildMenus() {
             });
     browser->addSeparator();
 
+    // The same builders serve right-click and the menu bar. Rebuild on open
+    // so enabled states, labels and targets follow the current selection.
+    const auto attachContextMenu = [this](const char* id, const QString& title,
+                                          auto populate) {
+        auto* command = m_shortcuts->command(QString::fromLatin1(id));
+        if (!command) return;
+        auto* menu = new QMenu(title, this);
+        menu->setObjectName(QString::fromLatin1(id) + QStringLiteral(".menu"));
+        command->action->setText(title);
+        command->action->setMenu(menu);
+        connect(menu, &QMenu::aboutToShow, this, [menu, populate] {
+            ui::clearMenu(*menu);
+            if (!populate(*menu))
+                menu->addAction(tr("No applicable selection"))->setEnabled(false);
+        });
+    };
+    attachContextMenu("edit.selectionActions", tr("Selection Actions"),
+        [this](QMenu& menu) {
+            if (m_timeline->populateSelectedClipActionsMenu(menu)) return true;
+            return m_trackList->populateSelectedTrackActionsMenu(menu);
+        });
+    attachContextMenu("track.actions", tr("Selected Track Actions"),
+        [this](QMenu& menu) { return m_trackList->populateSelectedTrackActionsMenu(menu); });
+    attachContextMenu("browser.selectionActions", tr("Browser Selection Actions"),
+        [this](QMenu& menu) { return m_browser->populateSelectedItemActionsMenu(menu); });
+    attachContextMenu("browser.tabActions", tr("Current Icon Tab Actions"),
+        [this](QMenu& menu) { return m_browser->populateCurrentTabActionsMenu(menu); });
+
     auto* settings = menuBar()->addMenu(tr("&Settings"));
     connect(addCommand(settings, "app.settings", tr("&Settings…"), kApp,
                        QKeySequence(QKeySequence::Preferences)),
@@ -11632,6 +11919,11 @@ void MainWindow::applyStartupPluginScanResults() {
     m_controller.pluginManager().takeScanFinished();
     ui::preparePluginPickerMenus(&m_controller);
     if (m_browser) m_browser->reloadPlugins();
+    if (!m_controller.pluginManager().lastScanError().empty()) {
+        statusBar()->showMessage(
+            tr("Plugin scan could not finish. Open Plugin Manager for details."),
+            12000);
+    }
 }
 
 void MainWindow::retirePluginEditor(const QString& channelId,
@@ -12468,6 +12760,163 @@ bool MainWindow::checkMidiInput() {
     return passed && m_midiInput->checkQueueOverflowForTest();
 }
 
+bool MainWindow::checkRecordingContextForTest() {
+    if (!m_timeline || !m_contextPanel || !m_typingKeyboard) return false;
+    ui::ClipSel midi;
+    int midiRow = -1;
+    const auto rows = daw::visibleTracks(m_controller.project());
+    for (int row = 0; row < int(rows.size()); ++row) {
+        const auto& track = m_controller.project().tracks[rows[size_t(row)].index];
+        for (const auto& clip : track.clips) {
+            if (clip.kind != daw::ClipKind::Midi) continue;
+            midi = {QString::fromStdString(track.id), QString::fromStdString(clip.id)};
+            midiRow = row;
+        }
+    }
+    if (midiRow < 0) return false;
+    const auto prefsBefore = m_controller.recordingPrefs();
+    const bool typingBefore = m_typingKeyboard->isEnabled();
+    const bool armedBefore = m_recordEngaged;
+    const auto rulerBefore = m_transport->rulerFormat();
+    const bool followBefore = m_timeline->followsPlayhead();
+    const auto restore = qScopeGuard([&] {
+        m_typingKeyboard->allNotesOff();
+        if (m_controller.isRecording()) stopRecordingNow();
+        cancelCountIn();
+        m_controller.setRecordingPrefs(prefsBefore);
+        setTypingKeyboardEnabled(typingBefore);
+        setRecordEngaged(armedBefore);
+        m_transport->setRulerFormat(rulerBefore);
+        m_timeline->setFollowPlayhead(followBefore);
+    });
+    const auto fail = [](const char* detail) {
+        std::fprintf(stderr, "FAIL Recording context: %s\n", detail);
+        return false;
+    };
+    const auto settle = [] {
+        QEventLoop loop;
+        QTimer::singleShot(420, &loop, &QEventLoop::quit);
+        loop.exec();
+    };
+    const auto recordButton = [&]() -> QAbstractButton* {
+        for (auto* button : m_contextPanel->findChildren<QAbstractButton*>(
+                 QStringLiteral("ContextPanelRecordToggle")))
+            if (button->isVisible() && m_contextPanel->rect().contains(
+                    button->mapTo(m_contextPanel, button->rect().center()))) return button;
+        return nullptr;
+    };
+    const auto click = [](QWidget* target, const QPoint& at, Qt::MouseButton button) {
+        const QPoint global = target->mapToGlobal(at);
+        QMouseEvent press(QEvent::MouseButtonPress, at, global, button, button, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, at, global, button, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(target, &press);
+        QApplication::sendEvent(target, &release);
+    };
+    auto prefs = prefsBefore;
+    prefs.countInBeats = 0;
+    prefs.mode = daw::RecordMode::Overwrite;
+    prefs.midiOverdubMerge = false;
+    m_controller.setRecordingPrefs(prefs);
+    m_typingKeyboard->allNotesOff();
+    setTypingKeyboardEnabled(true);
+    setContextPanelVisible(true);
+    m_trackList->setSelectedTrack(midi.trackId);
+    selectTrackFromHeader(midi.trackId);
+    m_timeline->setFollowPlayhead(false);
+    m_controller.seekSeconds(0);
+    m_timeline->setHorizontalZoom(40);
+    m_timeline->centerPlayhead();
+    m_timeline->ensureLaneVisible(midiRow);
+    setRecordEngaged(true);
+
+    const std::vector<std::string> target{midi.trackId.toStdString()};
+    for (int pass = 0; pass < 2; ++pass) {
+        m_transport->setRulerFormat(pass ? ui::RulerFormat::BarsAndTime : ui::RulerFormat::Bars);
+        m_timeline->ensureLaneVisible(midiRow);
+        // Both a selected MIDI clip and a track-only context used to occupy
+        // the strip after a take. Dismiss either without losing its target.
+        if (pass == 0) m_timeline->selectClips({midi});
+        else selectTrackFromHeader(midi.trackId);
+        settle();
+        if (recordButton()) return fail("selection did not receive its own context");
+        m_controller.seekSeconds(14 + pass * 2);
+        const auto undoBefore = m_controller.undoDepth();
+        const QPoint empty(2, m_timeline->laneCentreForTest(midiRow));
+        click(m_timeline, empty, Qt::RightButton);
+        settle();
+        auto* start = recordButton();
+        if (!start || m_timeline->hasClipSelection() || !m_selection.isEmpty() ||
+            !m_recordEngaged || m_controller.isRecording() || recordTargets() != target ||
+            liveInputTarget() != target.front() || m_controller.undoDepth() != undoBefore ||
+            m_controller.positionSeconds() != 14 + pass * 2)
+            return fail("background click did not restore recording and preserve input target/position");
+
+        // R remains a playable note. The mouse alone starts and lands the take.
+        QKeyEvent rPress(QEvent::KeyPress, Qt::Key_R, Qt::NoModifier, QStringLiteral("r"));
+        QKeyEvent rRelease(QEvent::KeyRelease, Qt::Key_R, Qt::NoModifier, QStringLiteral("r"));
+        QApplication::sendEvent(m_timeline, &rPress);
+        const bool noteOnly = m_typingKeyboard->heldCount() == 1 && !m_controller.isRecording();
+        QApplication::sendEvent(m_timeline, &rRelease);
+        if (!noteOnly) return fail("R did not remain a note while armed");
+        const auto clipCount = m_controller.project().findTrack(target.front())->clips.size();
+        click(start, start->rect().center(), Qt::LeftButton);
+        if (!m_controller.isRecording() || m_controller.recordingTracks() != target)
+            return fail("mouse Start did not record onto the same MIDI track");
+        QApplication::sendEvent(m_timeline, &rPress);
+        audio::AudioBuffer input(2, 256), output(2, 256);
+        for (int block = 0; block < 24; ++block)
+            if (!m_controller.processDeviceBlockForTest(input, output, 256))
+                return fail("headless capture did not advance");
+        QApplication::sendEvent(m_timeline, &rRelease);
+        click(start, start->rect().center(), Qt::LeftButton);
+        const auto* recordedTrack = m_controller.project().findTrack(target.front());
+        if (m_controller.isRecording() || !m_recordEngaged || !m_typingKeyboard->isEnabled() ||
+            !recordedTrack || recordedTrack->clips.size() != clipCount + 1 ||
+            recordedTrack->clips.back().notes.empty()) {
+            std::fprintf(stderr, "Recording context pass=%d recording=%d armed=%d typing=%d clips=%zu->%zu notes=%zu\n",
+                pass, m_controller.isRecording(), m_recordEngaged, m_typingKeyboard->isEnabled(),
+                clipCount, recordedTrack ? recordedTrack->clips.size() : 0,
+                recordedTrack && !recordedTrack->clips.empty() ? recordedTrack->clips.back().notes.size() : 0);
+            return fail("mouse Stop did not keep the MIDI take");
+        }
+    }
+
+    // A native context-menu event may arrive without a mouse press. It has
+    // the same dismissal behaviour, while a click on a clip still opens its menu.
+    selectTrackFromHeader(midi.trackId);
+    const QPoint empty(2, m_timeline->laneCentreForTest(midiRow));
+    QContextMenuEvent nativeMenu(QContextMenuEvent::Mouse, empty, m_timeline->mapToGlobal(empty));
+    QApplication::sendEvent(m_timeline, &nativeMenu);
+    settle();
+    if (!m_selection.isEmpty() || !recordButton()) return fail("native background context click");
+    m_timeline->selectClips({midi});
+    // Deliberately leave the preceding right-click without a context-menu
+    // event: that gesture must not swallow the next clip's menu.
+    click(m_timeline, empty, Qt::RightButton);
+    m_timeline->selectClips({midi});
+    const auto* source = m_controller.project().findTrack(target.front());
+    const auto clip = std::find_if(source->clips.begin(), source->clips.end(),
+        [&](const auto& c) { return c.id == midi.clipId.toStdString(); });
+    if (clip == source->clips.end()) return fail("original clip was modified");
+    const QPoint inside(int((clip->startSeconds + .2 - m_timeline->horizontalScrollForTest()) *
+        m_timeline->pixelsPerSecondForTest()), m_timeline->laneCentreForTest(midiRow));
+    click(m_timeline, inside, Qt::RightButton);
+    bool menuOpened = false;
+    QTimer::singleShot(0, this, [&] {
+        if (auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) {
+            menuOpened = true;
+            menu->hide();
+        }
+    });
+    QContextMenuEvent clipMenu(QContextMenuEvent::Mouse, inside, m_timeline->mapToGlobal(inside));
+    QApplication::sendEvent(m_timeline, &clipMenu);
+    QApplication::processEvents();
+    if (!menuOpened || m_selection.singleClip() != midi)
+        return fail("clip context menu was lost after dismissing selection");
+    std::fprintf(stderr, "PASS Recording context: clip/track dismissal, retained MIDI target, two mouse-started takes, R note, native/clip menus\n");
+    return true;
+}
+
 bool MainWindow::checkTypingKeyboard() {
     if (!m_typingKeyboard || !m_shortcuts) return false;
 
@@ -12630,6 +13079,7 @@ bool MainWindow::checkLayoutIndependentShortcuts() {
         QStringLiteral("transport.forwardBar"),
         QStringLiteral("view.timeBars"),
         QStringLiteral("view.timeClock"),
+        QStringLiteral("view.timeBoth"),
         QStringLiteral("view.followPlayhead"),
         QStringLiteral("edit.snapOn"),
         QStringLiteral("edit.snapOff"),
@@ -12695,13 +13145,18 @@ bool MainWindow::checkLayoutIndependentShortcuts() {
         m_transport->snapEnabled();
     m_transport->setSnapEnabled(snapBefore);
 
-    const bool barsBefore = m_transport->showsBars();
+    const auto rulerBefore = m_transport->rulerFormat();
+    const bool positionBarsBefore = m_transport->positionShowsBars();
     const bool timeCommands =
         m_shortcuts->invoke(QStringLiteral("view.timeClock")) &&
         !m_transport->showsBars() &&
         m_shortcuts->invoke(QStringLiteral("view.timeBars")) &&
-        m_transport->showsBars();
-    m_transport->setTimeDisplayBars(barsBefore);
+        m_transport->showsBars() &&
+        m_shortcuts->invoke(QStringLiteral("view.timeBoth")) &&
+        m_transport->rulerFormat() == ui::RulerFormat::BarsAndTime &&
+        m_timeline->rulerFormat() == ui::RulerFormat::BarsAndTime;
+    m_transport->setRulerFormat(rulerBefore);
+    m_transport->setPositionDisplayBars(positionBarsBefore);
 
     const int gridBefore = m_transport->gridIndex();
     const bool gridCommand =
@@ -13866,11 +14321,6 @@ void MainWindow::openPianoRoll(const QString& trackId, const QString& clipId) {
             if (m_patternWindow && m_patternWindow->isVisible())
                 m_patternWindow->refresh();
         });
-        connect(m_pianoRoll, &PianoRollWindow::loopRangeChanged, this, [this] {
-            m_transport->setCycleEnabled(m_controller.isLoopEnabled());
-            m_timeline->update();
-            markDirty();
-        });
         connect(m_pianoRoll, &PianoRollWindow::playheadMoved, this, [this] {
 #ifdef DAW_ENABLE_COLLABORATION
             if (m_collaboration && !m_applyingRemoteTransport) {
@@ -14348,6 +14798,12 @@ bool MainWindow::routeEditChord(EditChord chord) {
         return true;
     }
 
+    for (QWidget* owner = focus; owner; owner = owner->parentWidget()) {
+        if (auto* library = qobject_cast<ClipLibraryView*>(owner)) {
+            if (chord == EditChord::Delete) library->removeSelected();
+            return true;
+        }
+    }
     if (m_warpEditor && m_warpEditor->ownsEditingFocus()) {
         if (chord == EditChord::Delete) m_warpEditor->deleteMarkers();
         return true;
@@ -15275,6 +15731,9 @@ void MainWindow::stopRecordingNow() {
     // Copied, not referenced: stopRecording() clears the controller's list.
     const std::vector<std::string> tracks = m_controller.recordingTracks();
     m_controller.stopRecording();
+    const auto silenceWarning = QString::fromStdString(m_controller.autoSilenceWarning());
+    if (!silenceWarning.isEmpty()) statusBar()->showMessage(
+        tr("Auto Silence: audio retained without trimming. %1").arg(silenceWarning), 10000);
     const auto warning = QString::fromStdString(m_controller.recordingWarning());
     if (!warning.isEmpty()) QMessageBox::warning(this, tr("Recording interrupted"),
         tr("This take contains missing audio or an incomplete file. Available audio has been retained at the paths below. Check it before continuing.\n\n%1").arg(warning));
@@ -15316,11 +15775,12 @@ std::string MainWindow::liveInputTarget() const {
         if (const auto* track = m_controller.project().findTrack(id);
             track && daw::trackAccepts(track->kind, daw::ClipKind::Midi)) return id;
     // The focused piano roll is playing its own track — that is the part being
-    // written. Otherwise input follows the selection and finally the first
-    // track that can take MIDI.
+    // written. Otherwise input follows the selection, the primary header
+    // track, and finally the first track that can take MIDI.
     QString preferred = m_selection.singleTrack();
     if (preferred.isEmpty() && !m_selection.clips().isEmpty())
         preferred = m_selection.clips().first().trackId;
+    if (preferred.isEmpty()) preferred = m_selectedTrackId;
     if (m_pianoRoll && m_pianoRoll->isVisible() && m_pianoRollFrame &&
         m_pianoRollFrame->isEditorActive() &&
         !m_pianoRoll->trackId().isEmpty()) {
@@ -16623,8 +17083,10 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
         m_transport->findChild<QAbstractButton*>(QStringLiteral("HeaderDockReveal"));
     auto* dockBrowser =
         m_transport->findChild<QAbstractButton*>(QStringLiteral("HeaderBrowserButton"));
-    const auto gridChips =
+    auto gridChips =
         m_transport->findChildren<QToolButton*>(QStringLiteral("GridChip"));
+    if (auto* ruler = m_transport->findChild<QToolButton*>(QStringLiteral("RulerFormatButton")))
+        gridChips.push_back(ruler);
     const bool gridVisible = !gridChips.isEmpty() &&
         std::all_of(gridChips.begin(), gridChips.end(),
                     [](QToolButton* chip) { return chip->isVisible(); });
@@ -16639,13 +17101,13 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
     const bool gridCompact = gridChips.size() == 2 &&
         std::all_of(gridChips.begin(), gridChips.end(),
                     [statsSection](QToolButton* chip) {
-                        return chip->width() <= 70 && chip->menu() &&
+                        return chip->width() >= 24 && chip->menu() &&
                                !chip->menu()->actions().isEmpty() &&
                                statsSection &&
                                statsSection->isAncestorOf(chip) &&
-                               chip->toolButtonStyle() ==
-                                    Qt::ToolButtonTextOnly &&
-                               !chip->text().isEmpty() &&
+                               (chip->objectName() == QLatin1String("RulerFormatButton")
+                                    ? chip->toolButtonStyle() == Qt::ToolButtonIconOnly && !chip->icon().isNull()
+                                    : chip->toolButtonStyle() == Qt::ToolButtonTextOnly && !chip->text().isEmpty()) &&
                                !chip->accessibleName().isEmpty();
                     });
     const QList<QWidget*> requiredControls{
@@ -16668,18 +17130,15 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
         transportPill->isAncestorOf(lcdScreen) &&
         transportPill->isAncestorOf(headerTools) &&
         std::abs(transportButtons->height() - headerTools->height()) <= 4 &&
-        lcdScreen->height() > transportButtons->height() &&
-        lcdScreen->height() > headerTools->height() &&
+        lcdScreen->height() == transportButtons->height() &&
+        lcdScreen->height() == headerTools->height() &&
         std::abs(transportButtons->geometry().center().y() -
                  lcdScreen->geometry().center().y()) <= 1 &&
         std::abs(headerTools->geometry().center().y() -
                  lcdScreen->geometry().center().y()) <= 1;
-    // The chassis is painted metal, not another pane of glass; the three
-    // plates it frames are the glass ones.
-    const bool threeBlockLayout = transportPill && lcdScreen &&
-        !qobject_cast<ui::GlassPanel*>(transportPill) &&
-        qobject_cast<ui::GlassPanel*>(lcdScreen) &&
-        transportPill->findChildren<ui::GlassPanel*>().size() == 3;
+    const bool consoleLayout = transportPill && lcdScreen &&
+        m_transport->height() == ui::kTransportHeight &&
+        transportPill->findChildren<ui::GlassPanel*>().isEmpty();
     const bool lcdContent = lcdScreen && positionSection && timeSignature &&
         statsSection &&
         lcdScreen->isAncestorOf(positionSection) &&
@@ -16704,8 +17163,8 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
     };
     const bool insetDocksPlaced = leftDock && rightDock && dockReveal &&
         leftDock->isVisible() && rightDock->isVisible() &&
-        transportPill && leftDock->height() < transportPill->height() &&
-        rightDock->height() < transportPill->height() &&
+        transportPill && leftDock->height() == transportPill->height() &&
+        rightDock->height() == transportPill->height() &&
         std::abs(leftDock->geometry().center().y() -
                  transportPill->geometry().center().y()) <= 1 &&
         std::abs(rightDock->geometry().center().y() -
@@ -16734,8 +17193,14 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
         }
     };
     waitForDrawer();
-    const bool drawerExpanded = leftDock && dockBrowser &&
-        leftDock->width() > collapsedDockWidth && dockBrowser->isVisible();
+    const bool drawerExpanded = leftDock && dockBrowser && dockBrowser->isVisible() &&
+        (leftDock->width() > collapsedDockWidth ||
+         (dockBrowser->window()->windowFlags() & Qt::Popup));
+    const bool drawerClearOfTransport = dockBrowser && transportPill &&
+        (dockBrowser->window() == window()
+             ? leftDock->geometry().right() < transportPill->geometry().left()
+             : dockBrowser->window()->geometry().top() >=
+                   m_transport->mapToGlobal(QPoint(0, m_transport->height())).y());
     const bool expandedClusterCentered = transportPill &&
         std::abs(transportPill->mapTo(m_transport, QPoint()).x() * 2 +
                      transportPill->width() - m_transport->width()) <= 2;
@@ -16756,24 +17221,24 @@ bool MainWindow::checkWebBrowserForTest(const QString& audioFile) {
         !insideShell(m_webContainer) || !insideShell(m_aiPanel) ||
         !requiredVisible || !gridVisible || !gridContained ||
         !gridCompact ||
-        !sectionOrder || !zonesAligned || !threeBlockLayout ||
+        !sectionOrder || !zonesAligned || !consoleLayout ||
         !lcdContent ||
         !signatureMenuComplete ||
         !clusterCentered || hasUndoRedo ||
         statusBar()->isHidden() ==
             QSettings().value(ui::kCpuStatusBarVisibleSetting, true).toBool() ||
         !insetDocksPlaced || !drawerInitiallyCompact || !drawerExpanded ||
-        !expandedClusterCentered || !drawerCollapsedAgain) {
+        !expandedClusterCentered || !drawerCollapsedAgain || !drawerClearOfTransport) {
         std::fprintf(stderr,
                      "web self-test second shrink: window=%d web=%d ai=%d "
                      "arrangement=%d required=%d grid=%d "
                      "contained=%d compact=%d "
-                     "order=%d aligned=%d threeBlocks=%d lcd=%d signature=%d centered=%d undoRedo=%d "
+                     "order=%d aligned=%d console=%d lcd=%d signature=%d centered=%d undoRedo=%d "
                      "docks=%d drawer=%d/%d/%d expandedCentered=%d min=%d\n",
                      width(), m_webContainer->width(), m_aiPanel->width(),
                      m_arrangementHost->width(), requiredVisible, gridVisible,
                      gridContained, gridCompact, sectionOrder, zonesAligned,
-                     threeBlockLayout, lcdContent,
+                     consoleLayout, lcdContent,
                      signatureMenuComplete, clusterCentered, hasUndoRedo,
                      insetDocksPlaced, drawerInitiallyCompact, drawerExpanded,
                      drawerCollapsedAgain, expandedClusterCentered,
@@ -17204,6 +17669,11 @@ void MainWindow::updateLocalProcessingActions() {
                                 : tr("Available for audio clips only"));
     }
     if (m_timeline) m_timeline->setLocalProcessingEnabled(localOnlyAvailable);
+    if (m_stripSilenceAction) {
+        m_stripSilenceAction->setEnabled(localOnlyAvailable && audioOnly && !m_controller.isRecording());
+        m_stripSilenceAction->setToolTip(localOnlyAvailable ? tr("Remove silence from the selected audio clips")
+                                                          : tr("Local-only in v1"));
+    }
     if (m_sharedPluginsAction) {
         const auto targets = PluginBatchDialog::selectedTargets(m_selection);
         m_sharedPluginsAction->setEnabled(localOnlyAvailable && !m_controller.isRecording() &&
@@ -17411,6 +17881,33 @@ void MainWindow::onOfflineRender() {
     m_selection.refresh();
     markDirty();
     statusBar()->showMessage(tr("Offline Render complete"), 4000);
+}
+
+void MainWindow::onStripSilence() {
+    if (m_controller.hasCloudProjectBinding() || m_controller.isRecording()) return;
+    std::vector<daw::EngineController::ClipAddress> clips;
+    for (const auto& selected : m_selection.clips())
+        clips.push_back({selected.trackId.toStdString(), selected.clipId.toStdString()});
+    if (clips.empty()) return;
+    StripSilenceDialog dialog(m_controller, std::move(clips), this);
+    dialog.exec();
+    if (m_contextPanel) m_contextPanel->refresh();
+    if (!dialog.applied()) return;
+    syncViews();
+    QVector<ui::ClipSel> selection;
+    for (const auto& clip : dialog.createdClips())
+        selection.push_back({QString::fromStdString(clip.trackId), QString::fromStdString(clip.clipId)});
+    m_timeline->selectClips(selection);
+    m_selection.refresh();
+    markDirty();
+    statusBar()->showMessage(tr("Strip Silence complete"), 3000);
+}
+
+void MainWindow::onSilenceSettings() {
+    if (m_controller.isRecording() || m_controller.isCountingIn()) return;
+    StripSilenceDialog dialog(m_controller, {}, this);
+    dialog.exec();
+    if (m_contextPanel) m_contextPanel->refresh();
 }
 
 // ── Project I/O ──

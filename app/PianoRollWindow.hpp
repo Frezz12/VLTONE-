@@ -304,9 +304,6 @@ signals:
     /// The local ruler sought the project transport. The enclosing window
     /// forwards this so the arrangement can repaint even while stopped.
     void playheadMoved();
-    /// The cycle region was dragged out here. There is one region for the whole
-    /// project, so the arrangement and the transport's lamp have to follow.
-    void loopRangeChanged();
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -461,17 +458,18 @@ private:
     void invalidateDocumentPaintCaches();
     void seekToLocalBeat(double beats, bool snapping = false);
 
-    // ── The cycle region ──
-    //
-    // The same region the arrangement shows: this ruler counts beats from the
-    // clip's own start, the controller keeps seconds from the project's, and
-    // these two convert between them. A cycle dragged out here is the cycle the
-    // whole project plays — there is only one.
-    double localBeatToSeconds(double beats) const;
-    double secondsToLocalBeat(double seconds) const;
-    enum class LoopGrab { None, Create, Move, ResizeStart, ResizeEnd };
-    LoopGrab loopGrabAt(double x) const;
-    void drawCycleStrip(QPainter& p);
+    // The strip above the ruler is a clip-local editing range, independent of
+    // the project transport and its playback cycle.
+    struct TimeRange {
+        double from = 0.0;
+        double to = 0.0;
+        bool valid() const { return to > from; }
+    };
+    enum class RangeGrab { None, Create, Move, ResizeStart, ResizeEnd };
+    RangeGrab rangeGrabAt(double x) const;
+    void updateTimeRangeDrag(double x, bool snapping);
+    void drawTimeRangeStrip(QPainter& p);
+    daw::miditools::Notes notesInTimeRange() const;
     void paintNoteShape(QPainter& p, const QRectF& r, const QColor& fill,
                         bool selected, bool muted) const;
 
@@ -571,10 +569,13 @@ private:
     bool m_scrubbingPlayhead = false;
     Qt::MouseButton m_pointerButton = Qt::NoButton;
     QPointF m_lastPointerPosition;
-    LoopGrab m_loopGrab = LoopGrab::None;
-    double m_loopAnchorBeats = 0.0;
-    double m_loopGrabOffset = 0.0;
-    double m_loopGrabLength = 0.0;
+    // Session-only state: changing a range never edits the project or transport.
+    TimeRange m_timeRange;
+    QHash<QString, TimeRange> m_clipTimeRanges;
+    RangeGrab m_rangeGrab = RangeGrab::None;
+    double m_rangeAnchorBeats = 0.0;
+    double m_rangeGrabOffset = 0.0;
+    double m_rangeGrabLength = 0.0;
     QPointF m_lastErasePoint;
     /// Everything written between a pointer press and release is collected in
     /// one history entry, even when several selected notes moved together.
@@ -705,6 +706,7 @@ private:
 class PianoRollWindow : public QWidget {
     Q_OBJECT
 public:
+    void populateActionsMenu(QMenu& menu);
     explicit PianoRollWindow(daw::EngineController* controller,
                              QWidget* parent = nullptr,
                              QAction* undoAction = nullptr,
@@ -760,17 +762,13 @@ public:
     /// The local header must contain only editor controls and navigation; MIDI
     /// context now belongs to the application's shared strip above it.
     bool checkCompactLayoutForTest();
+    bool checkMidiFileActionsForTest();
 
-    /// The cycle strip in this ruler: a drag creates and arms a region, while a
-    /// double-click on it removes it. The same region and gesture as the
-    /// arrangement's.
-    bool checkCycleGestureForTest();
+    /// Local range gestures and note commands must leave playback cycle intact.
+    bool checkLocalRangeForTest();
 
 signals:
     void edited();
-    /// The cycle region was dragged out in the roll. Forwarded so the
-    /// arrangement repaints it and the transport's Cycle lamp follows.
-    void loopRangeChanged();
     /// The transport moved from the local ruler. This is not a document edit;
     /// it only asks the arrangement and transport display to repaint now.
     void playheadMoved();
@@ -800,6 +798,10 @@ private:
     void buildToolsMenu(QMenu* menu);
     void buildSnapMenu(QMenu* menu);
     void buildToolbar();
+    void importMidiFile();
+    void exportMidiFile();
+    bool importMidiFromPath(const QString& path, QString& error);
+    bool exportMidiToPath(const QString& path, QString& error);
     void updateTitle();
     void updateScrollBars();
     void updateActionState();
@@ -847,6 +849,8 @@ private:
     QString m_clipId;
 
     QWidget* m_toolbar = nullptr;
+    QAction* m_importMidiAction = nullptr;
+    QAction* m_exportMidiAction = nullptr;
     QMenu* m_editMenu = nullptr;
     QMenu* m_viewMenu = nullptr;
     QMenu* m_toolsMenu = nullptr;

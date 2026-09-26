@@ -20,6 +20,7 @@ inline constexpr int kLaneHeight = 72;   // default lane height
 inline constexpr int kMinLaneHeight = 44;
 inline constexpr int kMaxLaneHeight = 320;
 inline constexpr int kRulerHeight = 34;
+inline constexpr int kRulerRowHeight = 20;
 /// The cycle strip: the band at the top of a ruler where the loop region is
 /// dragged out, above the bar numbers. Shared by the arrangement and the piano
 /// roll, which have to feel like one control in two places.
@@ -44,7 +45,9 @@ inline constexpr double kMinTimelineZoom = 4.0;
 // Two screen pixels per sample at 48 kHz; the decoded-source view can expose
 // individual samples instead of magnifying the 1 ms peak envelope.
 inline constexpr double kMaxTimelineZoom = 96000.0;
-inline constexpr int kTransportHeight = 80;
+inline constexpr int kTransportHeight = 60;
+inline constexpr int kContextBottomGap = 5;
+inline constexpr int kToolPanelHeight = 28 + kContextBottomGap;
 inline constexpr int kBottomBarHeight = 28;
 
 /// A platform monospace face for the main transport counter. Fixed-width

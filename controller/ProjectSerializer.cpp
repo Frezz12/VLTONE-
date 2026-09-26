@@ -909,6 +909,17 @@ json documentToJson(const ProjectModel& project, MediaPaths media) {
     json tracks = reservedArray(project.tracks.size());
     for (const auto& t : project.tracks) tracks.push_back(trackToJson(t, media));
     root["tracks"] = std::move(tracks);
+    if (!project.clipLibrary.empty()) {
+        json library = reservedArray(project.clipLibrary.size());
+        for (const auto& entry : project.clipLibrary) {
+            json content = reservedArray(entry.tracks.size());
+            for (const auto& track : entry.tracks) content.push_back(trackToJson(track, media));
+            library.push_back({{"id", entry.id}, {"name", entry.name},
+                {"sourceTrackId", entry.sourceTrackId}, {"sourceClipId", entry.sourceClipId},
+                {"tempo", entry.tempo}, {"tracks", std::move(content)}});
+        }
+        root["clipLibrary"] = std::move(library);
+    }
     return root;
 }
 
@@ -988,6 +999,21 @@ audio::Result documentFromJson(ProjectModel& out, const json& root,
             out.tracks.reserve(tracks.size());
             for (const auto& track : tracks)
                 out.tracks.push_back(trackFromJson(track, mediaDir));
+        }
+        if (root.contains("clipLibrary")) {
+            for (const auto& saved : root.at("clipLibrary")) {
+                ClipLibraryEntry entry;
+                entry.id = saved.at("id").get<std::string>();
+                entry.name = saved.value("name", std::string());
+                entry.sourceTrackId = saved.value("sourceTrackId", std::string());
+                entry.sourceClipId = saved.value("sourceClipId", std::string());
+                entry.tempo = saved.value("tempo", out.tempo);
+                if (!std::isfinite(entry.tempo) || entry.tempo <= 0) entry.tempo = out.tempo;
+                for (const auto& track : saved.at("tracks"))
+                    entry.tracks.push_back(trackFromJson(track, mediaDir));
+                if (!entry.id.empty() && !entry.tracks.empty() && !entry.tracks.front().clips.empty())
+                    out.clipLibrary.push_back(std::move(entry));
+            }
         }
     } catch (const std::exception& error) {
         out = ProjectModel{};
@@ -1264,7 +1290,7 @@ audio::Result ProjectSerializer::save(const ProjectModel& project,
         copied.emplace(key, destination);
         path = platform::pathToUtf8(destination);
     };
-    for (auto& t : persisted.tracks) {
+    const auto copyTrackMedia = [&](TrackModel& t) {
         for (auto& c : t.clips) {
             copyMedia(c.filePath);
             copyMedia(c.offlineProcess.renderedFilePath);
@@ -1274,8 +1300,11 @@ audio::Result ProjectSerializer::save(const ProjectModel& project,
                 for (auto& take : version.source.takes) copyMedia(take.filePath);
             }
         }
-    }
-    for (auto& track : persisted.tracks) copyMedia(track.freeze.filePath);
+        copyMedia(t.freeze.filePath);
+    };
+    for (auto& track : persisted.tracks) copyTrackMedia(track);
+    for (auto& entry : persisted.clipLibrary)
+        for (auto& track : entry.tracks) copyTrackMedia(track);
     copyMedia(persisted.coverImagePath);
     if (!copyFailure.empty()) {
         return audio::Result::fail(audio::EngineError::FileWriteError,

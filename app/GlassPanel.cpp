@@ -1,6 +1,7 @@
 #include "GlassPanel.hpp"
 
 #include "Theme.hpp"
+#include "UiConstants.hpp"
 
 #include <QApplication>
 #include <QFutureWatcher>
@@ -206,6 +207,7 @@ QImage GlassPanel::blurAndTint(QImage image) {
 }
 
 void GlassPanel::captureBackdrop() {
+    if (m_consoleSurface) return;
     QWidget* host = parentWidget();
     const QRect plate = plateRect();
     if (!host || plate.width() <= 0 || plate.height() <= 0) return;
@@ -284,11 +286,21 @@ void GlassPanel::setTopAttached(bool attached) {
     update();
 }
 
+void GlassPanel::setConsoleSurface(bool enabled) {
+    if (m_consoleSurface == enabled) return;
+    m_consoleSurface = enabled;
+    invalidateBackdrop();
+    if (enabled) m_backdrop = QPixmap();
+    update();
+}
+
 QRect GlassPanel::plateRect() const {
     // Attached at the top means flush with the host's edge: no inset there, and
     // the side inset leaves room for the flare rather than for a shadow.
+    const int bottom = m_consoleSurface && m_topAttached
+        ? ui::kContextBottomGap : m_shadowMargin;
     return rect().adjusted(m_shadowMargin, m_topAttached ? 0 : m_shadowMargin,
-                           -m_shadowMargin, -m_shadowMargin);
+                           -m_shadowMargin, -bottom);
 }
 
 QPainterPath GlassPanel::plateShape() const {
@@ -330,6 +342,27 @@ void GlassPanel::paintEvent(QPaintEvent*) {
     const Theme& theme = th();
     const bool flat = reduceTransparency();
     const qreal radius = std::min<qreal>(m_radius, plate.height() / 2.0);
+
+    if (m_consoleSurface) {
+        // The header's lower pixel row and this surface have identical ink.
+        // Only the exposed contour is outlined: a lit top rim would split the
+        // attachment back into two unrelated objects.
+        p.fillPath(shape, theme.headerBackground);
+        if (m_flash > 0.001) {
+            QColor flash = m_accent;
+            flash.setAlphaF(0.14 * m_flash);
+            p.fillPath(shape, flash);
+        }
+        p.save();
+        if (m_topAttached) p.setClipRect(rect().adjusted(0, 1, 0, 0));
+        const QColor edge = mixColors(theme.headerBackground,
+            theme.dark ? theme.textPrimary : theme.textSecondary, 0.10);
+        p.setPen(QPen(edge, 1.0));
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(shape);
+        p.restore();
+        return;
+    }
 
     // ── Shadow ──
     // A stack of ever-larger, ever-fainter copies of *this plate's own

@@ -97,6 +97,9 @@ int main() {
           "multi-input fused aggregation is bit-identical to sumInto");
     check(meter.peakLeft() == expectedLeft && meter.peakRight() == expectedRight,
           "multi-input peaks measure the completed sum exactly");
+    const float maximum = std::max({1.0f, expectedLeft, expectedRight});
+    check(meter.peakHold() == maximum,
+          "maximum includes both channels and earlier audio blocks");
 
     // Empty and changing layouts fully publish the meter state instead of
     // retaining values from a prior block.
@@ -108,6 +111,10 @@ int main() {
                       [](float sample) { return sample == 0.0f; }) &&
               meter.peakLeft() == 0.0f && meter.peakRight() == 0.0f,
           "empty meter input clears audio and both peaks");
+    check(meter.peakHold() == maximum,
+          "silence between UI frames does not erase the maximum");
+    meter.resetPeakHold();
+    check(meter.peakHold() == 0.0f, "peak reset is immediate while stopped");
 
     PlanarBlock monoInput(1, kFrames, -0.5f);
     PlanarBlock monoOutput(1, kFrames, 0.0f);
@@ -116,6 +123,7 @@ int main() {
     meter.process(context);
     check(meter.peakLeft() == 0.5f && meter.peakRight() == 0.0f,
           "mono processing resets the no-longer-present right peak");
+    check(meter.peakHold() == 0.5f, "the next block starts a new peak history");
 
     // Diagnostic microbenchmark against the removed two-pass implementation.
     // Atomic stores are included on both sides so only aggregation differs.

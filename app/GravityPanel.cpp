@@ -1,4 +1,5 @@
 #include "GravityPanel.hpp"
+#include "Theme.hpp"
 
 #include "Controls.hpp"
 #include "Icons.hpp"
@@ -690,15 +691,15 @@ GravityPanel::GravityPanel(daw::EngineController* controller, QString channelId,
 #GravityReadout { color: #AEB0B5; padding-bottom: 1px; }
 #GravityAlgorithm, #GravityPresetName, #GravityDrawer QComboBox {
     color: #D1D3D7; background: #121315; border: 1px solid #44474C;
-    border-radius: 0; min-height: 28px; padding: 0 9px;
+    border-radius: %RADIUS%px; min-height: 28px; padding: 0 9px;
     font-size: 10px; font-weight: 600;
 }
 #GravityPresetName { letter-spacing: 1px; }
 #GravityAlgorithm:hover, #GravityPresetName:hover, #GravityDrawer QComboBox:hover { border-color: #8A2356; }
-#GravityAlgorithm:focus, #GravityPresetName:focus, #GravityDrawer QComboBox:focus { border: 2px solid #FF26B5; }
+#GravityAlgorithm:focus, #GravityPresetName:focus, #GravityDrawer QComboBox:focus { border: 1px solid #44474C; }
 QSpinBox { color: #D1D3D7; background: #111214; border: 1px solid #55585E;
-           border-radius: 4px; padding: 3px; }
-#GravityDrawer { background: #17181B; border: 1px solid #34363A; border-radius: 10px; }
+           border-radius: %RADIUS%px; padding: 3px; }
+#GravityDrawer { background: #17181B; border: 1px solid #34363A; border-radius: %RADIUS%px; }
 #GravityDrawerTabs::pane { border: none; background: transparent; }
 #GravityDrawerTabs QTabBar::tab {
     color: #9A9DA3; background: transparent; padding: 6px 13px;
@@ -706,7 +707,7 @@ QSpinBox { color: #D1D3D7; background: #111214; border: 1px solid #55585E;
 }
 #GravityDrawerTabs QTabBar::tab:selected { color: #F1DDE9; border-bottom-color: #FF26B5; }
 #GravityDrawerTabs QTabBar::tab:focus { outline: 1px solid #FF26B5; }
-)"));
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius)));
 
     connect(m_algorithm, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int index) {

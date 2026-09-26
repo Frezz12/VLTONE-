@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Graph/Node.hpp"
+#include "DSP/PeakHold.hpp"
 
 #include <atomic>
 #include <string>
@@ -20,6 +21,8 @@ public:
 
     float peakLeft() const noexcept { return m_peakL.load(std::memory_order_relaxed); }
     float peakRight() const noexcept { return m_peakR.load(std::memory_order_relaxed); }
+    float peakHold() const noexcept { return m_peakHold.value(); }
+    void resetPeakHold() noexcept { m_peakHold.reset(); }
 
     void process(const ProcessContext& context) noexcept override;
 
@@ -27,6 +30,7 @@ private:
     std::string m_name;
     std::atomic<float> m_peakL{0.0f};
     std::atomic<float> m_peakR{0.0f};
+    PeakHold m_peakHold;
 };
 
 } // namespace daw::engine

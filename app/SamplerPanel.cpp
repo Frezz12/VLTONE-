@@ -1028,25 +1028,25 @@ bool SamplerPanel::eventFilter(QObject* watched, QEvent* event) {
 void SamplerPanel::applyTheme() {
     const Theme& t = th();
     setStyleSheet(QString(R"(
-#SamplerSection { background: %SURFACE%; border: 1px solid %BORDER%; border-radius: 7px; }
+#SamplerSection { background: %SURFACE%; border: 1px solid %BORDER%; border-radius: %RADIUS%px; }
 #SamplerGroupTitle { color: %TEXT2%; font-size: 10px; font-weight: 600; }
 #SamplerBody { background: %BG%; }
 #SamplerFxStrip { background: %FXSURFACE%; border-right: 1px solid %BORDER%; }
 #SamplerAccentBar { background: %ACCENT%; border-radius: 2px; }
 #SamplerStripName { color: %TEXT%; font-size: 10px; font-weight: 700; }
-#SamplerSlotWell { background: %WELL%; border: 1px solid %BORDER%; border-radius: 5px; }
-#SamplerMixerSlot { background: %SLOT%; border: 1px solid %BORDER%; border-radius: 3px;
+#SamplerSlotWell { background: %WELL%; border: 1px solid %BORDER%; border-radius: %RADIUS%px; }
+#SamplerMixerSlot { background: %SLOT%; border: 1px solid %BORDER%; border-radius: %RADIUS%px;
     color: %TEXT2%; font-size: 9px; font-weight: 500; padding: 0 4px;
     text-align: left; }
 #SamplerMixerSlot[active="true"] { color: %TEXT%; }
 #SamplerMixerSlot[bypassed="true"] { color: %DIM%; border-color: %BYPASS%; }
 #SamplerMixerSlot:hover { background: %HOVER%; }
 #SamplerMixerSlot::menu-indicator { image: none; width: 0; }
-#SamplerFxRouting { background: %WELL%; border: 1px solid %BORDER%; border-radius: 5px; }
+#SamplerFxRouting { background: %WELL%; border: 1px solid %BORDER%; border-radius: %RADIUS%px; }
 #SamplerFxReadout { color: %TEXT%; font-size: 10px; font-weight: 500; }
-#SamplerNamePlate { color: %TEXT%; background: %NAMEPLATE%; border-radius: 4px;
+#SamplerNamePlate { color: %TEXT%; background: %NAMEPLATE%; border-radius: %RADIUS%px;
     font-size: 10px; font-weight: 700; }
-#SamplerStretchBlock { background: %WELL%; border: 1px solid %BORDER%; border-radius: 6px; }
+#SamplerStretchBlock { background: %WELL%; border: 1px solid %BORDER%; border-radius: %RADIUS%px; }
 #SamplerCollapse { color: %TEXT%; background: transparent; border: none;
     text-align: left; padding: 2px 0; font-size: 10px; font-weight: 700; }
 #SamplerCollapse:hover { color: %ACCENT%; }
@@ -1057,14 +1057,14 @@ QTabBar#SamplerToolsTabs::tab:selected { color: %TEXT%; border-bottom-color: %AC
 QTabBar#SamplerToolsTabs::tab:hover { color: %ACCENT%; }
 #SamplerCaption { color: %TEXT2%; font-size: 10px; }
 #SamplerFile { color: %TEXT%; font-size: 12px; font-weight: 600; }
-#SamplerButton { color: %TEXT%; background: %WELL%; border: none; border-radius: 4px;
+#SamplerButton { color: %TEXT%; background: %WELL%; border: none; border-radius: %RADIUS%px;
                  padding: 4px 10px; font-size: 11px; }
 #SamplerButton:hover { background: %HOVER%; }
 #SamplerButton:pressed { background: %ACCENT%; color: %BG%; }
-#SamplerButton:focus, QComboBox:focus { border: 1px solid %ACCENT%; }
-QComboBox { color: %TEXT%; background: %WELL%; border: none; border-radius: 0;
+#SamplerButton:focus { border: 1px solid %ACCENT%; }
+QComboBox { color: %TEXT%; background: %WELL%; border: none; border-radius: %RADIUS%px;
             padding: 3px 8px; font-size: 11px; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
             .replace("%SURFACE%", t.surface.name())
             .replace("%WELL%", t.well().name())
             .replace("%TEXT%", t.textPrimary.name())

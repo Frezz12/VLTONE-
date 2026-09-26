@@ -1,4 +1,6 @@
 #pragma once
+
+class QMenu;
 #include "graphics/ScenePaintSource.hpp"
 #include "graphics/RetainedScene.hpp"
 #include "UiFrameClock.hpp"
@@ -194,6 +196,7 @@ public:
     /// The document moved under the window — an undo, a rename, a plugin
     /// swapped in the slot this curve drives. Re-read everything.
     void refresh();
+    void populateActionsMenu(QMenu& menu);
 
 signals:
     void closing(const QString& trackId, const QString& clipId);
@@ -219,6 +222,7 @@ private:
     QString m_trackId;
     QString m_clipId;
 
+    QMenu* m_shapeActions = nullptr;
     QComboBox* m_channel = nullptr;
     QComboBox* m_what = nullptr;
     QComboBox* m_parameter = nullptr;

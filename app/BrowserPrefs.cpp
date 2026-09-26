@@ -273,6 +273,7 @@ void setTabIcon(const QString& collectionId, const QString& icon) {
 QString activeCollection() {
     const QString stored = QSettings().value(key("activeCollection")).toString();
     if (stored.isEmpty()) return {};
+    if (stored == QStringLiteral("project-clips")) return stored;
     const auto current = tabs();
     return std::any_of(current.cbegin(), current.cend(), [&stored](const Tab& tab) {
         return tab.collectionId == stored;

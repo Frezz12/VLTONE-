@@ -12,6 +12,7 @@ class EngineController;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QPushButton;
 
 /// Preferences ▸ Recording: what a new take does to what is already there, how
 /// loop passes are kept, and how input monitoring is handled around a recording.
@@ -66,6 +67,8 @@ private:
     QComboBox* m_countIn = nullptr;
     QCheckBox* m_trimTakes = nullptr;
     QCheckBox* m_autoExpand = nullptr;
+    QCheckBox* m_autoSilence = nullptr;
+    QPushButton* m_silenceSettings = nullptr;
     QCheckBox* m_recordKey = nullptr;
     QCheckBox* m_autoMonitor = nullptr;
     QCheckBox* m_manualMonitor = nullptr;

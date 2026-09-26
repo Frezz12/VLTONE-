@@ -7,8 +7,10 @@
 #include "PluginBatchDialog.hpp"
 #include "SelectionModel.hpp"
 #include "Theme.hpp"
+#include "UiConstants.hpp"
 
 #include "RecordingSettingsPage.hpp"
+#include "StripSilencePreferences.hpp"
 
 #include "EngineController.hpp"
 #include "AudioMusicalAnalysis.hpp"
@@ -37,14 +39,15 @@
 
 namespace {
 
-// The island's proportions. It lives inside the 42-pixel tool strip. The outer
+// The island's proportions. It lives inside the compact tool strip. The outer
 // gutter preserves its flare, clipping and animation envelope even though the
 // attached panel no longer paints a drop shadow.
 constexpr int kRowHeight = 20;    // every control on the island is this tall
 constexpr int kButton = 22;       // square icon buttons
-constexpr int kPadding = 7;       // plate edge → controls, top and bottom
+constexpr int kPadding = 4;       // plate edge → controls, top and bottom
 constexpr int kEndPadding = 14;  // extra breathing room at the rounded ends
-constexpr int kShadow = 9;        // stable outer gutter and top flare
+constexpr int kShadow = 8;        // stable outer gutter and top flare
+static_assert(kRowHeight + 2 * kPadding + ui::kContextBottomGap == ui::kToolPanelHeight);
 
 constexpr double kMinDb = -60.0;
 
@@ -201,11 +204,14 @@ const std::vector<ContextTool>& contextPanelTools() {
         QT_TRANSLATE_NOOP("ContextPanelTools", "Count-in"),
         QT_TRANSLATE_NOOP("ContextPanelTools", "Monitor while recording"),
         QT_TRANSLATE_NOOP("ContextPanelTools", "MIDI trigger (mock)"),
+        QT_TRANSLATE_NOOP("ContextPanelTools", "Strip Silence"),
+        QT_TRANSLATE_NOOP("ContextPanelTools", "Auto Silence and settings"),
     };
     static const std::vector<ContextTool> tools = {
         {"clip.colour", "Audio Clip", "Track colour"},
         {"clip.level", "Audio Clip", "Gain and mute"},
         {"clip.fades", "Audio Clip", "Fade in / out"},
+        {"clip.silence", "Audio Clip", "Strip Silence"},
         {"clip.analysis", "Audio Clip", "Detected BPM and key"},
         {"clip.edit", "Audio Clip", "Duplicate and delete"},
         {"clip.plugins", "Audio Clip", "Clip FX plugin search"},
@@ -230,6 +236,7 @@ const std::vector<ContextTool>& contextPanelTools() {
         {"record.mode", "Recording", "Layer / overwrite"},
         {"record.countIn", "Recording", "Count-in"},
         {"record.monitor", "Recording", "Monitor while recording"},
+        {"record.silence", "Recording", "Auto Silence and settings"},
         {"record.options", "Recording", "MIDI trigger (mock)"},
     };
     return tools;
@@ -247,6 +254,8 @@ ContextPanel::ContextPanel(daw::EngineController* controller,
     // Hangs off the top of the tool strip and flares into it, rather than
     // floating in the middle of it as a separate object.
     setTopAttached(true);
+    setConsoleSurface(true);
+    setCornerRadius(8);
     hide();
     // A selection the *user* made moves the panel on, even from the recording
     // island — engaging Record opens the take settings, it does not lock the
@@ -475,6 +484,16 @@ QWidget* ContextPanel::buildAudioClip() {
     outer->addWidget(actionsHost, 0, Qt::AlignVCenter);
     std::vector<std::function<void()>> loaders;
 
+    if (toolEnabled("clip.silence")) {
+        auto* silence = islandButton(icons::Glyph::StripSilence, tr("Strip Silence…"), host);
+        silence->setObjectName("ContextPanelStripSilence");
+        connect(silence, &QAbstractButton::clicked, this, &ContextPanel::stripSilenceRequested);
+        row->addWidget(silence);
+        loaders.push_back([this, silence] {
+            silence->setEnabled(!m_controller->hasCloudProjectBinding() && !m_controller->isRecording());
+        });
+    }
+
     if (toolEnabled("clip.colour")) {
         // A clip has no colour of its own — it wears its track's. So the chip
         // shows the track colour and picking a new one recolours the track,
@@ -688,7 +707,7 @@ QWidget* ContextPanel::buildAudioClip() {
                 [this, host, actionsHost, pluginDivider](bool expanded) {
                     ui::contextAvailable(actionsHost, !expanded);
                     if (pluginDivider) ui::contextAvailable(pluginDivider, !expanded);
-                    if (QWidget* strip = parentWidget()) strip->setFixedHeight(44);
+                    if (QWidget* strip = parentWidget()) strip->setFixedHeight(ui::kToolPanelHeight);
                     setGeometry(targetGeometry());
                     layoutSelf();
                     invalidateBackdrop();
@@ -696,7 +715,7 @@ QWidget* ContextPanel::buildAudioClip() {
                 });
         connect(adder, &PluginQuickAdder::sizeChanged, this, [this, host] {
             if (!m_content || m_content != host) return;
-            if (QWidget* strip = parentWidget()) strip->setFixedHeight(44);
+            if (QWidget* strip = parentWidget()) strip->setFixedHeight(ui::kToolPanelHeight);
             setGeometry(targetGeometry());
             layoutSelf();
             invalidateBackdrop();
@@ -726,6 +745,14 @@ QWidget* ContextPanel::buildAudioClipMulti() {
     count->setFont(bold);
     row->addWidget(count);
     row->addWidget(islandDivider(host));
+
+    if (toolEnabled("clip.silence")) {
+        auto* silence = islandButton(icons::Glyph::StripSilence, tr("Strip Silence…"), host);
+        silence->setObjectName("ContextPanelStripSilence");
+        silence->setEnabled(!m_controller->hasCloudProjectBinding() && !m_controller->isRecording());
+        connect(silence, &QAbstractButton::clicked, this, &ContextPanel::stripSilenceRequested);
+        row->addWidget(silence);
+    }
 
     if (toolEnabled("clip.plugins")) {
         auto* shared = islandButton(icons::Glyph::Plugin, tr("Shared Plugins…"), host);
@@ -1574,7 +1601,7 @@ QWidget* ContextPanel::buildTrackMulti() {
         connect(adder, &PluginQuickAdder::searchStateChanged, this,
                 [this, host, actionsHost](bool expanded) {
                     ui::contextAvailable(actionsHost, !expanded);
-                    if (QWidget* strip = parentWidget()) strip->setFixedHeight(44);
+                    if (QWidget* strip = parentWidget()) strip->setFixedHeight(ui::kToolPanelHeight);
                     setGeometry(targetGeometry());
                     layoutSelf();
                     invalidateBackdrop();
@@ -1834,7 +1861,7 @@ QWidget* ContextPanel::buildTrack() {
                 [this, host, actionsHost, pluginDivider](bool expanded) {
                     ui::contextAvailable(actionsHost, !expanded);
                     if (pluginDivider) ui::contextAvailable(pluginDivider, !expanded);
-                    if (QWidget* strip = parentWidget()) strip->setFixedHeight(44);
+                    if (QWidget* strip = parentWidget()) strip->setFixedHeight(ui::kToolPanelHeight);
                     setGeometry(targetGeometry());
                     layoutSelf();
                     invalidateBackdrop();
@@ -1842,7 +1869,7 @@ QWidget* ContextPanel::buildTrack() {
                 });
         connect(adder, &PluginQuickAdder::sizeChanged, this, [this, host] {
             if (!m_content || m_content != host) return;
-            if (QWidget* strip = parentWidget()) strip->setFixedHeight(44);
+            if (QWidget* strip = parentWidget()) strip->setFixedHeight(ui::kToolPanelHeight);
             setGeometry(targetGeometry());
             layoutSelf();
             invalidateBackdrop();
@@ -1966,6 +1993,27 @@ QWidget* ContextPanel::buildRecording() {
         });
     }
 
+    if (toolEnabled("record.silence")) {
+        auto* automatic = islandButton(icons::Glyph::StripSilence, tr("Auto Silence — trim silence after recording"), host);
+        automatic->setObjectName("ContextPanelAutoSilence");
+        automatic->setCheckable(true);
+        connect(automatic, &QAbstractButton::clicked, this, [this](bool on) {
+            if (!m_updating) ui::silence::setAutomatic(*m_controller, on);
+        });
+        auto* settings = islandButton(icons::Glyph::Gear, tr("Strip Silence settings…"), host);
+        settings->setObjectName("ContextPanelSilenceSettings");
+        connect(settings, &QAbstractButton::clicked, this, &ContextPanel::silenceSettingsRequested);
+        row->addWidget(automatic);
+        row->addWidget(settings);
+        loaders.push_back([this, automatic, settings] {
+            automatic->setChecked(m_controller->recordingPrefs().autoSilence);
+            const bool available = !m_controller->hasCloudProjectBinding() &&
+                !m_controller->isRecording() && !m_controller->isCountingIn();
+            automatic->setEnabled(available);
+            settings->setEnabled(available);
+        });
+    }
+
     if (toolEnabled("record.options")) {
         // Deliberately a mock: it remembers being switched on and says so, but
         // nothing listens for MIDI yet. Better an honest placeholder in the
@@ -2001,8 +2049,9 @@ QWidget* ContextPanel::buildRecording() {
     // The same chip starts and stops — and cancels a count-in, which is the
     // only thing "stop" can mean before there is anything recorded. It does
     // exactly what R does, so the two never disagree.
-    auto* start = islandButton(icons::Glyph::Record, tr("Start recording (R)"),
+    auto* start = islandButton(icons::Glyph::Record, tr("Start recording"),
                                host);
+    start->setObjectName(QStringLiteral("ContextPanelRecordToggle"));
     start->setActiveColor(Theme::record());
     start->setProminent(true);
     connect(start, &QAbstractButton::clicked, this,
@@ -2013,9 +2062,10 @@ QWidget* ContextPanel::buildRecording() {
         const bool counting = m_controller->isCountingIn();
         start->setGlyph(rolling || counting ? icons::Glyph::Stop
                                             : icons::Glyph::Record);
-        start->setToolTip(counting  ? tr("Cancel the count-in (R)")
-                          : rolling ? tr("Stop recording (R)")
-                                    : tr("Start recording (R)"));
+        start->setToolTip(counting  ? tr("Cancel the count-in")
+                          : rolling ? tr("Stop recording")
+                                    : tr("Start recording"));
+        start->setAccessibleName(start->toolTip());
     });
 
     m_applyValues = [loaders = std::move(loaders), this] {
@@ -2162,10 +2212,10 @@ void ContextPanel::transitionTo(QWidget* next, Context context) {
         // bottom edges. The plate has room to spare either way.
         m_content->resize(m_content->sizeHint().width(),
                           std::max(kRowHeight, m_content->sizeHint().height()));
-        if (QWidget* strip = parentWidget()) strip->setFixedHeight(44);
+        if (QWidget* strip = parentWidget()) strip->setFixedHeight(ui::kToolPanelHeight);
         layoutSelf();
     } else if (QWidget* strip = parentWidget()) {
-        strip->setFixedHeight(44);
+        strip->setFixedHeight(ui::kToolPanelHeight);
     }
 
     auto* group = new QParallelAnimationGroup(this);
@@ -2175,7 +2225,7 @@ void ContextPanel::transitionTo(QWidget* next, Context context) {
     QPoint rest;
     if (m_content) {
         const QRect plate(kShadow, 0, std::max(1, target.width() - 2 * kShadow),
-                          std::max(1, target.height() - kShadow));
+                          std::max(1, target.height() - ui::kContextBottomGap));
         rest = QPoint(plate.center().x() - m_content->width() / 2,
                       plate.center().y() - m_content->height() / 2);
     }
@@ -2312,7 +2362,7 @@ QRect ContextPanel::targetGeometry() const {
     // strip it sits in.
     // Height includes the stable lower animation gutter; the top is flush with
     // the strip's own edge, which makes the two read as one surface.
-    const int height = kRowHeight + 2 * kPadding + kShadow;
+    const int height = kRowHeight + 2 * kPadding + ui::kContextBottomGap;
 
     // The stable home is the centre of the transport readout above this strip.
     // Only an enabled clip-follow context adopts the arrangement's narrower
@@ -2451,8 +2501,8 @@ void ContextPanel::reloadFollowSetting() {
 
 void ContextPanel::resizeEvent(QResizeEvent* ev) {
     ui::GlassPanel::resizeEvent(ev);
-    // Fully rounded ends, whatever the height: this is a floating island, not
-    // a rounded rectangle.
-    setCornerRadius(plateRect().height() / 2);   // fully rounded lower edge
+    // Resizing preserves the console's corner radius instead of turning the
+    // attachment into a fully rounded floating capsule.
+    setCornerRadius(8);
     layoutSelf();
 }

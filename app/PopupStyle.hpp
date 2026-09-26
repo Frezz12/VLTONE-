@@ -3,6 +3,9 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QProxyStyle>
+#include <QComboBox>
+#include <QPushButton>
+#include <QToolButton>
 #include <QStyleOption>
 #include <QLinearGradient>
 #include <QRadialGradient>
@@ -12,6 +15,13 @@
 class PopupStyle : public QProxyStyle {
 public:
     using QProxyStyle::QProxyStyle;
+
+    void polish(QWidget* widget) override {
+        QProxyStyle::polish(widget);
+        if (qobject_cast<QComboBox*>(widget) ||
+            qobject_cast<QToolButton*>(widget) || qobject_cast<QPushButton*>(widget))
+            widget->setAttribute(Qt::WA_MacShowFocusRect, false);
+    }
 
     int pixelMetric(PixelMetric metric, const QStyleOption* option = nullptr,
                     const QWidget* widget = nullptr) const override {
@@ -30,6 +40,23 @@ public:
 
     void drawPrimitive(PrimitiveElement element, const QStyleOption* option,
                        QPainter* painter, const QWidget* widget = nullptr) const override {
+        const auto* toolButton = qobject_cast<const QToolButton*>(widget);
+        const auto* pushButton = qobject_cast<const QPushButton*>(widget);
+        const bool disclosure = qobject_cast<const QComboBox*>(widget) ||
+            (toolButton && toolButton->menu()) || (pushButton && pushButton->menu());
+        if (element == PE_FrameFocusRect && disclosure && option) {
+            // Opening a list with the mouse should not leave a selected ring.
+            // Keep a quiet focus cue for users moving through controls with Tab.
+            if (option->state & State_KeyboardFocusChange) {
+                painter->save();
+                painter->setPen(QPen(option->palette.color(QPalette::WindowText), 1,
+                                     Qt::DotLine));
+                painter->setBrush(Qt::NoBrush);
+                painter->drawRect(option->rect.adjusted(1, 1, -2, -2));
+                painter->restore();
+            }
+            return;
+        }
         if (element == PE_IndicatorCheckBox && option) {
             drawToggle(option, painter);
             return;

@@ -83,7 +83,25 @@ void FileSearchWorker::search(const QStringList& roots, const QString& query,
             delivery.restart();
         };
         QQueue<QPair<QString, int>> pending;
-        for (const QString& root : roots) pending.enqueue({root, 0});
+        QSet<QString> matched;
+        for (const QString& root : roots) {
+            const QFileInfo info(root);
+            if (!info.exists()) continue;
+            if (info.isDir() && !ui::projecttemplates::isTemplatePackage(root)) {
+                pending.enqueue({info.absoluteFilePath(), 0});
+            }
+            if (ui::browserprefs::isIgnoredFile(info.fileName(), ignoredExtensions) ||
+                !matches(info.fileName(), query)) continue;
+            const QString path = info.absoluteFilePath();
+            if (!matched.contains(path)) {
+                matched.insert(path);
+                found << path;
+                if (found.size() >= kMaxMatches) {
+                    truncated = true;
+                    break;
+                }
+            }
+        }
         QSet<QString> scanned;
 
         // Breadth first: one large library must not postpone matches directly
@@ -124,7 +142,10 @@ void FileSearchWorker::search(const QStringList& roots, const QString& query,
                 }
                 if (ui::browserprefs::isIgnoredFile(info.fileName(), ignoredExtensions)) continue;
                 if (!matches(info.fileName(), query)) continue;
-                found << info.absoluteFilePath();
+                const QString absolutePath = info.absoluteFilePath();
+                if (matched.contains(absolutePath)) continue;
+                matched.insert(absolutePath);
+                found << absolutePath;
                 if (found.size() == 1 || delivery.elapsed() >= 100) {
                     publish(false);
                 }

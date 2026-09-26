@@ -1,5 +1,6 @@
 #include "graphics/ScenePaintSource.hpp"
 #include "PatternWindow.hpp"
+#include "MenuActions.hpp"
 
 #include "Controls.hpp"
 #include "EngineController.hpp"
@@ -1064,14 +1065,27 @@ void PatternWindow::moveSelectedSources(int direction) {
     }
 }
 
-void PatternWindow::showSelectionMenu(const QString& trackId,
-                                      const QPoint& globalPos) {
+void PatternWindow::showSelectionMenu(const QString& trackId, const QPoint& globalPos) {
     if (!m_selectedIds.contains(trackId)) {
         setSelectedSources({trackId}, trackId);
         m_selectionAnchorId = trackId;
     }
-    const int count = m_selectedIds.size();
     QMenu menu(this);
+    populateSelectionMenu(menu, trackId);
+    menu.exec(globalPos);
+}
+
+bool PatternWindow::populateActionsMenu(QMenu& menu) {
+    if (m_primaryId.isEmpty() || !ownsTrack(m_controller->project().findTrack(m_primaryId.toStdString())))
+        return false;
+    populateSelectionMenu(menu, m_primaryId);
+    auto* source = menu.addMenu(tr("Source"));
+    populateSourceMenu(source, m_primaryId);
+    return true;
+}
+
+void PatternWindow::populateSelectionMenu(QMenu& menu, const QString& trackId) {
+    const int count = m_selectedIds.size();
     QAction* open = menu.addAction(tr("Open Piano Roll"));
     const auto* selectedTrack = m_controller->project().findTrack(trackId.toStdString());
     open->setEnabled(selectedTrack && daw::trackAccepts(selectedTrack->kind, daw::ClipKind::Midi));
@@ -1090,7 +1104,6 @@ void PatternWindow::showSelectionMenu(const QString& trackId,
     QAction* remove = menu.addAction(
         count == 1 ? tr("Delete Selected Source")
                    : tr("Delete %1 Selected Sources").arg(count));
-    remove->setShortcut(QKeySequence::Delete);
 
     const QStringList ids = childTrackIds();
     int first = int(ids.size());
@@ -1106,14 +1119,15 @@ void PatternWindow::showSelectionMenu(const QString& trackId,
     moveDown->setEnabled(last >= 0 && last < ids.size() - 1);
     selectAll->setEnabled(!ids.isEmpty() && m_selectedIds.size() != ids.size());
 
-    QAction* chosen = menu.exec(globalPos);
-    if (chosen == open) openRoll(trackId);
-    else if (chosen == transpose) transposeSelectedSources();
-    else if (chosen == moveUp) moveSelectedSources(-1);
-    else if (chosen == moveDown) moveSelectedSources(1);
-    else if (chosen == selectAll)
-        setSelectedSources(ids, ids.isEmpty() ? QString{} : ids.back());
-    else if (chosen == remove) deleteSelectedSources();
+    ui::connectMenuActions(menu, this, [=, this](QAction* chosen) {
+        if (chosen == open) openRoll(trackId);
+        else if (chosen == transpose) transposeSelectedSources();
+        else if (chosen == moveUp) moveSelectedSources(-1);
+        else if (chosen == moveDown) moveSelectedSources(1);
+        else if (chosen == selectAll)
+            setSelectedSources(ids, ids.isEmpty() ? QString{} : ids.back());
+        else if (chosen == remove) deleteSelectedSources();
+    });
 }
 
 void PatternWindow::rebuildRows() {
@@ -2362,7 +2376,7 @@ void PatternWindow::applyTheme() {
                               font-weight: 500; letter-spacing: 0.3px; }
 #PatternScroll { background: %BG%; }
 #PatternSourceRow { background: %SURFACE%; border: 1px solid %SEP%;
-                    border-radius: 8px; }
+                    border-radius: %RADIUS%px; }
 #PatternSourceRow:hover { background: %HOVER%; border-color: %SECTION%; }
 #PatternSourceRow[selected="true"] { background: %SELECTED%;
     border-color: %ACCENT%; }
@@ -2371,19 +2385,19 @@ void PatternWindow::applyTheme() {
     border: 2px solid %ACCENT%; }
 #PatternDropIndicator { background: %ACCENT%; border-radius: 1px; }
 QToolButton#PatternToolbarButton { color: %TEXT%; background: %WELL%;
-    border: 1px solid %SEP%; border-radius: 7px; padding: 4px 8px; }
+    border: 1px solid %SEP%; border-radius: %RADIUS%px; padding: 4px 8px; }
 QToolButton#PatternToolbarButton:hover { background: %HOVER%;
     border-color: %ACCENT%; }
 QToolButton#PatternToolbarButton:disabled { color: %TEXT2%; background: %SURFACE%; }
 QToolButton#PatternAddInstrument { min-height: 28px; padding: 4px 10px;
-    color: %TEXT%; background: %WELL%; border: 1px solid %SEP%; border-radius: 7px; }
+    color: %TEXT%; background: %WELL%; border: 1px solid %SEP%; border-radius: %RADIUS%px; }
 QToolButton#PatternAddInstrument:hover { background: %HOVER%; border-color: %ACCENT%; }
 #PatternDropHint { color: %TEXT2%; font-size: 10px; }
-QToolButton#PatternRhythm { border: 1px solid transparent; border-radius: 6px; }
+QToolButton#PatternRhythm { border: 1px solid transparent; border-radius: %RADIUS%px; }
 QToolButton#PatternRhythm:hover, QToolButton#PatternRhythm:focus {
     background: %HOVER%; border-color: %ACCENT%; }
 QToolButton#PatternRhythm::menu-indicator { image: none; }
-)")
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%BG%", t.background.name())
         .replace("%SURFACE%", t.surface.name())
         .replace("%WELL%", t.well().name())

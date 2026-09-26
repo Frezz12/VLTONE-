@@ -334,13 +334,13 @@ void PluginQuickAdder::updateGeometryForState() {
             background: %2;
             border: 1px solid %3;
             border-top-color: %4;
-            border-radius: 0;
+            border-radius: %RADIUS%px;
             padding: 0 24px 0 2px;
             selection-background-color: %5;
             font-size: 11px;
         }
         QLineEdit#PluginQuickSearch:focus { border: 1px solid %6; }
-    )")
+    )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .arg(th().textPrimary.name(QColor::HexArgb),
              withAlpha(th().well(), int(225 * fieldOpacity)).name(QColor::HexArgb),
              withAlpha(th().ink(), int(54 * fieldOpacity)).name(QColor::HexArgb),
@@ -718,7 +718,7 @@ void PluginQuickAdder::paintOverlay(QPaintEvent*) {
     const QRectF panel = QRectF(m_overlay->rect()).adjusted(0.5, 0.5, -0.5, -1.5);
     p.setPen(QPen(th().separator(), 1.0));
     p.setBrush(th().well());
-    p.drawRect(panel);
+    p.drawRoundedRect(panel, Theme::cornerRadius, Theme::cornerRadius);
 
     const QRect viewport = listViewport();
     p.save();

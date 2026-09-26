@@ -255,6 +255,7 @@ bool parseBytes(const std::uint8_t* data, std::size_t size, File& out,
                         Note note;
                         note.pitch = pitch;
                         note.velocity = started.velocity;
+                        note.releaseVelocity = kind == 0x80 ? velocity : 0;
                         note.channel = channel;
                         note.track = track;
                         note.startBeats = double(started.startTick) / perQuarter;
@@ -282,6 +283,7 @@ bool parseBytes(const std::uint8_t* data, std::size_t size, File& out,
             }
         }
 
+        out.lengthBeats = std::max(out.lengthBeats, double(tick) / perQuarter);
         // Anything still held when the track ends is closed there rather than
         // dropped — a file that forgot a note-off still gives a playable note.
         for (auto& [key, pendings] : open) {
@@ -318,6 +320,89 @@ bool parseBytes(const std::uint8_t* data, std::size_t size, File& out,
         out.lengthBeats =
             std::max(out.lengthBeats, note.startBeats + note.lengthBeats);
     }
+    return true;
+}
+
+bool encode(const File& file, std::vector<std::uint8_t>& bytes,
+            std::string& error, int numerator, int denominator) {
+    bytes.clear();
+    error.clear();
+    constexpr std::uint32_t ppq = 960;
+    constexpr std::uint32_t maxTick = 0x0FFFFFFF;
+    struct Event { std::uint32_t tick; bool on; int pitch, velocity, channel; };
+    std::vector<Event> events;
+    events.reserve(file.notes.size() * 2);
+    for (const auto& note : file.notes) {
+        const double end = note.startBeats + note.lengthBeats;
+        if (!std::isfinite(note.startBeats) || !std::isfinite(end) ||
+            note.startBeats < 0 || note.lengthBeats <= 0 || end * ppq > maxTick ||
+            note.pitch < 0 || note.pitch > 127 || note.velocity < 1 || note.velocity > 127 ||
+            note.channel < 0 || note.channel > 15 ||
+            note.releaseVelocity < 0 || note.releaseVelocity > 127) {
+            error = "Invalid MIDI note or timing outside the file's supported range";
+            return false;
+        }
+        const auto startTick = std::uint32_t(std::llround(note.startBeats * ppq));
+        const auto endTick = std::max(startTick + 1, std::uint32_t(std::llround(end * ppq)));
+        if (endTick > maxTick) { error = "MIDI note is too far from the start"; return false; }
+        events.push_back({startTick, true, note.pitch, note.velocity, note.channel});
+        events.push_back({endTick, false, note.pitch, note.releaseVelocity, note.channel});
+    }
+    std::stable_sort(events.begin(), events.end(), [](const Event& a, const Event& b) {
+        if (a.tick != b.tick) return a.tick < b.tick;
+        return a.on < b.on; // Release a repeated key before starting it again.
+    });
+    using Bytes = std::vector<std::uint8_t>;
+    const auto vlq = [](Bytes& out, std::uint32_t value) {
+        std::uint8_t buffer[4]; int count = 0;
+        buffer[count++] = value & 0x7F;
+        while ((value >>= 7) != 0) buffer[count++] = (value & 0x7F) | 0x80;
+        while (count) out.push_back(buffer[--count]);
+    };
+    Bytes track;
+    if (!file.trackNames.empty()) {
+        const auto& name = file.trackNames.front();
+        if (name.size() > maxTick) { error = "MIDI track name is too long"; return false; }
+        track.insert(track.end(), {0, 0xFF, 0x03});
+        vlq(track, std::uint32_t(name.size()));
+        track.insert(track.end(), name.begin(), name.end());
+    }
+    if (!std::isfinite(file.firstTempoBpm) || file.firstTempoBpm <= 0 ||
+        numerator < 1 || numerator > 255 || denominator < 1 || denominator > 128 ||
+        (denominator & (denominator - 1))) {
+        error = "Invalid tempo or time signature";
+        return false;
+    }
+    const double tempo = 60000000.0 / file.firstTempoBpm;
+    if (tempo < 1 || tempo > 0xFFFFFF) { error = "Tempo is outside the MIDI range"; return false; }
+    const auto micros = std::uint32_t(std::llround(tempo));
+    track.insert(track.end(), {0, 0xFF, 0x51, 3, std::uint8_t(micros >> 16),
+                              std::uint8_t(micros >> 8), std::uint8_t(micros)});
+    int power = 0;
+    for (int d = denominator; d > 1; d >>= 1) ++power;
+    track.insert(track.end(), {0, 0xFF, 0x58, 4, std::uint8_t(numerator),
+                              std::uint8_t(power), 24, 8});
+    std::uint32_t previous = 0;
+    for (const auto& event : events) {
+        vlq(track, event.tick - previous);
+        track.insert(track.end(), {std::uint8_t((event.on ? 0x90 : 0x80) | event.channel),
+                                  std::uint8_t(event.pitch), std::uint8_t(event.velocity)});
+        previous = event.tick;
+    }
+    if (!std::isfinite(file.lengthBeats) || file.lengthBeats < 0 || file.lengthBeats * ppq > maxTick) {
+        error = "Invalid MIDI file duration"; return false;
+    }
+    const auto end = std::max(previous, std::uint32_t(std::llround(file.lengthBeats * ppq)));
+    vlq(track, end - previous);
+    track.insert(track.end(), {0xFF, 0x2F, 0});
+    if (track.size() > std::numeric_limits<std::uint32_t>::max()) {
+        error = "MIDI track is too large"; return false;
+    }
+    bytes = {'M','T','h','d',0,0,0,6,0,0,0,1,
+             std::uint8_t(ppq >> 8),std::uint8_t(ppq),'M','T','r','k'};
+    const auto size = std::uint32_t(track.size());
+    for (int shift : {24,16,8,0}) bytes.push_back(std::uint8_t(size >> shift));
+    bytes.insert(bytes.end(), track.begin(), track.end());
     return true;
 }
 
