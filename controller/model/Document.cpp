@@ -7,6 +7,38 @@
 #include <random>
 
 namespace daw {
+
+std::unordered_set<std::string> sidechainFeedbackSources(
+    const ProjectModel& project, const std::string& destinationChannelId) {
+    std::unordered_map<std::string, std::vector<std::string>> edges;
+    for (const auto& track : project.tracks) {
+        if (!carriesAudio(track)) continue;
+        auto& outputs = edges[track.id];
+        if (!track.outputBusId.empty()) outputs.push_back(track.outputBusId);
+        // Disabled sends and bypassed inserts still own graph edges.
+        for (const auto& send : track.sends)
+            if (!send.destinationTrackId.empty()) outputs.push_back(send.destinationTrackId);
+        const auto append = [&](const InsertModel& insert) {
+            for (const auto& source : insert.sidechainTrackIds)
+                edges[source].push_back(track.id);
+        };
+        append(track.instrument);
+        for (const auto& insert : track.samplerFx.inserts) append(insert);
+        for (const auto& insert : track.inserts) append(insert);
+        for (const auto& clip : track.clips)
+            for (const auto& insert : clip.inserts) append(insert);
+    }
+    std::unordered_set<std::string> reachable;
+    std::vector<std::string> pending{destinationChannelId};
+    while (!pending.empty()) {
+        auto current = std::move(pending.back());
+        pending.pop_back();
+        if (!reachable.insert(current).second) continue;
+        if (const auto found = edges.find(current); found != edges.end())
+            pending.insert(pending.end(), found->second.begin(), found->second.end());
+    }
+    return reachable;
+}
 ClipWarpModel sliceWarp(const ClipWarpModel& warp, double beginBeat, double endBeat) {
     if (std::abs(beginBeat) < 1e-10 && std::abs(endBeat - warp.markers.back().targetBeats) < 1e-10) return warp;
     ClipWarpModel result = warp;

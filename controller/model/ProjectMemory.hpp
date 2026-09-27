@@ -10,10 +10,15 @@ inline std::size_t estimatedProjectBytes(const ProjectModel& project) {
         project.notebookHtml.size() +
         project.notebookCues.capacity() * sizeof(NotebookCueModel);
     for (const auto& cue : project.notebookCues) bytes += cue.text.size();
+    const auto sidechains = [](const InsertModel& slot) {
+        std::size_t result = slot.sidechainTrackIds.capacity() * sizeof(std::string);
+        for (const auto& id : slot.sidechainTrackIds) result += id.size();
+        return result;
+    };
     const auto inserts = [&](const auto& slots) {
         std::size_t result = slots.capacity() * sizeof(InsertModel);
         for (const auto& slot : slots) {
-            result += slot.path.size() + slot.name.size() + slot.uid.size() +
+            result += sidechains(slot) + slot.path.size() + slot.name.size() + slot.uid.size() +
                 slot.stateFile.size() + slot.rightStateFile.size() +
                 (slot.parameters.capacity() + slot.rightParameters.capacity()) * sizeof(InsertParameter);
             for (const auto& value : slot.parameters) result += value.id.size();
@@ -23,9 +28,9 @@ inline std::size_t estimatedProjectBytes(const ProjectModel& project) {
     };
     bytes += inserts(project.masterInserts) + project.tracks.capacity() * sizeof(TrackModel);
     const auto accountTrack = [&](const TrackModel& track) {
-        bytes += track.name.size() + track.id.size() + track.clips.capacity() * sizeof(ClipModel) +
+        bytes += track.name.size() + track.id.size() + track.iconId.size() + track.clips.capacity() * sizeof(ClipModel) +
             track.sends.capacity() * sizeof(SendModel) + inserts(track.inserts) +
-            inserts(track.samplerFx.inserts) +
+            inserts(track.samplerFx.inserts) + sidechains(track.instrument) +
             (track.instrument.parameters.capacity() + track.instrument.rightParameters.capacity()) * sizeof(InsertParameter);
         for (const auto& clip : track.clips) {
             bytes += clip.name.size() + clip.id.size() + clip.filePath.size() +

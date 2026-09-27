@@ -72,6 +72,13 @@ audio::Result EngineController::prepareStripSilence(const std::vector<ClipAddres
 audio::Result EngineController::applyStripSilence(const std::vector<StripSilenceSource>& sources,
     const std::vector<std::vector<SilenceRegion>>& regions,
     const StripSilenceSettings& settings, std::vector<ClipAddress>& created, bool recordUndo) {
+    return applyStripSilenceImpl(sources, regions, settings, created, recordUndo, SilenceApplyMode::Edit);
+}
+
+audio::Result EngineController::applyStripSilenceImpl(const std::vector<StripSilenceSource>& sources,
+    const std::vector<std::vector<SilenceRegion>>& regions,
+    const StripSilenceSettings& settings, std::vector<ClipAddress>& created,
+    bool recordUndo, SilenceApplyMode mode) {
     created.clear();
     if (cloudProjectBound()) return silenceFailure("Strip Silence is available in local projects.");
     if (isRecording()) return silenceFailure("Stop recording before processing audio clips.");
@@ -121,7 +128,10 @@ audio::Result EngineController::applyStripSilence(const std::vector<StripSilence
     if (beforeByTrack.empty()) return audio::Result::ok();
     // Capture opaque presets as well as exposed parameters before duplicating
     // Clip FX. Undo/redo restores exactly the same sound on every fragment.
-    if (auto result = captureLibraryPlugins(pluginSources); !result) return result;
+    // Recording already captured these states before landing the take. Its
+    // caller also owns the transaction and publishes all tracks together.
+    if (mode == SilenceApplyMode::Edit)
+        if (auto result = captureLibraryPlugins(pluginSources); !result) return result;
     for (const auto& track : pluginSources) for (const auto& captured : track.clips)
         for (auto& original : beforeByTrack[track.id].clips)
             if (original.id == captured.id) original = captured;
@@ -176,13 +186,16 @@ audio::Result EngineController::applyStripSilence(const std::vector<StripSilence
     ProjectModel before, after;
     for (auto& [id, track] : beforeByTrack) before.tracks.push_back(std::move(track));
     for (auto& [id, track] : afterByTrack) after.tracks.push_back(std::move(track));
+    if (mode == SilenceApplyMode::Recording) {
+        for (auto& track : after.tracks)
+            if (auto* target = m_project.findTrack(track.id)) target->clips = std::move(track.clips);
+        files.committed = true;
+        return audio::Result::ok();
+    }
     const auto restore = [this](const ProjectModel& state) {
         for (const auto& track : state.tracks)
             if (auto* target = m_project.findTrack(track.id)) target->clips = track.clips;
-        auto result = rebuildGraph();
-        if (result) result = restoreLibraryPluginStates(state.tracks, false);
-        updateTimelineDuration();
-        return result;
+        return rebuildGraphWithNewClipStates(state.tracks);
     };
     if (auto result = restore(after); !result) { restore(before); created.clear(); return result; }
     files.committed = true;
@@ -239,7 +252,8 @@ void EngineController::stripRecordedSilence(const FinalizedRecordingTrack& recor
             regions.push_back(std::move(merged));
         }
         std::vector<ClipAddress> created;
-        result = applyStripSilence(sources, regions, recording.semantics.stripSilence, created, false);
+        result = applyStripSilenceImpl(sources, regions, recording.semantics.stripSilence,
+            created, false, SilenceApplyMode::Recording);
         if (!result) m_autoSilenceWarning = result.message();
     } catch (const std::exception& error) { m_autoSilenceWarning = error.what(); }
 }

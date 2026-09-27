@@ -2421,6 +2421,18 @@ void routingPluginAssetReducerAndWire() {
                   .changed(),
           "Graphit is accepted by the shared built-in allowlist");
 
+    InsertModel compressor = builtinInsert("compressor", "daw.compressor");
+    check(apply("plugin-compressor-add", AddPluginInsert{trackChain, compressor, graphit.id}).changed() &&
+              apply("plugin-compressor-mode", SetPluginParameter{trackChain, compressor.id,
+                    "mode", 1.0, false}).changed(),
+          "Compressor and its mode parameter pass shared validation");
+
+    InsertModel delay = builtinInsert("delay", "daw.delay");
+    check(apply("plugin-delay-add", AddPluginInsert{trackChain, delay, graphit.id}).changed() &&
+              apply("plugin-delay-character", SetPluginParameter{trackChain, delay.id,
+                    "character", 3.0, false}).changed(),
+          "Delay and its character parameter pass shared validation");
+
     InsertModel pitchCorrector = builtinInsert("pitch-corrector", "daw.pitch-corrector");
     check(apply("plugin-pitch-add",
                 AddPluginInsert{trackChain, pitchCorrector, graphit.id}).changed() &&
@@ -2907,6 +2919,66 @@ void gatewayOptimisticConfirmedReplay() {
 
 } // namespace
 
+void multiSidechainContract() {
+    SharedProjectDocument state;
+    const auto destination = trackId("multi-destination");
+    const auto first = trackId("multi-kick");
+    const auto second = trackId("multi-snare");
+    for (const auto& id : {destination, first, second}) {
+        TrackModel track; track.id = id; track.kind = TrackKind::Audio;
+        state.project.tracks.push_back(track);
+    }
+    const PluginLocation location{PluginChain::Track, destination, {}};
+    auto insert = builtinInsert("multi-compressor", "daw.compressor");
+    insert.sidechainTrackIds = {first, second};
+    auto add = command("multi-add", AddPluginInsert{location, insert, {}});
+    auto encoded = projectCommandToJson(add);
+    auto decoded = projectCommandFromJson(encoded);
+    check(decoded && std::get<AddPluginInsert>(decoded->body).insert.sidechainTrackIds == insert.sidechainTrackIds,
+          "multi-sidechain insert round-trips over collaboration JSON");
+    check(ProjectReducer::apply(state, add).changed(), "shared plugin accepts two sidechain sources");
+    const auto current = [&] { return state.project.findTrack(destination)->inserts.front().sidechainTrackIds; };
+    auto single = command("multi-legacy-set", SetPluginProperty{location, insert.id, PluginProperty::SidechainTrackId, first});
+    const auto changed = ProjectReducer::apply(state, single);
+    check(changed.changed() && current() == std::vector<std::string>{first} && changed.inverse,
+          "legacy sidechain command selects exactly one source");
+    if (changed.inverse) {
+        auto undo = *changed.inverse; undo.meta = meta("multi-legacy-undo");
+        auto roundtrip = projectCommandFromJson(projectCommandToJson(undo));
+        check(roundtrip && ProjectReducer::apply(state, *roundtrip).changed() && current() == insert.sidechainTrackIds,
+              "undo of a legacy command restores the complete previous source list");
+    }
+    auto clear = command("multi-clear", SetPluginProperty{location, insert.id, PluginProperty::SidechainTrackIds, std::vector<std::string>{}});
+    auto clearWire = projectCommandFromJson(projectCommandToJson(clear));
+    check(clearWire && ProjectReducer::apply(state, *clearWire).changed() && current().empty(),
+          "empty sidechain array clears all inputs");
+    auto multiple = command("multi-select", SetPluginProperty{location, insert.id, PluginProperty::SidechainTrackIds, insert.sidechainTrackIds});
+    const auto fields = commandTouchedFields(multiple);
+    const auto legacyFields = commandTouchedFields(single);
+    check(fields == legacyFields, "single and multiple sidechain commands share the same conflict field");
+    auto set = ProjectReducer::apply(state, multiple);
+    single.meta = meta("multi-legacy-newer");
+    ProjectReducer::apply(state, single);
+    if (set.inverse) {
+        auto stale = *set.inverse; stale.meta = meta("multi-stale-undo");
+        check(!ProjectReducer::apply(state, stale).accepted(), "stale multi-source undo cannot overwrite a later single-source edit");
+    }
+    for (const auto& invalid : {std::vector<std::string>{first, first}, std::vector<std::string>{destination},
+                                std::vector<std::string>{trackId("missing-key")}}) {
+        const auto result = ProjectReducer::apply(state, command("multi-invalid-" + invalid.front(),
+            SetPluginProperty{location, insert.id, PluginProperty::SidechainTrackIds, invalid}));
+        check(!result.accepted() && current() == std::vector<std::string>{first},
+              "invalid multi-source commands preserve the previous routing");
+    }
+    auto invalidWire = projectCommandToJson(multiple);
+    invalidWire["payload"]["value"] = json::array({first, first});
+    check(!projectCommandFromJson(invalidWire), "wire rejects duplicate source IDs");
+    invalidWire["payload"]["value"] = nullptr;
+    check(!projectCommandFromJson(invalidWire), "wire rejects null source lists");
+    encoded["payload"]["insert"]["sidechainTrackId"] = second;
+    check(!projectCommandFromJson(encoded), "insert wire rejects inconsistent legacy and multiple sources");
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     const fs::path dir = fs::temp_directory_path() /
@@ -2924,6 +2996,7 @@ int main() {
     laneTakeCompReducerAndRecordingBatch();
     sharedSnapshotMetadataRoundTrip();
     routingPluginAssetReducerAndWire();
+    multiSidechainContract();
     commandV2Contracts();
     gatewayOptimisticConfirmedReplay();
 

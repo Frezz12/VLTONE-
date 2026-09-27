@@ -14,11 +14,13 @@ inline QString text(const std::string& value, int limit = 160) {
     return result;
 }
 inline QJsonObject plugin(const daw::InsertModel& slot, int index) {
+    QJsonArray sidechains;
+    for (const auto& id : slot.sidechainTrackIds) sidechains.append(text(id, 64));
     return {{"id", text(slot.id, 64)}, {"slot", index}, {"name", text(slot.name)},
             {"vendor", text(slot.vendor)}, {"version", text(slot.pluginVersion, 64)},
             {"format", text(daw::toString(slot.format), 16)}, {"bypassed", slot.bypassed},
             {"mix", slot.mix}, {"channel_mode", text(daw::toString(slot.channelMode), 32)},
-            {"sidechain_track_id", text(slot.sidechainTrackId, 64)}};
+            {"sidechain_track_ids", sidechains}};
 }
 inline QJsonArray chain(const std::vector<daw::InsertModel>& inserts, bool& truncated) {
     QJsonArray result;

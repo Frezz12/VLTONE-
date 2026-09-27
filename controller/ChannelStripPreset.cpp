@@ -68,7 +68,7 @@ void makePortable(InsertModel& model) {
     // a project's state directory.
     model.stateFile.clear();
     model.rightStateFile.clear();
-    model.sidechainTrackId.clear();
+    model.sidechainTrackIds.clear();
     model.windowX = model.windowY = model.windowWidth = model.windowHeight = 0;
     model.windowOpen = false;
 }

@@ -72,6 +72,7 @@ public:
     /// Import and apply a .vlttheme delivered by a file picker, Finder or
     /// Explorer. The operation owns a private copy before returning success.
     void importThemeFile(const QString& path);
+    QString importTrackIconFile();
 
 signals:
     void transportPanelStyleChanged();
@@ -115,6 +116,7 @@ private:
     QWidget* buildLanguageTab();
     void refreshLanguages();
     void refreshFontStatus();
+    void refreshTrackIcons();
     void refreshThemeLibrary();
     void refreshThemeControls();
     void refreshStartupTemplateOptions();
@@ -142,6 +144,8 @@ private:
     QuickImportSettingsPage* m_quickImportPage = nullptr;
     NotebookSettingsPage* m_notebookPage = nullptr;
     QListWidget* m_themeList = nullptr;
+    QListWidget* m_trackIconList = nullptr;
+    QWidget* m_trackIconGroup = nullptr;
     QListWidget* m_savedThemeList = nullptr;
     QPushButton* m_applySavedTheme = nullptr;
     QPushButton* m_exportSavedTheme = nullptr;

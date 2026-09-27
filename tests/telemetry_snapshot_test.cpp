@@ -11,7 +11,7 @@ int main() {
     track.instrument.pluginVersion = "2.1"; track.instrument.path = "/secret/plugin.vst3";
     track.instrument.stateFile = "private-state";
     auto effect = track.instrument; effect.name = "Compressor"; effect.bypassed = true;
-    effect.sidechainTrackId = "kick";
+    effect.sidechainTrackIds = {"kick", "snare"};
     track.inserts = {daw::InsertModel{}, effect};
     daw::ClipModel clip; clip.id = "clip"; clip.name = "Audio";
     clip.filePath = "/secret/audio.wav"; clip.inserts = {effect};
@@ -22,7 +22,7 @@ int main() {
     const auto row = snapshot["tracks"].toArray().at(0).toObject();
     const auto insert = row["inserts"].toArray().at(0).toObject();
     if (row["name"] != QString::fromUtf8("Бас") || insert["slot"] != 1 ||
-        !insert["bypassed"].toBool() || insert["sidechain_track_id"] != "kick" ||
+        !insert["bypassed"].toBool() || insert["sidechain_track_ids"].toArray() != QJsonArray{"kick", "snare"} ||
         row["instrument"].toObject()["version"] != "2.1" || row["clip_fx"].toArray().size() != 1 ||
         json.contains("/secret") || json.contains("private-state")) return 1;
     const auto aggregates = telemetry::pluginAggregates(project);

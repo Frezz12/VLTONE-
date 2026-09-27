@@ -109,6 +109,8 @@ public:
     /// Open the same actions as a right-click on the primary selected track.
     bool showSelectedTrackActionsMenu();
     bool populateSelectedTrackActionsMenu(QMenu& menu);
+    void showTrackIconPicker(const QString& trackId);
+    void applyTrackIcon(const QStringList& trackIds, const QString& iconId);
     void setSelectedTrack(const QString& id);
     void setSelectedTracks(const QStringList& ids, const QString& primary = {});
 
@@ -120,6 +122,7 @@ public:
     void setRecordState(bool engaged, const QStringList& targets);
 
 signals:
+    void customTrackIconRequested(const QStringList& trackIds);
     void sharedPluginsRequested();
     void selectionChanged(const QString& trackId);
     /// The whole selection, whenever it changes. `selectionChanged` carries the

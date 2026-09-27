@@ -38,6 +38,7 @@ std::string trackPropertyName(TrackProperty property) {
         case TrackProperty::Muted: return "muted";
         case TrackProperty::Mono: return "mono";
         case TrackProperty::Summing: return "summing";
+        case TrackProperty::IconId: return "iconId";
     }
     return "name";
 }
@@ -50,6 +51,7 @@ bool trackPropertyFromName(const std::string& name, TrackProperty& out) {
     else if (name == "muted") out = TrackProperty::Muted;
     else if (name == "mono") out = TrackProperty::Mono;
     else if (name == "summing") out = TrackProperty::Summing;
+    else if (name == "iconId") out = TrackProperty::IconId;
     else return false;
     return true;
 }
@@ -166,8 +168,15 @@ std::string pluginPropertyName(PluginProperty property) {
         case PluginProperty::Mix: return "mix";
         case PluginProperty::ChannelMode: return "channelMode";
         case PluginProperty::SidechainTrackId: return "sidechainTrackId";
+        case PluginProperty::SidechainTrackIds: return "sidechainTrackIds";
     }
     return "name";
+}
+
+std::string pluginPropertyFieldName(PluginProperty property) {
+    // Both wire spellings change the same field, including conditional undo.
+    return property == PluginProperty::SidechainTrackIds
+        ? "sidechainTrackId" : pluginPropertyName(property);
 }
 
 bool pluginPropertyFromName(const std::string& name, PluginProperty& out) {
@@ -176,6 +185,7 @@ bool pluginPropertyFromName(const std::string& name, PluginProperty& out) {
     else if (name == "mix") out = PluginProperty::Mix;
     else if (name == "channelMode") out = PluginProperty::ChannelMode;
     else if (name == "sidechainTrackId") out = PluginProperty::SidechainTrackId;
+    else if (name == "sidechainTrackIds") out = PluginProperty::SidechainTrackIds;
     else return false;
     return true;
 }
@@ -341,6 +351,16 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                                          std::string_view label) {
         return value.empty() || requireUuid(value, label);
     };
+    const auto requireSidechains = [&](const std::vector<std::string>& ids) {
+        if (ids.size() > kMaxPluginSidechainSources)
+            return fail("too many plugin sidechain sources");
+        std::unordered_set<std::string> unique;
+        for (const auto& id : ids) {
+            if (!requireUuid(id, "sidechainTrackIds") || !unique.insert(id).second)
+                return fail("invalid or duplicate plugin sidechain source");
+        }
+        return true;
+    };
     const auto requireAssetId = [&](const AssetRef& asset,
                                     std::string_view label, bool allowEmpty) {
         if (allowEmpty && asset.empty()) return true;
@@ -472,8 +492,7 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
             } else if constexpr (std::is_same_v<T, AddPluginInsert>) {
                 if (!requireLocationIds(body.location) ||
                     !requireUuid(body.insert.id, "insert.id") ||
-                    !requireOptionalUuid(body.insert.sidechainTrackId,
-                                         "insert.sidechainTrackId") ||
+                    !requireSidechains(body.insert.sidechainTrackIds) ||
                     !requireAssetId(body.insert.stateAsset,
                                     "insert.stateAsset.assetId", true) ||
                     !requireAssetId(body.insert.rightStateAsset,
@@ -503,8 +522,7 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                 if (!requireLocationIds(body.location) ||
                     !requireUuid(body.insertId, "insertId") ||
                     !requireUuid(body.replacement.id, "replacement.id") ||
-                    !requireOptionalUuid(body.replacement.sidechainTrackId,
-                                         "replacement.sidechainTrackId") ||
+                    !requireSidechains(body.replacement.sidechainTrackIds) ||
                     !requireAssetId(body.replacement.stateAsset,
                                     "replacement.stateAsset.assetId", true) ||
                     !requireAssetId(body.replacement.rightStateAsset,
@@ -521,6 +539,10 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                 if (!requireLocationIds(body.location) ||
                     !requireUuid(body.insertId, "insertId")) {
                     return false;
+                }
+                if (body.property == PluginProperty::SidechainTrackIds) {
+                    const auto* ids = std::get_if<std::vector<std::string>>(&body.value);
+                    return ids && requireSidechains(*ids);
                 }
                 return body.property != PluginProperty::SidechainTrackId ||
                        !std::holds_alternative<std::string>(body.value) ||
@@ -998,7 +1020,7 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
                     addClipDescendants(body.location.clipId);
             } else if constexpr (std::is_same_v<T, SetPluginProperty>) {
                 fields.insert("plugin:" + body.insertId + ":" +
-                              pluginPropertyName(body.property));
+                              pluginPropertyFieldName(body.property));
                 addPluginGenerationHead(body.insertId);
                 if (!body.location.clipId.empty())
                     addClipDescendants(body.location.clipId);

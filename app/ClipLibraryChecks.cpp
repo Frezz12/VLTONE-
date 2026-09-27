@@ -88,6 +88,29 @@ bool checkClipLibraryForTest(const QString& screenshot) {
     browser->saveClipToLibrary(QString::fromStdString(pattern),QString::fromStdString(patternClip));
     browser->saveClipToLibrary(QString::fromStdString(lane),QString::fromStdString(curve));
     check(list->count()==4,"MIDI, audio, Pattern and automation cards");
+    list->selectEntry(QString::fromStdString(entry));
+    QApplication::processEvents();
+    const QRect card = list->visualItemRect(list->currentItem());
+    const QPoint pressPoint = card.center();
+    const auto sendListMouse = [&](QEvent::Type type, const QPoint& at,
+                                   Qt::MouseButton button, Qt::MouseButtons buttons) {
+        QMouseEvent event(type, QPointF(at), QPointF(list->viewport()->mapToGlobal(at)),
+                          button, buttons, Qt::NoModifier);
+        QApplication::sendEvent(list->viewport(), &event);
+    };
+    sendListMouse(QEvent::MouseButtonPress, pressPoint, Qt::LeftButton, Qt::LeftButton);
+    sendListMouse(QEvent::MouseMove,
+                  pressPoint + QPoint(QApplication::startDragDistance()+4, 0),
+                  Qt::NoButton, Qt::LeftButton);
+    const auto drags = list->findChildren<QDrag*>();
+    const bool visibleDrag = !drags.isEmpty() &&
+        drags.back()->mimeData()->hasFormat(ui::cliplibrary::kLibraryMime) &&
+        !drags.back()->pixmap().isNull() &&
+        drags.back()->pixmap().toImage().pixelColor(card.width()/2, card.height()/2).alpha() > 0 &&
+        drags.back()->pixmap().toImage().pixelColor(card.width()/2, card.height()/2).alpha() < 255 &&
+        drags.back()->hotSpot() == pressPoint - card.topLeft();
+    check(visibleDrag,"drag keeps a translucent card under the grab point");
+    sendListMouse(QEvent::MouseButtonRelease, pressPoint, Qt::LeftButton, Qt::NoButton);
     auto* search=browser->findChild<QLineEdit*>(QStringLiteral("BrowserSearch"));
     search->setText("Evening"); check(list->count()==1,"search filters card names");
     search->clear(); check(list->count()==4,"clearing search restores cards");
@@ -107,9 +130,14 @@ bool checkClipLibraryForTest(const QString& screenshot) {
     controller.undo(); browser->refreshClipLibrary();
 
     QMimeData fromLibrary; fromLibrary.setData(ui::cliplibrary::kLibraryMime,QByteArray::fromStdString(entry));
-    const QPoint targetPoint(int(10*timeline->pixelsPerSecondForTest()),timeline->laneCentreForTest(0));
+    const QPoint targetPoint(int(2*timeline->pixelsPerSecondForTest()),timeline->laneCentreForTest(0));
     QDragEnterEvent timelineEnter(targetPoint,Qt::CopyAction,&fromLibrary,Qt::LeftButton,Qt::NoModifier);
     QApplication::sendEvent(timeline,&timelineEnter);
+    if (!screenshot.isEmpty()) {
+        const QFileInfo path(screenshot);
+        check(root.grab().save(path.absolutePath()+"/"+path.completeBaseName()+"-drag.png"),
+              "library drop preview fixture saved");
+    }
     QDropEvent timelineDrop(targetPoint,Qt::CopyAction,&fromLibrary,Qt::LeftButton,Qt::NoModifier);
     QApplication::sendEvent(timeline,&timelineDrop);
     check(timelineDrop.isAccepted() && controller.project().findTrack(midiTrack)->clips.size()==before+1,

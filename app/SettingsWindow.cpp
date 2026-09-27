@@ -1,4 +1,5 @@
 #include "SettingsWindow.hpp"
+#include "TrackIcons.hpp"
 #include "graphics/GraphicsPreferences.hpp"
 #include "UiFrameClock.hpp"
 #include <QSpinBox>
@@ -641,6 +642,8 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
             markThemeModified);
     connect(&ThemeManager::instance(), &ThemeManager::fontChanged, this,
             markThemeModified);
+    connect(&ThemeManager::instance(), &ThemeManager::trackIconsChanged, this,
+            markThemeModified);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
     buttons->button(QDialogButtonBox::Close)->setText(tr("Close"));
@@ -1076,6 +1079,48 @@ QWidget* SettingsWindow::buildThemesTab() {
     connect(m_themeLibraryWatcher, &QFileSystemWatcher::directoryChanged, this,
             [this] { refreshThemeLibrary(); });
     refreshThemeLibrary();
+
+    m_trackIconGroup = new QGroupBox(tr("Track Icons"), page);
+    m_trackIconGroup->setObjectName(QStringLiteral("TrackIconSettings"));
+    auto* iconColumn = new QVBoxLayout(m_trackIconGroup);
+    auto* iconHint = new QLabel(tr("Add your own images to the track icon library. Images are optimized to 96 × 96 and saved with your theme settings. Projects opened without an icon use the default track icon."), m_trackIconGroup);
+    iconHint->setWordWrap(true);
+    iconColumn->addWidget(iconHint);
+    m_trackIconList = new QListWidget(m_trackIconGroup);
+    m_trackIconList->setObjectName(QStringLiteral("CustomTrackIcons"));
+    m_trackIconList->setAccessibleName(tr("Custom track icons"));
+    m_trackIconList->setViewMode(QListView::IconMode);
+    m_trackIconList->setResizeMode(QListView::Adjust);
+    m_trackIconList->setMovement(QListView::Static);
+    m_trackIconList->setIconSize(QSize(32, 32));
+    m_trackIconList->setGridSize(QSize(92, 68));
+    m_trackIconList->setWordWrap(true);
+    m_trackIconList->setFixedHeight(150);
+    iconColumn->addWidget(m_trackIconList);
+    auto* iconButtons = new QHBoxLayout;
+    auto* addIcon = new QPushButton(tr("Add icon…"), m_trackIconGroup);
+    addIcon->setObjectName(QStringLiteral("ImportTrackIcon"));
+    auto* removeIcon = new QPushButton(tr("Remove icon"), m_trackIconGroup);
+    removeIcon->setEnabled(false);
+    removeIcon->setToolTip(tr("Tracks using this icon will display their default icon."));
+    iconButtons->addWidget(addIcon);
+    iconButtons->addWidget(removeIcon);
+    iconButtons->addStretch(1);
+    iconColumn->addLayout(iconButtons);
+    col->addWidget(m_trackIconGroup);
+    connect(addIcon, &QPushButton::clicked, this, [this] { importTrackIconFile(); });
+    connect(m_trackIconList, &QListWidget::currentItemChanged, this,
+            [removeIcon](QListWidgetItem* item) { removeIcon->setEnabled(item != nullptr); });
+    connect(removeIcon, &QPushButton::clicked, this, [this] {
+        auto* item = m_trackIconList->currentItem();
+        if (!item) return;
+        QString error;
+        if (!ui::trackicons::removeCustom(item->data(Qt::UserRole).toString(), &error))
+            QMessageBox::warning(this, tr("Track Icons"), error);
+    });
+    connect(&ThemeManager::instance(), &ThemeManager::trackIconsChanged, this,
+            &SettingsWindow::refreshTrackIcons);
+    refreshTrackIcons();
 
     auto* fontGroup = new QGroupBox(tr("Interface Font"), page);
     auto* fontColumn = new QVBoxLayout(fontGroup);
@@ -1698,6 +1743,43 @@ QWidget* SettingsWindow::buildThemesTab() {
                 repaintSurfaces();
             });
     return page;
+}
+
+void SettingsWindow::refreshTrackIcons() {
+    if (!m_trackIconList) return;
+    const QString selected = m_trackIconList->currentItem()
+        ? m_trackIconList->currentItem()->data(Qt::UserRole).toString() : QString();
+    m_trackIconList->clear();
+    for (const auto& entry : ui::trackicons::customIcons()) {
+        const QIcon image = ui::trackicons::icon(entry.id, th().textPrimary);
+        auto* item = new QListWidgetItem(image.isNull() ? icons::icon(icons::Glyph::Image, th().textSecondary) : image,
+                                        entry.name, m_trackIconList);
+        item->setData(Qt::UserRole, entry.id);
+        item->setToolTip(entry.name);
+        if (entry.id == selected) m_trackIconList->setCurrentItem(item);
+    }
+}
+
+QString SettingsWindow::importTrackIconFile() {
+    showTab(kThemesTab);
+    if (auto* scroll = qobject_cast<QScrollArea*>(m_pages->widget(kThemesTab)))
+        scroll->ensureWidgetVisible(m_trackIconGroup, 0, 20);
+    const QString path = QFileDialog::getOpenFileName(this, tr("Add track icon"), QString(),
+        tr("Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.svg *.ico);;All files (*)"));
+    if (path.isEmpty()) return {};
+    QString error;
+    const QString id = ui::trackicons::importFile(path, &error);
+    if (id.isEmpty()) {
+        QMessageBox::warning(this, tr("Track Icons"), error);
+        return {};
+    }
+    for (int i = 0; i < m_trackIconList->count(); ++i)
+        if (m_trackIconList->item(i)->data(Qt::UserRole).toString() == id) {
+            m_trackIconList->setCurrentRow(i);
+            m_trackIconList->scrollToItem(m_trackIconList->item(i));
+            break;
+        }
+    return id;
 }
 
 void SettingsWindow::refreshFontStatus() {

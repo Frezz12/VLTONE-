@@ -1,4 +1,6 @@
 #include "Internal/InternalFactory.hpp"
+#include "Internal/CompressorInstance.hpp"
+#include "Internal/DelayInstance.hpp"
 
 #include "Internal/GravityInstance.hpp"
 #include "Internal/GraphitInstance.hpp"
@@ -62,6 +64,10 @@ std::vector<PluginDescriptor> InternalFactory::inspect(const std::string& path) 
 }
 
 std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& descriptor) {
+    if (descriptor.uid == delay::DelayInstance::uid()) return std::make_unique<delay::DelayInstance>();
+    if (descriptor.uid == compressor::CompressorInstance::uid()) {
+        return std::make_unique<compressor::CompressorInstance>();
+    }
     if (descriptor.uid == pitch::PitchCorrectorInstance::uid()) {
         return std::make_unique<pitch::PitchCorrectorInstance>();
     }
@@ -88,6 +94,8 @@ std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& 
 
 std::vector<PluginDescriptor> builtinPlugins() {
     return {sampler::SamplerInstance::staticDescriptor(),
+            delay::DelayInstance::staticDescriptor(),
+            compressor::CompressorInstance::staticDescriptor(),
             pitch::PitchCorrectorInstance::staticDescriptor(),
             equalizer::EqualizerInstance::staticDescriptor(),
             gravity::GravityInstance::staticDescriptor(),

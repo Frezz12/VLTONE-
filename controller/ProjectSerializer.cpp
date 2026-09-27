@@ -782,6 +782,7 @@ json trackToJson(const TrackModel& t, MediaPaths media) {
         {"inserts", insertsToJson(t.inserts)},
         {"clips", std::move(clips)},
     };
+    if (!t.iconId.empty()) track["iconId"] = t.iconId;
     if (!t.samplerFx.ownerInstrumentId.empty() || !t.samplerFx.inserts.empty() ||
         std::abs(t.samplerFx.volume - 1.0f) > 1e-6f ||
         std::abs(t.samplerFx.pan) > 1e-6f) {
@@ -805,6 +806,10 @@ TrackModel trackFromJson(const json& j, const std::string& mediaDir) {
     t.id = j.value("id", newUuid());
     t.kind = trackKindFromString(j.value("kind", "audio"));
     t.name = j.value("name", "");
+    t.iconId = j.value("iconId", "");
+    if (t.iconId.size() > 96 ||
+        t.iconId.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-:") != std::string::npos)
+        t.iconId.clear();
     t.color = j.value("color", 0x4A90D9u);
     t.volume = j.value("volume", 1.0f);
     t.pan = j.value("pan", 0.0f);

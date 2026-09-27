@@ -27,6 +27,7 @@ protected:
     bool event(QEvent* event) override;
     void startDrag(Qt::DropActions supportedActions) override;
     void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
     void showEvent(QShowEvent* event) override;
@@ -36,5 +37,6 @@ private:
     PreviewLoader* m_loader;
     QString m_filter, m_signature, m_loading;
     QSet<QString> m_requested;
+    QPoint m_dragPressOffset{20, 20};
     double m_zoom = 1.0;
 };

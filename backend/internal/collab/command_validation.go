@@ -162,7 +162,7 @@ func deriveCommandMetadataForSchema(kind string, payload json.RawMessage,
 				return nil, nil, err
 			}
 			switch property {
-			case "name", "color", "volume", "pan", "muted", "mono", "summing":
+			case "name", "color", "volume", "pan", "muted", "mono", "summing", "iconId":
 				add(prefix + property)
 			default:
 				return nil, nil, invalidf("track property is unsupported")
@@ -362,6 +362,8 @@ func deriveCommandMetadataForSchema(kind string, payload json.RawMessage,
 				return nil, nil, err
 			}
 			switch property {
+			case "sidechainTrackIds":
+				add(prefix+"sidechainTrackId", prefix+"generation")
 			case "name", "bypassed", "mix", "channelMode", "sidechainTrackId":
 				add(prefix+property, prefix+"generation")
 			default:
@@ -692,7 +694,7 @@ func deriveCommandLeasePolicyForSchema(kind string, payload json.RawMessage,
 	case "plugin.setProperty":
 		body, _ := commandPayloadObject(payload)
 		property, _ := requiredPayloadString(body, "property")
-		if property == "sidechainTrackId" {
+		if property == "sidechainTrackId" || property == "sidechainTrackIds" {
 			location, err := validatePluginLocation(body["location"])
 			if err != nil {
 				return commandLeasePolicy{}, err
@@ -991,8 +993,10 @@ func deriveLifecycleStepsForSchema(kind string, payload json.RawMessage,
 		afterID, _ := optionalIdentifier("afterId")
 		addVacant("plugin:", insertID)
 		addLive("plugin:", afterID)
-		sidechainID, _ := optionalPayloadUUIDValue(insert, "sidechainTrackId")
-		addLive("track:", sidechainID)
+		sidechainIDs, _ := sharedInsertSidechainIDs(insert)
+		for _, id := range sidechainIDs {
+			addLive("track:", id)
+		}
 		if location.Chain == "instrument" && afterID != "" {
 			return nil, invalidf("command payload instrument chain cannot have an anchor")
 		}
@@ -1030,6 +1034,11 @@ func deriveLifecycleStepsForSchema(kind string, payload json.RawMessage,
 		if property == "sidechainTrackId" {
 			sidechainID, _ := optionalPayloadUUIDValue(body, "value")
 			addLive("track:", sidechainID)
+		} else if property == "sidechainTrackIds" {
+			ids, _ := sidechainSourceIDs(body["value"])
+			for _, id := range ids {
+				addLive("track:", id)
+			}
 		}
 	case "plugin.replace":
 		if _, err := pluginParents(); err != nil {
@@ -1038,8 +1047,10 @@ func deriveLifecycleStepsForSchema(kind string, payload json.RawMessage,
 		insertID, _ := identifier("insertId")
 		addLive("plugin:", insertID)
 		replacement, _ := commandPayloadObject(body["replacement"])
-		sidechainID, _ := optionalPayloadUUIDValue(replacement, "sidechainTrackId")
-		addLive("track:", sidechainID)
+		sidechainIDs, _ := sharedInsertSidechainIDs(replacement)
+		for _, id := range sidechainIDs {
+			addLive("track:", id)
+		}
 	case "plugin.setState", "plugin.setParameter", "plugin.removeParameter", "plugin.setAssetBinding", "plugin.removeAssetBinding":
 		if _, err := pluginParents(); err != nil {
 			return nil, err

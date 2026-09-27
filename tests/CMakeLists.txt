@@ -262,6 +262,14 @@ set_tests_properties(gravity_test PROPERTIES
 # VLT Equalizer: stable registration/state, IIR and WOLA paths, dynamic
 # sidechain, PDC notifications, sample-offset events and realtime safety.
 add_executable(equalizer_test equalizer_test.cpp)
+add_executable(compressor_test compressor_test.cpp)
+add_executable(delay_test delay_test.cpp)
+target_link_libraries(delay_test PRIVATE daw_pluginhost)
+add_test(NAME delay_test COMMAND delay_test)
+set_tests_properties(delay_test PROPERTIES TIMEOUT 120)
+target_link_libraries(compressor_test PRIVATE daw_pluginhost)
+add_test(NAME compressor_test COMMAND compressor_test)
+set_tests_properties(compressor_test PROPERTIES TIMEOUT 90)
 target_link_libraries(equalizer_test PRIVATE daw_controller)
 
 add_test(NAME equalizer_test COMMAND equalizer_test)

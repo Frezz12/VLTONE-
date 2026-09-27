@@ -10,10 +10,12 @@
 #include <QInputDialog>
 #include <QKeyEvent>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollBar>
 #include <QStyledItemDelegate>
+#include <QStyleOptionViewItem>
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
@@ -259,12 +261,37 @@ void ClipLibraryView::paintEvent(QPaintEvent* event) {
         m_filter.isEmpty() ? tr("Drag a clip here to keep a copy.\nSaved with this project.") : tr("No matching clips"));
 }
 
+void ClipLibraryView::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        if (auto* pressed = itemAt(event->position().toPoint()))
+            m_dragPressOffset = event->position().toPoint() - visualItemRect(pressed).topLeft();
+    }
+    QListWidget::mousePressEvent(event);
+}
+
 void ClipLibraryView::startDrag(Qt::DropActions) {
     if (!currentItem()) return;
+    const QRect itemRect = visualItemRect(currentItem());
+    if (itemRect.isEmpty()) return;
+    const qreal dpr = viewport()->devicePixelRatioF();
+    QPixmap pixmap((QSizeF(itemRect.size()) * dpr).toSize());
+    pixmap.setDevicePixelRatio(dpr);
+    pixmap.fill(Qt::transparent);
+    {
+        QPainter painter(&pixmap);
+        painter.setOpacity(0.76);
+        QStyleOptionViewItem option;
+        initViewItemOption(&option);
+        option.rect = QRect(QPoint(), itemRect.size());
+        option.state |= QStyle::State_Selected;
+        itemDelegate()->paint(&painter, option, indexFromItem(currentItem()));
+    }
     auto* drag=new QDrag(this); auto* mime=new QMimeData;
     mime->setData(ui::cliplibrary::kLibraryMime, currentItem()->data(Qt::UserRole).toString().toUtf8());
-    drag->setMimeData(mime); drag->setPixmap(viewport()->grab(visualItemRect(currentItem())));
-    drag->setHotSpot(QPoint(20,20)); drag->exec(Qt::CopyAction,Qt::CopyAction); drag->deleteLater();
+    drag->setMimeData(mime); drag->setPixmap(pixmap);
+    drag->setHotSpot(QPoint(std::clamp(m_dragPressOffset.x(), 0, itemRect.width()-1),
+                            std::clamp(m_dragPressOffset.y(), 0, itemRect.height()-1)));
+    drag->exec(Qt::CopyAction,Qt::CopyAction); drag->deleteLater();
 }
 
 bool ClipLibraryView::populateActions(QMenu& menu) {

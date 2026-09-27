@@ -1871,171 +1871,173 @@ QWidget* ChannelStrip::buildSends() {
     const auto* track =
         m_controller->project().findTrack(m_trackId.toStdString());
     const size_t sendCount = track ? track->sends.size() : 0;
-    const int slotCount = std::max<int>(kMinSendSlots, int(sendCount));
+    const int slotCount = std::max(kMinSendSlots, int(sendCount) + 1);
 
     std::vector<QWidget*> rows;
-    for (int i = 0; i < slotCount; ++i) {
-        if (track && i < int(sendCount)) {
-            const daw::SendModel& send = track->sends[size_t(i)];
-            const QString sendId = QString::fromStdString(send.id);
-            QString destName = tr("Missing");
-            if (const auto* dest =
-                    m_controller->project().findTrack(send.destinationTrackId))
-                destName = QString::fromStdString(dest->name);
+    for (int i = 0; i < int(sendCount); ++i) {
+        const daw::SendModel& send = track->sends[size_t(i)];
+        const QString sendId = QString::fromStdString(send.id);
+        QString destName = tr("Missing");
+        if (const auto* dest =
+                m_controller->project().findTrack(send.destinationTrackId))
+            destName = QString::fromStdString(dest->name);
 
-            auto* toggle = makeSlotButton(destName, send.enabled);
-            toggle->setPopupMode(QToolButton::DelayedPopup);
-            toggle->setProperty("bypassed", !send.enabled);
-            toggle->setToolTip(
-                (send.enabled ? tr("Send to %1, %2. Click to switch it off; the "
-                                   "knob sets how much goes.")
-                              : tr("Send to %1, %2 — off. Click to switch it on."))
-                    .arg(destName,
-                         send.preFader ? tr("pre-fader") : tr("post-fader")));
-            connect(toggle, &QToolButton::clicked, this,
-                    [this, sendId, enabled = send.enabled] {
-                        m_controller->setSendEnabled(m_trackId.toStdString(),
-                                                     sendId.toStdString(),
-                                                     !enabled);
-                        emit edited();
-                        emit structureChanged();
-                    });
+        auto* toggle = makeSlotButton(destName, send.enabled);
+        toggle->setPopupMode(QToolButton::DelayedPopup);
+        toggle->setProperty("sendRow", true);
+        toggle->setProperty("bypassed", !send.enabled);
+        toggle->setAccessibleName(destName);
+        toggle->setToolTip(
+            (send.enabled ? tr("Send to %1, %2. Click to switch it off; the "
+                               "knob sets how much goes.")
+                          : tr("Send to %1, %2 — off. Click to switch it on."))
+                .arg(destName,
+                     send.preFader ? tr("pre-fader") : tr("post-fader")));
+        connect(toggle, &QToolButton::clicked, this,
+                [this, sendId, enabled = send.enabled] {
+                    m_controller->setSendEnabled(m_trackId.toStdString(),
+                                                 sendId.toStdString(),
+                                                 !enabled);
+                    emit edited();
+                    emit structureChanged();
+                });
 
-            auto* row = new SlotRow(toggle, this);
+        auto* row = new SlotRow(toggle, this);
 
-            // Same three-across shape as a plugin slot, and for the same
-            // reason: these are the three things a send is actually adjusted
-            // with, and a menu between the pointer and any of them is a tax.
-            auto* power = new ui::IconButton(icons::Glyph::Power,
-                                             send.enabled ? tr("Switch this send off")
-                                                          : tr("Switch this send on"),
-                                             row);
-            power->setButtonSize(kActionSide, kActionSide);
-            power->setCursor(Qt::PointingHandCursor);
-            power->setCheckable(true);
-            power->setChecked(!send.enabled);
-            power->setActiveColor(Theme::mute());
-            connect(power, &QAbstractButton::clicked, this,
-                    [this, sendId](bool off) {
-                        m_controller->setSendEnabled(m_trackId.toStdString(),
-                                                     sendId.toStdString(), !off);
-                        emit edited();
-                        emit structureChanged();
-                    });
-            row->addSlotAction(power);
+        // Same three-across shape as a plugin slot, and for the same
+        // reason: these are the three things a send is actually adjusted
+        // with, and a menu between the pointer and any of them is a tax.
+        auto* power = new ui::IconButton(icons::Glyph::Power,
+                                         send.enabled ? tr("Switch this send off")
+                                                      : tr("Switch this send on"),
+                                         row);
+        power->setButtonSize(kActionSide, kActionSide);
+        power->setCursor(Qt::PointingHandCursor);
+        power->setCheckable(true);
+        power->setChecked(!send.enabled);
+        power->setActiveColor(Theme::mute());
+        connect(power, &QAbstractButton::clicked, this,
+                [this, sendId](bool off) {
+                    m_controller->setSendEnabled(m_trackId.toStdString(),
+                                                 sendId.toStdString(), !off);
+                    emit edited();
+                    emit structureChanged();
+                });
+        row->addSlotAction(power);
 
-            auto* tap = new QToolButton(row);
-            tap->setObjectName("TapButton");
-            tap->setCursor(Qt::PointingHandCursor);
-            tap->setText(send.preFader ? tr("PRE") : tr("PST"));
-            tap->setProperty("slotActionText", send.preFader ? tr("Switch to post-fader") :
-                                                             tr("Switch to pre-fader"));
-            tap->setToolTip(send.preFader
-                                ? tr("Pre-fader: the send ignores this channel's "
-                                     "fader. Click for post-fader.")
-                                : tr("Post-fader: the send follows this channel's "
-                                     "fader. Click for pre-fader."));
-            connect(tap, &QToolButton::clicked, this,
-                    [this, sendId, pre = send.preFader] {
-                        m_controller->setSendPreFader(m_trackId.toStdString(),
-                                                      sendId.toStdString(), !pre);
-                        emit edited();
-                        emit structureChanged();
-                    });
-            QFont tapFont = tap->font();
-            tapFont.setPixelSize(9);
-            tapFont.setWeight(QFont::Medium);
-            row->addSlotAction(tap, std::max(kTapWidth,
-                QFontMetrics(tapFont).horizontalAdvance(tap->text()) + 6));
+        auto* tap = new QToolButton(row);
+        tap->setObjectName("TapButton");
+        tap->setCursor(Qt::PointingHandCursor);
+        tap->setText(send.preFader ? tr("PRE") : tr("PST"));
+        tap->setProperty("slotActionText", send.preFader ? tr("Switch to post-fader") :
+                                                         tr("Switch to pre-fader"));
+        tap->setToolTip(send.preFader
+                            ? tr("Pre-fader: the send ignores this channel's "
+                                 "fader. Click for post-fader.")
+                            : tr("Post-fader: the send follows this channel's "
+                                 "fader. Click for pre-fader."));
+        connect(tap, &QToolButton::clicked, this,
+                [this, sendId, pre = send.preFader] {
+                    m_controller->setSendPreFader(m_trackId.toStdString(),
+                                                  sendId.toStdString(), !pre);
+                    emit edited();
+                    emit structureChanged();
+                });
+        QFont tapFont = tap->font();
+        tapFont.setPixelSize(9);
+        tapFont.setWeight(QFont::Medium);
+        row->addSlotAction(tap, std::max(kTapWidth,
+            QFontMetrics(tapFont).horizontalAdvance(tap->text()) + 6));
 
-            auto* remove = new ui::IconButton(icons::Glyph::Close,
-                                              tr("Remove this send"), row);
-            remove->setButtonSize(kActionSide, kActionSide);
-            remove->setCursor(Qt::PointingHandCursor);
-            connect(remove, &QAbstractButton::clicked, this, [this, sendId] {
-                m_controller->removeSend(m_trackId.toStdString(),
-                                         sendId.toStdString());
-                emit edited();
-                emit structureChanged();
-            });
-            row->addSlotAction(remove);
+        auto* remove = new ui::IconButton(icons::Glyph::Close,
+                                          tr("Remove this send"), row);
+        remove->setButtonSize(kActionSide, kActionSide);
+        remove->setCursor(Qt::PointingHandCursor);
+        connect(remove, &QAbstractButton::clicked, this, [this, sendId] {
+            m_controller->removeSend(m_trackId.toStdString(),
+                                     sendId.toStdString());
+            emit edited();
+            emit structureChanged();
+        });
+        row->addSlotAction(remove);
 
-            // The amount, as a knob rather than the slider that used to sit on
-            // a second line: it reads at a glance, it costs no height, and it
-            // is where every console puts a send level. It sits at the head of
-            // the row, so a column of sends reads down as "this much, to
-            // there" rather than the other way round.
-            auto* level = new ui::Knob({}, row);
-            m_sendKnobs.insert(sendId, level);
-            level->setBare(kSendKnobSide);
-            // Up to +6 dB, like a fader: unity is not enough to drive a quiet
-            // source into a reverb without turning the bus up under everything
-            // else feeding it.
-            level->setRange(0.0, double(daw::EngineController::kMaxSendLevel));
-            level->setDefaultValue(0.5);
-            level->setValue(send.level);
-            level->setFormatter([](double v) { return ui::formatGainDb(v); });
-            level->setToolTip(tr("Send amount to %1 — up to +6 dB").arg(destName));
-            level->setAutomatable(true);
-            connect(level, &ui::Knob::automateRequested, this,
-                    [this, sendId] {
-                        emit automateSendRequested(m_trackId, sendId);
-                    });
-            auto levelStart = std::make_shared<std::optional<float>>();
-            connect(level, &ui::Knob::valueChanged, this,
-                    [this, sendId, levelStart](double v) {
-                if (!*levelStart) {
-                    if (const auto* track = m_controller->project().findTrack(
-                            m_trackId.toStdString())) {
-                        for (const auto& current : track->sends) {
-                            if (current.id == sendId.toStdString()) {
-                                *levelStart = current.level;
-                                break;
-                            }
+        // The amount, as a knob rather than the slider that used to sit on
+        // a second line: it reads at a glance, it costs no height, and it
+        // is where every console puts a send level. It sits at the head of
+        // the row, so a column of sends reads down as "this much, to
+        // there" rather than the other way round.
+        auto* level = new ui::Knob({}, row);
+        m_sendKnobs.insert(sendId, level);
+        level->setBare(kSendKnobSide);
+        // Up to +6 dB, like a fader: unity is not enough to drive a quiet
+        // source into a reverb without turning the bus up under everything
+        // else feeding it.
+        level->setRange(0.0, double(daw::EngineController::kMaxSendLevel));
+        level->setDefaultValue(0.5);
+        level->setValue(send.level);
+        level->setFormatter([](double v) { return ui::formatGainDb(v); });
+        level->setToolTip(tr("Send amount to %1 — up to +6 dB").arg(destName));
+        level->setAutomatable(true);
+        connect(level, &ui::Knob::automateRequested, this,
+                [this, sendId] {
+                    emit automateSendRequested(m_trackId, sendId);
+                });
+        auto levelStart = std::make_shared<std::optional<float>>();
+        connect(level, &ui::Knob::valueChanged, this,
+                [this, sendId, levelStart](double v) {
+            if (!*levelStart) {
+                if (const auto* track = m_controller->project().findTrack(
+                        m_trackId.toStdString())) {
+                    for (const auto& current : track->sends) {
+                        if (current.id == sendId.toStdString()) {
+                            *levelStart = current.level;
+                            break;
                         }
                     }
                 }
-                m_controller->setSendLevel(m_trackId.toStdString(),
-                                           sendId.toStdString(), float(v));
-                emit edited(false);
-            });
-            connect(level, &ui::Knob::editFinished, this,
-                    [this, sendId, levelStart] {
-                if (*levelStart) {
-                    m_controller->commitSendLevelEdit(
-                        m_trackId.toStdString(), sendId.toStdString(),
-                        **levelStart);
-                    levelStart->reset();
-                }
-                emit edited();
-            });
-            row->setLeading(level);
+            }
+            m_controller->setSendLevel(m_trackId.toStdString(),
+                                       sendId.toStdString(), float(v));
+            emit edited(false);
+        });
+        connect(level, &ui::Knob::editFinished, this,
+                [this, sendId, levelStart] {
+            if (*levelStart) {
+                m_controller->commitSendLevelEdit(
+                    m_trackId.toStdString(), sendId.toStdString(),
+                    **levelStart);
+                levelStart->reset();
+            }
+            emit edited();
+        });
+        row->setLeading(level);
 
-            rows.push_back(row);
-        } else {
-            auto* b = makeSlotButton(tr("SEND %1").arg(i + 1), false);
-            auto* menu = new QMenu(b);
-            connect(menu, &QMenu::aboutToShow, this,
-                    [this, menu] { populateAddSendMenu(menu); });
-            b->setMenu(menu);
-            rows.push_back(b);
-        }
+        rows.push_back(row);
     }
 
-    auto* add = new ui::IconButton(icons::Glyph::Plus, tr("Add send"), this);
-    add->setButtonSize(16, 14);
-    connect(add, &QAbstractButton::clicked, this, [this, add] {
-        auto* menu = new QMenu(add);
-        menu->setAttribute(Qt::WA_DeleteOnClose);
-        populateAddSendMenu(menu);
-        menu->popup(add->mapToGlobal(QPoint(0, add->height())));
-    });
+    // Like the FX rack, all unused space is one add target. A branching signal
+    // distinguishes a parallel send from a plugin in the serial FX chain.
+    auto* add = makeSlotButton({}, false);
+    add->setObjectName(QStringLiteral("SendAddArea"));
+    const int addHeight = (slotCount - int(sendCount)) * (kSlotHeight + 1) - 1;
+    add->setProperty("sendAddNaturalHeight", addHeight);
+    add->setFixedHeight(addHeight);
+    add->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    add->setIconSize(QSize(16, 16));
+    add->setFocusPolicy(Qt::StrongFocus);
+    add->setToolTip(tr("Add send"));
+    add->setAccessibleName(tr("Add send"));
+    auto* menu = new QMenu(add);
+    connect(menu, &QMenu::aboutToShow, this,
+            [this, menu] { populateAddSendMenu(menu); });
+    add->setMenu(menu);
+    rows.push_back(add);
     WellDrag drag;
     drag.dragMime = kSendsMime;
     drag.dragPayload = m_trackId;
     drag.titleTip = tr("Drag onto another channel to move these sends there. "
                        "Hold Alt to copy them instead.");
-    return buildSlotWell(tr("Sends"), add, rows, {}, {}, std::move(drag));
+    return buildSlotWell(tr("Sends"), nullptr, rows, {}, {}, std::move(drag));
 }
 
 void ChannelStrip::populateInputMenu(QMenu* menu) {
@@ -2348,6 +2350,11 @@ void ChannelStrip::setRackHeights(const RackHeights& heights) {
         // of keeping an empty well below the final processing stage.
         const int height = m_master && i == 3 ? 0 : std::max(heights[i], m_rackNaturalHeights[i]);
         if (row->height() == height && row->isHidden() == (height == 0)) continue;
+        if (i == 3 && !m_master) {
+            if (auto* add = row->findChild<QToolButton*>(QStringLiteral("SendAddArea")))
+                add->setFixedHeight(add->property("sendAddNaturalHeight").toInt() +
+                                    height - m_rackNaturalHeights[i]);
+        }
         row->setFixedHeight(height);
         row->setVisible(height > 0);
         changed = true;
@@ -3205,7 +3212,7 @@ QLabel { color: %TEXT2%; font-size: 9px; }
     color: %TEXT2%; font-size: 9px; font-weight: 400; padding: 0 5px;
     text-align: left;
 }
-#SlotButton[insertRow="true"] {
+#SlotButton[insertRow="true"], #SlotButton[sendRow="true"] {
     background: transparent; border-radius: 2px; border-bottom-color: %RACK_LINE%;
 }
 #SlotButton[active="true"] { color: %TEXT%; border-left-color: %ACCENT%; }
@@ -3220,10 +3227,10 @@ QLabel { color: %TEXT2%; font-size: 9px; }
 #SlotButton:hover { background: %HOVER%; }
 #SlotButton::menu-indicator { image: none; width: 0; }
 #SlotButton:disabled { color: %TEXT2%; }
-#InsertAddArea { background: transparent; border: none; border-radius: 6px; padding: 0; }
-#InsertAddArea:hover, #InsertAddArea:focus { background: %RACK_HOVER%; }
-#InsertAddArea:pressed { background: %RECESS%; }
-#InsertAddArea::menu-indicator { image: none; width: 0; }
+#InsertAddArea, #SendAddArea { background: transparent; border: none; border-radius: 6px; padding: 0; }
+#InsertAddArea:hover, #InsertAddArea:focus, #SendAddArea:hover, #SendAddArea:focus { background: %RACK_HOVER%; }
+#InsertAddArea:pressed, #SendAddArea:pressed { background: %RECESS%; }
+#InsertAddArea::menu-indicator, #SendAddArea::menu-indicator { image: none; width: 0; }
 #SlotOverflow { background: %SLOT%; color: %TEXT%; border: 1px solid %SEP%;
                 border-radius: %RADIUS%px; padding: 0; font-size: 12px; }
 #SlotOverflow:hover, #SlotOverflow:focus { background: %HOVER%; }
@@ -3263,6 +3270,8 @@ QLabel { color: %TEXT2%; font-size: 9px; }
 
     for (auto* add : findChildren<QToolButton*>(QStringLiteral("InsertAddArea")))
         add->setIcon(icons::icon(icons::Glyph::Plus, t.textSecondary, 14));
+    for (auto* add : findChildren<QToolButton*>(QStringLiteral("SendAddArea")))
+        add->setIcon(icons::icon(icons::Glyph::Send, t.textSecondary, 16));
 
     if (!m_insertsOnly) {
         if (m_master) {

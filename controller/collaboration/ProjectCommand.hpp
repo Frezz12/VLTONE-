@@ -46,6 +46,7 @@ enum class TrackProperty : std::uint8_t {
     Muted,
     Mono,
     Summing,
+    IconId,
 };
 
 enum class ClipProperty : std::uint8_t {
@@ -107,6 +108,7 @@ enum class PluginProperty : std::uint8_t {
     Mix,
     ChannelMode,
     SidechainTrackId,
+    SidechainTrackIds,
 };
 
 struct CommandMeta {
@@ -336,11 +338,14 @@ struct ReplacePluginInsert {
     InsertModel replacement;
 };
 
+using PluginPropertyValue = std::variant<std::string, double, std::int64_t, bool,
+                                         std::vector<std::string>>;
+
 struct SetPluginProperty {
     PluginLocation location;
     std::string insertId;
     PluginProperty property = PluginProperty::Name;
-    ScalarValue value = std::string();
+    PluginPropertyValue value = std::string();
 };
 
 /// Atomically updates compatibility metadata, fallback parameters and all
@@ -661,6 +666,7 @@ bool sendPropertyFromName(const std::string& name, SendProperty& out);
 std::string pluginChainName(PluginChain chain);
 bool pluginChainFromName(const std::string& name, PluginChain& out);
 std::string pluginPropertyName(PluginProperty property);
+std::string pluginPropertyFieldName(PluginProperty property);
 bool pluginPropertyFromName(const std::string& name, PluginProperty& out);
 std::string commandKind(const ProjectCommand& command);
 /// True for the canonical 8-4-4-4-12 hexadecimal UUID wire representation.

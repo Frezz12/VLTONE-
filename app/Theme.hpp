@@ -117,6 +117,7 @@ public:
 signals:
     void changed();
     void fontChanged();
+    void trackIconsChanged();
 
 private:
     ThemeManager();

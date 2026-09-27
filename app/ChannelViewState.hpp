@@ -17,7 +17,9 @@ inline QByteArray channelViewState(const daw::ProjectModel& project,
     };
     const auto slot = [&](const daw::InsertModel& insert) {
         string(insert.id); string(insert.name); string(insert.uid);
-        string(insert.path); string(insert.sidechainTrackId);
+        string(insert.path);
+        out << quint64(insert.sidechainTrackIds.size());
+        for (const auto& source : insert.sidechainTrackIds) string(source);
         out << int(insert.format) << int(insert.channelMode) << insert.bypassed;
     };
     const auto writeSlots = [&](const auto& inserts) {

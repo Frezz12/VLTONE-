@@ -2,6 +2,8 @@
 
 #include "Controls.hpp"
 #include "EqualizerPanel.hpp"
+#include "CompressorPanel.hpp"
+#include "DelayPanel.hpp"
 #include "GraphitPanel.hpp"
 #include "PitchCorrectorPanel.hpp"
 #include "ModulationPanel.hpp"
@@ -10,6 +12,7 @@
 #include "EngineController.hpp"
 #include "SamplerPanel.hpp"
 #include "Theme.hpp"
+#include "graphics/ScenePaintSource.hpp"
 #if defined(Q_OS_MACOS)
 #include "PluginEditorWindowMac.hpp"
 #endif
@@ -35,9 +38,11 @@
 #include <QSizePolicy>
 #include <QScreen>
 #include <QStyle>
+#include <QStyleOption>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QKeyEvent>
 #include <QComboBox>
 #include <QResizeEvent>
@@ -165,6 +170,215 @@ constexpr int kNativeMapMaxAttempts = 45;
 /// from looking like a plugin window instead of a second application, this
 /// guarantees there is always somewhere to grab the window or resize it.
 constexpr int kScreenInset = 28;
+
+// Keep native combo-box input, accessibility and popups, but draw the closed
+// controls as one compact routing strip in both QWidget and GPU workspaces.
+class PluginHeaderCombo : public QComboBox, public ui::graphics::ScenePaintSource {
+public:
+    PluginHeaderCombo(icons::Glyph glyph, int preferredWidth, int minimumWidth,
+                      QWidget* parent)
+        : QComboBox(parent), m_glyph(glyph), m_preferredWidth(preferredWidth),
+          m_minimumWidth(minimumWidth) {
+        setFixedHeight(20);
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        setFocusPolicy(Qt::StrongFocus);
+        setCursor(Qt::PointingHandCursor);
+        setAttribute(Qt::WA_Hover);
+    }
+    QSize sizeHint() const override { return {m_preferredWidth, 20}; }
+    QSize minimumSizeHint() const override { return {m_minimumWidth, 20}; }
+    void paintScene(QPainter& painter, const QRegion&) override {
+        const auto& t = th();
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QRectF bounds = QRectF(rect()).adjusted(1, 1, -1, -1);
+        QStyleOptionComboBox option;
+        initStyleOption(&option);
+        const bool focus = hasFocus() && (option.state & QStyle::State_KeyboardFocusChange);
+        const bool connected = m_glyph == icons::Glyph::Link &&
+                               !currentData().toString().isEmpty() && isEnabled();
+        if ((isEnabled() && (underMouse() || (option.state & QStyle::State_On))) || focus) {
+            painter.setPen(focus ? QPen(t.accentHighlight, 1) : QPen(Qt::NoPen));
+            painter.setBrush(mixColors(t.well(), t.textPrimary, 0.07));
+            painter.drawRoundedRect(bounds, 4, 4);
+        }
+        const QColor ink = isEnabled() ? t.textPrimary : t.textSecondary;
+        const QColor iconInk = connected ? t.accentHighlight : t.textSecondary;
+        icons::Glyph glyph = m_glyph;
+        if (glyph == icons::Glyph::StereoRings &&
+            currentData().toInt() == int(daw::PluginChannelMode::Mono))
+            glyph = icons::Glyph::MonoRing;
+        icons::paint(painter, glyph, QRectF(7, 3, 14, 14), iconInk);
+        painter.setPen(ink);
+        const QRect textRect(27, 0, std::max(0, width() - 46), height());
+        const QString label = m_glyph == icons::Glyph::StereoRings &&
+                              currentData().toInt() == int(daw::PluginChannelMode::DualMono)
+            ? QStringLiteral("2 × ") + itemText(findData(int(daw::PluginChannelMode::Mono)))
+            : currentText();
+        painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter,
+                         fontMetrics().elidedText(label, Qt::ElideRight,
+                                                  textRect.width()));
+        icons::paint(painter, icons::Glyph::Chevron,
+                     QRectF(width() - 16, 5, 10, 10), iconInk);
+    }
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        paintScene(painter, QRegion(rect()));
+    }
+private:
+    icons::Glyph m_glyph;
+    int m_preferredWidth;
+    int m_minimumWidth;
+};
+
+// Toggle checkboxes without dismissing the source picker. Native menu focus,
+// scrolling, accessibility, Escape and outside-click dismissal remain intact.
+class SidechainSourceMenu final : public QMenu {
+public:
+    using QMenu::QMenu;
+protected:
+    bool event(QEvent* event) override {
+        if (event->type() == QEvent::ShortcutOverride) {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            if (key->key() == Qt::Key_Space || key->key() == Qt::Key_Return ||
+                key->key() == Qt::Key_Enter) {
+                event->accept();
+                return true;
+            }
+        }
+        return QMenu::event(event);
+    }
+    void mouseReleaseEvent(QMouseEvent* event) override {
+        auto* action = actionAt(event->pos());
+        if (event->button() == Qt::LeftButton && toggle(action)) {
+            event->accept();
+            return;
+        }
+        QMenu::mouseReleaseEvent(event);
+    }
+    void keyPressEvent(QKeyEvent* event) override {
+        if ((event->key() == Qt::Key_Space || event->key() == Qt::Key_Return ||
+             event->key() == Qt::Key_Enter) && toggle(activeAction())) {
+            event->accept();
+            return;
+        }
+        QMenu::keyPressEvent(event);
+    }
+private:
+    bool toggle(QAction* action) {
+        if (!action || !action->isEnabled() || !action->isCheckable()) return false;
+        action->trigger();
+        update();
+        return true;
+    }
+};
+
+class PluginSidechainCombo final : public PluginHeaderCombo {
+public:
+    explicit PluginSidechainCombo(QWidget* parent)
+        : PluginHeaderCombo(icons::Glyph::Link, 186, 128, parent),
+          m_menu(new SidechainSourceMenu(this)) {
+        m_menu->setObjectName(QStringLiteral("PluginSidechainMenu"));
+        m_menu->setToolTipsVisible(true);
+        connect(m_menu, &QMenu::aboutToHide, this, [this] {
+            QComboBox::hidePopup();
+            update();
+        });
+    }
+    std::function<void(const std::vector<std::string>&)> selectionChanged;
+
+    void setSources(const std::vector<daw::EngineController::SidechainSource>& sources,
+                    const std::vector<std::string>& selected) {
+        m_sources = sources;
+        m_selected = selected;
+        QStringList names;
+        for (const auto& id : selected) {
+            const auto found = std::find_if(m_sources.begin(), m_sources.end(),
+                [&](const auto& source) { return source.id == id; });
+            if (found != m_sources.end()) names << QString::fromStdString(found->name);
+            else {
+                const auto name = PluginEditorWindow::tr("Missing source (%1)")
+                    .arg(QString::fromStdString(id).left(8));
+                m_sources.push_back({id, name.toStdString()});
+                names << name;
+            }
+        }
+        const QString label = selected.empty() ? PluginEditorWindow::tr("Side Chain: Off")
+            : selected.size() == 1 ? PluginEditorWindow::tr("Side Chain: %1").arg(names.front())
+            : PluginEditorWindow::tr("Side Chain: %1 sources").arg(selected.size());
+        if (count() != 1) { clear(); addItem(label); }
+        else setItemText(0, label);
+        setItemData(0, selected.empty() ? QString() : QStringLiteral("connected"));
+        setCurrentIndex(0);
+        setToolTip((names.isEmpty() ? label : names.join(QLatin1Char('\n'))) + QLatin1Char('\n') +
+            PluginEditorWindow::tr("Select one or more sources. Their post-fader signals are summed into the sidechain input."));
+        syncChecks();
+        update();
+    }
+    void showPopup() override {
+        if (!isEnabled() || m_menu->isVisible()) return;
+        m_menu->clear();
+        auto* off = m_menu->addAction(PluginEditorWindow::tr("Side Chain: Off"));
+        off->setCheckable(true);
+        connect(off, &QAction::triggered, this, [this] {
+            if (selectionChanged) selectionChanged({});
+        });
+        m_menu->addSeparator();
+        for (const auto& source : m_sources) {
+            const QString name = QString::fromStdString(source.name);
+            auto* action = m_menu->addAction(fontMetrics().elidedText(name, Qt::ElideRight, 320));
+            action->setToolTip(name);
+            action->setData(QString::fromStdString(source.id));
+            action->setCheckable(true);
+            connect(action, &QAction::triggered, this, [this, id = source.id](bool checked) {
+                auto selected = m_selected;
+                std::erase(selected, id);
+                if (checked) selected.push_back(id);
+                if (selectionChanged) selectionChanged(selected);
+            });
+        }
+        syncChecks();
+        m_menu->setMinimumWidth(std::max(240, width()));
+        m_menu->popup(mapToGlobal(QPoint(0, height() + 3)));
+        for (auto* action : m_menu->actions()) {
+            if (action->isChecked()) { m_menu->setActiveAction(action); break; }
+        }
+    }
+    void hidePopup() override {
+        m_menu->hide();
+        QComboBox::hidePopup();
+    }
+private:
+    void syncChecks() {
+        for (auto* action : m_menu->actions()) {
+            if (!action->isCheckable()) continue;
+            const auto id = action->data().toString().toStdString();
+            const bool selected = id.empty() ? m_selected.empty()
+                : std::find(m_selected.begin(), m_selected.end(), id) != m_selected.end();
+            action->setChecked(selected);
+            action->setEnabled(id.empty() || selected || m_selected.size() < daw::kMaxPluginSidechainSources);
+        }
+    }
+    SidechainSourceMenu* m_menu;
+    std::vector<daw::EngineController::SidechainSource> m_sources;
+    std::vector<std::string> m_selected;
+};
+
+class PluginHeaderName final : public QLabel, public ui::graphics::ScenePaintSource {
+public:
+    using QLabel::QLabel;
+    void paintScene(QPainter& painter, const QRegion&) override {
+        painter.setPen(isEnabled() ? th().textPrimary : th().textSecondary);
+        painter.drawText(contentsRect(), Qt::AlignLeft | Qt::AlignVCenter,
+                         fontMetrics().elidedText(text(), Qt::ElideRight,
+                                                  contentsRect().width()));
+    }
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        paintScene(painter, QRegion(rect()));
+    }
+};
 
 QSize boundedToAvailable(QSize requested, const QSize& available) {
     if (!requested.isValid()) requested = QSize(720, 480);
@@ -342,28 +556,32 @@ void PluginEditorWindow::buildWrapper() {
     m_wrapper->setObjectName(QStringLiteral("PluginWrapper"));
     m_wrapper->setFixedHeight(28);
     auto* row = new QHBoxLayout(m_wrapper);
-    row->setContentsMargins(6, 2, 6, 2);
-    row->setSpacing(4);
+    row->setContentsMargins(6, 2, 6, 3);
+    row->setSpacing(6);
 
     m_power = new ui::IconButton(icons::Glyph::Power,
                                  tr("Enable or bypass this plugin"), m_wrapper);
     m_power->setObjectName(QStringLiteral("PluginPower"));
     m_power->setCheckable(true);
-    m_power->setButtonSize(24, 24);
-    m_power->setProperty("circular", true);
+    m_power->setButtonSize(24, 22);
+    m_power->setProperty("consoleButton", true);
+    m_power->setFocusPolicy(Qt::StrongFocus);
     m_power->setAccessibleName(tr("Plugin enabled"));
     row->addWidget(m_power);
 
-    m_pluginName = new QLabel(tr("Plugin"), m_wrapper);
+    m_pluginName = new PluginHeaderName(tr("Plugin"), m_wrapper);
     m_pluginName->setObjectName(QStringLiteral("PluginWrapperName"));
     m_pluginName->setMinimumWidth(0);
     m_pluginName->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     row->addWidget(m_pluginName, 1);
 
     m_dockToggle = new QToolButton(m_wrapper);
+    m_dockToggle->setObjectName(QStringLiteral("PluginParameters"));
     m_dockToggle->setCheckable(true);
-    m_dockToggle->setFixedSize(24, 24);
-    m_dockToggle->setIcon(icons::icon(icons::Glyph::Automation, th().textPrimary));
+    m_dockToggle->setFixedSize(24, 22);
+    m_dockToggle->setIconSize(QSize(16, 16));
+    m_dockToggle->setFocusPolicy(Qt::StrongFocus);
+    m_dockToggle->setCursor(Qt::PointingHandCursor);
     m_dockToggle->setToolTip(
         tr("Show this plugin's parameters — right-click a knob to create automation"));
     m_dockToggle->setAccessibleName(tr("Show parameter panel"));
@@ -372,7 +590,18 @@ void PluginEditorWindow::buildWrapper() {
             [this](bool on) { setParameterDockVisible(on); });
     row->addWidget(m_dockToggle);
 
-    m_channelMode = new QComboBox(m_wrapper);
+    auto* routing = new QWidget(m_wrapper);
+    routing->setObjectName(QStringLiteral("PluginRouting"));
+    routing->setFixedHeight(22);
+    // Share scarce width with the title, but never stretch past the controls'
+    // natural width on a large editor.
+    routing->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+    auto* routingRow = new QHBoxLayout(routing);
+    routingRow->setContentsMargins(1, 0, 1, 0);
+    routingRow->setSpacing(0);
+    row->addWidget(routing, 1);
+
+    m_channelMode = new PluginHeaderCombo(icons::Glyph::StereoRings, 108, 82, routing);
     m_channelMode->setObjectName(QStringLiteral("PluginMode"));
     m_channelMode->setAccessibleName(tr("Plugin channel mode"));
     m_channelMode->setToolTip(
@@ -381,14 +610,16 @@ void PluginEditorWindow::buildWrapper() {
     m_channelMode->addItem(tr("Mono"), int(daw::PluginChannelMode::Mono));
     m_channelMode->addItem(tr("Stereo"), int(daw::PluginChannelMode::Stereo));
     m_channelMode->addItem(tr("Dual Mono"), int(daw::PluginChannelMode::DualMono));
-    row->addWidget(m_channelMode);
+    routingRow->addWidget(m_channelMode);
 
-    m_leftChannel = new QToolButton(m_wrapper);
-    m_rightChannel = new QToolButton(m_wrapper);
+    m_leftChannel = new QToolButton(routing);
+    m_rightChannel = new QToolButton(routing);
     for (QToolButton* button : {m_leftChannel, m_rightChannel}) {
         button->setCheckable(true);
         button->setAutoExclusive(true);
-        button->setFixedSize(24, 24);
+        button->setFixedSize(22, 20);
+        button->setFocusPolicy(Qt::StrongFocus);
+        button->setCursor(Qt::PointingHandCursor);
     }
     m_leftChannel->setText(QStringLiteral("L"));
     m_leftChannel->setToolTip(tr("Edit the left mono instance"));
@@ -396,14 +627,19 @@ void PluginEditorWindow::buildWrapper() {
     m_rightChannel->setText(QStringLiteral("R"));
     m_rightChannel->setToolTip(tr("Edit the right mono instance"));
     m_rightChannel->setAccessibleName(tr("Edit right dual-mono channel"));
-    row->addWidget(m_leftChannel);
-    row->addWidget(m_rightChannel);
+    routingRow->addWidget(m_leftChannel);
+    routingRow->addWidget(m_rightChannel);
 
-    m_sidechain = new QComboBox(m_wrapper);
+    auto* divider = new QWidget(routing);
+    divider->setObjectName(QStringLiteral("PluginRoutingDivider"));
+    divider->setFixedSize(1, 12);
+    routingRow->addWidget(divider, 0, Qt::AlignVCenter);
+
+    auto* sidechain = new PluginSidechainCombo(routing);
+    m_sidechain = sidechain;
     m_sidechain->setObjectName(QStringLiteral("PluginSidechain"));
-    m_sidechain->setAccessibleName(tr("Sidechain source"));
-    m_sidechain->setMinimumWidth(150);
-    row->addWidget(m_sidechain);
+    m_sidechain->setAccessibleName(tr("Sidechain sources"));
+    routingRow->addWidget(m_sidechain);
     m_layout->addWidget(m_wrapper);
 
     connect(m_power, &QAbstractButton::clicked, this, [this](bool enabled) {
@@ -441,18 +677,13 @@ void PluginEditorWindow::buildWrapper() {
             [selectChannel](bool checked) {
                 selectChannel(daw::PluginEditorChannel::Right, checked);
             });
-    connect(m_sidechain, &QComboBox::currentIndexChanged, this, [this](int index) {
-        if (!m_controller || m_refreshingWrapper || index < 0 ||
-            !m_sidechain->isEnabled()) {
-            return;
-        }
-        const std::string source = m_sidechain->itemData(index).toString().toStdString();
-        if (m_controller->setInsertSidechainSource(m_channelKey, m_insertKey,
-                                                   source)) {
+    sidechain->selectionChanged = [this](const std::vector<std::string>& sources) {
+        if (!m_controller || m_refreshingWrapper || !m_sidechain->isEnabled()) return;
+        if (m_controller->setInsertSidechainSources(m_channelKey, m_insertKey, sources)) {
             emit projectEdited();
         }
         refreshWrapper();
-    });
+    };
     refreshWrapper();
 }
 
@@ -575,6 +806,30 @@ void PluginEditorWindow::rebuildEditorContent() {
         const bool pro = descriptorUid == "daw.doubler-pro";
         setMinimumSize(rack ? 800 : 360, pro ? 659 : 529);
         m_fallbackContentSize = QSize(rack ? 1040 : 440, pro ? 700 : 570);
+        resize(m_fallbackContentSize);
+    } else if (trustedInternal && descriptorUid == "daw.delay" &&
+               dynamic_cast<daw::plugins::delay::DelayInstance*>(plugin)) {
+        auto* panel = new DelayPanel(m_controller, m_channelId, m_insertId, this);
+        m_generic = panel;
+        connect(panel, &DelayPanel::projectEdited, this, &PluginEditorWindow::projectEdited);
+        connect(panel, &DelayPanel::automationRequested, this,
+                [this](const QString& id) { emit automationRequested(m_channelId, m_insertId, id); });
+        m_contentRow->insertWidget(0, panel, 1);
+        emit builtInPanelReady(panel, QStringLiteral("delay"));
+        setMinimumSize(960, 459);
+        m_fallbackContentSize = QSize(1100, 499);
+        resize(m_fallbackContentSize);
+    } else if (trustedInternal && descriptorUid == "daw.compressor" &&
+               dynamic_cast<daw::plugins::compressor::CompressorInstance*>(plugin)) {
+        auto* panel = new CompressorPanel(m_controller, m_channelId, m_insertId, this);
+        m_generic = panel;
+        connect(panel, &CompressorPanel::projectEdited, this, &PluginEditorWindow::projectEdited);
+        connect(panel, &CompressorPanel::automationRequested, this,
+                [this](const QString& id) { emit automationRequested(m_channelId, m_insertId, id); });
+        m_contentRow->insertWidget(0, panel, 1);
+        emit builtInPanelReady(panel, QStringLiteral("compressor"));
+        setMinimumSize(800, 379);
+        m_fallbackContentSize = QSize(920, 399);
         resize(m_fallbackContentSize);
     } else if (trustedInternal && descriptorUid == "daw.pitch-corrector" &&
                dynamic_cast<daw::plugins::pitch::PitchCorrectorInstance*>(plugin)) {
@@ -760,6 +1015,7 @@ void PluginEditorWindow::refreshWrapper() {
     m_refreshingWrapper = true;
 
     m_power->setChecked(!model->bypassed);
+    m_pluginName->setEnabled(!model->bypassed);
     const int modeIndex = m_channelMode->findData(int(model->channelMode));
     if (modeIndex >= 0) m_channelMode->setCurrentIndex(modeIndex);
     const bool dual = model->channelMode == daw::PluginChannelMode::DualMono;
@@ -780,11 +1036,10 @@ void PluginEditorWindow::refreshWrapper() {
     const bool supports =
         m_controller->insertSupportsSidechain(m_channelKey, m_insertKey);
     if (!supports) {
-        const QString signature = QStringLiteral("unsupported");
-        if (m_sidechainSignature != signature) {
+        if (m_sidechain->isEnabled() || m_sidechain->count() == 0) {
+            m_sidechain->hidePopup();
             m_sidechain->clear();
-            m_sidechain->addItem(tr("No sidechain input"));
-            m_sidechainSignature = signature;
+            m_sidechain->addItem(tr("Side Chain: %1").arg(QStringLiteral("—")));
         }
         m_sidechain->setEnabled(false);
         m_sidechain->setToolTip(
@@ -796,31 +1051,8 @@ void PluginEditorWindow::refreshWrapper() {
     // Source discovery checks the complete routing graph for feedback. It is
     // needed only for plugins that actually expose an auxiliary input.
     const auto sources = m_controller->insertSidechainSources(m_channelKey);
-    QStringList signature{QStringLiteral("supported")};
-    for (const auto& source : sources) {
-        signature << QString::fromStdString(source.id);
-    }
-    const QString signatureText = signature.join(QLatin1Char('|'));
-    if (m_sidechainSignature != signatureText) {
-        m_sidechain->clear();
-        m_sidechain->addItem(tr("Side Chain: Off"), QString());
-        for (const auto& source : sources) {
-            m_sidechain->addItem(
-                tr("Side Chain: %1").arg(QString::fromStdString(source.name)),
-                QString::fromStdString(source.id));
-        }
-        m_sidechainSignature = signatureText;
-    }
     m_sidechain->setEnabled(true);
-    const QString current = QString::fromStdString(model->sidechainTrackId);
-    int sourceIndex = m_sidechain->findData(current);
-    if (sourceIndex < 0 && !current.isEmpty()) {
-        m_sidechain->addItem(tr("Side Chain: missing source"), current);
-        sourceIndex = m_sidechain->count() - 1;
-    }
-    m_sidechain->setCurrentIndex(std::max(sourceIndex, 0));
-    m_sidechain->setToolTip(
-        tr("Choose the post-fader signal sent to the plugin's auxiliary input"));
+    static_cast<PluginSidechainCombo*>(m_sidechain)->setSources(sources, model->sidechainTrackIds);
     m_refreshingWrapper = false;
 }
 
@@ -1657,33 +1889,41 @@ void PluginEditorWindow::applyTheme() {
     setStyleSheet(QString(R"(
 PluginEditorWindow { background: %BG%; }
 #PluginWrapper {
-    background: %SURFACE%;
+    background: %HEADER%;
     border-bottom: 1px solid %SEPARATOR%;
 }
-#PluginWrapperName { color: %TEXT%; font-size: 11px; font-weight: 600; }
+#PluginWrapperName { color: %TEXT%; font-size: 12px; font-weight: 600; }
+#PluginRouting {
+    background: %WELL%;
+    border: 1px solid %SEPARATOR%;
+    border-radius: 6px;
+}
+#PluginRoutingDivider { background: %SEPARATOR%; }
 #PluginMode, #PluginSidechain {
     color: %TEXT%;
-    background: %WELL%;
-    border: 1px solid %SEPARATOR%;
-    border-radius: %RADIUS%px;
-    padding: 2px 22px 2px 7px;
-    min-height: 18px;
+    background: transparent;
+    border: none;
+    padding: 0;
+    min-height: 0;
+    font-size: 11px;
+    font-weight: 500;
 }
-#PluginMode:hover, #PluginSidechain:hover { border-color: %ACCENT%; }
-#PluginMode:focus, #PluginSidechain:focus { border: 1px solid %ACCENT%; }
 #PluginWrapper QToolButton {
     color: %TEXT2%;
-    background: %WELL%;
-    border: 1px solid %SEPARATOR%;
-    border-radius: %RADIUS%px;
-    font-weight: 700;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 0;
+    font-size: 10px;
+    font-weight: 600;
 }
-#PluginWrapper QToolButton:hover { color: %TEXT%; border-color: %ACCENT%; }
+#PluginWrapper QToolButton:hover { color: %TEXT%; background: %HOVER%; }
 #PluginWrapper QToolButton:checked {
     color: %TEXT%;
     background: %SELECTION%;
-    border-color: %ACCENT%;
+    border-color: %SEPARATOR%;
 }
+#PluginWrapper QToolButton:focus { border-color: %ACCENT%; }
 #PluginEditorLoading {
     color: %TEXT2%;
     background: %BG%;
@@ -1713,6 +1953,8 @@ PluginEditorWindow { background: %BG%; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%BG%", t.background.name())
         .replace("%SURFACE%", t.surface.name())
+        .replace("%HEADER%", t.headerBackground.name())
+        .replace("%HOVER%", mixColors(t.headerBackground, t.textPrimary, 0.08).name())
         .replace("%ELEVATED%", t.surfaceElevated.name())
         .replace("%WELL%", t.well().name())
         .replace("%SEPARATOR%", t.separator().name())
@@ -1720,6 +1962,7 @@ PluginEditorWindow { background: %BG%; }
         .replace("%ACCENT%", t.accent.name())
         .replace("%TEXT%", t.textPrimary.name())
         .replace("%TEXT2%", t.textSecondary.name()));
+    m_dockToggle->setIcon(icons::icon(icons::Glyph::Automation, t.textSecondary, 16));
     if (property("vlt.pitchChrome").toBool()) {
         setStyleSheet(styleSheet() + QStringLiteral(
             "PluginEditorWindow { background: transparent; }"));

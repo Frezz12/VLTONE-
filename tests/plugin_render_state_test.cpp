@@ -178,6 +178,36 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
         require(std::abs(left[kBlock - 1] - (dual ? 0.1f : 0.2f * editedGain)) < 1e-4f &&
                 std::abs(right[kBlock - 1] - 0.2f * editedGain) < 1e-4f,
                 "export leaves live edits intact");
+        if (scope == "clip") {
+            std::vector<EngineController::StripSilenceSource> sources;
+            require(bool(controller.prepareStripSilence({{track, clip}}, sources)), "prepare clip split");
+            std::vector<EngineController::ClipAddress> pieces;
+            require(bool(controller.applyStripSilence(sources, {{{0, .2}, {.5, 1}}}, {}, pieces)) &&
+                    pieces.size() == 2, "split native Clip FX state");
+            const auto checkSplitAudio = [&] {
+                live.setGraph(controller.routingGraph());
+                play();
+                require(std::abs(left[kBlock - 1] - .2f * editedGain) < 1e-4f &&
+                        std::abs(right[kBlock - 1] - .2f * editedGain) < 1e-4f,
+                        "unpublished Clip FX state survives activation and graph publication");
+            };
+            checkSplitAudio();
+            controller.undo(); checkSplitAudio();
+            controller.redo(); checkSplitAudio();
+            auto* beforeCapture = controller.insertInstance(track,
+                controller.project().findTrack(track)->clips.front().inserts.front().id);
+            controller.setRecordDirectory(temp.path.string());
+            require(controller.startRecording(track), "record over native Clip FX");
+            require(beforeCapture && !beforeCapture->isActive(), "native Clip FX stream is deactivated during capture");
+            audio::AudioBuffer input(2, kBlock), output(2, kBlock); input.clear();
+            require(controller.processDeviceBlockForTest(input, output, kBlock), "native fixture recording callback");
+            controller.finalizeRecordingCapture();
+            require(controller.insertInstance(track,
+                        controller.project().findTrack(track)->clips.front().inserts.front().id) == beforeCapture &&
+                    beforeCapture->isActive(), "native Clip FX reactivates its original instance");
+            controller.stop();
+            checkSplitAudio();
+        }
         std::cout << "PASS " << descriptor.name << " / " << scope
                   << ": preset, pending edits, cancellation, live audio\n";
     }

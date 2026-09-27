@@ -16,13 +16,18 @@ namespace {
 using json = nlohmann::json;
 
 bool hasExactKeys(const json& value,
-                  std::initializer_list<const char*> keys) {
-    if (!value.is_object() || value.size() != keys.size()) return false;
+                  std::initializer_list<const char*> keys,
+                  std::initializer_list<const char*> optional = {}) {
+    if (!value.is_object()) return false;
+    const auto present = std::count_if(optional.begin(), optional.end(),
+        [&](const char* key) { return value.contains(key); });
+    if (value.size() != keys.size() + present) return false;
     return std::all_of(keys.begin(), keys.end(),
                        [&](const char* key) { return value.contains(key); });
 }
 
-json scalarToJson(const ScalarValue& value) {
+template <typename Value>
+json scalarToJson(const Value& value) {
     return std::visit([](const auto& item) { return json(item); }, value);
 }
 
@@ -32,6 +37,31 @@ bool scalarFromJson(const json& value, ScalarValue& out) {
     else if (value.is_number_integer()) out = value.get<std::int64_t>();
     else if (value.is_number()) out = value.get<double>();
     else return false;
+    return true;
+}
+
+bool sidechainIdsFromJson(const json& value, std::vector<std::string>& out) {
+    if (!value.is_array() || value.size() > kMaxPluginSidechainSources) return false;
+    out.clear();
+    for (const auto& item : value) {
+        if (!item.is_string()) return false;
+        auto id = item.get<std::string>();
+        if (!isUuid(id) || std::find(out.begin(), out.end(), id) != out.end()) return false;
+        out.push_back(std::move(id));
+    }
+    return true;
+}
+
+bool pluginPropertyValueFromJson(const json& value, SetPluginProperty& body) {
+    if (body.property == PluginProperty::SidechainTrackIds) {
+        std::vector<std::string> ids;
+        if (!sidechainIdsFromJson(value, ids)) return false;
+        body.value = std::move(ids);
+        return true;
+    }
+    ScalarValue scalar;
+    if (!scalarFromJson(value, scalar)) return false;
+    std::visit([&](const auto& item) { body.value = item; }, scalar);
     return true;
 }
 
@@ -571,7 +601,7 @@ bool bindingsFromJson(const json& value,
 }
 
 json sharedInsertToJson(const InsertModel& insert) {
-    return json{{"id", insert.id},
+    json out{{"id", insert.id},
                 {"name", insert.name},
                 {"bypassed", insert.bypassed},
                 {"format", toString(insert.format)},
@@ -581,13 +611,16 @@ json sharedInsertToJson(const InsertModel& insert) {
                 {"stateSchemaVersion", insert.stateSchemaVersion},
                 {"mix", insert.mix},
                 {"channelMode", toString(insert.channelMode)},
-                {"sidechainTrackId", insert.sidechainTrackId},
+                {"sidechainTrackId", insert.sidechainTrackIds.empty()
+                    ? std::string{} : insert.sidechainTrackIds.front()},
                 {"stateAsset", serialization::assetRefToJson(insert.stateAsset)},
                 {"rightStateAsset",
                  serialization::assetRefToJson(insert.rightStateAsset)},
                 {"parameters", parametersToJson(insert.parameters)},
                 {"rightParameters", parametersToJson(insert.rightParameters)},
                 {"assetBindings", bindingsToJson(insert.assetBindings)}};
+    if (insert.sidechainTrackIds.size() > 1) out["sidechainTrackIds"] = insert.sidechainTrackIds;
+    return out;
 }
 
 bool sharedInsertFromJson(const json& value, InsertModel& insert) {
@@ -596,7 +629,7 @@ bool sharedInsertFromJson(const json& value, InsertModel& insert) {
                        "pluginVersion", "stateSchemaVersion", "mix",
                        "channelMode", "sidechainTrackId", "stateAsset",
                        "rightStateAsset", "parameters", "rightParameters",
-                       "assetBindings"}) ||
+                       "assetBindings"}, {"sidechainTrackIds"}) ||
         !value.at("id").is_string() || !value.at("name").is_string() ||
         !value.at("bypassed").is_boolean() ||
         !value.at("format").is_string() || !value.at("uid").is_string() ||
@@ -626,7 +659,14 @@ bool sharedInsertFromJson(const json& value, InsertModel& insert) {
     insert.stateSchemaVersion = value.at("stateSchemaVersion").get<int>();
     insert.mix = value.at("mix").get<float>();
     insert.channelMode = pluginChannelModeFromString(channelMode);
-    insert.sidechainTrackId = value.at("sidechainTrackId").get<std::string>();
+    const auto legacy = value.at("sidechainTrackId").get<std::string>();
+    if (value.contains("sidechainTrackIds")) {
+        if (!sidechainIdsFromJson(value.at("sidechainTrackIds"), insert.sidechainTrackIds) ||
+            legacy != (insert.sidechainTrackIds.empty() ? std::string{}
+                                                       : insert.sidechainTrackIds.front())) return false;
+    } else if (!legacy.empty()) {
+        insert.sidechainTrackIds.push_back(legacy);
+    }
     return assetFromJson(value.at("stateAsset"), insert.stateAsset, true) &&
            assetFromJson(value.at("rightStateAsset"), insert.rightStateAsset,
                          true) &&
@@ -1421,7 +1461,7 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
         if (!pluginLocationFromJson(payload.at("location"), body.location) ||
             !pluginPropertyFromName(
                 payload.value("property", std::string()), body.property) ||
-            !scalarFromJson(payload.at("value"), body.value)) {
+            !pluginPropertyValueFromJson(payload.at("value"), body)) {
             error = "invalid plugin property payload";
             return false;
         }

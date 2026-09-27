@@ -16,6 +16,7 @@
 namespace daw {
 
 struct InsertModel;
+inline constexpr std::size_t kMaxPluginSidechainSources = 64;
 
 /// Generate a random RFC-4122-ish UUID string (8-4-4-4-12 hex).
 std::string newUuid();
@@ -668,11 +669,11 @@ struct InsertModel {
     /// Host-provided dry/wet, 0…1. Every plugin gets one for free.
     float mix = 1.0f;
 
-    /// Host wrapper state. The sidechain source is a track id; an empty id is
-    /// the explicit "Off" value. Missing sources remain silent on load.
+    /// Host wrapper state. Post-fader sources sum into the auxiliary input;
+    /// an empty list is the explicit "Off" value.
     PluginChannelMode channelMode = PluginChannelMode::Auto;
     PluginEditorChannel editorChannel = PluginEditorChannel::Left;
-    std::string sidechainTrackId;
+    std::vector<std::string> sidechainTrackIds;
 
     /// Editor placement, so reopening a project puts the window back.
     int windowX = 0, windowY = 0, windowWidth = 0, windowHeight = 0;
@@ -775,6 +776,9 @@ struct TrackModel {
     std::vector<InsertModel> inserts;
     std::vector<ClipModel> clips;
     TrackFreezeState freeze;
+    /// Stable appearance key; custom image bytes belong to local theme settings.
+    /// Empty or unavailable keys display the default icon for this track kind.
+    std::string iconId;
 };
 
 /// An immutable musical snapshot in this project's clip library. The first
@@ -972,6 +976,11 @@ uint32_t takeColor(uint32_t base, size_t index);
 /// that decides which clips belong on which track, so drag-and-drop, the
 /// context menus and the controller all agree.
 bool trackAccepts(TrackKind kind, ClipKind clipKind);
+
+/// A new source -> destination edge must not point back to a channel already
+/// reachable from the destination, including existing sidechain dependencies.
+std::unordered_set<std::string> sidechainFeedbackSources(
+    const ProjectModel& project, const std::string& destinationChannelId);
 
 /// Whether a live recording can land on this track. Bus-style channels
 /// (including Aux, surfaced in the UI as Send) process routed signal but do

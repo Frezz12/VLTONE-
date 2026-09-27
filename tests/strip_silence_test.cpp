@@ -103,6 +103,47 @@ int main() {
     check(!effect || (!clips[0].inserts.empty() && clips[0].inserts[0].id != clips[1].inserts[0].id),
           "each fragment keeps independent Clip FX");
     check(controller.undoDepth() == depth + 1, "batch creates one undo item");
+    if (effect && clips.size() == 2) {
+        auto* first = controller.insertInstance(track, clips[0].inserts[0].id);
+        auto* second = controller.insertInstance(track, clips[1].inserts[0].id);
+        const auto scheduled = [&](plugins::PluginInstance* instance) {
+            const auto graph = controller.routingGraph();
+            return std::any_of(graph->nodes.begin(), graph->nodes.end(), [&](const auto& entry) {
+                const auto* node = dynamic_cast<const plugins::PluginNode*>(entry.node);
+                return node && node->instance() == instance;
+            });
+        };
+        controller.seekSeconds(2.2);
+        check(first && second && scheduled(first) && scheduled(second), "fragment effects are initially scheduled");
+        check(controller.startRecording(track), "starts the next take over effect-bearing fragments");
+        check(!scheduled(first) && !scheduled(second) &&
+              !first->isActive() && !second->isActive() &&
+              controller.insertInstance(track, clips[0].inserts[0].id) == first &&
+              controller.insertInstance(track, clips[1].inserts[0].id) == second,
+              "recording retains Clip FX instances with their DSP streams deactivated");
+        // A parameter edit must survive dormant processing and the activation
+        // on punch-out, without replacing the editor's instance.
+        controller.setInsertParameter(track, clips[0].inserts[0].id, "output.gain", -6);
+        audio::AudioBuffer input(2, 256), output(2, 256);
+        for (unsigned ch = 0; ch < 2; ++ch) std::fill_n(input.getChannel(ch), 256, .125f);
+        check(controller.processDeviceBlockForTest(input, output, 256) &&
+              std::abs(output.getChannel(0)[255] - .125f) < 1e-5 &&
+              std::abs(output.getChannel(1)[255] - .125f) < 1e-5,
+              "recording still monitors the live input without previous Clip FX");
+        const auto added = controller.addClipFxInsert(track, clips[1].id, *effect);
+        auto* addedInstance = controller.insertInstance(track, added);
+        check(addedInstance && !addedInstance->isActive() && !scheduled(addedInstance),
+              "adding Clip FX during recording creates an editable dormant instance");
+        if (!added.empty()) controller.undo();
+        controller.finalizeRecordingCapture();
+        check(scheduled(first) && scheduled(second) && first->isActive() && second->isActive() &&
+              controller.insertInstance(track, clips[0].inserts[0].id) == first,
+              "punch-out reschedules the same Clip FX instances");
+        controller.processDeviceBlockForTest(input, output, 256);
+        check(near(controller.insertParameter(track, clips[0].inserts[0].id, "output.gain"), -6),
+              "dormant Clip FX parameter edits survive reactivation");
+        controller.stop();
+    }
     controller.undo();
     check(controller.project().findTrack(track)->clips.size() == 1 &&
           controller.project().findTrack(track)->clips[0].id == clip, "undo restores exact original clip");
@@ -199,6 +240,7 @@ int main() {
             recorder.processDeviceBlockForTest(input, output, frames);
         }
         const auto beforeRecord = recorder.undoDepth();
+        const auto beforeRecordBytes = recorder.undoEstimatedBytes();
         recorder.stopRecording();
         const auto landed = recorder.project().findTrack(target)->clips;
         check(recorder.autoSilenceWarning().empty() && landed.size() == 1 &&
@@ -206,11 +248,51 @@ int main() {
               layered ? "Auto Silence trims the audible loop take" : "Auto Silence uses settings frozen at recording start");
         check(!layered || (!landed.empty() && landed[0].takes.size() >= 2), "loop take history is retained");
         check(recorder.undoDepth() == beforeRecord + 1, "recording and Auto Silence share one undo");
+        check(recorder.undoEstimatedBytes() > beforeRecordBytes + 256,
+              "recording accounts for its actual undo snapshot payload");
         recorder.undo();
         check(recorder.project().findTrack(target)->clips.empty(), "undo removes recording and cleanup together");
         recorder.redo();
         check(recorder.project().findTrack(target)->clips.size() == 1 &&
               near(recorder.project().findTrack(target)->clips[0].durationSeconds, .2), "redo restores cleaned recording");
+    }
+
+    // Multi-track cleanup is one graph publication, independent of how many
+    // target tracks acquire fragments, and one undo operation for the take.
+    {
+        EngineController recorder;
+        recorder.initialize(48000, 256, false); recorder.setRecordDirectory(dir.string());
+        std::vector<std::string> tracks;
+        for (unsigned i = 0; i < 4; ++i) tracks.push_back(recorder.addTrack(TrackKind::Audio, "Batch"));
+        auto prefs = recorder.recordingPrefs();
+        prefs.autoSilence = true; prefs.stripSilence = exactSettings();
+        recorder.setRecordingPrefs(prefs);
+        check(recorder.startRecordingTracks(tracks), "starts multitrack Auto Silence capture");
+        audio::AudioBuffer input(2, 256), output(2, 256);
+        for (unsigned at = 0; at < 48000; at += 256) {
+            const auto frames = std::min(256u, 48000 - at);
+            for (unsigned i = 0; i < frames; ++i)
+                input.getChannel(0)[i] = input.getChannel(1)[i] =
+                    (at + i >= 9600 && at + i < 19200) ||
+                    (at + i >= 28800 && at + i < 38400) ? .5f : 0.f;
+            recorder.processDeviceBlockForTest(input, output, frames);
+        }
+        const auto rebuilds = recorder.graphRebuildCountForTest();
+        const auto depth = recorder.undoDepth();
+        recorder.stopRecording();
+        check(recorder.autoSilenceWarning().empty() && recorder.graphRebuildCountForTest() - rebuilds == 2,
+              "four cleaned tracks require only capture-finalization and landing rebuilds");
+        check(recorder.undoDepth() == depth + 1 && std::all_of(tracks.begin(), tracks.end(), [&](const auto& id) {
+                  return recorder.project().findTrack(id)->clips.size() == 2;
+              }), "all recorded tracks receive their fragments in one undo operation");
+        recorder.undo();
+        check(std::all_of(tracks.begin(), tracks.end(), [&](const auto& id) {
+                  return recorder.project().findTrack(id)->clips.empty();
+              }), "multitrack undo restores every target together");
+        recorder.redo();
+        check(std::all_of(tracks.begin(), tracks.end(), [&](const auto& id) {
+                  return recorder.project().findTrack(id)->clips.size() == 2;
+              }), "multitrack redo restores every cleaned target");
     }
 
     // Auto cleanup of a punch must not delete older material outside the take.
@@ -237,6 +319,12 @@ int main() {
               near(parts[0].startSeconds, 0) && near(parts[0].durationSeconds, .25) &&
               near(parts[1].startSeconds, .75) && near(parts[1].durationSeconds, .25),
               "a silent punch preserves all material outside the recorded interval");
+        if (effect && parts.size() == 2) {
+            recorder.processDeviceBlockForTest(input, output, 256);
+            check(near(recorder.insertParameter(target, parts[0].inserts[0].id, "output.gain"), -3) &&
+                  near(recorder.insertParameter(target, parts[1].inserts[0].id, "output.gain"), -3),
+                  "new fragment effects load their state before publication");
+        }
         recorder.undo();
         const auto undone = recorder.project().findTrack(target)->clips;
         check(undone.size() == 1 && undone[0].id == original &&

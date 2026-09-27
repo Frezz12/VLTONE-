@@ -51,7 +51,7 @@ int main() {
     slot.model.mix = 0.67f;
     slot.model.bypassed = true;
     slot.model.channelMode = daw::PluginChannelMode::DualMono;
-    slot.model.sidechainTrackId = "old-sidechain";
+    slot.model.sidechainTrackIds = {"old-sidechain", "another-sidechain"};
     slot.model.stateFile = "project-state.bin";
     slot.model.rightStateFile = "project-right-state.bin";
     slot.model.windowWidth = 900;
@@ -87,7 +87,7 @@ int main() {
               loaded.inserts.front().rightState == slot.rightState,
           "round-trips both opaque plugin state chunks");
     check(loaded.sends.empty() && loaded.outputBusId.empty() && !loaded.muted &&
-              loaded.inserts.front().model.sidechainTrackId.empty() &&
+              loaded.inserts.front().model.sidechainTrackIds.empty() &&
               loaded.inserts.front().model.stateFile.empty() &&
               !loaded.inserts.front().model.windowOpen,
           "omits sends, routing and project/window-specific state");

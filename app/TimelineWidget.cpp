@@ -103,7 +103,7 @@ constexpr double kOriginGuideSnapPx = 6.0;
 constexpr int kClipVerticalInset = 2;
 /// Compact native scrollbars live inside the arrangement so the horizontal one
 /// stays immediately above an open mixer instead of disappearing behind it.
-constexpr int kTimelineScrollExtent = 12;
+constexpr int kTimelineScrollExtent = ui::kTimelineScrollExtent;
 constexpr int kTimelineScrollUnitsPerSecond = 1000;
 
 bool tempoAnalysisConfident(const daw::ClipTempoAnalysisModel& tempo) {
@@ -342,8 +342,18 @@ TimelineWidget::TimelineWidget(daw::EngineController* controller,
     connect(m_verticalScrollBar, &QScrollBar::valueChanged, this,
             &TimelineWidget::setVerticalScroll);
 
+    m_navigationCorner = new QWidget(this);
+    m_navigationCorner->setObjectName(QStringLiteral("TimelineNavigationCorner"));
+    m_navigationCorner->setAttribute(Qt::WA_StyledBackground);
+    m_navigationCorner->setAttribute(Qt::WA_NoMousePropagation);
+    // The square joining the two rails is chrome, never an editing target.
+    m_navigationCorner->setEnabled(false);
+    applyNavigationTheme();
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
-            [this] { update(); }); // Invalidate retained grid/lane geometry too.
+            [this] {
+                applyNavigationTheme();
+                update(); // Invalidate retained grid/lane geometry too.
+            });
     m_backgroundMedia = new ui::ThemeMediaBackground(this);
     connect(m_backgroundMedia, &ui::ThemeMediaBackground::frameChanged, this,
             [this](bool animatedFrame) {
@@ -1397,6 +1407,13 @@ void TimelineWidget::setWaveformScale(double scale) {
     update();
 }
 
+void TimelineWidget::refreshClipWaveforms() {
+    const auto revision = m_controller->clipWaveformRevision();
+    if (m_clipWaveformRevision == revision) return;
+    m_clipWaveformRevision = revision;
+    update();
+}
+
 void TimelineWidget::setShowBars(bool showBars) {
     setRulerFormat(showBars ? ui::RulerFormat::Bars : ui::RulerFormat::Time);
 }
@@ -1421,9 +1438,9 @@ void TimelineWidget::setRulerFormat(ui::RulerFormat format) {
 std::optional<double> TimelineWidget::liveZoomPointerX() const {
     const QPoint local = mapFromGlobal(QCursor::pos());
     const int viewportWidth = std::max(1, width() - kTimelineScrollExtent);
-    if (local.x() < 0 || local.x() > viewportWidth ||
+    if (local.x() < 0 || local.x() >= viewportWidth ||
         local.y() < rulerHeight() ||
-        local.y() >= height() - m_bottomInset)
+        local.y() >= height() - m_bottomInset - kTimelineScrollExtent)
         return std::nullopt;
     return double(local.x());
 }
@@ -1445,8 +1462,8 @@ void TimelineWidget::applyHorizontalZoom(
         // beneath the hand throughout wheel, pinch and keyboard zoom.
         focus = m_scrollSeconds + anchorX / m_pixelsPerSecond;
     } else {
-        // Toolbar controls live outside the arrangement. Their stable spatial
-        // reference is the playhead, placed at the centre of the viewport.
+        // The navigation controls use the playhead as their stable spatial
+        // reference, placed at the centre of the viewport.
         anchorX = viewportWidth * 0.5;
     }
     m_pixelsPerSecond = next;
@@ -1725,21 +1742,77 @@ void TimelineWidget::setHorizontalScroll(double seconds) {
     ui::FrameClock::instance().request(this, QRegion(rect()));
 }
 
+void TimelineWidget::setNavigationControls(QWidget* controls) {
+    if (!controls || controls == m_navigationControls) return;
+    delete m_navigationControls;
+    m_navigationControls = controls;
+    controls->setParent(this);
+    controls->show();
+    layoutNavigationControls();
+}
+
+int TimelineWidget::minimumNavigationHeight() const {
+    return rulerHeight() + (m_navigationControls ? m_navigationControls->height() : 0) +
+           2 * kTimelineScrollExtent;
+}
+
+void TimelineWidget::applyNavigationTheme() {
+    const Theme& theme = th();
+    const QColor rail = mixColors(theme.headerBackground, theme.well(), 0.32);
+    const QString style = QStringLiteral(R"(
+QScrollBar { background: %1; border: 1px solid %2; border-radius: 3px; margin: 0px; }
+QScrollBar:horizontal { height: %3px; }
+QScrollBar:vertical { width: %3px; }
+QScrollBar::handle { background: %4; border: 1px solid %2; border-radius: 3px; min-width: 0px; min-height: 0px; }
+QScrollBar::handle:horizontal { min-width: 32px; margin: 2px; }
+QScrollBar::handle:vertical { min-height: 32px; margin: 2px; }
+QScrollBar::handle:hover { background: %5; }
+QScrollBar::handle:pressed { background: %6; }
+QScrollBar::handle:disabled { background: %7; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; border: none; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+)")
+        .arg(rail.name(), theme.sectionDivider().name())
+        .arg(kTimelineScrollExtent)
+        .arg(mixColors(rail, theme.textPrimary, 0.30).name(),
+             mixColors(rail, theme.textPrimary, 0.43).name(),
+             mixColors(rail, theme.textPrimary, 0.56).name(),
+             mixColors(rail, theme.textPrimary, 0.12).name());
+    m_horizontalScrollBar->setStyleSheet(style);
+    m_verticalScrollBar->setStyleSheet(style);
+    m_navigationCorner->setStyleSheet(
+        QStringLiteral("#TimelineNavigationCorner { background: %1; border: 1px solid %2; border-radius: 3px; }")
+            .arg(rail.name(), theme.sectionDivider().name()));
+}
+
 void TimelineWidget::layoutNavigationControls() {
     if (!m_horizontalScrollBar || !m_verticalScrollBar) return;
     const int bottom = std::clamp(height() - m_bottomInset, 0, height());
     const int horizontalY = std::max(0, bottom - kTimelineScrollExtent);
+    const int verticalY = rulerHeight() +
+        (m_navigationControls ? m_navigationControls->height() : 0);
     m_horizontalScrollBar->setGeometry(
         0, horizontalY, std::max(0, width() - kTimelineScrollExtent),
         kTimelineScrollExtent);
     m_verticalScrollBar->setGeometry(
-        std::max(0, width() - kTimelineScrollExtent), rulerHeight(),
+        std::max(0, width() - kTimelineScrollExtent), verticalY,
         kTimelineScrollExtent,
-        std::max(0, horizontalY - rulerHeight()));
+        std::max(0, horizontalY - verticalY));
     m_horizontalScrollBar->setVisible(bottom >= kTimelineScrollExtent);
-    m_verticalScrollBar->setVisible(horizontalY > rulerHeight());
+    m_verticalScrollBar->setVisible(horizontalY > verticalY);
+    m_navigationCorner->setGeometry(
+        std::max(0, width() - kTimelineScrollExtent), horizontalY,
+        kTimelineScrollExtent, kTimelineScrollExtent);
+    m_navigationCorner->setVisible(bottom >= kTimelineScrollExtent);
+    m_navigationCorner->raise();
     m_horizontalScrollBar->raise();
     m_verticalScrollBar->raise();
+    if (m_navigationControls) {
+        m_navigationControls->move(
+            std::max(0, width() - m_navigationControls->width()),
+            rulerHeight());
+        m_navigationControls->raise();
+    }
 }
 
 void TimelineWidget::scheduleNavigationSync() {
@@ -2564,7 +2637,26 @@ void TimelineWidget::refreshRecordingFrame() {
         const auto& track = project.tracks[rows[lane].index];
         if (std::find(targets.begin(), targets.end(), track.id) == targets.end()) continue;
         const int y = rulerHeight() - m_scrollY + m_laneOffsets[lane];
-        current += QRect(0, y - 2, width(), m_laneOffsets[lane + 1] - m_laneOffsets[lane] + 4).intersected(viewport);
+        const int height = m_laneOffsets[lane + 1] - m_laneOffsets[lane];
+        if (!QRect(0, y - 2, width(), height + 4).intersects(viewport)) continue;
+        const auto include = [&](const QRectF& area) {
+            if (area.isEmpty()) return;
+            current += area.adjusted(-3, -3, 3, 3).intersected(QRectF(viewport)).toAlignedRect();
+        };
+        // The recording rim still follows every display frame, but empty lane
+        // space needs no repaint. Include both loop spans and the old region
+        // below so a wrap/seek/scroll also erases the previous overlay.
+        const auto preview = m_controller->recordingPreview(track.id);
+        for (const auto& span : preview.spans) {
+            const double left = (span.startSeconds - m_scrollSeconds) * m_pixelsPerSecond;
+            const double right = (span.endSeconds - m_scrollSeconds) * m_pixelsPerSecond;
+            include(QRectF(left, y, std::max(2.0, right - left), ui::laneHeightFor(track.height)));
+        }
+        const auto& pending = ui::pendingTakeClip(track);
+        if (pending.empty()) continue;
+        const auto* clip = findClipModel(QString::fromStdString(track.id), QString::fromStdString(pending));
+        if (clip && clip->expanded)
+            include(takeRowRect(compRect(int(lane), *clip), int(clip->takes.size())));
     }
     // Restoring the static plate also erases an old overlay on stop, after a
     // layout change, or when the recording track leaves the viewport.
@@ -4459,24 +4551,24 @@ void TimelineWidget::drawWaveform(QPainter& p, const daw::ClipModel& clip,
                                   const QRectF& area) {
     const std::string& path = m_controller->clipDisplayFilePath(clip);
     const bool processed = path != clip.filePath;
+    const auto waveform = m_controller->clipWaveform(clip);
     if (clip.warp.enabled && !processed && clip.warp.markers.size() >= 2) {
         for (std::size_t i = 0; i + 1 < clip.warp.markers.size(); ++i) {
             const auto& a = clip.warp.markers[i]; const auto& b = clip.warp.markers[i + 1];
             const double start = daw::beatsToSeconds(a.targetBeats, m_controller->tempo());
             const double duration = daw::beatsToSeconds(b.targetBeats - a.targetBeats, m_controller->tempo());
             const QRectF segment(area.left() + start * m_pixelsPerSecond, area.top(), duration * m_pixelsPerSecond, area.height());
-            drawPeaks(p, m_controller->waveforms().cached(path), a.sourceSeconds, segment,
-                clip.gain, QColor(255, 255, 255), duration / (b.sourceSeconds - a.sourceSeconds), clip.sampleEdit.reverse,
-                m_controller->cachedSourceSamples(path));
+            drawPeaks(p, waveform.peaks, a.sourceSeconds, segment,
+                clip.gain, QColor(255, 255, 255), duration / (b.sourceSeconds - a.sourceSeconds),
+                waveform.reversed, waveform.samples);
         }
         return;
     }
-    drawPeaks(p, m_controller->waveforms().cached(path),
+    drawPeaks(p, waveform.peaks,
               processed ? 0.0 : clip.offsetSeconds, area,
               processed ? 1.0f : clip.gain, QColor(255, 255, 255),
               processed ? 1.0 : clip.sampleEdit.stretchTime,
-              processed ? false : clip.sampleEdit.reverse,
-              m_controller->cachedSourceSamples(path));
+              waveform.reversed, waveform.samples);
 }
 
 /// The waveform envelope of `peaks` across `area`, where the source time at the
@@ -5046,6 +5138,32 @@ void TimelineWidget::drawStaticFrame(QPainter& p,
                 const int y = lanesBottom();
                 p.setPen(QPen(t.accent, 2, Qt::DashLine));
                 p.drawLine(0, y, width(), y);
+            }
+            if (!m_dropLibraryId.isEmpty()) {
+                if (const auto* entry = m_controller->libraryClip(m_dropLibraryId.toStdString());
+                    entry && !entry->tracks.empty() && !entry->tracks.front().clips.empty()) {
+                    const auto& clip = entry->tracks.front().clips.front();
+                    const bool snapOn = m_snapEnabled && !(m_dropModifiers & Qt::ControlModifier);
+                    const double at = std::max(0.0, snap(xToSeconds(m_dropPosition.x()), snapOn));
+                    const double ratio = entry->tempo / std::max(1.0, m_controller->project().tempo);
+                    const QRectF ghost(secondsToX(at),
+                        (m_dropLane >= 0 ? laneTop(m_dropLane) : lanesBottom()) + kClipVerticalInset,
+                        std::max(2.0, clip.durationSeconds * ratio * m_pixelsPerSecond),
+                        std::max(2, laneBodyHeightAt(m_dropLane) - 2 * kClipVerticalInset));
+                    QColor fill = QColor::fromRgb(clip.color);
+                    fill.setAlpha(65);
+                    QColor edge = QColor::fromRgb(clip.color);
+                    edge.setAlpha(190);
+                    p.setBrush(fill);
+                    p.setPen(QPen(edge, 1.4, Qt::DashLine));
+                    p.drawRoundedRect(ghost, Theme::cornerRadius, Theme::cornerRadius);
+                    if (ghost.width() > 24) {
+                        p.setPen(t.textPrimary);
+                        p.drawText(ghost.adjusted(8, 0, -8, 0), Qt::AlignVCenter | Qt::AlignLeft,
+                            QFontMetrics(p.font()).elidedText(QString::fromStdString(entry->name),
+                                Qt::ElideRight, int(ghost.width()) - 16));
+                    }
+                }
             }
         }
 
@@ -7485,9 +7603,13 @@ std::optional<daw::plugins::PluginDescriptor> TimelineWidget::pluginFromMime(
 void TimelineWidget::dragEnterEvent(QDragEnterEvent* ev) {
     if (const auto id = ui::cliplibrary::libraryId(ev->mimeData()); !id.isEmpty()) {
         if (!m_controller->libraryClip(id.toStdString())) return;
+        m_dropLibraryId = id;
+        m_dropPosition = ev->position().toPoint();
+        m_dropModifiers = ev->modifiers();
         m_dropActive = true; m_dropLane = laneAt(ev->position().toPoint().y());
         ev->setDropAction(Qt::CopyAction); ev->accept(); update(); return;
     }
+    m_dropLibraryId.clear();
     if (!mimeHasImportable(ev->mimeData()) && !mimeHasPlugin(ev->mimeData()) &&
         projectTemplateFromMime(ev->mimeData()).isEmpty())
         return;
@@ -7503,6 +7625,8 @@ void TimelineWidget::dragMoveEvent(QDragMoveEvent* ev) {
     if (const auto id = ui::cliplibrary::libraryId(ev->mimeData()); !id.isEmpty()) {
         const auto* entry = m_controller->libraryClip(id.toStdString());
         if (!entry || entry->tracks.empty() || entry->tracks.front().clips.empty()) { ev->ignore(); return; }
+        m_dropPosition = ev->position().toPoint();
+        m_dropModifiers = ev->modifiers();
         m_dropLane = laneAt(ev->position().toPoint().y());
         const auto* target = m_controller->project().findTrack(trackIdForLane(m_dropLane).toStdString());
         if (target && !daw::trackAccepts(target->kind, entry->tracks.front().clips.front().kind)) {
@@ -7540,12 +7664,14 @@ void TimelineWidget::dragMoveEvent(QDragMoveEvent* ev) {
 
 void TimelineWidget::dragLeaveEvent(QDragLeaveEvent*) {
     m_dropActive = false;
+    m_dropLibraryId.clear();
     m_dropClip = {};
     update();
 }
 
 void TimelineWidget::dropEvent(QDropEvent* ev) {
     m_dropActive = false;
+    m_dropLibraryId.clear();
     const ClipRef overClip = m_dropClip;
     m_dropClip = {};
     if (const auto id = ui::cliplibrary::libraryId(ev->mimeData()); !id.isEmpty()) {

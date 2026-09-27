@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' qrc:; style-src 'self'; img-src 'self' data:; connect-src 'none'">
+  <title>Compressor · Soft / Punch</title>
+  <link rel="stylesheet" href="compressor.css">
+  <script src="qrc:///qtwebchannel/qwebchannel.js" defer></script>
+  <script src="compressor.js" defer></script>
+</head>
+<body>
+  <main aria-label="Compressor" id="panel">
+    <section class="transfer" aria-label="Compression curve">
+      <button id="mode" class="mode" aria-label="Punch mode" aria-pressed="false" title="Soft: RMS detector. Punch: peak detector and saturation.">
+        <span class="soft-label">SOFT</span><span class="switch" aria-hidden="true"><i></i></span><span class="punch-label">PUNCH</span>
+      </button>
+      <div class="graph-wrap">
+        <svg id="graph" viewBox="0 0 236 236" aria-label="Input to output transfer curve">
+          <defs><pattern id="grid" width="31.33" height="31.33" patternUnits="userSpaceOnUse" x="28" y="12"><path d="M 31.33 0 L 0 0 0 31.33" fill="none" stroke="#a8adae" stroke-width=".7"/></pattern><clipPath id="plot-bounds"><rect x="28" y="12" width="188" height="188"/></clipPath></defs>
+          <rect class="plot" x="28" y="12" width="188" height="188" rx="1"/>
+          <rect x="28" y="12" width="188" height="188" fill="url(#grid)"/>
+          <path class="identity" d="M28 200 L216 12"/>
+          <path id="curve" d="M28 200 L216 12" clip-path="url(#plot-bounds)"/>
+          <circle id="level-marker" r="4" cx="28" cy="200" clip-path="url(#plot-bounds)"/>
+          <text x="28" y="222">−60</text><text x="208" y="222">0</text>
+          <text x="3" y="17">0</text><text x="1" y="203">−60</text>
+          <g id="graph-ratio" role="slider" tabindex="0" aria-label="Ratio graph handle" aria-orientation="vertical"><circle class="hit" r="16"/><circle class="handle" r="8"/></g>
+          <g id="graph-threshold" role="slider" tabindex="0" aria-label="Threshold graph handle" aria-orientation="horizontal"><circle class="hit" r="16"/><circle class="handle" r="8"/></g>
+        </svg>
+        <div class="axis-label">INPUT / OUTPUT <span>dB</span></div>
+      </div>
+    </section>
+    <section class="controls" aria-label="Compression parameters">
+      <div class="primary" id="primary">
+        <button id="autoGain" class="auto-gain" aria-label="Auto Gain" aria-pressed="false" title="Compensate at −18 dB, up to +12 dB"><i aria-hidden="true"></i><span>AUTO<br>GAIN</span><small id="auto-state">OFF</small></button>
+      </div>
+      <div class="secondary" id="secondary"></div>
+    </section>
+    <section class="meters" aria-label="Signal levels">
+      <div class="meter" id="meter-gr"><span>GR</span><div class="segments" role="meter" aria-label="Gain reduction" aria-valuemin="0" aria-valuemax="30"></div><output>0.0</output></div>
+      <div class="meter" id="meter-in"><span>IN</span><div class="segments" role="meter" aria-label="Input level" aria-valuemin="-60" aria-valuemax="6"></div><output>−∞</output></div>
+      <div class="meter" id="meter-out"><span>OUT</span><div class="segments" role="meter" aria-label="Output level" aria-valuemin="-60" aria-valuemax="6"></div><output>−∞</output></div>
+      <span class="meter-unit">dB</span>
+    </section>
+  </main>
+  <div id="menu" role="menu" hidden><button role="menuitem" id="reset">Reset to default</button><button role="menuitem" id="automate">Create automation</button></div>
+</body>
+</html>

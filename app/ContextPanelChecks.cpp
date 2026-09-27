@@ -34,9 +34,15 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     strip.setBrowserVisible(false);
     strip.setInspectorZoneWidth(30);
     strip.resize(1000, ui::kToolPanelHeight);
+    QWidget navigationHost;
+    auto* viewControls = strip.takeTimelineViewControls();
+    if (!viewControls) return false;
+    viewControls->setParent(&navigationHost);
+    navigationHost.resize(viewControls->size());
+    viewControls->show();
+    navigationHost.show();
     ui::SelectionModel selection;
     ContextPanel panel(m_controller, &selection, &strip);
-    strip.watchContextPanel(&panel);
     strip.show();
     QApplication::processEvents();
     int right = strip.contextRightEdge();
@@ -68,18 +74,17 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
         }
         return true;
     };
-    auto* wave = strip.findChild<QAbstractButton*>("WaveformScaleButton");
-    auto* sliderCluster = strip.findChild<QWidget*>("TimelineSliderCluster");
-    auto* trackHeight = strip.findChild<QSlider*>("TimelineTrackHeightSlider");
-    auto* timelineZoom = strip.findChild<QSlider*>("TimelineZoomSlider");
+    auto* wave = viewControls->findChild<QAbstractButton*>("WaveformScaleButton");
+    auto* trackHeight = viewControls->findChild<QSlider*>("TimelineTrackHeightSlider");
+    auto* timelineZoom = viewControls->findChild<QSlider*>("TimelineZoomSlider");
     const int fullCount = visibleActions();
     const bool utilitiesOrdered =
-        wave && sliderCluster && trackHeight && timelineZoom &&
-        wave->isVisible() && sliderCluster->isVisible() &&
-        wave->mapTo(&strip, QPoint()).x() <
-            sliderCluster->mapTo(&strip, QPoint()).x();
+        wave && trackHeight && timelineZoom &&
+        wave->isVisible() && timelineZoom->isVisible() && trackHeight->isVisible() &&
+        wave->y() < timelineZoom->y() && timelineZoom->y() < trackHeight->y() &&
+        !strip.findChild<QWidget*>("TimelineViewControls");
     if (!check(fits() && fullCount >= 6 && utilitiesOrdered,
-               "wide strip shows waveform, track height and zoom in order")) return false;
+               "waveform, zoom and track height live outside the context strip")) return false;
     QPointer<QWidget> primary;
     QPointer<QWidget> colour;
     for (auto* widget : panel.findChildren<QWidget*>()) {
@@ -96,14 +101,14 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
                                   visibleActions() < fullCount,
                                   "gain survives after secondary controls disappear")) return false;
     }
-    if (!check(wave->isHidden() && strip.contextRightEdge() == right &&
-                   sliderCluster->isVisible() &&
+    if (!check(wave->isVisible() && strip.contextRightEdge() == right &&
+                   viewControls->isVisible() &&
                    panel.x() + panel.width() <= strip.contextRightEdge(),
-               "context stops before the timeline controls at its reserved boundary")) return false;
+               "context keeps its boundary without hiding navigation controls")) return false;
     for (int i = 0; i < 8; ++i) {
         panel.relayout();
         QApplication::processEvents();
-        if (!check(wave->isHidden(), "crowded waveform control stays hidden")) return false;
+        if (!check(wave->isVisible(), "context relayout leaves waveform control visible")) return false;
     }
     left = right;
     panel.relayout();
@@ -202,10 +207,10 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     strip.setBrowserVisible(true);
     strip.setBrowserZoneWidth(520);
     QApplication::processEvents();
-    if (!check(sliderCluster->isHidden(),
-               "timeline sliders hide when a widened browser leaves little room")) return false;
+    if (!check(viewControls->isVisible(),
+               "widening the browser keeps navigation controls available")) return false;
     strip.setBrowserZoneWidth(30);
     QApplication::processEvents();
-    return check(sliderCluster->isVisible(),
-                 "timeline sliders return after the arrangement widens");
+    return check(viewControls->isVisible(),
+                 "navigation controls remain visible after the arrangement widens");
 }

@@ -6563,7 +6563,7 @@ bool MainWindow::checkTimelinePanForTest() {
 
     const double playheadFocus =
         m_timeline->horizontalScrollForTest() +
-        (m_timeline->width() - 12) /
+        (m_timeline->width() - ui::kTimelineScrollExtent) /
             (2.0 * m_timeline->pixelsPerSecondForTest());
     m_controller.seekSeconds(playheadFocus);
     for (const auto& track : m_controller.project().tracks) {
@@ -6581,7 +6581,8 @@ bool MainWindow::checkTimelinePanForTest() {
          m_timeline->horizontalScrollForTest()) *
         m_timeline->pixelsPerSecondForTest();
     const bool playheadCentred =
-        std::abs(focusedPlayheadX - (m_timeline->width() - 12) * 0.5) <= 1.0;
+        std::abs(focusedPlayheadX -
+                 (m_timeline->width() - ui::kTimelineScrollExtent) * 0.5) <= 1.0;
     const bool zoomFocusButtonRemoved =
         !m_toolPanel->findChild<QWidget*>(QStringLiteral("ZoomFocusButton"));
 
@@ -6628,10 +6629,8 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
         return false;
     }
 
-    auto* waveformScale = m_toolPanel
-                              ? m_toolPanel->findChild<QWidget*>(
-                                    QStringLiteral("WaveformScaleButton"))
-                              : nullptr;
+    auto* waveformScale = m_timeline->findChild<QWidget*>(
+        QStringLiteral("WaveformScaleButton"));
     if (!waveformScale) return false;
     m_timeline->setWaveformScale(1.0);
     const QPointF scaleFrom(waveformScale->rect().center());
@@ -6671,9 +6670,9 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
         return false;
     }
 
-    auto* trackHeightSlider = m_toolPanel->findChild<QSlider*>(
+    auto* trackHeightSlider = m_timeline->findChild<QSlider*>(
         QStringLiteral("TimelineTrackHeightSlider"));
-    auto* timelineZoomSlider = m_toolPanel->findChild<QSlider*>(
+    auto* timelineZoomSlider = m_timeline->findChild<QSlider*>(
         QStringLiteral("TimelineZoomSlider"));
     if (!trackHeightSlider || !timelineZoomSlider) return false;
 
@@ -6703,15 +6702,29 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
             Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(control, &release);
     };
+    auto* viewControls = m_timeline->findChild<QWidget*>(
+        QStringLiteral("TimelineViewControls"));
+    auto* verticalScroll = m_timeline->findChild<QScrollBar*>(
+        QStringLiteral("TimelineVerticalScroll"));
+    auto* horizontalScroll = m_timeline->findChild<QScrollBar*>(
+        QStringLiteral("TimelineHorizontalScroll"));
+    const QPoint wavePosition = waveformScale->mapTo(m_timeline, QPoint());
+    const QPoint zoomPosition = timelineZoomSlider->mapTo(m_timeline, QPoint());
+    const QPoint heightPosition = trackHeightSlider->mapTo(m_timeline, QPoint());
     const bool compactControls =
+        viewControls && verticalScroll && horizontalScroll &&
+        !m_toolPanel->findChild<QWidget*>(QStringLiteral("TimelineViewControls")) &&
         trackHeightSlider->size() == waveformScale->size() &&
         timelineZoomSlider->size() == waveformScale->size() &&
-        waveformScale->width() >= 24 && waveformScale->width() <= 36 &&
-        waveformScale->height() >= 24 && waveformScale->height() <= 28 &&
-        trackHeightSlider->mapTo(m_toolPanel, trackHeightSlider->rect().center()).y() ==
-            waveformScale->mapTo(m_toolPanel, waveformScale->rect().center()).y() &&
-        timelineZoomSlider->mapTo(m_toolPanel, timelineZoomSlider->rect().center()).y() ==
-            waveformScale->mapTo(m_toolPanel, waveformScale->rect().center()).y();
+        waveformScale->width() == ui::kTimelineScrollExtent && waveformScale->height() >= 24 &&
+        wavePosition.x() == zoomPosition.x() && zoomPosition.x() == heightPosition.x() &&
+        wavePosition.y() < zoomPosition.y() && zoomPosition.y() < heightPosition.y() &&
+        heightPosition.x() == verticalScroll->x() &&
+        viewControls->y() == m_timeline->rulerHeight() &&
+        viewControls->geometry().bottom() + 1 == verticalScroll->y() &&
+        viewControls->geometry().right() + 1 == m_timeline->width() &&
+        verticalScroll->width() == horizontalScroll->height() &&
+        horizontalScroll->geometry().right() + 1 == verticalScroll->x();
 
     const auto originalHeights = [&] {
         std::vector<std::pair<std::string, double>> values;
@@ -6755,7 +6768,7 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
     const double scaleBeforeSlider = m_timeline->pixelsPerSecondForTest();
     const double scrollBeforeSlider = m_timeline->horizontalScrollForTest();
     const double anchorX =
-        std::max(1, m_timeline->width() - 12) * 0.5;
+        std::max(1, m_timeline->width() - ui::kTimelineScrollExtent) * 0.5;
     const double centreBeforeSlider =
         scrollBeforeSlider + anchorX / scaleBeforeSlider;
     const QPoint cursorBeforeSlider = QCursor::pos();
@@ -7394,8 +7407,8 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
     m_timeline->setVerticalScroll(100000);
     QApplication::processEvents();
     const int scrollBefore = m_timeline->verticalScroll();
-    const QPoint marqueeStart(m_timeline->width() - 12,
-                              m_timeline->height() - 12);
+    const QPoint marqueeStart(m_timeline->width() - ui::kTimelineScrollExtent - 12,
+                              horizontalScroll->y() - 12);
     const QPoint marqueeOutside(marqueeStart.x(), m_timeline->rulerHeight() - 30);
     const double playheadBeforeMarquee = 0.137;
     m_controller.seekSeconds(playheadBeforeMarquee);
@@ -7578,15 +7591,15 @@ bool MainWindow::checkSettingsViewportForTest() {
                                      ->data(0, Qt::UserRole)
                                      .toInt(&valid);
                 groupedNavigation = groupedNavigation && valid && page >= 0 &&
-                                    page <= SettingsWindow::kInterfaceTab &&
+                                    page <= SettingsWindow::kMixerTab &&
                                     !navigationPages.contains(page);
                 if (valid) navigationPages.insert(page);
             }
         }
         groupedNavigation = groupedNavigation &&
-                            navigationPages.size() == SettingsWindow::kInterfaceTab + 1;
+                            navigationPages.size() == SettingsWindow::kMixerTab + 1;
     }
-    bool scrollable = pages && pages->count() == SettingsWindow::kInterfaceTab + 1 &&
+    bool scrollable = pages && pages->count() == SettingsWindow::kMixerTab + 1 &&
                       groupedNavigation &&
                       m_settingsWindow->checkAudioPageForTest() &&
                       SettingsWindow::checkWheelRoutingForTest() &&
@@ -7822,8 +7835,9 @@ bool MainWindow::checkTimelineRulersForTest() {
     auto* inspectorHeader = m_inspector->findChild<QWidget*>(QStringLiteral("InspectorHeader"));
     auto* browserHeader = m_browser->findChild<QWidget*>(QStringLiteral("BrowserHeader"));
     auto* scroll = m_timeline->findChild<QScrollBar*>(QStringLiteral("TimelineVerticalScroll"));
+    auto* viewControls = m_timeline->findChild<QWidget*>(QStringLiteral("TimelineViewControls"));
     if (!button || !button->menu() || !trackHeader || !inspectorHeader ||
-        !browserHeader || !scroll) return false;
+        !browserHeader || !scroll || !viewControls) return false;
     const auto originalFormat = m_transport->rulerFormat();
     const bool originalCounter = m_transport->positionShowsBars();
     const double originalPosition = m_controller.positionSeconds();
@@ -7844,7 +7858,9 @@ bool MainWindow::checkTimelineRulersForTest() {
         QApplication::processEvents();
         if (m_timeline->rulerHeight() != height || trackHeader->height() != height ||
             inspectorHeader->height() != height || browserHeader->height() != height ||
-            scroll->y() != height) return false;
+            viewControls->y() != height ||
+            scroll->y() != viewControls->geometry().bottom() + 1 ||
+            viewControls->geometry().right() + 1 != m_timeline->width()) return false;
         for (int row = 0; row < 3; ++row) {
             const QRect header = m_trackList->rowRectForTest(row);
             if (header.isNull()) continue;
@@ -9146,7 +9162,6 @@ void MainWindow::buildLayout() {
     // strip rather than part of its zone layout, so it can size itself to
     // whatever the selection needs without pushing the zones around.
     m_contextPanel = new ContextPanel(&m_controller, &m_selection, m_toolPanel);
-    m_toolPanel->watchContextPanel(m_contextPanel);
     // Asked, not told: the plate recomputes its geometry from inside a
     // selection change, so a value pushed afterwards would always be one step
     // behind what it had already decided.
@@ -9355,6 +9370,8 @@ void MainWindow::buildLayout() {
     if (m_toolPanel)
         m_trackList->setRulerActions(m_toolPanel->takeTrackActions());
     m_timeline = new TimelineWidget(&m_controller, m_arrangementHost);
+    if (m_toolPanel)
+        m_timeline->setNavigationControls(m_toolPanel->takeTimelineViewControls());
     m_trackHeaderWidth = std::max(
         ui::kMinTrackHeaderWidth,
         QSettings().value(ui::kTrackHeaderWidthSetting,
@@ -9677,6 +9694,7 @@ void MainWindow::buildLayout() {
         m_trackList->setRulerHeight(height);
         m_inspector->setHeaderHeight(height);
         m_browser->setHeaderHeight(height);
+        layoutBottomPanels();
     };
     connect(m_timeline, &TimelineWidget::rulerHeightChanged, this, alignRulerHeaders);
     connect(m_transport, &TransportBar::timeFormatChanged, this, [this] {
@@ -9741,6 +9759,15 @@ void MainWindow::buildLayout() {
         });
     connect(m_trackList, &TrackListWidget::tracksChanged, this,
             &MainWindow::onTracksChanged);
+    connect(m_trackList, &TrackListWidget::customTrackIconRequested, this,
+            [this](const QStringList& targets) {
+                openSettings(SettingsWindow::kThemesTab);
+                QTimer::singleShot(0, this, [this, targets] {
+                    if (!m_settingsWindow) return;
+                    const QString id = m_settingsWindow->importTrackIconFile();
+                    if (!id.isEmpty()) m_trackList->applyTrackIcon(targets, id);
+                });
+            });
     // Track order and mixer channels acknowledge the same structure change.
     connect(m_trackList, &TrackListWidget::orderChanged, this, [this] {
         syncStructureViews();
@@ -10911,12 +10938,15 @@ void MainWindow::layoutBottomPanels() {
     if (!m_arrangementHost || !m_bottomPanel) return;
     const int hostH = m_arrangementHost->height();
     if (hostH <= 0) return;
-    constexpr int kMinArrangementReveal = 60;
+    // Keep the view controls, bottom rail and a usable piece of the vertical
+    // rail exposed even when the mixer is pulled all the way upward.
+    const int minimumReveal = m_timeline ? m_timeline->minimumNavigationHeight()
+                                        : ui::kRulerHeight + 2 * ui::kTimelineScrollExtent;
     int covered = 0;
     const auto place = [&](QWidget* panel, int preferredHeight) {
         if (!panel) return;
         const int visibleHeight = std::min(std::max(0, preferredHeight),
-            std::max(0, hostH - kMinArrangementReveal));
+            std::max(0, hostH - minimumReveal));
         // Shrink to available space so the content reaches the lower edge.
         // Below the content minimum, clip the body while dragging to dismiss.
         const int bodyHeight = std::max(panel->minimumHeight(), visibleHeight);
@@ -14282,7 +14312,6 @@ void MainWindow::openPianoRoll(const QString& trackId, const QString& clipId) {
         // before the button could receive its release/click.
         m_noteContextPanel = m_pianoRoll->createContextPanel(m_toolPanel);
         if (m_noteContextPanel) {
-            m_toolPanel->watchContextPanel(m_noteContextPanel);
             m_noteContextPanel->setBoundsProvider([this](int& left, int& right) {
                 return contextPanelBounds(left, right);
             });
@@ -18660,6 +18689,7 @@ void MainWindow::refreshUi() {
     {
         ui::perf::Scope phase("refreshUi.pluginEvents.ms");
         if (m_controller.pumpPluginEvents()) markDirty();
+        if (m_timeline) m_timeline->refreshClipWaveforms();
     }
 
     {

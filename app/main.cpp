@@ -8,6 +8,7 @@
 #include "OfflineRenderDialog.hpp"
 #include "PluginBatchDialog.hpp"
 #include "PluginEditorWindow.hpp"
+#include "TrackIcons.hpp"
 #include "TransportBar.hpp"
 #include "ChannelStrip.hpp"
 #include "InternalEditorFrame.hpp"
@@ -65,6 +66,7 @@
 #include "Theme.hpp"
 #include "ThemePackage.hpp"
 #include "graphics/WorkspaceSurface.hpp"
+#include "graphics/BrowserSurface.hpp"
 #include "graphics/GraphicsPreferences.hpp"
 #include <QQuickWindow>
 #include "Typography.hpp"
@@ -75,6 +77,7 @@
 #include <QNetworkProxyFactory>
 #include <QDir>
 #include <QSettings>
+#include <QScrollArea>
 #include <QFile>
 #include <QFont>
 #include <QToolTip>
@@ -575,6 +578,14 @@ int main(int argc, char** argv) {
     if (themeId)
         ThemeManager::instance().setThemeId(QString::fromUtf8(themeId),
                                             /*persist=*/false);
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_SIDECHAIN_ONLY")) {
+        MainWindow window(/*openDevice=*/false);
+        return window.checkPluginSidechainForTest() ? 0 : 76;
+    }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_NORMALIZE_ONLY")) {
+        MainWindow window(/*openDevice=*/false);
+        return window.checkInspectorNormalizeForTest() ? 0 : 77;
+    }
     if (trackCreationCheck) {
         daw::EngineController controller;
         if (!controller.initialize(48000, 256, false)) return 66;
@@ -1304,6 +1315,25 @@ int main(int argc, char** argv) {
         const bool shotCloud = false;
         const char* shotJoin = nullptr;
 #endif
+        if (const char* iconsShot = std::getenv("DAW_SHOT_TRACK_ICONS")) {
+            const bool picker = std::strcmp(iconsShot, "picker") == 0;
+            QTimer::singleShot(250, &window, [&window, picker] {
+                auto* headers = window.findChild<TrackListWidget*>();
+                auto* controller = window.collaborationEngineController();
+                const char* choices[] = {"builtin:drum-kit", "builtin:acoustic-guitar", "builtin:piano", "builtin:synth", "builtin:microphone", "builtin:saxophone"};
+                QString first;
+                int i = 0;
+                for (const auto& track : controller->project().tracks) {
+                    if (daw::isFolder(track)) continue;
+                    if (first.isEmpty()) first = QString::fromStdString(track.id);
+                    controller->setTrackIcons({track.id}, choices[i++ % std::size(choices)]);
+                }
+                if (headers) {
+                    headers->syncTrackValues();
+                    if (picker) headers->showTrackIconPicker(first);
+                }
+            });
+        }
         // DAW_SHOT_GRAPHIT opens the compact built-in one-knob saturator.
         const bool shootGraphit = std::getenv("DAW_SHOT_GRAPHIT") != nullptr;
         if (shootGraphit) window.openDemoGraphit();
@@ -1376,7 +1406,21 @@ int main(int argc, char** argv) {
         // grabbed on its own.
         const char* shotSettings = std::getenv("DAW_SHOT_SETTINGS");
         const bool shootSettings = shotSettings != nullptr;
-        if (shootSettings) window.openSettings(std::atoi(shotSettings));
+        if (shootSettings) {
+            window.openSettings(std::atoi(shotSettings));
+            if (qEnvironmentVariable("DAW_SHOT_TRACK_ICONS") == QLatin1String("settings")) {
+                QTimer::singleShot(350, &window, [] {
+                    for (QWidget* widget : QApplication::allWidgets()) {
+                        if (widget->objectName() != QLatin1String("TrackIconSettings")) continue;
+                        for (QWidget* parent = widget->parentWidget(); parent; parent = parent->parentWidget())
+                            if (auto* scroll = qobject_cast<QScrollArea*>(parent)) {
+                                scroll->ensureWidgetVisible(widget, 0, 20);
+                                break;
+                            }
+                    }
+                });
+            }
+        }
         // DAW_SHOT_PLUGINS is the tab index to show (0 Plugins, 1 Search Paths,
         // 2 Blacklist), so each tab can be grabbed on its own.
         // DAW_SHOT_CONTEXT is a comma-separated list of clip indices, left to
@@ -1471,6 +1515,8 @@ int main(int argc, char** argv) {
         // it however visible Qt thinks it is. So it is grabbed as a widget, on
         // its own, which is all there is to look at anyway.
         const bool shootFlyout = std::getenv("DAW_SHOT_FLYOUT") != nullptr ||
+                                 (std::getenv("DAW_SHOT_TRACK_ICONS") &&
+                                  qEnvironmentVariable("DAW_SHOT_TRACK_ICONS") == QLatin1String("picker")) ||
                                  std::getenv("DAW_SHOT_MENU") != nullptr ||
                                  std::getenv("DAW_SHOT_FOLDER_DIALOG") != nullptr;
         // DAW_SHOT_FOLDER_DIALOG opens "which kind of folder?" over the demo.
@@ -1481,6 +1527,29 @@ int main(int argc, char** argv) {
         }
         QTimer::singleShot(grabDelay, &app, [&] {
             if (shootEditor) {
+                // Built-in editors live in our scene. Capture that scene
+                // directly, including on runners without a desktop framebuffer.
+                for (QWidget* widget : QApplication::allWidgets()) {
+                    auto* editor = qobject_cast<PluginEditorWindow*>(widget);
+                    if (!editor || !editor->isVisible()) continue;
+                    if (auto* browser = editor->findChild<ui::graphics::BrowserSurface*>()) {
+                        auto* page = browser->page();
+                        if (page->isQuick() && page->quickItem() && page->quickItem()->window())
+                            page->quickItem()->window()->grabWindow().save(QString::fromUtf8(screenshotPath));
+                        else
+                            editor->grab().save(QString::fromUtf8(screenshotPath));
+                        QApplication::quit();
+                        return;
+                    }
+                    if (!editor->requiresNativeSurface()) {
+                        if (auto* surface = window.findChild<ui::graphics::WorkspaceSurface*>())
+                            surface->quickWindow()->grabWindow().save(QString::fromUtf8(screenshotPath));
+                        else
+                            editor->grab().save(QString::fromUtf8(screenshotPath));
+                        QApplication::quit();
+                        return;
+                    }
+                }
                 if (QScreen* screen = QGuiApplication::primaryScreen()) {
                     screen->grabWindow(0).save(QString::fromUtf8(screenshotPath));
                 }

@@ -55,7 +55,10 @@ json insertToJson(const InsertModel& i) {
         j["channelMode"] = toString(i.channelMode);
     if (i.editorChannel != PluginEditorChannel::Left)
         j["editorChannel"] = toString(i.editorChannel);
-    if (!i.sidechainTrackId.empty()) j["sidechain"] = i.sidechainTrackId;
+    if (!i.sidechainTrackIds.empty()) {
+        j["sidechain"] = i.sidechainTrackIds.front(); // Older readers use the first source.
+        j["sidechains"] = i.sidechainTrackIds;
+    }
     if (!i.stateFile.empty()) j["stateFile"] = i.stateFile;
     if (!i.rightStateFile.empty()) j["rightStateFile"] = i.rightStateFile;
     if (!i.stateAsset.empty()) j["stateAsset"] = assetRefToJson(i.stateAsset);
@@ -97,7 +100,18 @@ InsertModel insertFromJson(const json& j) {
         j.value("channelMode", std::string("auto")));
     i.editorChannel = pluginEditorChannelFromString(
         j.value("editorChannel", std::string("left")));
-    i.sidechainTrackId = j.value("sidechain", "");
+    if (j.contains("sidechains") && j.at("sidechains").is_array()) {
+        for (const auto& value : j.at("sidechains")) {
+            if (!value.is_string()) continue;
+            auto id = value.get<std::string>();
+            if (!id.empty() && std::find(i.sidechainTrackIds.begin(),
+                i.sidechainTrackIds.end(), id) == i.sidechainTrackIds.end())
+                i.sidechainTrackIds.push_back(std::move(id));
+            if (i.sidechainTrackIds.size() == kMaxPluginSidechainSources) break;
+        }
+    } else if (auto source = j.value("sidechain", ""); !source.empty()) {
+        i.sidechainTrackIds.push_back(std::move(source));
+    }
     i.stateFile = j.value("stateFile", "");
     i.rightStateFile = j.value("rightStateFile", "");
     if (j.contains("stateAsset"))

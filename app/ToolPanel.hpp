@@ -1,8 +1,6 @@
 #pragma once
 
 #include <QHBoxLayout>
-#include <QPointer>
-#include <QVector>
 #include <QWidget>
 
 namespace icons { enum class Glyph; }
@@ -26,6 +24,9 @@ public:
     /// Move the track actions into the ruler above the track headers. The
     /// strip keeps an empty track-width zone so its other columns stay aligned.
     QWidget* takeTrackActions();
+    /// Move the waveform/zoom/track-height column above the timeline scroll rail.
+    /// This strip continues to own the controls' state and signals.
+    QWidget* takeTimelineViewControls();
 
     void setRestartMode(bool on);
     void setPlayFromClip(bool on);
@@ -56,11 +57,9 @@ public:
     void setTrackHeightValue(int height);
     /// Keep the compact zoom control in step with wheel, pinch and shortcuts.
     void setTimelineZoom(double pixelsPerSecond);
-    /// Keep a permanent boundary before the waveform control, even while it
-    /// is hidden. Its slot must not move when a context panel approaches it.
+    /// Available context area ends before the browser/assistant columns.
     int contextRightEdge() const;
     int contextLeftEdge() const;
-    void watchContextPanel(QWidget* panel);
 
 signals:
     void resized();
@@ -85,13 +84,9 @@ signals:
 
 protected:
     bool event(QEvent*) override;
-    bool eventFilter(QObject*, QEvent*) override;
     void resizeEvent(QResizeEvent*) override;
 
 private:
-    void updateWaveformVisibility(QWidget* changingPanel = nullptr, bool showing = false);
-    void updateTimelineSliderVisibility();
-    QVector<QPointer<QWidget>> m_contextPanels;
     void applyTheme();
     /// Push the assistant's zone back to the end of the row. The zones are
     /// positional, and moving the browser to the right edge would otherwise
@@ -104,7 +99,7 @@ private:
     QSlider* m_trackHeightSlider = nullptr;
     QSlider* m_timelineZoomSlider = nullptr;
     QWidget* m_timelineZone = nullptr;
-    QWidget* m_timelineSliders = nullptr;
+    QWidget* m_timelineViewControls = nullptr;
     bool m_trackHeightDragging = false;
     ui::IconButton* m_createAutomation = nullptr;
     ui::IconButton* m_showAutomation = nullptr;

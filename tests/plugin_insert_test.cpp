@@ -487,6 +487,70 @@ int main() {
         ctrl.setInsertBypassed(trackId, insertId, false);
     }
 
+    // Multi-source routing remains a real project operation (including render,
+    // undo, legacy loading and both instances of a dual-mono plugin).
+    {
+        daw::EngineController multi;
+        check(multi.initialize(48000, 128, false).isOk(), "multi-sidechain engine initializes");
+        multi.pluginManager().copyCatalogFrom(fixturePlugins);
+        const auto target = multi.importAudioToNewTrack(tonePath, 0);
+        const auto keyA = multi.importAudioToNewTrack(tonePath, 0);
+        const auto keyB = multi.importAudioToNewTrack(tonePath, 0);
+        const auto slot = multi.addInsert(target, *descriptor);
+        const auto keySlot = multi.addInsert(keyB, *descriptor); // additional latency on one source
+        multi.setTrackVolume(keyA, 0.25f);
+        multi.setTrackVolume(keyB, 0.5f);
+        check(multi.setInsertSidechainSources(target, slot, {keyA, keyB, keyA}) &&
+                  multi.insertModel(target, slot)->sidechainTrackIds == std::vector<std::string>{keyA, keyB},
+              "multiple sidechains are saved in order with duplicates removed");
+        multi.undo();
+        check(multi.insertModel(target, slot)->sidechainTrackIds.empty(), "one undo restores all sidechain sources");
+        multi.redo();
+        check(multi.insertModel(target, slot)->sidechainTrackIds.size() == 2, "redo restores the complete source list");
+        check(!multi.setInsertSidechainSources(keyB, keySlot, {target}), "mutual sidechain feedback is rejected");
+        const auto offered = multi.insertSidechainSources(keyB);
+        check(std::none_of(offered.begin(), offered.end(), [&](const auto& s) { return s.id == target; }),
+              "the menu excludes feedback through an existing sidechain");
+        check(!multi.setInsertSidechainSources(target, slot, {keyA, "missing"}) &&
+                  multi.insertModel(target, slot)->sidechainTrackIds.size() == 2,
+              "an invalid source cannot partially apply the selection");
+        const auto saved = (dir / "multi-sidechain.vlt").string();
+        check(multi.saveProject(saved).isOk(), "multi-sidechain project saves");
+        daw::EngineController reopened;
+        reopened.initialize(48000, 128, false);
+        reopened.pluginManager().copyCatalogFrom(fixturePlugins);
+        check(reopened.openProject(saved).isOk() &&
+                  reopened.insertModel(target, slot)->sidechainTrackIds == std::vector<std::string>{keyA, keyB},
+              "all sidechain sources survive a project reopen");
+
+        daw::rendering::Spec spec;
+        spec.outputDir = dir.string(); spec.range = daw::rendering::Range::Custom;
+        spec.customEndSeconds = 1.0; spec.stemChannelIds = {target};
+        spec.file.container = audio::platform::Container::Wav;
+        spec.file.encoding = audio::platform::Encoding::Float32;
+        float reference = 0;
+        for (int pass = 0; pass < 3; ++pass) {
+            multi.setInsertSidechainSources(target, slot, pass == 0 ? std::vector<std::string>{}
+                : std::vector<std::string>{keyA, keyB});
+            if (pass == 2) multi.setInsertChannelMode(target, slot, daw::PluginChannelMode::DualMono);
+            spec.baseName = "multi-sidechain-render-" + std::to_string(pass);
+            daw::rendering::Report report;
+            const bool rendered = multi.renderProject(spec, {}, report).isOk() && report.files.size() == 2;
+            check(rendered, "sidechain target exports a stem");
+            if (!rendered) continue;
+            const float peak = peakBetween(report.files.back(), 0.1, 0.9);
+            if (pass == 0) reference = peak;
+            else check(std::abs(peak - reference * 1.75f) < 0.005f,
+                pass == 1 ? "offline stem sums both post-fader keys with source latency compensated"
+                          : "both dual-mono instances receive every sidechain source");
+        }
+        daw::ProjectModel legacy;
+        check(daw::ProjectSerializer::deserializeDocument(legacy,
+            R"({"format":"vlt-project","tracks":[{"id":"target","inserts":[{"id":"fx","format":"clap","uid":"gain","sidechain":"key"}]}]})").isOk() &&
+            legacy.tracks.front().inserts.front().sidechainTrackIds == std::vector<std::string>{"key"},
+            "old projects with a single sidechain remain readable");
+    }
+
     // ── Host wrapper routing: explicit modes, dual mono and sidechain ──
     {
         check(ctrl.insertSupportsSidechain(trackId, insertId),
@@ -499,8 +563,8 @@ int main() {
         check(!ctrl.setInsertSidechainSource(trackId, insertId, trackId),
               "a self-sidechain is rejected before it can close the graph loop");
         check(ctrl.setInsertSidechainSource(trackId, insertId, samplerTrackId) &&
-                  ctrl.insertModel(trackId, insertId)->sidechainTrackId ==
-                      samplerTrackId,
+                  ctrl.insertModel(trackId, insertId)->sidechainTrackIds ==
+                      std::vector<std::string>{samplerTrackId},
               "a safe sidechain route is saved on the slot");
 
         check(ctrl.setInsertChannelMode(trackId, insertId,
@@ -852,7 +916,7 @@ int main() {
                   slots->front().channelMode == daw::PluginChannelMode::DualMono &&
                   slots->front().editorChannel ==
                       daw::PluginEditorChannel::Right &&
-                  slots->front().sidechainTrackId == samplerTrackId,
+                  slots->front().sidechainTrackIds == std::vector<std::string>{samplerTrackId},
               "wrapper mode, selected dual-mono side and sidechain survive reload");
         if (slots) {
             const auto wrapperParameters = reloaded.insertParameters(

@@ -1,5 +1,8 @@
 #include "UiPerformance.hpp"
+#include "UiFrameClock.hpp"
 #include "TrackListWidget.hpp"
+#include "TrackIcons.hpp"
+#include "TrackIconPicker.hpp"
 #include "MenuActions.hpp"
 #include "ScrollInput.hpp"
 #include "CompLayout.hpp"
@@ -207,10 +210,8 @@ public:
     TrackIcon(icons::Glyph glyph, const QColor& color, QWidget* parent)
         : QAbstractButton(parent), m_glyph(glyph), m_color(color) {
         setFixedSize(kIconSize, kIconSize);
-        setFocusPolicy(Qt::NoFocus);
-        // Not a button unless something makes it one; a plain track's icon is
-        // decoration and must not eat the click that selects the row.
-        setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        setFocusPolicy(Qt::StrongFocus);
+        setCursor(Qt::PointingHandCursor);
     }
 
     void setTrackColor(const QColor& color) {
@@ -224,6 +225,12 @@ public:
         m_expanded = expanded;
         setAttribute(Qt::WA_TransparentForMouseEvents, false);
         setCursor(Qt::PointingHandCursor);
+    }
+
+    void setIconId(const QString& id) {
+        if (m_iconId == id) return;
+        m_iconId = id;
+        ui::FrameClock::instance().request(this, rect());
     }
 
 protected:
@@ -241,8 +248,16 @@ protected:
 
         // The glyphs are drawn on a 24-unit grid; give this one the tile minus
         // its padding so a bigger tile means a bigger icon, not more air.
-        icons::paint(p, m_glyph, tile.adjusted(5, 5, -5, -5),
-                     mixColors(m_color, t.textPrimary, 0.30));
+        const QColor ink = mixColors(m_color, t.textPrimary, 0.30);
+        const QIcon chosen = ui::trackicons::icon(m_iconId, ink);
+        const QRect glyphRect = tile.adjusted(5, 5, -5, -5).toAlignedRect();
+        if (chosen.isNull()) icons::paint(p, m_glyph, glyphRect, ink);
+        else chosen.paint(&p, glyphRect);
+        if (hasFocus() || underMouse()) {
+            p.setPen(QPen(hasFocus() ? t.accentHighlight : ink, 1));
+            p.setBrush(Qt::NoBrush);
+            p.drawRoundedRect(tile, 8, 8);
+        }
 
         if (!m_disclosure) return;
         // A chevron tucked into the corner: this tile opens and closes. It sits
@@ -264,6 +279,7 @@ protected:
 
 private:
     icons::Glyph m_glyph;
+    QString m_iconId;
     QColor m_color;
     bool m_disclosure = false;
     bool m_expanded = false;
@@ -367,6 +383,10 @@ TrackListWidget::TrackListWidget(daw::EngineController* controller,
     setFixedWidth(ui::kTrackHeaderWidth);
     setMouseTracking(true);
     setAcceptDrops(true);
+    connect(&ThemeManager::instance(), &ThemeManager::trackIconsChanged, this, [this] {
+        for (const auto& row : m_rows) if (row.icon)
+            ui::FrameClock::instance().request(row.icon, row.icon->rect());
+    });
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -490,10 +510,17 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
     colorBar->installEventFilter(this);
 
     auto* icon = new TrackIcon(glyphForTrack(track), color, container);
+    icon->setObjectName(QStringLiteral("TrackIcon"));
+    icon->setProperty("trackId", id);
+    icon->setIconId(QString::fromStdString(track.iconId));
+    icon->setAccessibleName(tr("Icon for %1").arg(QString::fromStdString(track.name)));
+    icon->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(icon, &QWidget::customContextMenuRequested, this,
+            [this, id] { showTrackIconPicker(id); });
     if (folder) {
         icon->makeDisclosure(track.expanded);
-        icon->setToolTip(track.expanded ? tr("Collapse folder")
-                                        : tr("Expand folder"));
+        icon->setToolTip((track.expanded ? tr("Collapse folder") : tr("Expand folder")) +
+                        QLatin1Char('\n') + tr("Right-click to change icon"));
         // Look the folder up when clicked: the document vector moves under us
         // as tracks are added and reordered, so a captured reference dangles.
         connect(icon, &QAbstractButton::clicked, this, [this, id] {
@@ -503,7 +530,8 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
             emit orderChanged();
         });
     } else {
-        icon->setToolTip(trackKindName(track.kind));
+        icon->setToolTip(trackKindName(track.kind) + QLatin1Char('\n') + tr("Change track icon…"));
+        connect(icon, &QAbstractButton::clicked, this, [this, id] { showTrackIconPicker(id); });
     }
 
     auto* name = new ui::InlineNameEdit(QString::fromStdString(track.name),
@@ -764,11 +792,13 @@ void TrackListWidget::syncTrackValues(const QStringList& trackIds) {
         static_cast<TrackRowSurface*>(row.container)->setTrackColor(color);
         static_cast<TrackColorRail*>(row.colorRail)->setTrackColor(color);
         static_cast<TrackIcon*>(row.icon)->setTrackColor(color);
+        static_cast<TrackIcon*>(row.icon)->setIconId(QString::fromStdString(t->iconId));
         if (auto* name = qobject_cast<QLineEdit*>(row.nameEdit);
             name && !name->hasFocus() && row.displayedName != t->name) {
             QSignalBlocker block(name);
             name->setText(QString::fromStdString(t->name));
             row.displayedName = t->name;
+            row.icon->setAccessibleName(tr("Icon for %1").arg(QString::fromStdString(t->name)));
         }
         // Blocked: these setters are how the row *reports* an edit, and a value
         // arriving from elsewhere must not be echoed back as one.
@@ -908,7 +938,8 @@ void TrackListWidget::rebuild() {
         row.depth = visible.depth;
         if (row.container && row.isFolder) {
             static_cast<TrackIcon*>(row.icon)->makeDisclosure(track.expanded);
-            row.icon->setToolTip(track.expanded ? tr("Collapse folder") : tr("Expand folder"));
+            row.icon->setToolTip((track.expanded ? tr("Collapse folder") : tr("Expand folder")) +
+                                QLatin1Char('\n') + tr("Right-click to change icon"));
             if (auto* count = row.container->findChild<QLabel*>("FolderCount"))
                 count->setText(QString::number(daw::subtreeOf(project, track.id).size()));
         }
@@ -2190,6 +2221,35 @@ void TrackListWidget::finishTrackButtonPaint() {
     }
 }
 
+void TrackListWidget::applyTrackIcon(const QStringList& trackIds, const QString& iconId) {
+    std::vector<std::string> changed;
+    for (const auto& id : trackIds) {
+        const auto* track = m_controller->project().findTrack(id.toStdString());
+        if (track && QString::fromStdString(track->iconId) != iconId) changed.push_back(track->id);
+    }
+    if (changed.empty()) return;
+    const auto result = m_controller->setTrackIcons(changed, iconId.toStdString());
+    syncTrackValues(trackIds);
+    emit trackValuesChanged(trackIds, daw::collab::marksLocalFileDirty(result), true);
+}
+
+void TrackListWidget::showTrackIconPicker(const QString& id) {
+    if (!m_selectedIds.contains(id)) clickSelect(id, Qt::NoModifier);
+    const auto* track = m_controller->project().findTrack(id.toStdString());
+    if (!track) return;
+    const QStringList targets = m_selectedIds;
+    auto* picker = new TrackIconPicker(QString::fromStdString(track->iconId),
+                                      icons::icon(glyphForTrack(*track), th().textPrimary, 32), this);
+    connect(picker, &TrackIconPicker::iconSelected, this,
+            [this, targets](const QString& selected) { applyTrackIcon(targets, selected); });
+    connect(picker, &TrackIconPicker::addIconRequested, this,
+            [this, targets] { emit customTrackIconRequested(targets); });
+    const int index = rowIndexOf(id);
+    const QPoint at = index >= 0 ? m_rows[std::size_t(index)].icon->mapToGlobal(QPoint(0, kIconSize + 3))
+                                 : mapToGlobal(QPoint(0, m_ruler->height()));
+    picker->popup(at);
+}
+
 void TrackListWidget::contextMenuEvent(QContextMenuEvent* ev) {
     // Only reached when the click missed every row — the rows' own filter
     // handles those and returns true.
@@ -2286,6 +2346,7 @@ void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
     colour->setToolTip(isFolder
                            ? tr("Recolours every track inside the folder too")
                            : QString());
+    QAction* trackIcon = menu.addAction(tr("Change track icon…"));
     menu.addSeparator();
 
     QAction* dup = nullptr;
@@ -2364,6 +2425,7 @@ void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
     ui::connectMenuActions(menu, this, [=, this](QAction* chosen) {
         const auto* track = m_controller->project().findTrack(id.toStdString());
         if (!track) return;
+        if (chosen == trackIcon) { showTrackIconPicker(id); return; }
         if (sharedPlugins && chosen == sharedPlugins) { emit sharedPluginsRequested(); return; }
         if (freeze && chosen == freeze) {
             if (frozen) m_controller->unfreezeTrack(id.toStdString());

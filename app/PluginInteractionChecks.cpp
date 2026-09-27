@@ -11,6 +11,16 @@
 #include "EngineController.hpp"
 #include "TypingKeyboard.hpp"
 #include "Theme.hpp"
+#include "SamplerPanel.hpp"
+#include "Controls.hpp"
+#include "Core/AudioBuffer.hpp"
+#include "Recording/RecordingEngine.hpp"
+#include <QCheckBox>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QTemporaryDir>
+#include <QToolButton>
+#include <cmath>
 #include "graphics/GraphicsPreferences.hpp"
 #include "graphics/WorkspaceSurface.hpp"
 #ifdef DAW_ENABLE_VST
@@ -18,11 +28,15 @@
 #endif
 #include <QApplication>
 #include <QComboBox>
+#include <QMenu>
+#include <QDir>
+#include <QPainter>
 #include <QAbstractButton>
 #include <QDialog>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QEventLoop>
+#include <QElapsedTimer>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPixmap>
@@ -36,6 +50,219 @@
 #endif
 #include <windows.h>
 #endif
+
+bool MainWindow::checkInspectorNormalizeForTest() {
+    QTemporaryDir directory;
+    if (!directory.isValid()) return false;
+    const auto path = directory.filePath("quiet.wav").toStdString();
+    audio::AudioBuffer tone(2, 96000);
+    for (audio::BufferSize frame = 0; frame < 96000; ++frame) {
+        const float value = 0.2f * std::sin(float(frame) * 0.0576f);
+        tone.getChannel(0)[frame] = tone.getChannel(1)[frame] = value;
+    }
+    audio::AudioRecorder recorder;
+    recorder.initialize(48000, 2);
+    if (!recorder.writeWAVFile(path, tone, 48000).isOk()) return false;
+    const auto track = m_controller.addTrack(daw::TrackKind::Audio, "Normalize");
+    const auto clip = m_controller.importAudio(path, track, 0.0);
+    const auto copy = m_controller.duplicateClip(track, clip);
+    const auto id = QString::fromStdString(track);
+    syncViews();
+    m_selectedTrackId = id;
+    m_selection.setClips({{id, QString::fromStdString(clip)}});
+    m_timeline->selectClips({{id, QString::fromStdString(clip)}});
+    m_inspector->setSelection(id, QString::fromStdString(clip));
+    setMixerShownForShot(false);
+    resize(1280, 850); show();
+    const auto wait = [](int ms) {
+        QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
+    };
+    wait(300);
+    auto* more = m_inspector->findChild<QToolButton*>("InspectorMoreClipSettings");
+    auto* toggle = m_inspector->findChild<QCheckBox*>("ClipParameter_pre.normalize");
+    auto* scroll = m_inspector->findChild<QScrollArea*>("InspectorScrollArea");
+    if (!more || !toggle || !scroll) return false;
+    more->setChecked(true); wait(60);
+    scroll->ensureWidgetVisible(toggle, 0, 18); wait(300);
+    auto* surface = centralWidget()->findChild<ui::graphics::WorkspaceSurface*>();
+    const auto click = [&](QWidget* button) {
+        const QPoint global = button->mapToGlobal(button->rect().center());
+        const QPoint at = surface ? surface->quickWindow()->mapFromGlobal(global) : button->rect().center();
+        QObject* receiver = surface ? static_cast<QObject*>(surface->quickWindow()) : button;
+        QMouseEvent press(QEvent::MouseButtonPress, at, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, at, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(receiver, &press); QApplication::sendEvent(receiver, &release);
+        wait(350);
+    };
+    const auto envelope = [&](const std::string& clipId) {
+        return m_controller.clipWaveform(*m_controller.audioClip(track, clipId));
+    };
+    const auto peak = [](const daw::WaveformPeaks* peaks) {
+        float result = 0;
+        if (peaks) for (const float value : peaks->maxima) result = std::max(result, value);
+        return result;
+    };
+    const auto picture = [&] {
+        if (!surface) return m_timeline->grab().toImage();
+        const auto scene = surface->quickWindow()->grabWindow();
+        const auto origin = surface->quickWindow()->mapFromGlobal(m_timeline->mapToGlobal(QPoint{}));
+        const auto dpr = scene.devicePixelRatio();
+        return scene.copy(QRect(qRound(origin.x() * dpr), qRound(origin.y() * dpr),
+            qRound(m_timeline->width() * dpr), qRound(m_timeline->height() * dpr)));
+    };
+    const auto shots = qEnvironmentVariable("DAW_NORMALIZE_TEST_SHOTS");
+    const auto save = [&](const QString& name) {
+        if (shots.isEmpty()) return true;
+        QDir().mkpath(shots);
+        return (surface ? surface->quickWindow()->grabWindow() : grab().toImage())
+            .save(shots + '/' + name + ".png");
+    };
+    bool ok = true;
+    const auto check = [&](bool valid, const char* label) {
+        std::fprintf(stderr, "%s normalize: %s\n", valid ? "PASS" : "FAIL", label);
+        ok &= valid;
+    };
+    check(peak(envelope(clip).peaks) > .19f && peak(envelope(clip).peaks) < .21f,
+          "initial waveform matches the quiet file");
+    const auto originalPicture = picture();
+    const auto undoDepth = m_controller.undoDepth();
+    check(save("before"), "before screenshot");
+    click(toggle);
+    // Wait for the ordinary control-thread tick, without forcing a bake via
+    // clipSampleData(). Native GPU startup can delay its first delivery.
+    QElapsedTimer publicationWait;
+    publicationWait.start();
+    while (peak(envelope(clip).peaks) < .99f && publicationWait.elapsed() < 3000)
+        wait(20);
+    const auto normalized = envelope(clip);
+    // Keep the editor's sample alive across Undo/Redo to exercise shared-cache
+    // reuse even after the last clip drops its processed envelope.
+    const auto samplerAudio = m_controller.clipSampleData(track, clip);
+    check(toggle->isChecked() && m_controller.undoDepth() == undoDepth + 1,
+          "scrolled Inspector click enables Normalize in one undo step");
+    check(peak(normalized.peaks) > .99f && normalized.samples && samplerAudio &&
+          normalized.samples == samplerAudio->audio.get(),
+          "waveform uses the same normalized audio as Sampler and playback");
+    check(!originalPicture.isNull() && originalPicture != picture(),
+          "timeline pixels change without opening Sampler or moving the clip");
+    check(peak(envelope(copy).peaks) < .21f &&
+          peak(m_controller.waveforms().cached(path)) < .21f,
+          "other clips and the source envelope remain unchanged");
+    check(save("normalized"), "normalized screenshot");
+    onUndo(); wait(350);
+    check(!toggle->isChecked() && peak(envelope(clip).peaks) < .21f && originalPicture == picture(),
+          "Undo restores both the switch and original waveform pixels");
+    onRedo(); wait(350);
+    check(toggle->isChecked() && peak(envelope(clip).peaks) > .99f,
+          "Redo restores the normalized waveform");
+    click(toggle);
+    check(!toggle->isChecked() && peak(envelope(clip).peaks) < .21f,
+          "switching Normalize off restores the source waveform");
+    // The editor's other entry point must publish to the arrangement too.
+    SamplerPanel sampler(&m_controller, SamplerPanel::Context::Clip, id, QString::fromStdString(clip));
+    auto* samplerToggle = sampler.findChild<ui::Led*>("SamplerParameter.pre.normalize");
+    if (!samplerToggle) return false;
+    samplerToggle->click(); wait(350);
+    check(peak(envelope(clip).peaks) > .99f && originalPicture != picture(),
+          "Sampler Normalize also refreshes the arrangement");
+    return ok;
+}
+
+bool MainWindow::checkPluginSidechainForTest() {
+    auto& controller = m_controller;
+    const auto descriptor = controller.pluginManager().find(daw::plugins::Format::Internal, "daw.compressor");
+    if (!descriptor) return false;
+    const auto track = controller.addTrack(daw::TrackKind::Audio, "Bass");
+    const auto kick = controller.addTrack(daw::TrackKind::Audio, "Kick");
+    const auto snare = controller.addTrack(daw::TrackKind::Audio, "Snare");
+    const auto percussion = controller.addTrack(daw::TrackKind::Audio, "Percussion");
+    const auto slot = controller.addInsert(track, *descriptor);
+    syncViews(); resize(1280, 860); show(); hide(); show(); raise(); activateWindow();
+    openPluginEditor(QString::fromStdString(track), QString::fromStdString(slot));
+    auto* editor = m_pluginEditors.value(QString::fromStdString(track + '/' + slot));
+    auto* frame = editor ? m_internalEditorFrames.value(editor) : nullptr;
+    if (!frame) return false;
+    const auto wait = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
+    wait(1500);
+    auto* combo = editor->findChild<QComboBox*>("PluginSidechain");
+    auto* wrapper = editor->findChild<QWidget*>("PluginWrapper");
+    if (!combo || !wrapper) return false;
+    auto* surface = centralWidget()->findChild<ui::graphics::WorkspaceSurface*>();
+    const QPoint openPoint = combo->rect().center();
+    const QPoint globalPoint = combo->mapToGlobal(openPoint);
+    const QPoint inputPoint = surface ? surface->quickWindow()->mapFromGlobal(globalPoint) : openPoint;
+    QObject* input = surface ? static_cast<QObject*>(surface->quickWindow()) : combo;
+    QMouseEvent openPress(QEvent::MouseButtonPress, inputPoint, globalPoint, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent openRelease(QEvent::MouseButtonRelease, inputPoint, globalPoint, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(input, &openPress); QApplication::sendEvent(input, &openRelease); wait(100);
+    auto* menu = editor->findChild<QMenu*>("PluginSidechainMenu");
+    if (!menu) return false;
+    const auto actionFor = [&](const std::string& id) -> QAction* {
+        for (auto* action : menu->actions())
+            if (action->isCheckable() && action->data().toString().toStdString() == id) return action;
+        return nullptr;
+    };
+    const auto click = [&](QAction* action) {
+        if (!action) return false;
+        const QPoint point = menu->actionGeometry(action).center();
+        QMouseEvent press(QEvent::MouseButtonPress, point, menu->mapToGlobal(point), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, point, menu->mapToGlobal(point), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(menu, &press); QApplication::sendEvent(menu, &release); wait(40);
+        return true;
+    };
+    const auto selected = [&] { return controller.insertModel(track, slot)->sidechainTrackIds; };
+    bool ok = true;
+    const auto check = [&](bool valid, const char* what) {
+        if (!valid) std::fprintf(stderr, "FAIL sidechain %s (selected=%zu, popup=%d, header=%d)\n",
+            what, selected().size(), menu->isVisible(), wrapper->height());
+        ok &= valid;
+    };
+    check(wrapper->height() == 28 && !actionFor(track), "thin header and no self route");
+    check(click(actionFor(kick)) && menu->isVisible() && selected() == std::vector<std::string>{kick}, "first mouse selection");
+    check(click(actionFor(snare)) && menu->isVisible() && selected() == std::vector<std::string>{kick, snare}, "second mouse selection");
+    check(combo->toolTip().contains("Kick") && combo->toolTip().contains("Snare") && combo->currentText().contains("2"), "count and source tooltip");
+    controller.undo(); editor->pollForTest();
+    check(selected() == std::vector<std::string>{kick} && !actionFor(snare)->isChecked(), "undo updates checks");
+    controller.redo(); editor->pollForTest();
+    check(selected() == std::vector<std::string>{kick, snare} && actionFor(snare)->isChecked(), "redo updates checks");
+    const auto screenshots = qEnvironmentVariable("DAW_SIDECHAIN_TEST_SHOTS");
+    if (!screenshots.isEmpty()) {
+        QDir().mkpath(screenshots);
+        wait(200);
+        QImage picture;
+        if (surface) {
+            const auto scene = surface->quickWindow()->grabWindow();
+            const auto origin = surface->quickWindow()->mapFromGlobal(frame->mapToGlobal(QPoint(0, 0)));
+            const auto dpr = scene.devicePixelRatio();
+            picture = scene.copy(QRect(qRound(origin.x() * dpr), qRound(origin.y() * dpr),
+                qRound(frame->width() * dpr), qRound(frame->height() * dpr)));
+            picture.setDevicePixelRatio(dpr);
+        } else picture = frame->grab().toImage();
+        const auto popup = menu->grab().toImage();
+        if (!picture.isNull()) {
+            QPainter painter(&picture);
+            painter.drawImage(frame->mapFromGlobal(menu->pos()), popup);
+            painter.end();
+        }
+        check(!picture.isNull() && picture.pixelColor(picture.width() / 2,
+            qRound(32 * picture.devicePixelRatio())).lightness() < 180, "rendered header is present in screenshot");
+        ok &= picture.save(screenshots + "/sidechain-selection.png");
+    }
+    menu->setActiveAction(actionFor(kick));
+    QKeyEvent space(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+    QApplication::sendEvent(menu, &space); wait(40);
+    check(menu->isVisible() && selected() == std::vector<std::string>{snare} && !controller.isPlaying(), "Space toggles without starting transport or closing");
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(menu, &escape); wait(40);
+    check(!menu->isVisible(), "Escape closes");
+    combo->showPopup(); wait(40);
+    check(click(actionFor({})) && selected().empty() && menu->isVisible(), "Off clears all sources");
+    menu->hide();
+    std::fprintf(stderr, "%s multi-sidechain UI: pointer, persistent popup, keyboard, undo/redo, 28px header\n", ok ? "PASS" : "FAIL");
+    editor->close(); wait(40);
+    for (const auto& id : {track, kick, snare, percussion}) controller.removeTrack(id);
+    return ok;
+}
 
 bool MainWindow::checkPluginWindowPolicyForTest() {
     auto descriptor = m_controller.pluginManager().find(

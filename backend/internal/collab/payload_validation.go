@@ -22,6 +22,7 @@ var lowercaseSHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // by both PostgreSQL and the desktop snapshot codec.
 const (
 	maximumPluginParameterIDBytes = 400
+	maximumPluginSidechainSources = 64
 	maximumSendLevel              = 1.9953 // +6 dB, desktop parity
 )
 
@@ -148,7 +149,7 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		if err := requireIDs("trackId"); err != nil {
 			return err
 		}
-		property, err := payloadEnum(body, "property", "name", "color", "volume", "pan", "muted", "mono", "summing")
+		property, err := payloadEnum(body, "property", "name", "color", "volume", "pan", "muted", "mono", "summing", "iconId")
 		if err != nil {
 			return err
 		}
@@ -425,7 +426,7 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		if err := requireIDs("insertId"); err != nil {
 			return err
 		}
-		property, err := payloadEnum(body, "property", "name", "bypassed", "mix", "channelMode", "sidechainTrackId")
+		property, err := payloadEnum(body, "property", "name", "bypassed", "mix", "channelMode", "sidechainTrackId", "sidechainTrackIds")
 		if err != nil {
 			return err
 		}
@@ -774,6 +775,17 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 
 func validateTrackPropertyValue(body map[string]json.RawMessage, property string) error {
 	switch property {
+	case "iconId":
+		value, err := payloadString(body, "value", 96, true)
+		if err != nil {
+			return err
+		}
+		for _, c := range value {
+			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == ':' || c == '-') {
+				return invalidf("track icon must be a stable icon identifier")
+			}
+		}
+		return nil
 	case "name":
 		_, err := payloadString(body, "value", 4096, true)
 		return err
@@ -1142,9 +1154,53 @@ func validatePluginPropertyValue(body map[string]json.RawMessage, property strin
 		return err
 	case "sidechainTrackId":
 		return optionalPayloadUUID(body, "value")
+	case "sidechainTrackIds":
+		_, err := sidechainSourceIDs(body["value"])
+		return err
 	default:
 		return invalidf("plugin property is unsupported")
 	}
+}
+
+func sidechainSourceIDs(raw json.RawMessage) ([]string, error) {
+	var ids []string
+	if err := json.Unmarshal(raw, &ids); err != nil || ids == nil || len(ids) > maximumPluginSidechainSources {
+		return nil, invalidf("sidechain sources must be an array of at most 64 track IDs")
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		parsed, err := uuid.Parse(id)
+		if err != nil || parsed == uuid.Nil || parsed.String() != id || seen[id] {
+			return nil, invalidf("sidechain sources must be unique canonical track UUIDs")
+		}
+		seen[id] = true
+	}
+	return ids, nil
+}
+
+func sharedInsertSidechainIDs(body map[string]json.RawMessage) ([]string, error) {
+	legacy, err := optionalPayloadUUIDValue(body, "sidechainTrackId")
+	if err != nil {
+		return nil, err
+	}
+	if raw, exists := body["sidechainTrackIds"]; exists {
+		ids, err := sidechainSourceIDs(raw)
+		if err != nil {
+			return nil, err
+		}
+		first := ""
+		if len(ids) != 0 {
+			first = ids[0]
+		}
+		if legacy != first {
+			return nil, invalidf("sidechain source representations disagree")
+		}
+		return ids, nil
+	}
+	if legacy == "" {
+		return []string{}, nil
+	}
+	return []string{legacy}, nil
 }
 
 func validateSharedInsert(raw json.RawMessage,
@@ -1154,7 +1210,7 @@ func validateSharedInsert(raw json.RawMessage,
 		return "", "", "", invalidf("command payload insert must be an object")
 	}
 	required := []string{"id", "name", "bypassed", "format", "uid", "vendor", "pluginVersion", "stateSchemaVersion", "mix", "channelMode", "sidechainTrackId", "stateAsset", "rightStateAsset", "parameters", "rightParameters", "assetBindings"}
-	if err := exactPayloadKeys(body, required, nil); err != nil {
+	if err := exactPayloadKeys(body, required, []string{"sidechainTrackIds"}); err != nil {
 		return "", "", "", err
 	}
 	insertID, err := requiredPayloadUUID(body, "id")
@@ -1179,8 +1235,8 @@ func validateSharedInsert(raw json.RawMessage,
 	if err != nil || !safePluginContractText(uid, 400) {
 		return "", "", "", invalidf("command payload plugin uid is invalid")
 	}
-	if format == "internal" && uid != "daw.sampler" && uid != "daw.equalizer" &&
-		uid != "daw.gravity" && uid != "daw.graphit" &&
+	if format == "internal" && uid != "daw.delay" && uid != "daw.sampler" && uid != "daw.equalizer" &&
+		uid != "daw.gravity" && uid != "daw.graphit" && uid != "daw.compressor" &&
 		uid != "daw.doubler" && uid != "daw.doubler-pro" && uid != "daw.chorus" &&
 		uid != "daw.flanger" && uid != "daw.phaser" && uid != "daw.modulation" && uid != "daw.pitch-corrector" {
 		return "", "", "", invalidf("command payload built-in plugin uid is unsupported")
@@ -1208,7 +1264,7 @@ func validateSharedInsert(raw json.RawMessage,
 	if _, err := payloadEnum(body, "channelMode", "auto", "mono", "stereo", "dual-mono"); err != nil {
 		return "", "", "", err
 	}
-	if err := optionalPayloadUUID(body, "sidechainTrackId"); err != nil {
+	if _, err := sharedInsertSidechainIDs(body); err != nil {
 		return "", "", "", err
 	}
 	for _, name := range []string{"stateAsset", "rightStateAsset"} {

@@ -79,6 +79,10 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     explicit TimelineWidget(daw::EngineController* controller,
                             QWidget* parent = nullptr);
     ~TimelineWidget() override;
+    /// Place the shared view controls directly above the right scroll rail.
+    void setNavigationControls(QWidget* controls);
+    /// Room for the ruler, view-control column and both scroll rails.
+    int minimumNavigationHeight() const;
     using QWidget::update;
     void update();
     void update(const QRect& region);
@@ -146,6 +150,8 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     /// Scale only the painted audio envelope. Playback gain and clip gain stay
     /// untouched; 1.0 is the default waveform height.
     void setWaveformScale(double scale);
+    /// Repaint after a deferred clip processing job publishes its envelope.
+    void refreshClipWaveforms();
     double waveformScale() const { return m_waveformScale; }
 
     /// `pointerX` is supplied by wheel/pinch input from the track lanes. Other
@@ -501,6 +507,7 @@ private:
                              std::optional<double> pointerX);
     std::optional<double> liveZoomPointerX() const;
     void layoutNavigationControls();
+    void applyNavigationTheme();
     void syncNavigationControls();
     void scheduleNavigationSync();
     ui::FrameTimer* m_navigationFrame = nullptr;
@@ -791,6 +798,8 @@ private:
     double m_scrollSeconds = 0.0;   // time at the left edge
     QScrollBar* m_horizontalScrollBar = nullptr;
     QScrollBar* m_verticalScrollBar = nullptr;
+    QWidget* m_navigationControls = nullptr;
+    QWidget* m_navigationCorner = nullptr;
     bool m_followPlayhead = false;
     bool m_followSuspended = false;
     bool m_followWasPlaying = false;
@@ -808,6 +817,7 @@ private:
     double m_staticFrameScroll = 0.0;
     double m_staticFrameScale = 0.0;
     std::uint64_t m_staticFramePaintCount = 0;
+    std::uint64_t m_clipWaveformRevision = 0;
     using PatternSources = std::vector<std::pair<std::string, std::size_t>>;
     std::unordered_map<std::string, std::unordered_map<std::string, PatternSources>> m_patternSources;
     std::array<std::uint64_t, 3> m_patternSourcesStamp{};
@@ -1006,6 +1016,9 @@ private:
     // External file drag hover: the lane the drop would land on (−1 = below all).
     bool m_dropActive = false;
     int m_dropLane = -1;
+    QString m_dropLibraryId;
+    QPoint m_dropPosition;
+    Qt::KeyboardModifiers m_dropModifiers = Qt::NoModifier;
 
     // Eraser drag from the dedicated toolbar tool.
     bool m_erasing = false;

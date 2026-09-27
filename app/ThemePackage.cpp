@@ -3,6 +3,7 @@
 #include "NotebookPrefs.hpp"
 #include "TimelineBackgroundPrefs.hpp"
 #include "UiConstants.hpp"
+#include "TrackIcons.hpp"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -30,7 +31,7 @@ namespace {
 constexpr char kMagic[] = "VLTTHEME";
 constexpr quint32 kFormatVersion = 1;
 constexpr quint32 kMaxManifestBytes = 1024 * 1024;
-constexpr int kMaxResources = 64;
+constexpr int kMaxResources = 512;
 constexpr qint64 kCopyBufferBytes = 1024 * 1024;
 
 struct ResourceMeta {
@@ -303,6 +304,15 @@ void assignResourceRole(QJsonObject& appearance, const QString& role,
         appearance.insert(QStringLiteral("notebook"), section);
     } else if (role == QLatin1String("interfaceFont")) {
         appearance.insert(QStringLiteral("interfaceFontResource"), id);
+    } else if (role.startsWith(QLatin1String("trackIcon:"))) {
+        QJsonArray icons = appearance.value(QStringLiteral("trackIcons")).toArray();
+        for (qsizetype i = 0; i < icons.size(); ++i) {
+            auto icon = icons[i].toObject();
+            if (icon.value("id").toString() != role.mid(10)) continue;
+            icon.insert("resource", id);
+            icons[i] = icon;
+        }
+        appearance.insert(QStringLiteral("trackIcons"), icons);
     } else if (role.startsWith(QLatin1String("notebookFont:"))) {
         QJsonArray fonts = appearance.value(QStringLiteral("notebookFontResources"))
                                .toArray();
@@ -419,6 +429,14 @@ bool ThemePackage::captureCurrent(const QString& requestedName,
     };
 
     const ThemeManager& manager = ThemeManager::instance();
+    QJsonArray trackIcons;
+    for (const auto& icon : trackicons::customIcons()) {
+        const QString path = trackicons::customPath(icon.id);
+        if (path.isEmpty()) continue;
+        if (!checkedResource(QStringLiteral("trackIcon:") + icon.id, path)) return false;
+        trackIcons.append(QJsonObject{{"id", icon.id}, {"name", icon.name}});
+    }
+    snapshot.appearance.insert(QStringLiteral("trackIcons"), trackIcons);
     if (manager.hasCustomFont()) {
         const QString fontPath = manager.customFontPath();
         if (fontPath.isEmpty())
@@ -883,6 +901,21 @@ ThemePackageResult ThemePackage::apply(const QString& installedPath,
     }
 
     ThemeManager& manager = ThemeManager::instance();
+    const QJsonArray trackIcons = appearance.value(QStringLiteral("trackIcons")).toArray();
+    if (trackIcons.size() > kMaxResources)
+        return failure(QCoreApplication::translate("ThemePackage", "The theme contains too many icons."));
+    for (const auto& value : trackIcons) {
+        const auto icon = value.toObject();
+        const QString id = icon.value("id").toString();
+        const QString resource = icon.value("resource").toString();
+        const QString path = resourcePath(manifest, storageId, resource);
+        // The stored key is the content hash, never a path supplied by a theme.
+        if (id != QStringLiteral("custom:") + resource || path.isEmpty())
+            return failure(QCoreApplication::translate("ThemePackage", "The theme contains an invalid track icon."));
+        QString error;
+        if (!trackicons::restoreCustom(id, icon.value("name").toString(), path, &error))
+            return failure(error);
+    }
     if (!interfaceFontPath.isEmpty()) {
         QString fontError;
         if (!manager.importFont(interfaceFontPath, &fontError))

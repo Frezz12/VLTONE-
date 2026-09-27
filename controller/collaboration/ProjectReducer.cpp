@@ -30,7 +30,8 @@ ProjectCommand inverseShell(const ProjectCommand& source, CommandBody body) {
     return inverse;
 }
 
-bool doubleValue(const ScalarValue& value, double& out) {
+template <typename Value>
+bool doubleValue(const Value& value, double& out) {
     if (const auto* number = std::get_if<double>(&value)) {
         if (!std::isfinite(*number)) return false;
         out = *number;
@@ -686,8 +687,8 @@ bool pluginIsDeleted(const SharedProjectDocument& state,
 
 bool supportedBuiltin(const InsertModel& insert) {
     return insert.format == PluginFormat::Internal &&
-           (insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
-            insert.uid == "daw.gravity" || insert.uid == "daw.graphit" ||
+           (insert.uid == "daw.delay" || insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
+            insert.uid == "daw.gravity" || insert.uid == "daw.graphit" || insert.uid == "daw.compressor" ||
             insert.uid == "daw.doubler" || insert.uid == "daw.doubler-pro" || insert.uid == "daw.chorus" ||
             insert.uid == "daw.flanger" || insert.uid == "daw.phaser" || insert.uid == "daw.modulation" ||
             insert.uid == "daw.pitch-corrector");
@@ -776,7 +777,7 @@ bool sharedInsertEqual(const InsertModel& a, const InsertModel& b) {
            a.pluginVersion == b.pluginVersion &&
            a.stateSchemaVersion == b.stateSchemaVersion && a.mix == b.mix &&
            a.channelMode == b.channelMode &&
-           a.sidechainTrackId == b.sidechainTrackId &&
+           a.sidechainTrackIds == b.sidechainTrackIds &&
            a.stateAsset == b.stateAsset &&
            a.rightStateAsset == b.rightStateAsset &&
            parameterVectorsEqual(a.parameters, b.parameters) &&
@@ -1213,6 +1214,16 @@ ApplyResult applyTrackProperty(SharedProjectDocument& state,
     ScalarValue before;
     bool same = false;
     switch (body.property) {
+        case TrackProperty::IconId: {
+            const auto* value = std::get_if<std::string>(&body.value);
+            if (!value || value->size() > 96 ||
+                value->find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-:") != std::string::npos)
+                return reject(ApplyCode::InvalidCommand, "invalid track icon");
+            before = track->iconId;
+            same = track->iconId == *value;
+            track->iconId = *value;
+            break;
+        }
         case TrackProperty::Name: {
             const auto* value = std::get_if<std::string>(&body.value);
             if (!value || value->size() > 4096)
@@ -2250,6 +2261,19 @@ bool pluginKindMatchesLocation(const PluginLocation& location,
     return location.chain == PluginChain::Instrument ? instrument : !instrument;
 }
 
+bool validSidechainSources(const ProjectModel& project, const PluginLocation& location,
+                           const std::vector<std::string>& sources) {
+    if (sources.size() > kMaxPluginSidechainSources) return false;
+    const auto feedback = sidechainFeedbackSources(project, location.trackId);
+    std::unordered_set<std::string> unique;
+    for (const auto& id : sources) {
+        const auto* track = project.findTrack(id);
+        if (!track || !carriesAudio(*track) || feedback.contains(id) ||
+            !unique.insert(id).second) return false;
+    }
+    return true;
+}
+
 ApplyResult applyAddPlugin(SharedProjectDocument& state,
                            const ProjectCommand& command,
                            const AddPluginInsert& body) {
@@ -2263,9 +2287,7 @@ ApplyResult applyAddPlugin(SharedProjectDocument& state,
         return reject(ApplyCode::InvalidCommand,
                       "plugin must be a clean supported built-in for its chain");
     }
-    if (!body.insert.sidechainTrackId.empty() &&
-        (!state.project.findTrack(body.insert.sidechainTrackId) ||
-         body.insert.sidechainTrackId == body.location.trackId)) {
+    if (!validSidechainSources(state.project, body.location, body.insert.sidechainTrackIds)) {
         return reject(ApplyCode::InvalidCommand,
                       "plugin sidechain track does not exist or is self-routed");
     }
@@ -2510,9 +2532,7 @@ ApplyResult applyReplacePlugin(SharedProjectDocument& state,
         return reject(ApplyCode::InvalidCommand,
                       "replacement must preserve a clean supported insert id");
     }
-    if (!body.replacement.sidechainTrackId.empty() &&
-        (!state.project.findTrack(body.replacement.sidechainTrackId) ||
-         body.replacement.sidechainTrackId == body.location.trackId)) {
+    if (!validSidechainSources(state.project, body.location, body.replacement.sidechainTrackIds)) {
         return reject(ApplyCode::InvalidCommand,
                       "plugin sidechain track does not exist or is self-routed");
     }
@@ -2555,7 +2575,8 @@ ApplyResult applySetPluginProperty(SharedProjectDocument& state,
     InsertModel* insert = pluginAt(state.project, body.location, body.insertId);
     if (!insert)
         return reject(ApplyCode::MissingEntity, "plugin does not exist");
-    ScalarValue before;
+    PluginPropertyValue before;
+    PluginProperty inverseProperty = body.property;
     bool same = false;
     switch (body.property) {
         case PluginProperty::Name: {
@@ -2599,17 +2620,26 @@ ApplyResult applySetPluginProperty(SharedProjectDocument& state,
             insert->channelMode = parsed;
             break;
         }
-        case PluginProperty::SidechainTrackId: {
-            const auto* value = std::get_if<std::string>(&body.value);
-            if (!value || (!value->empty() &&
-                           (!state.project.findTrack(*value) ||
-                            *value == body.location.trackId))) {
-                return reject(ApplyCode::InvalidCommand,
-                              "invalid plugin sidechain track");
+        case PluginProperty::SidechainTrackId:
+        case PluginProperty::SidechainTrackIds: {
+            std::vector<std::string> sources;
+            if (body.property == PluginProperty::SidechainTrackId) {
+                const auto* value = std::get_if<std::string>(&body.value);
+                if (!value) return reject(ApplyCode::InvalidCommand, "invalid plugin sidechain track");
+                if (!value->empty()) sources.push_back(*value);
+            } else {
+                const auto* value = std::get_if<std::vector<std::string>>(&body.value);
+                if (!value) return reject(ApplyCode::InvalidCommand, "invalid plugin sidechain tracks");
+                sources = *value;
             }
-            before = insert->sidechainTrackId;
-            same = insert->sidechainTrackId == *value;
-            insert->sidechainTrackId = *value;
+            if (!validSidechainSources(state.project, body.location, sources)) {
+                return reject(ApplyCode::InvalidCommand,
+                              "invalid plugin sidechain tracks or feedback loop");
+            }
+            before = insert->sidechainTrackIds;
+            inverseProperty = PluginProperty::SidechainTrackIds;
+            same = insert->sidechainTrackIds == sources;
+            insert->sidechainTrackIds = std::move(sources);
             break;
         }
     }
@@ -2623,7 +2653,7 @@ ApplyResult applySetPluginProperty(SharedProjectDocument& state,
         result.impact.clipIds.insert(body.location.clipId);
     result.impact.pluginInsertIds.insert(body.insertId);
     const std::string key = "plugin:" + body.insertId + ":" +
-                            pluginPropertyName(body.property);
+                            pluginPropertyFieldName(body.property);
     markWriter(state, key, command.meta.operationId, result.impact);
     markPluginGenerationWriter(state, body.insertId, command, result.impact);
     markClipDescendantsWriter(state, body.location.clipId, command,
@@ -2631,7 +2661,7 @@ ApplyResult applySetPluginProperty(SharedProjectDocument& state,
     if (!same) {
         ProjectCommand inverse = inverseShell(
             command, SetPluginProperty{body.location, body.insertId,
-                                       body.property, before});
+                                       inverseProperty, before});
         inverse.conditions.push_back(FieldWriterIs{key, command.meta.operationId});
         inverse.conditions.push_back(
             pluginGenerationCondition(body.insertId, command));

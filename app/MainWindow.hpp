@@ -408,6 +408,8 @@ public:
     bool checkWorkspaceMotionForTest();
     bool checkPluginWindowPolicyForTest();
     bool checkPluginKeyboardForTest();
+    bool checkPluginSidechainForTest();
+    bool checkInspectorNormalizeForTest();
     /// Exercise multi-lane clip movement, Shift-add/duplicate and marquee
     /// auto-scroll with real mouse events.
     bool checkTimelineClipGesturesForTest();

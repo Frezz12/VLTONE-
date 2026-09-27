@@ -35,6 +35,14 @@ class Delay {
         if (++m_cursor == m_data.size())
             m_cursor = 0;
     }
+    // Convex interpolation keeps a long feedback loop non-expanding.
+    double readLinear(double delay) const noexcept {
+        double pos = double(m_cursor) - std::clamp(delay, 3.0, double(m_data.size() - 4));
+        if (pos < 0) pos += double(m_data.size());
+        const auto first = std::size_t(pos);
+        const auto second = first + 1 == m_data.size() ? 0 : first + 1;
+        return std::lerp(m_data[first], m_data[second], pos - double(first));
+    }
     double read(double delay) const noexcept {
         double pos = double(m_cursor) - std::clamp(delay, 3.0, double(m_data.size() - 4));
         if (pos < 0)

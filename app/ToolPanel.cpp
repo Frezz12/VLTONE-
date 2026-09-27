@@ -10,7 +10,6 @@
 #include <QHBoxLayout>
 #include <QHideEvent>
 #include <QKeyEvent>
-#include <QLinearGradient>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -19,6 +18,7 @@
 #include <QSlider>
 #include <QStyleOption>
 #include <QToolButton>
+#include <QVBoxLayout>
 
 #include <algorithm>
 #include <cmath>
@@ -43,69 +43,33 @@ int sliderForTimelineZoom(double pixelsPerSecond) {
     return int(std::lround(position * kCompactZoomSteps));
 }
 
-constexpr int kViewControlWidth = 30;
+constexpr int kViewControlWidth = ui::kTimelineScrollExtent;
 constexpr int kViewControlHeight = 24;
 
 class TimelineViewControls final : public QWidget {
 public:
     explicit TimelineViewControls(QWidget* parent) : QWidget(parent) {
         setObjectName(QStringLiteral("TimelineViewControls"));
-        setFixedHeight(kViewControlHeight + 2);
-        setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+        setFixedSize(kViewControlWidth, 3 * kViewControlHeight);
+        setAttribute(Qt::WA_OpaquePaintEvent);
+        setAttribute(Qt::WA_NoMousePropagation);
         connect(&ThemeManager::instance(), &ThemeManager::changed, this,
                 QOverload<>::of(&QWidget::update));
     }
 
-    void watchControl(QWidget* control) {
-        m_controls.push_back(control);
-        control->installEventFilter(this);
-    }
-
 protected:
-    bool eventFilter(QObject* watched, QEvent* event) override {
-        if (event->type() == QEvent::Show || event->type() == QEvent::Hide ||
-            event->type() == QEvent::Move || event->type() == QEvent::Resize)
-            update();
-        return QWidget::eventFilter(watched, event);
-    }
-
     void paintEvent(QPaintEvent*) override {
-        QVector<QRectF> cells;
-        QRectF bounds;
-        for (const auto& control : m_controls) {
-            if (!control || !control->isVisibleTo(this)) continue;
-            const QRectF cell(control->mapTo(this, QPoint()), control->size());
-            cells.push_back(cell);
-            bounds = bounds.united(cell);
-        }
-        if (cells.isEmpty()) return;
-
         QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
         const Theme& theme = th();
-        const QRectF plate = bounds.adjusted(-0.5, -0.5, 0.5, 0.5);
-        QLinearGradient bed(plate.topLeft(), plate.bottomLeft());
-        bed.setColorAt(0.0, mixColors(theme.headerBackground, theme.well(), 0.32));
-        bed.setColorAt(1.0, mixColors(theme.headerBackground, theme.well(), 0.14));
-        QLinearGradient edge(plate.topLeft(), plate.bottomLeft());
-        edge.setColorAt(0.0, mixColors(theme.headerBackground, theme.well(), 0.72));
-        edge.setColorAt(1.0, mixColors(theme.headerBackground, theme.textPrimary, 0.12));
-        painter.setPen(QPen(QBrush(edge), 1.0));
-        painter.setBrush(bed);
-        painter.drawRoundedRect(plate, Theme::cornerRadius, Theme::cornerRadius);
-
-        QColor divider = theme.textPrimary;
-        divider.setAlpha(theme.dark ? 28 : 38);
-        painter.setPen(QPen(divider, 1.0));
-        for (qsizetype i = 1; i < cells.size(); ++i) {
-            const qreal x = cells[i].left() - 0.5;
-            painter.drawLine(QPointF(x, plate.top() + 7.0),
-                             QPointF(x, plate.bottom() - 7.0));
-        }
+        painter.fillRect(rect(), theme.headerBackground);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setBrush(mixColors(theme.headerBackground, theme.well(), 0.32));
+        painter.setPen(theme.sectionDivider());
+        painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
+        for (int i = 1; i < 3; ++i)
+            painter.drawLine(3, i * kViewControlHeight,
+                             width() - 4, i * kViewControlHeight);
     }
-
-private:
-    QVector<QPointer<QWidget>> m_controls;
 };
 
 void paintViewControl(QPainter& painter, const QWidget* control,
@@ -119,20 +83,18 @@ void paintViewControl(QPainter& painter, const QWidget* control,
         if (!pressed) fill.setAlpha(theme.dark ? 22 : 16);
         painter.setPen(Qt::NoPen);
         painter.setBrush(fill);
-        painter.drawRoundedRect(cell, Theme::cornerRadius - 3,
-                                Theme::cornerRadius - 3);
+        painter.drawRoundedRect(cell, 2, 2);
     }
     QStyleOption option;
     option.initFrom(control);
     if (control->hasFocus() && (option.state & QStyle::State_KeyboardFocusChange)) {
         painter.setBrush(Qt::NoBrush);
         painter.setPen(QPen(theme.textPrimary, 1.0, Qt::DotLine));
-        painter.drawRoundedRect(cell, Theme::cornerRadius - 3,
-                                Theme::cornerRadius - 3);
+        painter.drawRoundedRect(cell, 2, 2);
     }
     const QPointF centre = QRectF(control->rect()).center();
     icons::paint(painter, glyph,
-                 QRectF(centre.x() - 8.0, centre.y() - 8.0, 16.0, 16.0),
+                 QRectF(centre.x() - 7.0, centre.y() - 7.0, 14.0, 14.0),
                  control->isEnabled() ? theme.textPrimary : theme.textSecondary);
 }
 
@@ -496,38 +458,26 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
 
     row->addWidget(ui::separatorLine(Qt::Vertical, 18, this));
 
-    // Timeline zone: the context island travels through its centre. Its far
-    // edge is a stable utility rail: waveform height first, then track height
-    // and horizontal zoom, matching the visual order of what they affect.
+    // Keep the context travel area aligned with the arrangement. The view
+    // controls are handed to its right rail once MainWindow creates the timeline.
     m_timelineZone = new QWidget(this);
-    // Centre the utility group in the rail above its bottom border. Keep it
-    // in this row when the context panel opens a taller plugin-search area.
     m_timelineZone->setFixedHeight(ui::kToolPanelHeight - 1);
     auto* timelineLayout = new QHBoxLayout(m_timelineZone);
     timelineLayout->setContentsMargins(2, 0, 2, 0);
     timelineLayout->setSpacing(0);
     timelineLayout->addStretch(1);
     auto* viewControls = new TimelineViewControls(m_timelineZone);
-    auto* viewRow = new QHBoxLayout(viewControls);
-    viewRow->setContentsMargins(1, 1, 1, 1);
+    m_timelineViewControls = viewControls;
+    auto* viewRow = new QVBoxLayout(viewControls);
+    viewRow->setContentsMargins(0, 0, 0, 0);
     viewRow->setSpacing(0);
     m_waveformScale = new WaveformScaleButton(
         [this](double scale) { emit waveformScaleChanged(scale); }, viewControls);
-    auto waveformPolicy = m_waveformScale->sizePolicy();
-    waveformPolicy.setRetainSizeWhenHidden(true);
-    m_waveformScale->setSizePolicy(waveformPolicy);
     viewRow->addWidget(m_waveformScale);
-    viewControls->watchControl(m_waveformScale);
-
-    m_timelineSliders = new QWidget(viewControls);
-    m_timelineSliders->setObjectName(QStringLiteral("TimelineSliderCluster"));
-    auto* sliderRow = new QHBoxLayout(m_timelineSliders);
-    sliderRow->setContentsMargins(0, 0, 0, 0);
-    sliderRow->setSpacing(0);
 
     m_trackHeightSlider = new TimelineScrubButton(
         icons::Glyph::ResizeVertical, TimelineScrubButton::Axis::Vertical,
-        ui::kLaneHeight, m_timelineSliders);
+        ui::kLaneHeight, viewControls);
     m_trackHeightSlider->setObjectName(QStringLiteral("TimelineTrackHeightSlider"));
     m_trackHeightSlider->setRange(ui::kMinLaneHeight, 180);
     m_trackHeightSlider->setValue(ui::kLaneHeight);
@@ -536,13 +486,11 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     m_trackHeightSlider->setAccessibleName(tr("Timeline track height"));
     m_trackHeightSlider->setToolTip(
         tr("Track height: drag the icon up or down; double-click resets"));
-    sliderRow->addWidget(m_trackHeightSlider);
-    viewControls->watchControl(m_trackHeightSlider);
 
     const int defaultZoomValue = sliderForTimelineZoom(80.0);
     m_timelineZoomSlider = new TimelineScrubButton(
         icons::Glyph::ResizeHorizontal, TimelineScrubButton::Axis::Horizontal,
-        defaultZoomValue, m_timelineSliders);
+        defaultZoomValue, viewControls);
     m_timelineZoomSlider->setObjectName(QStringLiteral("TimelineZoomSlider"));
     m_timelineZoomSlider->setRange(0, kCompactZoomSteps);
     m_timelineZoomSlider->setValue(defaultZoomValue);
@@ -551,9 +499,10 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     m_timelineZoomSlider->setAccessibleName(tr("Timeline horizontal zoom"));
     m_timelineZoomSlider->setToolTip(
         tr("Timeline zoom: drag the icon left or right; double-click resets"));
-    sliderRow->addWidget(m_timelineZoomSlider);
-    viewControls->watchControl(m_timelineZoomSlider);
-    viewRow->addWidget(m_timelineSliders);
+    viewRow->addWidget(m_timelineZoomSlider);
+    viewRow->addWidget(m_trackHeightSlider);
+    QWidget::setTabOrder(m_waveformScale, m_timelineZoomSlider);
+    QWidget::setTabOrder(m_timelineZoomSlider, m_trackHeightSlider);
     timelineLayout->addWidget(viewControls, 0, Qt::AlignVCenter);
     row->addWidget(m_timelineZone, 1, Qt::AlignTop);
 
@@ -605,6 +554,15 @@ QWidget* ToolPanel::takeTrackActions() {
     QWidget* actions = m_trackActions;
     actions->setParent(nullptr);
     return actions;
+}
+
+QWidget* ToolPanel::takeTimelineViewControls() {
+    QWidget* controls = m_timelineViewControls;
+    if (!controls) return nullptr;
+    m_timelineZone->layout()->removeWidget(controls);
+    controls->setParent(nullptr);
+    m_timelineViewControls = nullptr;
+    return controls;
 }
 
 void ToolPanel::setRestartMode(bool on) {
@@ -712,7 +670,6 @@ void ToolPanel::setBrowserOnLeft(bool onLeft) {
 
 void ToolPanel::resizeEvent(QResizeEvent* ev) {
     QWidget::resizeEvent(ev);
-    updateTimelineSliderVisibility();
     emit resized();
 }
 
@@ -727,61 +684,20 @@ int ToolPanel::contextLeftEdge() const {
 }
 
 int ToolPanel::contextRightEdge() const {
-    if (!m_waveformScale) return width() - 12;
-    return m_waveformScale->mapTo(this, QPoint()).x() - 8;
-}
-
-void ToolPanel::watchContextPanel(QWidget* panel) {
-    if (!panel || m_contextPanels.contains(panel)) return;
-    m_contextPanels.push_back(panel);
-    panel->installEventFilter(this);
-    updateWaveformVisibility();
-}
-
-void ToolPanel::updateWaveformVisibility(QWidget* changingPanel, bool showing) {
-    if (!m_waveformScale) return;
-    const int waveLeft = m_waveformScale->mapTo(this, QPoint()).x();
-    // A little hysteresis prevents repeated hide/show at a splitter boundary.
-    const int gap = m_waveformScale->isHidden() ? 32 : 20;
-    bool crowded = false;
-    for (const auto& panel : m_contextPanels) {
-        if (!panel || panel->width() == 0 ||
-            (panel == changingPanel ? !showing : panel->isHidden())) continue;
-        const int right = panel->mapTo(this, QPoint(panel->width(), 0)).x();
-        if (right + gap > waveLeft) crowded = true;
-    }
-    m_waveformScale->setVisible(!crowded);
-}
-
-void ToolPanel::updateTimelineSliderVisibility() {
-    if (!m_timelineZone || !m_timelineSliders) return;
-    // The compact icon pair is secondary chrome. Hysteresis avoids a splitter
-    // sitting on the threshold making them flicker in and out.
-    const int threshold = m_timelineSliders->isHidden() ? 280 : 240;
-    m_timelineSliders->setVisible(m_timelineZone->width() >= threshold);
+    if (!m_timelineZone) return width() - 12;
+    return std::min(width() - 12,
+                    m_timelineZone->mapTo(this, QPoint(m_timelineZone->width(), 0)).x());
 }
 
 bool ToolPanel::event(QEvent* event) {
     const bool handled = QWidget::event(event);
     if (event->type() == QEvent::LayoutRequest) {
         // Sidebar/track-zone widths can change without resizing this strip.
-        // Notify after Qt has positioned the reserved waveform slot.
+        // Notify after Qt has positioned the available context area.
         if (m_row) m_row->activate();
-        updateTimelineSliderVisibility();
         emit resized();
-        updateWaveformVisibility();
     }
     return handled;
-}
-
-bool ToolPanel::eventFilter(QObject* watched, QEvent* event) {
-    if (event->type() == QEvent::Show || event->type() == QEvent::Hide) {
-        // Visibility flags are not final until the event has been delivered.
-        updateWaveformVisibility(qobject_cast<QWidget*>(watched), event->type() == QEvent::Show);
-    } else if (event->type() == QEvent::Move || event->type() == QEvent::Resize) {
-        updateWaveformVisibility();
-    }
-    return QWidget::eventFilter(watched, event);
 }
 
 void ToolPanel::applyTheme() {
@@ -797,7 +713,6 @@ void ToolPanel::applyTheme() {
     }
     setStyleSheet(QString(R"(
 #ToolPanel { background: %1; border-bottom: 1px solid %2; }
-#TimelineSliderCluster { background: transparent; border: none; }
 )")
         .arg(rail.name(),
              t.sectionDivider().name()));

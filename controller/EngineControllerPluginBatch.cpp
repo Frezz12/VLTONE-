@@ -113,7 +113,7 @@ audio::Result EngineController::appendPluginBatch(
             model.id = newUuid();
             model.stateFile.clear(); model.rightStateFile.clear();
             model.stateAsset = {}; model.rightStateAsset = {};
-            model.sidechainTrackId.clear();
+            model.sidechainTrackIds.clear();
             model.windowOpen = false;
             model.windowX = model.windowY = model.windowWidth = model.windowHeight = 0;
             state.after.push_back(std::move(model));
@@ -219,8 +219,9 @@ audio::Result EngineController::createPluginBatchDraft(
                 if (feeds) changed |= upstream.insert(track.id).second;
                 if (!upstream.contains(track.id)) continue;
                 const auto sidechain = [&](const InsertModel& slot) {
-                    if (!slot.bypassed && !slot.sidechainTrackId.empty())
-                        changed |= upstream.insert(slot.sidechainTrackId).second;
+                    if (!slot.bypassed)
+                        for (const auto& source : slot.sidechainTrackIds)
+                            changed |= upstream.insert(source).second;
                 };
                 sidechain(track.instrument);
                 for (const auto& slot : track.inserts) sidechain(slot);

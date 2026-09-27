@@ -10051,6 +10051,22 @@ Click to load. Drag onto Audio FX.</source>
         <translation>Источник сайдчейна</translation>
     </message>
     <message>
+        <source>Sidechain sources</source>
+        <translation>Источники сайдчейна</translation>
+    </message>
+    <message>
+        <source>Side Chain: %1 sources</source>
+        <translation>Сайдчейн: каналов — %1</translation>
+    </message>
+    <message>
+        <source>Missing source (%1)</source>
+        <translation>Источник недоступен (%1)</translation>
+    </message>
+    <message>
+        <source>Select one or more sources. Their post-fader signals are summed into the sidechain input.</source>
+        <translation>Выберите один или несколько каналов. Их сигналы после фейдера суммируются на входе сайдчейна.</translation>
+    </message>
+    <message>
         <source>This plugin cannot use the selected channel mode</source>
         <translation>Этот плагин не может использовать выбранный режим канала</translation>
     </message>
@@ -12054,6 +12070,38 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
 <context>
     <name>SettingsWindow</name>
     <message>
+        <source>Track Icons</source>
+        <translation>Иконки треков</translation>
+    </message>
+    <message>
+        <source>Add your own images to the track icon library. Images are optimized to 96 × 96 and saved with your theme settings. Projects opened without an icon use the default track icon.</source>
+        <translation>Добавляйте свои изображения в библиотеку иконок треков. Они уменьшаются до 96 × 96 и сохраняются в настройках темы. Если иконка недоступна на другом компьютере, проект покажет стандартную.</translation>
+    </message>
+    <message>
+        <source>Custom track icons</source>
+        <translation>Пользовательские иконки треков</translation>
+    </message>
+    <message>
+        <source>Add icon…</source>
+        <translation>Добавить иконку…</translation>
+    </message>
+    <message>
+        <source>Remove icon</source>
+        <translation>Удалить иконку</translation>
+    </message>
+    <message>
+        <source>Tracks using this icon will display their default icon.</source>
+        <translation>Треки с этой иконкой будут показывать стандартную иконку.</translation>
+    </message>
+    <message>
+        <source>Add track icon</source>
+        <translation>Добавить иконку трека</translation>
+    </message>
+    <message>
+        <source>Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.svg *.ico);;All files (*)</source>
+        <translation>Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.svg *.ico);;Все файлы (*)</translation>
+    </message>
+    <message>
         <source>Studio Gray</source>
         <translation>Студийная серая</translation>
     </message>
@@ -13359,6 +13407,14 @@ Reassign it to &quot;%3&quot;?</source>
 <context>
     <name>ThemePackage</name>
     <message>
+        <source>The theme contains too many icons.</source>
+        <translation>В теме слишком много иконок.</translation>
+    </message>
+    <message>
+        <source>The theme contains an invalid track icon.</source>
+        <translation>В теме повреждена иконка трека.</translation>
+    </message>
+    <message>
         <source>The file is not a VLTONE theme.</source>
         <translation>Этот файл не является темой VLTONE.</translation>
     </message>
@@ -13999,6 +14055,18 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
 </context>
 <context>
     <name>TrackListWidget</name>
+    <message>
+        <source>Icon for %1</source>
+        <translation>Иконка трека «%1»</translation>
+    </message>
+    <message>
+        <source>Right-click to change icon</source>
+        <translation>Правая кнопка мыши — изменить иконку</translation>
+    </message>
+    <message>
+        <source>Change track icon…</source>
+        <translation>Изменить иконку трека…</translation>
+    </message>
     <message>
         <source>Freeze Track…</source>
         <translation>Заморозить дорожку…</translation>
@@ -16884,6 +16952,404 @@ M · 400 мс: %1
 S · 3 с: %2
 I · с момента сброса: %3
 I измеряется при воспроизведении. Нажмите для сброса.</translation>
+    </message>
+</context>
+<context>
+    <name>TrackIcons</name>
+    <message>
+        <source>Custom icon</source>
+        <translation>Своя иконка</translation>
+    </message>
+    <message>
+        <source>Drums &amp; percussion</source>
+        <translation>Ударные и перкуссия</translation>
+    </message>
+    <message>
+        <source>Guitars &amp; strings</source>
+        <translation>Гитары и струнные</translation>
+    </message>
+    <message>
+        <source>Keys &amp; mallets</source>
+        <translation>Клавиши и мелодическая перкуссия</translation>
+    </message>
+    <message>
+        <source>Winds &amp; brass</source>
+        <translation>Духовые</translation>
+    </message>
+    <message>
+        <source>Electronic</source>
+        <translation>Электроника</translation>
+    </message>
+    <message>
+        <source>Voice &amp; recording</source>
+        <translation>Голос и запись</translation>
+    </message>
+    <message>
+        <source>Sound &amp; effects</source>
+        <translation>Звук и эффекты</translation>
+    </message>
+    <message>
+        <source>Custom</source>
+        <translation>Свои</translation>
+    </message>
+    <message>
+        <source>Drum kit</source>
+        <translation>Барабанная установка</translation>
+    </message>
+    <message>
+        <source>Kick drum</source>
+        <translation>Бочка</translation>
+    </message>
+    <message>
+        <source>Snare</source>
+        <translation>Малый барабан</translation>
+    </message>
+    <message>
+        <source>Tom</source>
+        <translation>Том</translation>
+    </message>
+    <message>
+        <source>Hi-hat</source>
+        <translation>Хай-хэт</translation>
+    </message>
+    <message>
+        <source>Cymbal</source>
+        <translation>Тарелка</translation>
+    </message>
+    <message>
+        <source>Claps</source>
+        <translation>Хлопки</translation>
+    </message>
+    <message>
+        <source>Conga</source>
+        <translation>Конга</translation>
+    </message>
+    <message>
+        <source>Bongos</source>
+        <translation>Бонго</translation>
+    </message>
+    <message>
+        <source>Tambourine</source>
+        <translation>Тамбурин</translation>
+    </message>
+    <message>
+        <source>Triangle</source>
+        <translation>Треугольник</translation>
+    </message>
+    <message>
+        <source>Shaker</source>
+        <translation>Шейкер</translation>
+    </message>
+    <message>
+        <source>Cowbell</source>
+        <translation>Ковбелл</translation>
+    </message>
+    <message>
+        <source>Maracas</source>
+        <translation>Маракасы</translation>
+    </message>
+    <message>
+        <source>Acoustic guitar</source>
+        <translation>Акустическая гитара</translation>
+    </message>
+    <message>
+        <source>Electric guitar</source>
+        <translation>Электрогитара</translation>
+    </message>
+    <message>
+        <source>Bass guitar</source>
+        <translation>Бас-гитара</translation>
+    </message>
+    <message>
+        <source>Ukulele</source>
+        <translation>Укулеле</translation>
+    </message>
+    <message>
+        <source>Banjo</source>
+        <translation>Банджо</translation>
+    </message>
+    <message>
+        <source>Violin</source>
+        <translation>Скрипка</translation>
+    </message>
+    <message>
+        <source>Cello</source>
+        <translation>Виолончель</translation>
+    </message>
+    <message>
+        <source>Harp</source>
+        <translation>Арфа</translation>
+    </message>
+    <message>
+        <source>String ensemble</source>
+        <translation>Струнный ансамбль</translation>
+    </message>
+    <message>
+        <source>Piano</source>
+        <translation>Пианино</translation>
+    </message>
+    <message>
+        <source>Grand piano</source>
+        <translation>Рояль</translation>
+    </message>
+    <message>
+        <source>Electric piano</source>
+        <translation>Электропиано</translation>
+    </message>
+    <message>
+        <source>Organ</source>
+        <translation>Орган</translation>
+    </message>
+    <message>
+        <source>Accordion</source>
+        <translation>Аккордеон</translation>
+    </message>
+    <message>
+        <source>Xylophone</source>
+        <translation>Ксилофон</translation>
+    </message>
+    <message>
+        <source>Bells</source>
+        <translation>Колокольчики</translation>
+    </message>
+    <message>
+        <source>Music box</source>
+        <translation>Музыкальная шкатулка</translation>
+    </message>
+    <message>
+        <source>Trumpet</source>
+        <translation>Труба</translation>
+    </message>
+    <message>
+        <source>Saxophone</source>
+        <translation>Саксофон</translation>
+    </message>
+    <message>
+        <source>Flute</source>
+        <translation>Флейта</translation>
+    </message>
+    <message>
+        <source>Clarinet</source>
+        <translation>Кларнет</translation>
+    </message>
+    <message>
+        <source>Trombone</source>
+        <translation>Тромбон</translation>
+    </message>
+    <message>
+        <source>Tuba</source>
+        <translation>Туба</translation>
+    </message>
+    <message>
+        <source>French horn</source>
+        <translation>Валторна</translation>
+    </message>
+    <message>
+        <source>Harmonica</source>
+        <translation>Губная гармоника</translation>
+    </message>
+    <message>
+        <source>Synthesizer</source>
+        <translation>Синтезатор</translation>
+    </message>
+    <message>
+        <source>Pads</source>
+        <translation>Пэды</translation>
+    </message>
+    <message>
+        <source>Arpeggiator</source>
+        <translation>Арпеджиатор</translation>
+    </message>
+    <message>
+        <source>Drum machine</source>
+        <translation>Драм-машина</translation>
+    </message>
+    <message>
+        <source>Sampler</source>
+        <translation>Сэмплер</translation>
+    </message>
+    <message>
+        <source>Turntable</source>
+        <translation>Проигрыватель</translation>
+    </message>
+    <message>
+        <source>Tape</source>
+        <translation>Кассета</translation>
+    </message>
+    <message>
+        <source>Modular synth</source>
+        <translation>Модульный синтезатор</translation>
+    </message>
+    <message>
+        <source>Microphone</source>
+        <translation>Микрофон</translation>
+    </message>
+    <message>
+        <source>Vocals</source>
+        <translation>Вокал</translation>
+    </message>
+    <message>
+        <source>Choir</source>
+        <translation>Хор</translation>
+    </message>
+    <message>
+        <source>Headphones</source>
+        <translation>Наушники</translation>
+    </message>
+    <message>
+        <source>Speaker</source>
+        <translation>Колонка</translation>
+    </message>
+    <message>
+        <source>Amplifier</source>
+        <translation>Усилитель</translation>
+    </message>
+    <message>
+        <source>Field recording</source>
+        <translation>Полевая запись</translation>
+    </message>
+    <message>
+        <source>Waveform</source>
+        <translation>Звуковая волна</translation>
+    </message>
+    <message>
+        <source>Sine wave</source>
+        <translation>Синусоида</translation>
+    </message>
+    <message>
+        <source>Square wave</source>
+        <translation>Прямоугольная волна</translation>
+    </message>
+    <message>
+        <source>Saw wave</source>
+        <translation>Пила</translation>
+    </message>
+    <message>
+        <source>Pulse</source>
+        <translation>Импульс</translation>
+    </message>
+    <message>
+        <source>Noise</source>
+        <translation>Шум</translation>
+    </message>
+    <message>
+        <source>Sub bass</source>
+        <translation>Саб-бас</translation>
+    </message>
+    <message>
+        <source>Reverb</source>
+        <translation>Реверберация</translation>
+    </message>
+    <message>
+        <source>Delay</source>
+        <translation>Дилей</translation>
+    </message>
+    <message>
+        <source>Equalizer</source>
+        <translation>Эквалайзер</translation>
+    </message>
+    <message>
+        <source>Compressor</source>
+        <translation>Компрессор</translation>
+    </message>
+    <message>
+        <source>Filter</source>
+        <translation>Фильтр</translation>
+    </message>
+    <message>
+        <source>Riser</source>
+        <translation>Нарастание</translation>
+    </message>
+    <message>
+        <source>Impact</source>
+        <translation>Ударный эффект</translation>
+    </message>
+    <message>
+        <source>Loop</source>
+        <translation>Петля</translation>
+    </message>
+    <message>
+        <source>Mixer</source>
+        <translation>Микшер</translation>
+    </message>
+    <message>
+        <source>Automation</source>
+        <translation>Автоматизация</translation>
+    </message>
+    <message>
+        <source>The icon file is invalid.</source>
+        <translation>Файл иконки повреждён или имеет неподдерживаемый формат.</translation>
+    </message>
+    <message>
+        <source>Could not save the icon.</source>
+        <translation>Не удалось сохранить иконку.</translation>
+    </message>
+    <message>
+        <source>Choose an image smaller than 32 MB.</source>
+        <translation>Выберите изображение размером меньше 32 МБ.</translation>
+    </message>
+    <message>
+        <source>This image is too large or cannot be read.</source>
+        <translation>Это изображение слишком большое или не читается.</translation>
+    </message>
+    <message>
+        <source>Could not prepare the icon.</source>
+        <translation>Не удалось обработать иконку.</translation>
+    </message>
+    <message>
+        <source>Could not remove the icon.</source>
+        <translation>Не удалось удалить иконку.</translation>
+    </message>
+</context>
+<context>
+    <name>TrackIconPicker</name>
+    <message>
+        <source>Track icon</source>
+        <translation>Иконка трека</translation>
+    </message>
+    <message>
+        <source>Choose a track icon</source>
+        <translation>Выберите иконку трека</translation>
+    </message>
+    <message>
+        <source>Search instruments and sounds…</source>
+        <translation>Поиск инструментов и звуков…</translation>
+    </message>
+    <message>
+        <source>Search icons</source>
+        <translation>Поиск иконок</translation>
+    </message>
+    <message>
+        <source>Icon category</source>
+        <translation>Категория иконок</translation>
+    </message>
+    <message>
+        <source>Available track icons</source>
+        <translation>Доступные иконки треков</translation>
+    </message>
+    <message>
+        <source>No matching icons</source>
+        <translation>Иконки не найдены</translation>
+    </message>
+    <message>
+        <source>Use default</source>
+        <translation>По умолчанию</translation>
+    </message>
+    <message>
+        <source>Add icon…</source>
+        <translation>Добавить иконку…</translation>
+    </message>
+    <message>
+        <source>Import an image in theme settings</source>
+        <translation>Загрузить изображение в настройках темы</translation>
+    </message>
+    <message>
+        <source>All categories</source>
+        <translation>Все категории</translation>
+    </message>
+    <message>
+        <source>Default</source>
+        <translation>По умолчанию</translation>
     </message>
 </context>
 </TS>

@@ -12,7 +12,7 @@ The version 1 optional `snapshot` contains:
 - Every track's ID, name, kind, parent/output routing, volume/pan, mute/solo,
   recording/monitor/input configuration and freeze status.
 - Instruments, ordered track/master/sampler effect slots, plugin format, vendor,
-  version when known, bypass, mix, channel mode and sidechain source. Clip effect
+  version when known, bypass, mix, channel mode and sidechain sources. Clip effect
   chains and offline-processing chains are listed under their owning track.
   These describe configured slots, not proof that a third-party instance is healthy.
 - Sends, tempo, time signature, transport position, loop region and master controls.

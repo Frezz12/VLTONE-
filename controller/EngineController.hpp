@@ -504,6 +504,8 @@ public:
     /// filed inside it too — a folder is how a group of tracks is named and
     /// seen, so its colour is the group's colour.
     void setTrackColor(const std::string& trackId, uint32_t color);
+    collab::SharedMutationResult setTrackIcons(const std::vector<std::string>& trackIds,
+                                              const std::string& iconId);
     /// Lane height in pixels (document-only; the arrangement reads it). Live.
     void setTrackHeight(const std::string& trackId, double height);
     void commitTrackHeightEdit(
@@ -827,6 +829,9 @@ public:
     bool setInsertSidechainSource(const std::string& channelId,
                                   const std::string& insertId,
                                   const std::string& sourceTrackId);
+    bool setInsertSidechainSources(const std::string& channelId,
+                                   const std::string& insertId,
+                                   const std::vector<std::string>& sourceTrackIds);
 
     /// Parameters, addressed by the plugin's own stable id.
     std::vector<plugins::ParameterInfo> insertParameters(
@@ -1000,6 +1005,14 @@ public:
     /// placement renderer. Null for MIDI, layered or missing-file clips.
     std::shared_ptr<const plugins::sampler::SampleData> clipSampleData(
         const std::string& trackId, const std::string& clipId);
+    struct ClipWaveformView {
+        const WaveformPeaks* peaks = nullptr;
+        const engine::SampleBuffer* samples = nullptr;
+        bool reversed = false;
+    };
+    /// Paint-only view of already prepared audio; never decodes or processes.
+    ClipWaveformView clipWaveform(const ClipModel& clip) const;
+    std::uint64_t clipWaveformRevision() const { return m_clipWaveformRevision; }
     double clipSampleParameter(const std::string& trackId,
                                const std::string& clipId,
                                const std::string& parameterId);
@@ -1935,6 +1948,7 @@ public:
     /// Where the undo stack stands, for a caller that will later fold
     /// everything it did into one entry.
     std::size_t undoDepth() const { return m_undo.depth(); }
+    std::size_t undoEstimatedBytes() const { return m_undo.estimatedBytes(); }
     std::uint64_t projectRevision() const { return m_undo.revision(); }
     /// Includes live placements before their gesture enters undo history.
     std::uint64_t clipGeometryRevision() const { return m_clipGeometryRevision; }
@@ -2049,6 +2063,8 @@ private:
 
     /// Rebuild the whole node graph from the document and publish it.
     audio::Result rebuildGraph(bool reconfigurePlugins = false, bool publish = true);
+    /// After publication, retire the DSP stream of omitted recording Clip FX.
+    void suspendRecordingClipFx();
     /// Push the document's clip list for one track into its player node.
     void syncTrackClips(const TrackModel& track);
     std::string freezeFingerprint(const TrackModel& track) const;
@@ -2386,8 +2402,6 @@ private:
                                     const std::string& insertId);
     plugins::PluginNode* editorInsertNode(const std::string& channelId,
                                           const std::string& insertId);
-    bool sidechainWouldFeedback(const std::string& destinationChannelId,
-                                const std::string& sourceTrackId) const;
     ChannelSnapshot m_channelClipboard;
     std::unordered_map<std::string, std::shared_ptr<const engine::SampleBuffer>> m_samples;
     std::unordered_map<std::string, std::shared_ptr<const engine::SampleBuffer>> m_sourceSamples;
@@ -2399,6 +2413,7 @@ private:
         std::string path;
         plugins::sampler::PrecomputeSettings settings;
         std::shared_ptr<const plugins::sampler::SampleData> data;
+        std::shared_ptr<const WaveformPeaks> waveform;
     };
     std::unordered_map<std::string, ClipSampleCacheEntry> m_clipSampleCache;
     /// Content/settings-level reuse behind the clip-id lookup above. Identical
@@ -2408,8 +2423,10 @@ private:
         std::string path;
         plugins::sampler::PrecomputeSettings settings;
         std::weak_ptr<const plugins::sampler::SampleData> data;
+        std::weak_ptr<const WaveformPeaks> waveform;
     };
     std::vector<SharedClipSampleCacheEntry> m_sharedClipSampleCache;
+    std::uint64_t m_clipWaveformRevision = 0;
     std::shared_ptr<const plugins::sampler::SampleData> processedClipSample(
         const ClipModel& clip, const std::string& path,
         std::shared_ptr<const engine::SampleBuffer> raw);
@@ -2558,6 +2575,12 @@ private:
     void landCapture(TrackModel& track,
                      const FinalizedRecordingTrack& recording);
     void stripRecordedSilence(const FinalizedRecordingTrack& recording);
+    enum class SilenceApplyMode { Edit, Recording };
+    audio::Result applyStripSilenceImpl(const std::vector<StripSilenceSource>& sources,
+        const std::vector<std::vector<SilenceRegion>>& regions,
+        const StripSilenceSettings& settings, std::vector<ClipAddress>& created,
+        bool recordUndo, SilenceApplyMode mode);
+    audio::Result rebuildGraphWithNewClipStates(const std::vector<TrackModel>& tracks);
     std::string m_autoSilenceWarning;
     void landMidiCapture(TrackModel& track, const FinalizedRecordingTrack& recording);
     void captureMidiEvent(const std::string& trackId, int status, int d1, int d2,

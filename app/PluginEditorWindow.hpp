@@ -233,7 +233,6 @@ private:
     std::vector<GenericControl> m_genericControls;
     /// Which parameter the plugin last moved by itself.
     QString m_dockActive;
-    QString m_sidechainSignature;
     QTimer* m_poll = nullptr;            // refreshes wrapper + fallback panel
     QTimer* m_editorIdle = nullptr;      // periodic legacy VST editor service
     bool m_refreshingWrapper = false;

@@ -29,7 +29,7 @@ std::string EngineController::freezeUnavailableReason(const std::string& id) {
     if (track->kind != TrackKind::Audio && track->kind != TrackKind::Midi &&
         track->kind != TrackKind::Instrument) return "Only audio and MIDI source tracks can be frozen";
     if (track->armed || track->monitor) return "Disable recording and monitoring before freezing";
-    const auto external = [](const InsertModel& slot) { return !slot.sidechainTrackId.empty(); };
+    const auto external = [](const InsertModel& slot) { return !slot.sidechainTrackIds.empty(); };
     if (external(track->instrument) || std::any_of(track->inserts.begin(), track->inserts.end(), external) ||
         std::any_of(track->samplerFx.inserts.begin(), track->samplerFx.inserts.end(), external))
         return "Tracks with an external sidechain cannot be frozen independently";

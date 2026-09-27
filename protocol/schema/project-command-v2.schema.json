@@ -131,11 +131,12 @@
       "required": ["trackId", "property", "value"],
       "properties": {
         "trackId": { "$ref": "#/$defs/id" },
-        "property": { "enum": ["name", "color", "volume", "pan", "muted", "mono", "summing"] },
+        "property": { "enum": ["name", "color", "volume", "pan", "muted", "mono", "summing", "iconId"] },
         "value": { "$ref": "#/$defs/scalarValue" }
       },
       "oneOf": [
         { "properties": { "property": { "const": "name" }, "value": { "type": "string", "maxLength": 4096 } } },
+        { "properties": { "property": { "const": "iconId" }, "value": { "type": "string", "maxLength": 96, "pattern": "^[a-z0-9:-]*$" } } },
         { "properties": { "property": { "const": "color" }, "value": { "type": "integer", "minimum": 0, "maximum": 4294967295 } } },
         { "properties": { "property": { "const": "volume" }, "value": { "type": "number", "minimum": 0, "maximum": 2 } } },
         { "properties": { "property": { "const": "pan" }, "value": { "type": "number", "minimum": -1, "maximum": 1 } } },
@@ -534,13 +535,14 @@
         "name": { "type": "string", "maxLength": 4096 },
         "bypassed": { "type": "boolean" },
         "format": { "const": "internal" },
-        "uid": { "enum": ["daw.sampler", "daw.equalizer", "daw.gravity", "daw.graphit", "daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser", "daw.pitch-corrector"] },
+        "uid": { "enum": ["daw.sampler", "daw.delay", "daw.compressor", "daw.equalizer", "daw.gravity", "daw.graphit", "daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser", "daw.pitch-corrector"] },
         "vendor": { "type": "string", "maxLength": 4096 },
         "pluginVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
         "stateSchemaVersion": { "type": "integer", "minimum": 1 },
         "mix": { "type": "number", "minimum": 0, "maximum": 1 },
         "channelMode": { "enum": ["auto", "mono", "stereo", "dual-mono"] },
         "sidechainTrackId": { "$ref": "#/$defs/optionalId" },
+        "sidechainTrackIds": { "$ref": "#/$defs/sidechainTrackIds" },
         "stateAsset": { "$ref": "#/$defs/optionalPluginStateAssetRef" },
         "rightStateAsset": { "$ref": "#/$defs/optionalPluginStateAssetRef" },
         "parameters": { "type": "array", "maxItems": 16384, "items": { "$ref": "#/$defs/insertParameter" } },
@@ -565,7 +567,7 @@
       },
       "oneOf": [
         { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } }, "insert": { "properties": { "uid": { "const": "daw.sampler" } } }, "afterId": { "const": "" } } },
-        { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "insert": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity", "daw.graphit", "daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser", "daw.pitch-corrector"] } } } } }
+        { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "insert": { "properties": { "uid": { "enum": ["daw.delay", "daw.compressor", "daw.equalizer", "daw.gravity", "daw.graphit", "daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser", "daw.pitch-corrector"] } } } } }
       ]
     },
     "pluginRefPayload": {
@@ -609,8 +611,12 @@
       },
       "oneOf": [
         { "properties": { "location": { "properties": { "chain": { "const": "instrument" } } }, "replacement": { "properties": { "uid": { "const": "daw.sampler" } } } } },
-        { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "replacement": { "properties": { "uid": { "enum": ["daw.equalizer", "daw.gravity", "daw.graphit", "daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser", "daw.pitch-corrector"] } } } } }
+        { "properties": { "location": { "properties": { "chain": { "enum": ["master", "track", "samplerFx", "clip"] } } }, "replacement": { "properties": { "uid": { "enum": ["daw.delay", "daw.compressor", "daw.equalizer", "daw.gravity", "daw.graphit", "daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser", "daw.pitch-corrector"] } } } } }
       ]
+    },
+    "sidechainTrackIds": {
+      "type": "array", "maxItems": 64, "uniqueItems": true,
+      "items": { "$ref": "#/$defs/id" }
     },
     "pluginPropertyPayload": {
       "type": "object",
@@ -619,15 +625,16 @@
       "properties": {
         "location": { "$ref": "#/$defs/pluginLocation" },
         "insertId": { "$ref": "#/$defs/id" },
-        "property": { "enum": ["name", "bypassed", "mix", "channelMode", "sidechainTrackId"] },
-        "value": { "$ref": "#/$defs/scalarValue" }
+        "property": { "enum": ["name", "bypassed", "mix", "channelMode", "sidechainTrackId", "sidechainTrackIds"] },
+        "value": { "oneOf": [{ "$ref": "#/$defs/scalarValue" }, { "$ref": "#/$defs/sidechainTrackIds" }] }
       },
       "oneOf": [
         { "properties": { "property": { "const": "name" }, "value": { "type": "string", "maxLength": 4096 } } },
         { "properties": { "property": { "const": "bypassed" }, "value": { "type": "boolean" } } },
         { "properties": { "property": { "const": "mix" }, "value": { "type": "number", "minimum": 0, "maximum": 1 } } },
         { "properties": { "property": { "const": "channelMode" }, "value": { "enum": ["auto", "mono", "stereo", "dual-mono"] } } },
-        { "properties": { "property": { "const": "sidechainTrackId" }, "value": { "$ref": "#/$defs/optionalId" } } }
+        { "properties": { "property": { "const": "sidechainTrackId" }, "value": { "$ref": "#/$defs/optionalId" } } },
+        { "properties": { "property": { "const": "sidechainTrackIds" }, "value": { "$ref": "#/$defs/sidechainTrackIds" } } }
       ]
     },
     "pluginStatePayload": {

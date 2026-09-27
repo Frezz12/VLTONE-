@@ -27,6 +27,8 @@ enum class Glyph {
     /// Full arrows, for moving something rather than adding to it — the piano
     /// roll's transpose buttons, where a plus sign would read as "new note".
     ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
+    /// A parallel branch off the main signal path, for aux sends.
+    Send,
     Home, Globe, Reload, Download,
     ResizeHorizontal, ResizeVertical, WindowMaximize,
     Trash, Layers,

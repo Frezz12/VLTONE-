@@ -24,6 +24,8 @@ set(DAW_PLUGINHOST_SOURCES
     Host/Registry.cpp
     Host/PluginNode.cpp
     Internal/EqualizerInstance.cpp
+    Internal/CompressorInstance.cpp
+    Internal/DelayInstance.cpp
     Internal/PitchCorrectorInstance.cpp
     Internal/PitchCorrectorDSP.cpp
     Internal/ModulationInstance.cpp

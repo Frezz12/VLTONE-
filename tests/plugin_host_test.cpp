@@ -586,6 +586,39 @@ int main() {
         node->setBypassed(false);
     }
 
+    // Multiple independent auxiliary edges sum once, share PDC, and remain
+    // isolated from the host dry path. One source has another plugin's latency.
+    {
+        auto node = std::make_shared<PluginNode>("multi-sidechain", factory.create(descriptor));
+        auto delayed = std::make_shared<PluginNode>("delayed-key", factory.create(descriptor));
+        engine::AudioGraph graph;
+        const auto ramp = graph.addNode(std::make_unique<engine::SourceNode>("ramp", &RampSource::render, nullptr));
+        const auto key = graph.adoptNode(delayed);
+        const auto effect = graph.adoptNode(node);
+        graph.connect(ramp, key);
+        graph.connect(ramp, effect);
+        graph.connect(ramp, effect, engine::InputRole::Sidechain);
+        graph.connect(key, effect, engine::InputRole::Sidechain);
+        graph.setSink(effect);
+        auto compiled = graph.compile(info);
+        check(compiled.has_value(), "multiple sidechain sources compile with a delayed source");
+        if (compiled) {
+            engine::GraphProcessor processor(2);
+            processor.setGraph(*compiled);
+            OutputBuffer output(2, kBlock);
+            for (int block = 0; block < 4; ++block)
+                processor.process(output.block(), kBlock, block * kBlock, true);
+            // At t=511, two 64-sample stages put all three ramps at t=383.
+            check(std::fabs(output.storage[kBlock - 1] - 3.f * (4 * kBlock - 1 - 2 * kPluginLatency)) < 1e-5f,
+                  "two sidechain sources sum at unity and align with main through PDC");
+            node->setMix(0.f);
+            for (int block = 4; block < 10; ++block)
+                processor.process(output.block(), kBlock, block * kBlock, true);
+            check(std::fabs(output.storage[kBlock - 1] - float(10 * kBlock - 1 - 2 * kPluginLatency)) < 1e-5f,
+                  "sidechain audio never leaks into the dry output");
+        }
+    }
+
     // ── A plugin that does not define its stopped output ──
     //
     // This is deliberately exercised at PluginNode rather than in one format

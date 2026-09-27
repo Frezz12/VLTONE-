@@ -205,7 +205,7 @@ int main() {
         missing.name = "Unavailable Compressor";
         missing.format = daw::PluginFormat::Vst3;
         missing.uid = "com.vlt.tests.unavailable-compressor";
-        missing.sidechainTrackId = storedBus->id;
+        missing.sidechainTrackIds = {storedBus->id};
         missing.parameters.push_back({"threshold", -18.0});
         mutableStoredKick->inserts.push_back(std::move(missing));
     }
@@ -246,7 +246,7 @@ int main() {
           "import assigns fresh ids and remaps internal routing");
     check(importedKick && importedBus && importedKick->inserts.size() == 2 &&
               importedKick->inserts.back().id != missingSlotId &&
-              importedKick->inserts.back().sidechainTrackId == importedBus->id &&
+              importedKick->inserts.back().sidechainTrackIds == std::vector<std::string>{importedBus->id} &&
               importedKick->inserts.back().parameters.size() == 1,
           "missing plugin fallback survives and its slot/sidechain ids are remapped");
     const auto* importedSampler = named(destination.project(), "Sampler Lane");

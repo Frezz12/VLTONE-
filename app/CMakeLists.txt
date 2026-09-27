@@ -137,16 +137,33 @@ if(DAW_BUILD_TESTS)
     qt_add_executable(theme_package_test
         ../tests/theme_package_test.cpp
         ThemePackage.cpp ThemePackage.hpp Theme.cpp Theme.hpp Typography.cpp
+        TrackIcons.cpp TrackIcons.hpp
         NotebookPrefs.cpp NotebookPrefs.hpp TimelineBackgroundPrefs.cpp
         TimelineBackgroundPrefs.hpp UiConstants.cpp UiConstants.hpp)
+    qt_add_executable(track_icons_test ../tests/track_icons_test.cpp
+        TrackIcons.cpp TrackIcons.hpp TrackIconPicker.cpp TrackIconPicker.hpp
+        ThemePackage.cpp ThemePackage.hpp Theme.cpp Theme.hpp Typography.cpp
+        NotebookPrefs.cpp NotebookPrefs.hpp TimelineBackgroundPrefs.cpp
+        TimelineBackgroundPrefs.hpp UiConstants.cpp UiConstants.hpp)
+    target_include_directories(track_icons_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(track_icons_test PRIVATE daw_controller Qt6::Widgets Qt6::Svg
+        Qt6::Test Qt6::WebEngineCore Qt6::WebEngineQuick)
+    target_compile_definitions(track_icons_test PRIVATE
+        DAW_TEST_FONT_PATH="${CMAKE_SOURCE_DIR}/fonts/Inter-Regular.ttf")
+    add_test(NAME track_icons_test COMMAND track_icons_test
+        -o -,txt -o ${CMAKE_CURRENT_BINARY_DIR}/track_icons_test.txt,txt)
+    set_tests_properties(track_icons_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 45)
     target_include_directories(theme_package_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(theme_package_test PRIVATE
-        Qt6::Widgets Qt6::WebEngineCore Qt6::WebEngineQuick)
+        Qt6::Widgets Qt6::WebEngineCore Qt6::WebEngineQuick Qt6::Svg)
     add_test(NAME theme_package_test COMMAND theme_package_test)
     set_tests_properties(theme_package_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
     if(WIN32)
+        set_tests_properties(track_icons_test PROPERTIES
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
         set_tests_properties(theme_package_test PROPERTIES
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -233,6 +250,38 @@ if(DAW_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
 
+    qt_add_executable(compressor_ui_test
+        ../tests/compressor_ui_test.cpp CompressorPanel.cpp CompressorPanel.hpp
+        WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
+    target_include_directories(compressor_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(compressor_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test)
+    if(APPLE)
+        target_link_libraries(compressor_ui_test PRIVATE "-framework CoreFoundation")
+    endif()
+    add_test(NAME compressor_ui_test COMMAND compressor_ui_test)
+    set_tests_properties(compressor_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QTWEBENGINE_DISABLE_SANDBOX=1;QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu --disable-gpu-compositing" TIMEOUT 90)
+    if(WIN32)
+        set_tests_properties(compressor_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+
+    qt_add_executable(delay_ui_test
+        ../tests/delay_ui_test.cpp DelayPanel.cpp DelayPanel.hpp
+        WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
+    target_include_directories(delay_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(delay_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test)
+    if(APPLE)
+        target_link_libraries(delay_ui_test PRIVATE "-framework CoreFoundation")
+    endif()
+    add_test(NAME delay_ui_test COMMAND delay_ui_test)
+    set_tests_properties(delay_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QTWEBENGINE_DISABLE_SANDBOX=1;QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu --disable-gpu-compositing" TIMEOUT 120)
+    if(WIN32)
+        set_tests_properties(delay_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+
     qt_add_executable(pitch_corrector_ui_test
         ../tests/pitch_corrector_ui_test.cpp PitchCorrectorPanel.cpp PitchCorrectorPanel.hpp
         WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
@@ -278,6 +327,20 @@ foreach(modulation_target daw modulation_ui_test)
         qt_add_resources(${modulation_target} "${modulation_target}_modulation_ui"
             PREFIX "/vlt/modulation" BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/modulation"
             FILES resources/modulation/index.html resources/modulation/modulation.css resources/modulation/modulation.js)
+    endif()
+endforeach()
+foreach(compressor_target daw compressor_ui_test)
+    if(TARGET ${compressor_target})
+        qt_add_resources(${compressor_target} "${compressor_target}_compressor_ui"
+            PREFIX "/vlt/compressor" BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/compressor"
+            FILES resources/compressor/index.html resources/compressor/compressor.css resources/compressor/compressor.js)
+    endif()
+endforeach()
+foreach(delay_target daw delay_ui_test)
+    if(TARGET ${delay_target})
+        qt_add_resources(${delay_target} "${delay_target}_delay_ui"
+            PREFIX "/vlt/delay" BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/delay"
+            FILES resources/delay/index.html resources/delay/delay.css resources/delay/delay.js)
     endif()
 endforeach()
 foreach(pitch_target daw pitch_corrector_ui_test)
@@ -414,6 +477,22 @@ if(DAW_BUILD_TESTS)
         endif()
     endforeach()
     add_test(NAME track_mixer_sync_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    add_test(NAME plugin_sidechain_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    add_test(NAME inspector_normalize_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    set_tests_properties(inspector_normalize_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_NORMALIZE_ONLY=1"
+        TIMEOUT 60 RUN_SERIAL TRUE)
+    if(WIN32)
+        set_tests_properties(inspector_normalize_ui_test PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    set_tests_properties(plugin_sidechain_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QTWEBENGINE_DISABLE_SANDBOX=1;DAW_SELFTEST_SIDECHAIN_ONLY=1"
+        TIMEOUT 60 RUN_SERIAL TRUE)
+    if(WIN32)
+        set_tests_properties(plugin_sidechain_ui_test PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     add_test(NAME warp_panel_test COMMAND $<TARGET_FILE:daw> --warpcheck)
     set_tests_properties(warp_panel_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 60 RUN_SERIAL TRUE)

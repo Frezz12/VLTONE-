@@ -516,6 +516,23 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
                                   QPointF(shoulder, 17.0)}));
         break;
     }
+    case Glyph::Send: {
+        QPainterPath route;
+        route.moveTo(4, 17);
+        route.lineTo(20, 17);
+        route.moveTo(16.5, 13.5);
+        route.lineTo(20, 17);
+        route.lineTo(16.5, 20.5);
+        route.moveTo(9, 17);
+        route.lineTo(9, 10);
+        route.quadTo(9, 6, 13, 6);
+        route.lineTo(20, 6);
+        route.moveTo(16.5, 2.5);
+        route.lineTo(20, 6);
+        route.lineTo(16.5, 9.5);
+        strokePath(p, route, c, 1.8);
+        break;
+    }
     case Glyph::Home: {
         QPainterPath house;
         house.moveTo(4.8, 11.2);
