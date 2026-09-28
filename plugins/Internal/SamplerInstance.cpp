@@ -576,14 +576,18 @@ void SamplerInstance::noteOn(int key, int channel, float velocity,
     auto sample = m_sample.read();
     if (!sample) return;
 
-    // FL-style "Cut itself": a fresh trigger owns the sampler immediately.
-    // Kill rather than release so an envelope tail cannot overlap the new
-    // bass hit. This intentionally applies across keys and MIDI channels of
-    // this one Sampler instance, never to another track or instrument.
+    // Cut Itself applies across this instance's keys and MIDI channels. Use
+    // short paired fades: killing a bass at a nonzero sample clicks, while a
+    // regular envelope release could leave a long tail under the next note.
     const bool cutItself =
         m_values[std::uint32_t(Param::CutItself)].load(std::memory_order_relaxed) >= 0.5;
+    bool smoothStart = false;
     if (cutItself) {
-        for (Voice& voice : m_voices) voice.kill();
+        for (Voice& voice : m_voices) {
+            if (!voice.active()) continue;
+            voice.choke();
+            smoothStart = true;
+        }
     }
 
     Voice* chosen = nullptr;
@@ -605,7 +609,7 @@ void SamplerInstance::noteOn(int key, int channel, float velocity,
         }
     }
 
-    chosen->start(key, channel, velocity, pan, snapshot(), *sample, m_sampleRate);
+    chosen->start(key, channel, velocity, pan, snapshot(), *sample, m_sampleRate, smoothStart);
     chosen->setStartedAt(++m_voiceStamp);
 }
 
@@ -654,7 +658,7 @@ void SamplerInstance::applyEvent(const PluginEvent& event, std::uint32_t) noexce
             break;
         case PluginEvent::Kind::NoteChoke:
             for (Voice& voice : m_voices) {
-                if (voice.active() && voice.key() == int(event.key)) voice.kill();
+                if (voice.active() && voice.key() == int(event.key)) voice.choke();
             }
             break;
         case PluginEvent::Kind::ParamGestureBegin:

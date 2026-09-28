@@ -679,14 +679,8 @@ void OfflineRenderDialog::applyTheme() {
 #OfflineRenderClips::item { border: none; padding: 4px 6px; }
 #OfflineRenderClips::item:selected { background: %SELECTED%; color: %TEXT%; }
 #OfflineAutoRender, #OfflineRenderStart {
-    min-height: 20px; padding: 3px 10px; border-radius: %RADIUS%px;
+    min-height: 20px; padding: 3px 10px;
 }
-#OfflineAutoRender:checked, #OfflineRenderStart {
-    background: %SELECTED%; color: %TEXT%; border: 1px solid %ACCENT%;
-    font-weight: 600;
-}
-#OfflineAutoRender:checked:hover, #OfflineRenderStart:hover { background: %HOVER%; }
-#OfflineAutoRender:disabled, #OfflineRenderStart:disabled { color: %TEXT2%; border-color: %SEP%; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%BG%", t.background.name())
         .replace("%SURFACE%", t.surface.name())

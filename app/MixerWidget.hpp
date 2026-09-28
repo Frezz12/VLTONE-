@@ -64,6 +64,7 @@ signals:
     /// An insert, instrument or routing slot changed. Ordinary value edits do
     /// not emit this, so the shell can keep its existing strip widgets alive.
     void structureChanged();
+    void trackCreated();
     void trackRemoved(const QString& trackId);
     void pluginEditorRequested(const QString& channelId, const QString& insertId);
     void openPatternRequested(const QString& patternId);

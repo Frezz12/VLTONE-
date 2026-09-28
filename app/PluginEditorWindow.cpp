@@ -1889,13 +1889,13 @@ void PluginEditorWindow::applyTheme() {
     setStyleSheet(QString(R"(
 PluginEditorWindow { background: %BG%; }
 #PluginWrapper {
-    background: %HEADER%;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %TOP%,stop:1 %HEADER%);
     border-bottom: 1px solid %SEPARATOR%;
 }
 #PluginWrapperName { color: %TEXT%; font-size: 12px; font-weight: 600; }
 #PluginRouting {
-    background: %WELL%;
-    border: 1px solid %SEPARATOR%;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %WELL_TOP%,stop:1 %WELL%);
+    border: 1px solid %SEPARATOR%; border-top-color: %WELL_EDGE%; border-bottom-color: %LIGHT%;
     border-radius: 6px;
 }
 #PluginRoutingDivider { background: %SEPARATOR%; }
@@ -1954,6 +1954,10 @@ PluginEditorWindow { background: %BG%; }
         .replace("%BG%", t.background.name())
         .replace("%SURFACE%", t.surface.name())
         .replace("%HEADER%", t.headerBackground.name())
+        .replace("%TOP%", mixColors(t.headerBackground, t.surfaceElevated, 0.32).name())
+        .replace("%WELL_TOP%", t.wellTop().name())
+        .replace("%WELL_EDGE%", t.edgeDark(t.well()).name())
+        .replace("%LIGHT%", t.edgeLight(t.headerBackground).name())
         .replace("%HOVER%", mixColors(t.headerBackground, t.textPrimary, 0.08).name())
         .replace("%ELEVATED%", t.surfaceElevated.name())
         .replace("%WELL%", t.well().name())

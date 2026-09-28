@@ -1758,31 +1758,34 @@ int TimelineWidget::minimumNavigationHeight() const {
 
 void TimelineWidget::applyNavigationTheme() {
     const Theme& theme = th();
-    const QColor rail = mixColors(theme.headerBackground, theme.well(), 0.32);
+    const QColor rail = mixColors(theme.panelBottom(), theme.well(), 0.65);
     const QString style = QStringLiteral(R"(
-QScrollBar { background: %1; border: 1px solid %2; border-radius: 3px; margin: 0px; }
-QScrollBar:horizontal { height: %3px; }
+QScrollBar { background: %1; border: 1px solid %2; border-radius: 5px; margin: 0px; }
+QScrollBar:horizontal { height: %3px; border-bottom: none; }
 QScrollBar:vertical { width: %3px; }
-QScrollBar::handle { background: %4; border: 1px solid %2; border-radius: 3px; min-width: 0px; min-height: 0px; }
-QScrollBar::handle:horizontal { min-width: 32px; margin: 2px; }
-QScrollBar::handle:vertical { min-height: 32px; margin: 2px; }
+QScrollBar::handle { border: 1px solid %8; border-radius: 4px; min-width: 0px; min-height: 0px; }
+QScrollBar::handle:horizontal { min-width: 32px; margin: 3px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 %4, stop:1 %8); }
+QScrollBar::handle:vertical { min-height: 32px; margin: 3px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 %4, stop:1 %8); }
 QScrollBar::handle:hover { background: %5; }
 QScrollBar::handle:pressed { background: %6; }
 QScrollBar::handle:disabled { background: %7; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; border: none; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 )")
-        .arg(rail.name(), theme.sectionDivider().name())
+        .arg(rail.name(), theme.separator().name())
         .arg(kTimelineScrollExtent)
-        .arg(mixColors(rail, theme.textPrimary, 0.30).name(),
+        .arg(mixColors(rail, theme.textPrimary, 0.36).name(),
              mixColors(rail, theme.textPrimary, 0.43).name(),
              mixColors(rail, theme.textPrimary, 0.56).name(),
-             mixColors(rail, theme.textPrimary, 0.12).name());
+             mixColors(rail, theme.textPrimary, 0.12).name(),
+             mixColors(rail, theme.textPrimary, 0.24).name());
     m_horizontalScrollBar->setStyleSheet(style);
     m_verticalScrollBar->setStyleSheet(style);
     m_navigationCorner->setStyleSheet(
-        QStringLiteral("#TimelineNavigationCorner { background: %1; border: 1px solid %2; border-radius: 3px; }")
-            .arg(rail.name(), theme.sectionDivider().name()));
+        QStringLiteral("#TimelineNavigationCorner { background: %1; border: 1px solid %2; border-bottom: none; border-radius: 5px; }")
+            .arg(rail.name(), theme.separator().name()));
 }
 
 void TimelineWidget::layoutNavigationControls() {
@@ -2762,7 +2765,10 @@ void TimelineWidget::drawCycleStrip(QPainter& p) {
 
     // The empty strip still reads as a place where something goes: a shade
     // darker than the ruler under it, with a hairline where the two meet.
-    p.fillRect(strip, mixColors(t.toolbarBackground, t.background, 0.35));
+    QLinearGradient recess(0, 0, 0, ui::kLoopStripHeight);
+    recess.setColorAt(0, mixColors(t.panelBottom(), t.well(), 0.70));
+    recess.setColorAt(1, mixColors(t.panelBottom(), t.well(), 0.45));
+    p.fillRect(strip, recess);
     p.setPen(QPen(mixColors(t.separator(), t.background, 0.35), 1));
     p.drawLine(0, ui::kLoopStripHeight, width(), ui::kLoopStripHeight);
 
@@ -2870,17 +2876,20 @@ void TimelineWidget::drawRuler(QPainter& p) {
     const Theme& t = th();
 
     QLinearGradient rulerFill(0, 0, 0, rulerHeight());
-    rulerFill.setColorAt(0.0, mixColors(t.surfaceElevated, t.toolbarBackground, 0.30));
-    rulerFill.setColorAt(1.0, mixColors(t.surface, t.toolbarBackground, 0.45));
+    rulerFill.setColorAt(0.0, t.panelTop());
+    rulerFill.setColorAt(1.0, t.panelBottom());
     p.fillRect(QRect(0, 0, width(), rulerHeight()), rulerFill);
     drawCycleStrip(p);
-    p.setPen(QPen(t.sectionDivider(), 1));
+    p.setPen(QPen(t.edgeLight(t.panelTop()), 1));
+    p.drawLine(0, 0, width(), 0);
+    p.setPen(QPen(t.separator(), 1));
     // The neighbouring QSS borders occupy their last in-bounds pixel. Drawing
     // at y == height was half clipped and made the join look one pixel lower.
     p.drawLine(0, rulerHeight() - 1, width(), rulerHeight() - 1);
 
     QFont f = p.font();
-    f.setPixelSize(10);
+    f.setPixelSize(11);
+    f.setWeight(QFont::Medium);
     p.setFont(f);
 
     if (ui::rulerShowsBars(m_rulerFormat)) {
@@ -2902,8 +2911,8 @@ void TimelineWidget::drawRuler(QPainter& p) {
             p.setPen(QPen(t.gridLineStrong, 1));
             p.drawLine(x, rowBottom - 8, x, rowBottom - 1);
             if (bar % labelStride == 0) {
-                p.setPen(t.textSecondary);
-                p.drawText(x + 4, rowBottom - 10,
+                p.setPen(mixColors(t.textSecondary, t.textPrimary, 0.16));
+                p.drawText(x + 5, rowBottom - 8,
                            QString::number(bar + 1));
             }
         }
@@ -2933,9 +2942,9 @@ void TimelineWidget::drawRuler(QPainter& p) {
             const int x = secondsToX(time);
             p.setPen(QPen(t.gridLineStrong, 1));
             p.drawLine(x, rowBottom - 8, x, rowBottom - 1);
-            p.setPen(t.textSecondary);
+            p.setPen(mixColors(t.textSecondary, t.textPrimary, 0.16));
             const int mins = int(time) / 60;
-            p.drawText(x + 4, rowBottom - 10,
+            p.drawText(x + 5, rowBottom - 8,
                        QString::asprintf("%d:%04.1f", mins, time - mins * 60));
         }
         p.restore();

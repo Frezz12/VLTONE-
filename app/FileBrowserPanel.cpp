@@ -150,7 +150,7 @@ FileBrowserPanel::FileBrowserPanel(daw::EngineController* controller,
             &FileBrowserPanel::searchChanged);
     auto* searchRow = new QWidget(this);
     auto* searchLayout = new QHBoxLayout(searchRow);
-    searchLayout->setContentsMargins(6, 5, 6, 5);
+    searchLayout->setContentsMargins(8, 6, 8, 6);
     searchLayout->addWidget(m_searchField);
     column->addWidget(searchRow);
 
@@ -342,21 +342,21 @@ QWidget* FileBrowserPanel::buildHeader() {
 
     auto* add = new ui::IconButton(icons::Glyph::Plus, tr("Add a folder…"), header);
     add->setObjectName(QStringLiteral("BrowserAddFolder"));
-    add->setButtonSize(22, 20);
+    add->setButtonSize(24, 24);
     connect(add, &QAbstractButton::clicked, this,
             &FileBrowserPanel::requestAddFolder);
     row->addWidget(add);
 
     auto* refresh =
         new ui::IconButton(icons::Glyph::Restart, tr("Re-read the folders"), header);
-    refresh->setButtonSize(22, 20);
+    refresh->setButtonSize(24, 24);
     connect(refresh, &QAbstractButton::clicked, this,
             &FileBrowserPanel::refreshFolders);
     row->addWidget(refresh);
 
     auto* settings = new ui::IconButton(icons::Glyph::Gear,
                                         tr("Browser settings"), header);
-    settings->setButtonSize(22, 20);
+    settings->setButtonSize(24, 24);
     connect(settings, &QAbstractButton::clicked, this,
             &FileBrowserPanel::settingsRequested);
     row->addWidget(settings);
@@ -372,12 +372,12 @@ void FileBrowserPanel::setHeaderHeight(int height) {
 QWidget* FileBrowserPanel::buildTabs() {
     auto* bar = new QWidget(this);
     bar->setObjectName(QStringLiteral("BrowserTabs"));
-    bar->setFixedHeight(27);
+    bar->setFixedHeight(32);
     m_tabsBar = bar;
     m_tabsLayout = new QHBoxLayout(bar);
     // Targets yield a few pixels at the browser's minimum width, so the
     // permanent clips tab fits even with every custom tab present.
-    m_tabsLayout->setContentsMargins(0, 2, 0, 2);
+    m_tabsLayout->setContentsMargins(4, 3, 4, 3);
     m_tabsLayout->setSpacing(0);
     rebuildTabs();
     return bar;
@@ -407,11 +407,12 @@ void FileBrowserPanel::rebuildTabs() {
         button->setAutoRaise(true);
         button->setCheckable(true);
         button->setChecked(m_activeCollection == collectionId);
-        button->setFixedHeight(23);
+        button->setFixedHeight(26);
+        button->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         button->setMinimumWidth(16);
-        button->setMaximumWidth(20);
-        button->setIconSize(QSize(13, 13));
-        button->setIcon(icons::icon(glyph, tint, 13));
+        button->setMaximumWidth(28);
+        button->setIconSize(QSize(14, 14));
+        button->setIcon(icons::icon(glyph, tint, 14));
         button->setToolTip(label);
         button->setAccessibleName(tr("%1 tab").arg(label));
         button->setFocusPolicy(Qt::StrongFocus);
@@ -444,9 +445,10 @@ void FileBrowserPanel::rebuildTabs() {
         auto* add = new QToolButton(m_tabsBar);
         add->setObjectName(QStringLiteral("BrowserTabButton"));
         add->setAutoRaise(true);
-        add->setFixedHeight(23);
+        add->setFixedHeight(26);
+        add->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         add->setMinimumWidth(16);
-        add->setMaximumWidth(20);
+        add->setMaximumWidth(28);
         add->setIconSize(QSize(12, 12));
         add->setIcon(icons::icon(icons::Glyph::Plus, idle, 12));
         add->setToolTip(tr("Add an icon tab"));
@@ -700,11 +702,11 @@ QWidget* FileBrowserPanel::buildPreviewBar() {
 
     auto* row = new QWidget(bar);
     auto* controls = new QHBoxLayout(row);
-    controls->setContentsMargins(6, 4, 6, 5);
-    controls->setSpacing(3);
+    controls->setContentsMargins(8, 5, 8, 6);
+    controls->setSpacing(4);
 
     m_playButton = new ui::IconButton(icons::Glyph::Play, tr("Play the selection"), row);
-    m_playButton->setButtonSize(22, 20);
+    m_playButton->setButtonSize(24, 24);
     m_playButton->setAccentTint(true);
     connect(m_playButton, &QAbstractButton::clicked, this,
             &FileBrowserPanel::togglePreview);
@@ -712,7 +714,7 @@ QWidget* FileBrowserPanel::buildPreviewBar() {
 
     m_loopButton = new ui::IconButton(icons::Glyph::Loop,
                                       tr("Repeat, instead of playing once"), row);
-    m_loopButton->setButtonSize(22, 20);
+    m_loopButton->setButtonSize(24, 24);
     m_loopButton->setCheckable(true);
     m_loopButton->setChecked(ui::browserprefs::previewLoop());
     connect(m_loopButton, &QAbstractButton::toggled, this, [this](bool on) {
@@ -723,7 +725,7 @@ QWidget* FileBrowserPanel::buildPreviewBar() {
 
     m_autoButton = new ui::IconButton(icons::Glyph::Headphones,
                                       tr("Play a file as soon as it is selected"), row);
-    m_autoButton->setButtonSize(22, 20);
+    m_autoButton->setButtonSize(24, 24);
     m_autoButton->setCheckable(true);
     m_autoButton->setChecked(ui::browserprefs::autoPreview());
     connect(m_autoButton, &QAbstractButton::toggled, this, [this](bool on) {
@@ -791,42 +793,53 @@ void FileBrowserPanel::applyTheme() {
         t.surface, t.textPrimary, t.dark ? 0.20 : 0.14);
     setStyleSheet(QString(R"(
 #BrowserPanel { background: %SURFACE%; %EDGE%: 1px solid %SECTION%; }
-#BrowserHeader { background: %HEADER%; border-bottom: 1px solid %SECTION%; }
-#BrowserTabs { background: %SURFACE%; border-bottom: 1px solid %SECTION%; }
+#BrowserHeader { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                            stop:0 %LIGHT%, stop:0.04 %PANEL_TOP%, stop:1 %PANEL_BOTTOM%);
+                 border-bottom: 1px solid %SEP%; }
+#BrowserTabs { background: %PANEL_BOTTOM%; border-bottom: 1px solid %SEP%; }
 #BrowserTabs QToolButton#BrowserTabButton { background: transparent; border: 1px solid transparent;
-                                           border-radius: %RADIUS%px; padding: 0; }
+                                           border-radius: %RADIUS%px; padding: 0 5px; }
 #BrowserTabs QToolButton#BrowserTabButton:hover { background: %HOVER%; }
-#BrowserTabs QToolButton#BrowserTabButton:checked { background: %SELECT%; border-color: %SELECTEDGE%; }
-#BrowserTabs QToolButton#BrowserTabButton:focus { border-color: %TEXT2%; }
-#BrowserTitle { color: %TEXT2%; font-size: %TITLEPX%px; font-weight: 700;
-                letter-spacing: 0.6px; }
+#BrowserTabs QToolButton#BrowserTabButton:pressed { background: %WELL%; }
+#BrowserTabs QToolButton#BrowserTabButton:checked {
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %CONTROL_TOP%,stop:1 %CONTROL_BOTTOM%);
+    border-color: %SELECTEDGE%; border-top-color: %LIGHT%; border-bottom-color: %ACCENT%; }
+#BrowserTabs QToolButton#BrowserTabButton:focus { border-color: %ACCENT%; }
+#BrowserTitle { color: %TEXT1%; font-size: %TITLEPX%px; font-weight: 600;
+                letter-spacing: 0.5px; }
 #BrowserFileLabel { color: %TEXT2%; font-size: %SMALLPX%px; }
-#BrowserSearch { background: %WELL%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
+#BrowserSearch { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                            stop:0 %RECESS%, stop:1 %WELL%);
+                 border: 1px solid %SEP%; border-top-color: %RECESS%; border-bottom-color: %LIGHT%; border-radius: %RADIUS%px;
                  padding: %PADPX%px 6px; color: %TEXT1%; font-size: %BODYPX%px; }
 #BrowserSearch:focus { border-color: %ACCENT%; }
-#BrowserPreview { background: %TOOLBAR%; border-top: 1px solid %SECTION%; }
+#BrowserPreview { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                             stop:0 %PANEL_TOP%, stop:1 %PANEL_BOTTOM%);
+                  border-top: 1px solid %SEP%; }
 QTreeWidget { background: %SURFACE%; border: none; color: %TEXT1%;
               selection-background-color: %SELECT%; selection-color: %TEXT1%;
               font-size: %BODYPX%px; }
-QTreeWidget::item { padding: %ROWPADPX%px 3px; margin: 1px 4px 1px 2px;
-                    border-radius: %ROUNDPX%px; }
+QTreeWidget::item { padding: %ROWPADPX%px 4px; margin: 1px 6px 1px 2px;
+                    border: 1px solid transparent; border-radius: %RADIUS%px; }
 QTreeWidget::item:hover:!selected { background: %HOVER%; }
 QTreeWidget::item:selected { background: %SELECT%; color: %TEXT1%;
                              border: 1px solid %SELECTEDGE%; }
 QTreeWidget::branch { background: transparent; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
-                      .replace("%TITLEPX%", px(10))
+                      .replace("%TITLEPX%", px(11))
                       .replace("%SMALLPX%", px(10))
-                      .replace("%BODYPX%", px(11))
+                      .replace("%BODYPX%", px(12))
                       .replace("%ROWPADPX%", px(2))
-                      .replace("%ROUNDPX%", px(6))
-                      .replace("%PADPX%", px(3))
+                      .replace("%PADPX%", px(4))
                       .replace("%EDGE%", edge)
                       .replace("%SURFACE%", t.surface.name())
-                      .replace("%TOOLBAR%", t.toolbarBackground.name())
-                      .replace("%HEADER%", mixColors(t.toolbarBackground,
-                                                       t.surfaceElevated, 0.22).name())
+                      .replace("%PANEL_TOP%", t.panelTop().name())
+                      .replace("%PANEL_BOTTOM%", t.panelBottom().name())
                       .replace("%WELL%", t.well().name())
+                      .replace("%RECESS%", t.wellTop().name())
+                      .replace("%LIGHT%", t.edgeLight(t.panelTop()).name())
+                      .replace("%CONTROL_TOP%", t.controlTop().name())
+                      .replace("%CONTROL_BOTTOM%", t.controlBottom().name())
                       .replace("%SEP%", t.separator().name())
                       .replace("%SECTION%", t.sectionDivider().name())
                       .replace("%ACCENT%", t.accent.name())

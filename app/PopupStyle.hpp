@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Theme.hpp"
+
 #include <QPainter>
 #include <QPainterPath>
 #include <QProxyStyle>
@@ -99,14 +101,16 @@ private:
         const bool checked = option->state & State_On;
         const bool partial = option->state & State_NoChange;
         const bool hovered = enabled && (option->state & State_MouseOver);
+        const auto& theme = th();
         const auto& palette = option->palette;
-        const QColor background = palette.color(QPalette::Window);
-        const QColor surface = palette.color(QPalette::Button);
+        // QSS can make a checkbox's Button brush transparent. Its indicator
+        // still needs an opaque material, shared with other recessed controls.
+        const QColor background = theme.background;
+        const QColor surface = theme.controlBottom();
         const QColor accent = palette.color(QPalette::Highlight);
-        const QColor ink = palette.color(QPalette::WindowText);
         const QColor white(255, 255, 255);
         QColor track = checked ? mix(accent, surface, 0.12)
-                               : mix(surface, ink, 0.12);
+                               : theme.well();
         if (partial) track = mix(accent, surface, 0.45);
         if (hovered) track = mix(track, white, 0.08);
         if (!enabled) track = mix(track, background, 0.58);
@@ -121,8 +125,14 @@ private:
 
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
-        painter->setPen(QPen(mix(track, ink, enabled ? 0.18 : 0.08), 0.8));
-        painter->setBrush(track);
+        QLinearGradient recess(rail.topLeft(), rail.bottomLeft());
+        recess.setColorAt(0, theme.edgeDark(track));
+        recess.setColorAt(1, track);
+        QLinearGradient rim(rail.topLeft(), rail.bottomLeft());
+        rim.setColorAt(0, theme.edgeDark(track));
+        rim.setColorAt(1, theme.edgeLight(track));
+        painter->setPen(QPen(QBrush(rim), 0.8));
+        painter->setBrush(recess);
         painter->drawRoundedRect(rail, 8.0, 8.0);
 
         QColor shadowColor = QColor(0, 0, 0, enabled ? 75 : 28);
@@ -135,13 +145,13 @@ private:
         painter->drawEllipse(thumb.adjusted(-2.0, -1.0, 2.0, 2.0));
 
         QColor glass = checked ? mix(white, accent, 0.42)
-                               : mix(surface, ink, 0.28);
+                               : mix(surface, white, theme.dark ? 0.42 : 0.08);
         if (!enabled) glass = mix(glass, background, 0.5);
         QLinearGradient fill(thumb.topLeft(), thumb.bottomLeft());
-        fill.setColorAt(0.0, mix(glass, white, 0.55));
-        fill.setColorAt(0.48, mix(glass, white, 0.16));
-        fill.setColorAt(1.0, mix(glass, ink, 0.08));
-        painter->setPen(QPen(mix(glass, ink, 0.14), 0.7));
+        fill.setColorAt(0.0, theme.edgeLight(glass));
+        fill.setColorAt(0.48, glass);
+        fill.setColorAt(1.0, theme.edgeDark(glass));
+        painter->setPen(QPen(theme.edgeDark(glass), 0.7));
         painter->setBrush(fill);
         painter->drawEllipse(thumb);
 

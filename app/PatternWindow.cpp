@@ -2371,11 +2371,12 @@ void PatternWindow::applyTheme() {
     const Theme& t = th();
     setStyleSheet(QString(R"(
 #PatternWindow { background: %BG%; color: %TEXT%; }
-#PatternColumnHeader { background: %BG%; }
+#PatternColumnHeader { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %TOP%,stop:1 %BOTTOM%); }
 #PatternColumnHeader QLabel { color: %TEXT2%; font-size: 9px;
                               font-weight: 500; letter-spacing: 0.3px; }
 #PatternScroll { background: %BG%; }
-#PatternSourceRow { background: %SURFACE%; border: 1px solid %SEP%;
+#PatternSourceRow { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %TOP%,stop:1 %SURFACE%);
+                    border: 1px solid %SEP%; border-top-color: %LIGHT%; border-bottom-color: %SHADOW%;
                     border-radius: %RADIUS%px; }
 #PatternSourceRow:hover { background: %HOVER%; border-color: %SECTION%; }
 #PatternSourceRow[selected="true"] { background: %SELECTED%;
@@ -2384,8 +2385,9 @@ void PatternWindow::applyTheme() {
 #PatternSourceRow[dropTarget="true"] { background: %SELECTED%;
     border: 2px solid %ACCENT%; }
 #PatternDropIndicator { background: %ACCENT%; border-radius: 1px; }
-QToolButton#PatternToolbarButton { color: %TEXT%; background: %WELL%;
-    border: 1px solid %SEP%; border-radius: %RADIUS%px; padding: 4px 8px; }
+QToolButton#PatternToolbarButton { color: %TEXT%;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %CONTROL_TOP%,stop:1 %CONTROL_BOTTOM%);
+    border: 1px solid %SEP%; border-top-color: %LIGHT%; border-bottom-color: %SHADOW%; border-radius: %RADIUS%px; padding: 4px 8px; }
 QToolButton#PatternToolbarButton:hover { background: %HOVER%;
     border-color: %ACCENT%; }
 QToolButton#PatternToolbarButton:disabled { color: %TEXT2%; background: %SURFACE%; }
@@ -2400,6 +2402,12 @@ QToolButton#PatternRhythm::menu-indicator { image: none; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%BG%", t.background.name())
         .replace("%SURFACE%", t.surface.name())
+        .replace("%TOP%", t.panelTop().name())
+        .replace("%BOTTOM%", t.panelBottom().name())
+        .replace("%LIGHT%", t.edgeLight(t.panelTop()).name())
+        .replace("%SHADOW%", t.edgeDark(t.panelBottom()).name())
+        .replace("%CONTROL_TOP%", t.controlTop().name())
+        .replace("%CONTROL_BOTTOM%", t.controlBottom().name())
         .replace("%WELL%", t.well().name())
         .replace("%SEP%", t.separator().name())
         .replace("%SECTION%", t.sectionDivider().name())

@@ -463,7 +463,9 @@ void TrackListWidget::applyTheme() {
     setStyleSheet(QString(R"(
 #TrackHeaders { background: %BG%; }
 #TrackHeaders { border-right: 1px solid %SECTION%; }
-#TrackListRuler { background: %RULER%; border-bottom: 1px solid %SECTION%; }
+#TrackListRuler { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                            stop:0 %LIGHT%, stop:0.04 %PANEL_TOP%, stop:1 %PANEL_BOTTOM%);
+                  border-bottom: 1px solid %SEP%; }
 #TrackHeaders QLineEdit { background: transparent; border: none; color: %TEXT%;
                           font-size: 12px; font-weight: 600; padding: 0; }
 #TrackHeaders QLineEdit:focus { background: %WELL%; border-radius: 6px; }
@@ -473,7 +475,9 @@ void TrackListWidget::applyTheme() {
 #FolderCount { color: %TEXT2%; font-size: 9px; font-weight: 600; }
 )")
         .replace("%BG%", mixColors(t.background, t.surface, 0.18).name())
-        .replace("%RULER%", mixColors(t.surface, t.toolbarBackground, 0.40).name())
+        .replace("%PANEL_TOP%", t.panelTop().name())
+        .replace("%PANEL_BOTTOM%", t.panelBottom().name())
+        .replace("%LIGHT%", t.edgeLight(t.panelTop()).name())
         .replace("%SECTION%", t.sectionDivider().name())
         .replace("%WELL%", t.well().name())
         .replace("%SEP%", t.separator().name())

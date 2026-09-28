@@ -9,7 +9,6 @@
 #include <vector>
 
 class QCheckBox;
-class QBoxLayout;
 class QComboBox;
 class QDialogButtonBox;
 class QDoubleSpinBox;
@@ -86,7 +85,6 @@ private:
     void updateCover();
     void openRenderedFolder();
     void reject() override;
-    void resizeEvent(QResizeEvent* event) override;
 
     daw::EngineController& m_controller;
     const ui::SelectionModel* m_selection = nullptr;
@@ -139,9 +137,6 @@ private:
     QPushButton* m_openFolder = nullptr;
     QString m_renderedFile;
     QWidget* m_page = nullptr;
-    QBoxLayout* m_columns = nullptr;
-    QBoxLayout* m_actions = nullptr;
-    QBoxLayout* m_headerRow = nullptr;
     QLabel* m_previewTitle = nullptr;
     QLabel* m_previewFormat = nullptr;
     /// Kept so a row can be hidden label and all: hiding only the field leaves

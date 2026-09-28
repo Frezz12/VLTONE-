@@ -615,13 +615,10 @@ QLabel[role="fieldLabel"], QLabel[role="sectionTitle"] { color: %2; font-weight:
 #CreationSlotName:hover { background: %6; border-radius: 5px; }
 #CreationSlotName:focus { border: 1px solid %7; border-radius: 5px; }
 #CreationError { color: %2; background: %6; border: 1px solid %7; border-radius: 6px; padding: 8px; }
-#ConfirmCreateTracks { background: %7; color: %8; border: none; border-radius: 7px; padding: 7px 18px; font-weight: 600; }
-#ConfirmCreateTracks:hover { background: %9; }
-#ConfirmCreateTracks:disabled { background: %5; color: %3; }
+#ConfirmCreateTracks { padding: 7px 18px; }
 )").arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),
         t.well().name(), t.separator().name(), mixColors(t.well(), t.textPrimary, 0.07).name(),
-        t.accent.name(), t.accent.lightnessF() > 0.55 ? QStringLiteral("#101114") : QStringLiteral("#ffffff"),
-        t.accentHighlight.name()));
+        t.accent.name()));
 }
 
 bool CreateTracksDialog::checkForTest(daw::EngineController& controller, const QString& screenshotPath) {

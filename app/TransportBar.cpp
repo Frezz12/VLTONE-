@@ -464,20 +464,37 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         const auto& t = th();
-        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        QColor fill = mixColors(t.headerBackground, t.well(), 0.24);
-        if (underMouse()) fill = mixColors(fill, t.textPrimary, 0.06);
-        p.setPen(QPen(mixColors(t.headerBackground, t.textPrimary, 0.11), 1));
-        p.setBrush(fill);
-        p.drawRoundedRect(r, Theme::cornerRadius, Theme::cornerRadius);
+        constexpr qreal radius = Theme::cornerRadius;
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -1.5);
+        const bool pressed = isDown();
+        const bool hovered = underMouse() && isEnabled();
+        const QColor fill = pressed ? t.wellBottom() : t.controlBottom();
+        if (!isEnabled()) p.setOpacity(0.4);
+
+        // Keep the one-pixel contact shadow inside the existing hit target.
+        p.setPen(Qt::NoPen);
+        p.setBrush(mixColors(t.headerBackground, t.edgeDark(t.headerBackground), pressed ? 0.15 : 0.45));
+        p.drawRoundedRect(r.translated(0, 1), radius, radius);
+        QLinearGradient face(r.topLeft(), r.bottomLeft());
+        face.setColorAt(0, pressed ? t.wellTop() :
+            mixColors(t.controlBottom(), t.controlTop(), hovered ? 1.0 : 0.65));
+        face.setColorAt(1, fill);
+        QLinearGradient rim(r.topLeft(), r.bottomLeft());
+        rim.setColorAt(0, pressed ? t.edgeDark(fill) : t.edgeLight(fill));
+        rim.setColorAt(1, t.edgeDark(fill));
+        p.setPen(QPen(QBrush(rim), 1));
+        p.setBrush(face);
+        p.drawRoundedRect(r, radius, radius);
         int x = 7;
         if (!m_primary) {
             p.setFont(ui::transportControlFont(11));
-            p.setPen(t.textSecondary);
+            p.setPen(t.textPrimary);
             p.drawText(QRect(3, 0, m_modifierWidth, height()), Qt::AlignCenter, m_modifier);
             x += m_modifierWidth;
         }
         icon().paint(&p, QRect(x, (height() - 18) / 2, 18, 18));
+        p.setPen(QPen(t.separator(), 1));
+        p.drawLine(QPointF(width() - 15.5, 9), QPointF(width() - 15.5, height() - 10));
         p.setPen(QPen(t.textSecondary, 1.3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         const qreal cx = width() - 8;
         const qreal cy = height() / 2.0;
@@ -486,10 +503,10 @@ protected:
         QStyleOption focus;
         focus.initFrom(this);
         if (hasFocus() && (focus.state & QStyle::State_KeyboardFocusChange)) {
-            p.setPen(QPen(t.textSecondary, 1));
+            p.setPen(QPen(t.accent, 1));
             p.setBrush(Qt::NoBrush);
             p.drawRoundedRect(r.adjusted(1, 1, -1, -1),
-                              Theme::cornerRadius - 1, Theme::cornerRadius - 1);
+                              radius - 1, radius - 1);
         }
     }
 private:
@@ -1475,8 +1492,8 @@ void TransportBar::paintScene(QPainter& p, const QRegion&) {
         bed.setColorAt(0, mixColors(t.headerBackground, t.well(), 0.64));
         bed.setColorAt(1, mixColors(t.headerBackground, t.well(), 0.42));
         QLinearGradient edge(display.topLeft(), display.bottomLeft());
-        edge.setColorAt(0, mixColors(t.headerBackground, t.well(), 0.90));
-        edge.setColorAt(1, mixColors(t.headerBackground, t.textPrimary, t.dark ? 0.10 : 0.20));
+        edge.setColorAt(0, t.edgeDark(t.headerBackground));
+        edge.setColorAt(1, t.edgeLight(t.headerBackground));
         p.setPen(QPen(QBrush(edge), 1));
         p.setBrush(bed);
         p.drawRoundedRect(display, Theme::cornerRadius, Theme::cornerRadius);
@@ -1485,8 +1502,14 @@ void TransportBar::paintScene(QPainter& p, const QRegion&) {
     for (QWidget* dock : {m_leftDock, m_rightDock}) {
         if (!dock) continue;
         const QRectF plate = QRectF(dock->geometry()).adjusted(0.5, 4.5, -0.5, -4.5);
-        p.setBrush(mixColors(t.headerBackground, t.surfaceElevated, 0.35));
-        p.setPen(QPen(mixColors(t.headerBackground, t.textPrimary, 0.09), 1));
+        QLinearGradient face(plate.topLeft(), plate.bottomLeft());
+        face.setColorAt(0, mixColors(t.headerBackground, t.surfaceElevated, 0.48));
+        face.setColorAt(1, mixColors(t.headerBackground, t.surface, 0.20));
+        QLinearGradient rim(plate.topLeft(), plate.bottomLeft());
+        rim.setColorAt(0, t.edgeLight(t.headerBackground));
+        rim.setColorAt(1, t.edgeDark(t.headerBackground));
+        p.setBrush(face);
+        p.setPen(QPen(QBrush(rim), 1));
         p.drawRoundedRect(plate, Theme::cornerRadius, Theme::cornerRadius);
     }
 }

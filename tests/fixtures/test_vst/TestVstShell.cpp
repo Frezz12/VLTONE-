@@ -94,8 +94,13 @@ VstIntPtr dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
                                    effect->getParameter(effect, index));
             return 1;
         case effCanBeAutomated: return index == 0;
-        case effGetProgram: return 0;
-        case effSetProgram: return value == 0;
+        case effGetProgram:
+            // EZdrummer reports program 1 while declaring numPrograms == 1.
+            return self.kind == Kind::Effect &&
+                std::getenv("DAW_TEST_VST_INVALID_PROGRAM") ? 1 : 0;
+        case effSetProgram:
+            if (value < 0 || value >= effect->numPrograms) std::abort();
+            return 1;
         case effGetChunk:
             if (self.kind != Kind::Effect || !ptr) return 0;
             *static_cast<void**>(ptr) = &self.gain;

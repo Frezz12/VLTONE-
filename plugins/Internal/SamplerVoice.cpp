@@ -195,7 +195,7 @@ float Svf::processLowpass(int channel, float input) noexcept {
 
 void Voice::start(int key, int channel, float velocity, float notePan,
                   const SamplerSettings& settings, const SampleData& sample,
-                  double sampleRate) noexcept {
+                  double sampleRate, bool smoothStart) noexcept {
     m_active = true;
     m_key = key;
     m_channel = channel;
@@ -203,6 +203,7 @@ void Voice::start(int key, int channel, float velocity, float notePan,
     m_notePan = std::clamp(notePan, -1.0f, 1.0f);
     m_cutRemaining = -1;
     m_cutLength = std::max(1, int(sampleRate * 0.005));
+    m_fadeInRemaining = smoothStart ? m_cutLength : 0;
 
     const Region region = regionFor(settings, sample);
     m_position = region.start;
@@ -229,11 +230,17 @@ void Voice::release(bool cutWhenEnvelopeOff) noexcept {
     if (cutWhenEnvelopeOff && m_cutRemaining < 0) m_cutRemaining = m_cutLength;
 }
 
+void Voice::choke() noexcept {
+    // Repeated triggers must not restart a tail that is already fading out.
+    if (m_cutRemaining < 0) release(true);
+}
+
 void Voice::kill() noexcept {
     m_active = false;
     m_amp.kill();
     for (Envelope& env : m_modEnv) env.kill();
     m_cutRemaining = -1;
+    m_fadeInRemaining = 0;
 }
 
 Voice::Region Voice::regionFor(const SamplerSettings& settings,
@@ -477,9 +484,18 @@ void Voice::render(const SampleData& sample, const SamplerSettings& settings,
         const double formantPole = std::exp(-2.0 * kPi * 1200.0 / sampleRate);
         const double formantTilt = std::tanh(settings.formant / 12.0);
 
-        for (engine::FrameCount i = 0; i < produced; ++i) {
+        for (engine::FrameCount i = 0; i < produced && m_cutRemaining != 0; ++i) {
             double gain = staticGain;
-            if (settings.ampEnvOn) gain *= m_amp.advance(1.0 / sampleRate, settings.ampEnv);
+            if (settings.ampEnvOn) {
+                // Hold the outgoing envelope at its current level so a zero
+                // release cannot bypass the choke's smoothing ramp.
+                gain *= m_cutRemaining >= 0 ? m_amp.value()
+                                           : m_amp.advance(1.0 / sampleRate, settings.ampEnv);
+            }
+            if (m_fadeInRemaining > 0) {
+                gain *= 1.0 - double(m_fadeInRemaining) / double(m_cutLength);
+                --m_fadeInRemaining;
+            }
             if (m_cutRemaining > 0) {
                 gain *= double(m_cutRemaining) / double(m_cutLength);
                 --m_cutRemaining;

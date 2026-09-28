@@ -89,6 +89,8 @@ signals:
     void trackRoutingEdited(const QString& sourceTrackId);
     /// A send was added/removed — the owner should rebuild this strip.
     void structureChanged();
+    /// A new return track was created from the send menu.
+    void trackCreated();
     /// A loaded insert was clicked: open its editor. The strip does not own
     /// the window, so it only says which slot.
     void editorRequested(const QString& channelId, const QString& insertId);

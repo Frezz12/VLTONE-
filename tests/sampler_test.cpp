@@ -107,6 +107,13 @@ float peakOf(const std::vector<float>& data) {
     return peak;
 }
 
+float largestStep(const std::vector<float>& data, std::size_t begin = 1) {
+    float step = 0.0f;
+    for (std::size_t i = std::max<std::size_t>(begin, 1); i < data.size(); ++i)
+        step = std::max(step, std::abs(data[i] - data[i - 1]));
+    return step;
+}
+
 /// How many frames at the head of the block are non-silent — the length of a
 /// one-shot, measured.
 std::size_t soundingFrames(const std::vector<float>& data) {
@@ -126,10 +133,11 @@ void setMod(sampler::SamplerInstance& instance, ModTarget target, ModParam param
     instance.setParameter(sampler::indexOf(target, parameter), value);
 }
 
-std::unique_ptr<sampler::SamplerInstance> makeSampler(bool withSample = true) {
+std::unique_ptr<sampler::SamplerInstance> makeSampler(bool withSample = true,
+                                                     double sampleRate = kRate) {
     auto instance = std::make_unique<sampler::SamplerInstance>();
     PluginProcessInfo info;
-    info.sampleRate = kRate;
+    info.sampleRate = sampleRate;
     info.maxBlockSize = kBlock * 8;
     instance->activate(info);
     instance->startProcessing();
@@ -616,8 +624,102 @@ int main() {
         auto reference = makeSampler();
         set(*reference, Param::Volume, 1.0);
         const Output one = render(*reference, kBlock, {noteOn(64, 1.0, 64)});
-        check(std::abs(cut.left[96] - one.left[96]) < 0.01f,
-              "Cut Itself chokes the previous voice when the next note begins");
+        check(std::abs(cut.left[384] - one.left[384]) < 0.01f,
+              "Cut Itself leaves only the new voice after a short handover");
+    }
+
+    // Retrigger a nonzero source at a different velocity. A smooth handover
+    // must not step from the old level to the new one, even with zero release,
+    // and it must retire the old note without leaving a long envelope tail.
+    for (double rate : {44100.0, 48000.0, 96000.0}) {
+        for (double release : {-1.0, 0.0, 0.75}) {
+            const auto configure = [rate, release] {
+                auto instance = makeSampler(true, rate);
+                set(*instance, Param::CutItself, 1.0);
+                set(*instance, Param::AmpEnvOn, release >= 0.0 ? 1.0 : 0.0);
+                set(*instance, Param::AmpAttack, 0.0);
+                set(*instance, Param::AmpRelease, std::max(0.0, release));
+                return instance;
+            };
+            const auto at = std::uint32_t(rate * 0.008) + 13;
+            const auto frames = std::uint32_t(rate * 0.03);
+            const std::vector<PluginEvent> events{
+                noteOn(60, 1.0), noteOff(60, at), noteOn(64, 0.25, at)};
+            auto instance = configure();
+            const Output out = render(*instance, frames, events);
+            check(out.left[0] == 0.5f,
+                  "Cut Itself preserves the first note's original attack");
+            check(largestStep(out.left, at) < 0.01f &&
+                      largestStep(out.right, at) < 0.01f,
+                  "Cut Itself changes level without an abrupt step at any rate/release");
+            check(std::abs(out.left[at + std::uint32_t(rate * 0.01)] - 0.125f) < 1e-6f,
+                  "Cut Itself removes the old voice promptly even with a long release");
+
+            // The audio callback may split the handover at any frame. Its
+            // output must match the same events rendered in one large block.
+            auto split = configure();
+            Output chunked(frames);
+            for (std::uint32_t offset = 0; offset < frames;) {
+                const auto count = std::min<std::uint32_t>(127, frames - offset);
+                std::vector<PluginEvent> local;
+                for (PluginEvent event : events) {
+                    if (event.frameOffset < offset || event.frameOffset >= offset + count) continue;
+                    event.frameOffset -= offset;
+                    local.push_back(event);
+                }
+                const Output block = render(*split, count, local);
+                std::copy(block.left.begin(), block.left.end(), chunked.left.begin() + offset);
+                std::copy(block.right.begin(), block.right.end(), chunked.right.begin() + offset);
+                offset += count;
+            }
+            float error = 0.0f;
+            for (std::size_t i = 0; i < out.left.size(); ++i) {
+                error = std::max(error, std::abs(out.left[i] - chunked.left[i]));
+                error = std::max(error, std::abs(out.right[i] - chunked.right[i]));
+            }
+            check(error < 1e-6f, "Cut Itself is independent of audio callback boundaries");
+        }
+    }
+    {
+        auto bass = std::make_shared<engine::SampleBuffer>(2, kSampleFrames, kRate);
+        for (std::uint32_t i = 0; i < kSampleFrames; ++i) {
+            const float value = float(0.8 * std::sin(2.0 * std::numbers::pi * 55.0 * i / kRate));
+            bass->writableChannel(0)[i] = value;
+            bass->writableChannel(1)[i] = -value;
+        }
+        auto instance = makeSampler(false);
+        instance->adoptSample("/synthetic/bass.wav", bass);
+        set(*instance, Param::CutItself, 1.0);
+        // Retrigger near the crest of a 55 Hz bass, rather than conveniently
+        // at a zero crossing, and change its MIDI pitch on the second note.
+        const auto at = std::uint32_t(kRate / (55.0 * 4.0));
+        const Output out = render(*instance, 1536,
+                                  {noteOn(60, 1.0), noteOff(60, at), noteOn(64, 1.0, at)});
+        const float step = std::max(largestStep(out.left, at), largestStep(out.right, at));
+        std::printf("INFO  bass retrigger largest step: %.6f\n", step);
+        check(step < 0.025f, "adjacent bass notes do not break the waveform at retrigger");
+    }
+    {
+        auto instance = makeSampler();
+        set(*instance, Param::LoopMode, 1.0);
+        const Output stopped = render(*instance, kBlock,
+                                      {noteOn(60, 1.0), noteOff(60, 100)});
+        check(largestStep(stopped.left, 100) < 0.01f &&
+                  std::abs(stopped.left.back()) < 1e-6f,
+              "a loop's short release never returns to full gain after reaching zero");
+    }
+    {
+        auto instance = makeSampler();
+        set(*instance, Param::AmpEnvOn, 1.0);
+        set(*instance, Param::AmpAttack, 0.0);
+        set(*instance, Param::AmpRelease, 0.0);
+        PluginEvent choke = noteOff(60, 100);
+        choke.kind = PluginEvent::Kind::NoteChoke;
+        const Output out = render(*instance, kBlock, {noteOn(60, 1.0), choke});
+        check(largestStep(out.left, 100) < 0.01f &&
+                  soundingFrames(out.left) < 400 &&
+                  std::abs(out.left.back()) < 1e-6f,
+              "an explicit MIDI choke fades to silence even with zero envelope release");
     }
 
     // ── The stretch engine ──

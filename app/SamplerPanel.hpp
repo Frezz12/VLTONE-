@@ -2,6 +2,7 @@
 #include "graphics/ScenePaintSource.hpp"
 #include "UiFrameClock.hpp"
 
+#include <QColor>
 #include <QHash>
 #include <QString>
 #include <QWidget>
@@ -52,6 +53,7 @@ public:
     /// only on a real change, and rescans the audio only when the buffer itself
     /// is replaced.
     void setSample(std::shared_ptr<const daw::plugins::sampler::SampleData> sample);
+    void setClipColor(const QColor& color);
     void setMarkers(double startOffset, double endOffset, double loopStart,
                     double loopEnd, int loopMode, double fadeIn, double fadeOut);
 
@@ -80,6 +82,7 @@ private:
     double fractionForX(int x) const;
 
     std::shared_ptr<const daw::plugins::sampler::SampleData> m_sample;
+    QColor m_clipColor;
     quint64 m_peakGeneration = 0;
     quint64 m_gpuWaveformKey = 0;
     bool m_peakBuildBusy = false;

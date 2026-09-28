@@ -2,7 +2,6 @@
 #include "UiFrameClock.hpp"
 #include <QElapsedTimer>
 #include "MixerWidget.hpp"
-#include "graphics/GraphicsPreferences.hpp"
 #include "ChannelViewState.hpp"
 #include <QApplication>
 #include <QEvent>
@@ -42,7 +41,7 @@
 
 namespace {
 constexpr int kStripGap = 2;
-constexpr int kVerticalInset = 5;
+constexpr int kVerticalInset = 6;
 int channelStride(int width) { return width + kStripGap; }
 int channelsWidth(int count, int width) {
     return count > 0 ? count * channelStride(width) - kStripGap : 0;
@@ -53,7 +52,7 @@ int channelsWidth(int count, int width) {
 class MasterFoldHandle final : public QAbstractButton {
 public:
     explicit MasterFoldHandle(QWidget* parent) : QAbstractButton(parent) {
-        setObjectName("MasterFoldHandle"); setFixedWidth(10);
+        setObjectName("MasterFoldHandle"); setFixedWidth(16);
         setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
         setCursor(Qt::SplitHCursor); setFocusPolicy(Qt::StrongFocus);
         setAttribute(Qt::WA_MacShowFocusRect, false);
@@ -67,16 +66,20 @@ protected:
         QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
         const auto& t = th();
         const bool collapsed = property("collapsed").toBool();
-        const QColor color = collapsed || m_dragging
-            ? Theme::record() : t.textSecondary;
-        p.setPen(QPen(mixColors(t.background, color, collapsed || underMouse() || hasFocus() || m_dragging ? .9 : .45), 2,
-                      Qt::SolidLine, Qt::RoundCap));
+        const bool active = underMouse() || hasFocus() || m_dragging;
+        const QColor color = collapsed || active ? t.accent : t.textSecondary;
         const qreal x = width() / 2.;
-        p.drawLine(QPointF(x, height() / 2. - 17), QPointF(x, height() / 2. + 17));
-        if (hasFocus()) {
-            p.setPen(QPen(t.textSecondary, 1, Qt::DotLine));
-            p.drawRect(QRectF(rect()).adjusted(1.5, height() / 2. - 24, -1.5, -height() / 2. + 24));
-        }
+        p.setPen(QPen(t.separator(), 1));
+        p.drawLine(QPointF(x, 8), QPointF(x, height() - 8));
+        const QRectF grip(2.5, height() / 2. - 26, width() - 5, 52);
+        p.setBrush(active ? t.panelTop() : t.panelBottom());
+        p.setPen(QPen(hasFocus() ? t.accent : t.separator(), 1));
+        p.drawRoundedRect(grip, 5, 5);
+        p.setPen(QPen(mixColors(t.panelBottom(), color, collapsed || active ? .9 : .55), 1.5,
+                      Qt::SolidLine, Qt::RoundCap));
+        for (qreal offset : {-2.0, 2.0})
+            p.drawLine(QPointF(x + offset, height() / 2. - 10),
+                       QPointF(x + offset, height() / 2. + 10));
     }
     void mousePressEvent(QMouseEvent* e) override {
         if (e->button() == Qt::LeftButton) {
@@ -139,28 +142,29 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    // Flat console command bar: it meets the timeline and both side edges
-    // exactly, while the small accent rail gives the title a clear origin.
+    // A raised command bar above the recessed channel bay.
     m_header = new QWidget(this);
     m_header->setObjectName("MixerHeader");
-    m_header->setFixedHeight(32);
+    m_header->setFixedHeight(30);
     auto* head = new QHBoxLayout(m_header);
-    head->setContentsMargins(10, 0, 6, 0);
-    head->setSpacing(7);
+    head->setContentsMargins(12, 0, 8, 0);
+    head->setSpacing(8);
 
     m_headerAccent = new QWidget(m_header);
     m_headerAccent->setObjectName(QStringLiteral("MixerHeaderAccent"));
-    m_headerAccent->setFixedSize(2, 16);
+    m_headerAccent->setFixedSize(2, 14);
     m_headerGlyph = new QLabel(m_header);
     m_headerGlyph->setFixedSize(16, 16);
     auto* title = new QLabel(tr("MIXER"), m_header);
     title->setObjectName("MixerTitle");
     m_headerCount = new QLabel(m_header);
     m_headerCount->setObjectName(QStringLiteral("MixerHeaderCount"));
+    m_headerCount->setFixedHeight(20);
+    m_headerCount->setAlignment(Qt::AlignCenter);
     auto* settings = new ui::IconButton(icons::Glyph::Gear,
                                         tr("Mixer settings"), m_header);
     settings->setObjectName(QStringLiteral("MixerSettingsButton"));
-    settings->setButtonSize(28, 24);
+    settings->setButtonSize(24, 24);
     settings->setFocusPolicy(Qt::StrongFocus);
     settings->setAccessibleName(tr("Mixer settings"));
     connect(settings, &QAbstractButton::clicked, this,
@@ -180,7 +184,6 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     head->addWidget(m_headerAccent);
     head->addWidget(m_headerGlyph);
     head->addWidget(title);
-    head->addWidget(ui::separatorLine(Qt::Vertical, 14, m_header));
     head->addWidget(m_headerCount);
     head->addStretch(1);
     head->addWidget(m_masterToggle);
@@ -189,27 +192,35 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
 
     // ── Strips: scrolling channels on the left, master pinned right ──
     auto* body = new QWidget(this);
+    body->setObjectName(QStringLiteral("MixerBody"));
+    body->setAttribute(Qt::WA_StyledBackground, true);
     auto* bodyRow = new QHBoxLayout(body);
-    bodyRow->setContentsMargins(0, kVerticalInset, 0, kVerticalInset);
+    bodyRow->setContentsMargins(8, kVerticalInset, 8, kVerticalInset);
     bodyRow->setSpacing(0);
 
     m_stripsHost = new QWidget(body);
+    m_stripsHost->setObjectName(QStringLiteral("MixerStripHost"));
     m_stripsLayout = new QHBoxLayout(m_stripsHost);
     m_stripsLayout->setContentsMargins(0, 0, 0, 0);
     m_stripsLayout->setSpacing(0);
     m_stripsLayout->addStretch(1);
 
     m_scroll = new QScrollArea(body);
+    m_scroll->setObjectName(QStringLiteral("MixerChannelsScroll"));
+    m_scroll->viewport()->setObjectName(QStringLiteral("MixerChannelsViewport"));
+    m_scroll->horizontalScrollBar()->setObjectName(QStringLiteral("MixerNavigationBar"));
+    m_scroll->verticalScrollBar()->setObjectName(QStringLiteral("MixerNavigationBar"));
     m_scroll->setWidget(m_stripsHost);
     // The viewport supplies the background. Keeping the page transparent also
     // avoids raster backing-store blits under the retained GPU scene.
-    if (ui::graphics::gpuWorkspaceEnabled()) m_stripsHost->setAutoFillBackground(false);
+    m_stripsHost->setAutoFillBackground(false);
     m_scroll->setWidgetResizable(true);
     m_scroll->setFrameShape(QFrame::NoFrame);
     m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
     m_masterHost = new QWidget(body);
+    m_masterHost->setObjectName(QStringLiteral("MixerMasterHost"));
     auto* masterRow = new QHBoxLayout(m_masterHost);
     masterRow->setContentsMargins(0, 0, 0, 0);
     masterRow->setSpacing(0);
@@ -218,8 +229,10 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     // elsewhere must never stretch its slots or push its fader out of view.
     auto* masterScroll = new QScrollArea(body);
     m_masterScroll = masterScroll;
+    masterScroll->setObjectName(QStringLiteral("MixerMasterScroll"));
+    masterScroll->verticalScrollBar()->setObjectName(QStringLiteral("MixerNavigationBar"));
     masterScroll->setWidget(m_masterHost);
-    if (ui::graphics::gpuWorkspaceEnabled()) m_masterHost->setAutoFillBackground(false);
+    m_masterHost->setAutoFillBackground(false);
     masterScroll->setWidgetResizable(true);
     masterScroll->setFrameShape(QFrame::NoFrame);
     masterScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -284,31 +297,64 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
 void MixerWidget::applyTheme() {
     const Theme& t = th();
     setStyleSheet(QString(R"(
-#MixerPanel { background: %BG%; border: none; }
-#MixerHeader { background: %HEADER%; border: none;
-               border-top: 1px solid %SECTION%;
-               border-bottom: 1px solid %SECTION%; }
-#MixerTitle { color: %TEXT%; font-size: 10px; font-weight: 700;
-              letter-spacing: 0.6px; }
-#MixerHeaderCount { color: %TEXT2%; font-size: 10px; }
-#MasterVisibilityButton { color: %TEXT2%; background: transparent; border: none;
-                         border-radius: %RADIUS%px; padding: 2px 6px; font-size: 10px; }
-#MasterVisibilityButton:checked { color: %TEXT%; background: %SURFACE%; }
-#MasterVisibilityButton:hover, #MasterVisibilityButton:pressed { background: %HOVER%; }
-#MasterVisibilityButton:focus { border: 1px dotted %TEXT2%; }
+#MixerPanel { background: %BOTTOM%; border: none; }
+#MixerHeader { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                          stop:0 %TOP%, stop:1 %BOTTOM%);
+               border: 1px solid %SECTION%; border-top-color: %LIGHT%;
+               border-top-left-radius: 8px; border-top-right-radius: 8px; }
+#MixerTitle { color: %TEXT%; font-size: 11px; font-weight: 600;
+              letter-spacing: 0.7px; }
+#MixerHeaderCount { color: %TEXT2%; font-size: 10px; background: %WELL%;
+                    border: 1px solid %SEP%; border-radius: 6px; padding: 0 7px; }
+#MixerBody { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                        stop:0 %BAY_TOP%, stop:1 %WELL%);
+             border: 1px solid %SECTION%; border-top: none; }
+#MixerChannelsScroll, #MixerMasterScroll, #MixerChannelsViewport,
+#MixerStripHost, #MixerMasterHost { background: transparent; border: none; }
+#MasterDock { background: %BOTTOM%; border-radius: 8px; }
+#MasterVisibilityButton { color: %TEXT2%; background: %WELL%; border: 1px solid %SEP%;
+                         border-radius: 6px; padding: 2px 8px; font-size: 11px; }
+#MasterVisibilityButton:checked { color: %TEXT%; background: %SELECT%; border-color: %SELECT_EDGE%; }
+#MasterVisibilityButton:hover { background: %HOVER%; color: %TEXT%; }
+#MasterVisibilityButton:pressed { background: %WELL%; }
+#MasterVisibilityButton:focus { border-color: %ACCENT%; }
+QScrollBar#MixerNavigationBar { background: %WELL%; }
+QScrollBar#MixerNavigationBar:horizontal {
+    height: 12px; margin: 2px 0 0 0;
+}
+QScrollBar#MixerNavigationBar:vertical {
+    width: 12px; margin: 0 0 0 2px;
+}
+QScrollBar#MixerNavigationBar::handle {
+    background: %SCROLL%; border: 1px solid %SCROLL_EDGE%; border-radius: 4px;
+    min-width: 28px; min-height: 28px;
+}
+QScrollBar#MixerNavigationBar::handle:hover {
+    background: %SCROLL_HOVER%;
+}
+QScrollBar#MixerNavigationBar::handle:pressed {
+    background: %ACCENT%;
+}
 )")
-        .replace("%BG%", t.background.name())
-        .replace("%SURFACE%", t.surface.name())
-        .replace("%HEADER%", mixColors(t.surface, t.surfaceElevated, 0.28).name())
+        .replace("%TOP%", t.panelTop().name())
+        .replace("%BOTTOM%", t.panelBottom().name())
+        .replace("%LIGHT%", t.edgeLight(t.panelTop()).name())
+        .replace("%BAY_TOP%", mixColors(t.well(), t.surface, .35).name())
+        .replace("%WELL%", t.well().name())
+        .replace("%SELECT%", mixColors(t.panelBottom(), t.accent, .17).name())
+        .replace("%SELECT_EDGE%", mixColors(t.separator(), t.accent, .42).name())
+        .replace("%ACCENT%", t.accent.name())
+        .replace("%SCROLL%", mixColors(t.well(), t.textPrimary, .25).name())
+        .replace("%SCROLL_EDGE%", mixColors(t.well(), t.textPrimary, .32).name())
+        .replace("%SCROLL_HOVER%", mixColors(t.well(), t.textPrimary, .40).name())
         .replace("%SEP%", t.separator().name())
         .replace("%SECTION%", t.sectionDivider().name())
         .replace("%TEXT2%", t.textSecondary.name())
-        .replace("%RADIUS%", QString::number(Theme::cornerRadius))
-        .replace("%HOVER%", mixColors(t.surfaceElevated, t.textPrimary, .12).name())
+        .replace("%HOVER%", t.controlTop().name())
         .replace("%TEXT%", t.textPrimary.name()));
     if (m_headerAccent)
         m_headerAccent->setStyleSheet(
-            QStringLiteral("background: %1;").arg(t.accent.name()));
+            QStringLiteral("background: %1; border-radius: 1px;").arg(t.accent.name()));
     if (m_headerGlyph)
         m_headerGlyph->setPixmap(
             icons::icon(icons::Glyph::Mixer, t.accent, 15).pixmap(15, 15));
@@ -327,7 +373,7 @@ void MixerWidget::updateMasterToggle() {
     m_masterToggle->setChecked(m_masterVisible);
     m_masterToggle->setToolTip(action); m_masterToggle->setAccessibleName(action);
     m_masterToggle->setIcon(icons::icon(m_masterVisible ? icons::Glyph::ArrowRight : icons::Glyph::ArrowLeft,
-        m_masterVisible ? Theme::record() : th().textSecondary, 12));
+        m_masterVisible ? th().accent : th().textSecondary, 12));
     if (m_masterHandle) {
         m_masterHandle->setAccessibleName(action);
         m_masterHandle->setToolTip(m_masterVisible
@@ -836,6 +882,8 @@ void MixerWidget::wireStrip(ChannelStrip* strip) {
             emit structureChanged();
             rebuild();
         }, Qt::QueuedConnection);
+        connect(strip, &ChannelStrip::trackCreated, this,
+                &MixerWidget::trackCreated, Qt::QueuedConnection);
 }
 
 void MixerWidget::rebuild() {

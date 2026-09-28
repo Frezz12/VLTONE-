@@ -195,6 +195,13 @@ int main() {
             effect->setParameterFromHost(0, 0.9);
             check(effect->loadState(state) && near(effect->parameterValue(0), 0.25),
                   "bank chunk restores through the validated envelope");
+            // Older snapshots can contain a vendor's out-of-range program.
+            // The bank chunk is authoritative; never dispatch that index.
+            auto legacyProgramState = state;
+            legacyProgramState[8] = 1;
+            effect->setParameterFromHost(0, 0.9);
+            check(effect->loadState(legacyProgramState) && near(effect->parameterValue(0), 0.25),
+                  "bank chunk restores despite an out-of-range legacy program index");
             std::vector<std::uint8_t> invalid = state;
             invalid[0] = 'X';
             effect->setParameterFromHost(0, 0.6);

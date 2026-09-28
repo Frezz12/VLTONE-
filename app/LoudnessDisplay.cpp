@@ -36,15 +36,16 @@ void LoudnessDisplay::paintEvent(QPaintEvent*) {
     QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
     const auto& theme = ThemeManager::instance().theme();
     const QRectF face = QRectF(rect()).adjusted(.5, .5, -.5, -.5);
-    const qreal radius = Theme::cornerRadius;
+    constexpr qreal radius = 4;
     QLinearGradient recess(face.topLeft(), face.bottomLeft());
-    recess.setColorAt(0, mixColors(theme.well(), Qt::black, theme.dark ? .22 : .04));
-    recess.setColorAt(1, theme.well());
-    p.setBrush(recess); p.setPen(QPen(theme.separator(), 1));
+    recess.setColorAt(0, theme.wellTop());
+    recess.setColorAt(1, theme.wellBottom());
+    QLinearGradient rim(face.topLeft(), face.bottomLeft());
+    rim.setColorAt(0, theme.edgeDark(theme.well()));
+    rim.setColorAt(0.22, theme.separator());
+    rim.setColorAt(1, theme.edgeLight(theme.surface));
+    p.setBrush(recess); p.setPen(QPen(QBrush(rim), 1));
     p.drawRoundedRect(face, radius, radius);
-    p.setBrush(Qt::NoBrush);
-    p.setPen(QPen(theme.ink(theme.dark ? 22 : 16), 1));
-    p.drawLine(QPointF(radius, height() - 1.5), QPointF(width() - radius, height() - 1.5));
     QFont caption = font(); caption.setPixelSize(9); caption.setWeight(QFont::Medium);
     p.setFont(caption); p.setPen(theme.textSecondary);
     p.drawText(QRectF(6, 3, width() - 25, 13), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("LUFS"));
@@ -62,7 +63,7 @@ void LoudnessDisplay::paintEvent(QPaintEvent*) {
         p.drawText(line, Qt::AlignRight | Qt::AlignVCenter, reading(values[row]));
     }
     if (hasFocus()) {
-        p.setPen(QPen(theme.textSecondary, 1, Qt::DotLine)); p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(theme.accent, 1)); p.setBrush(Qt::NoBrush);
         p.drawRoundedRect(face.adjusted(2, 2, -2, -2), radius - 2, radius - 2);
     }
 }

@@ -602,7 +602,10 @@ void SessionStatusStrip::applyTheme() {
 void SessionStatusStrip::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     const Theme& theme = th();
-    painter.fillRect(rect(), theme.surface);
+    QLinearGradient surface(0, 0, 0, height());
+    surface.setColorAt(0, theme.panelTop());
+    surface.setColorAt(1, theme.panelBottom());
+    painter.fillRect(rect(), surface);
     painter.setPen(QPen(theme.separator(), 1));
     painter.drawLine(0, 0, width(), 0);
 

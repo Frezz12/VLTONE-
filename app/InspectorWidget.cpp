@@ -33,7 +33,7 @@
 #include <cmath>
 
 namespace {
-constexpr int kClipParameterFieldHeight = 20;
+constexpr int kClipParameterFieldHeight = 24;
 
 class ClipNameLabel final : public QLabel {
 public:
@@ -309,7 +309,7 @@ protected:
 
 void configureClipForm(QFormLayout* form) {
     form->setContentsMargins(0, 0, 0, 0);
-    form->setVerticalSpacing(2);
+    form->setVerticalSpacing(3);
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     // In the narrow inspector, translated labels and numeric units
     // need separate lines. Do not let their combined minimum widths overflow.
@@ -348,7 +348,7 @@ void InspectorWidget::buildUi() {
     title->setObjectName("InspectorTitle");
     m_collapseButton = new ui::IconButton(icons::Glyph::Sidebar,
                                           tr("Collapse inspector"), m_header);
-    m_collapseButton->setButtonSize(22, 20);
+    m_collapseButton->setButtonSize(24, 24);
     connect(m_collapseButton, &QAbstractButton::clicked, this,
             &InspectorWidget::toggleCollapsed);
     head->addWidget(title, 1);
@@ -363,8 +363,10 @@ void InspectorWidget::buildUi() {
 
     m_nameEdit = new QLineEdit(m_content);
     m_nameEdit->setObjectName(QStringLiteral("InspectorTrackName"));
+    m_nameEdit->setFixedHeight(24);
     m_nameEdit->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     m_nameEdit->setPlaceholderText(tr("Track name"));
+    m_nameEdit->setAccessibleName(tr("Track name"));
     // Same reasoning as the tempo field: nothing should own the keyboard until
     // it is clicked, or the transport shortcuts stop working.
     m_nameEdit->setFocusPolicy(Qt::ClickFocus);
@@ -381,13 +383,13 @@ void InspectorWidget::buildUi() {
     colorRow->setContentsMargins(0, 0, 0, 0);
     colorRow->setSpacing(4);
     m_colorSwatch = new QWidget(m_content);
-    m_colorSwatch->setFixedHeight(18);
+    m_colorSwatch->setFixedHeight(20);
     m_colorSwatch->setCursor(Qt::PointingHandCursor);
     m_colorSwatch->setToolTip(tr("Track colour"));
     m_colorSwatch->installEventFilter(this);
     auto* colorButton = new ui::IconButton(icons::Glyph::Gear,
                                            tr("Choose colour"), m_content);
-    colorButton->setButtonSize(22, 20);
+    colorButton->setButtonSize(24, 24);
     connect(colorButton, &QAbstractButton::clicked, this,
             &InspectorWidget::pickColor);
     colorRow->addWidget(m_colorSwatch, 1);
@@ -784,6 +786,8 @@ void InspectorWidget::rebuild() {
             emit structureChanged();
             rebuild();
         }, Qt::QueuedConnection);
+        connect(m_strip, &ChannelStrip::trackCreated, this,
+                &InspectorWidget::trackCreated, Qt::QueuedConnection);
         m_stripSlot->addWidget(m_strip, 0, Qt::AlignHCenter);
     }
     loadProperties();
@@ -917,43 +921,60 @@ void InspectorWidget::refreshMeters() {
 void InspectorWidget::applyTheme() {
     const Theme& t = th();
     setStyleSheet(QString(R"(
-#InspectorPanel { background: %SURFACE%; border-right: 2px solid %SECTION%; }
-#InspectorHeader { background: %HEADER%; border-bottom: 1px solid %SECTION%; }
-#InspectorTitle { color: %TEXT2%; font-size: 10px; font-weight: 700;
-                  letter-spacing: 0.6px; }
+#InspectorPanel { background: %SURFACE%; border-right: 1px solid %SECTION%; }
+#InspectorHeader { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                              stop:0 %LIGHT%, stop:0.04 %PANEL_TOP%, stop:1 %PANEL_BOTTOM%);
+                   border-bottom: 1px solid %SEP%; }
+#InspectorPanel QLabel#InspectorTitle { color: %TEXT%; font-size: 11px; font-weight: 600;
+                  letter-spacing: 0.5px; }
 #InspectorPanel QLabel { color: %TEXT2%; font-size: 10px; }
-#InspectorTrackName { padding: 2px 4px; font-size: 11px; }
+#InspectorTrackName { padding: 2px 5px; font-size: 11px; font-weight: 500; }
 #InspectorScrollArea QScrollBar:vertical { width: 6px; margin: 2px 0; }
-#InspectorClipSection { background: %WELL%; border: 1px solid %SEP%;
+#InspectorClipSection { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                                   stop:0 %PANEL_TOP%, stop:1 %SURFACE%);
+                        border: 1px solid %SEP%; border-top-color: %LIGHT%; border-bottom-color: %SHADOW%;
                         border-radius: %RADIUS%px; }
-#InspectorClipName { color: %TEXT%; font-weight: 600; }
+#InspectorPanel QLabel#InspectorClipName { color: %TEXT%; font-size: 11px; font-weight: 600; }
 #InspectorClipSection QCheckBox QLabel { color: %TEXT%; }
-#InspectorStretchTool { min-height: 18px; padding: 1px 3px; font-size: 10px; }
+#InspectorStretchTool { min-height: 22px; padding: 1px 3px; font-size: 11px; }
 #InspectorMoreClipSettings { color: %TEXT2%; background: transparent;
-                             border: none; text-align: left; padding: 1px 0;
-                             min-height: 20px; font-size: 10px; }
+                             border: 1px solid transparent; text-align: left; padding: 1px 2px;
+                             min-height: 22px; font-size: 11px; }
 #InspectorMoreClipSettings:hover, #InspectorMoreClipSettings:focus {
-    color: %ACCENT%;
+    color: %TEXT%; background: %HOVER%; border-color: %SEP%;
 }
 #InspectorClipSection QComboBox, #InspectorClipSection QDoubleSpinBox {
-    min-height: 16px; padding: 1px 4px; border-radius: %RADIUS%px;
-    font-size: 10px; font-weight: 400;
+    min-height: 20px; padding: 1px 4px; border-radius: %RADIUS%px;
+    font-size: 11px; font-weight: 400;
+}
+#InspectorTrackName, #InspectorClipSection QComboBox, #InspectorClipSection QDoubleSpinBox {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 %RECESS%, stop:1 %WELL%);
+    border: 1px solid %SEP%; border-top-color: %RECESS%; border-bottom-color: %LIGHT%;
+}
+#InspectorTrackName:hover, #InspectorClipSection QComboBox:hover,
+#InspectorClipSection QDoubleSpinBox:hover { border-color: %SECTION%; }
+#InspectorTrackName:focus, #InspectorClipSection QComboBox:focus,
+#InspectorClipSection QComboBox:on, #InspectorClipSection QDoubleSpinBox:focus {
+    border-color: %ACCENT%;
 }
 #InspectorClipSection QComboBox::drop-down { width: 16px; }
 #InspectorClipSection QDoubleSpinBox QLineEdit {
     background: transparent; border: none; padding: 0; min-height: 0;
-    font-size: 10px;
+    font-size: 11px;
 }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%SURFACE%", t.surface.name())
-        .replace("%TOOLBAR%", t.toolbarBackground.name())
-        .replace("%HEADER%", mixColors(t.toolbarBackground,
-                                        t.surfaceElevated, 0.22).name())
+        .replace("%PANEL_TOP%", t.panelTop().name())
+        .replace("%PANEL_BOTTOM%", t.panelBottom().name())
         .replace("%SEP%", t.separator().name())
         .replace("%SECTION%", t.sectionDivider().name())
         .replace("%TEXT2%", t.textSecondary.name())
         .replace("%TEXT%", t.textPrimary.name())
         .replace("%ACCENT%", t.accent.name())
+        .replace("%RECESS%", t.wellTop().name())
+        .replace("%LIGHT%", t.edgeLight(t.panelTop()).name())
+        .replace("%SHADOW%", t.edgeDark(t.surface).name())
+        .replace("%HOVER%", t.controlTop().name())
         .replace("%WELL%", t.well().name()));
     loadProperties();
 }

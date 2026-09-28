@@ -8,6 +8,9 @@
 #if DAW_ENABLE_VST3
 #include "Vst3/Vst3Factory.hpp"
 #endif
+#if DAW_ENABLE_VST
+#include "Vst/VstFactory.hpp"
+#endif
 #if DAW_ENABLE_AU
 #include "Au/AuFactory.hpp"
 #include <AudioUnit/AudioUnitParameters.h>
@@ -79,6 +82,10 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
     preset->setParameterFromHost(unsigned(index), tunedValue);
     std::vector<std::uint8_t> state;
     require(preset->saveState(state) && !state.empty(), "save native preset");
+    if (descriptor.format == Format::Vst)
+        require(state.size() >= 16 && std::all_of(state.begin() + 8, state.begin() + 12,
+                    [](auto byte) { return byte == 255; }),
+                "out-of-range VST program is saved as absent metadata");
     preset->stopProcessing(); preset->deactivate();
 
     for (const std::string scope : {"track", "group", "master", "clip", "dual-mono"}) {
@@ -215,6 +222,16 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
 }
 
 int main() try {
+#if DAW_ENABLE_VST
+    VstFactory vst;
+    const auto vstPlugins = vst.inspect(DAW_TEST_VST_SHELL_PATH);
+    const auto effect = std::find_if(vstPlugins.begin(), vstPlugins.end(),
+        [](const auto& plugin) { return plugin.uid == "54465831"; });
+    require(effect != vstPlugins.end(), "VST2 fixture");
+    environment("DAW_TEST_VST_INVALID_PROGRAM", "1");
+    checkFormat(vst, *effect, "0", 1.0, 0.5, 0.75, 0.75f);
+    environment("DAW_TEST_VST_INVALID_PROGRAM", "");
+#endif
 #if DAW_ENABLE_CLAP
     ClapFactory clap;
     const auto clapPlugins = clap.inspect(DAW_TEST_CLAP_PATH);

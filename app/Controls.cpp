@@ -265,7 +265,7 @@ void paintSlider(QPainter& p, const QRectF& track, const SliderPaint& spec) {
                         vertical ? rail.topRight() : rail.bottomLeft());
     bed.setColorAt(0.0, mixColors(t.well(), QColor(0, 0, 0), t.dark ? 0.45 : 0.16));
     bed.setColorAt(0.55, t.well());
-    bed.setColorAt(1.0, mixColors(t.well(), t.textPrimary, t.dark ? 0.07 : 0.04));
+    bed.setColorAt(1.0, t.wellBottom());
     p.setPen(Qt::NoPen);
     p.setBrush(bed);
     p.drawRoundedRect(rail, railRadius, railRadius);
@@ -1112,7 +1112,7 @@ void FaderWidget::paintScale(QPainter& p) const {
     const double tickRight = kScaleWidth - 2.0;
     const double tickLeft = tickRight - kTickLength;
     const QColor tick = mixColors(t.textSecondary, t.background, 0.35);
-    const QColor text = mixColors(t.textSecondary, t.background, 0.15);
+    const QColor text = t.textSecondary;
 
     // The unit, once, at the head of the column — the marks below it are then
     // just numbers, which is how it reads on the panel.
@@ -1269,10 +1269,8 @@ void FaderWidget::paintEvent(QPaintEvent*) {
         p.setBrush(QColor(0, 0, 0, t.dark ? 105 : 42));
         p.drawEllipse(body.translated(0.0, 1.0));
         QRadialGradient face(body.center(), body.width() / 2.0);
-        face.setColorAt(0.0, mixColors(t.surfaceElevated, t.textPrimary,
-                                      t.dark ? 0.10 : 0.05));
-        face.setColorAt(1.0, mixColors(t.well(), QColor(0, 0, 0),
-                                      t.dark ? 0.28 : 0.06));
+        face.setColorAt(0.0, t.controlTop());
+        face.setColorAt(1.0, t.wellTop());
         p.setBrush(face);
         p.setPen(QPen(t.separator(), 1.0));
         p.drawEllipse(body);
@@ -1307,7 +1305,7 @@ void FaderWidget::paintEvent(QPaintEvent*) {
     p.setPen(Qt::NoPen);
     p.setBrush(mixColors(t.well(), QColor(0, 0, 0), t.dark ? 0.55 : 0.18));
     p.drawRoundedRect(track, 2.0, 2.0);
-    p.setPen(QPen(t.ink(t.dark ? 22 : 40), 1.0));
+    p.setPen(QPen(t.edgeLight(t.well()), 1.0));
     if (vertical) {
         p.drawLine(QPointF(track.right() - 0.5, track.top() + 2.0),
                    QPointF(track.right() - 0.5, track.bottom() - 2.0));
@@ -1980,8 +1978,7 @@ void PanKnob::paintEvent(QPaintEvent*) {
                               QPointF(body.width() * 0.31,
                                       body.height() * 0.24),
                           body.width() * 0.84);
-    glass.setColorAt(0.0, mixColors(t.surfaceElevated, t.textPrimary,
-                                    t.dark ? 0.19 : 0.30));
+    glass.setColorAt(0.0, t.controlTop());
     glass.setColorAt(0.48, mixColors(t.surfaceElevated, t.well(), 0.24));
     glass.setColorAt(1.0, mixColors(t.well(), t.background,
                                     t.dark ? 0.58 : 0.24));
@@ -1991,7 +1988,7 @@ void PanKnob::paintEvent(QPaintEvent*) {
     p.setBrush(glass);
     p.drawEllipse(body);
 
-    QColor sheen = t.textPrimary;
+    QColor sheen = t.edgeLight(t.controlTop());
     sheen.setAlphaF(0.10 + interaction * 0.08);
     p.setBrush(Qt::NoBrush);
     p.setPen(QPen(sheen, 1.0, Qt::SolidLine, Qt::RoundCap));
@@ -2572,8 +2569,7 @@ void Knob::paintEvent(QPaintEvent*) {
         p.drawArc(ring, int(from * 16), int(-sweep * 16));
         const QRectF body = ring.adjusted(4, 4, -4, -4);
         QLinearGradient surface(body.topLeft(), body.bottomLeft());
-        surface.setColorAt(0, mixColors(t.surfaceElevated, t.textPrimary,
-                                         interacting ? 0.12 : 0.05));
+        surface.setColorAt(0, interacting ? t.edgeLight(t.controlTop()) : t.controlTop());
         surface.setColorAt(1, t.well());
         p.setBrush(surface);
         p.setPen(QPen(mixColors(t.separator(), t.textSecondary, 0.18), 1));
@@ -3332,6 +3328,7 @@ double ResizeHandle::along(const QMouseEvent* ev) const {
 }
 
 void ResizeHandle::paintEvent(QPaintEvent*) {
+    if (!m_seamVisible) return;
     QPainter painter(this);
     const Theme& t = th();
     const QColor line = t.sectionDivider();

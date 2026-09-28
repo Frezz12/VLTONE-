@@ -76,18 +76,16 @@ double relativeLuminance(const QColor& colour) {
 }
 
 Theme studioGray() {
-    // Midtone neutral surfaces let coloured tracks and signal meters carry
-    // meaning. The silver accent uses dark ink on filled controls; text and
-    // thin grid lines stay distinct from the surrounding grey plates.
+    // Cool graphite plates with a blue accent, distinct from coloured tracks.
     Theme t = make("studio-gray", "Studio Gray", true,
-                   grey(88), grey(100), grey(108),
-                   grey(250), grey(242),
-                   grey(240), grey(255),
+                   colorFromRgb(0x44484E), colorFromRgb(0x565C64), colorFromRgb(0x606771),
+                   colorFromRgb(0xF5F7FA), colorFromRgb(0xDFE4EB),
+                   colorFromRgb(0x82B5EA), colorFromRgb(0xA1CCF5),
                    grey(232), grey(255),
-                   grey(112), grey(144), QColor(240, 240, 240, 48),
-                   grey(72), grey(100));
-    t.headerBackground = t.surface;
-    t.pluginMenuBackground = grey(86);
+                   colorFromRgb(0x555B64), colorFromRgb(0x707985), QColor(130, 181, 234, 48),
+                   colorFromRgb(0x4B5058), colorFromRgb(0x50565E));
+    t.headerBackground = t.transportBackground;
+    t.pluginMenuBackground = colorFromRgb(0x494F57);
     return t;
 }
 
@@ -99,6 +97,38 @@ QColor Theme::well() const {
     // towards white. Brightening it on a light theme turned every meter, groove
     // and knob arc into white-on-white.
     return mixColors(background, QColor(0, 0, 0), dark ? 0.35 : 0.07);
+}
+
+QColor Theme::panelBottom() const {
+    return mixColors(surface, headerBackground, 0.35);
+}
+
+QColor Theme::wellTop() const {
+    return mixColors(well(), Qt::black, dark ? 0.16 : 0.005);
+}
+
+QColor Theme::wellBottom() const {
+    return mixColors(well(), surface, 0.12);
+}
+
+QColor Theme::edgeLight(const QColor& base) const {
+    return mixColors(base, Qt::white, dark ? 0.14 : 0.65);
+}
+
+QColor Theme::edgeDark(const QColor& base) const {
+    return mixColors(base, Qt::black, dark ? 0.26 : 0.18);
+}
+
+QColor Theme::controlTop() const {
+    return mixColors(surfaceElevated, Qt::white, dark ? 0.035 : 0.24);
+}
+
+QColor Theme::controlBottom() const {
+    return mixColors(surfaceElevated, surface, 0.60);
+}
+
+QColor Theme::panelTop() const {
+    return mixColors(panelBottom(), surfaceElevated, 0.60);
 }
 
 QColor Theme::separator() const {
@@ -123,7 +153,11 @@ QColor Theme::accentText() const {
                                 (relativeLuminance(darkInk) + 0.05);
     const double lightContrast = (relativeLuminance(lightInk) + 0.05) /
                                  (luminance + 0.05);
-    return darkContrast >= lightContrast ? darkInk : lightInk;
+    if (std::max(darkContrast, lightContrast) >= 4.5)
+        return darkContrast >= lightContrast ? darkInk : lightInk;
+    // Mid-luminance accents need the full ink range to meet normal-text contrast.
+    return (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05)
+               ? QColor(Qt::black) : QColor(Qt::white);
 }
 
 QColor Theme::ink(int alpha) const {
@@ -154,49 +188,48 @@ ThemeManager::ThemeManager() {
 
     m_presets = {
         make("dark", "Dark", true,
-             grey(20), grey(31), grey(38),
-             grey(242), grey(153),
-             QColor(74, 143, 217), QColor(102, 166, 230),
+             colorFromRgb(0x17191D), colorFromRgb(0x25292F), colorFromRgb(0x333943),
+             colorFromRgb(0xEDF0F4), colorFromRgb(0xA8B1BD),
+             colorFromRgb(0x639EE4), colorFromRgb(0x86B8F0),
              QColor(128, 191, 255), QColor(184, 190, 198),
-             grey(51), grey(77), QColor(74, 143, 217, 77),
-             grey(13), grey(26)),
+             colorFromRgb(0x30353D), colorFromRgb(0x48515F), QColor(99, 158, 228, 77),
+             colorFromRgb(0x20242A), colorFromRgb(0x22262C)),
         studioGray(),
         // Clean cool neutrals give panels a visible hierarchy without turning
         // the workspace into a flat grey sheet. Saturated blue carries active
         // state; the warm playhead remains easy to find in a dense project.
         make("light", "Light", false,
-             QColor(244, 247, 250), QColor(250, 252, 253), QColor(255, 255, 255),
-             QColor(24, 34, 45), QColor(84, 101, 118),
-             QColor(22, 127, 211), QColor(56, 152, 232),
+             colorFromRgb(0xD8DDE3), colorFromRgb(0xEEF0F3), colorFromRgb(0xFAFBFC),
+             colorFromRgb(0x222831), colorFromRgb(0x4C5662),
+             colorFromRgb(0x327BBF), colorFromRgb(0x2468A5),
              QColor(35, 109, 181), QColor(214, 72, 72),
-             QColor(213, 222, 231), QColor(174, 190, 205),
-             QColor(22, 127, 211, 54),
-             QColor(230, 237, 243), QColor(242, 246, 249)),
+             colorFromRgb(0xBEC6D0), colorFromRgb(0xA0ACBA),
+             QColor(50, 123, 191, 54),
+             colorFromRgb(0xCFD5DC), colorFromRgb(0xE4E8ED)),
         // Solarized warmth stays recognisable, with stronger ink and distinct
         // teal waveform/orange playhead accents for faster visual parsing.
         make("solarized-light", "Solarized Light", false,
-             QColor(253, 246, 227), QColor(249, 241, 221), QColor(255, 250, 237),
-             QColor(48, 75, 84), QColor(82, 103, 111),
-             QColor(22, 139, 210), QColor(59, 164, 230),
+             colorFromRgb(0xE9DFC9), colorFromRgb(0xF6EDDA), colorFromRgb(0xFFF7E8),
+             colorFromRgb(0x304B54), colorFromRgb(0x455961),
+             QColor(22, 139, 210), colorFromRgb(0x126DA6),
              QColor(28, 154, 145), QColor(214, 93, 46),
-             QColor(222, 211, 184), QColor(190, 171, 131),
+             colorFromRgb(0xD0C2A5), colorFromRgb(0xB3A17C),
              QColor(22, 139, 210, 56),
-             QColor(242, 232, 208), QColor(248, 239, 220)),
+             colorFromRgb(0xDBCFB7), colorFromRgb(0xECE1CB)),
         make("gruvbox", "Gruvbox", true,
-             QColor(41, 38, 33), QColor(51, 46, 41), QColor(64, 59, 51),
-             QColor(240, 232, 209), QColor(168, 153, 122),
+             colorFromRgb(0x25221E), colorFromRgb(0x37312A), colorFromRgb(0x494037),
+             colorFromRgb(0xF0E8D1), colorFromRgb(0xCAB99A),
              QColor(217, 153, 51), QColor(242, 179, 77),
              QColor(217, 179, 77), QColor(184, 190, 198),
              QColor(66, 61, 54), QColor(84, 77, 69),
              QColor(217, 153, 51, 77),
-             QColor(33, 31, 26), QColor(46, 41, 36)),
+             colorFromRgb(0x2E2923), colorFromRgb(0x322C26)),
     };
 
-    // Header colour remains separately editable. The standard dark header is
-    // graphite; other palettes retain their existing surface colours.
+    // Header colour remains separately editable in custom palettes.
     for (auto& p : m_presets)
         if (!p.headerBackground.isValid())
-            p.headerBackground = p.id == QLatin1String("dark") ? grey(40) : p.transportBackground;
+            p.headerBackground = p.transportBackground;
 
     QSettings settings;
     const QString saved = settings.value("ui/themeId", "dark").toString();
@@ -544,6 +577,11 @@ void ThemeManager::apply() {
     p.setColor(QPalette::PlaceholderText, t.textSecondary);
     p.setColor(QPalette::Button, t.surfaceElevated);
     p.setColor(QPalette::ButtonText, t.textPrimary);
+    p.setColor(QPalette::Light, t.edgeLight(t.surface));
+    p.setColor(QPalette::Midlight, t.controlTop());
+    p.setColor(QPalette::Mid, t.separator());
+    p.setColor(QPalette::Dark, t.edgeDark(t.surface));
+    p.setColor(QPalette::Shadow, t.edgeDark(t.well()));
     p.setColor(QPalette::BrightText, Qt::white);
     p.setColor(QPalette::Highlight, t.accent);
     p.setColor(QPalette::HighlightedText, t.accentText());
@@ -610,8 +648,13 @@ QString ThemeManager::styleSheet() const {
             .arg(QString::number(col.alphaF(), 'f', 3));
     };
     const QColor popup = mixColors(t.surface, t.background, t.dark ? 0.55 : 0.35);
+    const QColor buttonTop = t.controlTop();
+    const QColor buttonBottom = t.controlBottom();
+    const QColor buttonEdge = t.edgeDark(buttonBottom);
+    // Lift saturated keys away from their ink so hover stays readable in custom themes.
+    const QColor accentLift = t.accentText().lightnessF() < 0.5 ? QColor(Qt::white) : QColor(Qt::black);
 
-    // Thin borders and flat surfaces keep the application's dense controls legible.
+    // Lighting stays inside the existing one-pixel borders and control bounds.
     return QString(R"(
 QWidget { color: %TEXT%; font-size: 12px; }
 QMainWindow, QDialog { background: %BG%; }
@@ -634,8 +677,11 @@ QMenu::separator { height: 1px; background: %POPUP_BORDER%; margin: 3px 6px; }
    grey Fusion strip that does not belong to any of this. */
 QMenu::scroller { height: 14px; background: %POPUP%; }
 
-QStatusBar { background: %TOOLBAR%; border-top: 1px solid %SEP%; }
+QStatusBar { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                        stop:0 %PANEL_TOP%, stop:1 %PANEL_BOTTOM%);
+             border-top: 1px solid %SEP%; }
 QStatusBar QLabel { color: %TEXT2%; font-size: 11px; }
+QStatusBar QLabel#ProjectStatusText { padding-left: 8px; }
 QStatusBar::item { border: none; }
 
 QToolTip { background: %ELEV%; color: %TEXT%; border: 1px solid %SEP%;
@@ -650,7 +696,8 @@ QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 
 QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
-    background: %WELL%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %WELL_TOP%,stop:1 %WELL_BOTTOM%);
+    border: 1px solid %SEP%; border-top-color: %WELL_EDGE%; border-bottom-color: %PANEL_LIGHT%; border-radius: %RADIUS%px;
     padding: 3px 7px; selection-background-color: %ACCENT%;
 }
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {
@@ -660,12 +707,13 @@ QCheckBox { spacing: 7px; min-height: 20px; }
 QCheckBox:disabled { color: %TEXT2%; }
 /* Compact closed controls; their lists use the shared popup surface below. */
 QComboBox {
-    background: %WELL%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %WELL_TOP%,stop:1 %WELL_BOTTOM%);
+    border: 1px solid %SEP%; border-top-color: %WELL_EDGE%; border-bottom-color: %PANEL_LIGHT%; border-radius: %RADIUS%px;
     padding: 3px 9px; min-height: 20px; color: %TEXT%; font-weight: 500;
     selection-background-color: %ACCENT%;
 }
-QComboBox:hover { background: %HOVER%; border-color: %HOVER%; }
-QComboBox:focus, QComboBox:on { border: 1px solid %SEP%; }
+QComboBox:hover { border-color: %BUTTON_EDGE%; }
+QComboBox:focus, QComboBox:on { border: 1px solid %ACCENT%; }
 QComboBox:disabled { color: %TEXT2%; }
 QComboBox::drop-down { border: none; width: 22px; }
 QComboBox::down-arrow { image: url(:/icons/popup-chevron-%APPEARANCE%.svg); width: 12px; height: 12px; }
@@ -681,22 +729,50 @@ QComboBox QAbstractItemView::item { min-height: 18px; padding: 1px 7px;
                                     border-radius: %RADIUS%px; }
 QComboBox QAbstractItemView::item:selected { background: %POPUP_HOVER%; color: %TEXT%; }
 
+/* Console keys: a raised face, a lit upper edge and a recessed press.
+   State changes keep the same border and padding, including keyboard focus. */
 QPushButton {
-    background: %ELEV%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
-    padding: 4px 12px; font-weight: 500;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 %BUTTON_TOP%, stop:1 %BUTTON_BOTTOM%);
+    color: %TEXT%; border: 1px solid %BUTTON_EDGE%; border-top-color: %BUTTON_LIGHT%;
+    border-bottom-color: %BUTTON_SHADOW%; border-radius: 6px;
+    padding: 5px 12px; font-weight: 500;
 }
-QPushButton:hover { background: %ELEV_HOVER%; }
-QPushButton:pressed { background: %ACCENT_SOFT%; }
-QPushButton:checked { background: %ACCENT%; color: %ACCENT_TEXT%; border-color: %ACCENT%; }
-QPushButton:disabled { color: %TEXT2%; }
-QPushButton[accentAction="true"] {
-    background: %ACCENT%; color: %ACCENT_TEXT%; border-color: %ACCENT%;
-    font-weight: 600;
+QPushButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 %BUTTON_HOVER%, stop:1 %BUTTON_TOP%);
+    border-color: %BUTTON_LIGHT%; border-bottom-color: %BUTTON_EDGE%;
 }
-QPushButton[accentAction="true"]:hover { background: %ACCENT_HL%; }
-QPushButton[accentAction="true"]:pressed { background: %ACCENT_DARK%; }
+QPushButton:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 %WELL%, stop:1 %BUTTON_BOTTOM%);
+    border-color: %BUTTON_SHADOW%; border-bottom-color: %BUTTON_EDGE%;
+}
+QPushButton:checked {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 %BUTTON_ON_TOP%, stop:1 %BUTTON_ON_BOTTOM%);
+    color: %TEXT%; border-color: %BUTTON_ON_EDGE%; border-bottom-color: %ACCENT%;
+}
+QPushButton:checked:hover { background: %BUTTON_ON_TOP%; border-color: %ACCENT%; }
+QPushButton:checked:pressed { background: %BUTTON_ON_BOTTOM%; border-color: %BUTTON_ON_EDGE%; }
+QPushButton:focus { border-color: %ACCENT%; }
+QPushButton:default, QPushButton[accentAction="true"] {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 %BUTTON_ACCENT_TOP%, stop:1 %ACCENT%);
+    color: %ACCENT_TEXT%; border-color: %ACCENT%; border-top-color: %BUTTON_ACCENT_EDGE%;
+    border-bottom-color: %ACCENT_DARK%; font-weight: 600;
+}
+QPushButton:default:hover, QPushButton[accentAction="true"]:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 %BUTTON_ACCENT_EDGE%, stop:1 %BUTTON_ACCENT_TOP%);
+}
+QPushButton:default:pressed, QPushButton[accentAction="true"]:pressed {
+    background: %ACCENT%; border-top-color: %ACCENT_DARK%; border-bottom-color: %BUTTON_ACCENT_EDGE%;
+}
+QPushButton:default:focus, QPushButton[accentAction="true"]:focus { border-color: %ACCENT_TEXT%; }
+QPushButton:disabled, QPushButton:checked:disabled, QPushButton:default:disabled,
 QPushButton[accentAction="true"]:disabled {
-    background: %ELEV%; color: %TEXT2%; border-color: %SEP%;
+    background: %SURFACE%; color: %TEXT2%; border-color: %SEP%;
 }
 
 QToolButton { background: transparent; border: none; border-radius: %RADIUS%px; padding: 3px; font-weight: 500; }
@@ -709,7 +785,9 @@ QSplitter::handle:hover { background: %ACCENT_SOFT%; }
 QDockWidget { titlebar-close-icon: none; titlebar-normal-icon: none; }
 QDockWidget::title { background: %TOOLBAR%; padding: 5px 8px; border-bottom: 1px solid %SEP%; }
 
-QGroupBox { border: 1px solid %SEP%; border-radius: %RADIUS%px; margin-top: 14px; padding-top: 6px; }
+QGroupBox { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %PANEL_TOP%,stop:1 %SURFACE%);
+            border: 1px solid %SEP%; border-top-color: %PANEL_LIGHT%; border-bottom-color: %PANEL_SHADOW%;
+            border-radius: %RADIUS%px; margin-top: 14px; padding-top: 6px; }
 QGroupBox::title { subcontrol-origin: margin; left: 10px; color: %TEXT2%; font-weight: 600; }
 
 QLabel[role="section"] { color: %TEXT2%; font-size: 10px; font-weight: 500; }
@@ -731,10 +809,12 @@ QTreeWidget#SettingsNavigation::item:selected {
     background: %ACCENT_SOFT%; color: %TEXT%; border-left-color: %ACCENT%;
 }
 QTreeWidget#SettingsNavigation::item:focus { border-color: %ACCENT%; }
-QWidget#SettingsPageHeader { border-bottom: 1px solid %SEP%; }
+QWidget#SettingsPageHeader {
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %PANEL_TOP%,stop:1 %PANEL_BOTTOM%);
+    border-bottom: 1px solid %SEP%; }
 QLabel#SettingsPageIcon { background: %ACCENT_SOFT%; border-radius: %RADIUS%px; }
 SettingsWindow QGroupBox {
-    background: %SURFACE%; border-radius: %RADIUS%px; margin-top: 18px; padding-top: 8px;
+    border-radius: %RADIUS%px; margin-top: 18px; padding-top: 8px;
 }
 SettingsWindow QGroupBox::title { color: %TEXT%; padding: 0 4px; }
 
@@ -788,13 +868,30 @@ QSlider::groove:vertical:focus { border: 1px solid %ACCENT%; }
         .replace("%TEXT2%", c(t.textSecondary))
         .replace("%BG%", c(t.background))
         .replace("%SURFACE%", c(t.surface))
-        .replace("%ELEV_HOVER%", c(mixColors(t.surfaceElevated, t.textPrimary, 0.10)))
+        .replace("%BUTTON_TOP%", c(buttonTop))
+        .replace("%BUTTON_BOTTOM%", c(buttonBottom))
+        .replace("%BUTTON_EDGE%", c(buttonEdge))
+        .replace("%BUTTON_LIGHT%", c(t.edgeLight(buttonTop)))
+        .replace("%BUTTON_SHADOW%", c(t.edgeDark(buttonBottom)))
+        .replace("%BUTTON_HOVER%", c(mixColors(buttonTop, t.dark ? Qt::white : Qt::black, 0.03)))
+        .replace("%BUTTON_ON_TOP%", c(mixColors(buttonTop, t.accent, 0.08)))
+        .replace("%BUTTON_ON_BOTTOM%", c(mixColors(t.well(), t.accent, 0.18)))
+        .replace("%BUTTON_ON_EDGE%", c(mixColors(buttonEdge, t.accent, 0.60)))
+        .replace("%BUTTON_ACCENT_TOP%", c(mixColors(t.accent, accentLift, 0.08)))
+        .replace("%BUTTON_ACCENT_EDGE%", c(mixColors(t.accent, accentLift, 0.16)))
         .replace("%ELEV%", c(t.surfaceElevated))
         .replace("%ACCENT_TEXT%", c(t.accentText()))
         .replace("%TOOLBAR%", c(t.toolbarBackground))
+        .replace("%PANEL_TOP%", c(t.panelTop()))
+        .replace("%PANEL_BOTTOM%", c(t.panelBottom()))
+        .replace("%PANEL_LIGHT%", c(t.edgeLight(t.panelTop())))
+        .replace("%PANEL_SHADOW%", c(t.edgeDark(t.panelBottom())))
         .replace("%SEP%", c(t.separator()))
         .replace("%SECTION%", c(t.sectionDivider()))
         .replace("%WELL%", c(t.well()))
+        .replace("%WELL_TOP%", c(t.wellTop()))
+        .replace("%WELL_BOTTOM%", c(t.wellBottom()))
+        .replace("%WELL_EDGE%", c(t.edgeDark(t.well())))
         .replace("%POPUP%", c(popup))
         .replace("%POPUP_BORDER%", c(mixColors(popup, t.textPrimary, 0.22)))
         .replace("%POPUP_HOVER%", c(mixColors(popup, t.textPrimary, t.dark ? 0.12 : 0.09)))

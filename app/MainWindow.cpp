@@ -6257,7 +6257,54 @@ bool MainWindow::checkTrackMixerSyncForTest() {
     m_controller.undo();
     selectTrackFromHeader(QString::fromStdString(id));
     syncViews();
-    std::fprintf(stderr, "PASS track/mixer names, numbering, grouping and undo/redo\n");
+    const auto createSendFromStrip = [this](ChannelStrip* source) -> std::string {
+        auto* add = source ? source->findChild<QToolButton*>("SendAddArea") : nullptr;
+        auto* menu = add ? add->menu() : nullptr;
+        if (!menu || !QMetaObject::invokeMethod(menu, "aboutToShow") ||
+            menu->actions().isEmpty()) return {};
+        // Create Send Track is always the final menu action, in any locale.
+        const size_t before = m_controller.project().tracks.size();
+        menu->actions().back()->trigger();
+        QApplication::processEvents();
+        if (m_controller.project().tracks.size() != before + 1) return {};
+        return m_controller.project().tracks.back().id;
+    };
+    const std::string sendOne = createSendFromStrip(stripFor(id));
+    if (!check(!sendOne.empty(), "first mixer send action did not create a track")) return false;
+    if (!check(!m_trackList->rowRectForTrack(QString::fromStdString(sendOne)).isEmpty(),
+               "first mixer send did not immediately add a timeline row")) return false;
+    const std::string sendTwo = createSendFromStrip(stripFor(id));
+    if (!check(!sendTwo.empty(), "second mixer send action did not create a track")) return false;
+    ChannelStrip* inspectorStrip = nullptr;
+    for (auto* candidate : m_inspector->findChildren<ChannelStrip*>()) {
+        if (candidate->trackId().toStdString() == id && !candidate->isHidden()) {
+            inspectorStrip = candidate;
+            break;
+        }
+    }
+    const std::string sendInspector = createSendFromStrip(inspectorStrip);
+    if (!check(!sendInspector.empty(), "inspector send action did not create a track")) return false;
+    const auto& sends = m_controller.project().findTrack(id)->sends;
+    const auto routedTo = [&sends](const std::string& destination) {
+        return std::any_of(sends.begin(), sends.end(), [&](const auto& send) {
+            return send.destinationTrackId == destination;
+        });
+    };
+    if (!check(
+               m_controller.project().findTrack(sendOne)->kind == daw::TrackKind::Aux &&
+               m_controller.project().findTrack(sendTwo)->kind == daw::TrackKind::Aux &&
+               m_controller.project().findTrack(sendInspector)->kind == daw::TrackKind::Aux &&
+               !m_trackList->rowRectForTrack(QString::fromStdString(sendOne)).isEmpty() &&
+               !m_trackList->rowRectForTrack(QString::fromStdString(sendTwo)).isEmpty() &&
+               !m_trackList->rowRectForTrack(QString::fromStdString(sendInspector)).isEmpty() &&
+               routedTo(sendOne) && routedTo(sendTwo) && routedTo(sendInspector),
+               "send creation did not immediately add routed timeline rows"))
+        return false;
+    m_controller.removeTrack(sendInspector);
+    m_controller.removeTrack(sendTwo);
+    m_controller.removeTrack(sendOne);
+    syncViews();
+    std::fprintf(stderr, "PASS track/mixer names, numbering, grouping, sends and undo/redo\n");
     return true;
 }
 
@@ -7010,14 +7057,14 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
         const double before = field->value();
         clipWheel(field);
         clipWheel(field->findChild<QLineEdit*>(), QPoint(0, -12));
-        if (!inspectorCheck(field->value() == before && field->height() == 20,
-                            "thin numeric field ignores both wheel types")) return false;
+        if (!inspectorCheck(field->value() == before && field->height() == 24,
+                            "compact numeric field ignores both wheel types")) return false;
     }
     for (auto* field : clipSection->findChildren<QComboBox*>()) {
         const int before = field->currentIndex();
         clipWheel(field);
-        if (!inspectorCheck(field->currentIndex() == before && field->height() == 20,
-                            "thin mode field ignores the wheel")) return false;
+        if (!inspectorCheck(field->currentIndex() == before && field->height() == 24,
+                            "compact mode field ignores the wheel")) return false;
     }
     clipScroll->verticalScrollBar()->setValue(0);
     clipWheel(pitchEdit);
@@ -9420,7 +9467,7 @@ void MainWindow::buildLayout() {
     m_bottomPanel->setObjectName("BottomEditorPanel");
     m_bottomPanel->setMinimumHeight(180);
     auto* bottomLayout = new QVBoxLayout(m_bottomPanel);
-    bottomLayout->setContentsMargins(0, 5, 0, 0);
+    bottomLayout->setContentsMargins(0, 0, 0, 0);
     bottomLayout->setSpacing(0);
     m_mixer = new MixerWidget(&m_controller, m_bottomPanel);
     m_mixer->setMinimumHeight(140);
@@ -9442,6 +9489,7 @@ void MainWindow::buildLayout() {
 
     auto* handle = new ui::ResizeHandle(Qt::Horizontal, m_bottomPanel);
     handle->setEdge(Qt::TopEdge);
+    handle->setSeamVisible(false);
     handle->onDragStart = [this] { m_mixerDragStartHeight = m_mixerHeight; };
     handle->onDrag = [this](int deltaY) {
         // deltaY is measured from where the drag started, so the new height has
@@ -9916,6 +9964,8 @@ void MainWindow::buildLayout() {
         // needs reconstruction; headers and timeline contain no slot widgets.
         if (m_inspector) m_inspector->rebuildForTrack(m_selectedTrackId);
     });
+    connect(m_mixer, &MixerWidget::trackCreated, this,
+            &MainWindow::syncStructureViews);
     connect(m_mixer, &MixerWidget::pluginEditorRequested, this,
             &MainWindow::openPluginEditor);
     connect(m_mixer, &MixerWidget::settingsRequested, this,
@@ -9968,6 +10018,8 @@ void MainWindow::buildLayout() {
             m_mixer->setSelectedTrack(m_selectedTrackId);
         }
     });
+    connect(m_inspector, &InspectorWidget::trackCreated, this,
+            &MainWindow::syncStructureViews);
     connect(m_inspector, &InspectorWidget::pluginEditorRequested, this,
             &MainWindow::openPluginEditor);
     connect(m_inspector, &InspectorWidget::automateControlRequested, this,
@@ -14484,6 +14536,7 @@ void MainWindow::setEditTool(int index) {
 
 void MainWindow::buildStatusBar() {
     m_statusLeft = new QLabel(this);
+    m_statusLeft->setObjectName(QStringLiteral("ProjectStatusText"));
     m_statusLeft->setAccessibleName(tr("Audio and project status"));
 
     auto* cpuStatus = new QToolButton(this);
@@ -14502,6 +14555,7 @@ void MainWindow::buildStatusBar() {
     m_cpuStatusIcon->setFixedSize(14, 14);
     m_statusRight = new QLabel(QStringLiteral("0%"), cpuStatus);
     m_statusRight->setObjectName(QStringLiteral("CpuLoadPercent"));
+    m_statusRight->setFont(ui::transportDisplayFont(11, QFont::Medium));
     m_statusRight->setFixedWidth(34);
     m_statusRight->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_cpuStatusMeter = new QProgressBar(cpuStatus);
@@ -14524,19 +14578,19 @@ void MainWindow::buildStatusBar() {
     statusBar()->addWidget(m_statusLeft, 1);
     statusBar()->addPermanentWidget(cpuStatus);
     statusBar()->setSizeGripEnabled(false);
-    statusBar()->setFixedHeight(22);
+    statusBar()->setFixedHeight(ui::kBottomBarHeight);
 
     const auto applyCpuTheme = [this] {
         if (!m_cpuStatusButton || !m_cpuStatusIcon || !m_cpuStatusMeter) return;
         m_cpuStatusButton->setStyleSheet(QString(R"(
-#CpuLoadStatus { border: 1px solid transparent; border-radius: 4px; padding: 0; background: transparent; }
+#CpuLoadStatus { border: 1px solid %5; border-top-color: %2; border-radius: 7px; padding: 0; background: %2; }
 #CpuLoadStatus:hover { background: %1; }
 #CpuLoadStatus:pressed { background: %2; }
 #CpuLoadStatus:focus { border-color: %3; }
 #CpuLoadStatus QLabel { background: transparent; color: %4; }
 )")
             .arg(th().surfaceElevated.name(), th().well().name(),
-                 th().accent.name(), th().textSecondary.name()));
+                 th().accent.name(), th().textSecondary.name(), th().separator().name()));
         m_cpuStatusIcon->setPixmap(
             icons::svgIcon(QStringLiteral("cpu.svg"), th().textSecondary, 14)
                 .pixmap(14, 14));
@@ -14552,7 +14606,7 @@ QProgressBar::chunk { border-radius: 3px; background: %2; }
     const auto applyCpuMode = [this](bool meter) {
         m_cpuStatusMeter->setVisible(meter);
         m_statusRight->setVisible(!meter);
-        m_cpuStatusButton->setFixedSize(12 + 14 + 5 + (meter ? 68 : 34), 20);
+        m_cpuStatusButton->setFixedSize(12 + 14 + 5 + (meter ? 68 : 34), 24);
         const QString hint = meter
             ? tr("Audio CPU load · Click to show percentages")
             : tr("Audio CPU load · Click to show the load meter");
@@ -17624,7 +17678,6 @@ void MainWindow::openExportDialogForShot(bool stems) {
     auto* dialog = new ExportDialog(m_controller, &m_selection, this, m_projectPath);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setModal(false);
-    dialog->resize(1020, 860);
     if (stems) dialog->stageStemsForShot();
     dialog->show();
 }

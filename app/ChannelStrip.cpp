@@ -1,4 +1,5 @@
 #include "ChannelStrip.hpp"
+#include "ConsoleLevelWell.hpp"
 #include "LoudnessDisplay.hpp"
 #include "AudioImportPreparation.hpp"
 #include "ChannelStripPreset.hpp"
@@ -96,28 +97,6 @@ constexpr int kSendKnobSide = 17;
 constexpr int kSlotTextPad = 5;
 /// Border + padding the slot button spends on its own text, both sides.
 constexpr int kSlotTextInset = 2 + kSlotTextPad * 2;
-
-/// The level section is one recessed instrument; the original fader cap and
-/// pan knob sit on this surface unchanged.
-class ConsoleWell : public QWidget {
-public:
-    using QWidget::QWidget;
-protected:
-    void paintEvent(QPaintEvent*) override {
-        const auto& t = th();
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-        const QRectF face = QRectF(rect()).adjusted(.5, .5, -.5, -.5);
-        QLinearGradient recess(face.topLeft(), face.bottomLeft());
-        recess.setColorAt(0, mixColors(t.well(), Qt::black, t.dark ? .20 : .035));
-        recess.setColorAt(1, mixColors(t.well(), t.surface, .2));
-        p.setBrush(recess);
-        p.setPen(QPen(mixColors(t.separator(), Qt::black, t.dark ? .28 : .04), 1));
-        p.drawRoundedRect(face, 3, 3);
-        p.setPen(QPen(t.ink(t.dark ? 13 : 30), 1));
-        p.drawLine(QPointF(3, height() - .5), QPointF(width() - 3, height() - .5));
-    }
-};
 
 /// Keep the full name available to accessibility, tooltips and model sync;
 /// only the painted line is shortened when a channel becomes narrow.
@@ -264,7 +243,7 @@ public:
     SlotRow(QToolButton* slot, QWidget* parent)
         : QWidget(parent), m_slot(slot), m_fullText(slot->text()) {
         m_slot->setParent(this);
-        setFixedHeight(kSlotHeight);
+        setFixedHeight(slot->height());
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         m_slot->installEventFilter(this);
         m_overflow = new QToolButton(this);
@@ -519,6 +498,8 @@ private:
         }
 
         int available = slotWidth() - kSlotTextInset - reserve;
+        const bool instrument = m_slot->property("instrumentRow").toBool();
+        if (instrument) available -= m_slot->iconSize().width() + 4;
         if (m_hovered && m_useOverflow) available = 0;
         if (m_hovered && spread) {
             if (m_actions.size() >= 3) {
@@ -532,6 +513,10 @@ private:
         // only resolved once the widget has been polished.
         m_slot->setText(m_slot->fontMetrics().elidedText(
             m_fullText, Qt::ElideRight, std::max(0, available)));
+        if (instrument) {
+            m_slot->setToolButtonStyle(m_slot->text().isEmpty()
+                ? Qt::ToolButtonTextOnly : Qt::ToolButtonTextBesideIcon);
+        }
     }
 
     QToolButton* m_slot = nullptr;
@@ -708,14 +693,8 @@ bool ChannelStrip::checkFaderInputForTest() {
     return ok;
 }
 
-/// One I/O plate: a recessed field with a micro-caption on the left, the
-/// destination named across the middle and a caret at the right.
-///
-/// A QToolButton underneath, so the QSS box, the hover and the menu behave like
-/// every other control on the strip — everything above is painted over it. The
-/// caption is what tells the two rows apart now that neither carries an icon:
-/// the arrow glyphs they used read as a symbol nobody could name, and at 11px
-/// they cost more width than they returned.
+// QToolButton supplies the recessed plate and menu interaction; the caption
+// and disclosure share the remaining space either side of the destination.
 class RoutingField : public QToolButton {
 public:
     explicit RoutingField(QWidget* parent, QString caption)
@@ -750,19 +729,12 @@ protected:
         const Theme& t = th();
         const QRectF r(rect());
 
-        // The lip of the recess: one lit hairline along the top edge. It is the
-        // whole reason the plate reads as cut into the strip rather than laid
-        // on it.
-        p.setPen(QPen(t.ink(t.dark ? 16 : 34), 1.0));
-        p.drawLine(QPointF(r.left() + 4.0, r.top() + 1.0),
-                   QPointF(r.right() - 4.0, r.top() + 1.0));
-
         QFont f = font();
         f.setPixelSize(8);
         f.setWeight(QFont::Normal);
         f.setLetterSpacing(QFont::PercentageSpacing, 100);
         p.setFont(f);
-        p.setPen(mixColors(t.textSecondary, t.background, isEnabled() ? 0.2 : 0.5));
+        p.setPen(isEnabled() ? t.textSecondary : mixColors(t.textSecondary, t.background, 0.5));
         p.drawText(QRectF(r.left() + 4.0, r.top(), kCaptionWidth, r.height()),
                    Qt::AlignLeft | Qt::AlignVCenter, m_caption);
 
@@ -771,8 +743,7 @@ protected:
         // so — the slot rows all act on a click.
         const double x = r.right() - 8.0;
         const double y = r.center().y() - 0.5;
-        QColor caret = t.accent;
-        caret.setAlphaF(underMouse() ? 0.95 : 0.62);
+        const QColor caret = underMouse() || hasFocus() ? t.textPrimary : t.textSecondary;
         p.setPen(QPen(caret, 1.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.drawPolyline(QPolygonF({QPointF(x - 2.6, y - 1.2), QPointF(x, y + 1.6),
                                   QPointF(x + 2.6, y - 1.2)}));
@@ -879,7 +850,7 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
     }
     col->addWidget(m_rack);
 
-    auto* levelWell = new ConsoleWell(this);
+    auto* levelWell = new ui::ConsoleLevelWell(this);
     levelWell->setObjectName(QStringLiteral("ChannelLevelWell"));
     auto* levelColumn = new QVBoxLayout(levelWell);
     levelColumn->setContentsMargins(3, 4, 3, 2);
@@ -1279,8 +1250,7 @@ QWidget* ChannelStrip::buildSlotWell(const QString& title, QWidget* addButton,
         font.setWeight(QFont::Medium);
         caption->setFont(font);
     }
-    // Instrument and FX headers share a baseline even when one has no action
-    // buttons. Their first slots should line up as well as the section titles.
+    // Headers share a baseline with or without action buttons.
     caption->setObjectName(QStringLiteral("ChannelSectionCaption"));
     caption->setMinimumHeight(kActionSide);
     caption->setToolTip(drag.titleTip.isEmpty() ? title : drag.titleTip);
@@ -1772,11 +1742,18 @@ QWidget* ChannelStrip::buildInstrument() {
 
     const bool loaded = track->instrument.isLoaded();
     const bool filled = !track->instrument.name.empty();
-    // The section header already says INSTRUMENT, so the empty slot only has to
-    // say it is empty — "NO INSTRUMENT" elides to "NO IN…UMENT" at strip width.
     auto* slot = makeSlotButton(
-        filled ? QString::fromStdString(track->instrument.name) : tr("EMPTY"),
+        filled ? QString::fromStdString(track->instrument.name) : tr("Choose…"),
         filled);
+    slot->setProperty("instrumentRow", true);
+    slot->setProperty("missing", filled && !loaded);
+    slot->setFocusPolicy(Qt::StrongFocus);
+    slot->setAccessibleName(tr("Instrument") + QStringLiteral(": ") + slot->text());
+    slot->setFixedHeight(24);
+    if (!filled) slot->setText({});
+    slot->setToolButtonStyle(filled ? Qt::ToolButtonTextBesideIcon : Qt::ToolButtonIconOnly);
+    slot->setIconSize(filled ? QSize(12, 12) : QSize(16, 16));
+    QWidget* row = slot;
     const QString trackId = m_trackId;
     const QString instrumentId = QString::fromStdString(track->instrument.id);
 
@@ -1830,13 +1807,8 @@ QWidget* ChannelStrip::buildInstrument() {
                 });
         // Addressed by track id and instrument slot id — the same pair an
         // insert uses, so the hover actions are the ones the inserts have.
-        return buildSlotWell(
-            tr("Instrument"), nullptr,
-            {buildSlotRow(slot, trackId, instrumentId,
-                          track->instrument.bypassed, /*instrument=*/true)},
-            [](const QString& path) { return ui::isAudioFile(path); },
-            [this, trackId](const QString& path) { dropSampleOnInstrument(trackId, path); },
-            WellDrag{});
+        row = buildSlotRow(slot, trackId, instrumentId,
+                           track->instrument.bypassed, /*instrument=*/true);
     } else {
         slot->setToolTip(tr("What plays this track's notes — click to load one."));
         slot->setMenu(ui::buildLazyPluginMenu(
@@ -1860,11 +1832,14 @@ QWidget* ChannelStrip::buildInstrument() {
 
     // Dropping a sample on an empty slot is the fastest way to a sound: the
     // sampler goes in and the file goes into it, in one undoable step.
-    return buildSlotWell(
-        tr("Instrument"), nullptr, {slot},
+    auto* section = buildSlotWell(
+        tr("Instrument"), nullptr, {row},
         [](const QString& path) { return ui::isAudioFile(path); },
         [this, trackId](const QString& path) { dropSampleOnInstrument(trackId, path); },
         WellDrag{});
+    section->findChild<QLabel*>(QStringLiteral("ChannelSectionCaption"))->hide();
+    section->layout()->setSpacing(0);
+    return section;
 }
 
 QWidget* ChannelStrip::buildSends() {
@@ -2201,7 +2176,7 @@ void ChannelStrip::populateAddSendMenu(QMenu* menu) {
         if (destination.empty()) return;
         m_controller->addSend(m_trackId.toStdString(), destination);
         emit edited();
-        emit structureChanged();
+        emit trackCreated();
     });
 }
 
@@ -2213,17 +2188,10 @@ QWidget* ChannelStrip::buildFaderRow() {
     row->setSpacing(5);
 
     m_meter = new ui::LevelMeter(Qt::Vertical, 2, box);
-    m_meter->setMeterStyle(ui::LevelMeter::Style::Console);
-    m_meter->setMinimumHeight(60);
-    m_meter->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
     m_fader = new ui::FaderWidget(box);
-    m_fader->setWheelEnabled(false);
-    m_fader->setMinimumHeight(60);
     // The dB scale is printed down the fader's left, with the meter on its
     // right — the reading order of every console: numbers, cap, level.
-    m_fader->setScaleVisible(true);
-    m_meter->setScaleInsets(m_fader->scaleInsets());
-    m_fader->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+    ui::configureConsoleLevel(m_fader, m_meter);
 
     connect(m_fader, &ui::FaderWidget::gainChanged, this, [this](double g) {
         if (m_master) {
@@ -2787,7 +2755,7 @@ void ChannelStrip::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
     const Theme& t = th();
-    QColor fill = m_master ? t.surfaceElevated : t.surface;
+    QColor fill = m_master ? t.controlBottom() : t.surface;
     if (m_insertsOnly)
         fill = mixColors(t.surface, t.background, t.dark ? 0.10 : 0.04);
     const QColor trackColor(m_headerSwatchStyleKey);
@@ -2807,9 +2775,16 @@ void ChannelStrip::paintEvent(QPaintEvent*) {
         glow.setColorAt(1, fill);
         p.setBrush(glow);
     } else {
-        p.setBrush(fill);
+        QLinearGradient material(face.topLeft(), face.bottomLeft());
+        material.setColorAt(0, mixColors(fill, Qt::white, t.dark ? 0.015 : 0.12));
+        material.setColorAt(1, fill);
+        p.setBrush(material);
     }
-    p.setPen(QPen(m_dropHighlight ? t.accent : t.sectionDivider(), border));
+    QLinearGradient rim(face.topLeft(), face.bottomLeft());
+    rim.setColorAt(0, t.edgeLight(fill));
+    rim.setColorAt(0.12, t.sectionDivider());
+    rim.setColorAt(1, t.edgeDark(fill));
+    p.setPen(QPen(m_dropHighlight ? QBrush(t.accent) : QBrush(rim), border));
     p.drawRoundedRect(face, Theme::cornerRadius, Theme::cornerRadius);
 }
 
@@ -3200,13 +3175,17 @@ QLabel { color: %TEXT2%; font-size: 9px; }
    padding is what keeps the destination centred between the caption RoutingField
    paints on the left and the caret it paints on the right. */
 #RoutingButton {
-    background: %RECESS%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %RECESS%,stop:1 %WELL_BOTTOM%);
+    border: 1px solid %SEP%; border-top-color: %WELL_EDGE%; border-bottom-color: %LIGHT%; border-radius: 5px;
     color: %TEXT%; font-size: 9px; font-weight: 400; padding: 0 10px 0 25px;
 }
 #RoutingButton:hover { background: %WELL%; border-color: %ACCENT_SOFT%; }
+#RoutingButton:focus { border-color: %ACCENT%; }
+#RoutingButton:pressed { background: %RECESS%; border-color: %WELL_EDGE%; }
 #RoutingButton:disabled { color: %TEXT2%; }
 #RoutingButton::menu-indicator { image: none; width: 0; }
-#SlotWell { background: %WELL%; border: 1px solid %SEP%; border-radius: %RADIUS%px; }
+#SlotWell { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %RECESS%,stop:1 %WELL_BOTTOM%);
+    border: 1px solid %SEP%; border-top-color: %WELL_EDGE%; border-bottom-color: %LIGHT%; border-radius: %RADIUS%px; }
 #SlotButton {
     background: %SLOT%; border: 1px solid transparent; border-radius: %RADIUS%px;
     color: %TEXT2%; font-size: 9px; font-weight: 400; padding: 0 5px;
@@ -3215,6 +3194,12 @@ QLabel { color: %TEXT2%; font-size: 9px; }
 #SlotButton[insertRow="true"], #SlotButton[sendRow="true"] {
     background: transparent; border-radius: 2px; border-bottom-color: %RACK_LINE%;
 }
+#SlotButton[instrumentRow="true"] {
+    background: transparent; border-radius: 6px; border-color: transparent;
+    color: %TEXT%; font-size: 10px; font-weight: 500;
+}
+#SlotButton[instrumentRow="true"]:hover, #SlotButton[instrumentRow="true"]:focus { background: %RACK_HOVER%; }
+#SlotButton[instrumentRow="true"]:pressed { background: %RECESS%; }
 #SlotButton[active="true"] { color: %TEXT%; border-left-color: %ACCENT%; }
 /* Bypassed reads as "off" without the pointer on it: the accent border is
    traded for a muted red and the name dims. Listed after [active] so it wins
@@ -3224,7 +3209,9 @@ QLabel { color: %TEXT2%; font-size: 9px; }
    unlicensed, or moved since the scan. It has to look wrong: it is a hole in
    the chain the user cannot hear. */
 #SlotButton[missing="true"] { color: %BYPASS%; border-color: %BYPASS%; }
-#SlotButton:hover { background: %HOVER%; }
+#SlotButton:hover { background: %HOVER%; color: %TEXT%; }
+#SlotButton:focus { border-color: %ACCENT%; }
+#SlotButton:pressed { background: %RECESS%; }
 #SlotButton::menu-indicator { image: none; width: 0; }
 #SlotButton:disabled { color: %TEXT2%; }
 #InsertAddArea, #SendAddArea { background: transparent; border: none; border-radius: 6px; padding: 0; }
@@ -3239,28 +3226,30 @@ QLabel { color: %TEXT2%; font-size: 9px; }
    only one that says its state in letters rather than in a glyph. */
 #TapButton {
     background: %SLOT%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
-    color: %ACCENT%; font-size: 9px; font-weight: 500; padding: 0;
+    color: %TEXT%; font-size: 9px; font-weight: 500; padding: 0;
 }
 #TapButton:hover { background: %HOVER%; }
 #TapButton::menu-indicator { image: none; width: 0; }
 #ChannelGainReadout { color: %TEXT%; font-size: 9px; }
 #ChannelPeakReadout {
-    background: transparent; border: 1px solid transparent; border-radius: %RADIUS%px;
+    background: transparent; border: 1px solid transparent; border-radius: 3px;
     color: %TEXT2%; font-size: 9px; padding: 0;
 }
-#ChannelPeakReadout:hover, #ChannelPeakReadout:focus { background: %HOVER%; border-color: %SEP%; }
+#ChannelPeakReadout:hover, #ChannelPeakReadout:focus { background: %HOVER%; color: %TEXT%; border-color: %SEP%; }
 #ChannelPeakReadout:pressed { background: %RECESS%; }
 #ChannelPeakReadout[clipped="true"] { color: %CLIP%; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%TEXT2%", t.textSecondary.name())
         .replace("%TEXT%", t.textPrimary.name())
         .replace("%WELL%", t.well().name())
-        .replace("%RECESS%", mixColors(t.well(), QColor(0, 0, 0),
-                                       t.dark ? 0.40 : 0.10).name())
+        .replace("%RECESS%", t.wellTop().name())
+        .replace("%WELL_BOTTOM%", t.wellBottom().name())
+        .replace("%WELL_EDGE%", t.edgeDark(t.well()).name())
+        .replace("%LIGHT%", t.edgeLight(t.surface).name())
         .replace("%ACCENT_SOFT%", mixColors(t.separator(), t.accent, 0.55).name())
         .replace("%SLOT%", mixColors(t.surfaceElevated, t.background, 0.2).name())
         .replace("%SEP%", t.separator().name())
-        .replace("%HOVER%", mixColors(t.surfaceElevated, t.textPrimary, 0.12).name())
+        .replace("%HOVER%", t.controlTop().name())
         .replace("%RACK_LINE%", mixColors(t.well(), t.textPrimary, 0.10).name())
         .replace("%RACK_HOVER%", mixColors(t.well(), t.textPrimary, 0.06).name())
         .replace("%DIM%", mixColors(t.textSecondary, t.background, 0.35).name())
@@ -3272,6 +3261,12 @@ QLabel { color: %TEXT2%; font-size: 9px; }
         add->setIcon(icons::icon(icons::Glyph::Plus, t.textSecondary, 14));
     for (auto* add : findChildren<QToolButton*>(QStringLiteral("SendAddArea")))
         add->setIcon(icons::icon(icons::Glyph::Send, t.textSecondary, 16));
+    for (auto* slot : findChildren<QToolButton*>(QStringLiteral("SlotButton"))) {
+        if (slot->property("instrumentRow").toBool())
+            slot->setIcon(icons::icon(icons::Glyph::MidiKeys,
+                slot->property("active").toBool() ? t.textPrimary : t.textSecondary,
+                slot->iconSize().width()));
+    }
 
     if (!m_insertsOnly) {
         if (m_master) {

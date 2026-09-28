@@ -834,8 +834,6 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
                 .arg(color.red()).arg(color.green()).arg(color.blue()).arg(alpha);
         };
         const QString glassField = rgba(field, t.dark ? 208 : 232);
-        const QString pressedField = rgba(
-            mixColors(field, t.accent, 0.20), t.dark ? 238 : 246);
         setStyleSheet(QString(R"(
 #EqualizerPanel QComboBox {
     background: %1; border: 1px solid %2; border-radius: %RADIUS%px;
@@ -845,14 +843,8 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
 #EqualizerPanel QComboBox:focus { border-color: %2; }
 #EqualizerPanel QComboBox::drop-down { width: 16px; border: none; }
 #EqualizerPanel QPushButton {
-    background: %1; border: 1px solid %2; border-radius: %RADIUS%px;
-    padding: 3px 12px; color: %3; min-height: 22px;
+    padding: 3px 12px; min-height: 22px;
 }
-#EqualizerPanel QPushButton:hover { background: %6; border-color: %4; }
-#EqualizerPanel QPushButton:focus { background: %8; border-color: %4; }
-#EqualizerPanel QPushButton:pressed { background: %8; border-color: %4; }
-#EqualizerPanel QPushButton:checked { background: %4; border-color: %4; color: %7; }
-#EqualizerPanel QPushButton:disabled { color: %5; background: %1; }
 #EqualizerPanel QCheckBox { color: %3; spacing: 6px; }
 #EqualizerBandLabel { color: %4; font-weight: 700; letter-spacing: 0.6px; }
 #EqualizerDynamicsPanel {
@@ -868,9 +860,7 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
 }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius)).arg(glassField, edge.name(), t.textPrimary.name(), t.accent.name(),
         t.textSecondary.name(),
-        rgba(mixColors(field, t.textPrimary, 0.10), t.dark ? 228 : 242),
-        (t.accent.value() > 150 ? QColor(18, 20, 24) : QColor(245, 246, 248))
-            .name(), pressedField));
+        rgba(mixColors(field, t.textPrimary, 0.10), t.dark ? 228 : 242)));
     };
     restyle();
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, restyle);

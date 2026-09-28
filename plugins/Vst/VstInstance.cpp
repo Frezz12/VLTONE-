@@ -323,8 +323,12 @@ void VstInstance::setParameterFromHost(std::uint32_t index, double plainValue) {
 
 bool VstInstance::saveState(std::vector<std::uint8_t>& out) const {
     if (!m_effect) return false;
-    const VstIntPtr program =
+    const VstIntPtr reportedProgram =
         m_effect->dispatcher(m_effect, effGetProgram, 0, 0, nullptr, 0.0f);
+    // Some plugins (EZdrummer) report 1 for a single declared program. It is
+    // optional metadata; the chunk/parameters still describe the full state.
+    const VstIntPtr program = reportedProgram >= 0 && reportedProgram < m_effect->numPrograms
+        ? reportedProgram : -1;
     std::vector<std::uint8_t> payload;
     std::uint8_t mode = kStateParameters;
 
@@ -372,7 +376,7 @@ bool VstInstance::loadState(std::span<const std::uint8_t> state) {
     const std::int32_t program = static_cast<std::int32_t>(readU32(state.data() + 8));
     const std::uint32_t payloadSize = readU32(state.data() + 12);
     if (state.size() != kStateHeaderSize + std::size_t(payloadSize) ||
-        (program < -1 || program >= m_effect->numPrograms)) {
+        (program < -1 || (mode != kStateChunk && program >= m_effect->numPrograms))) {
         return false;
     }
     const std::uint8_t* payload = state.data() + kStateHeaderSize;
@@ -390,7 +394,9 @@ bool VstInstance::loadState(std::span<const std::uint8_t> state) {
         return false;
     }
 
-    if (program >= 0)
+    // Also accept older bank snapshots with invalid vendor program metadata,
+    // but never pass an out-of-range index to effSetProgram.
+    if (program >= 0 && program < m_effect->numPrograms)
         m_effect->dispatcher(m_effect, effSetProgram, 0, program, nullptr, 0.0f);
     if (mode == kStateChunk) {
         m_effect->dispatcher(m_effect, effSetChunk, 0, payloadSize,

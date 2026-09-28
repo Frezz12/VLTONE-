@@ -1912,6 +1912,10 @@ Will be skipped: %3</source>
 <context>
     <name>ChannelStrip</name>
     <message>
+        <source>Choose…</source>
+        <translation>Выбрать…</translation>
+    </message>
+    <message>
         <source>Incoming tracks and buses</source>
         <translation>Входящие треки и шины</translation>
     </message>

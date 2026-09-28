@@ -77,7 +77,7 @@ enum class Param : std::uint32_t {
     // Appended after every existing SMP parameter so their numeric indices
     // stay stable for live automation/event streams. State itself is stored
     // by string id, so older chunks simply leave this at its default.
-    CutItself,       ///< every new note immediately chokes older voices
+    CutItself,       ///< every new note chokes older voices with a short crossfade
     EndOffset,       ///< normalized end marker, after Start
     Formant,         ///< timbre shift for formant-capable stretch modes
 

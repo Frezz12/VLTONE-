@@ -9,6 +9,7 @@
 #include "FileTypes.hpp"
 
 #include "Controls.hpp"
+#include "ConsoleLevelWell.hpp"
 #include "EngineController.hpp"
 #include "PluginPickerMenu.hpp"
 #include "Theme.hpp"
@@ -78,9 +79,10 @@ const daw::plugins::ParameterInfo* infoFor(const QString& id) {
 QWidget* sectionBox(const QString& title, QLayout* content, QWidget* parent) {
     auto* box = new QWidget(parent);
     box->setObjectName(QStringLiteral("SamplerSection"));
+    box->setAttribute(Qt::WA_StyledBackground, true);
     auto* column = new QVBoxLayout(box);
-    column->setContentsMargins(10, 8, 10, 8);
-    column->setSpacing(6);
+    column->setContentsMargins(10, 9, 10, 9);
+    column->setSpacing(7);
     if (!title.isEmpty()) {
         auto* label = new QLabel(title, box);
         label->setObjectName(QStringLiteral("SamplerGroupTitle"));
@@ -103,6 +105,30 @@ QLabel* caption(const QString& text, QWidget* parent) {
     label->setObjectName(QStringLiteral("SamplerCaption"));
     return label;
 }
+
+// Keep the keyboard directly below the active page. QStackedWidget normally
+// reserves space for the tallest hidden page as well.
+class SamplerToolPages final : public QStackedWidget {
+public:
+    explicit SamplerToolPages(QWidget* parent) : QStackedWidget(parent) {
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        layout()->setSizeConstraint(QLayout::SetNoConstraint);
+        connect(this, &QStackedWidget::currentChanged, this,
+                [this] { updateGeometry(); });
+    }
+
+    QSize sizeHint() const override {
+        QSize hint = QStackedWidget::sizeHint();
+        if (currentWidget()) hint.setHeight(currentWidget()->sizeHint().height());
+        return hint;
+    }
+
+    QSize minimumSizeHint() const override {
+        QSize hint = QStackedWidget::minimumSizeHint();
+        if (currentWidget()) hint.setHeight(currentWidget()->minimumSizeHint().height());
+        return hint;
+    }
+};
 
 // A small checkbox is easier to discover than an unlit LED on a dark well.
 // Keep Led's binding API; only the Sampler's boolean controls use this paint.
@@ -246,10 +272,14 @@ void SamplerWaveform::setSample(std::shared_ptr<const sampler::SampleData> sampl
         update();
         return;
     }
-    // The panel polls; most of those polls hand back the very sample already on
-    // screen. Repainting anyway would spend a gradient-filled path and two wide
-    // stroked outlines, five times a second, to redraw the same picture.
+    // The panel polls; repaint only when the audio or its visible length changes.
     if (!sameLength) update();
+}
+
+void SamplerWaveform::setClipColor(const QColor& color) {
+    if (m_clipColor == color) return;
+    m_clipColor = color;
+    update();
 }
 
 void SamplerWaveform::setMarkers(double startOffset, double endOffset,
@@ -358,12 +388,12 @@ void SamplerWaveform::paintWaveformBase(QPainter& p) {
     const Theme& t = th();
 
     const QRectF frame = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    QLinearGradient glass(frame.topLeft(), frame.bottomLeft());
-    glass.setColorAt(0.0, mixColors(t.surfaceElevated, t.well(), 0.26));
-    glass.setColorAt(0.56, mixColors(t.well(), t.background, 0.18));
-    glass.setColorAt(1.0, mixColors(t.well(), t.background, 0.34));
-    p.setPen(QPen(mixColors(t.separator(), t.textSecondary, 0.14), 1.0));
-    p.setBrush(glass);
+    // Match the arrangement: the track/clip colour carries the identity, and
+    // a plain white envelope stays legible on that saturated surface.
+    const QColor clip = m_clipColor.isValid() ? m_clipColor : t.accent;
+    const QColor surface = m_minima.isEmpty() ? t.well() : clip;
+    p.setPen(QPen(mixColors(surface, Qt::black, 0.45), 1.0));
+    p.setBrush(surface);
     p.drawRoundedRect(frame, 7.0, 7.0);
 
     QPainterPath clipping;
@@ -381,11 +411,7 @@ void SamplerWaveform::paintWaveformBase(QPainter& p) {
     const double middle = height() / 2.0;
     const double scale = height() / 2.0 - 9.0;
 
-    // A quiet editor grid gives the new filled waveform a precise time/level
-    // frame without competing with the audio. It derives entirely from theme
-    // tokens, so it remains readable in both supplied themes.
-    QColor grid = mixColors(t.separator(), t.textSecondary, 0.10);
-    grid.setAlphaF(t.dark ? 0.36 : 0.24);
+    const QColor grid(255, 255, 255, 20);
     p.setPen(QPen(grid, 1.0));
     for (int division = 1; division < 8; ++division) {
         const double x = double(width()) * division / 8.0;
@@ -400,14 +426,10 @@ void SamplerWaveform::paintWaveformBase(QPainter& p) {
     // and it plays, but it is past everything the markers can address.
     const double baseEnd = xForFraction(1.0);
     if (baseEnd < width() - 1) {
-        QColor tail = mixColors(t.well(), t.background, 0.52);
-        tail.setAlphaF(0.82);
-        p.fillRect(QRectF(baseEnd, 0, width() - baseEnd, height()), tail);
+        p.fillRect(QRectF(baseEnd, 0, width() - baseEnd, height()), QColor(0, 0, 0, 36));
     }
 
-    QColor centreLine = mixColors(t.waveform, t.background, 0.60);
-    centreLine.setAlphaF(0.72);
-    p.setPen(QPen(centreLine, 1.0));
+    p.setPen(QPen(QColor(255, 255, 255, 56), 1.0));
     p.drawLine(QPointF(0.0, middle), QPointF(double(width()), middle));
 
     // Buckets → pixels. A column covering several buckets takes their extremes;
@@ -431,41 +453,11 @@ void SamplerWaveform::paintWaveformBase(QPainter& p) {
         lows[x] = QPointF(x, middle - double(low) * scale);
     }
 
-    QPainterPath upper;
-    QPainterPath lower;
-    upper.addPolygon(QPolygonF(highs));
-    lower.addPolygon(QPolygonF(lows));
-
-    QPainterPath body = upper;
+    QPainterPath body;
+    body.addPolygon(QPolygonF(highs));
     for (int x = columns - 1; x >= 0; --x) body.lineTo(lows[x]);
     body.closeSubpath();
-
-    QLinearGradient signal(0.0, 5.0, 0.0, double(height()) - 5.0);
-    QColor edge = mixColors(t.waveform, t.accent, 0.24);
-    edge.setAlphaF(0.50);
-    QColor core = mixColors(t.waveform, t.accentHighlight, 0.50);
-    core.setAlphaF(0.94);
-    signal.setColorAt(0.0, edge);
-    signal.setColorAt(0.48, core);
-    signal.setColorAt(0.52, core);
-    signal.setColorAt(1.0, edge);
-    p.setPen(Qt::NoPen);
-    p.setBrush(signal);
-    p.drawPath(body);
-
-    QColor signalGlow = t.accent;
-    signalGlow.setAlphaF(0.18);
-    p.setBrush(Qt::NoBrush);
-    p.setPen(QPen(signalGlow, 4.0, Qt::SolidLine, Qt::RoundCap,
-                  Qt::RoundJoin));
-    p.drawPath(upper);
-    p.drawPath(lower);
-    QColor signalEdge = mixColors(t.waveform, t.accentHighlight, 0.34);
-    signalEdge.setAlphaF(0.86);
-    p.setPen(QPen(signalEdge, 1.0, Qt::SolidLine, Qt::RoundCap,
-                  Qt::RoundJoin));
-    p.drawPath(upper);
-    p.drawPath(lower);
+    p.fillPath(body, Qt::white);
 
     p.restore();
 }
@@ -473,7 +465,8 @@ void SamplerWaveform::paintWaveformBase(QPainter& p) {
 void SamplerWaveform::paintScene(QPainter& p, const QRegion&) {
     p.setRenderHint(QPainter::Antialiasing, true);
     const quint64 key = qHashMulti(0, m_peakGeneration, m_minima.size(),
-        m_sample ? m_sample->baseFrames : 0);
+        m_sample ? m_sample->baseFrames : 0, width(), height(), m_clipColor.rgba(),
+        th().well().rgba(), th().accent.rgba(), th().textSecondary.rgba());
     auto* scene = ui::graphics::sceneGeometrySink(p);
     if (!scene || scene->beginRetainedSection(1002, key != m_gpuWaveformKey)) {
         p.save(); paintWaveformBase(p); p.restore();
@@ -495,10 +488,8 @@ void SamplerWaveform::paintScene(QPainter& p, const QRegion&) {
     if (start > 0.0) p.fillRect(QRectF(0, 0, start, height()), shade);
     if (end < baseEnd) p.fillRect(QRectF(end, 0, baseEnd - end, height()), shade);
 
-    QColor fadeInk = t.accentHighlight;
-    fadeInk.setAlphaF(0.18);
-    QColor fadeEdge = t.accentHighlight;
-    fadeEdge.setAlphaF(0.72);
+    const QColor fadeInk(0, 0, 0, 40);
+    const QColor fadeEdge(255, 255, 255, 220);
     if (m_fadeIn > 0.0) {
         const double to = start + (end - start) * m_fadeIn;
         QPainterPath path;
@@ -543,7 +534,7 @@ void SamplerWaveform::paintScene(QPainter& p, const QRegion&) {
         p.setPen(QPen(mixColors(colour, t.textPrimary, 0.18), 0.8));
         p.setBrush(chip);
         p.drawRoundedRect(QRectF(chipX, 3.0, chipWidth, chipHeight), 3.0, 3.0);
-        p.setPen(t.background);
+        p.setPen(colour.lightnessF() > .55 ? QColor(20, 20, 20) : QColor(Qt::white));
         p.drawText(QRectF(chipX, 3.0, chipWidth, chipHeight), Qt::AlignCenter, glyph);
     };
 
@@ -917,16 +908,18 @@ SamplerPanel::SamplerPanel(daw::EngineController* controller, Context context,
                            QString ownerId, QString objectId, QWidget* parent)
     : QWidget(parent), m_controller(controller), m_channelId(std::move(ownerId)),
       m_slotId(std::move(objectId)), m_context(context) {
+    setObjectName(QStringLiteral("SamplerPanel"));
+    setAttribute(Qt::WA_StyledBackground, true);
     setAcceptDrops(true);
     auto* outer = new QHBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setContentsMargins(8, 8, 8, 8);
     outer->setSpacing(0);
     // Both contexts deliberately use the same shell.  A timeline clip is not
     // a reduced secondary dialog: it is the same Sample Editor with state
     // routed to a ClipModel instead of the built-in sampler instance.
     auto* splitter = new QSplitter(Qt::Horizontal, this);
     splitter->setChildrenCollapsible(false);
-    splitter->setHandleWidth(1);
+    splitter->setHandleWidth(0);
     splitter->addWidget(buildFxStrip());
     splitter->addWidget(buildSamplerBody());
     splitter->setSizes({118, 842});
@@ -1028,56 +1021,70 @@ bool SamplerPanel::eventFilter(QObject* watched, QEvent* event) {
 void SamplerPanel::applyTheme() {
     const Theme& t = th();
     setStyleSheet(QString(R"(
-#SamplerSection { background: %SURFACE%; border: 1px solid %BORDER%; border-radius: %RADIUS%px; }
+#SamplerPanel, #SamplerBody, #SamplerBodyScroll, #SamplerPage { background: %BG%; }
+#SamplerSection { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %TOP%,stop:1 %BOTTOM%);
+                  border: 1px solid %BORDER%; border-top-color: %EDGE%; border-bottom-color: %SHADOW%; border-radius: %RADIUS%px; }
 #SamplerGroupTitle { color: %TEXT2%; font-size: 10px; font-weight: 600; }
-#SamplerBody { background: %BG%; }
-#SamplerFxStrip { background: %FXSURFACE%; border-right: 1px solid %BORDER%; }
+#SamplerFxStrip { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %TOP%,stop:1 %SURFACE%);
+                  border: 1px solid %BORDER%; border-top-color: %EDGE%; border-bottom-color: %SHADOW%; border-radius: %RADIUS%px; }
 #SamplerAccentBar { background: %ACCENT%; border-radius: 2px; }
 #SamplerStripName { color: %TEXT%; font-size: 10px; font-weight: 700; }
-#SamplerSlotWell { background: %WELL%; border: 1px solid %BORDER%; border-radius: %RADIUS%px; }
-#SamplerMixerSlot { background: %SLOT%; border: 1px solid %BORDER%; border-radius: %RADIUS%px;
-    color: %TEXT2%; font-size: 9px; font-weight: 500; padding: 0 4px;
+#SamplerSlotWell { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %WELL_TOP%,stop:1 %WELL_BOTTOM%);
+    border: 1px solid %BORDER%; border-top-color: %WELL_EDGE%; border-bottom-color: %EDGE%; border-radius: %RADIUS%px; }
+#SamplerMixerSlot { background: transparent; border: 1px solid transparent;
+    border-bottom-color: %RACK_LINE%; border-radius: 2px;
+    color: %TEXT2%; font-size: 9px; font-weight: 400; padding: 0 5px;
     text-align: left; }
-#SamplerMixerSlot[active="true"] { color: %TEXT%; }
+#SamplerMixerSlot[active="true"] { color: %TEXT%; border-left-color: %ACCENT%; }
 #SamplerMixerSlot[bypassed="true"] { color: %DIM%; border-color: %BYPASS%; }
-#SamplerMixerSlot:hover { background: %HOVER%; }
+#SamplerMixerSlot:hover { background: %HOVER%; color: %TEXT%; }
 #SamplerMixerSlot::menu-indicator { image: none; width: 0; }
-#SamplerFxRouting { background: %WELL%; border: 1px solid %BORDER%; border-radius: %RADIUS%px; }
+#SamplerInsertAddArea { background: transparent; border: none; border-radius: 6px; padding: 0; }
+#SamplerInsertAddArea:hover, #SamplerInsertAddArea:focus { background: %HOVER%; }
+#SamplerInsertAddArea:pressed { background: %WELL%; }
+#SamplerInsertAddArea::menu-indicator { image: none; width: 0; }
 #SamplerFxReadout { color: %TEXT%; font-size: 10px; font-weight: 500; }
 #SamplerNamePlate { color: %TEXT%; background: %NAMEPLATE%; border-radius: %RADIUS%px;
     font-size: 10px; font-weight: 700; }
 #SamplerStretchBlock { background: %WELL%; border: 1px solid %BORDER%; border-radius: %RADIUS%px; }
 #SamplerCollapse { color: %TEXT%; background: transparent; border: none;
     text-align: left; padding: 2px 0; font-size: 10px; font-weight: 700; }
-#SamplerCollapse:hover { color: %ACCENT%; }
+#SamplerCollapse:hover { color: %TEXT%; background: %HOVER%; }
 QTabBar#SamplerToolsTabs::tab { color: %TEXT2%; background: transparent;
-    border: none; border-bottom: 2px solid transparent; padding: 7px 12px;
-    font-size: 11px; font-weight: 600; }
-QTabBar#SamplerToolsTabs::tab:selected { color: %TEXT%; border-bottom-color: %ACCENT%; }
-QTabBar#SamplerToolsTabs::tab:hover { color: %ACCENT%; }
+    border: 1px solid transparent; border-radius: 6px; padding: 6px 12px; margin-right: 4px;
+    font-size: 11px; font-weight: 500; }
+QTabBar#SamplerToolsTabs::tab:selected { color: %TEXT%;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %CONTROL_TOP%,stop:1 %CONTROL_BOTTOM%);
+    border-color: %BORDER%; border-top-color: %EDGE%; border-bottom-color: %ACCENT%; }
+QTabBar#SamplerToolsTabs::tab:hover { color: %TEXT%; background: %HOVER%; }
 #SamplerCaption { color: %TEXT2%; font-size: 10px; }
 #SamplerFile { color: %TEXT%; font-size: 12px; font-weight: 600; }
-#SamplerButton { color: %TEXT%; background: %WELL%; border: none; border-radius: %RADIUS%px;
-                 padding: 4px 10px; font-size: 11px; }
-#SamplerButton:hover { background: %HOVER%; }
-#SamplerButton:pressed { background: %ACCENT%; color: %BG%; }
-#SamplerButton:focus { border: 1px solid %ACCENT%; }
-QComboBox { color: %TEXT%; background: %WELL%; border: none; border-radius: %RADIUS%px;
-            padding: 3px 8px; font-size: 11px; }
+#SamplerButton { padding: 3px 10px; min-height: 18px; font-size: 11px; }
+QComboBox { font-size: 11px; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
             .replace("%SURFACE%", t.surface.name())
+            .replace("%TOP%", t.panelTop().name())
+            .replace("%BOTTOM%", t.panelBottom().name())
+            .replace("%EDGE%", t.edgeLight(t.panelTop()).name())
+            .replace("%SHADOW%", t.edgeDark(t.panelBottom()).name())
+            .replace("%CONTROL_TOP%", t.controlTop().name())
+            .replace("%CONTROL_BOTTOM%", t.controlBottom().name())
+            .replace("%WELL_TOP%", t.wellTop().name())
+            .replace("%WELL_BOTTOM%", t.wellBottom().name())
+            .replace("%WELL_EDGE%", t.edgeDark(t.well()).name())
+            .replace("%RACK_LINE%", mixColors(t.well(), t.textPrimary, .10).name())
             .replace("%WELL%", t.well().name())
             .replace("%TEXT%", t.textPrimary.name())
             .replace("%TEXT2%", t.textSecondary.name())
             .replace("%ACCENT%", t.accent.name())
             .replace("%BORDER%", t.separator().name())
-            .replace("%SLOT%", mixColors(t.surfaceElevated, t.background, 0.2).name())
-            .replace("%HOVER%", mixColors(t.surfaceElevated, t.textPrimary, 0.12).name())
+            .replace("%HOVER%", t.controlTop().name())
             .replace("%DIM%", mixColors(t.textSecondary, t.background, 0.35).name())
             .replace("%BYPASS%", mixColors(Theme::mute(), t.background, 0.45).name())
             .replace("%NAMEPLATE%", mixColors(t.surface, t.accent, 0.17).name())
-            .replace("%FXSURFACE%", mixColors(t.surface, t.background, 0.18).name())
             .replace("%BG%", t.background.name()));
+    for (auto* add : findChildren<QToolButton*>(QStringLiteral("SamplerInsertAddArea")))
+        add->setIcon(icons::icon(icons::Glyph::Plus, t.textSecondary, 14));
 }
 
 sampler::SamplerInstance* SamplerPanel::sampler() const {
@@ -1239,11 +1246,12 @@ QComboBox* SamplerPanel::combo(const QString& parameterId, const QStringList& it
 QWidget* SamplerPanel::buildFxStrip() {
     auto* strip = new QWidget(this);
     strip->setObjectName(QStringLiteral("SamplerFxStrip"));
+    strip->setAttribute(Qt::WA_StyledBackground, true);
     strip->setMinimumWidth(112);
     strip->setMaximumWidth(128);
     auto* column = new QVBoxLayout(strip);
-    column->setContentsMargins(5, 5, 5, 5);
-    column->setSpacing(4);
+    column->setContentsMargins(8, 10, 8, 8);
+    column->setSpacing(6);
 
     auto* stripHeader = new QHBoxLayout;
     stripHeader->setContentsMargins(0, 0, 0, 0);
@@ -1256,18 +1264,23 @@ QWidget* SamplerPanel::buildFxStrip() {
     stripName->setObjectName(QStringLiteral("SamplerStripName"));
     stripHeader->addWidget(swatch);
     stripHeader->addWidget(stripName, 1);
+    column->addLayout(stripHeader);
+    auto* fxActions = new QHBoxLayout;
+    fxActions->setSpacing(2);
+    fxActions->addWidget(caption(QStringLiteral("FX"), strip));
+    fxActions->addStretch();
     m_fxBypass = new ui::IconButton(
         icons::Glyph::Power,
         m_context == Context::Instrument ? tr("Bypass all Sampler effects")
                                          : tr("Bypass all Clip effects"), strip);
-    m_fxBypass->setButtonSize(14, 14);
+    m_fxBypass->setButtonSize(20, 24);
     m_fxBypass->setCheckable(true);
     m_fxBypass->setActiveColor(Theme::mute());
-    stripHeader->addWidget(m_fxBypass);
+    fxActions->addWidget(m_fxBypass);
     auto* addFx = new ui::IconButton(icons::Glyph::Plus, tr("Add effect"), strip);
-    addFx->setButtonSize(14, 14);
-    stripHeader->addWidget(addFx);
-    column->addLayout(stripHeader);
+    addFx->setButtonSize(20, 24);
+    fxActions->addWidget(addFx);
+    column->addLayout(fxActions);
     if (m_context == Context::Clip) {
         m_offlineHistory = new QToolButton(strip);
         m_offlineHistory->setObjectName(QStringLiteral("SamplerOfflineHistory"));
@@ -1314,49 +1327,47 @@ QWidget* SamplerPanel::buildFxStrip() {
     m_fxSlotsLayout->setSpacing(1);
     column->addWidget(m_fxSlotsHost);
 
-    auto* routing = new QWidget(strip);
+    auto* routing = new ui::ConsoleLevelWell(strip);
     routing->setObjectName(QStringLiteral("SamplerFxRouting"));
     routing->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
-    auto* routingLayout = new QGridLayout(routing);
-    routingLayout->setContentsMargins(3, 3, 3, 3);
-    routingLayout->setHorizontalSpacing(2);
-    routingLayout->setVerticalSpacing(3);
-    auto* panCaption = caption(tr("Pan"), routing);
-    panCaption->setAlignment(Qt::AlignCenter);
+    auto* routingLayout = new QVBoxLayout(routing);
+    routingLayout->setContentsMargins(3, 4, 3, 2);
+    routingLayout->setSpacing(2);
+    auto* panRow = new QHBoxLayout;
+    panRow->setContentsMargins(0, 0, 0, 0);
+    panRow->setSpacing(3);
     m_fxPan = new ui::PanKnob(routing);
-    m_fxPan->setFixedSize(44, 44);
+    m_fxPan->setFixedSize(30, 30);
+    m_fxPan->setAccessibleName(tr("Pan"));
     m_fxPanLabel = new QLabel(QStringLiteral("C"), routing);
     m_fxPanLabel->setObjectName(QStringLiteral("SamplerFxReadout"));
     m_fxPanLabel->setAlignment(Qt::AlignCenter);
+    m_fxPanLabel->setFixedWidth(23);
     m_fxVolume = new ui::FaderWidget(Qt::Vertical, routing);
-    m_fxVolume->setMinimumHeight(80);
-    m_fxVolume->setFixedWidth(22);
-    m_fxVolume->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+    m_fxVolume->setAccessibleName(tr("Volume"));
     m_fxMeter = new ui::LevelMeter(Qt::Vertical, 2, routing);
-    m_fxMeter->setMinimumHeight(80);
-    m_fxMeter->setFixedWidth(14);
-    m_fxMeter->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
-    // Three columns keep the control axis at the *geometric* centre of the
-    // strip: a meter-width spacer on the left mirrors the real meter on the
-    // right. Pan and Volume therefore share the exact centre line even though
-    // only the right satellite paints anything.
-    routingLayout->setColumnMinimumWidth(0, 14);
-    routingLayout->setColumnMinimumWidth(2, 14);
-    routingLayout->addWidget(panCaption, 0, 1);
-    routingLayout->addWidget(m_fxPan, 1, 1, Qt::AlignHCenter);
-    routingLayout->addWidget(m_fxPanLabel, 2, 1);
-    // Pan is one visual group (caption, dial, readout); the empty rhythm row
-    // below it prevents the long Volume rail from looking attached to the
-    // dial. Sixteen pixels follows the strip's 4/8px spacing scale while still
-    // leaving plenty of rail at the minimum editor height.
-    routingLayout->setRowMinimumHeight(3, 16);
-    routingLayout->addWidget(m_fxVolume, 4, 1, Qt::AlignHCenter);
-    routingLayout->addWidget(m_fxMeter, 4, 2, Qt::AlignHCenter);
+    ui::configureConsoleLevel(m_fxVolume, m_fxMeter);
+    m_fxMeter->setFixedWidth(18);
+    connect(m_fxMeter, &ui::LevelMeter::peakResetRequested, m_fxMeter,
+            &ui::LevelMeter::clearClip);
+    panRow->addStretch();
+    panRow->addWidget(m_fxPan);
+    panRow->addWidget(m_fxPanLabel);
+    panRow->addStretch();
+    routingLayout->addLayout(panRow);
+    auto* levelRow = new QHBoxLayout;
+    levelRow->setContentsMargins(0, 0, 0, 0);
+    levelRow->setSpacing(5);
+    levelRow->addStretch();
+    levelRow->addWidget(m_fxVolume);
+    levelRow->addWidget(m_fxMeter);
+    levelRow->addStretch();
+    routingLayout->addLayout(levelRow, 1);
     m_fxGainLabel = new QLabel(ui::formatGainDb(1.0), routing);
     m_fxGainLabel->setObjectName(QStringLiteral("SamplerFxReadout"));
     m_fxGainLabel->setAlignment(Qt::AlignCenter);
-    routingLayout->addWidget(m_fxGainLabel, 5, 1);
-    routingLayout->setRowStretch(4, 1);
+    m_fxGainLabel->setFixedHeight(24);
+    routingLayout->addWidget(m_fxGainLabel);
     // The console output block begins immediately below the inserts and owns
     // all remaining height. Its fader rail and meter therefore terminate at
     // the bottom readout instead of floating halfway down an empty sidebar.
@@ -1560,11 +1571,13 @@ void SamplerPanel::rebuildFxSlots() {
             m_fxSlotsLayout->addWidget(row);
         } else {
             auto* add = new QToolButton(m_fxSlotsHost);
-            add->setObjectName(QStringLiteral("SamplerMixerSlot"));
+            add->setObjectName(QStringLiteral("SamplerInsertAddArea"));
             add->setProperty("active", false);
-            add->setText(tr("INSERT %1").arg(index + 1));
-            add->setFixedHeight(kSamplerFxSlotHeight);
-            add->setToolButtonStyle(Qt::ToolButtonTextOnly);
+            add->setIcon(icons::icon(icons::Glyph::Plus, th().textSecondary, 14));
+            add->setIconSize(QSize(14, 14));
+            add->setFixedHeight(inserts.empty() ? 2 * kSamplerFxSlotHeight : kSamplerFxSlotHeight);
+            add->setToolButtonStyle(Qt::ToolButtonIconOnly);
+            add->setFocusPolicy(Qt::StrongFocus);
             add->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
             add->setCursor(Qt::PointingHandCursor);
             add->setToolTip(tr("Empty insert slot — click to load an effect."));
@@ -1572,6 +1585,7 @@ void SamplerPanel::rebuildFxSlots() {
             connect(add, &QToolButton::clicked, this,
                     [this, index] { showFxMenu(index); });
             m_fxSlotsLayout->addWidget(add);
+            break;
         }
     }
 }
@@ -1699,15 +1713,17 @@ QWidget* SamplerPanel::buildSamplerBody() {
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* page = new QWidget(scroll);
+    page->setObjectName(QStringLiteral("SamplerPage"));
     auto* column = new QVBoxLayout(page);
-    column->setContentsMargins(12, 10, 12, 10);
-    column->setSpacing(9);
+    column->setContentsMargins(8, 0, 0, 0);
+    column->setSpacing(8);
     column->addWidget(buildWaveformSection());
     column->addWidget(buildToolSection());
 
     {
         auto* keysBox = new QWidget(page);
         keysBox->setObjectName(QStringLiteral("SamplerSection"));
+        keysBox->setAttribute(Qt::WA_StyledBackground, true);
         auto* keysLayout = new QVBoxLayout(keysBox);
         keysLayout->setContentsMargins(10, 5, 10, 7);
         keysLayout->setSpacing(5);
@@ -1782,6 +1798,7 @@ QWidget* SamplerPanel::buildSamplerBody() {
     }
     column->addStretch(1);
     scroll->setWidget(page);
+    page->setAutoFillBackground(false);
     hostLayout->addWidget(scroll);
     return host;
 }
@@ -1840,7 +1857,7 @@ QWidget* SamplerPanel::buildToolSection() {
     tabs->setExpanding(false);
     tabs->setDrawBase(false);
     tabs->setAccessibleName(tr("Sample settings"));
-    auto* pages = new QStackedWidget(host);
+    auto* pages = new SamplerToolPages(host);
     pages->setObjectName(QStringLiteral("SamplerToolsPages"));
     content->addWidget(tabs);
     content->addWidget(pages);
@@ -1868,23 +1885,25 @@ QWidget* SamplerPanel::buildToolSection() {
     auto* playback = new QVBoxLayout(playbackPage);
     playback->setContentsMargins(0, 0, 0, 0);
     playback->setSpacing(8);
-    auto* first = knobRow();
+    auto* playbackGrid = new QGridLayout;
+    playbackGrid->setContentsMargins(0, 0, 0, 0);
+    playbackGrid->setSpacing(8);
+    playbackGrid->setColumnStretch(0, 1);
+    playbackGrid->setColumnStretch(1, 1);
     auto* region = knobRow();
     region->addWidget(knob(QStringLiteral("startoffset"), tr("Start")));
     region->addWidget(knob(QStringLiteral("endoffset"), tr("End")));
     region->addWidget(knob(QStringLiteral("fadein"), tr("Fade In")));
     region->addWidget(knob(QStringLiteral("fadeout"), tr("Fade Out")));
     region->addStretch();
-    first->addWidget(group(tr("Sample region"), region), 1);
+    playbackGrid->addWidget(group(tr("Sample region"), region), 0, 0);
     auto* loop = knobRow();
     loop->addLayout(choice(tr("Loop Mode"), combo(QStringLiteral("loop.mode"),
                             {tr("Off"), tr("Forward"), tr("Ping-Pong")})));
     loop->addWidget(knob(QStringLiteral("loop.start"), tr("Start")));
     loop->addWidget(knob(QStringLiteral("loop.end"), tr("End")));
-    first->addWidget(group(tr("Loop"), loop), 1);
-    playback->addLayout(first);
+    playbackGrid->addWidget(group(tr("Loop"), loop), 0, 1);
 
-    auto* second = knobRow();
     auto* stretch = knobRow();
     auto* mode = combo(QStringLiteral("stretch.mode"),
                        {tr("Resample"), tr("Stretch"), tr("Loop"),
@@ -1897,7 +1916,8 @@ QWidget* SamplerPanel::buildToolSection() {
     m_formantKnob->setToolTip(tr("Shifts the vocal character without changing pitch or duration. Vocal mode also preserves formants when pitch changes; Resample uses a tonal tilt."));
     stretch->addWidget(m_formantKnob);
     stretch->addStretch();
-    second->addWidget(group(tr("Time & pitch"), stretch), 1);
+    playbackGrid->addWidget(group(tr("Time & pitch"), stretch), 1, 0, 1,
+                            m_context == Context::Instrument ? 1 : 2);
     if (m_context == Context::Instrument) {
         auto* tuning = knobRow();
         tuning->addWidget(knob(QStringLiteral("pitch"), tr("Tune")));
@@ -1908,9 +1928,9 @@ QWidget* SamplerPanel::buildToolSection() {
         switches->addWidget(cutItself);
         switches->addWidget(led(QStringLiteral("keepondisk"), tr("Disk")));
         tuning->addLayout(switches);
-        second->addWidget(group(tr("Voice"), tuning));
+        playbackGrid->addWidget(group(tr("Voice"), tuning), 1, 1);
     }
-    playback->addLayout(second);
+    playback->addLayout(playbackGrid);
     playback->addStretch();
     addPage(tr("Playback"), playbackPage);
 
@@ -2033,6 +2053,17 @@ QWidget* SamplerPanel::buildWaveformSection() {
 // ── Refresh ──
 
 void SamplerPanel::refresh() {
+    if (m_controller) {
+        QColor color = th().accent;
+        if (const auto* track = m_controller->project().findTrack(m_channelId.toStdString()))
+            color = colorFromRgb(track->color);
+        if (m_context == Context::Clip) {
+            if (const auto* clip = m_controller->audioClip(m_channelId.toStdString(), m_slotId.toStdString());
+                clip && clip->muted)
+                color = QColor(101, 105, 113);
+        }
+        m_waveform->setClipColor(color);
+    }
     if (m_offlineHistory && m_controller) {
         const auto* clip = m_controller->audioClip(m_channelId.toStdString(), m_slotId.toStdString());
         const bool hasHistory = clip && (!clip->offlineHistory.empty() || !clip->offlineProcess.empty());
@@ -2265,26 +2296,49 @@ bool SamplerPanel::checkLayoutForTest() {
         auto* tabs = panel.findChild<QTabBar*>("SamplerToolsTabs");
         auto* scroll = panel.findChild<QScrollArea*>("SamplerBodyScroll");
         auto* pages = panel.findChild<QStackedWidget*>("SamplerToolsPages");
-        for (const QSize size : {QSize(960, 562), QSize(860, 520)}) {
-            panel.resize(size);
-            for (int index = 0; index < tabs->count(); ++index) {
-                tabs->setCurrentIndex(index);
-                QApplication::processEvents();
-                check(scroll->horizontalScrollBar()->maximum() == 0,
-                      "horizontal overflow at supported editor size");
-                // A hidden scrollbar cannot disguise a clipped child.
-                for (QWidget* control : pages->currentWidget()->findChildren<QWidget*>()) {
-                    if (!control->isVisible() || !control->objectName().startsWith("SamplerParameter."))
-                        continue;
-                    const QRect bounds(control->mapTo(scroll->widget(), QPoint()), control->size());
-                    check(scroll->widget()->rect().contains(bounds), "parameter extends outside its page");
-                    for (QWidget* parent = control->parentWidget(); parent && parent != pages;
-                         parent = parent->parentWidget()) {
-                        check(parent->rect().contains(QRect(control->mapTo(parent, QPoint()), control->size())),
-                              "parameter clipped by a control group");
+        auto* keyboard = panel.findChild<QToolButton*>("SamplerCollapse");
+        auto* fxStrip = panel.findChild<QWidget*>("SamplerFxStrip");
+        // Switch palettes while this editor remains open, at both supported
+        // sizes. QSS lighting must not change layout or retain stale surfaces.
+        for (const Theme& preset : ThemeManager::instance().presets()) {
+            ThemeManager::instance().setThemeId(preset.id, false);
+            for (const QSize size : {QSize(960, 562), QSize(860, 520)}) {
+                panel.resize(size);
+                for (int index = 0; index < tabs->count(); ++index) {
+                    tabs->setCurrentIndex(index);
+                    QApplication::processEvents();
+                    scroll->verticalScrollBar()->setValue(0);
+                    check(scroll->horizontalScrollBar()->maximum() == 0,
+                          "horizontal overflow at supported editor size");
+                    check(fxStrip->mapTo(&panel, QPoint()).y() ==
+                              panel.m_waveform->parentWidget()->mapTo(&panel, QPoint()).y(),
+                          "FX strip and waveform section have different top margins");
+                    int controlsBottom = 0;
+                    for (QWidget* widget : pages->currentWidget()->findChildren<QWidget*>()) {
+                        if (!widget->isVisible() ||
+                            (widget->objectName() != QLatin1String("SamplerSection") &&
+                             !widget->objectName().startsWith("SamplerParameter.")))
+                            continue;
+                        controlsBottom = std::max(controlsBottom,
+                            widget->mapTo(scroll->widget(), QPoint(0, widget->height())).y());
                     }
+                    const int keyboardGap = keyboard->parentWidget()->mapTo(scroll->widget(), QPoint()).y() - controlsBottom;
+                    check(keyboardGap >= 0 && keyboardGap <= 12,
+                          "hidden settings pages leave a gap before the keyboard");
+                    // A hidden scrollbar cannot disguise a clipped child.
+                    for (QWidget* control : pages->currentWidget()->findChildren<QWidget*>()) {
+                        if (!control->isVisible() || !control->objectName().startsWith("SamplerParameter."))
+                            continue;
+                        const QRect bounds(control->mapTo(scroll->widget(), QPoint()), control->size());
+                        check(scroll->widget()->rect().contains(bounds), "parameter extends outside its page");
+                        for (QWidget* parent = control->parentWidget(); parent && parent != pages;
+                             parent = parent->parentWidget()) {
+                            check(parent->rect().contains(QRect(control->mapTo(parent, QPoint()), control->size())),
+                                  "parameter clipped by a control group");
+                        }
+                    }
+                    check(panel.m_waveform->isVisible(), "waveform disappeared when changing settings tabs");
                 }
-                check(panel.m_waveform->isVisible(), "waveform disappeared when changing settings tabs");
             }
         }
         tabs->setCurrentIndex(0);
@@ -2317,12 +2371,11 @@ bool SamplerPanel::checkLayoutForTest() {
             check(panel.readParameter("stretch.pitch") == before,
                   "one drag is not restored by one undo");
         }
-        auto* keyboard = panel.findChild<QToolButton*>("SamplerCollapse");
         keyboard->setChecked(true);
         QApplication::processEvents();
         check(panel.m_keyboard->isVisible() && scroll->horizontalScrollBar()->maximum() == 0,
               "keyboard disclosure breaks the compact page");
     }
-    if (ok) std::fprintf(stderr, "PASS Sampler: all tabs fit at 960/860 px, Clip shell, keyboard, wheel protection, drag and undo\n");
+    if (ok) std::fprintf(stderr, "PASS Sampler: aligned sections, compact tab heights, all tabs fit at 960/860 px, Clip shell, keyboard, wheel protection, drag and undo\n");
     return ok;
 }

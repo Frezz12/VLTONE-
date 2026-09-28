@@ -174,22 +174,33 @@ protected:
         const qreal headerHeight = 28.0;
         const qreal footerHeight = 25.0;
         const qreal sidebarWidth = std::clamp(frame.width() * 0.22, 82.0, 118.0);
-        painter.fillRect(QRectF(frame.left(), frame.top(), frame.width(), headerHeight),
-                         theme.headerBackground);
+        const auto plate = [&](const QRectF& bounds, const QColor& top, const QColor& bottom) {
+            QLinearGradient face(bounds.topLeft(), bounds.bottomLeft());
+            face.setColorAt(0, top);
+            face.setColorAt(1, bottom);
+            painter.fillRect(bounds, face);
+            painter.setPen(theme.edgeLight(top));
+            painter.drawLine(bounds.topLeft(), bounds.topRight());
+            painter.setPen(theme.edgeDark(bottom));
+            painter.drawLine(bounds.bottomLeft(), bounds.bottomRight());
+        };
+        plate(QRectF(frame.left(), frame.top(), frame.width(), headerHeight),
+              mixColors(theme.headerBackground, theme.surfaceElevated, 0.32), theme.headerBackground);
         painter.fillRect(QRectF(frame.left(), frame.top() + headerHeight,
                                 sidebarWidth, frame.height() - headerHeight),
                          theme.surface);
-        painter.fillRect(QRectF(frame.left() + sidebarWidth,
-                                frame.bottom() - footerHeight,
-                                frame.width() - sidebarWidth, footerHeight),
-                         theme.toolbarBackground);
+        plate(QRectF(frame.left() + sidebarWidth, frame.bottom() - footerHeight,
+                     frame.width() - sidebarWidth, footerHeight), theme.panelTop(), theme.panelBottom());
 
         const QRectF transport(frame.center().x() - 58.0, frame.top() + 5.0,
                                116.0, 18.0);
-        painter.setPen(theme.separator());
-        painter.setBrush(theme.transportBackground);
+        QLinearGradient display(transport.topLeft(), transport.bottomLeft());
+        display.setColorAt(0, theme.wellTop());
+        display.setColorAt(1, theme.wellBottom());
+        painter.setPen(theme.edgeDark(theme.well()));
+        painter.setBrush(display);
         painter.drawRoundedRect(transport, 6.0, 6.0);
-        painter.setPen(theme.accentHighlight);
+        painter.setPen(theme.textPrimary);
         painter.drawText(transport, Qt::AlignCenter, QStringLiteral("1.1.000   120"));
 
         painter.setPen(theme.textSecondary);
@@ -197,11 +208,6 @@ protected:
         small.setPixelSize(9);
         small.setWeight(QFont::DemiBold);
         painter.setFont(small);
-        painter.drawText(QRectF(frame.left() + 10.0, frame.top() + 38.0,
-                                sidebarWidth - 20.0, 16.0),
-                         Qt::AlignLeft | Qt::AlignVCenter,
-                         QCoreApplication::translate("SettingsWindow", "Tracks"));
-
         const qreal laneLeft = frame.left() + sidebarWidth;
         const qreal laneTop = frame.top() + headerHeight;
         const qreal laneRight = frame.right();
@@ -230,7 +236,7 @@ protected:
             painter.setPen(theme.separator());
             painter.drawLine(QPointF(frame.left(), top + trackHeight),
                              QPointF(frame.right(), top + trackHeight));
-            painter.setPen(i == 0 ? theme.textPrimary : theme.textSecondary);
+            painter.setPen(i <= 1 ? theme.textPrimary : theme.textSecondary);
             painter.drawText(QRectF(frame.left() + 10.0, top, sidebarWidth - 20.0,
                                     trackHeight),
                              Qt::AlignLeft | Qt::AlignVCenter,
@@ -243,7 +249,7 @@ protected:
         painter.setPen(Qt::NoPen);
         painter.setBrush(theme.accent);
         painter.drawRoundedRect(clipRect, 5.0, 5.0);
-        painter.setPen(QPen(theme.waveform, 1.5));
+        painter.setPen(QPen(Qt::white, 1.5));
         QPainterPath waveform;
         waveform.moveTo(clipRect.left() + 8.0, clipRect.center().y());
         for (int x = 8; x < int(clipRect.width()) - 8; x += 8) {
@@ -256,6 +262,23 @@ protected:
         const qreal playheadX = laneLeft + (laneRight - laneLeft) * 0.72;
         painter.drawLine(QPointF(playheadX, laneTop),
                          QPointF(playheadX, laneBottom));
+
+        // Show the same raised key and recessed rail used by the full interface.
+        const QRectF key(frame.right() - 44, frame.bottom() - footerHeight + 5, 34, 15);
+        QLinearGradient keyFace(key.topLeft(), key.bottomLeft());
+        keyFace.setColorAt(0, theme.controlTop());
+        keyFace.setColorAt(1, theme.controlBottom());
+        painter.setBrush(keyFace);
+        painter.setPen(theme.edgeDark(theme.controlBottom()));
+        painter.drawRoundedRect(key, 3, 3);
+        painter.setPen(theme.edgeLight(theme.controlTop()));
+        painter.drawLine(key.topLeft() + QPointF(3, 0), key.topRight() - QPointF(3, 0));
+        painter.setPen(theme.textPrimary);
+        painter.drawText(key, Qt::AlignCenter, QStringLiteral("FX"));
+        const QRectF rail(laneLeft + 12, key.center().y() - 2, 50, 4);
+        painter.setPen(theme.edgeDark(theme.well()));
+        painter.setBrush(theme.wellTop());
+        painter.drawRoundedRect(rail, 2, 2);
 
         painter.setClipping(false);
         painter.setPen(theme.sectionDivider());
@@ -2362,16 +2385,23 @@ void SettingsWindow::refreshSwatches() {
             {contrastRatio(m_editTheme.textPrimary, m_editTheme.background),
              contrastRatio(m_editTheme.textPrimary, m_editTheme.surface),
              contrastRatio(m_editTheme.textSecondary, m_editTheme.background),
-             contrastRatio(m_editTheme.textSecondary, m_editTheme.surface)});
+             contrastRatio(m_editTheme.textSecondary, m_editTheme.surface),
+             contrastRatio(m_editTheme.textPrimary, m_editTheme.controlTop()),
+             contrastRatio(m_editTheme.textPrimary, m_editTheme.controlBottom()),
+             contrastRatio(m_editTheme.textSecondary, m_editTheme.panelTop()),
+             contrastRatio(m_editTheme.textSecondary, m_editTheme.panelBottom()),
+             contrastRatio(m_editTheme.textSecondary, m_editTheme.wellTop()),
+             contrastRatio(m_editTheme.textSecondary, m_editTheme.wellBottom()),
+             contrastRatio(m_editTheme.accentText(), m_editTheme.accent)});
         if (weakest >= 4.5) {
             m_themeContrastStatus->setText(
                 tr("✓ Text contrast looks good — weakest pairing is %1:1.")
-                    .arg(weakest, 0, 'f', 1));
+                    .arg(weakest, 0, 'f', 2));
         } else {
             m_themeContrastStatus->setText(
                 tr("⚠ Low text contrast — weakest pairing is %1:1. Aim for "
                    "4.5:1 or higher.")
-                    .arg(weakest, 0, 'f', 1));
+                    .arg(weakest, 0, 'f', 2));
         }
     }
     if (m_themeSaveButton && m_themeNameEdit)

@@ -147,10 +147,9 @@ QLabel[role="secondary"] { color: %3; font-size: 12px; }
 #BatchSlotName:hover { background: %5; }
 #BatchSlotName:focus { border: 1px solid %6; }
 #BatchError { color: %2; border: 1px solid %6; border-radius: 5px; padding: 6px; }
-#BatchApply { background: %6; color: %7; border: none; border-radius: 6px; padding: 6px 14px; }
-#BatchApply:disabled { background: %5; color: %3; }
+#BatchApply { padding: 6px 14px; }
 )" ).arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(), t.well().name(),
-           t.separator().name(), t.accent.name(), t.accent.lightnessF() > 0.55 ? "#101114" : "#ffffff"));
+           t.separator().name(), t.accent.name()));
     const auto valid = m_controller.validatePluginBatch(m_targets);
     if (m_targets.size() < 2 || !valid) showError(tr("Select at least two compatible tracks or audio clips."));
     else if (controller.hasCloudProjectBinding()) showError(tr("Shared Plugins are available in local projects."));

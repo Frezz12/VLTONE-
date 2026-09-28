@@ -14,8 +14,11 @@
 #include <QEventLoop>
 #include <QLabel>
 #include <QPushButton>
+#include <QPainter>
+#include <QStyleOptionButton>
 #include <QSettings>
 #include <QScrollArea>
+#include <QTabWidget>
 #include <QTemporaryDir>
 #include <QThreadPool>
 #include <QTimer>
@@ -52,13 +55,15 @@ int main(int argc, char** argv) {
     QSettings().setValue(QStringLiteral("ui/themeId"),
                          QStringLiteral("logic"));
     ThemeManager& themes = ThemeManager::instance();
+    themes.apply();
     QStringList presetIds;
     for (const Theme& theme : themes.presets()) presetIds.push_back(theme.id);
     check(presetIds == QStringList({QStringLiteral("dark"),
+                                    QStringLiteral("studio-gray"),
                                     QStringLiteral("light"),
                                     QStringLiteral("solarized-light"),
                                     QStringLiteral("gruvbox")}),
-          "only the four supported built-in themes remain");
+          "supported built-in themes remain available");
     check(themes.themeId() == QStringLiteral("dark") &&
               QSettings().value(QStringLiteral("ui/themeId")).toString() ==
                   QStringLiteral("dark"),
@@ -86,6 +91,15 @@ int main(int argc, char** argv) {
           QDir(QString::fromStdString(spec.outputDir)), "unsaved project uses fallback folder");
     parent.show();
     dialog.show();
+    if (qEnvironmentVariableIsSet("DAW_RENDER_TEST_ARTIFACTS")) {
+        auto* tabs = dialog.findChild<QTabWidget*>("ExportAdvanced");
+        for (int i = 0; i < tabs->count(); ++i) {
+            tabs->setCurrentIndex(i);
+            QApplication::processEvents();
+            dialog.grab().save(temporary.filePath(QStringLiteral("render-tab-%1.png").arg(i)));
+        }
+        tabs->setCurrentIndex(0);
+    }
     auto* buttons = dialog.findChild<QDialogButtonBox*>();
     auto* status = dialog.findChild<QLabel*>("ExportStatus");
     bool cancelled = false, enabled = false;
@@ -139,7 +153,6 @@ int main(int argc, char** argv) {
         container->setCurrentIndex(container->findData(int(audio::platform::Container::Mp3)));
         check(coverButton->isEnabled() && !coverButton->icon().isNull(), "switching back to MP3 retains cover");
         if (qEnvironmentVariableIsSet("DAW_RENDER_TEST_ARTIFACTS")) {
-            completed.resize(1020, 860);
             QApplication::processEvents();
             completed.grab().save(temporary.filePath("render-with-cover.png"));
         }
@@ -200,19 +213,65 @@ int main(int argc, char** argv) {
             const double x = luminance(a), y = luminance(b);
             return (std::max(x, y) + .05) / (std::min(x, y) + .05);
         };
-        for (const QString& theme : {QStringLiteral("light"), QStringLiteral("solarized-light")}) {
+        for (const QString& theme : presetIds) {
             ThemeManager::instance().setThemeId(theme, false);
-            completed.resize(640, 760);
+            completed.resize(520, 560);
             QApplication::processEvents();
             const auto palette = completedButtons->button(QDialogButtonBox::Ok)->palette();
-            check(contrast(palette.color(QPalette::ButtonText), palette.color(QPalette::Button)) >= 4.5,
-                  "render button meets text contrast in both themes");
+            const QBrush fill = palette.brush(QPalette::Button);
+            double buttonContrast = contrast(palette.color(QPalette::ButtonText), fill.color());
+            if (const auto* gradient = fill.gradient()) {
+                buttonContrast = 21.0;
+                for (const auto& stop : gradient->stops())
+                    buttonContrast = std::min(buttonContrast,
+                        contrast(palette.color(QPalette::ButtonText), stop.second));
+            }
+            check(buttonContrast >= 4.5,
+                  "render button meets text contrast in every theme");
+
+            // Render the shared stylesheet in every interaction state, including
+            // gradient ends. Hover/pressed fills cannot be read from QPalette.
+            const QStyle::State states[] = {
+                QStyle::State_Enabled | QStyle::State_Raised,
+                QStyle::State_Enabled | QStyle::State_Raised | QStyle::State_MouseOver,
+                QStyle::State_Enabled | QStyle::State_Sunken,
+                QStyle::State_Enabled | QStyle::State_On,
+                QStyle::State_Enabled | QStyle::State_On | QStyle::State_MouseOver,
+                QStyle::State_Enabled | QStyle::State_Raised | QStyle::State_HasFocus | QStyle::State_KeyboardFocusChange
+            };
+            for (bool primary : {false, true}) {
+                QPushButton probe(QStringLiteral("Control"));
+                probe.setProperty("accentAction", primary);
+                probe.resize(160, 36);
+                probe.ensurePolished();
+                for (const auto state : states) {
+                    QStyleOptionButton option;
+                    option.initFrom(&probe);
+                    option.state = state;
+                    option.text = probe.text();
+                    QImage rendered(probe.size(), QImage::Format_ARGB32_Premultiplied);
+                    rendered.fill(th().background);
+                    QPainter painter(&rendered);
+                    probe.style()->drawControl(QStyle::CE_PushButton, &option, &painter, &probe);
+                    painter.end();
+                    const QColor ink = probe.palette().color(QPalette::ButtonText);
+                    const double ratio = std::min(contrast(ink, rendered.pixelColor(80, 2)),
+                                                   contrast(ink, rendered.pixelColor(80, 33)));
+                    if (ratio < 4.5)
+                        std::cerr << "Contrast " << theme.toStdString() << " primary=" << primary
+                                  << " state=" << int(state) << " ratio=" << ratio << '\n';
+                    check(ratio >= 4.5, "shared button states meet normal-text contrast");
+                }
+            }
             for (auto* action : {completedButtons->button(QDialogButtonBox::Ok), openFolder})
                 check(completed.rect().contains(QRect(action->mapTo(&completed, QPoint()), action->size())),
                       "completed actions remain inside a narrow window");
-            auto* subtitle = completed.findChild<QLabel*>("ExportSubtitle");
-            check(contrast(subtitle->palette().color(QPalette::WindowText), th().background) >= 4.5,
-                  "secondary text meets contrast in both themes");
+            auto* summary = completed.findChild<QLabel*>("ExportSummary");
+            check(contrast(summary->palette().color(QPalette::WindowText), th().panelBottom()) >= 4.5,
+                  "secondary text meets contrast in every theme");
+            for (const QColor& background : {th().panelTop(), th().panelBottom(), th().wellTop(), th().wellBottom()})
+                check(contrast(th().textSecondary, background) >= 4.5,
+                      "secondary labels meet contrast at both ends of panel and field gradients");
             auto* renderScroll = completed.findChild<QScrollArea*>();
             check(renderScroll->widget()->width() <= renderScroll->viewport()->width(),
                   "narrow render form does not overflow horizontally");

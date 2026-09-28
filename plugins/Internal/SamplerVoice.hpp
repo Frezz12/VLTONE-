@@ -169,12 +169,14 @@ class Voice {
 public:
     void start(int key, int channel, float velocity, float notePan,
                const SamplerSettings& settings, const SampleData& sample,
-               double sampleRate) noexcept;
+               double sampleRate, bool smoothStart = false) noexcept;
     /// `cutWhenEnvelopeOff` is the instance's answer to "would this note ever
     /// stop on its own" — true for a looping sample whose amplitude envelope is
     /// switched off, which otherwise sounds forever.
     void release(bool cutWhenEnvelopeOff) noexcept;
-    /// Cut immediately, for a stolen voice or a transport stop.
+    /// End with a short fade, independently of the user's release setting.
+    void choke() noexcept;
+    /// Cut immediately, for a transport stop or reset.
     void kill() noexcept;
 
     bool active() const noexcept { return m_active; }
@@ -243,12 +245,14 @@ private:
     bool m_resetStretch = true;
     engine::dsp::TimeStretch* m_lastStretcher = nullptr;
 
-    /// Frames left of the short fade that ends a looping note whose amplitude
-    /// envelope is switched off. Negative means "not cutting" — with the
-    /// envelope off a one-shot is meant to play to its end even after the key
-    /// is released, but a *loop* would then never stop.
+    /// Frames left of a forced short fade: a choke, or the release of a loop
+    /// whose amplitude envelope is switched off. Negative means "not cutting".
+    /// With the envelope off a one-shot plays to its end after key release,
+    /// but a loop would then never stop.
     int m_cutRemaining = -1;
     int m_cutLength = 1;
+    /// Only retriggers with Cut Itself fade in, paired with the outgoing cut.
+    int m_fadeInRemaining = 0;
 
     Envelope m_amp;
     Envelope m_modEnv[kModTargetCount];

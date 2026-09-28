@@ -562,13 +562,9 @@ void ProjectSaveDialog::applyTheme() {
 }
 #ProjectError { color: %7; }
 #ProjectPrimaryButton {
-    min-height: 32px; color: %ACCENT_TEXT%; background: %6;
-    border: 1px solid %6; border-radius: %RADIUS%px; padding: 0 18px;
-    font-weight: 600;
+    min-height: 32px; padding: 0 18px;
 }
-#ProjectPrimaryButton:disabled { color: %3; background: %4; border-color: %5; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
-        .replace("%ACCENT_TEXT%", t.accentText().name())
         .arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),
              t.well().name(), t.separator().name(), t.accent.name(),
              Theme::record().name()));
@@ -675,6 +671,7 @@ ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
 
             auto* open = new QPushButton(tr("Open"), card);
             open->setObjectName(QStringLiteral("ProjectPrimaryButton"));
+            open->setProperty("accentAction", true);
             open->setAccessibleName(tr("Open project %1").arg(summary.name));
             connect(open, &QPushButton::clicked, this, [this, path] {
                 m_selectedPath = path;
@@ -746,16 +743,11 @@ void ProjectOpenDialog::applyTheme() {
     border-radius: %RADIUS%px; padding: 24px;
 }
 #ProjectPrimaryButton {
-    min-height: 32px; color: %ACCENT_TEXT%; background: %7;
-    border: 1px solid %7; border-radius: %RADIUS%px; padding: 0 18px;
-    font-weight: 600;
+    min-height: 32px; padding: 0 18px;
 }
-#ProjectPrimaryButton:focus { border: 2px solid %8; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
-        .replace("%ACCENT_TEXT%", t.accentText().name())
         .arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),
-             t.surface.name(), t.separator().name(), t.well().name(),
-             t.accent.name(), t.accentHighlight.name()));
+             t.surface.name(), t.separator().name(), t.well().name()));
 }
 
 bool ProjectOpenDialog::checkForTest() const {
@@ -946,13 +938,9 @@ void ProjectTemplateSaveDialog::applyTheme() {
 }
 #ProjectError { color: %7; }
 #ProjectPrimaryButton {
-    min-height: 32px; color: %ACCENT_TEXT%; background: %6;
-    border: 1px solid %6; border-radius: %RADIUS%px; padding: 0 18px;
-    font-weight: 600;
+    min-height: 32px; padding: 0 18px;
 }
-#ProjectPrimaryButton:disabled { color: %3; background: %4; border-color: %5; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
-        .replace("%ACCENT_TEXT%", t.accentText().name())
         .arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),
              t.well().name(), t.separator().name(), t.accent.name(),
              Theme::record().name()));
@@ -1220,18 +1208,14 @@ void ProjectTemplateOpenDialog::applyTheme() {
     border-radius: %RADIUS%px; padding: 24px;
 }
 #ProjectPrimaryButton {
-    min-height: 34px; color: %ACCENT_TEXT%; background: %7;
-    border: 1px solid %7; border-radius: %RADIUS%px; padding: 0 18px;
-    font-weight: 600;
+    min-height: 34px; padding: 0 18px;
 }
-#ProjectPrimaryButton:disabled { color: %3; background: %8; border-color: %5; }
 #TemplateDeleteButton {
     min-height: 34px; color: %2; background: transparent;
     border: 1px solid %5; border-radius: %RADIUS%px; padding: 0 13px;
 }
 #TemplateDeleteButton:hover { border-color: %9; color: %9; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
-        .replace("%ACCENT_TEXT%", t.accentText().name())
         .arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),
              t.surface.name(), t.separator().name(), t.surfaceElevated.name(),
              t.accent.name(), t.well().name(), Theme::record().name()));

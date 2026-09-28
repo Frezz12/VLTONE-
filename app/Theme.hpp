@@ -58,6 +58,16 @@ struct Theme {
 
     /// Surface tinted towards the background — used for wells / recessed areas.
     QColor well() const;
+    QColor wellTop() const;
+    QColor wellBottom() const;
+    /// Shared material for sidebar headers, the ruler and the bottom bars.
+    QColor panelTop() const;
+    QColor panelBottom() const;
+    /// Shared lighting, independent of text ink and never stored in theme files.
+    QColor edgeLight(const QColor& base) const;
+    QColor edgeDark(const QColor& base) const;
+    QColor controlTop() const;
+    QColor controlBottom() const;
     /// A hairline that reads as a separator on this theme.
     QColor separator() const;
     /// A stronger boundary reserved for the application's major regions. It

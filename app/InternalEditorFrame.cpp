@@ -488,8 +488,14 @@ void InternalEditorFrame::paintEvent(QPaintEvent*) {
     }
 
     if (m_titleBar) {
-        painter.fillRect(m_titleBar->geometry(), theme.toolbarBackground);
-        painter.setPen(theme.separator());
+        const QRect title = m_titleBar->geometry();
+        QLinearGradient header(title.topLeft(), title.bottomLeft());
+        header.setColorAt(0, mixColors(theme.toolbarBackground, theme.surfaceElevated, 0.40));
+        header.setColorAt(1, theme.toolbarBackground);
+        painter.fillRect(title, header);
+        painter.setPen(theme.edgeLight(theme.toolbarBackground));
+        painter.drawLine(title.topLeft(), title.topRight());
+        painter.setPen(theme.edgeDark(theme.toolbarBackground));
         painter.drawLine(m_titleBar->geometry().bottomLeft(),
                          m_titleBar->geometry().bottomRight());
     }
@@ -498,7 +504,7 @@ void InternalEditorFrame::paintEvent(QPaintEvent*) {
     // Focus remains visible through the title text and button states. The
     // contour itself is deliberately neutral so plugin artwork is not boxed
     // in by the application's accent colour.
-    painter.setPen(QPen(QColor(0, 0, 0), 1.0));
+    painter.setPen(QPen(theme.edgeDark(theme.surface), 1.0));
     painter.setBrush(Qt::NoBrush);
     painter.drawRect(rect().adjusted(0, 0, -1, -1));
 }

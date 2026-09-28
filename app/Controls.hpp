@@ -783,6 +783,7 @@ public:
     /// Select which edge of the parent owns the hit area. Vertical handles use
     /// Left/Right; horizontal handles use Top/Bottom.
     void setEdge(Qt::Edge edge);
+    void setSeamVisible(bool visible) { m_seamVisible = visible; update(); }
 
     /// Distance from the start of the gesture, so the owner applies it to the
     /// size the panel had when the drag began — applying it to the running size
@@ -803,6 +804,7 @@ private:
 
     Qt::Orientation m_orientation;
     Qt::Edge m_edge;
+    bool m_seamVisible = true;
     double m_start = 0.0;
     bool m_dragging = false;
 };
