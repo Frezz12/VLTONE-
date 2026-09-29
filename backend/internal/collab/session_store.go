@@ -136,13 +136,13 @@ func (s *Store) startSession(ctx context.Context, projectID, actorUserID,
 		}
 		// Once a project contains v4 content an older client cannot start a
 		// room whose reducer would discard the new MIDI properties.
-		if commandSchemaVersion < CollaborationCommandSchemaV4 {
+		if commandSchemaVersion < CollaborationCommandSchemaV5 {
 			var newer int64
-			if err := tx.Model(&model.ProjectOperation{}).Where("project_id = ? AND schema_version >= ?", projectID, CollaborationCommandSchemaV4).Count(&newer).Error; err != nil {
+			if err := tx.Model(&model.ProjectOperation{}).Where("project_id = ? AND schema_version > ?", projectID, commandSchemaVersion).Count(&newer).Error; err != nil {
 				return err
 			}
 			if newer != 0 {
-				return invalidf("project requires collaboration command schema v4")
+				return invalidf("project requires a newer collaboration command schema")
 			}
 		}
 		manifestRevision := int64(0)

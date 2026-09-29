@@ -886,7 +886,7 @@
       "required": ["kind", "channelId", "slotId", "parameterId", "sendId"],
       "properties": {
         "kind": { "enum": ["volume", "pan", "mute", "send", "parameter"] },
-        "channelId": { "$ref": "#/$defs/id" },
+        "channelId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "const": "master" }] },
         "slotId": { "$ref": "#/$defs/optionalId" },
         "parameterId": { "type": "string", "maxLength": 4096 },
         "sendId": { "$ref": "#/$defs/optionalId" }

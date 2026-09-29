@@ -65,6 +65,8 @@ public:
     std::string takeText();
 
     bool done() const { return m_done; }
+    bool hasOutput() const { return !m_reply.text.empty() || !m_building.empty() || !m_reply.calls.empty(); }
+    int errorStatus() const { return m_errorStatus; }
 
 private:
     void handle(const std::string& eventName, const nlohmann::json& data);
@@ -78,6 +80,8 @@ private:
     ModelReply m_reply;
     AiSession::Usage m_usage;
     bool m_done = false;
+    bool m_previousCR = false;
+    int m_errorStatus = 0;
 
     /// Partial tool calls by their index in the stream.
     struct Building {

@@ -115,8 +115,12 @@ enum class ModParam : std::uint32_t {
 inline constexpr std::uint32_t kMainCount = std::uint32_t(Param::kMainCount);
 inline constexpr std::uint32_t kModTargetCount = std::uint32_t(ModTarget::kCount);
 inline constexpr std::uint32_t kModParamCount = std::uint32_t(ModParam::kCount);
-inline constexpr std::uint32_t kParameterCount =
+inline constexpr std::uint32_t kLegacyParameterCount =
     kMainCount + kModTargetCount * kModParamCount;
+/// Append after the complete SMP/INS table; never move existing automation ids.
+enum class SlideParam : std::uint32_t { Legato, TimeMs, TempoSync, Beats, Shape, SmoothingMs, BendRange, Count };
+inline constexpr std::uint32_t kParameterCount = kLegacyParameterCount + std::uint32_t(SlideParam::Count);
+constexpr std::uint32_t indexOf(SlideParam p) noexcept { return kLegacyParameterCount + std::uint32_t(p); }
 
 /// Flat index of one INS-page control. The matrix is laid out target-major, so
 /// a target's controls are contiguous and the voice can read them as a run.

@@ -7,6 +7,7 @@ namespace daw {
 std::string EngineController::warpUnavailableReason(const std::string& trackId,
                                                     const std::string& clipId) {
     if (cloudProjectBound()) return "Warp is available in local projects only.";
+    if (isTrackFrozen(trackId)) return "Unfreeze the track before using Warp.";
     const auto* clip = audioClip(trackId, clipId);
     if (!clip) return "Select an audio clip.";
     if (isLayered(*clip)) return "Bounce the comp to an audio clip before using Warp.";
@@ -48,6 +49,7 @@ bool EngineController::setClipWarp(const std::string& trackId, const std::string
         (!warp.empty() && warpMaximumRatio(warp, tempo()) > 1000)) return false;
     auto* clip = findClip(trackId, clipId);
     if (!clip || clip->warp == warp) return false;
+    cancelWarpPreview();
     if (!warp.empty()) {
         auto data = clipSampleData(trackId, clipId);
         if (!data || !data->audio) {
@@ -83,6 +85,7 @@ void EngineController::applyClipWarpState(const std::string& trackId, const std:
 }
 
 void EngineController::beginWarpEdit(const std::string& trackId, const std::string& clipId) {
+    cancelWarpPreview();
     cancelWarpEdit();
     if (!warpUnavailableReason(trackId, clipId).empty()) return;
     if (const auto* clip = audioClip(trackId, clipId)) m_warpEdit = WarpEdit{trackId, clipId, clip->warp};
@@ -109,6 +112,78 @@ void EngineController::cancelWarpEdit() {
     setClipWarp(edit.trackId, edit.clipId, edit.before);
     m_warpEdit.reset();
     flushDeferredClipSync();
+}
+
+bool EngineController::validWarpPreview() const {
+    if (!m_warpPreview || cloudProjectBound() || isTrackFrozen(m_warpPreview->trackId)) return false;
+    const auto& session = *m_warpPreview;
+    const auto* clip = audioClip(session.trackId, session.clipId);
+    return clip && clip->warp == session.before && clip->startSeconds == session.startSeconds &&
+        tempo() == session.tempo && m_project.timeSigNumerator == session.numerator &&
+        m_project.timeSigDenominator == session.denominator &&
+        offlineSourceFingerprint(*clip) == session.fingerprint;
+}
+
+bool EngineController::warpPreviewActive() {
+    if (m_warpPreview && !validWarpPreview()) cancelWarpPreview();
+    return m_warpPreview.has_value();
+}
+
+const ClipWarpModel* EngineController::warpPreviewMap() const {
+    return validWarpPreview() ? &m_warpPreview->proposed : nullptr;
+}
+
+bool EngineController::beginWarpPreview(const std::string& trackId, const std::string& clipId) {
+    cancelWarpEdit();
+    cancelWarpPreview();
+    if (!warpUnavailableReason(trackId, clipId).empty()) return false;
+    const auto* clip = audioClip(trackId, clipId);
+    if (!clip || clip->warp.empty() || !clip->warp.enabled || !clipSampleData(trackId, clipId)) return false;
+    m_warpPreview = WarpPreview{trackId, clipId, offlineSourceFingerprint(*clip), clip->warp,
+        clip->warp, clip->startSeconds, tempo(), m_project.timeSigNumerator, m_project.timeSigDenominator, true};
+    return true;
+}
+
+bool EngineController::updateWarpPreview(const ClipWarpModel& map) {
+    if (!warpPreviewActive() || !map.enabled || !validWarp(map) || warpMaximumRatio(map, tempo()) > 1000) return false;
+    auto& session = *m_warpPreview;
+    if (map.markers.front() != session.before.markers.front() ||
+        map.markers.back() != session.before.markers.back()) return false;
+    // An assistant may insert anchors or move timing, never discard manual work.
+    auto it = map.markers.begin();
+    for (const auto& old : session.before.markers) {
+        while (it != map.markers.end() && it->sourceSeconds < old.sourceSeconds) ++it;
+        if (it == map.markers.end() || it->sourceSeconds != old.sourceSeconds ||
+            it->id != old.id || it->locked != old.locked || (old.locked && it->targetBeats != old.targetBeats)) return false;
+    }
+    if (session.proposed == map) return true;
+    session.proposed = map;
+    if (session.after) if (auto* track = m_project.findTrack(session.trackId)) syncTrackClips(*track);
+    return true;
+}
+
+bool EngineController::auditionWarpPreview(bool after) {
+    if (!warpPreviewActive()) return false;
+    if (m_warpPreview->after == after) return true;
+    m_warpPreview->after = after;
+    if (auto* track = m_project.findTrack(m_warpPreview->trackId)) syncTrackClips(*track);
+    return true;
+}
+
+bool EngineController::commitWarpPreview() {
+    if (!warpPreviewActive()) return false;
+    const auto session = std::move(*m_warpPreview);
+    m_warpPreview.reset();
+    const bool changed = setClipWarp(session.trackId, session.clipId, session.proposed, "Align Warp Timing");
+    if (!changed) if (auto* track = m_project.findTrack(session.trackId)) syncTrackClips(*track);
+    return changed;
+}
+
+void EngineController::cancelWarpPreview() {
+    if (!m_warpPreview) return;
+    const auto trackId = m_warpPreview->trackId;
+    m_warpPreview.reset();
+    if (auto* track = m_project.findTrack(trackId)) syncTrackClips(*track);
 }
 
 } // namespace daw

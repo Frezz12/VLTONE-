@@ -135,10 +135,24 @@ bool AiSession::begin(const std::string& prompt) {
     return true;
 }
 
+bool AiSession::resume() {
+    if (m_running || m_lastError.empty() || m_messages.empty()) return false;
+    const auto mode = m_context.mode;
+    const bool started = begin("Continue the previous request from the current project state. "
+                              "Completed tool results above are already applied; do not repeat them. "
+                              "Finish the missing response and any remaining work.");
+    m_context.mode = mode;
+    return started;
+}
+
 AiSession::Step AiSession::applyReply(const ModelReply& reply) {
     if (!m_running) return Step::Finished;
 
     if (!reply.error.empty()) {
+        // Keep partial prose visible, but never recover or execute commands
+        // from a response that failed or was interrupted.
+        if (!reply.text.empty())
+            m_messages.push_back(Message{Role::Assistant, reply.text, {}, {}});
         m_lastError = reply.error;
         finish();
         return Step::Failed;

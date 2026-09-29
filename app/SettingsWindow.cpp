@@ -2641,7 +2641,7 @@ QWidget* SettingsWindow::buildInterfaceTab() {
     auto* gpu = new QCheckBox(tr("GPU rendering (experimental)"), graphicsGroup);
     gpu->setObjectName("GpuWorkspaceEnabled");
     const bool runningGpuMode = ui::graphics::gpuWorkspaceEnabled();
-    gpu->setChecked(QSettings().value("ui/gpuWorkspace", false).toBool());
+    gpu->setChecked(QSettings().value("ui/gpuWorkspace", true).toBool());
     auto* restartGpu = new QPushButton(tr("Restart VLTONE"), graphicsGroup);
     restartGpu->setObjectName(QStringLiteral("GpuRestartButton"));
     restartGpu->setProperty("accentAction", true);

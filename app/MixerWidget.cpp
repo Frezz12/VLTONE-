@@ -23,6 +23,7 @@
 
 #include <QAbstractButton>
 #include <QCoreApplication>
+#include <QContextMenuEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
@@ -858,6 +859,10 @@ void MixerWidget::wireStrip(ChannelStrip* strip) {
     ui::perf::sample("mixer.strip.created", 1);
         connect(strip, &ChannelStrip::selectRequested, this,
                 &MixerWidget::trackSelected);
+        connect(strip, &ChannelStrip::timelineRequested, this,
+                &MixerWidget::timelineRequested);
+        connect(strip, &ChannelStrip::createTracksRequested, this,
+                &MixerWidget::createTracksRequested);
         connect(strip, &ChannelStrip::edited, this, [this, strip](bool dirty) {
             emit edited(dirty);
             emit channelEdited(strip->trackId(), dirty);
@@ -884,6 +889,27 @@ void MixerWidget::wireStrip(ChannelStrip* strip) {
         }, Qt::QueuedConnection);
         connect(strip, &ChannelStrip::trackCreated, this,
                 &MixerWidget::trackCreated, Qt::QueuedConnection);
+}
+
+void MixerWidget::contextMenuEvent(QContextMenuEvent* event) {
+    auto* menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("MixerContextMenu"));
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    connect(menu->addAction(tr("Show Master on Timeline")), &QAction::triggered, this,
+            [this] { emit timelineRequested(QString::fromLatin1(daw::EngineController::kMasterChannelId)); });
+    menu->addSeparator();
+    const auto kinds = ui::addTrackKindItems(*menu);
+    for (auto it = kinds.cbegin(); it != kinds.cend(); ++it)
+        connect(it.key(), &QAction::triggered, this, [this, spec = it.value()] {
+            if (!spec.create(*m_controller).empty()) emit trackCreated();
+        });
+    menu->addSeparator();
+    connect(menu->addAction(tr("Create Tracks…")), &QAction::triggered,
+            this, &MixerWidget::createTracksRequested);
+    connect(menu->addAction(tr("Mixer settings")), &QAction::triggered,
+            this, &MixerWidget::settingsRequested);
+    menu->popup(event->globalPos());
+    event->accept();
 }
 
 void MixerWidget::rebuild() {
@@ -1095,7 +1121,9 @@ void MixerWidget::refreshMeters() {
 
 void MixerWidget::setSelectedTrack(const QString& trackId) {
     m_selectedTrackId = trackId;
+    const auto* track = m_controller->project().findTrack(trackId.toStdString());
     for (ChannelStrip* strip : m_strips) {
-        if (!strip->isMaster()) strip->setSelected(strip->trackId() == trackId);
+        strip->setSelected(strip->isMaster()
+            ? track && track->kind == daw::TrackKind::Master : strip->trackId() == trackId);
     }
 }

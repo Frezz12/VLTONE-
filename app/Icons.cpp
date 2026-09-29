@@ -823,6 +823,28 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
                                  QPointF(17.5, 13.8)}));
         break;
     }
+    case Glyph::Copy: {
+        p.setPen(QPen(c, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(QRectF(8, 8, 12, 13), 2, 2);
+        QPainterPath back;
+        back.moveTo(5, 16); back.lineTo(4, 16);
+        back.quadTo(3, 16, 3, 14); back.lineTo(3, 5);
+        back.quadTo(3, 3, 5, 3); back.lineTo(14, 3);
+        back.quadTo(16, 3, 16, 5);
+        p.drawPath(back);
+        break;
+    }
+    case Glyph::Edit: {
+        QPainterPath pencil;
+        pencil.moveTo(4, 20); pencil.lineTo(5, 15);
+        pencil.lineTo(16, 4); pencil.quadTo(17, 3, 18, 4);
+        pencil.lineTo(20, 6); pencil.quadTo(21, 7, 20, 8);
+        pencil.lineTo(9, 19); pencil.closeSubpath();
+        strokePath(p, pencil, c, 1.7);
+        p.drawLine(QPointF(14, 6), QPointF(18, 10));
+        break;
+    }
     case Glyph::Knife: {
         // A straight scalpel, aligned handle-to-tip so the tool never reads as
         // bent when it becomes the arrangement cursor.

@@ -3,6 +3,7 @@
 #include "ai/AiTools.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 
 using json = nlohmann::json;
 
@@ -198,8 +199,10 @@ json requestBody(Provider provider, const std::string& model, int maxTokens,
                             vendorExtensions, tools);
 }
 
-ModelReply parseReply(Provider provider, const json& body) {
+ModelReply parseReply(Provider provider, const json& body) try {
     ModelReply reply;
+    reply.error = errorMessage(provider, body);
+    if (!reply.error.empty()) return reply;
     if (provider == Provider::Anthropic) {
         for (const json& block : body.value("content", json::array())) {
             const std::string type = block.value("type", "");
@@ -211,6 +214,12 @@ ModelReply parseReply(Provider provider, const json& body) {
                                        block.value("input", json::object())});
             }
         }
+        if (body.value("stop_reason", std::string()) == "max_tokens") {
+            reply.calls.clear();
+            reply.error = "The response reached the output limit. Continue to request the rest.";
+        }
+        if (reply.text.empty() && reply.calls.empty() && reply.error.empty())
+            reply.error = "The model returned an empty response. Try again.";
         return reply;
     }
 
@@ -227,10 +236,19 @@ ModelReply parseReply(Provider provider, const json& body) {
         reply.calls.push_back({call.value("id", ""), fn.value("name", ""),
                                argsFromString(fn.value("arguments", ""))});
     }
+    const std::string reason = choices[0].value("finish_reason", std::string());
+    if (reason == "length" || reason == "content_filter" || reason == "error") {
+        reply.calls.clear();
+        reply.error = "The model did not finish its response (" + reason + ").";
+    }
+    if (reply.text.empty() && reply.calls.empty() && reply.error.empty())
+        reply.error = "The model returned an empty response. Try again.";
     return reply;
+} catch (const json::exception&) {
+    return {{}, {}, "The model returned an invalid response shape."};
 }
 
-AiSession::Usage parseUsage(Provider provider, const json& body) {
+AiSession::Usage parseUsage(Provider provider, const json& body) try {
     const json& usage = body.value("usage", json::object());
     if (provider == Provider::Anthropic)
         return {usage.value("input_tokens", std::uint64_t(0)),
@@ -242,14 +260,17 @@ AiSession::Usage parseUsage(Provider provider, const json& body) {
     return {usage.value("prompt_tokens", std::uint64_t(0)),
             usage.value("completion_tokens", std::uint64_t(0)),
             details.value("cached_tokens", std::uint64_t(0)), 0};
+} catch (const json::exception&) {
+    return {};
 }
 
 std::string errorMessage(Provider, const json& body) {
     // Providers use error.message. The VLT proxy deliberately has a flatter
     // APIError envelope so account/quota/configuration failures are readable
     // by every desktop client as well.
-    if (body.contains("error") && body["error"].is_object())
-        return body["error"].value("message", std::string());
+    if (body.contains("error") && body["error"].is_object() &&
+        body["error"].contains("message") && body["error"]["message"].is_string())
+        return body["error"]["message"].get<std::string>();
     if (body.contains("message") && body["message"].is_string())
         return body["message"].get<std::string>();
     return {};
@@ -258,7 +279,7 @@ std::string errorMessage(Provider, const json& body) {
 // ── Streaming ───────────────────────────────────────────────────────────────
 
 StreamDecoder::Building& StreamDecoder::building(int index) {
-    if (index < 0) index = 0;
+    if (index < 0 || index >= 128) throw std::out_of_range("tool index");
     if (std::size_t(index) >= m_building.size())
         m_building.resize(std::size_t(index) + 1);
     return m_building[std::size_t(index)];
@@ -271,7 +292,19 @@ std::string StreamDecoder::takeText() {
 }
 
 bool StreamDecoder::feed(std::string_view bytes) {
-    m_buffer.append(bytes);
+    // Normalize SSE line endings even when CR/LF straddles network chunks.
+    for (char ch : bytes) {
+        if (ch == '\n' && m_previousCR) { m_previousCR = false; continue; }
+        m_previousCR = ch == '\r';
+        m_buffer += m_previousCR ? '\n' : ch;
+    }
+    if (m_buffer.size() > 4 * 1024 * 1024) {
+        m_reply.error = "The model sent an oversized stream event.";
+        m_reply.calls.clear();
+        m_done = true;
+        m_buffer.clear();
+        return true;
+    }
 
     // Events are separated by a blank line. Anything after the last one is a
     // partial event and stays in the buffer for the next chunk.
@@ -318,13 +351,17 @@ bool StreamDecoder::feed(std::string_view bytes) {
         if (!parsed.is_discarded()) {
             try {
                 handle(eventName, parsed);
-            } catch (const json::exception&) {
+            } catch (const std::exception&) {
                 m_reply.error = "the model stream had an invalid shape";
                 m_done = true;
             }
+        } else {
+            m_reply.error = "The model sent an invalid stream event.";
+            m_done = true;
         }
     }
     m_buffer.erase(0, start);
+    if (!m_reply.error.empty()) m_reply.calls.clear();
     return m_done;
 }
 
@@ -369,12 +406,18 @@ void StreamDecoder::handle(const std::string& eventName, const json& data) {
             // that costs the most.
             const json& usage = data.value("usage", json::object());
             m_usage.outputTokens += usage.value("output_tokens", std::uint64_t(0));
+            const json& delta = data.value("delta", json::object());
+            if (delta.value("stop_reason", std::string()) == "max_tokens")
+                m_reply.error = "The response reached the output limit. Continue to request the rest.";
         } else if (type == "message_stop") {
             m_done = true;
         } else if (type == "error") {
             m_reply.error = errorMessage(m_provider, data);
             if (m_reply.error.empty()) m_reply.error = "the stream failed";
             m_done = true;
+            const auto kind = data.value("error", json::object()).value("type", std::string());
+            if (kind == "overloaded_error") m_errorStatus = 503;
+            if (kind == "rate_limit_error") m_errorStatus = 429;
         }
         return;
     }
@@ -384,6 +427,9 @@ void StreamDecoder::handle(const std::string& eventName, const json& data) {
         m_reply.error = errorMessage(m_provider, data);
         if (m_reply.error.empty()) m_reply.error = "the stream failed";
         m_done = true;
+        if (data["error"].is_object() && data["error"].contains("code") &&
+            data["error"]["code"].is_number_integer())
+            m_errorStatus = data["error"]["code"].get<int>();
         return;
     }
     if (data.contains("usage") && data["usage"].is_object())
@@ -408,6 +454,12 @@ void StreamDecoder::handle(const std::string& eventName, const json& data) {
         // per-block stop event.
         if (choice.contains("finish_reason") &&
             !choice["finish_reason"].is_null()) {
+            const auto reason = choice["finish_reason"].get<std::string>();
+            if (reason == "length" || reason == "content_filter" || reason == "error") {
+                m_reply.error = "The model did not finish its response (" + reason + ").";
+                m_done = true;
+                continue;
+            }
             for (std::size_t i = 0; i < m_building.size(); ++i)
                 closeBlock(int(i));
         }

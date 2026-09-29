@@ -563,6 +563,16 @@ int main() {
 
         const std::string firstId =
             params.value["parameters"][0].value("id", "");
+        const auto page = call(c, "list_plugin_parameters", {{"channelId", pianoId}, {"insertId", slotId}, {"limit", 1}});
+        check(page.ok && page.value["parameters"].size() == 1 && page.value["nextOffset"] == 1 &&
+                  page.value["parameters"][0].contains("stepped") && page.value["parameters"][0].contains("default"),
+              "parameter pages retain precision, defaults and stepped metadata");
+        const auto filtered = call(c, "list_plugin_parameters", {{"channelId", pianoId}, {"insertId", slotId}, {"nameContains", firstId}});
+        check(filtered.ok && !filtered.value["parameters"].empty(), "parameters can be found by id without sending the whole plugin");
+        const auto duplicate = call(c, "set_insert_parameters", {{"channelId", pianoId}, {"insertId", slotId},
+            {"parameters", json::array({{{"parameterId", firstId}, {"value", params.value["parameters"][0]["min"]}},
+                                       {{"parameterId", firstId}, {"value", params.value["parameters"][0]["min"]}}})}});
+        check(!duplicate.ok, "duplicate parameter changes are rejected before applying a batch");
         const ai::ToolResult wrongParam =
             call(c, "set_insert_parameter", json{{"channelId", pianoId},
                                                  {"insertId", slotId},
@@ -1228,6 +1238,22 @@ int main() {
     }
 
     // ── The wire: both providers' shapes, and streaming ──
+    {
+        daw::EngineController harmonyController;
+        ai::ToolContext context;
+        context.compositionCandidates = std::make_shared<ai::CompositionCandidateStore>();
+        const json progression = json::array({{{"startBeats", 0}, {"lengthBeats", 1.5}, {"root", 0}, {"pitchClasses", {0, 4, 7, 11, 2}}},
+                                               {{"startBeats", 1.5}, {"lengthBeats", 2.5}, {"root", 5}, {"pitchClasses", {5, 9, 0, 4}}}});
+        const auto result = ai::callTool(harmonyController, "compose_candidates", {{"role", "chords"}, {"bars", 1}, {"harmony", progression}}, context);
+        check(result.ok && result.value["harmonySegments"] == 2, "explicit extended chord progressions reach the composition engine");
+        json bad = progression;
+        bad[1]["startBeats"] = 1;
+        check(!ai::callTool(harmonyController, "compose_candidates", {{"role", "chords"}, {"bars", 1}, {"harmony", bad}}, context).ok,
+              "overlapping explicit chord changes are refused");
+        context.uiContext = [] { return json{{"pianoRoll", {{"selectedNoteCount", 3}}}}; };
+        check(ai::callTool(harmonyController, "get_ui_context", {}, context).value["pianoRoll"]["selectedNoteCount"] == 3,
+              "UI selection context reaches the model without Qt in the controller");
+    }
     // None of this needs a network, which is the only reason streaming can be
     // checked at all. The bytes below are the event shapes each provider
     // documents, fed in split across chunk boundaries the way a socket
@@ -1409,6 +1435,30 @@ int main() {
                     "{\"message\":\"overloaded\"}}\n\n");
         check(broken.done() && broken.reply().error == "overloaded",
               "an error event ends the stream and carries its reason");
+
+        StreamDecoder crlf(Provider::OpenAi);
+        crlf.feed("data: {\"choices\":[{\"delta\":{\"content\":\"kept\"}}]}\r");
+        crlf.feed("\n\r\ndata: [DONE]\r\n\r\n");
+        check(crlf.done() && crlf.reply().text == "kept", "SSE CRLF survives chunk boundaries");
+        StreamDecoder oversizedIndex(Provider::OpenAi);
+        oversizedIndex.feed("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":2147483647}]}}]}\n\n");
+        check(oversizedIndex.done() && !oversizedIndex.reply().error.empty(), "untrusted tool indices are bounded");
+        StreamDecoder truncated(Provider::OpenAi);
+        truncated.feed("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"x\",\"function\":{\"name\":\"set_tempo\",\"arguments\":\"{\\\"bpm\\\":140}\"}}]},\"finish_reason\":\"length\"}]}\n\n");
+        check(!truncated.reply().error.empty() && truncated.reply().calls.empty(), "output-limit tool calls cannot execute");
+        StreamDecoder rateLimited(Provider::OpenAi);
+        rateLimited.feed("data: {\"error\":{\"code\":429,\"message\":\"busy\"}}\n\n");
+        check(rateLimited.errorStatus() == 429 && !rateLimited.hasOutput(), "in-stream rate limits can be retried before output");
+        check(!parseReply(Provider::OpenAi, json{{"choices", 4}}).error.empty(), "malformed JSON responses do not throw");
+        daw::EngineController partialController;
+        ai::AiSession partialSession(partialController);
+        partialSession.begin("/compose make chords");
+        partialSession.applyReply({"Half a response", {{"no", "set_tempo", {{"bpm", 177}}}}, "interrupted"});
+        check(partialSession.messages().back().text == "Half a response" && partialController.tempo() != 177,
+              "interrupted prose is kept and its commands are never executed");
+        check(partialSession.resume() && partialSession.context().mode == ai::InteractionMode::Compose,
+              "continuation preserves the original capability mode");
+        partialSession.applyReply({"Finished", {}, {}});
     }
 
     // ── The prompt library ──

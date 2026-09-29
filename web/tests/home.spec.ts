@@ -5,7 +5,7 @@ for (const locale of ["ru", "en"]) {
     await page.context().addCookies([{ name: "vlt-locale", value: locale, url: "http://127.0.0.1:3100" }]);
     await page.goto("/");
     await expect(page).toHaveTitle(/VLTone.*(?:Открытая бета|Open beta)/);
-    await expect(page.locator("h1")).toContainText("VLTone");
+    await expect(page.locator("h1")).toContainText(locale === "ru" ? "Запись, MIDI и сведение." : "Record, arrange and mix.");
     await expect(page.locator(".hero-announcement")).toHaveCount(0);
     await expect(page.locator(".vlt-brand .brand-mark img")).toBeVisible();
     await expect(page.locator(".vlt-brand .brand-mark img")).toHaveCSS("object-fit", "contain");
@@ -21,8 +21,8 @@ for (const locale of ["ru", "en"]) {
 
     const steps = page.locator(".beta-steps li");
     await expect(steps).toHaveCount(3);
-    await expect(steps.nth(0).getByRole("link")).toHaveAttribute("href", "/register");
-    await expect(steps.nth(1).getByRole("link")).toHaveAttribute("href", "/releases");
+    await expect(steps.nth(0).getByRole("link")).toHaveAttribute("href", "/releases");
+    await expect(steps.nth(1).getByRole("link")).toHaveAttribute("href", "/register");
     await steps.nth(2).getByRole("link").click();
     await expect(page).toHaveURL(/\/manual#first-launch$/);
     await expect(page.locator("#first-launch")).toBeInViewport();
@@ -33,8 +33,8 @@ for (const locale of ["ru", "en"]) {
     await page.keyboard.press("Enter");
     await expect(page.locator(".faq-list details").first()).not.toHaveAttribute("open");
     await page.locator(".hero-copy-panel").getByRole("link").first().click();
-    await expect(page).toHaveURL(/\/register$/);
-    await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex, follow");
+    await expect(page).toHaveURL(/\/releases$/);
+    await expect(page.locator("h1")).toBeVisible();
     const ogImage = await request.get("/opengraph-image");
     expect(ogImage.status()).toBe(200);
     expect(ogImage.headers()["content-type"]).toContain("image/png");
@@ -52,7 +52,7 @@ for (const width of [320, 375, 768, 1440]) {
     await expect(page.locator(".vlt-nav")).toBeVisible();
     await expect(page.locator(".vlt-nav a")).toHaveCount(3);
     await expect(page.locator(".locale-link")).toBeVisible();
-    await expect(page.getByRole("link", { name: "Аккаунт" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Аккаунт", exact: true })).toBeVisible();
     const header = await page.evaluate(() => {
       const brand = document.querySelector(".vlt-brand")!.getBoundingClientRect();
       const nav = document.querySelector(".vlt-nav")!.getBoundingClientRect();

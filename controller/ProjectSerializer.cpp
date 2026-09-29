@@ -1,4 +1,5 @@
 #include "ProjectSerializer.hpp"
+#include "SlideJson.hpp"
 #include "collaboration/CollaborationState.hpp"
 #include "platform/PathUtils.hpp"
 #include "serialization/AssetJson.hpp"
@@ -284,6 +285,7 @@ json takeToJson(const TakeModel& t, MediaPaths media) {
         {"notes", std::move(notes)},
     };
     if (!t.asset.empty()) result["asset"] = assetRefToJson(t.asset);
+    if (!t.slideNotes.empty()) result["slideNotes"] = slides::toJson(t.slideNotes);
     if (!t.lanes.empty()) {
         result["lanes"] = reservedArray(t.lanes.size());
         for (const auto& lane : t.lanes) result["lanes"].push_back(laneToJson(lane));
@@ -307,6 +309,7 @@ TakeModel takeFromJson(const json& j, const std::string& mediaDir) {
     t.muted = j.value("muted", false);
     t.channels = j.value("channels", 0);
     t.color = j.value("color", 0x4A90D9u);
+    if (j.contains("slideNotes")) t.slideNotes = slides::fromArray(j.at("slideNotes"));
     if (j.contains("lanes") && j.at("lanes").is_array())
         for (const auto& lane : j.at("lanes")) t.lanes.push_back(laneFromJson(lane));
     if (j.contains("asset")) t.asset = assetRefFromJson(j.at("asset"));
@@ -521,6 +524,7 @@ json clipToJson(const ClipModel& c, MediaPaths media, bool withHistory = true) {
         {"inserts", insertsToJson(c.inserts)},
         {"expanded", c.expanded},
     };
+    if (!c.slideNotes.empty()) result["slideNotes"] = slides::toJson(c.slideNotes);
     if (!c.warp.empty()) {
         json markers = json::array();
         for (const auto& marker : c.warp.markers)
@@ -645,6 +649,7 @@ ClipModel clipFromJson(const json& j, const std::string& mediaDir,
             offline.value("tailMaxSeconds", 30.0);
     }
     c.patternClipId = j.value("patternClipId", "");
+    if (j.contains("slideNotes")) c.slideNotes = slides::fromArray(j.at("slideNotes"));
     if (j.contains("notes") && j.at("notes").is_array()) {
         const auto& notes = j.at("notes");
         c.notes.reserve(notes.size());
@@ -767,6 +772,7 @@ json trackToJson(const TrackModel& t, MediaPaths media) {
         {"monitor", t.monitor},
         {"mono", t.mono},
         {"height", t.height},
+        {"expandedHeight", t.expandedHeight},
         {"expanded", t.expanded},
         {"automationExpanded", t.automationExpanded},
         {"summing", t.summing},
@@ -819,6 +825,7 @@ TrackModel trackFromJson(const json& j, const std::string& mediaDir) {
     t.monitor = j.value("monitor", false);
     t.mono = j.value("mono", false);
     t.height = j.value("height", 84.0);
+    t.expandedHeight = j.value("expandedHeight", t.height > 24.0 ? t.height : 72.0);
     t.expanded = j.value("expanded", true);
     // Before automation had its own disclosure it borrowed `expanded`; use
     // that value when opening an older project so its visible lanes do not

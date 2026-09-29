@@ -21,6 +21,7 @@ struct MidiInputStamp {
 struct MidiPerformance {
     std::vector<NoteModel> notes;
     std::vector<ControllerLane> lanes;
+    std::vector<SlideNoteModel> slideNotes;
     bool empty() const noexcept {
         return notes.empty() && lanes.empty();
     }
@@ -54,7 +55,7 @@ MidiPerformance sliceMidiPerformance(const MidiPerformance &data, double fromBea
                                      bool newIds = true);
 void mergeMidiPerformance(ClipModel &clip, MidiPerformance data, double offsetBeats,
                           double endBeats);
-/// Materialize only the audible comp pieces. Ordinary clips are unchanged.
+/// Materialize the audible source range, including left trims and comp pieces.
 void sliceMidiClipContent(ClipModel &clip, double fromSeconds, double toSeconds, double tempo,
                           bool newIds);
 std::vector<ClipModel> midiPlaybackClips(const TrackModel &track, double tempo);

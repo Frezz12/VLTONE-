@@ -1,5 +1,6 @@
 #include "EngineController.hpp"
 #include "ExportDialog.hpp"
+#include "BounceInPlaceDialog.hpp"
 #include "ExportPrefs.hpp"
 #include "PreviewLoader.hpp"
 #include <QApplication>
@@ -9,8 +10,10 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
+#include <QGroupBox>
 #include <QImage>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QEventLoop>
 #include <QLabel>
 #include <QPushButton>
@@ -18,6 +21,8 @@
 #include <QStyleOptionButton>
 #include <QSettings>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QScreen>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QThreadPool>
@@ -52,6 +57,12 @@ int main(int argc, char** argv) {
     const auto check = [&](bool ok, const char* what) {
         if (!ok) { ++failures; std::cerr << "FAIL: " << what << '\n'; }
     };
+    const auto settleWindow = [] {
+        // Native window managers can asynchronously constrain a requested size.
+        QEventLoop loop;
+        QTimer::singleShot(30, &loop, &QEventLoop::quit);
+        loop.exec();
+    };
     QSettings().setValue(QStringLiteral("ui/themeId"),
                          QStringLiteral("logic"));
     ThemeManager& themes = ThemeManager::instance();
@@ -79,6 +90,21 @@ int main(int argc, char** argv) {
 
     daw::EngineController controller;
     check(bool(controller.initialize(48000, 64, false)), "controller prepares");
+    {
+        daw::EngineController::BounceRequest selection;
+        selection.tracks = {"first", "second", "third", "fourth"};
+        selection.endSeconds = 1;
+        BounceInPlaceDialog bounce(controller, selection, QStringLiteral("4 MIDI tracks"));
+        auto* destination = bounce.findChild<QComboBox*>(QStringLiteral("BounceDestination"));
+        auto* result = bounce.findChild<QLabel*>(QStringLiteral("BounceResultSummary"));
+        check(destination && destination->count() == 1 && destination->currentData().toInt() ==
+              int(daw::EngineController::BounceDestination::NewTrack) && result && !result->text().isEmpty(),
+              "multi-track Bounce dialog clearly creates one mixed audio track");
+        selection.tracks.resize(1);
+        BounceInPlaceDialog single(controller, selection, QStringLiteral("1 track"));
+        check(single.findChild<QComboBox*>(QStringLiteral("BounceDestination"))->count() == 2,
+              "single-track Bounce still offers Replace and New Track");
+    }
     const auto track = controller.addTrack(daw::TrackKind::Audio, "Test");
     controller.importAudio(source.toStdString(), track, 0);
     daw::rendering::Spec spec;
@@ -91,15 +117,77 @@ int main(int argc, char** argv) {
           QDir(QString::fromStdString(spec.outputDir)), "unsaved project uses fallback folder");
     parent.show();
     dialog.show();
-    if (qEnvironmentVariableIsSet("DAW_RENDER_TEST_ARTIFACTS")) {
-        auto* tabs = dialog.findChild<QTabWidget*>("ExportAdvanced");
-        for (int i = 0; i < tabs->count(); ++i) {
-            tabs->setCurrentIndex(i);
-            QApplication::processEvents();
-            dialog.grab().save(temporary.filePath(QStringLiteral("render-tab-%1.png").arg(i)));
+    settleWindow();
+    check(dialog.findChildren<QTabWidget*>().isEmpty(), "render settings require no tabs");
+    check(dialog.size().width() <= dialog.screen()->availableGeometry().width() - 80
+          && dialog.size().height() <= dialog.screen()->availableGeometry().height() - 80,
+          "initial render window leaves room around it on the current screen");
+    dialog.resize(1100, 820);
+    settleWindow();
+    auto* renderScroll = dialog.findChild<QScrollArea*>();
+    const QStringList sections{"ExportFormatSection", "ExportRangeSection",
+        "ExportProcessingSection", "ExportOutputsSection", "ExportDetailsSection"};
+    for (const QString& name : sections) {
+        auto* section = dialog.findChild<QGroupBox*>(name);
+        if (section && dialog.height() < 820) {
+            renderScroll->ensureWidgetVisible(section, 0, 0);
+            settleWindow();
         }
-        tabs->setCurrentIndex(0);
+        check(section && section->isVisible()
+              && renderScroll->viewport()->rect().contains(
+                  QRect(section->mapTo(renderScroll->viewport(), QPoint()), section->size())),
+              "render sections fit together or remain reachable on a short screen");
     }
+    renderScroll->verticalScrollBar()->setValue(0);
+    settleWindow();
+    auto* stems = dialog.findChild<QCheckBox*>("ExportStems");
+    auto* trackList = dialog.findChild<QListWidget*>("ExportChannels");
+    auto* details = dialog.findChild<QGroupBox*>("ExportDetailsSection");
+    const QRect detailsBefore = details->geometry();
+    check(trackList->isVisible() && !trackList->isEnabled(),
+          "stem choices remain visible when exporting only the master");
+    stems->setChecked(true);
+    settleWindow();
+    if (details->geometry() != detailsBefore) {
+        const QRect after = details->geometry();
+        std::cerr << "Details before " << detailsBefore.x() << ',' << detailsBefore.y()
+                  << ' ' << detailsBefore.width() << 'x' << detailsBefore.height()
+                  << ", after " << after.x() << ',' << after.y()
+                  << ' ' << after.width() << 'x' << after.height() << '\n';
+    }
+    check(trackList->isEnabled() && details->geometry() == detailsBefore,
+          "enabling stems preserves the positions of adjacent settings");
+    stems->setChecked(false);
+    settleWindow();
+    if (qEnvironmentVariableIsSet("DAW_RENDER_TEST_ARTIFACTS")) {
+        dialog.grab().save(temporary.filePath("render-overview.png"));
+    }
+    const QFont originalFont = QApplication::font();
+    QFont largeFont = originalFont;
+    largeFont.setPixelSize(18);
+    QApplication::setFont(largeFont);
+    themes.fontChanged();
+    dialog.resize(520, 560);
+    QApplication::processEvents();
+    check(renderScroll->widget()->width() <= renderScroll->viewport()->width(),
+          "large text fits a narrow render window without horizontal clipping");
+    renderScroll->ensureWidgetVisible(dialog.findChild<QLineEdit*>("ExportComment"));
+    QApplication::processEvents();
+    auto* commentField = dialog.findChild<QLineEdit*>("ExportComment");
+    check(renderScroll->viewport()->rect().contains(
+              QRect(commentField->mapTo(renderScroll->viewport(), QPoint()), commentField->size())),
+          "large-text metadata remains reachable");
+    if (qEnvironmentVariableIsSet("DAW_RENDER_TEST_ARTIFACTS"))
+        dialog.grab().save(temporary.filePath("render-large-text.png"));
+    QApplication::setFont(originalFont);
+    themes.fontChanged();
+    dialog.resize(1100, 820);
+    QApplication::processEvents();
+    auto* formatSection = dialog.findChild<QGroupBox*>("ExportFormatSection");
+    auto* outputsSection = dialog.findChild<QGroupBox*>("ExportOutputsSection");
+    check(outputsSection->mapTo(renderScroll->widget(), QPoint()).x()
+              > formatSection->mapTo(renderScroll->widget(), QPoint()).x() + formatSection->width(),
+          "render layout returns to two columns after expanding the window");
     auto* buttons = dialog.findChild<QDialogButtonBox*>();
     auto* status = dialog.findChild<QLabel*>("ExportStatus");
     bool cancelled = false, enabled = false;
@@ -275,6 +363,18 @@ int main(int argc, char** argv) {
             auto* renderScroll = completed.findChild<QScrollArea*>();
             check(renderScroll->widget()->width() <= renderScroll->viewport()->width(),
                   "narrow render form does not overflow horizontally");
+            auto* format = completed.findChild<QGroupBox*>("ExportFormatSection");
+            auto* outputs = completed.findChild<QGroupBox*>("ExportOutputsSection");
+            check(outputs->mapTo(renderScroll->widget(), QPoint()).y()
+                      >= format->mapTo(renderScroll->widget(), QPoint()).y() + format->height(),
+                  "narrow render window stacks its settings into one column");
+            renderScroll->verticalScrollBar()->setValue(renderScroll->verticalScrollBar()->maximum());
+            QApplication::processEvents();
+            auto* comment = completed.findChild<QLineEdit*>("ExportComment");
+            check(renderScroll->viewport()->rect().contains(
+                      QRect(comment->mapTo(renderScroll->viewport(), QPoint()), comment->size())),
+                  "last metadata field remains reachable by scrolling");
+            renderScroll->verticalScrollBar()->setValue(0);
             if (qEnvironmentVariableIsSet("DAW_RENDER_TEST_ARTIFACTS"))
                 completed.grab().save(temporary.filePath("render-narrow-" + theme + ".png"));
         }

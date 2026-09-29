@@ -468,6 +468,10 @@ CollaborationCommandBridge::watchDurableOperation(
     return {DurableOperationWatchCode::Watching};
 }
 
+std::uint32_t CollaborationCommandBridge::commandSchemaVersion() const noexcept {
+    return m_service ? std::uint32_t(m_service->commandSchemaVersion()) : daw::collab::kProjectCommandSchemaVersion;
+}
+
 bool CollaborationCommandBridge::handlesCloudBinding() {
     refreshProjectBinding();
     return !m_boundProjectId.isEmpty();

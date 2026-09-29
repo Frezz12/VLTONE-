@@ -21,8 +21,11 @@
 namespace {
 constexpr auto kSettings = "bounceInPlace";
 
-bool enabled(std::uint32_t mask, daw::EngineController::BounceFxLayer layer) {
-    return (mask & std::uint32_t(layer)) != 0;
+bool mixesSources(const daw::EngineController::BounceRequest& request) {
+    if (request.fullMix) return true;
+    std::set<std::string> tracks(request.tracks.begin(), request.tracks.end());
+    for (const auto& clip : request.clips) tracks.insert(clip.trackId);
+    return tracks.size() > 1;
 }
 } // namespace
 
@@ -85,10 +88,16 @@ BounceInPlaceDialog::BounceInPlaceDialog(
     auto* destinationBox = new QGroupBox(tr("After rendering"), this);
     auto* destinationForm = new QFormLayout(destinationBox);
     m_destination = new QComboBox(destinationBox);
-    m_destination->addItem(tr("Replace in place"),
-                           int(daw::EngineController::BounceDestination::Replace));
-    m_destination->addItem(tr("Create a new track"),
-                           int(daw::EngineController::BounceDestination::NewTrack));
+    m_destination->setObjectName(QStringLiteral("BounceDestination"));
+    if (mixesSources(m_baseRequest)) {
+        m_destination->addItem(tr("Mix into one new audio track"),
+                               int(daw::EngineController::BounceDestination::NewTrack));
+    } else {
+        m_destination->addItem(tr("Replace in place"),
+                               int(daw::EngineController::BounceDestination::Replace));
+        m_destination->addItem(tr("Create a new track"),
+                               int(daw::EngineController::BounceDestination::NewTrack));
+    }
     destinationForm->addRow(tr("Destination"), m_destination);
     root->addWidget(destinationBox);
 
@@ -98,7 +107,8 @@ BounceInPlaceDialog::BounceInPlaceDialog(
     root->addWidget(m_summary);
     m_warning = new QLabel(this);
     m_warning->setWordWrap(true);
-    m_warning->setAccessibleName(tr("Bounce warning"));
+    m_warning->setObjectName(QStringLiteral("BounceResultSummary"));
+    m_warning->setAccessibleName(tr("Bounce result"));
     root->addWidget(m_warning);
 
     m_status = new QLabel(tr("Ready"), this);
@@ -126,7 +136,8 @@ BounceInPlaceDialog::BounceInPlaceDialog(
     m_summing->setChecked(settings.value("summing", true).toBool());
     m_masterFx->setChecked(settings.value("masterFx", false).toBool());
     m_ending->setCurrentIndex(settings.value("tail", 0).toInt());
-    m_destination->setCurrentIndex(settings.value("destination", 0).toInt());
+    m_destination->setCurrentIndex(std::max(0,
+        m_destination->findData(settings.value("destination", 0).toInt())));
     settings.endGroup();
 
     connect(m_ending, &QComboBox::currentIndexChanged, this,
@@ -204,7 +215,7 @@ void BounceInPlaceDialog::updateSummary() {
         {m_masterFx, tr("Master FX")},
     }};
     const bool masterPrinted = m_masterFx->isChecked();
-    const bool sharedCapture = request.fullMix || m_sends->isChecked() ||
+    const bool sharedCapture = mixesSources(request) || m_sends->isChecked() ||
                                m_summing->isChecked();
     const bool trackCapture = m_trackFx->isChecked();
     for (int i = 0; i < int(layers.size()); ++i) {
@@ -226,21 +237,10 @@ void BounceInPlaceDialog::updateSummary() {
                  live.isEmpty() ? tr("none") : live.join(", "),
                  skipped.isEmpty() ? tr("none") : skipped.join(", ")));
 
-    const bool shared = enabled(request.fxLayers,
-                                daw::EngineController::BounceFxLayer::Sends) ||
-                        enabled(request.fxLayers,
-                                daw::EngineController::BounceFxLayer::Summing) ||
-                        enabled(request.fxLayers,
-                                daw::EngineController::BounceFxLayer::Master);
-    std::set<std::string> sourceTracks(request.tracks.begin(),
-                                       request.tracks.end());
-    for (const auto& clip : request.clips) sourceTracks.insert(clip.trackId);
-    const std::size_t sources = request.fullMix ? 1 : sourceTracks.size();
-    m_warning->setText(shared && sources > 1
-                           ? tr("Warning: shared nonlinear effects are rendered with each "
-                                "source soloed; the sum of files can differ from "
-                                "the live mix.")
-                           : QString());
+    m_warning->setText(mixesSources(request)
+        ? tr("Selected sources will be mixed into one audio clip on a new track. "
+             "The rendered source regions will be muted.")
+        : QString());
     m_renderButton->setEnabled(!m_rendering &&
                                request.endSeconds > request.startSeconds);
 }
@@ -261,7 +261,8 @@ void BounceInPlaceDialog::startRender() {
     settings.setValue("summing", m_summing->isChecked());
     settings.setValue("masterFx", m_masterFx->isChecked());
     settings.setValue("tail", m_ending->currentIndex());
-    settings.setValue("destination", m_destination->currentIndex());
+    if (m_destination->count() > 1)
+        settings.setValue("destination", m_destination->currentData().toInt());
     settings.endGroup();
 
     m_rendering = true;

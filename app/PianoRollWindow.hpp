@@ -1,4 +1,5 @@
 #pragma once
+#include "SlideNotes.hpp"
 #include "graphics/ScenePaintSource.hpp"
 #include "graphics/RetainedScene.hpp"
 #include "UiFrameClock.hpp"
@@ -38,16 +39,23 @@ class QAction;
 class QActionGroup;
 class QButtonGroup;
 class QComboBox;
+class QDragEnterEvent;
+class QDragMoveEvent;
+class QDragLeaveEvent;
+class QDropEvent;
+class QMimeData;
 class QHideEvent;
 class QLabel;
 class QMenu;
 class QScrollBar;
+class QSlider;
 class QShowEvent;
 class QTimer;
 class QToolButton;
 class QuantizeDialog;
 class RandomizeDialog;
 class StrumDialog;
+class SlideCurveEditor;
 class ToolDialog;
 
 /// The note canvas: a piano keyboard down the left edge, a bar/beat grid, the
@@ -75,7 +83,7 @@ public:
     /// What the left mouse button does on the grid.
     ///
     /// The right button also erases in every mode.
-    enum class Tool { Draw, Select, Slice, Mute, Erase };
+    enum class Tool { Draw, Select, Slice, Mute, Erase, Slide };
 
     /// How a note is painted. Purely cosmetic — nothing here changes a note.
     enum class NoteStyle {
@@ -100,8 +108,8 @@ public:
 
     explicit PianoRollView(daw::EngineController* controller,
                            QWidget* parent = nullptr);
-    /// Ends a keyboard audition that outlived the window (closed with a key
-    /// held), which would otherwise leave the synth holding the note.
+    /// Ends a note audition that outlived the window (closed while drawing or
+    /// holding a piano key), which would otherwise leave the synth sounding.
     ~PianoRollView() override;
 
     void setClip(const QString& trackId, const QString& clipId);
@@ -152,8 +160,6 @@ public:
     /// Other MIDI tracks to draw underneath, as dimmed reference material.
     void setGhostTracks(const QSet<QString>& trackIds);
     QSet<QString> ghostTracks() const { return m_ghostTracks; }
-    void setFollowPlayback(bool follow);
-    bool followPlayback() const { return m_followPlayback; }
     /// Repaint only the old/new playhead slivers and keyboard keys whose held
     /// state changed. Called by the window's 30 Hz transport timer.
     void refreshPlayheadFrame();
@@ -197,7 +203,9 @@ public:
     /// Headless regression check for the three pointer invariants most easily
     /// broken by event coalescing: swept erasing, grid-safe brush length and a
     /// stretch handle that only belongs to a multi-note selection.
+    bool checkSlidesForTest(const QString& imageDirectory);
     bool checkInteractionGesturesForTest();
+    static bool checkAuditionForTest();
 
     /// Privacy-safe collaboration mapping for the application-owned note
     /// canvas. Beat/pitch/value survive different zoom, scroll and lane sizes;
@@ -318,6 +326,10 @@ protected:
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
     void wheelEvent(QWheelEvent*) override;
+    void dragEnterEvent(QDragEnterEvent*) override;
+    void dragMoveEvent(QDragMoveEvent*) override;
+    void dragLeaveEvent(QDragLeaveEvent*) override;
+    void dropEvent(QDropEvent*) override;
     /// Native trackpad gestures (pinch to zoom, smart-zoom to fit) arrive here
     /// rather than as wheel events, so they need their own hook.
     bool event(QEvent*) override;
@@ -329,6 +341,22 @@ protected:
     void resizeEvent(QResizeEvent*) override;
 
 private:
+    void paintSlides(QPainter&);
+    bool slidePress(QMouseEvent*);
+    bool slideMove(QMouseEvent*);
+    bool slideRelease();
+    bool slideKey(QKeyEvent*);
+    void openSlideEditor(const std::string& id);
+    void cancelSlideGesture();
+    QRectF slideRect(const daw::SlideNoteModel&) const;
+    std::string slideAt(QPointF) const;
+    void publishSlides(const std::vector<daw::SlideNoteModel>&, bool undo);
+    bool m_slideChord = false;
+    bool m_slideGesture = false, m_slideCreating = false, m_slideResize = false;
+    QPointF m_slidePress;
+    std::string m_selectedSlide;
+    std::vector<daw::SlideNoteModel> m_slideBefore;
+    QPointer<SlideCurveEditor> m_slideEditor;
     bool hasActivePointerGesture() const;
     void finishInterruptedPointerGesture();
     friend class PianoRollWindow;
@@ -422,8 +450,8 @@ private:
     QRectF stretchHandleRect() const;
     /// True when the pointer is over the stretch handle.
     bool onStretchHandle(const QPointF& pos) const;
-    /// Keep the playhead on screen while it moves.
-    void followPlayhead();
+    QString samplerDropPath(const QMimeData*) const;
+    bool inNoteGrid(const QPointF&) const;
     /// Sound `pitch` on the clip's track through its instrument, ending
     /// whatever the keyboard was already sounding. Nothing is written down —
     /// this is the click you hear, not a note.
@@ -515,7 +543,7 @@ private:
     double m_gridContrast = 0.5;
     QColor m_gridColor;              // invalid = follow the theme
     QSet<QString> m_ghostTracks;
-    bool m_followPlayback = true;
+    QString m_sampleDropName;
     double m_lastPlayheadX = -1.0;
     PitchMask m_lastSoundingPitches;
     PitchMask m_livePitches;
@@ -549,6 +577,9 @@ private:
     std::vector<daw::NoteModel> m_moveWorking;
     /// Shift-drag keeps the original notes in place and turns this captured
     /// selection into copies only after the pointer clears the drag threshold.
+    daw::slides::PitchCurves m_slidePaintCurves;
+    std::uint64_t m_slidePaintRevision=~std::uint64_t(0);
+    std::string m_slidePaintClip;
     bool m_duplicateDragPending = false;
     bool m_duplicateDragCreated = false;
     QPointF m_movePress;
@@ -706,6 +737,8 @@ private:
 class PianoRollWindow : public QWidget {
     Q_OBJECT
 public:
+    static bool checkSlidesForTest(const QString& imageDirectory);
+    static bool checkWorkflowsForTest(const QString& imageDirectory);
     void populateActionsMenu(QMenu& menu);
     explicit PianoRollWindow(daw::EngineController* controller,
                              QWidget* parent = nullptr,
@@ -719,6 +752,9 @@ public:
     /// internal editor is active.
     QString trackId() const { return m_trackId; }
     QString clipId() const { return m_clipId; }
+    daw::miditools::Notes selectedNotesForAssistant() const {
+        return m_view && m_view->hasSelection() ? m_view->targetNotes() : daw::miditools::Notes{};
+    }
     QWidget* collaborationPresenceSurface() const { return m_view; }
     collab::SemanticPoint collaborationPresenceAt(
         const QPointF& position) const;
@@ -833,7 +869,8 @@ private:
     /// Apply commits that already-computed result under `undoLabel`.
     template <typename Dialog>
     void hostToolDialog(Dialog*& dialog, const QString& undoLabel,
-                        const std::function<void(Dialog*)>& preview);
+                        const std::function<void(Dialog*)>& preview,
+                        const std::function<void(Dialog*)>& prepare = {});
     /// Slider signals can arrive much faster than a frame can be shown. Retain
     /// only the latest pure preview request and run at most one every 16 ms.
     void scheduleToolPreview(ToolDialog* owner, std::function<void()> preview);
@@ -845,6 +882,12 @@ private:
     PianoRollView* m_view = nullptr;
     QScrollBar* m_hScroll = nullptr;
     QScrollBar* m_vScroll = nullptr;
+    QSlider* m_timeZoom = nullptr;
+    QSlider* m_noteHeight = nullptr;
+    QWidget* m_navigationKeyboardSpace = nullptr;
+    QWidget* m_navigationRulerSpace = nullptr;
+    QWidget* m_navigationLaneSpace = nullptr;
+    void applyNavigationTheme();
     QString m_trackId;
     QString m_clipId;
 

@@ -178,6 +178,28 @@ AiSettingsPage::AiSettingsPage(QWidget* parent) : QWidget(parent) {
     });
     form->addRow(QString(), m_streaming);
 
+    auto* timeout = new QSpinBox(this);
+    timeout->setRange(1, 30);
+    timeout->setSuffix(tr(" min"));
+    timeout->setValue(ui::aiprefs::timeoutSeconds() / 60);
+    timeout->setToolTip(tr("How long to wait without receiving data. Stop cancels immediately."));
+    connect(timeout, &QSpinBox::valueChanged, this, [this](int value) {
+        if (m_loading) return;
+        ui::aiprefs::setTimeoutSeconds(value * 60);
+        emit changed();
+    });
+    form->addRow(tr("Response timeout"), timeout);
+    auto* retries = new QSpinBox(this);
+    retries->setRange(0, 5);
+    retries->setValue(ui::aiprefs::maxRetries());
+    retries->setToolTip(tr("Retry temporary errors before any output arrives. Partial responses are kept for manual continuation."));
+    connect(retries, &QSpinBox::valueChanged, this, [this](int value) {
+        if (m_loading) return;
+        ui::aiprefs::setMaxRetries(value);
+        emit changed();
+    });
+    form->addRow(tr("Automatic retries"), retries);
+
     auto* warning = new QLabel(
         tr("The assistant edits the project directly. Each request lands on "
            "the undo stack as one entry, so Ctrl+Z takes back everything a "

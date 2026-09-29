@@ -89,6 +89,17 @@ int main() {
     check(writeWave(wave), "creates an audio fixture");
     check(writeMidi(midi), "creates a MIDI fixture");
     {
+        ContentCatalog singleFile({daw::platform::pathToUtf8(wave)});
+        singleFile.refresh();
+        const auto matches = singleFile.search();
+        check(matches.size() == 1 && singleFile.search("bass").empty(),
+              "an explicit file grant never scans sibling files");
+        const auto id = matches.empty() ? std::string() : matches.front().contentId;
+        check(singleFile.resolvePath(id).has_value(), "a granted single file resolves");
+        singleFile.setBrowserRoots({});
+        check(!singleFile.resolvePath(id), "removing a single file revokes its id immediately");
+    }
+    {
         std::ofstream ignored(granted / "notes.txt");
         ignored << "not content";
     }
@@ -105,6 +116,9 @@ int main() {
           "indexes supported audio and MIDI, but not unrelated files");
     check(first.cacheHits == 0 && first.metadataFailures == 0,
           "first refresh probes both files");
+    check(catalog.search({}, {}, 200, daw::platform::pathToUtf8(granted)).size() == 2 &&
+              catalog.search({}, {}, 200, daw::platform::pathToUtf8(tree.path / "other")).empty(),
+          "folder-scoped search cannot include samples from another folder");
 
     const auto audio = catalog.search("warm", ContentType::Audio);
     check(audio.size() == 1 && audio.front().name == "Warm Kick.WAV",

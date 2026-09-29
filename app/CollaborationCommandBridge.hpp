@@ -96,6 +96,7 @@ public:
     /// read-only or resyncing. Callers must never fall through to a local
     /// mutation/legacy undo while this is true.
     bool handlesCloudBinding() override;
+    std::uint32_t commandSchemaVersion() const noexcept override;
     daw::collab::SharedMutationResult submit(
         daw::collab::SharedMutationRequest request) override;
     qsizetype pendingOperationCount() const;

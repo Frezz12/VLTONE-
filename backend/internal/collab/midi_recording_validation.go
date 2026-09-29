@@ -93,7 +93,7 @@ func validateMidiTake(raw json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if err = exactPayloadKeys(b, []string{"id", "name", "offsetSeconds", "lengthSeconds", "clipOffsetSeconds", "gain", "muted", "channels", "color", "notes"}, []string{"lanes"}); err != nil {
+	if err = exactPayloadKeys(b, []string{"id", "name", "offsetSeconds", "lengthSeconds", "clipOffsetSeconds", "gain", "muted", "channels", "color", "notes"}, []string{"lanes", "slideNotes"}); err != nil {
 		return err
 	}
 	if _, err = requiredPayloadUUID(b, "id"); err != nil {
@@ -122,6 +122,11 @@ func validateMidiTake(raw json.RawMessage) error {
 	if err = midiArray(b["notes"], validateNotePayload); err != nil {
 		return err
 	}
+	if raw, ok := b["slideNotes"]; ok {
+		if err := midiArray(raw, validateSlidePayload); err != nil {
+			return err
+		}
+	}
 	if lanes, ok := b["lanes"]; ok {
 		return midiArray(lanes, validateMidiLane)
 	}
@@ -132,8 +137,13 @@ func validateMidiContentPayload(raw json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if err = exactPayloadKeys(b, []string{"notes", "lanes", "takes", "comp", "expanded"}, nil); err != nil {
+	if err = exactPayloadKeys(b, []string{"notes", "lanes", "takes", "comp", "expanded"}, []string{"slideNotes"}); err != nil {
 		return err
+	}
+	if raw, ok := b["slideNotes"]; ok {
+		if err := midiArray(raw, validateSlidePayload); err != nil {
+			return err
+		}
 	}
 	if _, err = payloadBool(b, "expanded"); err != nil {
 		return err

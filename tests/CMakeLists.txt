@@ -649,3 +649,7 @@ add_executable(midi_recording_protocol_test midi_recording_protocol_test.cpp)
 target_link_libraries(midi_recording_protocol_test PRIVATE daw_controller)
 add_test(NAME midi_recording_protocol_test COMMAND midi_recording_protocol_test)
 set_tests_properties(midi_recording_protocol_test PROPERTIES TIMEOUT 120)
+
+add_executable(slide_test slide_test.cpp)
+target_link_libraries(slide_test PRIVATE daw_controller)
+add_test(NAME slide_test COMMAND slide_test)

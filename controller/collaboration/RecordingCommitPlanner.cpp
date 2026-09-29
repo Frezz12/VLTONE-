@@ -589,7 +589,7 @@ RecordingCommitPlanResult RecordingCommitPlanner::plan(
     const CloudRecordingRecoveryRun& frozenRun,
     const RecordingCommitPlanInput& input) {
     const CommandMeta& meta = input.meta;
-    if (meta.schemaVersion != kProjectCommandSchemaVersion ||
+    if (!supportedProjectCommandSchemaVersion(meta.schemaVersion) ||
         !canonicalUuid(meta.projectId) || !canonicalUuid(meta.operationId) ||
         !canonicalUuid(meta.transactionId) || meta.serverSequence != 0 ||
         meta.operationId != frozenRun.opId ||

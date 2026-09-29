@@ -39,6 +39,14 @@ constexpr int kMinimumWidth = 420;
 constexpr int kMinimumHeight = 300;
 constexpr int kInteractiveResizeFrameMs = 16;
 
+QSize minimumFrameSize(const QWidget* content, const QRect& bounds) {
+    QSize minimum(kMinimumWidth, kMinimumHeight);
+    if (content && content->property("vlt.compactEditor").toBool()) minimum = QSize(340, 220);
+    if (content)
+        minimum = minimum.expandedTo(content->minimumSize() + QSize(2, kTitleHeight + 2));
+    return minimum.boundedTo(bounds.size());
+}
+
 struct HandleSpec {
     int edges;
     Qt::CursorShape cursor;
@@ -174,8 +182,8 @@ void InternalEditorFrame::setContent(QWidget* content) {
     setAttribute(Qt::WA_OpaquePaintEvent, false);
     applyTheme();
     content->setParent(this);
-    m_preferredContentSize = content->size().expandedTo(QSize(640, 360));
-    content->setMinimumSize(0, 0);
+    m_preferredContentSize = content->property("vlt.compactEditor").toBool()
+        ? content->size() : content->size().expandedTo(QSize(640, 360));
     content->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     m_column->addWidget(content, 1);
     m_title->setText(content->windowTitle().isEmpty()
@@ -253,8 +261,7 @@ void InternalEditorFrame::setMaximized(bool maximized) {
     if (maximized) m_restoreGeometry = geometry();
     m_maximized = maximized;
     const QRect limits = m_maximized ? workspaceRect() : availableRect();
-    setMinimumSize(std::min(kMinimumWidth, limits.width()),
-                   std::min(kMinimumHeight, limits.height()));
+    setMinimumSize(minimumFrameSize(m_content, limits));
     setGeometry(maximized ? workspaceRect()
                           : constrainedGeometry(m_restoreGeometry));
     updateMaximizeButton();
@@ -302,6 +309,7 @@ void InternalEditorFrame::resizeForContent(const QSize& contentSize) {
     if (m_maximized) return;
 
     const QSize chrome(2, kTitleHeight + 2);
+    setMinimumSize(minimumFrameSize(m_content, availableRect()));
     QRect wanted(geometry().topLeft(), contentSize + chrome);
     QRect constrained = constrainedGeometry(wanted);
     // A plugin opening its parameter dock should stay fully visible if it was
@@ -553,20 +561,20 @@ void InternalEditorFrame::restorePlacement() {
     m_maximized = m_expansionEnabled &&
         settings.value(m_settingsKey + "/maximized", false).toBool();
     const QRect movementBounds = m_maximized ? workspaceRect() : availableRect();
-    setMinimumSize(std::min(kMinimumWidth, movementBounds.width()),
-                   std::min(kMinimumHeight, movementBounds.height()));
+    setMinimumSize(minimumFrameSize(m_content, movementBounds));
 
     if (saved.isValid()) {
         m_restoreGeometry = constrainedGeometry(saved);
     } else {
         const QRect bounds = workspaceRect();
         const QSize chrome(2, kTitleHeight + 2);
+        const QSize minimum = minimumFrameSize(m_content, bounds);
         QSize wanted = m_preferredContentSize + chrome;
         wanted.setWidth(std::clamp(wanted.width(),
-                                   std::min(kMinimumWidth, bounds.width()),
+                                   minimum.width(),
                                    bounds.width()));
         wanted.setHeight(std::clamp(wanted.height(),
-                                    std::min(kMinimumHeight, bounds.height()),
+                                    minimum.height(),
                                     bounds.height()));
         m_restoreGeometry = QRect(
             bounds.x() + (bounds.width() - wanted.width()) / 2,
@@ -591,8 +599,7 @@ void InternalEditorFrame::savePlacement() {
 void InternalEditorFrame::constrainToParent() {
     if (!m_placementRestored) return;
     const QRect bounds = m_maximized ? workspaceRect() : availableRect();
-    setMinimumSize(std::min(kMinimumWidth, bounds.width()),
-                   std::min(kMinimumHeight, bounds.height()));
+    setMinimumSize(minimumFrameSize(m_content, bounds));
     if (m_maximized) {
         setGeometry(workspaceRect());
     } else {
@@ -629,8 +636,9 @@ QRect InternalEditorFrame::workspaceRect() const {
 
 QRect InternalEditorFrame::constrainedGeometry(const QRect& wanted) const {
     const QRect bounds = availableRect();
-    const int minW = std::min(kMinimumWidth, bounds.width());
-    const int minH = std::min(kMinimumHeight, bounds.height());
+    const QSize minimum = minimumFrameSize(m_content, bounds);
+    const int minW = minimum.width();
+    const int minH = minimum.height();
     const int width = std::clamp(wanted.width(), minW, bounds.width());
     const int height = std::clamp(wanted.height(), minH, bounds.height());
     const int maxX = bounds.x() + bounds.width() - width;
@@ -734,32 +742,36 @@ QRect InternalEditorFrame::interactiveResizeGeometry(
     const QPoint& globalPosition) const {
     const QPoint delta = globalPosition - m_pressGlobal;
     const QRect bounds = availableRect();
-    int left = m_pressGeometry.left();
-    int top = m_pressGeometry.top();
-    int right = m_pressGeometry.x() + m_pressGeometry.width();
-    int bottom = m_pressGeometry.y() + m_pressGeometry.height();
-    const int minW = std::min(kMinimumWidth, bounds.width());
-    const int minH = std::min(kMinimumHeight, bounds.height());
+    // An asynchronously loaded editor can raise its minimum during a drag.
+    // Reconcile the starting rectangle before deriving anchored edge limits.
+    const QRect pressGeometry = constrainedGeometry(m_pressGeometry);
+    int left = pressGeometry.left();
+    int top = pressGeometry.top();
+    int right = pressGeometry.x() + pressGeometry.width();
+    int bottom = pressGeometry.y() + pressGeometry.height();
+    const QSize minimum = minimumFrameSize(m_content, bounds);
+    const int minW = minimum.width();
+    const int minH = minimum.height();
 
     if (m_resizeEdges & LeftEdge) {
-        left = std::clamp(m_pressGeometry.left() + delta.x(),
+        left = std::clamp(pressGeometry.left() + delta.x(),
                           bounds.left(), right - minW);
     }
     if (m_resizeEdges & RightEdge) {
-        right = std::clamp(m_pressGeometry.x() +
-                               m_pressGeometry.width() + delta.x(),
+        right = std::clamp(pressGeometry.x() +
+                               pressGeometry.width() + delta.x(),
                            left + minW, bounds.x() + bounds.width());
     }
     if (m_resizeEdges & TopEdge) {
         const int latestTitleTop = bounds.y() + bounds.height() -
                                    std::min(kTitleHeight + 2, bounds.height());
-        top = std::clamp(m_pressGeometry.top() + delta.y(),
+        top = std::clamp(pressGeometry.top() + delta.y(),
                          std::max(bounds.top(), bottom - bounds.height()),
                          std::min(bottom - minH, latestTitleTop));
     }
     if (m_resizeEdges & BottomEdge) {
-        bottom = std::clamp(m_pressGeometry.y() +
-                                m_pressGeometry.height() + delta.y(),
+        bottom = std::clamp(pressGeometry.y() +
+                                pressGeometry.height() + delta.y(),
                             top + minH, top + bounds.height());
     }
     return QRect(left, top, right - left, bottom - top);
@@ -923,6 +935,43 @@ bool InternalEditorFrame::checkPlacementForTest() {
               "losing the mouse grab cancels any delayed resize");
         first.hide();
         second.hide();
+    }
+    {
+        QWidget smallHost;
+        smallHost.resize(1000, 700);
+        smallHost.show();
+        InternalEditorFrame limited(key + "/minimum", &smallHost);
+        auto* content = new QWidget;
+        content->setMinimumSize(860, 558);
+        limited.setContent(content);
+        limited.present();
+        QApplication::processEvents();
+        const auto shrink = [&limited](bool growMinimum) {
+            QWidget* handle = limited.m_resizeHandles[7];
+            const QPoint origin = handle->mapToGlobal(handle->rect().center());
+            QMouseEvent press(QEvent::MouseButtonPress, handle->mapFromGlobal(origin), origin,
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(handle, &press);
+            if (growMinimum) limited.content()->setMinimumSize(900, 600);
+            const QPoint end = origin - QPoint(10000, 10000);
+            QMouseEvent release(QEvent::MouseButtonRelease, handle->mapFromGlobal(end), end,
+                                Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(handle, &release);
+            QApplication::processEvents();
+        };
+        shrink(false);
+        check(content->minimumSize() == QSize(860, 558) && limited.size() == QSize(862, 582) &&
+                  limited.rect().contains(content->geometry()),
+              "interactive resizing preserves the editor minimum plus title and borders");
+        shrink(true);
+        check(limited.size() == QSize(902, 624) && limited.rect().contains(content->geometry()),
+              "an editor minimum raised during a drag keeps resize limits valid");
+        smallHost.resize(350, 260);
+        QApplication::processEvents();
+        check(limited.width() <= smallHost.width() && limited.height() <= smallHost.height() &&
+                  smallHost.rect().contains(QRect(limited.m_titleBar->mapTo(&smallHost, QPoint()),
+                                                    limited.m_titleBar->size())),
+              "a content minimum larger than the workspace still leaves the title recoverable");
     }
     InternalEditorFrame frame(key, &host);
     frame.setWorkspaceArea(&body);

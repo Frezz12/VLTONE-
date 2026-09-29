@@ -1173,6 +1173,7 @@ void AutomationEditorWindow::reloadTargetFields() {
     m_reloading = true;
 
     m_channel->clear();
+    m_channel->addItem(tr("Master"), QString::fromLatin1(daw::EngineController::kMasterChannelId));
     for (const daw::TrackModel& track : m_controller->project().tracks) {
         // Only tracks with a channel: a folder that does not sum, and an
         // automation lane, have nothing to drive.
@@ -1187,6 +1188,7 @@ void AutomationEditorWindow::reloadTargetFields() {
     const std::string channelId =
         m_channel->currentData().toString().toStdString();
     const daw::TrackModel* channel = m_controller->project().findTrack(channelId);
+    const bool master = channelId == daw::EngineController::kMasterChannelId;
 
     m_what->clear();
     const auto addWhat = [this](const QString& label, WhatEntry entry) {
@@ -1217,6 +1219,12 @@ void AutomationEditorWindow::reloadTargetFields() {
                      QString::fromStdString(insert.id), {}});
         }
     }
+    if (master) {
+        for (const auto& insert : m_controller->project().masterInserts)
+            addWhat(QString::fromStdString(insert.name),
+                    {daw::AutomationTargetKind::PluginParameter,
+                     QString::fromStdString(insert.id), {}});
+    }
     // Pick the entry that matches the clip's target.
     for (int i = 0; i < m_what->count(); ++i) {
         const WhatEntry entry = m_what->itemData(i).value<WhatEntry>();
@@ -1235,8 +1243,8 @@ void AutomationEditorWindow::reloadTargetFields() {
     const bool plugin = current.kind == daw::AutomationTargetKind::PluginParameter;
     m_parameter->clear();
     m_parameter->setVisible(plugin);
-    if (plugin && channel) {
-        const std::string slotId = current.slotId.isEmpty()
+    if (plugin && (channel || master)) {
+        const std::string slotId = current.slotId.isEmpty() && channel
                                        ? channel->instrument.id
                                        : current.slotId.toStdString();
         for (const auto& info : m_controller->insertParameters(channelId, slotId)) {

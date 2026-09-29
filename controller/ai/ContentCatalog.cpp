@@ -278,7 +278,8 @@ ContentCatalog::setBrowserRoots(std::vector<std::string> browserRoots) {
         std::error_code ec;
         const fs::path canonical =
             fs::canonical(platform::pathFromUtf8(utf8Root), ec);
-        if (ec || !fs::is_directory(canonical, ec) || ec) {
+        if (ec || (!fs::is_directory(canonical, ec) &&
+                   !(fs::is_regular_file(canonical, ec) && contentTypeFor(canonical))) || ec) {
             ++report.rejected;
             continue;
         }
@@ -389,6 +390,15 @@ void ContentCatalog::runRefresh(std::stop_token stop,
     for (const fs::path& root : roots) {
         if (cancelled()) return;
         std::error_code ec;
+        if (fs::is_regular_file(root, ec)) {
+            if (const auto type = contentTypeFor(root); type && seen.insert(pathKey(root)).second) {
+                candidates.push_back({root, pathKey(root), *type});
+                std::scoped_lock lock(m_mutex);
+                if (generation != m_generation) return;
+                m_status.filesDiscovered = candidates.size();
+            }
+            continue;
+        }
         fs::recursive_directory_iterator iterator(
             root, fs::directory_options::skip_permission_denied, ec);
         const fs::recursive_directory_iterator end;
@@ -531,6 +541,12 @@ void ContentCatalog::runRefresh(std::stop_token stop,
         visible.sizeBytes = facts.sizeBytes;
         visible.audio = facts.audio;
         visible.midi = facts.midi;
+        for (const auto& root : roots) {
+            if (!isWithin(candidate.path, root)) continue;
+            const auto relative = candidate.path.lexically_relative(root).parent_path();
+            visible.location = platform::pathToUtf8(root.filename() / relative);
+            break;
+        }
 
         {
             std::scoped_lock lock(m_mutex);
@@ -588,11 +604,12 @@ void ContentCatalog::runRefresh(std::stop_token stop,
 
 std::vector<ContentItem>
 ContentCatalog::search(std::string_view query, std::optional<ContentType> type,
-                       std::size_t limit) const {
+                       std::size_t limit, std::string_view withinFolder) const {
     std::scoped_lock lock(m_mutex);
     if (limit == 0) return {};
     limit = std::min(limit, kMaxSearchResults);
     const std::string needle = asciiLower(std::string(query));
+    const auto scope = withinFolder.empty() ? fs::path{} : platform::pathFromUtf8(std::string(withinFolder));
 
     struct Match {
         const ContentItem* item = nullptr;
@@ -601,9 +618,10 @@ ContentCatalog::search(std::string_view query, std::optional<ContentType> type,
     };
     std::vector<Match> matches;
     for (const IndexedItem& indexed : m_items) {
+        if (!scope.empty() && !isWithin(indexed.canonicalPath, scope)) continue;
         if (type && indexed.visible.type != *type) continue;
         std::string lowerName = asciiLower(indexed.visible.name);
-        const std::size_t position = lowerName.find(needle);
+        const std::size_t position = asciiLower(indexed.visible.name + " " + indexed.visible.location).find(needle);
         if (position == std::string::npos) continue;
         matches.push_back({&indexed.visible, std::move(lowerName), position});
     }

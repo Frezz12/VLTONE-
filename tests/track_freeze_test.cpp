@@ -1,4 +1,5 @@
 #include "EngineController.hpp"
+#include "SlideNotes.hpp"
 #include "ProjectSerializer.hpp"
 #include "Internal/InternalFactory.hpp"
 #include "Core/AudioBuffer.hpp"
@@ -7,6 +8,7 @@
 #include <filesystem>
 #include <cstdio>
 #include <cmath>
+#include <thread>
 namespace fs = std::filesystem;
 static int failures = 0;
 static bool check(bool ok, const char* text) { std::printf("%s %s\n", ok ? "PASS" : "FAIL", text); failures += !ok; return ok; }
@@ -71,6 +73,47 @@ int main() {
         {
             daw::EngineController reopened; reopened.initialize(48000, 256, false);
             check(bool(reopened.openProject(package)) && reopened.isTrackFrozen(id), "frozen project reopens with source state intact");
+            const auto sourceClip = reopened.project().findTrack(id)->clips.front().id;
+            reopened.requestClipSampleData(id, sourceClip);
+            reopened.pumpPluginEvents();
+            check(reopened.cachedClipSampleData(id, sourceClip) && reopened.isTrackFrozen(id),
+                  "opening the frozen sample editor preserves the source waveform and frozen playback");
+
+            // Frozen graph construction warms its original nodes before
+            // removing them. A valid legacy offline cache really does skip
+            // source decoding/processing in emitClipPlacements. The analysis
+            // snapshot supplies the same source fingerprint as that cache.
+            std::vector<daw::EngineController::StripSilenceSource> analysis;
+            if (check(bool(reopened.prepareStripSilence({{id, sourceClip}}, analysis)) && !analysis.empty(),
+                      "prepare source fingerprint for legacy offline-cache fixture")) {
+                auto original = *reopened.audioClip(id, sourceClip);
+                const auto renderedPath = (temp / "offline-cache.wav").string();
+                fs::copy_file(original.filePath, renderedPath);
+                original.offlineProcess.renderedFilePath = renderedPath;
+                original.offlineProcess.renderedDurationSeconds = original.durationSeconds;
+                original.offlineProcess.sourceFingerprint = analysis.front().fingerprint.substr(0, analysis.front().fingerprint.find(':'));
+                daw::TrackModel cachedTrack;
+                cachedTrack.id = "offline-source"; cachedTrack.kind = daw::TrackKind::Audio;
+                cachedTrack.clips = {original};
+                daw::ProjectModel cachedProject; cachedProject.tracks = {cachedTrack};
+                daw::EngineController cold; cold.initialize(48000, 256, false);
+                check(bool(cold.materializeCollaborationProject(std::move(cachedProject), true)) &&
+                      cold.offlineProcessCacheValid({cachedTrack.id, sourceClip}) &&
+                      !cold.cachedClipSampleData(cachedTrack.id, sourceClip),
+                      "legacy offline playback leaves source editor audio unprepared");
+                cold.requestClipSampleData(cachedTrack.id, sourceClip);
+                cold.pumpPluginEvents();
+                check(!cold.cachedClipSampleData(cachedTrack.id, sourceClip),
+                      "cold sample editor queues preparation without GUI-thread decoding");
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+                while (!cold.cachedClipSampleData(cachedTrack.id, sourceClip) && std::chrono::steady_clock::now() < deadline) {
+                    cold.pumpPluginEvents();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                check(cold.cachedClipSampleData(cachedTrack.id, sourceClip) &&
+                      cold.clipDisplayFilePath(*cold.audioClip(cachedTrack.id, sourceClip)) == renderedPath,
+                      "cold editor publishes original source audio without replacing offline playback");
+            }
             reopened.unfreezeTrack(id);
             check(!reopened.isTrackFrozen(id) && reopened.project().findTrack(id)->clips.size() == clips, "unfreeze restores editable source");
             reopened.undo(); check(reopened.isTrackFrozen(id), "unfreeze is undoable");
@@ -93,6 +136,17 @@ int main() {
         controller.setTrackArmed(id, false);
         controller.shutdown();
         for (const auto& file : frozen.files) { std::error_code ec; fs::remove(file, ec); }
+    }
+    {
+        daw::EngineController controller;controller.initialize(48000,128,false);controller.setRecordDirectory(temp.string());controller.setTempo(120);
+        auto track=controller.addTrack(daw::TrackKind::Instrument,"Slide freeze");
+        for(const auto& plugin:daw::plugins::builtinPlugins())if(plugin.uid=="daw.sampler")controller.setTrackInstrumentPlugin(track,plugin);
+        auto slot=controller.project().findTrack(track)->instrument.id;controller.loadSamplerSample(track,slot,(temp/"source.wav").string());controller.setInsertParameter(track,slot,"loop.mode",1);
+        auto clip=controller.addMidiClip(track,0,.5);daw::NoteModel note;note.id=daw::newUuid();note.pitch=60;note.lengthBeats=1;controller.setClipNotes(track,clip,{note},"Phrase");auto slide=daw::slides::create({note},.1,.5,72);daw::slides::preset(slide,60,72,2);controller.setClipSlideNotes(track,clip,{slide});
+        auto render=[&](const char* name){daw::rendering::Spec spec;spec.outputDir=temp.string();spec.baseName=name;spec.file.container=audio::platform::Container::Wav;spec.file.encoding=audio::platform::Encoding::Float32;spec.range=daw::rendering::Range::Custom;spec.customEndSeconds=.75;daw::rendering::Report report;auto result=controller.renderProject(spec,{},report);audio::platform::DecodedAudio decoded;if(result&&!report.files.empty())audio::platform::decodeAudioFile(report.files.front(),decoded);return decoded.interleaved;};
+        auto before=render("slide-before");daw::rendering::Report frozen;check(bool(controller.freezeTrack(track,{},frozen)),"slide instrument freezes");auto after=render("slide-frozen");double error=0;if(before.size()==after.size())for(std::size_t i=0;i<before.size();++i)error=std::max(error,std::abs(double(before[i])-after[i]));
+        check(!before.empty()&&before.size()==after.size()&&error<.000002,"freeze renders the identical slide trajectory");
+        slide.points.back().value=67;controller.setClipSlideNotes(track,clip,{slide});check(!controller.isTrackFrozen(track),"editing a slide invalidates its frozen audio");controller.shutdown();
     }
     std::error_code ec; fs::remove_all(temp, ec);
     return failures ? 1 : 0;

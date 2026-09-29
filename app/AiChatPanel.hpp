@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <memory>
 #include <vector>
+#include <functional>
+#include <nlohmann/json.hpp>
 
 namespace daw {
 class EngineController;
@@ -64,12 +66,12 @@ public:
     void addAttachment(const QString& path);
 
     /// Where the assistant reads "this" and "that track" from. Not owned.
-    void setSelectionModel(ui::SelectionModel* selection) {
-        m_selection = selection;
-    }
+    void setSelectionModel(ui::SelectionModel* selection);
     void setCommandManager(ShortcutManager* commands) {
         m_commands = commands;
     }
+    void setUiContextProvider(std::function<nlohmann::json()> provider) { m_uiContext = std::move(provider); }
+    void refreshContext() { updateSelectionContext(); }
 
     /// Where the open project lives on disk, so the assistant can save it when
     /// asked. Empty for a project that has never been saved. MainWindow keeps
@@ -167,6 +169,13 @@ private:
     void endRun();
     void renderTranscript();
     void refreshAttachments();
+    QStringList contentPaths() const;
+    void updateSelectionContext();
+    void showContext();
+    void showConversation();
+    void addMessageActions(QWidget* card, QVBoxLayout* layout, std::size_t index);
+    QString conversationText() const;
+    void continueRequest();
     /// The per-project standing instructions, in a small editor.
     void editInstructions();
     /// The saved-prompt menu: insert one, keep this one, or forget one.
@@ -184,6 +193,7 @@ private:
     daw::EngineController* m_controller = nullptr;
     ui::SelectionModel* m_selection = nullptr;
     ShortcutManager* m_commands = nullptr;
+    std::function<nlohmann::json()> m_uiContext;
     QString m_projectPath;
     std::unique_ptr<daw::ai::AiSession> m_session;
     std::shared_ptr<daw::ai::ContentCatalog> m_contentCatalog;
@@ -221,6 +231,12 @@ private:
     bool m_streamFlushPending = false;
     std::vector<std::size_t> m_transcriptHashes;
     QLabel* m_streamingLabel = nullptr;
+    QLabel* m_requestStatusLabel = nullptr;
+    QString m_requestStatus;
+    QToolButton* m_contextButton = nullptr;
+    QToolButton* m_attachmentButton = nullptr;
+    QToolButton* m_latestButton = nullptr;
+    bool m_followOutput = true;
     QLabel* m_attachHint = nullptr;
     ui::IconButton* m_promptsButton = nullptr;
     ui::IconButton* m_sendButton = nullptr;

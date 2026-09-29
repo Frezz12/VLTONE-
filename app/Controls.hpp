@@ -25,6 +25,7 @@ class QPainter;
 class QAction;
 class QContextMenuEvent;
 class QKeyEvent;
+class QHideEvent;
 class QTimer;
 class QVariantAnimation;
 
@@ -50,6 +51,44 @@ public:
 private:
     QPoint m_anchor;
     bool m_active = false;
+};
+
+/// Shared navigation chrome for the arrangement and piano roll.
+inline constexpr int kViewControlWidth = 18;
+inline constexpr int kViewControlHeight = 24;
+QString navigationScrollBarStyle();
+void paintViewControl(QPainter& painter, const QWidget* control,
+                      icons::Glyph glyph, bool pressed);
+
+class ViewControlStrip final : public QWidget {
+public:
+    explicit ViewControlStrip(QWidget* parent = nullptr);
+protected:
+    void paintEvent(QPaintEvent*) override;
+};
+
+/// Relative drag, wheel and keyboard all drive the same native slider value.
+class ViewScrubSlider final : public QSlider {
+public:
+    enum class Axis { Horizontal, Vertical };
+    ViewScrubSlider(icons::Glyph glyph, Axis axis, int resetValue,
+                    QWidget* parent = nullptr);
+protected:
+    void paintEvent(QPaintEvent*) override;
+    void mousePressEvent(QMouseEvent*) override;
+    void mouseMoveEvent(QMouseEvent*) override;
+    void mouseReleaseEvent(QMouseEvent*) override;
+    void mouseDoubleClickEvent(QMouseEvent*) override;
+    void hideEvent(QHideEvent*) override;
+    void enterEvent(QEnterEvent*) override;
+    void leaveEvent(QEvent*) override;
+private:
+    bool applyPointerDelta(const QPointF& delta, Qt::KeyboardModifiers modifiers);
+    icons::Glyph m_glyph;
+    Axis m_axis;
+    int m_resetValue = 0;
+    double m_positionAccumulator = 0.0;
+    LockedCursorDrag m_cursorDrag;
 };
 
 /// Linear gain ↔ fader travel with a dB taper (−60 … +6 dB), so unity sits at
@@ -747,13 +786,14 @@ private:
     QMarginsF m_scaleInsets;
 };
 
-/// A track-name field that stays inert until double-clicked. Clicking a track
+/// A track-name field that stays inert until explicitly edited. Clicking a track
 /// header should select the track, not drop a text cursor into its name — a
 /// focused line edit would swallow Space, which is play/pause.
 class InlineNameEdit : public QLineEdit {
     Q_OBJECT
 public:
     explicit InlineNameEdit(const QString& text, QWidget* parent = nullptr);
+    void beginEditing();
 
 protected:
     bool event(QEvent* ev) override;
@@ -792,6 +832,7 @@ public:
     std::function<void()> onDragStart;
 
 protected:
+    bool event(QEvent* event) override;
     void paintEvent(QPaintEvent*) override;
     void mousePressEvent(QMouseEvent* ev) override;
     void mouseMoveEvent(QMouseEvent* ev) override;

@@ -35,6 +35,8 @@ struct MidiNote {
     float pan = 0.0f;             ///< per-note stereo position, -1 ... 1
     std::uint8_t releaseVelocity = 0;
     std::uint64_t startOrder = 0, endOrder = 0;
+    std::int32_t noteId = -1;
+    std::vector<curve::Point> pitch;
 };
 
 /// Plays MIDI clips: turns a list of notes into note-on and note-off events at
@@ -68,6 +70,7 @@ private:
         std::shared_ptr<const NoteList> notes;
         std::vector<double> subtreeMaxEnd;
         std::uint64_t revision = 0;
+        std::vector<std::pair<std::int32_t, std::size_t>> identities;
     };
 
     static double buildSubtreeMax(NoteSchedule& schedule, std::size_t first,
@@ -93,6 +96,9 @@ private:
         schedule->revision = revision;
         schedule->subtreeMaxEnd.resize(schedule->notes->size());
         buildSubtreeMax(*schedule, 0, schedule->notes->size());
+        for (std::size_t i = 0; i < schedule->notes->size(); ++i)
+            if ((*schedule->notes)[i].noteId >= 0) schedule->identities.emplace_back((*schedule->notes)[i].noteId, i);
+        std::sort(schedule->identities.begin(), schedule->identities.end());
         return schedule;
     }
 
@@ -235,7 +241,8 @@ public:
         // A locate, loop wrap or edited note set invalidates both the active
         // voices and the monotonic start cursor.
         if (snapshotChanged || jumped || !m_hasPosition) {
-            releaseAll(*context.midiOutput, 0);
+            if (jumped || !m_hasPosition) releaseAll(*context.midiOutput, 0);
+            else reconcile(*schedule, blockStartBeats, *context.midiOutput);
             m_noteCursor = std::size_t(std::lower_bound(
                 notes.begin(), notes.end(), blockStartBeats,
                 [](const MidiNote& note, double beat) {
@@ -260,6 +267,7 @@ public:
         for (std::size_t i = 0; i < m_sounding.size();) {
             const Sounding sounding = m_sounding[i];
             if (sounding.endBeats < blockEndBeats) {
+                if (sounding.noteIndex < notes.size()) emitPitch(notes[sounding.noteIndex], blockStartBeats, blockEndBeats, samplesPerBeat, context.frames, *context.midiOutput,snapshotChanged);
                 const auto offset = sounding.endBeats <= blockStartBeats
                                         ? FrameCount(0)
                                         : FrameCount((sounding.endBeats -
@@ -267,7 +275,7 @@ public:
                                                      samplesPerBeat);
                 if (pushOrdered(*context.midiOutput, sounding.endOrder, MidiEvent::noteOff(
                         std::min(offset, context.frames - 1), sounding.channel,
-                        sounding.key, sounding.releaseVelocity))) {
+                        sounding.key, sounding.releaseVelocity, sounding.noteId))) {
                     m_sounding[i] = m_sounding.back();
                     m_sounding.pop_back();
                 } else {
@@ -296,17 +304,19 @@ public:
 
             const bool started = pushOrdered(*context.midiOutput, note.startOrder, MidiEvent::noteOn(
                 std::min(onOffset, context.frames - 1), note.channel, note.key,
-                note.velocity, note.pan));
+                note.velocity, note.pan, note.noteId));
             if (!started) continue;
             if (endsThisBlock) {
                 const auto offOffset =
                     FrameCount((endBeats - blockStartBeats) * samplesPerBeat);
                 pushOrdered(*context.midiOutput, note.endOrder, MidiEvent::noteOff(
-                    std::min(offOffset, context.frames - 1), note.channel, note.key, note.releaseVelocity));
+                    std::min(offOffset, context.frames - 1), note.channel, note.key, note.releaseVelocity, note.noteId));
+                emitPitch(note, blockStartBeats, blockEndBeats, samplesPerBeat, context.frames, *context.midiOutput,snapshotChanged);
             } else {
-                m_sounding.push_back(Sounding{note.key, note.channel, endBeats, note.releaseVelocity, note.endOrder});
+                m_sounding.push_back(Sounding{note.key, note.channel, endBeats, note.releaseVelocity, note.endOrder, note.noteId, m_noteCursor - 1, !note.pitch.empty()});
             }
         }
+        for (const auto& voice : m_sounding) if (voice.noteIndex < notes.size()) emitPitch(notes[voice.noteIndex], blockStartBeats, blockEndBeats, samplesPerBeat, context.frames, *context.midiOutput,snapshotChanged);
         context.midiOutput->sort();
     }
 
@@ -323,7 +333,61 @@ private:
         double endBeats;
         std::uint8_t releaseVelocity = 0;
         std::uint64_t endOrder = 0;
+        std::int32_t noteId = -1;
+        std::size_t noteIndex = 0;
+        bool hadPitch = false;
     };
+
+    void reconcile(const NoteSchedule& schedule, double beat, MidiBuffer& out) {
+        for (std::size_t i = 0; i < m_sounding.size();) {
+            auto& voice = m_sounding[i];
+            const auto it = std::lower_bound(schedule.identities.begin(), schedule.identities.end(),
+                std::pair{voice.noteId, std::size_t(0)});
+            const MidiNote* n = it != schedule.identities.end() && it->first == voice.noteId ? &(*schedule.notes)[it->second] : nullptr;
+            if (!n || voice.noteId < 0 || n->key != voice.key || n->channel != voice.channel ||
+                n->startBeats > beat || n->startBeats+n->lengthBeats <= beat) {
+                if (!out.push(MidiEvent::noteOff(0, voice.channel, voice.key, voice.releaseVelocity, voice.noteId))) { voice.noteIndex = schedule.notes->size(); voice.endBeats = beat; ++i; continue; }
+                m_sounding[i] = m_sounding.back(); m_sounding.pop_back(); continue;
+            }
+            voice.noteIndex = it->second; voice.endBeats = n->startBeats+n->lengthBeats;
+            voice.releaseVelocity = n->releaseVelocity; voice.endOrder = n->endOrder;
+            if (voice.hadPitch && n->pitch.empty()) {
+                MidiEvent reset; reset.noteId = n->noteId; reset.status = n->channel;
+                reset.data1 = n->key; reset.isPitchExpression = true;reset.pitch.edited=true;
+                out.push(reset);
+            }
+            voice.hadPitch = !n->pitch.empty();
+            ++i;
+        }
+    }
+
+    static void emitPitch(const MidiNote& note, double begin, double end, double spb,
+                          FrameCount frames, MidiBuffer& out, bool edited = false) {
+        if(note.pitch.empty())return;
+        const double start=std::max(begin,note.startBeats),stop=std::min(end,note.startBeats+note.lengthBeats);
+        if(!(stop>start)||!frames)return;
+        FrameCount frame=FrameCount(std::clamp((start-begin)*spb,0.,double(frames-1)));
+        const FrameCount limit=stop==end?frames:FrameCount(std::clamp((stop-begin)*spb,0.,double(frames)));
+        bool first=true;
+        while(frame<limit){
+            const double at=begin+frame/spb;
+            auto next=std::upper_bound(note.pitch.begin(),note.pitch.end(),at,[](double t,const auto& p){return t<p.beats;});
+            FrameCount until=limit;
+            if(next!=note.pitch.end())until=FrameCount(std::clamp(std::ceil((next->beats-begin)*spb-1e-8),double(frame+1),double(limit)));
+            MidiEvent e;e.status=note.channel;e.data1=note.key;e.noteId=note.noteId;e.isPitchExpression=true;e.musicalOrder=note.startOrder;e.frameOffset=frame;e.pitch.frames=until-frame;e.pitch.edited=edited&&first;
+            if(next!=note.pitch.begin()){
+                const auto& prev=*std::prev(next);e.pitch.active=true;e.pitch.from=prev.value;e.pitch.to=next==note.pitch.end()?prev.value:next->value;
+                e.pitch.segmentStart=prev.beats;e.pitch.shape=prev.shape;e.pitch.tension=prev.curve;e.pitch.priority=prev.priority;
+                e.pitch.shapeFrom=curve::shapeT(prev.phaseFrom,prev.shape,prev.curve);e.pitch.shapeTo=curve::shapeT(prev.phaseTo,prev.shape,prev.curve);
+                if(next!=note.pitch.end()){
+                    const double scale=(prev.phaseTo-prev.phaseFrom)/(next->beats-prev.beats);
+                    e.pitch.phaseFrom=prev.phaseFrom+(at-prev.beats)*scale;
+                    e.pitch.phaseTo=prev.phaseFrom+(begin+until/spb-prev.beats)*scale;
+                }
+            }
+            out.push(e);frame=until;first=false;
+        }
+    }
 
     void chaseActiveNotes(const NoteSchedule& schedule, std::size_t first,
                           std::size_t last, std::size_t startLimit,
@@ -341,11 +405,11 @@ private:
         if (mid < startLimit) {
             const MidiNote& note = (*schedule.notes)[mid];
             const double endBeats = note.startBeats + note.lengthBeats;
-            if (endBeats > blockStartBeats) {
+            if (endBeats > blockStartBeats && !std::any_of(m_sounding.begin(), m_sounding.end(), [&](const Sounding& s) { return note.noteId >= 0 && s.noteId == note.noteId; })) {
                 const bool endsThisBlock = endBeats < blockEndBeats;
                 if (endsThisBlock || m_sounding.size() < kMaxSounding) {
                     const bool started = out.push(MidiEvent::noteOn(
-                        0, note.channel, note.key, note.velocity, note.pan));
+                        0, note.channel, note.key, note.velocity, note.pan, note.noteId));
                     // Do not remember or release a voice the destination never
                     // received.
                     if (started) {
@@ -354,10 +418,11 @@ private:
                                 (endBeats - blockStartBeats) * samplesPerBeat);
                             out.push(MidiEvent::noteOff(
                                 std::min(offOffset, frames - 1), note.channel,
-                                note.key, note.releaseVelocity));
+                                note.key, note.releaseVelocity, note.noteId));
+                            emitPitch(note, blockStartBeats, blockEndBeats, samplesPerBeat, frames, out);
                         } else {
                             m_sounding.push_back(
-                                Sounding{note.key, note.channel, endBeats, note.releaseVelocity, note.endOrder});
+                                Sounding{note.key, note.channel, endBeats, note.releaseVelocity, note.endOrder, note.noteId, mid, !note.pitch.empty()});
                         }
                     }
                 }
@@ -419,7 +484,7 @@ private:
     void releaseAll(MidiBuffer& out, FrameCount offset) noexcept {
         std::size_t keep = 0;
         for (Sounding note : m_sounding) {
-            if (out.push(MidiEvent::noteOff(offset, note.channel, note.key)))
+            if (out.push(MidiEvent::noteOff(offset, note.channel, note.key, 0, note.noteId)))
                 continue;
             // A block already filled entirely with releases cannot sacrifice
             // one of them for this one. Keep the voice and make it immediately

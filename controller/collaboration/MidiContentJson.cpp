@@ -1,5 +1,6 @@
 #include "MidiContentJson.hpp"
 #include "ProjectSerializer.hpp"
+#include "SlideJson.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -36,6 +37,7 @@ json midiContentToJson(const ClipModel &content) {
              {"takes", clip.value("takes", json::array())},
              {"comp", clip.value("comp", json::array())},
              {"expanded", content.expanded}};
+    if (!content.slideNotes.empty()) out["slideNotes"] = slides::toJson(content.slideNotes);
     const auto points = [](json &lanes) {
         for (auto &lane : lanes)
             for (auto &point : lane["points"]) {
@@ -55,7 +57,7 @@ json midiContentToJson(const ClipModel &content) {
     return out;
 }
 bool midiContentFromJson(const json &value, ClipModel &out) {
-    if (!keys(value, {"notes", "lanes", "takes", "comp", "expanded"}) || value.size() != 5)
+    if (!keys(value, {"notes", "lanes", "takes", "comp", "expanded", "slideNotes"}) || (value.size() != 5 && value.size() != 6))
         return false;
     for (auto key : {"notes", "lanes", "takes", "comp"})
         if (!value.at(key).is_array())
@@ -63,6 +65,7 @@ bool midiContentFromJson(const json &value, ClipModel &out) {
     if (!value.at("expanded").is_boolean())
         return false;
     try {
+        if (value.contains("slideNotes")) (void)slides::fromArray(value.at("slideNotes"));
         // Validate the wire values before the project reader's compatibility
         // defaults/clamping. Parts deliberately need not contain every take.
         const auto number = [](const json &j, const char *k, double lo, double hi) {
@@ -130,8 +133,9 @@ bool midiContentFromJson(const json &value, ClipModel &out) {
         if (!valid(value.at("notes"), value.at("lanes")))
             return false;
         for (const auto &t : value.at("takes")) {
+            if (t.contains("slideNotes")) (void)slides::fromArray(t.at("slideNotes"));
             if (!keys(t, {"id", "name", "offsetSeconds", "lengthSeconds", "clipOffsetSeconds",
-                          "gain", "muted", "channels", "color", "notes", "lanes"}) ||
+                          "gain", "muted", "channels", "color", "notes", "lanes", "slideNotes"}) ||
                 !id(t, "id") || !t.at("name").is_string() ||
                 t.at("name").get<std::string>().size() > 4096 ||
                 !number(t, "offsetSeconds", 0, 1e100) || !number(t, "lengthSeconds", 0, 1e100) ||
@@ -188,6 +192,7 @@ std::vector<PrepareMidiPart> prepareMidiContent(const std::string &recordingId,
     for (const auto &take : clip.takes) {
         auto t = take;
         t.notes.clear();
+        t.slideNotes.clear();
         t.lanes.clear();
         header.takes.push_back(std::move(t));
         if (header.takes.size() == 64) {
@@ -212,6 +217,7 @@ std::vector<PrepareMidiPart> prepareMidiContent(const std::string &recordingId,
             part.kind = ClipKind::Midi;
             if (take) {
                 auto t = *take;
+                t.slideNotes.clear();
                 t.notes = std::move(ns);
                 t.lanes = std::move(ls);
                 part.takes.push_back(std::move(t));
@@ -240,6 +246,15 @@ std::vector<PrepareMidiPart> prepareMidiContent(const std::string &recordingId,
     append(clip.notes, clip.lanes, nullptr);
     for (const auto &t : clip.takes)
         append(t.notes, t.lanes, &t);
+    auto appendSlides=[&](const auto& list,const TakeModel* take){
+        for(std::size_t i=0;i<list.size();i+=16){ClipModel content;content.kind=ClipKind::Midi;
+            std::vector<SlideNoteModel> group(list.begin()+i,list.begin()+std::min(list.size(),i+16));
+            if(take){auto t=*take;t.notes.clear();t.lanes.clear();t.slideNotes=std::move(group);content.takes.push_back(std::move(t));}
+            else content.slideNotes=std::move(group);
+            add(std::move(content));
+        }
+    };
+    appendSlides(clip.slideNotes,nullptr);for(const auto& t:clip.takes)appendSlides(t.slideNotes,&t);
     for (auto &part : parts)
         part.count = std::uint32_t(parts.size());
     return parts;
@@ -259,6 +274,8 @@ bool validMidiContentIdentities(const ClipModel &clip) {
         }
         return true;
     };
+    for (const auto& s:clip.slideNotes) if(!ids.insert(s.id).second||!slides::valid(s))return false;
+    for (const auto& t:clip.takes)for(const auto& s:t.slideNotes)if(!ids.insert(s.id).second||!slides::valid(s))return false;
     if (!content(clip.notes, clip.lanes))
         return false;
     for (const auto &take : clip.takes)
@@ -288,13 +305,16 @@ ClipModel joinMidiContent(const std::vector<PrepareMidiPart> &parts) {
         out.expanded = out.expanded || part.content.expanded;
         out.comp.insert(out.comp.end(), part.content.comp.begin(), part.content.comp.end());
         merge(out.notes, out.lanes, part.content.notes, part.content.lanes);
+        out.slideNotes.insert(out.slideNotes.end(),part.content.slideNotes.begin(),part.content.slideNotes.end());
         for (const auto &take : part.content.takes) {
             auto it = std::find_if(out.takes.begin(), out.takes.end(),
                                    [&](const auto &t) { return t.id == take.id; });
             if (it == out.takes.end())
                 out.takes.push_back(take);
-            else
+            else {
                 merge(it->notes, it->lanes, take.notes, take.lanes);
+                it->slideNotes.insert(it->slideNotes.end(),take.slideNotes.begin(),take.slideNotes.end());
+            }
         }
     }
     return out;

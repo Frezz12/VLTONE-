@@ -157,6 +157,7 @@ struct OutputEvents {
             }
             case CLAP_EVENT_NOTE_ON:
             case CLAP_EVENT_NOTE_OFF:
+            case CLAP_EVENT_NOTE_END:
             case CLAP_EVENT_NOTE_CHOKE: {
                 if (!validSize(event, sizeof(clap_event_note_t))) return false;
                 const auto* note = reinterpret_cast<const clap_event_note_t*>(event);
@@ -164,7 +165,7 @@ struct OutputEvents {
                                ? PluginEvent::Kind::NoteOn
                                : (event->type == CLAP_EVENT_NOTE_OFF
                                       ? PluginEvent::Kind::NoteOff
-                                      : PluginEvent::Kind::NoteChoke);
+                                      : (event->type==CLAP_EVENT_NOTE_END?PluginEvent::Kind::NoteEnd:PluginEvent::Kind::NoteChoke));
                 out.channel = note->channel;
                 out.key = note->key;
                 out.noteId = note->note_id;
@@ -175,10 +176,11 @@ struct OutputEvents {
                 if (!validSize(event, sizeof(clap_event_note_expression_t))) return false;
                 const auto* expression =
                     reinterpret_cast<const clap_event_note_expression_t*>(event);
-                if (expression->expression_id != CLAP_NOTE_EXPRESSION_PRESSURE) {
+                if (expression->expression_id != CLAP_NOTE_EXPRESSION_PRESSURE && expression->expression_id != CLAP_NOTE_EXPRESSION_TUNING) {
                     return false;
                 }
-                out.kind = PluginEvent::Kind::PolyPressure;
+                out.kind = expression->expression_id == CLAP_NOTE_EXPRESSION_TUNING ? PluginEvent::Kind::NotePitch : PluginEvent::Kind::PolyPressure;
+                out.pitch.from = out.pitch.to = expression->value; out.pitch.active = true;
                 out.channel = expression->channel;
                 out.key = expression->key;
                 out.noteId = expression->note_id;
@@ -228,6 +230,15 @@ bool ClapInstance::initialize() {
 
     readParameters();
     readDescriptorPorts();
+    m_pitchCapabilities = {};
+    if (auto* ports = static_cast<const clap_plugin_note_ports_t*>(m_plugin->get_extension(m_plugin, CLAP_EXT_NOTE_PORTS))) {
+        clap_note_port_info_t port{};
+        if (ports->count(m_plugin, true) && ports->get(m_plugin, 0, true, &port)) {
+            m_pitchCapabilities.perNote = (port.supported_dialects & CLAP_NOTE_DIALECT_CLAP) != 0;
+            m_pitchCapabilities.mpe = (port.supported_dialects & CLAP_NOTE_DIALECT_MIDI_MPE) != 0;
+            m_pitchCapabilities.pitchBend = (port.supported_dialects & (CLAP_NOTE_DIALECT_MIDI | CLAP_NOTE_DIALECT_MIDI_MPE)) != 0;
+        }
+    }
     refreshLatency();
     refreshTail();
     return true;
@@ -482,7 +493,7 @@ bool ClapInstance::activate(const PluginProcessInfo& info) {
     // Match PluginNode's fixed block-event budget. Keeping all event layouts
     // in one union means a dense chord/CC block can use the whole budget
     // without four independent worst-case allocations per plugin instance.
-    constexpr std::size_t kBlockEventCapacity = 2048;
+    const std::size_t kBlockEventCapacity = engine::pitchEventCapacity(info.maxBlockSize, info.sampleRate);
     const std::size_t capacity =
         std::max(kBlockEventCapacity, m_parameters.size() + 256);
     m_inputEventScratch.resize(capacity);
@@ -764,6 +775,14 @@ PluginProcessDisposition ClapInstance::process(
             case PluginEvent::Kind::NoteOff:
             case PluginEvent::Kind::NoteChoke: {
                 if (orderCount >= m_inputEventScratch.size()) break;
+                if (!m_pitchCapabilities.perNote || event.preferMidi) {
+                    auto& out = m_inputEventScratch[orderCount].midi; out = {};
+                    out.header.size = sizeof(out); out.header.time = event.frameOffset;
+                    out.header.space_id = CLAP_CORE_EVENT_SPACE_ID; out.header.type = CLAP_EVENT_MIDI;
+                    out.port_index = 0; out.data[0] = std::uint8_t((event.kind == PluginEvent::Kind::NoteOn ? 0x90 : 0x80) | (event.channel & 15));
+                    out.data[1] = std::uint8_t(event.key); out.data[2] = std::uint8_t(std::clamp(std::lround(event.value*127),0L,127L));
+                    m_eventOrder[orderCount++] = &out.header; break;
+                }
                 clap_event_note_t& out = m_inputEventScratch[orderCount].note;
                 out = {};
                 out.header.size = sizeof(out);
@@ -824,6 +843,7 @@ PluginProcessDisposition ClapInstance::process(
                 m_eventOrder[orderCount++] = &out.header;
                 break;
             }
+            case PluginEvent::Kind::NotePitch:
             case PluginEvent::Kind::PolyPressure: {
                 if (orderCount >= m_inputEventScratch.size()) break;
                 clap_event_note_expression_t& out =
@@ -833,12 +853,12 @@ PluginProcessDisposition ClapInstance::process(
                 out.header.time = event.frameOffset;
                 out.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
                 out.header.type = CLAP_EVENT_NOTE_EXPRESSION;
-                out.expression_id = CLAP_NOTE_EXPRESSION_PRESSURE;
+                out.expression_id = event.kind == PluginEvent::Kind::NotePitch ? CLAP_NOTE_EXPRESSION_TUNING : CLAP_NOTE_EXPRESSION_PRESSURE;
                 out.note_id = event.noteId;
                 out.port_index = 0;
                 out.channel = event.channel;
                 out.key = event.key;
-                out.value = std::clamp(event.value, 0.0, 1.0);
+                out.value = event.kind == PluginEvent::Kind::NotePitch ? std::clamp(event.value, -120.0, 120.0) : std::clamp(event.value, 0.0, 1.0);
                 m_eventOrder[orderCount++] = &out.header;
                 break;
             }

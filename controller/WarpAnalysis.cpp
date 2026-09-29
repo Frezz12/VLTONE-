@@ -1,5 +1,6 @@
 #include "WarpAnalysis.hpp"
 #include "analysis/Signal.hpp"
+#include <array>
 
 namespace daw::analysis {
 std::vector<WarpTransient> detectWarpTransients(const engine::SampleBuffer& audio,
@@ -12,6 +13,8 @@ std::vector<WarpTransient> detectWarpTransients(const engine::SampleBuffer& audi
     std::vector<std::complex<double>> bins(size);
     std::vector<double> previous(size / 2 + 1, 0), magnitude(size / 2 + 1, 0), flux;
     flux.reserve((last - first) / hop);
+    std::vector<std::array<double, 3>> bands;
+    bands.reserve((last - first) / hop);
     for (std::size_t pos = first; pos + size <= last; pos += hop) {
         if (keepGoing && !keepGoing()) return {};
         std::fill(magnitude.begin(), magnitude.end(), 0.);
@@ -21,18 +24,43 @@ std::vector<WarpTransient> detectWarpTransients(const engine::SampleBuffer& audi
             for (std::size_t i = 0; i < magnitude.size(); ++i) magnitude[i] += std::abs(bins[i]);
         }
         double value = 0;
+        std::array<double, 3> band{};
         for (std::size_t i = 0; i < magnitude.size(); ++i) {
             const double logged = std::log1p(magnitude[i]);
-            value += std::max(0., logged - previous[i]); previous[i] = logged;
+            const double rise = std::max(0., logged - previous[i]); previous[i] = logged;
+            const double hz = i * audio.sampleRate() / size;
+            band[hz < 250 ? 0 : hz < 2500 ? 1 : 2] += rise;
+            value += rise;
         }
         flux.push_back(value);
+        bands.push_back(band);
     }
     if (flux.size() < 3) return {};
     const double peak = *std::max_element(flux.begin() + 1, flux.end());
     if (peak < 1e-6) return {};
     std::vector<WarpTransient> out;
     for (std::size_t i = 1; i + 1 < flux.size(); ++i) {
+        if (keepGoing && !keepGoing()) return {};
         if (flux[i] < peak * .025 || flux[i] <= flux[i - 1] || flux[i] < flux[i + 1]) continue;
+        // A local floor adapts to quiet passages after loud hits. Separate
+        // bands preserve bass attacks without letting treble noise dominate.
+        std::array<double, 3> floor{};
+        double local = 0; unsigned count = 0;
+        const auto radius = std::max<std::size_t>(2, std::size_t(audio.sampleRate() * .12 / hop));
+        for (auto j = i > radius ? i - radius : 0; j < std::min(flux.size(), i + radius + 1); ++j) {
+            if (j + 1 >= i && j <= i + 1) continue;
+            local += flux[j]; ++count;
+            for (int k = 0; k < 3; ++k) floor[k] += bands[j][k];
+        }
+        if (!count) continue;
+        local /= count;
+        double evidence = 0;
+        for (int k = 0; k < 3; ++k) {
+            floor[k] /= count;
+            if (bands[i][k] > 1e-5) evidence = std::max(evidence,
+                (bands[i][k] - floor[k]) / (bands[i][k] + floor[k] * 2 + 1e-6));
+        }
+        if (flux[i] < local * 1.1 || evidence < .12) continue;
         // Refine the FFT onset with the strongest short energy increase.
         const auto centre = first + i * hop;
         std::size_t attack = centre;
@@ -46,7 +74,9 @@ std::vector<WarpTransient> detectWarpTransients(const engine::SampleBuffer& audi
             }
             if (energy > strongest) { strongest = energy; attack = p; }
         }
-        WarpTransient transient{double(attack) / audio.sampleRate(), flux[i] / peak};
+        const double contrast = std::clamp((flux[i] - local) / (flux[i] + local * 2 + 1e-6), 0., 1.);
+        WarpTransient transient{double(attack) / audio.sampleRate(), std::sqrt(flux[i] / peak),
+            std::clamp(.65 * evidence + .35 * contrast, 0., 1.)};
         if (!out.empty() && transient.sourceSeconds - out.back().sourceSeconds < .025) {
             if (transient.strength > out.back().strength) out.back() = transient;
         } else out.push_back(transient);

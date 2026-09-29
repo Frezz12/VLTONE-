@@ -27,6 +27,12 @@
 #include <atomic>
 #include <cmath>
 #include <iostream>
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 class Canvas final : public ui::FrameWidget {
 public:
@@ -36,6 +42,7 @@ public:
     QPoint contextPosition;
     int contextMenus = 0;
     int paints = 0;
+    int staticBuilds = 0;
     Qt::ScrollPhase wheelPhase = Qt::NoScrollPhase;
     ulong inputTimestamp = 0;
     bool overflow = false;
@@ -52,6 +59,7 @@ protected:
         QPainter p(this);
         auto* scene = ui::graphics::sceneGeometrySink(p);
         if (!scene || scene->beginRetainedSection(101, false)) {
+            ++staticBuilds;
             p.fillRect(rect(), palette().color(QPalette::Window));
             if (scene) scene->endRetainedSection();
         }
@@ -141,6 +149,9 @@ bool checkContextMenuRouting(Qt::ContextMenuTrigger trigger) {
     return true;
 }
 int main(int argc, char** argv) {
+    // Match the app's native hosting policy: editor frames must not promote
+    // their complete QWidget sibling hierarchy above the Quick workspace.
+    QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
     QApplication app(argc, argv);
     if (!ui::graphics::WorkspaceSurface::checkPointerRoutingForTest()) {
         std::cerr << "GPU input routing did not survive reentrant teardown\n";
@@ -153,7 +164,12 @@ int main(int argc, char** argv) {
     const bool overrideWasSet = qEnvironmentVariableIsSet("VLT_GPU_WORKSPACE");
     const auto savedOverride = qgetenv("VLT_GPU_WORKSPACE");
     qunsetenv("VLT_GPU_WORKSPACE");
+    if (!ui::graphics::gpuWorkspaceEnabled()) return 1;
+    QSettings().setValue("ui/gpuWorkspace", false);
     if (ui::graphics::gpuWorkspaceEnabled()) return 1;
+    qputenv("VLT_GPU_WORKSPACE", "1");
+    if (!ui::graphics::gpuWorkspaceEnabled() || QSettings().value("ui/gpuWorkspace").toBool()) return 1;
+    qunsetenv("VLT_GPU_WORKSPACE");
     QSettings().setValue("ui/frameMode", "fixed");
     QSettings().setValue("ui/frameLimit", 144);
     QSettings().setValue("ui/gpuWorkspace", true);
@@ -314,10 +330,11 @@ int main(int argc, char** argv) {
     QWidget window;
     window.resize(320, 140);
     auto* canvas = new Canvas(&window); canvas->setGeometry(window.rect());
-    // Qt promotes ordinary widgets when a native sibling/ancestor is present.
-    // That must not be mistaken for a foreign plugin surface.
+    // An ordinary native widget must not be mistaken for a foreign plugin
+    // surface. Keep its ancestors alien, as the app's editor frames do.
     QWidget ordinaryNative(canvas);
     ordinaryNative.setGeometry(260, 5, 40, 10);
+    ordinaryNative.setAttribute(Qt::WA_DontCreateNativeAncestors);
     ordinaryNative.setAttribute(Qt::WA_NativeWindow);
     auto palette = canvas->palette(); palette.setColor(QPalette::Window, QColor(18, 22, 28)); canvas->setPalette(palette);
     auto* surface = new ui::graphics::WorkspaceSurface(canvas);
@@ -349,6 +366,16 @@ int main(int argc, char** argv) {
         color(221, 91) != QColor(18, 22, 28)) {
         frame.save("/private/tmp/vlt-gpu-scene-failure.png");
         std::cerr << "GPU geometry, clipping or color mismatch\n"; return 1;
+    }
+    {
+        PlainControl early(canvas);
+        early.setGeometry(260, 110, 30, 20); early.show();
+        QTimer::singleShot(100, &loop, &QEventLoop::quit); loop.exec();
+        early.color = Qt::blue; early.update();
+        QTimer::singleShot(100, &loop, &QEventLoop::quit); loop.exec();
+        if (surface->quickWindow()->grabWindow().pixelColor(int(270*dpr), int(120*dpr)) != QColor(Qt::blue)) {
+            std::cerr << "Initial native exposure stranded ordinary widget damage\n"; return 1;
+        }
     }
     const QPointF point(38.25, 40.5);
     QMouseEvent press(QEvent::MouseButtonPress, point, canvas->mapToGlobal(point),
@@ -621,6 +648,78 @@ int main(int argc, char** argv) {
         std::cerr << "Native drop retained the source's implicit mouse capture\n"; return 1;
     }
     dragSource.hide(); dropTarget.hide();
+    Canvas resizeStable(canvas);
+    resizeStable.setGeometry(5, 5, 30, 20); resizeStable.show();
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    const int cachedBuilds = resizeStable.staticBuilds;
+    canvas->paints = 0;
+    window.resize(360, 160);
+    canvas->setGeometry(window.rect());
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    const QImage resized = surface->quickWindow()->grabWindow();
+    if (resizeStable.staticBuilds != cachedBuilds || !canvas->paints ||
+        resized.pixelColor(int(350*dpr), int(150*dpr)) != palette.color(QPalette::Window)) {
+        std::cerr << "Workspace resize rebuilt cached geometry or left exposed pixels\n"; return 1;
+    }
+    resizeStable.hide();
+#ifdef Q_OS_WIN
+    {
+        QWidget editorHost(canvas);
+        editorHost.setGeometry(canvas->rect()); editorHost.show();
+        PlainControl nativeOverlay(&editorHost);
+        nativeOverlay.setAttribute(Qt::WA_DontCreateNativeAncestors);
+        nativeOverlay.setAttribute(Qt::WA_NativeWindow);
+        nativeOverlay.setProperty("vlt.nativeOverlay", true);
+        nativeOverlay.setGeometry(10, 10, 70, 50); nativeOverlay.show();
+        window.raise(); window.activateWindow();
+        nativeOverlay.windowHandle()->raise();
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        // The editor is already last in its QObject siblings. Resizing raises
+        // the native Quick sibling, so QWidget::raise() alone is insufficient.
+        canvas->resize(350, 155);
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        const HWND editor = reinterpret_cast<HWND>(nativeOverlay.winId());
+        const HWND workspace = reinterpret_cast<HWND>(window.winId());
+        POINT position{20, 20};
+        MapWindowPoints(editor, workspace, &position, 1);
+        const HWND hit = ChildWindowFromPointEx(workspace, position, CWP_SKIPINVISIBLE);
+        if (!IsWindowVisible(editor) || hit == workspace ||
+            (hit != editor && !IsChild(editor, hit) && !IsChild(hit, editor))) {
+            std::cerr << "Workspace resize covered a live native editor\n"; return 1;
+        }
+        nativeOverlay.hide();
+        if (IsWindowVisible(editor)) {
+            std::cerr << "A hidden native editor remained visible behind the GPU scene\n"; return 1;
+        }
+    }
+#endif
+    {
+        // Plain QWidget roots inherit an opaque window background even when
+        // their own paintEvent is empty. The GPU surface must cover that area,
+        // including newly exposed pixels before a resized scene is ready.
+        QWidget opaqueRoot;
+        opaqueRoot.resize(160, 90);
+        opaqueRoot.setPalette(palette);
+        ui::graphics::WorkspaceSurface opaqueSurface(&opaqueRoot);
+        opaqueRoot.show();
+        QTimer::singleShot(100, &loop, &QEventLoop::quit); loop.exec();
+        if (opaqueSurface.quickWindow()->grabWindow().pixelColor(10, 10) != palette.color(QPalette::Window)) {
+            std::cerr << "An opaque workspace retained a transparent GPU backdrop\n"; return 1;
+        }
+        auto changedPalette = palette;
+        changedPalette.setColor(QPalette::Window, QColor(12, 30, 48));
+        opaqueRoot.setPalette(changedPalette);
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        if (opaqueSurface.quickWindow()->grabWindow().pixelColor(10, 10) != changedPalette.color(QPalette::Window)) {
+            std::cerr << "GPU backdrop did not follow the workspace palette\n"; return 1;
+        }
+        QWidget translucentRoot;
+        translucentRoot.setAttribute(Qt::WA_TranslucentBackground);
+        ui::graphics::WorkspaceSurface translucentSurface(&translucentRoot);
+        if (translucentSurface.quickWindow()->color().alpha() != 0) {
+            std::cerr << "A translucent editor lost its transparent corners\n"; return 1;
+        }
+    }
     QWidget nativeEditor(canvas);
     nativeEditor.setGeometry(260, 90, 40, 30);
     nativeEditor.setProperty("vlt.foreignSurface", true);

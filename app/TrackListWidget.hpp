@@ -27,10 +27,9 @@ namespace ui { class LevelMeter; class FaderWidget; class PanKnob;
 
 /// The track headers column: one row per visible track.
 ///
-/// A row is a single line — colour rail, a large kind icon, the name over a
-/// strip of small M/S/monitor/record chips, then the fader and the pan knob —
-/// and it compacts level and pan into a pair of round controls when there is no
-/// width for the full throw. Folder tracks add a disclosure chevron and
+/// Rows keep the icon, name over small state buttons, level and pan in the
+/// established horizontal arrangement. Minimized rows keep their name and M/S
+/// on a 24 px strip; double-clicking the header restores its height. Folders add a disclosure chevron and
 /// indent their children; a folder that does not sum has no channel at all, so
 /// it shows nothing but its name and mute/solo.
 ///
@@ -198,6 +197,9 @@ private:
         ui::MsrButton* record = nullptr;
         ui::MsrButton* pattern = nullptr;
         QWidget* nameEdit = nullptr;
+        QWidget* band = nullptr;
+        QWidget* chips = nullptr;
+        QLabel* count = nullptr;
         int kind = -1;
         int top = 0;
         int height = 0;
@@ -215,6 +217,7 @@ private:
     /// Adapt a row to the resizable column. Level and pan become a compact
     /// round pair before either control has to disappear.
     void applyRowAdaptivity(const Row& row);
+    void toggleCompactRows(const QString& id);
     /// The row a plugin drag is over, and the drop itself. Split out because
     /// the highlight and the landing must agree on which row that is.
     int pluginDropRowAt(const QPoint& posInList, bool instrument) const;

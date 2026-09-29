@@ -305,6 +305,10 @@ int main(int argc, char** argv) {
     bool pluginInteractionCheck = false;
     bool patternCheck = false;
     bool samplerCheck = false;
+    bool slideCheck = false;
+    bool pianoWorkflowCheck = false;
+    bool midiAuditionCheck = false;
+    bool mixerContextCheck = false;
     bool offlineCheck = false;
     bool pluginBatchCheck = false;
     bool tempoCheck = false;
@@ -337,6 +341,10 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--mixer-scroll-check") == 0) mixerScrollCheck = true;
         else if (std::strcmp(argv[i], "--workspace-motion-check") == 0) workspaceMotionCheck = true;
         else if (std::strcmp(argv[i], "--plugin-interaction-check") == 0) pluginInteractionCheck = true;
+        else if (std::strcmp(argv[i], "--pianoworkflowcheck") == 0) pianoWorkflowCheck = true;
+        else if (std::strcmp(argv[i], "--slidecheck") == 0) slideCheck = true;
+        else if (std::strcmp(argv[i], "--midiauditioncheck") == 0) midiAuditionCheck = true;
+        else if (std::strcmp(argv[i], "--mixercontextcheck") == 0) mixerContextCheck = true;
         else if (std::strcmp(argv[i], "--samplercheck") == 0) samplerCheck = true;
         else if (std::strcmp(argv[i], "--offlinecheck") == 0) offlineCheck = true;
         else if (std::strcmp(argv[i], "--pluginbatchcheck") == 0) pluginBatchCheck = true;
@@ -386,7 +394,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    const bool headless = stripSilenceCheck || clipLibraryCheck || headerCheck || warpCheck || workspaceMotionCheck || mixerWheelCheck || tempoCheck || pluginBatchCheck || offlineCheck || pluginInteractionCheck || mixerScrollCheck || projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
+    const bool headless = pianoWorkflowCheck || mixerContextCheck || midiAuditionCheck || slideCheck || stripSilenceCheck || clipLibraryCheck || headerCheck || warpCheck || workspaceMotionCheck || mixerWheelCheck || tempoCheck || pluginBatchCheck || offlineCheck || pluginInteractionCheck || mixerScrollCheck || projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
                           crashtest || recovercheck;
     if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) {
         QByteArray chromiumFlags;
@@ -578,6 +586,10 @@ int main(int argc, char** argv) {
     if (themeId)
         ThemeManager::instance().setThemeId(QString::fromUtf8(themeId),
                                             /*persist=*/false);
+    if (pianoWorkflowCheck) return PianoRollWindow::checkWorkflowsForTest(qEnvironmentVariable("DAW_PIANO_WORKFLOW_DIR")) ? 0 : 81;
+    if (slideCheck) return PianoRollWindow::checkSlidesForTest(qEnvironmentVariable("DAW_SLIDE_CHECK_DIR")) ? 0 : 78;
+    if (midiAuditionCheck) return PianoRollView::checkAuditionForTest() ? 0 : 79;
+    if (mixerContextCheck) return ChannelStrip::checkContextMenusForTest() ? 0 : 80;
     if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_SIDECHAIN_ONLY")) {
         MainWindow window(/*openDevice=*/false);
         return window.checkPluginSidechainForTest() ? 0 : 76;
@@ -592,7 +604,9 @@ int main(int argc, char** argv) {
         return CreateTracksDialog::checkForTest(controller,
             screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString()) ? 0 : 66;
     }
-    if (pluginPickerCheck || selftest) {
+    // A focused chat run must reach the chat even when the platform-specific
+    // popup image check fails. Full selftest and --pluginpickercheck retain it.
+    if (pluginPickerCheck || (selftest && !qEnvironmentVariableIsSet("DAW_SELFTEST_AI_ONLY"))) {
         QString error;
         if (!ui::checkPluginPickerForTest(&error,
                 pluginPickerCheck && screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString())) {
@@ -1263,6 +1277,11 @@ int main(int argc, char** argv) {
         // custom frame and the arrangement visible around it.
         const bool shootRoll = std::getenv("DAW_SHOT_PIANOROLL") != nullptr;
         if (shootRoll) window.openFirstMidiClip();
+        if (shootRoll && qEnvironmentVariable("DAW_SHOT_PIANOROLL") == QLatin1String("maximized")) {
+            if (auto* roll = window.findChild<PianoRollWindow*>())
+                if (auto* frame = qobject_cast<InternalEditorFrame*>(roll->parentWidget()))
+                    frame->setMaximized(true);
+        }
         // DAW_SHOT_PIANOROLL=selected also selects every note, which is the
         // only way a still can show the context panel — it exists exactly when
         // something is selected.
@@ -1718,7 +1737,8 @@ int main(int argc, char** argv) {
         } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_TRACK_MIXER_ONLY")) {
             window.populateDemo();
             if (!window.checkTrackMixerSyncForTest() ||
-                !window.checkTrackRowHeightsForTest()) return 12;
+                !window.checkTrackRowHeightsForTest() ||
+                !window.checkTrackSelectionForTest()) return 12;
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
         } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_SETTINGS_ONLY")) {
             window.openSettings(SettingsWindow::kInterfaceTab);

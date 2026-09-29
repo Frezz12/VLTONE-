@@ -8,6 +8,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QTimer>
 
 #include <functional>
 #include <memory>
@@ -30,6 +31,8 @@ struct LlmConfig {
     int maxTokens = 8192;
     /// Show the answer as it is written rather than when it is finished.
     bool stream = true;
+    int timeoutSeconds = 600;
+    int maxRetries = 3;
 };
 
 /// One request to a language model.
@@ -46,6 +49,7 @@ public:
     /// Prose as it arrives, when streaming. Never called for a whole answer.
     using PartialSink = std::function<void(const QString& text)>;
     using UsageSink = std::function<void(daw::ai::AiSession::Usage)>;
+    using StatusSink = std::function<void(const QString&)>;
 
     LlmClient(Provider provider, QObject* parent = nullptr);
     ~LlmClient() override;
@@ -56,6 +60,7 @@ public:
 
     void setPartialSink(PartialSink sink) { m_partialSink = std::move(sink); }
     void setUsageSink(UsageSink sink) { m_usageSink = std::move(sink); }
+    void setStatusSink(StatusSink sink) { m_statusSink = std::move(sink); }
     void setAvailableTools(std::vector<daw::ai::ToolSpec> tools) {
         m_availableTools = std::move(tools);
     }
@@ -83,6 +88,8 @@ protected:
     LlmConfig m_config;
 
 private:
+    void attempt();
+    bool scheduleRetry(int status, const QByteArray& retryAfter, bool transportFailure);
     void requestManagedLease(const QString& system,
                              const std::vector<daw::ai::Message>& messages,
                              bool stream);
@@ -101,6 +108,12 @@ private:
     Reply m_onReply;
     PartialSink m_partialSink;
     UsageSink m_usageSink;
+    StatusSink m_statusSink;
+    QTimer m_retryTimer;
+    QString m_system;
+    std::vector<daw::ai::Message> m_messages;
+    int m_retries = 0;
+    bool m_freeRequest = false;
     std::vector<daw::ai::ToolSpec> m_availableTools;
     std::unique_ptr<daw::ai::wire::StreamDecoder> m_decoder;
     QString m_reservationId;

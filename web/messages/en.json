@@ -1,7 +1,7 @@
 {
   "Home": {
     "metaTitle": "VLTone — Music creation software · Open beta",
-    "metaDescription": "VLTone is a digital audio workstation for Windows and macOS. Record audio, write MIDI, arrange, mix, use plugins and an AI assistant. Join the open beta.",
+    "metaDescription": "VLTone is a digital audio workstation for Windows and macOS: audio recording, MIDI, sampler, plugins, mixer and export. View the interface, read the manual and download available builds.",
     "betaTag": "Open beta",
     "announcement": "Available for Windows and macOS",
     "kicker": "Music creation software",
@@ -132,13 +132,13 @@
     "metaTitle": "VLTone capabilities — recording, MIDI, mixing, plugins, and AI",
     "metaDescription": "A complete overview of VLTone capabilities: audio recording and editing, MIDI, instruments, mixing, automation, plugins, AI, export, and project recovery.",
     "eyebrow": "VLTone capabilities",
-    "title": "From the first note",
-    "titleAccent": "to the final mix.",
-    "intro": "Record, write, and mix. All the tools in your studio, together in one project.",
+    "title": "Tools for",
+    "titleAccent": "music production.",
+    "intro": "Audio recording and editing, MIDI, instruments, mixing and export in one project.",
     "join": "Join the beta",
     "explore": "Explore capabilities",
     "statusLabel": "Open beta",
-    "statusTitle": "The application gets better every day.",
+    "statusTitle": "Open beta: available features",
     "statusCopy": "We release updates regularly, fix issues, and refine workflows from musician feedback. The capabilities below work today, but the interface and individual details may evolve throughout the beta.",
     "releases": "Release history",
     "directoryLabel": "Inside VLTone",
@@ -153,7 +153,11 @@
         "nav": "Recording",
         "title": "Record and shape.",
         "lead": "Vocals, instruments, and takes, right in the arrangement. Trim, stretch, and bring your best moments together.",
-        "highlights": ["Monitoring", "Takes", "Time stretch"],
+        "highlights": [
+          "Monitoring",
+          "Takes",
+          "Time stretch"
+        ],
         "caption": "Arrangement · audio tracks and takes",
         "points": [
           "Select an input, arm and monitor the required track, and record against the metronome and project tempo.",
@@ -167,7 +171,11 @@
         "nav": "MIDI",
         "title": "Notes, beats, ideas.",
         "lead": "Draw melodies in the Piano Roll, build beats, or play a MIDI keyboard. Give your samples a voice of their own.",
-        "highlights": ["Piano Roll", "Patterns", "Sampler"],
+        "highlights": [
+          "Piano Roll",
+          "Patterns",
+          "Sampler"
+        ],
         "caption": "Piano Roll · notes and velocity",
         "points": [
           "Use the Piano Roll to create, select, move, and edit notes inside a MIDI clip.",
@@ -181,7 +189,11 @@
         "nav": "Mixing",
         "title": "Every sound in place.",
         "lead": "Shape the balance, effects, and automation. Export a finished mix or individual stems.",
-        "highlights": ["Bus / Send", "Automation", "Mix / Stems"],
+        "highlights": [
+          "Bus / Send",
+          "Automation",
+          "Mix / Stems"
+        ],
         "caption": "Mixer · channels, effects, and master",
         "points": [
           "Channel strips include gain, inserts, sends, pan, fader, meters, mute, solo, record, and monitoring states.",
@@ -195,7 +207,11 @@
         "nav": "Plugins",
         "title": "Plugins and effects.",
         "lead": "Your favorite instruments, external effects, and a built-in equalizer, together in your project.",
-        "highlights": ["VST / VST3", "CLAP", "AU · macOS"],
+        "highlights": [
+          "VST / VST3",
+          "CLAP",
+          "AU · macOS"
+        ],
         "caption": "Plugin Manager",
         "points": [
           "Use CLAP, VST, and VST3 plugins; Audio Unit is also available on macOS.",
@@ -209,7 +225,11 @@
         "nav": "AI",
         "title": "An extra pair of hands.",
         "lead": "Describe your task. Get help with tracks, MIDI, and processing, with actions you can undo.",
-        "highlights": ["Chat", "Commands", "Undo"],
+        "highlights": [
+          "Chat",
+          "Commands",
+          "Undo"
+        ],
         "caption": "AI assistant · chat and actions",
         "points": [
           "Chat can explain the project and perform available actions involving tracks, clips, MIDI, and processing.",
@@ -223,7 +243,11 @@
         "nav": "Projects",
         "title": "Pick up where you left off.",
         "lead": "Edit history, portable projects, and recovery after an unexpected shutdown.",
-        "highlights": ["Undo", "Recovery", "Portability"],
+        "highlights": [
+          "Undo",
+          "Recovery",
+          "Portability"
+        ],
         "caption": "Project recovery after a crash",
         "points": [
           "A project stores tracks, clips, MIDI, automation, routing, and plugin state, with structural edits participating in Undo.",
@@ -294,7 +318,7 @@
     "metaDescription": "Complete guide to recording, arranging, MIDI, plugins, automation, AI, and export in VLTone.",
     "eyebrow": "Documentation / Open beta",
     "title": "VLTone Manual",
-    "intro": "From first launch to a finished master: every workspace, real production workflows, and fixes for common problems in one guide.",
+    "intro": "Step-by-step instructions from first launch and recording to MIDI, slide notes, processing and export. Search by feature name or choose a section below.",
     "searchLabel": "Search the manual",
     "searchPlaceholder": "Try recording, piano roll, plugins…",
     "searchHint": "Search checks titles, steps, notes, and troubleshooting.",
@@ -322,12 +346,16 @@
             "id": "first-launch",
             "title": "First launch",
             "intro": "VLTone verifies your account, audio system, and available plugins before opening the main workspace.",
-            "preparation": "Connect your audio interface before launch. You will need internet access to sign in to your account.",
+            "preparation": "Download the installer for your OS from Releases. Close any other VLTone instance. Connect your audio interface before launching.",
             "steps": [
-              "Sign in to your VLTone account if the saved session cannot be restored.",
-              "Wait for safe plugin scanning; the current file and total progress appear in the startup window.",
-              "Open an empty project or a previously saved session.",
-              "Open Settings → Audio and verify the device, sample rate, and buffer size."
+              "Install and launch VLTone. On Windows use Setup.exe; on macOS open the DMG and move the app into Applications. Follow the instructions shown next to the download.",
+              "Sign in with your website account email and password. If you do not have an account, register on the website first. Your nickname and email address are different fields.",
+              "Wait for loading and plugin scanning to finish. The startup window reports the current stage; the first launch after installing plugins may take longer.",
+              "Create an empty project. Open Settings → Audio and choose the driver and output device connected to your headphones or speakers.",
+              "Check the main output pair. For recording, enable the interface inputs; the input on each track is selected separately.",
+              "Start with a buffer of 256 or 512 samples. A smaller buffer reduces playing latency; a larger one helps with crackles or high load. Keep project and device sample rates consistent.",
+              "Drop a familiar audio file onto the timeline and press Space. Check the track and Master meters, then set a comfortable listening level.",
+              "Save the project to its own folder with File → Save As. Continue with “First project: from file to export”."
             ],
             "result": "The main workspace is open and the audio engine is ready for playback and recording.",
             "notes": [
@@ -335,8 +363,12 @@
             ],
             "problems": [
               {
-                "problem": "A plugin scans for too long or is blacklisted.",
-                "fix": "Open Plugin Manager, inspect Blacklist, update the plugin, and scan it again."
+                "problem": "Meters move but there is no sound",
+                "fix": "Check the main output pair, OS device and physical interface output, then make sure Master is not muted."
+              },
+              {
+                "problem": "Startup pauses on one plugin",
+                "fix": "Note its name in the startup window. Check Plugin Manager and Blacklist after launch. Rescan after updating or fixing the plugin."
               }
             ],
             "figures": [
@@ -344,7 +376,7 @@
                 "slug": "startup",
                 "alt": "VLTone startup window scanning plugins",
                 "caption": "The startup window reports the current loading stage and plugin scan progress.",
-                "ratio": "4 / 3"
+                "ratio": "440 / 224"
               }
             ]
           },
@@ -375,13 +407,17 @@
             ],
             "notes": [
               "Internal editors use the same project and the same undo history.",
-              "The context panel adapts to available width. If a secondary button is hidden, widen the window or narrow the browser."
+              "The context panel adapts to available width. If a secondary button is hidden, widen the window or narrow the browser.",
+              "Select a track, then a clip: the inspector and context panel follow the current selection.",
+              "Hide unused panels through View to gain space. Timeline zoom and track height are separate settings.",
+              "Closing an instrument window does not disable its sound; bypass and closing an editor are different actions."
             ],
             "figures": [
               {
                 "slug": "arrangement",
                 "alt": "Main workspace with tracks, clips, and Mixer",
-                "caption": "The main window combines transport, track headers, arrangement, context panel, and Mixer."
+                "caption": "The main window combines transport, track headers, arrangement, context panel, and Mixer.",
+                "ratio": "1440 / 1200"
               }
             ]
           },
@@ -429,9 +465,34 @@
               {
                 "slug": "cycle",
                 "alt": "Arrangement with an active cycle range",
-                "caption": "The cycle range is marked on the ruler; Cycle enables it without moving its boundaries."
+                "caption": "The cycle range is marked on the ruler; Cycle enables it without moving its boundaries.",
+                "ratio": "1440 / 1200"
               }
+            ],
+            "notes": [
+              "Time signature is separate from BPM. Set both before recording so the grid matches the phrase.",
+              "For comparisons, set a cycle slightly wider than the phrase so effect onsets and tails remain audible.",
+              "Returning to the start moves the playhead, not clips. If playback is silent, check that the playhead crosses actual material."
             ]
+          },
+          {
+            "id": "first-project",
+            "title": "First project: from file to export",
+            "intro": "A complete starter workflow: add audio, create a MIDI phrase and export a file.",
+            "preparation": "Prepare one WAV file, connect headphones and verify audio using “First launch”.",
+            "steps": [
+              "Create an empty project and save it to a dedicated folder with Save As.",
+              "Set BPM and time signature. For an existing loop, start with its original tempo.",
+              "Drop the WAV onto an empty timeline area. With snapping enabled, move its start to the first bar.",
+              "Press Space and check the track and Master levels, then stop playback.",
+              "Add a MIDI track, assign Sampler and load a sound. Double-click to create a MIDI clip, then double-click it to open it.",
+              "Draw a few notes and adjust their lengths. Set velocity and listen alongside the audio clip.",
+              "Open the mixer with X. Balance both tracks and add an Equalizer insert if needed.",
+              "Loop the phrase, listen to the boundaries and stop transport. Save the project.",
+              "Open Render / Export, choose master mix, WAV and the required range. Set the name and folder, then render.",
+              "Open the resulting WAV and check the start, ending and clipping. Keep the project for future edits."
+            ],
+            "result": "You have a saved project and an audio file that plays without the DAW."
           }
         ]
       },
@@ -466,7 +527,10 @@
               }
             ],
             "notes": [
-              "Closing a changed session offers Save, Cancel, or an explicit discard."
+              "Closing a changed session offers Save, Cancel, or an explicit discard.",
+              "Keep the project and media in a permanent folder. The project stores structure and settings; deleting source audio may break file references.",
+              "Use Save As with a new name before major changes. Undo supports the current session; a separate copy preserves an independent version.",
+              "After moving to another computer, check media, plugins and presets. An unavailable third-party plugin is not automatically replaced."
             ],
             "problems": [
               {
@@ -511,8 +575,14 @@
               {
                 "slug": "track-folders",
                 "alt": "Nested folders and selected tracks",
-                "caption": "Folders show hierarchy, while multi-selection packs tracks with one command."
+                "caption": "Folders show hierarchy, while multi-selection packs tracks with one command.",
+                "ratio": "1440 / 1200"
               }
+            ],
+            "notes": [
+              "Audio plays audio clips; MIDI sends notes to an instrument; Pattern combines rhythm sources; Automation controls a parameter.",
+              "A normal folder groups tracks visually. A Summing Folder also combines their audio; check child-channel outputs.",
+              "Open the icon picker in the track header. Add custom images through theme settings; color and name remain separate controls."
             ]
           },
           {
@@ -546,13 +616,17 @@
               }
             ],
             "notes": [
-              "Shift extends a range; Ctrl/Cmd toggles individual items."
+              "Shift extends a range; Ctrl/Cmd toggles individual items.",
+              "Moving changes a clip’s position; trimming an edge changes its visible range. Use stretching to change speed, rather than ordinary trimming.",
+              "Check the entire selection before bulk operations. Undo restores the last completed action; Redo repeats an undone action.",
+              "Zoom in and adjust a short fade to soften a boundary. Listen to the transition with adjacent clips."
             ],
             "figures": [
               {
                 "slug": "context-panel",
                 "alt": "Context panel over selected clips",
-                "caption": "The context panel exposes only the controls relevant to the selected object type."
+                "caption": "The context panel exposes only the controls relevant to the selected object type.",
+                "ratio": "1440 / 1200"
               }
             ]
           },
@@ -569,7 +643,9 @@
             "result": "Arrangement structure remains readable and snapping matches the chosen scale.",
             "notes": [
               "When space is limited, the context panel hides secondary controls while retaining primary actions and values. Controls return when space becomes available.",
-              "The panel follows selected clips; track, note and recording contexts return it to the middle of the available area."
+              "The panel follows selected clips; track, note and recording contexts return it to the middle of the available area.",
+              "Zoom into the edit before working precisely: adaptive snapping depends on the visible scale.",
+              "Disabling Snap allows free positioning but does not move existing clips. Check the Piano Roll grid separately for MIDI."
             ]
           },
           {
@@ -585,15 +661,33 @@
             ],
             "result": "Notes and timed lines remain available while working on the composition.",
             "notes": [
-              "Use the dedicated button to pause an animated notebook background. The gear button opens notebook settings."
+              "Use the dedicated button to pause an animated notebook background. The gear button opens notebook settings.",
+              "Use ordinary notes for tasks and structure, and timed text for lines that should appear at a particular position.",
+              "Check timestamps by playing from the phrase start. Reordering text and changing its timestamp are different operations.",
+              "Save the project after editing the notebook. Before sharing it, check that embedded images are available."
             ],
             "figures": [
               {
                 "slug": "notebook",
                 "alt": "VLTone Notebook with the timed text tab",
-                "caption": "The Timed text tab beside the arrangement."
+                "caption": "The Timed text tab beside the arrangement.",
+                "ratio": "1440 / 1200"
               }
             ]
+          },
+          {
+            "id": "clip-library",
+            "title": "Clip library",
+            "intro": "Keep reusable audio and MIDI phrases in the project and bring them back to the timeline.",
+            "steps": [
+              "Select a timeline clip and use its save-to-clip-library command.",
+              "Open the library and inspect the new card. Saving a copy does not delete the original clip.",
+              "Give the variant a useful name so it is easy to distinguish.",
+              "Find the card using search and drag it to the intended position on a compatible track.",
+              "Use the restore-to-original-position action when the initial placement is needed.",
+              "Save the project. Check focus before Delete: deleting a library card and an arrangement clip are separate actions."
+            ],
+            "result": "The phrase is available for reuse without finding and copying the original track clip."
           }
         ]
       },
@@ -626,16 +720,22 @@
               {
                 "slug": "browser-samples",
                 "alt": "Sample Browser with a selected audio file and waveform",
-                "caption": "The preview strip lets you audition material before adding it."
+                "caption": "The preview strip lets you audition material before adding it.",
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "browser-plugins",
                 "alt": "Plugin category in the built-in Browser",
-                "caption": "Plugins have their own category and can be inserted without browsing file paths."
+                "caption": "Plugins have their own category and can be inserted without browsing file paths.",
+                "ratio": "1440 / 1200"
               }
             ],
             "notes": [
-              "MP3 uses the import decoder library; M4A/MP4A and MP4 audio use the native macOS or Windows decoder. Actual support depends on the file codec."
+              "MP3 uses the import decoder library; M4A/MP4A and MP4 audio use the native macOS or Windows decoder. Actual support depends on the file codec.",
+              "Lower preview level first. Browser preview level and track fader are separate controls.",
+              "Use browser collections for references to frequently used files; adding a reference does not move the source on disk.",
+              "Assign colors to folders; subfolders can inherit a color or use their own. This helps distinguish drums, vocals and effects.",
+              "After import, check the clip start and tempo. Choose an appropriate stretch mode if the file should follow project BPM."
             ]
           },
           {
@@ -650,14 +750,17 @@
             ],
             "result": "The clip is prepared for arrangement without changing the source file on disk.",
             "notes": [
-              "Sampler looks similar, but edits an instrument rather than one audio clip instance."
+              "Sampler looks similar, but edits an instrument rather than one audio clip instance.",
+              "Check that you are editing the intended clip; copies of one file can have different boundaries and processing.",
+              "Find the intended region first, then set its boundaries. Listen just before and after each boundary.",
+              "For local timing adjustments of individual attacks, open Warp Audio from the clip menu; ordinary Stretch changes the whole region’s duration."
             ],
             "figures": [
               {
                 "slug": "audio-editor",
                 "alt": "Audio clip editor with a waveform",
                 "caption": "The clip editor offers a large waveform and precise controls.",
-                "ratio": "4 / 3"
+                "ratio": "1440 / 1200"
               }
             ]
           },
@@ -698,8 +801,15 @@
               {
                 "slug": "recording",
                 "alt": "Record-enabled project with take options",
-                "caption": "Record Enable exposes take mode, count-in, and monitoring."
+                "caption": "Record Enable exposes take mode, count-in, and monitoring.",
+                "ratio": "1440 / 1200"
               }
+            ],
+            "notes": [
+              "Before Record, check the physical input and track meter. Microphone access may require OS permission.",
+              "If monitoring echoes or doubles, use one monitoring path: hardware monitoring on the interface or software monitoring in the DAW.",
+              "Make a short test recording to check level, input and clipping. A master fader cannot repair an overloaded input.",
+              "Enable Auto Strip Silence only after testing the threshold on similar material. Check quiet endings after recording."
             ]
           },
           {
@@ -720,13 +830,16 @@
               }
             ],
             "notes": [
-              "Take layers belong to one clip; duplicating a track makes an independent copy of the entire track."
+              "Take layers belong to one clip; duplicating a track makes an independent copy of the entire track.",
+              "Do not confuse the active take with the selected clip. Compare takes of the same region using the same playback range.",
+              "Save a separate project copy before deleting takes. Collapsing layers does not delete recorded audio."
             ],
             "figures": [
               {
                 "slug": "takes",
                 "alt": "Expanded take layers while recording",
-                "caption": "Each pass remains a separate layer while the parent clip stays a single object."
+                "caption": "Each pass remains a separate layer while the parent clip stays a single object.",
+                "ratio": "1440 / 1200"
               }
             ]
           },
@@ -744,7 +857,10 @@
             "result": "The audio clip follows the project musical timeline with the selected processing profile.",
             "notes": [
               "Vocal compensates formants during pitch shifts. Extreme stretching and large pitch shifts require listening checks with your recording.",
-              "Resample follows a different speed-change model; automatic beat-position preservation applies to the other modes."
+              "Resample follows a different speed-change model; automatic beat-position preservation applies to the other modes.",
+              "Resample links speed and pitch: slowing down lowers the sound. Pitch-preserving modes fit duration without that pitch change.",
+              "For large stretches, compare modes on a short loop. Rhythmic audio, vocals and dense mixes require different trade-offs.",
+              "Use Warp to move individual attacks independently; changing BPM does not replace local timing edits."
             ]
           },
           {
@@ -758,7 +874,46 @@
               "Press Enter to apply or Escape to cancel unfinished entry.",
               "Scroll the inspector with the wheel or trackpad; scrolling over fields does not change the sound."
             ],
-            "result": "The parameter is set precisely; one completed drag or entry is one Undo step."
+            "result": "The parameter is set precisely; one completed drag or entry is one Undo step.",
+            "notes": [
+              "Check field units: seconds, percentages, decibels and semitones control different things. Confirm typed values with Enter.",
+              "After Normalize, compare level and waveform. Undo restores both the setting and clip display."
+            ]
+          },
+          {
+            "id": "warp-audio",
+            "title": "Warp: audio timing with markers",
+            "intro": "Warp changes timing within an audio clip using anchors. Use it to align attacks and rhythm without splitting every hit.",
+            "preparation": "Select an ordinary local audio clip and save before extensive editing.",
+            "steps": [
+              "Right-click the clip and choose Warp Audio. A bottom panel opens, bound to that clip.",
+              "Wait for transient analysis. Suggested marks do not move audio; click a suggestion to turn it into a marker.",
+              "Double-click to add a manual marker. Place anchors before and after the region to move.",
+              "Drag a marker to the intended beat. The readout shows source position, target position and movement. Alt temporarily bypasses Snap.",
+              "Ctrl-click or marquee-select multiple markers. Lock anchors through the context menu to preserve their positions.",
+              "Set algorithm, pitch preservation and transient sensitivity in the inspector. On narrow screens, its button opens an overlay.",
+              "Select a ruler range and use Suggest Alignment for assisted timing. Compare Before / After on the same passage.",
+              "Set Strength and tolerance. Manual and locked anchors are preserved; explicitly include uncertain attacks when needed.",
+              "For swing, choose a grid and Groove. Preview it; Save Groove stores timing from the chosen region for reuse.",
+              "Apply commits the proposal as one action. Cancel or Esc restores the confirmed map. Warp Off disables processing while keeping markers.",
+              "Ctrl+wheel zooms around the pointer; the wheel pans the panel. W shows Warp and X switches to Mixer.",
+              "Save after Apply. Rendering uses the committed map, so apply an unfinished preview first."
+            ],
+            "result": "Attacks align to the selected grid or groove without overwriting the source audio."
+          },
+          {
+            "id": "strip-silence",
+            "title": "Strip Silence: split at silence",
+            "intro": "The command finds active regions and splits a clip at silence. Set the threshold for the material, not listening loudness.",
+            "steps": [
+              "Select an audio clip and open Strip Silence from its menu.",
+              "Run analysis and inspect the highlighted active regions.",
+              "Set the threshold so useful audio stays inside the detected regions. Check quiet consonants and endings.",
+              "Adjust available pause and boundary timing settings. Compare dense and quiet sections.",
+              "Apply only after reviewing the preview. Listen to joins and add fades if needed.",
+              "Undo restores the original clip layout. Save settings for later recordings; Auto Strip Silence applies them after recording stops."
+            ],
+            "result": "The timeline contains separate active regions and the source file is preserved."
           }
         ]
       },
@@ -772,11 +927,16 @@
             "title": "Piano roll",
             "intro": "Piano roll edits MIDI notes, velocity, pan, and controller lanes with the project grid, zoom, and cycle.",
             "steps": [
-              "Double-click a MIDI clip.",
-              "Use Draw for notes, Pointer for position and length, and Eraser or Knife for removal and slicing.",
-              "Set grid, snap, swing, and optionally Snap to Scale.",
-              "Select notes with a box, Shift range, or Ctrl/Cmd toggle.",
-              "Edit velocity or a controller lane in the lower area."
+              "Double-click an empty area of a MIDI track to create a clip without opening the editor. Double-click the clip itself to open Piano Roll.",
+              "Check the track and clip names at the top. The clip selector changes the edited phrase; in a pattern, make sure the intended instrument source is selected.",
+              "Choose Draw and click the grid. The row determines pitch and the horizontal position sets the start. Drag the right edge to change note length.",
+              "Pointer moves notes and selects a region. Eraser deletes and Knife splits. Shift-drag creates a copy of the selected notes.",
+              "Choose a grid division and enable Snap for rhythmic alignment. Snap to Scale constrains pitches to the selected scale; it is separate from time snapping.",
+              "Adjust velocity using the bars below the grid. The lower-lane selector exposes other MIDI controllers; check the lane name before drawing.",
+              "Use the top horizontal scrollbar and zoom controls on the right. Scrolling remains free during playback: Piano Roll does not pull the view back to the playhead.",
+              "Maximize expands the editor within the workspace to the right of the inspector and below the top context panel. Press it again to restore the previous size.",
+              "The Chords… button at the bottom or Alt+B opens the generator. Slide at the top or key 6 creates a control note; see the dedicated chapters.",
+              "Press Space to check the phrase. Closing the editor keeps edits in the project; save the project with Save."
             ],
             "result": "The MIDI clip contains rhythmically and tonally prepared notes and controller data.",
             "shortcuts": [
@@ -804,9 +964,11 @@
                 "slug": "piano-roll",
                 "alt": "Piano roll with selected MIDI notes and a lower lane",
                 "caption": "Selected notes share one context panel and can be edited as a group.",
-                "ratio": "4 / 3"
+                "ratio": "1440 / 1200"
               }
-            ]
+            ],
+            "preparation": "Create a MIDI or instrument track and assign an instrument. MIDI notes contain no audio by themselves.",
+            "notes": []
           },
           {
             "id": "midi-tools",
@@ -821,7 +983,10 @@
             ],
             "result": "Notes are transformed in one undoable operation instead of being edited individually.",
             "notes": [
-              "Preview does not create another clip; confirmation records the final state in project history."
+              "Preview does not create another clip; confirmation records the final state in project history.",
+              "Quantize brings note starts toward the grid; strength controls how far they move. Test on a short phrase copy first.",
+              "Transpose changes pitches, Velocity changes note strength and Humanize adds variation. Change one setting at a time to hear its effect.",
+              "Generators operate on sounding notes. Slide controls do not become additional chord or arpeggio notes."
             ],
             "problems": [
               {
@@ -847,7 +1012,7 @@
                 "slug": "pattern",
                 "alt": "Pattern editor with several instrument sources",
                 "caption": "Pattern editor combines sources, miniature sequences, and core controls.",
-                "ratio": "4 / 3"
+                "ratio": "1440 / 1200"
               }
             ],
             "notes": [
@@ -856,7 +1021,10 @@
               "A longer MIDI phrase extends the clip and Pattern to whole bars. Undo restores notes and boundaries. Dropping audio onto a row replaces its sample; dropping between rows adds a source.",
               "Other sources in the same Pattern automatically appear as ghost notes in Piano Roll. The Ghost Notes menu can hide individual sources or all of them.",
               "Right-click the sound plate for the instrument, Piano Roll, Fill rhythm, sample replacement and other actions. Built-in Samplers also expose Cut Itself.",
-              "The editor represents a Pattern track: MIDI operations target the source’s first MIDI clip. If there is none, one is created at the first Pattern instance."
+              "The editor represents a Pattern track: MIDI operations target the source’s first MIDI clip. If there is none, one is created at the first Pattern instance.",
+              "A step enables a hit at its position; loop the pattern and balance source levels before overall processing.",
+              "Fill rhythm fills a rhythm using the chosen settings. Check selected sources, density and length before applying.",
+              "Open a source’s Piano Roll for a more complex phrase. Dropping a sample on its grid replaces the sound only for a built-in Sampler."
             ]
           },
           {
@@ -864,11 +1032,16 @@
             "title": "Built-in Sampler",
             "intro": "Sampler loads a local audio file and turns it into an instrument for MIDI clips or the computer keyboard.",
             "steps": [
-              "Add a MIDI Track and choose Sampler.",
-              "Open its editor and load an audio file.",
-              "Set start/end, root note, envelope, and gain.",
-              "Create a MIDI clip and add notes.",
-              "Save the project; Sampler parameters are stored with the track."
+              "Create a MIDI track, choose the built-in Sampler in its instrument slot and open its editor.",
+              "Load a local audio file. Check the waveform and Start / End boundaries, which define the played source region.",
+              "Set Root Note, the key that plays the sample without transposition. Adjust gain before adding effects.",
+              "Adjust the envelope: Attack softens the onset and Release sets the fade after note release. Very short values may expose a click in the source.",
+              "Enable Loop only when the source region should repeat. Without Loop, a short sample ends even if its MIDI note remains held.",
+              "In Resample, pitch follows playback speed. Stretch modes use time stretching; compare the result using your material.",
+              "Open a MIDI clip and draw a phrase. To replace the sound, drag a file from the browser onto the Piano Roll grid; sampler settings are retained.",
+              "In a pattern, open the Piano Roll of the specific source; replacement targets that source’s sampler. This replacement is unavailable for third-party MIDI instruments.",
+              "For pitch transitions, open Slide / Legato. Enable Legato for overlapping ordinary notes; drawn slide curves work separately and take priority.",
+              "Save the project and keep the source audio file accessible. Sample replacement supports Undo / Redo."
             ],
             "result": "The sample plays as an instrument and follows project MIDI notes.",
             "problems": [
@@ -882,7 +1055,7 @@
                 "slug": "sampler",
                 "alt": "Built-in Sampler editor with a waveform",
                 "caption": "Sampler shows the waveform and its instrumental playback controls.",
-                "ratio": "4 / 3"
+                "ratio": "1440 / 1200"
               }
             ],
             "notes": [
@@ -908,8 +1081,135 @@
               }
             ],
             "notes": [
-              "Conflicting single-key commands are temporarily released and restored when the mode is disabled."
+              "Conflicting single-key commands are temporarily released and restored when the mode is disabled.",
+              "If keys type text instead of notes, check focus; search, number fields or chat may be receiving input.",
+              "Check the selected track and instrument. Enabling the typing keyboard does not add an instrument automatically."
             ]
+          },
+          {
+            "id": "slide-notes",
+            "title": "Slide notes and drawn pitch",
+            "intro": "A slide is a control note: it changes the pitch of an existing voice without triggering another sound. One curve can contain several rises and falls.",
+            "preparation": "A version 0.3.1 feature. Open a MIDI clip with a sufficiently long ordinary note. For a first test, use the built-in Sampler with a sustained or looped sample.",
+            "steps": [
+              "Select the ordinary note to affect. It must be sounding when the slide begins.",
+              "Choose Slide in the top toolbar or press 6. One note / Chord chooses whether to affect one voice or a group.",
+              "Point at the grid to preview the link. Without a selection, the closest eligible note by pitch is used; a tie favors the later start.",
+              "Draw the slide and drag it to the required length. Its row sets the target pitch and its length sets transition time.",
+              "Double-click the slide to open its nonmodal editor. The initial pitch automatically follows the linked voice’s current pitch.",
+              "Add and drag nodes in point mode. Use Pencil to draw a rise, fall and another rise in one gesture. Alt-drag changes segment curvature.",
+              "Choose time and pitch snapping. Use numeric fields for precise node adjustments; 100 cents equal one semitone.",
+              "The shape menu offers Linear, Smooth, Wave and Return. Copy Shape and Paste Shape transfer the curve while adapting it to another slide’s duration.",
+              "Click Audition Phrase. The reached pitch holds after the slide. The next slide starts there; a later overlapping slide takes over from the earlier one.",
+              "If the base note ends before the slide, the inactive tail is hatched. Use Extend Base Note only when a longer sound is intended.",
+              "For a chord, select the sounding notes before creating a slide. The linked set is stored and every linked voice moves by the same interval.",
+              "Esc cancels the current gesture. One Undo reverses a completed gesture. If the base was deleted, restore it with Undo or use Rebind."
+            ],
+            "result": "Pitch follows the drawn trajectory without retriggering the voice. The slide note itself is silent.",
+            "notes": [
+              "The base note is not automatically extended. Its envelope release keeps the last reached pitch.",
+              "MIDI-file export does not include slide curves; use audio rendering to preserve their sound.",
+              "Slide editing can be disabled in older shared sessions; both client and server must support the newer protocol."
+            ],
+            "problems": [
+              {
+                "problem": "The slide is marked inactive",
+                "fix": "No eligible note is sounding at its start. Move the slide, explicitly extend its base or rebind it."
+              },
+              {
+                "problem": "Drawing stops adding detail",
+                "fix": "A curve is limited to 256 points. Simplify tiny movements or divide the motion into consecutive slides."
+              }
+            ],
+            "figures": [
+              {
+                "slug": "slide-editor",
+                "alt": "Slide-note editor with several rises and falls",
+                "caption": "Nodes define pitch over time; the bottom controls copy the shape, manage links and audition the phrase.",
+                "ratio": "960 / 540"
+              }
+            ]
+          },
+          {
+            "id": "slide-routing",
+            "title": "Slides in plugins: MIDI, MPE and range",
+            "intro": "Delivery depends on the specific instrument’s capabilities. The VST3 or CLAP format alone does not guarantee independent pitch for each voice.",
+            "preparation": "A version 0.3.1 feature. Prepare a short test: a long note with a slide, followed by a chord.",
+            "steps": [
+              "Open the instrument’s Slide Delivery control. Start with Auto and read the displayed capability status.",
+              "The built-in Sampler controls each voice independently. Additional MIDI-channel allocation is not required.",
+              "Use Per Note when individual-note pitch support is confirmed. If unavailable, choose a supported mode.",
+              "Use MPE for an MPE instrument and enable the same mode inside the plugin. Channel 1 is common; channels 2–16 carry voices.",
+              "Match the bend range; MPE defaults to ±48 semitones. DAW and instrument ranges must agree.",
+              "Choose Pitch Bend for a conventional MIDI instrument. It changes the whole channel’s pitch, including chords; the status explicitly indicates this.",
+              "If a Pitch Bend channel has conflicting slides, the later one wins. Use supported per-note expression or MPE for independent movements.",
+              "Check the curve’s extremes. Out-of-range sections are marked; reduce the interval or increase the range in both DAW and plugin.",
+              "MPE holds a channel through release. An unknown tail uses a reserve, defaulting to 2 seconds; set it for the instrument.",
+              "When all 15 member channels are occupied, a new voice is skipped and overload is indicated. Reduce polyphony or tail duration.",
+              "If the instrument supports no suitable mode, choose Off or another instrument. Audition after each mode change."
+            ],
+            "result": "Slides use a supported delivery mode and the pitch range matches the instrument."
+          },
+          {
+            "id": "sampler-legato",
+            "title": "Sampler: Slide / Legato",
+            "intro": "Legato automatically connects overlapping ordinary notes. A drawn slide defines its own motion independently of the Legato time control.",
+            "preparation": "A version 0.3.1 feature. Open the built-in instrument Sampler and its Slide / Legato page.",
+            "steps": [
+              "First leave Legato off and verify ordinary polyphonic playback. This is the default.",
+              "Enable Legato and draw two overlapping ordinary notes. The most recently pressed note has priority during overlap.",
+              "Set time from 0 to 2000 ms; the default is 100 ms. Switch to musical divisions for tempo-related transitions.",
+              "Compare linear and S-shaped transitions. S-shaped is the default and eases the rate at the start and end.",
+              "Release the newest note while the previous one is still held; the voice returns to the previous note. Check this on a keyboard or in a clip.",
+              "Switch smoothing from 0 to 20 ms softens value jumps during editing; the default is 2 ms. A continuous drawn curve adds no extra lag.",
+              "Incoming MIDI Pitch Bend defaults to ±2 semitones. It applies to the MIDI keyboard’s bend wheel; a drawn curve uses semitones directly.",
+              "For long transitions, check sample duration and Loop. Slide does not make a finished sample play indefinitely."
+            ],
+            "result": "Overlapping ordinary notes connect using the chosen time and shape; explicit slides retain their own duration."
+          },
+          {
+            "id": "chord-generator",
+            "title": "Chord Generator",
+            "intro": "The generator creates a chord from scratch or builds chords on selected notes. Preview settings before applying.",
+            "preparation": "Updated in version 0.3.1. Open Piano Roll and assign an instrument to audition the result.",
+            "steps": [
+              "Click Chords… in the Piano Roll footer or press Alt+B. The command is also available in the editor’s musical tools menu.",
+              "In an empty clip, choose to create a new chord. Set the root and chord type to define its intervals.",
+              "Set the inversion. Enable bass doubling only if an additional lower note is wanted.",
+              "Set start position, duration and velocity to fit the phrase.",
+              "To harmonize an existing phrase, close the dialog, select the intended notes and reopen the generator. Check the selection-based mode.",
+              "Use preview. Compare chord types and inversions, listening to register and voice spacing.",
+              "Click Apply to write the result into the clip. Cancel closes the preview without committing.",
+              "Check the result in the grid. One Undo reverses the applied chord; unselected notes remain intact."
+            ],
+            "result": "The chord appears at the specified position as ordinary editable MIDI notes.",
+            "figures": [
+              {
+                "slug": "chord-generator",
+                "alt": "Chord Generator settings in Piano Roll",
+                "caption": "Set root, type, inversion and length before applying the result.",
+                "ratio": "603 / 468"
+              }
+            ]
+          },
+          {
+            "id": "midi-recording",
+            "title": "MIDI recording and retrospective capture",
+            "intro": "Record notes and controllers from a MIDI device, typing keyboard or onscreen keys. Recently played material can be recovered even without recording enabled.",
+            "preparation": "Select a MIDI or instrument track and verify input and instrument sound.",
+            "steps": [
+              "Select the intended track or arm several tracks. Check which tracks receive MIDI before starting.",
+              "Choose a mode: Overwrite replaces the recorded range; Layers keeps takes; MIDI overdub adds notes to existing material.",
+              "Set cycle and count-in if needed. Press Record and play; MIDI recording does not require an audio input.",
+              "Play notes, pedal and controllers during capture. Recording preserves performed timing without forced quantization.",
+              "Stop transport. The take is committed as one undoable edit. Open Piano Roll and inspect notes and controller lanes.",
+              "For MIDI Learn, open an instrument parameter’s menu, choose Assign MIDI Knob and move the desired control. Check that the parameter responds.",
+              "An assigned control records the instrument parameter lane. Check mappings after changing instruments; mappings are local settings.",
+              "If a useful phrase was played without recording, stop recording and count-in, place the playhead and right-click Record.",
+              "Choose Restore Played MIDI. New clips appear on the original tracks from the current playhead, preserving relative pauses.",
+              "Check and save the result. The buffer covers up to the last ten minutes, clears on project change and cannot recover an older session."
+            ],
+            "result": "Notes and recorded parameters are saved in the project for normal editing, copying and undo."
           }
         ]
       },
@@ -937,13 +1237,18 @@
               }
             ],
             "notes": [
-              "The context control and mixer fader edit one value and stay synchronised."
+              "The context control and mixer fader edit one value and stay synchronised.",
+              "Input determines where a signal comes from; output determines its destination. Instruments respond to MIDI, while audio tracks play clips or input.",
+              "Inserts process the signal in order from top to bottom. A send routes a copy to another channel with its own level.",
+              "Right-click a channel for automation, presets and timeline navigation. Master exposes its own parameters.",
+              "Use bypass to compare processing at matched loudness. Scrolling over a fader should not accidentally change the balance."
             ],
             "figures": [
               {
                 "slug": "mixer",
                 "alt": "VLTone Mixer with plugins and level meters",
-                "caption": "Each strip combines plugins, sends, pan, fader, and track states."
+                "caption": "Each strip combines plugins, sends, pan, fader, and track states.",
+                "ratio": "1440 / 1200"
               }
             ]
           },
@@ -964,6 +1269,11 @@
                 "problem": "The effect is doubled or too loud.",
                 "fix": "Check direct output, send level, and dry/wet on the Send track."
               }
+            ],
+            "notes": [
+              "A POST send follows the source fader; a PRE send takes signal before it. Choose the intended behavior and test by moving the fader.",
+              "For external sidechain, open a compatible plugin’s menu and select source channels. Multiple sources are combined for its detector.",
+              "Avoid routes that feed a signal back into itself. If a connection is unavailable, check feedback paths and plugin restrictions."
             ]
           },
           {
@@ -995,13 +1305,19 @@
                 "slug": "plugin-picker",
                 "alt": "Plugin picker with its search field",
                 "caption": "Search filters the list while retaining keyboard focus.",
-                "ratio": "4 / 3"
+                "ratio": "218 / 408"
               },
               {
                 "slug": "plugin-search",
                 "alt": "Inline plugin search in the context panel",
-                "caption": "Inline search expands directly over the selected track."
+                "caption": "Inline search expands directly over the selected track.",
+                "ratio": "1440 / 1200"
               }
+            ],
+            "notes": [
+              "Choose the correct slot first: placing a synth in an insert does not make it the track instrument. Use the processing chain for effects.",
+              "Save a preset before replacing a complex setup. You can close an editor without removing the plugin.",
+              "If an editor fails to open, check availability and compatibility in Plugin Manager. A plugin format alone does not guarantee every feature."
             ]
           },
           {
@@ -1038,7 +1354,9 @@
             "notes": [
               "If an external detector is selected without a connected sidechain, dynamics stays inactive and the editor shows SC missing.",
               "All Pass bands remain saved but are temporarily inactive in Linear Phase mode.",
-              "Processing mode and Linear Phase resolution are intentionally not automatable because they change plugin latency."
+              "Processing mode and Linear Phase resolution are intentionally not automatable because they change plugin latency.",
+              "Start with modest boosts or cuts and compare with bypass at matched level. Narrow and broad bands solve different problems.",
+              "Assign a sidechain source in the plugin menu before using an external detector. The Sidechain analyzer line helps verify the signal."
             ],
             "problems": [
               {
@@ -1054,7 +1372,8 @@
               {
                 "slug": "equalizer",
                 "alt": "VLTone Equalizer editor with a vocal cleanup curve",
-                "caption": "The resizable editor combines the response graph, direct band controls, phase mode, presets, A/B, and analyzer options."
+                "caption": "The resizable editor combines the response graph, direct band controls, phase mode, presets, A/B, and analyzer options.",
+                "ratio": "1440 / 1200"
               }
             ]
           },
@@ -1071,26 +1390,29 @@
             ],
             "result": "Available plugins are scanned and faulty ones remain isolated from startup.",
             "notes": [
-              "Do not add a disk root; it makes scanning much slower."
+              "Do not add a disk root; it makes scanning much slower.",
+              "Do not add the whole system disk to Search Paths. Select installed plugin folders for supported formats.",
+              "After scanning, search by name and check status. If blacklisted, fix the cause before removing the entry and rescanning.",
+              "When moving a project, install the same plugins and sound libraries. Their licenses and content are supplied separately by their developers."
             ],
             "figures": [
               {
                 "slug": "plugin-manager",
                 "alt": "Plugins tab in Plugin Manager",
                 "caption": "The main list shows recognised plugins and formats.",
-                "ratio": "4 / 3"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "plugin-paths",
                 "alt": "Plugin Manager search paths",
                 "caption": "Search Paths limit the folders inspected by the scanner.",
-                "ratio": "4 / 3"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "plugin-blacklist",
                 "alt": "Plugin Manager Blacklist",
                 "caption": "Faulty plugins stay isolated until an intentional rescan.",
-                "ratio": "4 / 3"
+                "ratio": "1440 / 1200"
               }
             ]
           },
@@ -1126,18 +1448,22 @@
               {
                 "slug": "automation-lane",
                 "alt": "Automation lane below an audio track",
-                "caption": "The lane shows a curve on the shared project timeline."
+                "caption": "The lane shows a curve on the shared project timeline.",
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "automation-editor",
                 "alt": "Separate automation curve editor",
                 "caption": "Curve editor supports precise selection and point movement.",
-                "ratio": "4 / 3"
+                "ratio": "1440 / 1200"
               }
             ],
             "notes": [
               "With creation mode off, double-clicking resets ordinary knobs. Alt/Option no longer enables automation creation; inspector numeric fields instead open explicit entry.",
-              "Cmd/Ctrl+Shift+A still deselects in Piano Roll. The automation mode shortcut can be reassigned in Keyboard Shortcuts."
+              "Cmd/Ctrl+Shift+A still deselects in Piano Roll. The automation mode shortcut can be reassigned in Keyboard Shortcuts.",
+              "Check the target before drawing: channel, plugin and parameter. Selecting another track does not retarget an existing curve.",
+              "Add nodes at key positions, then adjust segment curvature. Also check playback started from the middle of the curve.",
+              "For Master, open its mixer menu and create automation. A Master track appears on the timeline with child curves for volume, pan or master-plugin parameters."
             ]
           },
           {
@@ -1155,8 +1481,76 @@
             "notes": [
               "If the action is unavailable, check its menu explanation. Armed/monitored tracks, incoming routing, external sidechains, linked Pattern clips and external plugin-parameter automation can prevent freezing.",
               "Editing source material or processing invalidates the frozen result. Missing frozen media falls back to the original chain.",
-              "Freeze saves DSP work; plugin instances remain in memory. Cloud publication uses original editable sources."
+              "Freeze saves DSP work; plugin instances remain in memory. Cloud publication uses original editable sources.",
+              "Freeze reduces processing load; Render creates an output file. A frozen track retains a relationship to its original chain.",
+              "Return to an editable state to change notes, slides or source plugins. Freeze the track again after editing."
             ]
+          },
+          {
+            "id": "compressor-delay",
+            "title": "Compressor and Delay",
+            "intro": "Two built-in effects for dynamics and rhythmic repeats, added to a normal insert chain.",
+            "steps": [
+              "Add Compressor to a track insert and loop a representative passage.",
+              "Choose Soft or Punch. Lower Threshold until the meter shows the intended gain reduction; Ratio controls the compression amount.",
+              "Attack sets reaction speed, Release sets recovery and Knee sets how compression engages. Change them one at a time and listen to the instrument onset.",
+              "Match level with Makeup or Auto Gain. Dry / Wet mixes original and compressed signals. Compare bypass at similar loudness.",
+              "Add Delay. Choose project-tempo sync, independent BPM or timing in milliseconds.",
+              "Set straight, triplet or dotted divisions. Stereo and Ping-Pong define repeat placement.",
+              "Feedback sets repeat persistence and Mix sets their share. Start with low Feedback and listen after the phrase ends.",
+              "Compare Clean, Telephone, Radio, FM, Tape, Drive and Lo-Fi. Low Cut / High Cut limit repeat frequencies and modulation varies their movement.",
+              "On a dedicated send channel, Delay is normally fully wet; the source track’s send controls the amount.",
+              "Include enough export tail so repeats do not stop at the final clip boundary."
+            ],
+            "result": "Dynamics and repeats are configured with level and tail behavior checked.",
+            "figures": [
+              {
+                "slug": "compressor",
+                "alt": "Built-in Compressor with Soft and Punch modes",
+                "caption": "Threshold, ratio, attack, release and mix sit beside the response curve.",
+                "ratio": "1840 / 798"
+              },
+              {
+                "slug": "delay",
+                "alt": "Built-in Delay with sync and filters",
+                "caption": "Repeat timing, stereo mode, feedback and character in one editor.",
+                "ratio": "2200 / 998"
+              }
+            ]
+          },
+          {
+            "id": "vlt-pitch",
+            "title": "VLT Pitch: vocal tuning",
+            "intro": "Built-in pitch correction for a single vocal melody. Chords, choirs and full mixes are outside its intended input.",
+            "preparation": "Insert VLT Pitch in the vocal track’s Audio FX chain. Choose a short passage with stable notes for setup.",
+            "steps": [
+              "Choose Key and Scale. For a custom scale, enable allowed pitch classes on the keyboard; the mode changes to Custom.",
+              "Check A4, which defaults to 440 Hz. Change the reference only if the recording uses a different tuning.",
+              "Start with Natural, Pop, Tight or Hard and adjust Retune Speed. Zero milliseconds is the fastest, hardest correction; longer times make transitions slower.",
+              "Adjust Humanize for sustained notes and Vibrato to retain periodic movement. Their influence decreases at very fast Retune settings.",
+              "In Settings choose voice range, correction amount and output level. Formants preserves the vocal spectral envelope and is enabled by default.",
+              "Compare Real-Time and HD. Stop playback and recording and disable monitoring before changing quality; a pending change applies when the engine is idle.",
+              "Enable track monitoring to hear correction while recording. The take remains dry; delay also depends on buffer size and other plugins.",
+              "Check input/target note and Shift in cents. If the target is wrong, first verify key, voice range and source material.",
+              "Send to All copies parameters to other VLT Pitch instances in one undoable action. Use it only when those voices should share the settings.",
+              "Save the preset and project. Freeze and export use the selected quality and do not automatically switch to HD."
+            ],
+            "result": "Vocals are corrected toward allowed notes with the selected speed and natural movement."
+          },
+          {
+            "id": "modulation-rack",
+            "title": "Modulation Rack",
+            "intro": "A serial chain of Chorus, Doubler, Flanger and Phaser with a shared Filter & EQ section.",
+            "steps": [
+              "Add Modulation to a track insert. Start with one enabled module and switch the others off with their power buttons.",
+              "Adjust the selected card and listen to width, movement and level over a consistent loop.",
+              "Drag a card handle horizontally to reorder it. Clicking opens Move Left / Move Right; Alt + Left / Right also works.",
+              "Enable another module after checking the first. Order matters: each effect receives the output of the previous one.",
+              "Expand Filter & EQ. Adjust four bell bands, Low Cut and High Cut. Drag points for frequency/gain and use the wheel for Q.",
+              "Use numeric fields and keyboard controls for precision. Compare bypass without a large loudness change.",
+              "Save the preset and project. Standalone Chorus, Doubler, Flanger and Phaser are available when only one effect is needed."
+            ],
+            "result": "Modules process the signal in the selected order and shared filters shape its spectrum."
           }
         ]
       },
@@ -1177,7 +1571,10 @@
             ],
             "result": "The AI panel is ready to answer and execute available project commands.",
             "notes": [
-              "When AI quota is exhausted, editing, recording, plugins, and export remain available."
+              "When AI quota is exhausted, editing, recording, plugins, and export remain available.",
+              "For a managed model, check account sign-in and quota. For a custom endpoint, verify that the provider supports the model.",
+              "Save settings and send a short test request. Read the error: access, quota, key and connection problems need different fixes.",
+              "Hide private keys when sharing settings screenshots. An external provider processes the requests and attachments sent to it."
             ],
             "problems": [
               {
@@ -1191,11 +1588,14 @@
             "title": "Project AI assistant",
             "intro": "The assistant sees permitted session context and calls the same undoable commands exposed by the interface.",
             "steps": [
-              "Open AI and select Chat.",
-              "Describe the goal and optionally select a track or clip.",
-              "Drop a local attachment when the request needs it.",
-              "Review the reply and actions in the transcript.",
-              "Use Undo or revert to an earlier message when the result does not fit."
+              "Open AI from the View menu and choose Chat. The message field is available immediately; no starter option is required.",
+              "Check the selected model and access. If connection fails, open Settings → AI and verify the provider, endpoint and key.",
+              "Select the relevant clip or track if your request concerns specific material. Include its name and the desired result in your message.",
+              "Describe a clear action, such as “Create a MIDI track for bass” or “Explain how to set up a reverb send”. For a phrase, include length, tempo and key.",
+              "Drag a local attachment into the chat if needed. Check the attachment before sending.",
+              "Send the message and wait for the response. The transcript shows text and project actions; check which object changed.",
+              "Point to a message to access its actions. The copy icon copies text and the edit icon lets you revise the prompt; tooltips explain each button.",
+              "Audition the result. If it does not fit, use Undo or the available return-to-message action, then refine your request."
             ],
             "result": "The assistant explains a task or changes the project through controlled command history.",
             "notes": [
@@ -1205,7 +1605,8 @@
               {
                 "slug": "ai-chat",
                 "alt": "AI Chat panel with a completed request and actions",
-                "caption": "Transcript separates answers, actions, errors, and run state."
+                "caption": "Transcript separates answers, actions, errors, and run state.",
+                "ratio": "1440 / 1200"
               }
             ]
           },
@@ -1231,8 +1632,14 @@
               {
                 "slug": "ai-music",
                 "alt": "AI Music mode with a completed generation",
-                "caption": "A finished result receives a card and appears on an Audio track."
+                "caption": "A finished result receives a card and appears on an Audio track.",
+                "ratio": "1440 / 1200"
               }
+            ],
+            "notes": [
+              "Generation depends on the selected service and allowance. If unavailable, check the model and account settings.",
+              "Specify whether vocals are needed, approximate duration and instruments. Check the actual tempo and file start before arranging.",
+              "Insert Again places another copy of the result; it is not a new generation request. Save after choosing a suitable result."
             ]
           },
           {
@@ -1257,12 +1664,15 @@
               {
                 "slug": "web",
                 "alt": "Integrated Web panel beside the arrangement",
-                "caption": "Web and AI are independent side workspaces."
+                "caption": "Web and AI are independent side workspaces.",
+                "ratio": "1440 / 1200"
               }
             ],
             "notes": [
               "The browser uses system proxy settings and VPN routes. If a VPN exposes only a local proxy, enable its System proxy mode. Reload the tab after changing connectivity, or restart VLTone if needed.",
-              "After a network error, Reload retries the original address. Include the URL and error code when reporting a problem."
+              "After a network error, Reload retries the original address. Include the URL and error code when reporting a problem.",
+              "A webpage may need internet and its own sign-in. A VLTone account does not replace an external website account.",
+              "Use an available local file for import. A webpage URL is not necessarily an audio file URL."
             ]
           },
           {
@@ -1280,7 +1690,9 @@
             "notes": [
               "The selected start-page background and cached catalog work offline. Removing an image from the server collection does not erase a previously selected local copy.",
               "Start-page backgrounds do not restyle external websites. Video availability depends on the page, format and source restrictions.",
-              "Start-page background animation stops when reduced motion is enabled."
+              "Start-page background animation stops when reduced motion is enabled.",
+              "A background changes appearance, not the project’s audio tracks. Import an audio file separately for ordinary audio playback.",
+              "If load is high, disable the video background and compare project behavior. A saved link requires its source page to remain available."
             ]
           }
         ]
@@ -1294,13 +1706,20 @@
             "id": "export",
             "title": "Render and export",
             "intro": "Render / Export creates a final mix or separate stems with the selected format, sample rate, depth, and channels.",
-            "preparation": "Listen through the project and check solo/mute, master peaks, and range boundaries.",
+            "preparation": "Save the project. Check the end of the arrangement and reverb/delay tails. Finish or cancel any uncommitted editing previews.",
             "steps": [
-              "Open File → Render / Export.",
-              "Choose Mix or Stems.",
-              "Set folder, name, format, sample rate, bit depth, and channels.",
-              "Review stem sources and start render.",
-              "Open the result and check start, ending, and level."
+              "Open File → Render / Export. The new window collects the main settings on one page; scroll its contents on smaller screens.",
+              "Choose the output folder and name. Check that the folder is writable and the disk has enough free space.",
+              "Choose a format. WAV is useful for further mixing; MP3 can be used for a smaller sharing file. Available options depend on the format.",
+              "Set sample rate, bit depth for PCM formats and channel count. Keep two channels for a normal stereo mix.",
+              "Set the range to the whole project or the intended section. Check start and end positions so the intro and ending are included.",
+              "Choose the master mix for a single finished file. Enable Stems and select the intended sources for separate track files.",
+              "Check the stem mode and processing: pre/post fader, Mute / Solo, plugins and routing. Read the summary and warnings at the bottom.",
+              "Set the required effect tail. Enable normalization or other processing only when needed, and compare output loudness with the project.",
+              "Add metadata and cover art if needed and supported by the format. These fields do not replace the output file name.",
+              "Click Render. If a name already exists, review the overwrite prompt. Keep the app open until completion; Cancel stops the operation.",
+              "Listen to the exported file at its start and end. For stems, check aligned starts, the file set and the required effect tails.",
+              "Audio rendering includes slide notes and committed Warp edits. MIDI-file export keeps ordinary notes but does not export drawn slide curves."
             ],
             "result": "A finished audio file or a set of synchronised stems is available.",
             "shortcuts": [
@@ -1320,15 +1739,16 @@
                 "slug": "export-mix",
                 "alt": "Full-mix export dialog",
                 "caption": "Mix creates one file from the master output.",
-                "ratio": "4 / 3"
+                "ratio": "1100 / 820"
               },
               {
                 "slug": "export-stems",
                 "alt": "Stem export dialog",
                 "caption": "Stems save selected tracks as separate synchronised files.",
-                "ratio": "4 / 3"
+                "ratio": "1100 / 820"
               }
-            ]
+            ],
+            "notes": []
           },
           {
             "id": "recovery",
@@ -1343,14 +1763,16 @@
             ],
             "result": "The last consistent project state is restored and can be saved normally.",
             "notes": [
-              "Recovery complements Save but does not replace backups."
+              "Recovery complements Save but does not replace backups.",
+              "Recovery does not replace Save. Use a permanent project folder and check the last save time.",
+              "After recovery, listen to recently edited sections and check file references. Save the recovered version under a separate name."
             ],
             "figures": [
               {
                 "slug": "recovery",
                 "alt": "Project recovery dialog after a failure",
                 "caption": "The app presents a discovered session before opening the main workspace.",
-                "ratio": "4 / 3"
+                "ratio": "500 / 165"
               }
             ]
           },
@@ -1373,104 +1795,107 @@
               }
             ],
             "notes": [
-              "Some language and font changes require a restart; the page tells you when."
+              "Some language and font changes require a restart; the page tells you when.",
+              "Change one group at a time and check the result immediately. Audio device settings affect sound; interface scaling affects display.",
+              "Find commands by name in Keyboard Shortcuts and check their bindings. Manual shortcuts refer to default bindings.",
+              "After changing theme, check grid and selection contrast. Mixer settings help fit channel width to the display."
             ],
             "figures": [
               {
                 "slug": "settings-interface",
                 "alt": "General application settings",
                 "caption": "General: startup project, refresh rate, and graphics quality.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-audio",
                 "alt": "Audio settings",
                 "caption": "Audio: device, sample rate, buffer, and channels.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-transport",
                 "alt": "Transport settings",
                 "caption": "Transport: playback, metronome, and time behaviour.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-recording",
                 "alt": "Recording settings",
                 "caption": "Recording: take mode, monitoring, and capture options.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-context",
                 "alt": "Context Panel settings",
                 "caption": "Context Panel: tool visibility and behaviour.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-browser",
                 "alt": "Browser settings",
                 "caption": "Browser: preview, position, and import behaviour.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-quick-import",
                 "alt": "Quick Import settings",
                 "caption": "Quick Import: template, audio track, BPM and key detection.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-mixer",
                 "alt": "Mixer settings",
                 "caption": "Mixer: channel width and the default-size reset.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-notebook",
                 "alt": "Notebook settings",
                 "caption": "Notebook: background, visibility, and local fonts.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-ai",
                 "alt": "AI settings",
                 "caption": "AI: managed models and custom connections.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-account",
                 "alt": "Account settings",
                 "caption": "Account: session status, access, and AI quota.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-language",
                 "alt": "Language settings",
                 "caption": "Language: built-in and imported locales.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-recovery",
                 "alt": "Recovery settings",
                 "caption": "Recovery: journal frequency and retention.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-themes",
                 "alt": "Themes settings",
                 "caption": "Themes: ready-made light and dark palettes.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-theme-editor",
                 "alt": "Theme Editor",
                 "caption": "Theme Editor: individual colours and custom font.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               },
               {
                 "slug": "settings-shortcuts",
                 "alt": "Keyboard shortcut editor",
                 "caption": "Keyboard Shortcuts: search, rebind, and reset.",
-                "ratio": "8 / 7"
+                "ratio": "1440 / 1200"
               }
             ]
           },
@@ -1488,7 +1913,10 @@
             ],
             "result": "The issue is isolated while the project and source data remain safe.",
             "notes": [
-              "Do not delete recovery, Blacklist, or the project folder before making a copy."
+              "Do not delete recovery, Blacklist, or the project folder before making a copy.",
+              "If the wrong instrument plays, check the track, instrument slot and pattern source. Selecting a clip does not automatically change its instrument.",
+              "If an operation fails, reproduce it in a new project with one clip. This separates material problems from complex project routing.",
+              "In a report include app version, OS, audio driver, buffer, plugins and reproduction steps. Attach a short example and the expected result."
             ],
             "problems": [
               {
@@ -1511,11 +1939,29 @@
             "result": "The saved session is restored if it remains valid on the server.",
             "notes": [
               "The 72-hour offline allowance is not a password expiration. An online check is required after it ends.",
-              "Explicit sign-out, session revocation or account suspension can require a new sign-in. Do not remove the saved session merely because of a temporary network failure."
+              "Explicit sign-out, session revocation or account suspension can require a new sign-in. Do not remove the saved session merely because of a temporary network failure.",
+              "Do not delete saved credentials for a brief network outage. Restore connectivity and retry first.",
+              "If sign-in still fails, check the system clock, credential-store access and account status on the website."
             ]
+          },
+          {
+            "id": "bounce-selection",
+            "title": "Bounce: combine into audio",
+            "intro": "Bounce in Place turns selected material into an audio clip inside the project, useful for combined processing of several tracks.",
+            "preparation": "Combining multiple sources is updated in 0.3.1. Check the selection and save the project before processing.",
+            "steps": [
+              "Select the intended clips or tracks. Exclude anything that should remain separate.",
+              "Open Bounce in Place. With multiple source tracks, the result is a combined audio clip.",
+              "Set range and available processing options. Check the listed effects and sources.",
+              "Start processing and wait for completion. Cancellation should not leave an unfinished result.",
+              "Listen to the new clip with the project. Make sure original sources do not double it where they should be muted.",
+              "Check the region boundaries. One Undo reverses the operation; Redo restores the result."
+            ],
+            "result": "The project contains one audio clip of the selected sources, ready for ordinary editing and processing."
           }
         ]
       }
-    ]
+    ],
+    "versionNote": "Updated September 29, 2026. Screenshots and new features show build 0.3.1, currently in development. Available installers are listed on Releases."
   }
 }

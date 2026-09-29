@@ -31,6 +31,7 @@ public:
     bool initialize();
 
     const PluginDescriptor& descriptor() const noexcept override { return m_descriptor; }
+    PitchCapabilities pitchCapabilities() const noexcept override { return {false, false, m_descriptor.wantsMidi, false}; }
     void setListener(PluginListener* listener) noexcept override {
         m_listener.store(listener, std::memory_order_release);
     }

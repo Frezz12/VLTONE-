@@ -535,8 +535,9 @@ int main() {
             ++queuedReleases;
         }
         check(acceptedEveryRelease, "saturated live releases are accepted");
-        processor.process(output.block(), kBlock, 0, false, true,
-                          transportAt(0.0));
+        MidiBuffer saturated; saturated.reserve(kMidiEventsPerBlock);
+        ProcessContext stopContext;stopContext.frames=kBlock;stopContext.sampleRate=48000;stopContext.playing=false;stopContext.midiOutput=&saturated;
+        player->process(stopContext);recorder->received.assign(saturated.events().begin(),saturated.events().end());
         bool prematureTimelineRelease = false;
         for (const MidiEvent& event : recorder->received) {
             prematureTimelineRelease |=
@@ -547,8 +548,7 @@ int main() {
                   !prematureTimelineRelease,
               "an all-release block defers the transport's extra note-off");
 
-        processor.process(output.block(), kBlock, 0, false, true,
-                          transportAt(0.0));
+        saturated.clear();player->process(stopContext);recorder->received.assign(saturated.events().begin(),saturated.events().end());
         check(recorder->received.size() == 1 &&
                   recorder->received[0].isNoteOff() &&
                   recorder->received[0].channel() == kTimelineChannel &&
@@ -754,7 +754,7 @@ int main() {
         if (ready) {
             instance->startProcessing();
 
-            std::array<PluginEvent, 8> input{};
+            std::array<PluginEvent, 9> input{};
             input[0].kind = PluginEvent::Kind::NoteOn;
             input[0].frameOffset = 3;
             input[0].channel = 2;
@@ -795,6 +795,7 @@ int main() {
             input[7].noteId = 77;
             input[7].value = 80.0 / 127.0;
 
+            input[8]=input[7];input[8].kind=PluginEvent::Kind::NotePitch;input[8].value=-7.25;input[8].frameOffset=80;
             PluginEventCapture capture;
             OutputBuffer audio(2, kBlock);
             PluginProcessContext context;
@@ -822,6 +823,7 @@ int main() {
                 capture.events[2].kind == PluginEvent::Kind::NoteChoke &&
                 capture.events[2].frameOffset == 22;
             check(notesOk, "CLAP note on/off/choke preserve voice identity and timing");
+            check(instance->pitchCapabilities().perNote&&capture.count==9&&capture.events[8].kind==PluginEvent::Kind::NotePitch&&capture.events[8].noteId==77&&capture.events[8].frameOffset==80&&near(capture.events[8].value,-7.25),"CLAP tuning preserves voice identity, semitones and sample offset");
 
             const bool controllersOk =
                 capture.count >= 7 &&
@@ -877,6 +879,7 @@ int main() {
         }
         if (tone) {
             PluginNode host("MIDI expression echo", factory.create(*tone));
+            host.setSlideDelivery(SlideDelivery::PitchBend,2,2);
             host.prepare(info);
             MidiBuffer input, output;
             input.reserve(8); output.reserve(32);

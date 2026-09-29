@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vlt.studio/protocol/schema/slide-command-v5.schema.json",
+  "title": "VLT slide.set command v5",
+  "description": "The v5 slide operation. A null slide deletes the object. Its id must match slideId; references may be orphaned. Existing operations retain their negotiated schema contracts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "opId",
+    "transactionId",
+    "baseServerSeq",
+    "kind",
+    "payload",
+    "preconditions",
+    "touchedFields"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 5
+    },
+    "opId": {
+      "$ref": "project-command-v2.schema.json#/$defs/id"
+    },
+    "transactionId": {
+      "$ref": "project-command-v2.schema.json#/$defs/optionalId"
+    },
+    "baseServerSeq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "kind": {
+      "const": "slide.set"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trackId",
+        "clipId",
+        "takeId",
+        "slideId",
+        "slide"
+      ],
+      "properties": {
+        "trackId": {
+          "$ref": "project-command-v2.schema.json#/$defs/id"
+        },
+        "clipId": {
+          "$ref": "project-command-v2.schema.json#/$defs/id"
+        },
+        "takeId": {
+          "$ref": "project-command-v2.schema.json#/$defs/optionalId"
+        },
+        "slideId": {
+          "$ref": "project-command-v2.schema.json#/$defs/id"
+        },
+        "slide": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "slide-note.schema.json"
+            }
+          ]
+        }
+      }
+    },
+    "preconditions": {
+      "type": "array",
+      "items": {
+        "$ref": "project-command-v2.schema.json#/$defs/precondition"
+      },
+      "maxItems": 1024
+    },
+    "touchedFields": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "minItems": 1,
+      "maxItems": 8192,
+      "uniqueItems": true
+    }
+  }
+}

@@ -313,7 +313,13 @@ public:
         // Preallocated open addressing: a block containing N changed
         // parameters must not perform N squared COM/linear-search operations.
         m_lookup.assign(std::bit_ceil(std::max(std::size_t{2}, m_queues.size() * 2)), 0);
+        m_active.resize(m_queues.size());
         m_used = 0;
+    }
+    void reserveParameterPoints(Vst::ParamID id, std::size_t count) {
+        auto found=std::find_if(m_special.begin(),m_special.end(),[&](const auto& q){return q.first==id;});
+        if(found==m_special.end()){auto q=owned(new ParamValueQueue);q->reserve(count);m_special.emplace_back(id,std::move(q));}
+        else found->second->reserve(count);
     }
     void clear() noexcept {
         if (!m_used) return; // Idle plugins need no table scan on each audio block.
@@ -331,7 +337,7 @@ public:
     int32 PLUGIN_API getParameterCount() override { return int32(m_used); }
     Vst::IParamValueQueue* PLUGIN_API getParameterData(int32 index) override {
         if (index < 0 || std::size_t(index) >= m_used) return nullptr;
-        return m_queues[std::size_t(index)];
+        return m_active[std::size_t(index)];
     }
     Vst::IParamValueQueue* PLUGIN_API addParameterData(const Vst::ParamID& id,
                                                        int32& index) override {
@@ -348,18 +354,22 @@ private:
         auto slot = std::size_t(hash) & mask;
         while (const auto encoded = m_lookup[slot]) {
             const auto existing = encoded - 1;
-            if (m_queues[existing]->getParameterId() == id) {
-                index = int32(existing); return m_queues[existing];
+            if (m_active[existing]->getParameterId() == id) {
+                index = int32(existing); return m_active[existing];
             }
             slot = (slot + 1) & mask;
         }
         if (m_used >= m_queues.size()) return nullptr;
         index = int32(m_used++);
         m_lookup[slot] = uint32(index) + 1;
-        m_queues[index]->reset(id);
-        return m_queues[index];
+        auto special=std::find_if(m_special.begin(),m_special.end(),[&](const auto& q){return q.first==id;});
+        m_active[index]=special==m_special.end()?m_queues[index].get():special->second.get();
+        m_active[index]->reset(id);
+        return m_active[index];
     }
     std::vector<IPtr<ParamValueQueue>> m_queues;
+    std::vector<ParamValueQueue*> m_active;
+    std::vector<std::pair<Vst::ParamID,IPtr<ParamValueQueue>>> m_special;
     std::vector<uint32> m_lookup;
     std::size_t m_used = 0;
 };

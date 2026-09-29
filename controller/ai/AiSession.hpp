@@ -110,6 +110,8 @@ public:
 
     /// Open a turn with the user's request. False when one is already running.
     bool begin(const std::string& prompt);
+    /// Continue a failed/stopped turn with its completed tool results intact.
+    bool resume();
 
     enum class Step {
         NeedsRequest,  ///< tools ran; send the conversation again

@@ -61,7 +61,7 @@ void GraphicsPreferences::watchCompatibilityWindow(QWidget* source, std::functio
 bool gpuWorkspaceEnabled() {
     if (qEnvironmentVariableIsSet("VLT_GPU_WORKSPACE"))
         return qEnvironmentVariableIntValue("VLT_GPU_WORKSPACE") == 1;
-    return QSettings().value("ui/gpuWorkspace", false).toBool();
+    return QSettings().value("ui/gpuWorkspace", true).toBool();
 }
 GraphicsPreferences& GraphicsPreferences::instance() {
     static auto* prefs = new GraphicsPreferences(QCoreApplication::instance());

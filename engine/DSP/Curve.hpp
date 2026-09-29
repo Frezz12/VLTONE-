@@ -31,6 +31,8 @@ struct Point {
     Shape shape = Shape::Linear;
     /// −1 convex … 0 straight … +1 concave, for the segment that starts here.
     double curve = 0.0;
+    double phaseFrom = 0.0, phaseTo = 1.0;
+    double priority = -1e300;
 };
 
 /// Reshape a linear 0…1 position within a segment.
@@ -91,7 +93,11 @@ inline double valueAt(const std::vector<Point>& points, double beats,
     const double span = to.beats - from.beats;
     if (!(span > 0.0)) return to.value;
 
-    const double t = shapeT((beats - from.beats) / span, from.shape, from.curve);
+    const double fraction = (beats - from.beats) / span;
+    const double low = shapeT(from.phaseFrom, from.shape, from.curve);
+    const double high = shapeT(from.phaseTo, from.shape, from.curve);
+    const double shaped = shapeT(from.phaseFrom + (from.phaseTo-from.phaseFrom)*fraction, from.shape, from.curve);
+    const double t = high != low ? (shaped-low)/(high-low) : 0.0;
     return from.value + (to.value - from.value) * t;
 }
 

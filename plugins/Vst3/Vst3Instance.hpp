@@ -90,6 +90,7 @@ public:
     std::uint32_t latencySamples() const noexcept override {
         return m_latency.load(std::memory_order_relaxed);
     }
+    bool tailSamplesKnown() const noexcept override { return true; }
     std::uint32_t tailSamples() const noexcept override {
         return m_tail.load(std::memory_order_relaxed);
     }
@@ -97,6 +98,8 @@ public:
 private:
     void readParameters();
     void readMidiMappings();
+    PitchCapabilities pitchCapabilities() const noexcept override { return m_pitchCapabilities; }
+    PitchCapabilities m_pitchCapabilities;
     void readBuses();
     bool allocateAndActivateBuses(std::uint32_t maxBlockSize, bool sidechainConnected);
     void refreshLatency();

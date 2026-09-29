@@ -3,6 +3,7 @@
 #include "Common/RealtimeSort.hpp"
 
 #include "Common/Types.hpp"
+#include "DSP/PitchRamp.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -31,6 +32,9 @@ struct MidiEvent {
     /// MIDI wire bytes and defaults to centre for ordinary MIDI producers.
     float notePan = 0.0f;
     std::uint64_t musicalOrder = 0; ///< recorded ordering at equal frame offsets
+    std::int32_t noteId = -1;     ///< host voice identity, never a MIDI wire byte
+    bool isPitchExpression = false;
+    PitchRamp pitch;
 
     static constexpr std::uint8_t kNoteOff = 0x80;
     static constexpr std::uint8_t kNoteOn = 0x90;
@@ -46,21 +50,24 @@ struct MidiEvent {
     /// A note-on with zero velocity is a note-off — a convention old enough
     /// that plenty of real files and controllers still rely on it, and one
     /// that a synth reading only the status byte would get wrong.
-    bool isNoteOn() const noexcept { return type() == kNoteOn && data2 > 0; }
+    bool isNoteOn() const noexcept { return !isPitchExpression && type() == kNoteOn && data2 > 0; }
     bool isNoteOff() const noexcept {
-        return type() == kNoteOff || (type() == kNoteOn && data2 == 0);
+        return !isPitchExpression && (type() == kNoteOff || (type() == kNoteOn && data2 == 0));
     }
 
     static MidiEvent noteOn(FrameCount offset, std::uint8_t channel, std::uint8_t key,
-                            std::uint8_t velocity, float pan = 0.0f) noexcept {
+                            std::uint8_t velocity, float pan = 0.0f, std::int32_t id = -1) noexcept {
         MidiEvent event{
             offset, std::uint8_t(kNoteOn | (channel & 0x0F)), key, velocity};
         event.notePan = std::clamp(pan, -1.0f, 1.0f);
+        event.noteId = id;
         return event;
     }
     static MidiEvent noteOff(FrameCount offset, std::uint8_t channel,
-                             std::uint8_t key, std::uint8_t velocity = 0) noexcept {
-        return {offset, std::uint8_t(kNoteOff | (channel & 0x0F)), key, velocity};
+                             std::uint8_t key, std::uint8_t velocity = 0, std::int32_t id = -1) noexcept {
+        MidiEvent event{offset, std::uint8_t(kNoteOff | (channel & 0x0F)), key, velocity};
+        event.noteId = id;
+        return event;
     }
 };
 

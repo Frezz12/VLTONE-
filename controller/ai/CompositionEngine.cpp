@@ -395,15 +395,25 @@ std::vector<CompositionNoteEvent> generateChords(
     std::vector<int> previous;
     std::vector<CompositionNoteEvent> notes;
 
-    for (int bar = 0; bar < request.bars; ++bar) {
-        for (int hit = 0; hit < hits; ++hit) {
+    std::vector<double> onsets;
+    for (int bar = 0; bar < request.bars; ++bar)
+        for (int hit = 0; hit < hits; ++hit)
+            onsets.push_back(bar * request.beatsPerBar + hit * request.beatsPerBar / hits);
+    for (const auto& segment : request.harmony) onsets.push_back(segment.startBeats);
+    std::sort(onsets.begin(), onsets.end());
+    onsets.erase(std::unique(onsets.begin(), onsets.end(), [](double a, double b) {
+        return std::abs(a - b) < 1.0e-6;
+    }), onsets.end());
+    for (std::size_t at = 0; at < onsets.size(); ++at) {
+            const double start = onsets[at];
+            const int bar = int(start / request.beatsPerBar);
+            const int hit = int((start - bar * request.beatsPerBar) * hits / request.beatsPerBar);
             int degree = progression[std::size_t((bar + (variation >= 3)) % 4)];
             if (hit > 0 && random.chance(creativity * 0.35)) ++degree;
-            const int toneCount = density + creativity > 1.15 ? 4 : 3;
             std::vector<int> chord;
-            const double start = bar * request.beatsPerBar +
-                                 hit * request.beatsPerBar / hits;
             const CompositionHarmonySegment* harmony = harmonyAt(request, start);
+            const int toneCount = harmony && !harmony->chordTonePitchClasses.empty()
+                ? int(harmony->chordTonePitchClasses.size()) : density + creativity > 1.15 ? 4 : 3;
             for (int tone = 0; tone < toneCount; ++tone) {
                 int target = (range.lowest + range.highest) / 2 + (tone - 1) * 4;
                 if (tone < int(previous.size())) target = previous[std::size_t(tone)];
@@ -430,11 +440,12 @@ std::vector<CompositionNoteEvent> generateChords(
             if (chord.empty()) chord.push_back(scalePitchPool(request).front());
             std::sort(chord.begin(), chord.end());
             previous = chord;
-            const double length = request.beatsPerBar / hits * 0.94;
+            double end = at + 1 < onsets.size() ? onsets[at + 1] : totalBeats;
+            if (harmony) end = std::min(end, harmony->startBeats + harmony->lengthBeats);
+            const double length = (end - start) * 0.94;
             for (int pitch : chord)
                 addNote(notes, pitch, start, length,
                         76 + random.integer(-5, 13), totalBeats);
-        }
     }
     return notes;
 }

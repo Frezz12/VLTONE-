@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vlt.studio/protocol/schema/slide-note.schema.json",
+  "title": "SlideNote (project 11 / protocol 5)",
+  "description": "Silent pitch control. The C++ and Go validators additionally require strictly increasing times, first time 0 and last time 1. Missing references are retained as inactive data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "startBeats",
+    "lengthBeats",
+    "referenceNoteId",
+    "targetNoteIds",
+    "chord",
+    "muted",
+    "points"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "project-command-v2.schema.json#/$defs/id"
+    },
+    "startBeats": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1e+100
+    },
+    "lengthBeats": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1e+100
+    },
+    "referenceNoteId": {
+      "$ref": "project-command-v2.schema.json#/$defs/optionalId"
+    },
+    "targetNoteIds": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "project-command-v2.schema.json#/$defs/id"
+      }
+    },
+    "chord": {
+      "type": "boolean"
+    },
+    "muted": {
+      "type": "boolean"
+    },
+    "resumed": {
+      "type": "boolean"
+    },
+    "points": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "time",
+          "pitch",
+          "shape",
+          "curve"
+        ],
+        "properties": {
+          "time": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "pitch": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 127
+          },
+          "shape": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "curve": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1
+          }
+        }
+      }
+    }
+  }
+}

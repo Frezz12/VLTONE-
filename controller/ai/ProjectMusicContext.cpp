@@ -390,14 +390,15 @@ ProjectMusicContext buildProjectMusicContext(const ProjectModel& project,
                         }
                     }
                 }
+                const double sourceOffset = secondsToBeats(clip.offsetSeconds, out.tempo);
                 for (const NoteModel& note : clip.notes) {
                     if (note.muted || !(note.lengthBeats > 0.0)) continue;
-                    if (length > 0.0 && note.startBeats >= length) continue;
+                    if (length > 0.0 && note.startBeats >= sourceOffset + length) continue;
                     const double sourceLength =
                         length > 0.0
-                            ? std::min(note.lengthBeats, length - note.startBeats)
+                            ? std::min(note.lengthBeats, sourceOffset + length - note.startBeats)
                             : note.lengthBeats;
-                    const double noteFrom = clipFrom + note.startBeats;
+                    const double noteFrom = clipFrom + note.startBeats - sourceOffset;
                     const double noteTo = noteFrom + sourceLength;
                     const double audibleFrom =
                         std::max({noteFrom, gateFrom, rangeFrom});

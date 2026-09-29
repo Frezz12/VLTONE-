@@ -10,6 +10,9 @@ class QComboBox;
 class QDialogButtonBox;
 class QGridLayout;
 class QTableWidget;
+class QLabel;
+class QSpinBox;
+class QDoubleSpinBox;
 namespace ui { class Knob; }
 
 // Parameter dialogs for the piano roll's Tools menu.
@@ -48,6 +51,7 @@ protected:
     void finishLayout();
     /// Wire any widget's "value changed" signal to `paramsChanged`.
     void watch(QWidget* widget);
+    void setApplyEnabled(bool enabled);
 
     void closeEvent(QCloseEvent* event) override;
 
@@ -208,10 +212,24 @@ public:
     explicit ChordDialog(QWidget* parent = nullptr);
 
     daw::miditools::ChordParams params() const;
+    void setContext(const daw::miditools::Notes& notes, double start, double length,
+                    int velocity, double endBeats = 100000.0);
+    daw::miditools::Notes generate(const daw::miditools::Notes& notes) const;
 
 private:
+    void updateSummary();
+    QComboBox* m_source = nullptr;
     QComboBox* m_type = nullptr;
-    ui::Knob* m_inversion = nullptr;
+    QSpinBox* m_inversion = nullptr;
+    QWidget* m_newChord = nullptr;
+    QComboBox* m_root = nullptr;
+    QDoubleSpinBox* m_start = nullptr;
+    QDoubleSpinBox* m_length = nullptr;
+    QSpinBox* m_velocity = nullptr;
+    QLabel* m_summary = nullptr;
+    int m_sourceCount = 0;
+    int m_sourcePitch = 60;
+    double m_endBeats = 100000.0;
     QCheckBox* m_addOctave = nullptr;
     QCheckBox* m_bassOctave = nullptr;
 };

@@ -1,3 +1,4 @@
+#include "SlideJson.hpp"
 #include "collaboration/CommandJson.hpp"
 #include "collaboration/MidiContentJson.hpp"
 #include "serialization/AssetJson.hpp"
@@ -620,6 +621,7 @@ json sharedInsertToJson(const InsertModel& insert) {
                 {"rightParameters", parametersToJson(insert.rightParameters)},
                 {"assetBindings", bindingsToJson(insert.assetBindings)}};
     if (insert.sidechainTrackIds.size() > 1) out["sidechainTrackIds"] = insert.sidechainTrackIds;
+    if (insert.slideDelivery || insert.slideBendRange != 2 || insert.slideReleaseReserve != 2) { out["slideDelivery"]=insert.slideDelivery; out["slideBendRange"]=insert.slideBendRange; out["slideReleaseReserve"]=insert.slideReleaseReserve; }
     return out;
 }
 
@@ -629,7 +631,7 @@ bool sharedInsertFromJson(const json& value, InsertModel& insert) {
                        "pluginVersion", "stateSchemaVersion", "mix",
                        "channelMode", "sidechainTrackId", "stateAsset",
                        "rightStateAsset", "parameters", "rightParameters",
-                       "assetBindings"}, {"sidechainTrackIds"}) ||
+                       "assetBindings"}, {"sidechainTrackIds","slideDelivery","slideBendRange","slideReleaseReserve"}) ||
         !value.at("id").is_string() || !value.at("name").is_string() ||
         !value.at("bypassed").is_boolean() ||
         !value.at("format").is_string() || !value.at("uid").is_string() ||
@@ -658,6 +660,9 @@ bool sharedInsertFromJson(const json& value, InsertModel& insert) {
     insert.pluginVersion = value.at("pluginVersion").get<std::string>();
     insert.stateSchemaVersion = value.at("stateSchemaVersion").get<int>();
     insert.mix = value.at("mix").get<float>();
+    if(value.contains("slideDelivery")&&!value.at("slideDelivery").is_number_integer())return false;
+    insert.slideDelivery=value.value("slideDelivery",0); insert.slideBendRange=value.value("slideBendRange",2.); insert.slideReleaseReserve=value.value("slideReleaseReserve",2.);
+    if(insert.slideDelivery<0||insert.slideDelivery>4||!std::isfinite(insert.slideBendRange)||insert.slideBendRange<1||insert.slideBendRange>96||!std::isfinite(insert.slideReleaseReserve)||insert.slideReleaseReserve<0||insert.slideReleaseReserve>20)return false;
     insert.channelMode = pluginChannelModeFromString(channelMode);
     const auto legacy = value.at("sidechainTrackId").get<std::string>();
     if (value.contains("sidechainTrackIds")) {
@@ -789,6 +794,8 @@ json bodyToJson(const ProjectCommand& command) {
             return json{{"trackId", body.trackId},
                         {"clipId", body.clipId},
                         {"asset", serialization::assetRefToJson(body.asset)}};
+        } else if constexpr (std::is_same_v<T, SetSlideNote>) {
+            return json{{"trackId", body.trackId}, {"clipId", body.clipId}, {"takeId", body.takeId}, {"slideId", body.slideId}, {"slide", body.slide ? slides::toJson(*body.slide) : json(nullptr)}};
         } else if constexpr (std::is_same_v<T, SetClipSampleEdit>) {
             return json{{"trackId", body.trackId},
                         {"clipId", body.clipId},
@@ -1274,6 +1281,14 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
         }
         out = std::move(body);
         return true;
+    }
+    if (kind == "slide.set") {
+        if (!hasExactKeys(payload, {"trackId", "clipId", "takeId", "slideId", "slide"})) { error = "invalid slide payload"; return false; }
+        SetSlideNote body;
+        body.trackId = payload.at("trackId").get<std::string>(); body.clipId = payload.at("clipId").get<std::string>();
+        body.takeId = payload.at("takeId").get<std::string>(); body.slideId = payload.at("slideId").get<std::string>();
+        if (!payload.at("slide").is_null()) body.slide = slides::fromJson(payload.at("slide"));
+        out = std::move(body); return true;
     }
     if (kind == "clip.setSampleEdit") {
         if (!hasExactKeys(payload, {"trackId", "clipId", "sampleEdit"})) {
@@ -2096,7 +2111,7 @@ std::optional<ProjectCommand> projectCommandFromJson(const nlohmann::json& value
         if (!commandHasValidIds(command, &idError)) return fail(std::move(idError));
         if (error) error->clear();
         return command;
-    } catch (const json::exception& exception) {
+    } catch (const std::exception& exception) {
         return fail(std::string("invalid command JSON: ") + exception.what());
     }
 }

@@ -9,6 +9,7 @@
 #include "MixerWidget.hpp"
 #include "ChannelStrip.hpp"
 #include "TimelineWidget.hpp"
+#include "PianoRollWindow.hpp"
 #include "Controls.hpp"
 #include "UiFrameClock.hpp"
 #include "UiConstants.hpp"
@@ -344,22 +345,24 @@ bool TimelineWidget::checkAdaptiveGridForTest() {
 bool TimelineWidget::checkBottomInsetInvalidationForTest() {
     const int savedInset = m_bottomInset;
     const bool savedScenePaint = m_lastPaintWasScene;
+    const bool savedViewportDirty = m_staticViewportDirty;
     const QRegion savedPlaybackDirty = m_playbackOnlyDirty;
     const QRegion savedRecordingDirty = m_recordingOnlyDirty;
     const bool savedBackgroundRepaint = m_backgroundFrameRepaint;
 
     // Reproduce the retained-scene ordering behind the intermittent black
     // reveal: the mixer changes its clip, then a playhead frame arrives before
-    // the next scene capture. Static damage must survive that later frame.
+    // the next scene capture. Clip invalidation must survive that later frame,
+    // without requiring unchanged lane geometry to be discarded.
     m_lastPaintWasScene = true;
     m_staticDirty = {};
     setBottomInset(savedInset == 0 ? 32 : 0);
     m_playbackOnlyDirty += rect();
-    const bool invalidated =
-        m_staticDirty.intersected(rect()) == QRegion(rect());
+    const bool invalidated = m_staticViewportDirty;
 
     m_bottomInset = savedInset;
     m_lastPaintWasScene = savedScenePaint;
+    m_staticViewportDirty = savedViewportDirty;
     m_playbackOnlyDirty = savedPlaybackDirty;
     m_recordingOnlyDirty = savedRecordingDirty;
     m_backgroundFrameRepaint = savedBackgroundRepaint;
@@ -478,6 +481,116 @@ bool TimelineWidget::checkClipTrimPreviewForTest() {
         ok = timeline.checkClipIndexForTest() && ok;
     }
     controller.endClipTrimEdit();
+    // Exercise pointer hit testing and the actual gesture, including dispatch
+    // through the GPU workspace. Controller-only trim tests missed the MIDI
+    // head being treated as a move, and an audio-only stretch lookup returned
+    // zero for MIDI, magnifying its source offset by 100.
+    daw::EngineController gestures;
+    if (!gestures.initialize(48000, 512, false)) return false;
+    auto& document = const_cast<daw::ProjectModel&>(gestures.project());
+    document.tracks.clear(); document.invalidateTrackIndex();
+    std::vector<std::pair<std::string, std::string>> gestureClips;
+    for (int i = 0; i < 4; ++i) {
+        const auto id = gestures.addTrack(tracks[i], "Trim edge fixture");
+        daw::ClipModel clip;
+        clip.id = id + "-edge"; clip.kind = kinds[i];
+        clip.startSeconds = 2; clip.durationSeconds = 2;
+        if (clip.kind == daw::ClipKind::Midi) {
+            for (int n = 0; n < 3; ++n) {
+                daw::NoteModel note;
+                note.id = clip.id + std::to_string(n); note.pitch = 60 + n * 2;
+                note.startBeats = n == 2 ? 3 : n; note.lengthBeats = n == 1 ? 2.5 : .5;
+                clip.notes.push_back(note);
+            }
+        }
+        gestureClips.emplace_back(id, clip.id);
+        document.findTrack(id)->clips.push_back(std::move(clip));
+    }
+    document.invalidateStructure();
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->setContentsMargins(0, 0, 0, 0);
+    TimelineWidget edges(&gestures, &host);
+    layout->addWidget(&edges);
+    edges.m_pixelsPerSecond = 80; edges.m_scrollSeconds = 0;
+    edges.m_snapEnabled = false; edges.setTool(Tool::Select);
+    const auto settle = [](int ms) {
+        QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
+    };
+    host.resize(800, 600); host.show(); settle(80);
+    std::unique_ptr<ui::graphics::WorkspaceSurface> surface;
+    if (ui::graphics::gpuWorkspaceEnabled()) {
+        surface = std::make_unique<ui::graphics::WorkspaceSurface>(&host);
+        QObject::connect(surface.get(), &ui::graphics::WorkspaceSurface::failed, &host,
+            [&](const QString& reason) {
+                std::fprintf(stderr, "GPU trim dispatch failed: %s\n", qPrintable(reason)); ok = false;
+            });
+        settle(220);
+        ok &= surface->quickWindow()->isExposed();
+    }
+    const auto pointer = [&](QEvent::Type type, QPoint local) {
+        const QPointF global = edges.mapToGlobal(local);
+        const QPointF position = surface ? surface->quickWindow()->mapFromGlobal(global) : QPointF(local);
+        QMouseEvent event(type, position, global,
+            type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(surface ? static_cast<QObject*>(surface->quickWindow()) : &edges, &event);
+        settle(10);
+    };
+    for (int lane = 0; lane < 4; ++lane) {
+        const auto& [track, id] = gestureClips[lane];
+        const auto clip = [&]() -> const daw::ClipModel& { return document.findTrack(track)->clips.front(); };
+        const auto storage = clip().notes.data();
+        const auto depth = gestures.undoDepth();
+        const int y = edges.laneTop(lane) + edges.laneBodyHeightAt(lane) / 2;
+        pointer(QEvent::MouseButtonPress, {160, y});
+        const bool grabbed = edges.m_trimming && edges.m_trimEdge == Edge::Left && !edges.m_dragging;
+        pointer(QEvent::MouseMove, {240, y});
+        const bool moved = clip().startSeconds == 3 && clip().durationSeconds == 1 &&
+            clip().offsetSeconds == (lane < 2 ? 1 : 0) && clip().notes.data() == storage;
+        pointer(QEvent::MouseMove, {160, y}); // Reverse before release: restore the source.
+        const bool reversed = clip().startSeconds == 2 && clip().durationSeconds == 2 && clip().offsetSeconds == 0;
+        pointer(QEvent::MouseMove, {240, y});
+        pointer(QEvent::MouseButtonRelease, {240, y});
+        bool passed = grabbed && moved && reversed && gestures.undoDepth() == depth + 1;
+        if (lane == 1) {
+            const auto* nodes = gestures.trackNodes(track);
+            const auto graph = gestures.routingGraph();
+            const daw::engine::MidiClipPlayerNode* player = nullptr;
+            for (const auto& node : graph->nodes)
+                if (nodes && node.id == nodes->midiClips)
+                    player = dynamic_cast<const daw::engine::MidiClipPlayerNode*>(node.node);
+            const auto notes = player ? player->notes() : nullptr;
+            passed &= notes && notes->size() == 2 && (*notes)[0].startBeats == 6 &&
+                      (*notes)[0].lengthBeats == 1.5 && (*notes)[1].startBeats == 7;
+            QImage preview(400, 40, QImage::Format_ARGB32_Premultiplied);
+            preview.fill(Qt::transparent);
+            { QPainter p(&preview); p.setClipRect(preview.rect());
+              edges.drawMidiNotes(p, clip(), QRectF(240, 0, 80, 40), QRectF(240, 0, 80, 40),
+                                 gestures.midiNotesRevision(track)); }
+            bool stayed = false, shifted = false;
+            for (int row = 0; row < 40; ++row) {
+                stayed |= qAlpha(preview.pixel(290, row)) > 0;
+                shifted |= qAlpha(preview.pixel(310, row)) > 0;
+            }
+            passed &= stayed && !shifted;
+        }
+        gestures.undo();
+        passed &= clip().startSeconds == 2 && clip().offsetSeconds == 0 && clip().durationSeconds == 2;
+        gestures.redo();
+        passed &= clip().startSeconds == 3 && clip().durationSeconds == 1;
+        // Recover the hidden head in a subsequent gesture, then trim the tail.
+        pointer(QEvent::MouseButtonPress, {240, y}); pointer(QEvent::MouseMove, {160, y});
+        pointer(QEvent::MouseButtonRelease, {160, y});
+        passed &= clip().startSeconds == 2 && clip().durationSeconds == 2 && clip().offsetSeconds == 0;
+        pointer(QEvent::MouseButtonPress, {320, y});
+        passed &= edges.m_trimming && edges.m_trimEdge == Edge::Right;
+        pointer(QEvent::MouseMove, {280, y}); pointer(QEvent::MouseButtonRelease, {280, y});
+        passed &= clip().startSeconds == 2 && clip().durationSeconds == 1.5 && clip().notes.data() == storage;
+        std::printf("%s  clip kind=%d both trim edges, source timing, reversal and history (%s)\n",
+                    passed ? "PASS" : "FAIL", int(kinds[lane]), surface ? "gpu" : "widgets");
+        ok &= passed;
+    }
     return ok;
 }
 
@@ -703,16 +816,58 @@ bool checkMixerPerformance() {
 }
 
 bool checkUiScaling() {
+    if (qEnvironmentVariableIsSet("VLT_TRACK_PRESENTATION_CHECK_ONLY"))
+        return TimelineWidget::checkTrackPresentationForTest();
     bool ok = true;
     const auto check = [&](bool result, const char* name) {
         std::printf("%s  %s\n", result ? "PASS" : "FAIL", name); ok = ok && result;
     };
+    // Exercise the same shared divider used by Browser, Mixer, Web and Warp.
+    // Releases can arrive without a final move when native events coalesce.
+    for (const auto orientation : {Qt::Horizontal, Qt::Vertical}) {
+        QWidget host;
+        ResizeHandle handle(orientation, &host);
+        int delta = 0;
+        handle.onDrag = [&](int value) { delta = value; };
+        const auto mouse = [&](QEvent::Type type, int distance, Qt::MouseButtons buttons) {
+            const QPointF global = orientation == Qt::Horizontal
+                ? QPointF(100, 100 + distance) : QPointF(100 + distance, 100);
+            QMouseEvent event(type, handle.mapFromGlobal(global), global,
+                type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                buttons, Qt::NoModifier);
+            QApplication::sendEvent(&handle, &event);
+        };
+        mouse(QEvent::MouseButtonPress, 0, Qt::LeftButton);
+        mouse(QEvent::MouseMove, 20, Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, 35, Qt::NoButton);
+        check(delta == 35, "panel divider commits the final release coordinate");
+        for (const auto type : {QEvent::UngrabMouse, QEvent::Hide, QEvent::WindowDeactivate}) {
+            mouse(QEvent::MouseButtonPress, 0, Qt::LeftButton);
+            mouse(QEvent::MouseMove, 10, Qt::LeftButton);
+            QEvent cancelled(type);
+            QApplication::sendEvent(&handle, &cancelled);
+            mouse(QEvent::MouseMove, 80, Qt::LeftButton);
+            mouse(QEvent::MouseButtonRelease, 90, Qt::NoButton);
+            check(delta == 10, "cancelled panel resize cannot resume from a stale press");
+        }
+        mouse(QEvent::MouseButtonPress, 0, Qt::LeftButton);
+        mouse(QEvent::MouseMove, 12, Qt::LeftButton);
+        mouse(QEvent::MouseMove, 40, Qt::NoButton);
+        mouse(QEvent::MouseMove, 60, Qt::LeftButton);
+        check(delta == 12, "missing release cancels the panel resize on hover");
+    }
     check(TimelineWidget::checkInterruptedPointerGestureForTest(),
           "lost mouse release stops playhead, marquee and time selection");
     if (qEnvironmentVariableIsSet("VLT_POINTER_RELEASE_CHECK_ONLY")) return ok;
     check(TimelineWidget::checkClipTrimPreviewForTest(),
           "live audio/MIDI/Pattern/automation trim stays visible across tile boundaries and reversals");
-    if (qEnvironmentVariableIsSet("VLT_CLIP_TRIM_CHECK_ONLY")) return ok;
+    if (qEnvironmentVariableIsSet("VLT_CLIP_TRIM_CHECK_ONLY")) {
+        daw::EngineController controller;
+        if (!controller.initialize(48000, 512, false)) return false;
+        PianoRollWindow editor(&controller);
+        check(editor.checkMidiFileActionsForTest(), "trimmed MIDI piano-roll source bounds, seeking and export");
+        return ok;
+    }
     const auto settle = [](int ms = 80) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
     daw::EngineController controller;
     controller.initialize(48000.0, 512, false);
@@ -1067,17 +1222,32 @@ bool checkUiScaling() {
     const double trailHeadX = timeline.displayedPlayheadSubpixelXForTest();
     controller.pause(); timeline.refreshPlaybackFrame(); settle();
     const QImage parkedImage = timeline.grab().toImage();
-    int leftDifference = 0, rightDifference = 0;
+    int leftDifference = 0, boundaryDifference = 0, rightDifference = 0;
+    int firstRightDifference = rollingImage.width(), lastRightDifference = -1;
     const double dpr = rollingImage.devicePixelRatio();
+    const double headPixel = trailHeadX * dpr;
     for (int y = int(100 * dpr); y < int(130 * dpr); ++y) {
         for (int x = int((trailHeadX - 55) * dpr); x < int((trailHeadX + 55) * dpr); ++x) {
             if (x < 0 || x >= rollingImage.width()) continue;
             if (rollingImage.pixel(x, y) == parkedImage.pixel(x, y)) continue;
-            if (x < int(trailHeadX * dpr)) ++leftDifference;
-            else ++rightDifference;
+            // A fractional cursor centre straddles one physical pixel. The
+            // left-only wash can affect that pixel through antialiasing too;
+            // only pixels starting at/after ceil(headPixel) are fully right.
+            if (x + 1.0 <= headPixel) ++leftDifference;
+            else if (x < std::ceil(headPixel)) ++boundaryDifference;
+            else {
+                ++rightDifference;
+                firstRightDifference = std::min(firstRightDifference, x);
+                lastRightDifference = std::max(lastRightDifference, x);
+            }
         }
     }
-    check(leftDifference > 0 && rightDifference == 0,
+    std::printf("Trail raster: headPx=%.6f pausedPx=%.6f boundaryColumn=%d left=%d boundary=%d oldRight=%d right=%d rightColumns=%d..%d\n",
+        headPixel, timeline.displayedPlayheadSubpixelXForTest() * dpr, int(std::floor(headPixel)),
+        leftDifference, boundaryDifference, boundaryDifference + rightDifference, rightDifference,
+        firstRightDifference, lastRightDifference);
+    check(leftDifference > 0 && rightDifference == 0 &&
+          near(trailHeadX, timeline.displayedPlayheadSubpixelXForTest()),
           "after reverse pan the rendered trail extends only left from the cursor");
     check(near(timeline.displayedPlayheadTrailForTest(), 0.0), "pause removes the trail immediately");
 
@@ -1358,6 +1528,9 @@ bool TimelineWidget::checkScrollCacheForTest() {
 }
 
 bool ui::checkWorkspaceMotionPerformance() {
+    // This entry point runs before main's normal theme initialization. Native
+    // controls and scroll-area contents must use the production palette too.
+    ThemeManager::instance().apply();
     MainWindow window(false);
     const bool passed = window.checkWorkspaceMotionForTest();
     window.endRecoverySessionForTest();
@@ -1366,7 +1539,7 @@ bool ui::checkWorkspaceMotionPerformance() {
 
 bool MainWindow::checkWorkspaceMotionForTest() {
     const QString targetName = qEnvironmentVariable("VLT_MOTION_TARGET", "sampler");
-    if (targetName != "sampler" && targetName != "native" && targetName != "mixer") return false;
+    if (targetName != "sampler" && targetName != "native" && targetName != "mixer" && targetName != "browser") return false;
     const auto settle = [](int ms) {
         QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
     };
@@ -1400,12 +1573,13 @@ bool MainWindow::checkWorkspaceMotionForTest() {
     auto* editor = m_pluginEditors.isEmpty() ? nullptr : m_pluginEditors.begin().value();
     auto* frame = editor ? m_internalEditorFrames.value(editor, nullptr) : nullptr;
     if (!frame || !editor->isEditorInitialized()) return false;
-    if (targetName == "mixer") hideInternalWindow(editor);
+    if (targetName == "mixer" || targetName == "browser") hideInternalWindow(editor);
     else {
         // The native case exercises the same HWND host as vendor editors; the
         // content remains the deterministic built-in Sampler, not vendor DSP.
         if (targetName == "native") frame->prepareForNativeSurface();
-        frame->setGeometry(100, 130, 780, 520);
+        frame->resizeForContent(editor->size().expandedTo(editor->minimumSize()));
+        frame->move(100, 130);
         frame->present();
     }
     QPointer<ui::graphics::WorkspaceSurface> surface = findChild<ui::graphics::WorkspaceSurface*>();
@@ -1426,9 +1600,12 @@ bool MainWindow::checkWorkspaceMotionForTest() {
     }
     settle(500);
     if (surface && (!surface->quickWindow()->isExposed() || surface->quickWindow()->grabWindow().isNull())) return false;
-    QWidget* target = targetName == "mixer" ? m_mixerHandle : frame->findChild<QWidget*>("InternalEditorTitleBar");
+    if (targetName == "browser") { setBrowserVisible(true); settle(150); }
+    QWidget* target = targetName == "mixer" ? m_mixerHandle : targetName == "browser" ? m_browserHandle
+        : frame->findChild<QWidget*>("InternalEditorTitleBar");
     if (!target || failed) return false;
-    const QPointF anchor = target->mapToGlobal(QPoint(120, 2 + (targetName == "mixer" ? 0 : 16)));
+    const QPointF anchor = target->mapToGlobal(targetName == "browser" ? QPoint(3, 100)
+        : QPoint(120, 2 + (targetName == "mixer" ? 0 : 16)));
     QPointF lastGlobal = anchor;
     const auto sendMouse = [&](QEvent::Type type, QPointF global) {
         // Native plugin frames receive QWidget input directly; other content
@@ -1447,29 +1624,79 @@ bool MainWindow::checkWorkspaceMotionForTest() {
     gesture.setTimerType(Qt::PreciseTimer);
     connect(&gesture, &QTimer::timeout, this, [&] {
         const double phase = travel.elapsed() * 6.283185307179586 / 1600.;
-        lastGlobal = anchor + (targetName == "mixer" ? QPointF(0, std::sin(phase) * 100)
+        lastGlobal = anchor + (targetName == "browser" ? QPointF(std::sin(phase) * 80, 0)
+            : targetName == "mixer" ? QPointF(0, std::sin(phase) * 100)
             : QPointF(220 * (1 - std::cos(phase)), 60 * std::sin(phase)));
-        const QRect before = targetName == "mixer" ? m_mixer->geometry() : frame->geometry();
+        QWidget* moving = targetName == "mixer" || targetName == "browser" ? target->parentWidget() : frame;
+        const QRect before = moving->geometry();
         ui::perf::Scope cost("motion.input.ms");
         sendMouse(QEvent::MouseMove, lastGlobal);
-        if (before != (targetName == "mixer" ? m_mixer->geometry() : frame->geometry())) ++changes;
+        if (before != moving->geometry()) ++changes;
         ++inputs;
     });
     gesture.start(8); settle(1600);
     frames = inputs = changes = 0;
     ui::perf::reset();
     const auto staticBefore = m_timeline->staticFramePaintCountForTest();
+    const auto tilesBefore = m_timeline->gpuLaneTileBuildsForTest();
     QElapsedTimer measured; measured.start();
     settle(4800);
     gesture.stop(); sendMouse(QEvent::MouseButtonRelease, lastGlobal);
     const auto elapsed = measured.elapsed();
     ui::perf::flush();
-    std::printf("WORKSPACE_MOTION target=%s backend=%s tracks=%zu inputs=%d changes=%d frames=%d elapsed_ms=%lld timeline_static_paints=%llu\n",
+    const auto tileBuilds = m_timeline->gpuLaneTileBuildsForTest() - tilesBefore;
+    std::printf("WORKSPACE_MOTION target=%s backend=%s tracks=%zu inputs=%d changes=%d frames=%d elapsed_ms=%lld timeline_static_paints=%llu lane_tile_builds=%llu\n",
         targetName.toUtf8().constData(), surface ? "gpu" : "widgets", project.tracks.size(), inputs, changes, frames,
-        static_cast<long long>(elapsed), static_cast<unsigned long long>(m_timeline->staticFramePaintCountForTest() - staticBefore));
+        static_cast<long long>(elapsed), static_cast<unsigned long long>(m_timeline->staticFramePaintCountForTest() - staticBefore),
+        static_cast<unsigned long long>(tileBuilds));
+    // Release can commit a final layout after the last submitted GPU frame.
+    // Pixel probes below compare the settled presentation with widget geometry.
+    settle(150);
     if (const auto shot = qEnvironmentVariable("VLT_MOTION_SCREENSHOT"); !shot.isEmpty()) {
         if (surface && !failed) surface->quickWindow()->grabWindow().save(shot);
         else centralWidget()->grab().save(shot);
+    }
+    if (surface && !failed && (targetName == "mixer" || targetName == "browser")) {
+        if (tileBuilds != 0) {
+            std::fprintf(stderr, "Panel resize discarded unchanged lane geometry\n");
+            return false;
+        }
+    }
+    if (surface && !failed && targetName == "browser") {
+        auto* scroll = findChild<QScrollArea*>(QStringLiteral("InspectorScrollArea"));
+        if (!scroll || !scroll->widget()) return false;
+        const QImage workspace = surface->quickWindow()->grabWindow();
+        // QScrollArea enables autoFillBackground on its content. Probe the
+        // empty left margin, where that inherited theme color must be visible.
+        const QPointF probe = surface->quickWindow()->mapFromGlobal(
+            scroll->viewport()->mapToGlobal(QPoint(2, 100)));
+        const QPoint pixel(int(std::floor(probe.x() * workspace.devicePixelRatio())),
+                           int(std::floor(probe.y() * workspace.devicePixelRatio())));
+        const QColor expected = scroll->widget()->palette().color(scroll->widget()->backgroundRole());
+        if (!workspace.rect().contains(pixel) ||
+            (expected != th().background && expected != th().surface) ||
+            workspace.pixelColor(pixel) != expected) {
+            std::fprintf(stderr, "Inspector background differs from its theme at %d,%d: expected %s, got %s\n",
+                pixel.x(), pixel.y(), expected.name().toUtf8().constData(),
+                workspace.rect().contains(pixel) ? workspace.pixelColor(pixel).name().toUtf8().constData() : "outside");
+            return false;
+        }
+        auto* handle = static_cast<ui::ResizeHandle*>(m_browserHandle);
+        // Compare reuse with freshly recorded pixels, including both sides of
+        // the 512 px tile threshold and expansion into previously clipped lanes.
+        for (const int timelineWidth : {820, 600, 518, 512, 508, 516, 760, 940}) {
+            const int delta = m_timeline->width() - timelineWidth;
+            handle->onDragStart();
+            handle->onDrag(m_browserOnLeft ? delta : -delta);
+            settle(150);
+            const QImage retained = surface->quickWindow()->grabWindow();
+            m_timeline->update(); settle(150);
+            if (retained != surface->quickWindow()->grabWindow()) {
+                std::fprintf(stderr, "Browser resize differs from freshly rendered timeline at width %d\n",
+                             m_timeline->width());
+                return false;
+            }
+        }
     }
     if (surface && !failed && targetName == "mixer") {
         // Reveal lanes covered when the retained tiles were built, then compare

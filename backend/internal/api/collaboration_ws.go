@@ -509,7 +509,7 @@ func (s *Server) collaborationLive(w http.ResponseWriter, r *http.Request) {
 			"roomQueueBytes":  normalizedRoomQueueBytes(s.Config.CollabRoomQueueBytes),
 		},
 	}
-	if requiredProtocol == collab.CollaborationProtocolV3 || requiredProtocol == collab.CollaborationProtocolV4 {
+	if requiredProtocol == collab.CollaborationProtocolV3 || requiredProtocol == collab.CollaborationProtocolV4 || requiredProtocol == collab.CollaborationProtocolV5 {
 		welcome["effectiveRole"] = role
 		welcome["pluginRequirementsRevision"] = joined.Session.PluginRequirementsRevision
 	}
@@ -897,7 +897,7 @@ func (connection *collaborationRoomConnection) handleSnapshotHash(ctx context.Co
 func (connection *collaborationRoomConnection) handleLease(ctx context.Context,
 	envelope collaborationClientEnvelope) error {
 	if !connection.server.Config.CollabRecordingEnabled ||
-		(connection.protocol != collab.CollaborationProtocolV3 && connection.protocol != collab.CollaborationProtocolV4) {
+		(connection.protocol != collab.CollaborationProtocolV3 && connection.protocol != collab.CollaborationProtocolV4 && connection.protocol != collab.CollaborationProtocolV5) {
 		connection.reject(ctx, envelope.MessageID, "cloud_recording_disabled",
 			"Recording is not available in cloud projects.", false)
 		return nil

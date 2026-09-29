@@ -47,6 +47,7 @@ class SamplerWaveform : public ui::FrameWidget , public ui::graphics::ScenePaint
     Q_OBJECT
 public:
     explicit SamplerWaveform(QWidget* parent = nullptr);
+    static bool checkPeakUpdatesForTest();
 
     /// Called whenever the panel refreshes — five times a second while the
     /// window is open, so it must cost nothing when nothing moved. It repaints
@@ -82,8 +83,10 @@ private:
     double fractionForX(int x) const;
 
     std::shared_ptr<const daw::plugins::sampler::SampleData> m_sample;
+    std::shared_ptr<const daw::plugins::sampler::SampleData> m_peakSample;
     QColor m_clipColor;
     quint64 m_peakGeneration = 0;
+    quint64 m_peakRevision = 0;
     quint64 m_gpuWaveformKey = 0;
     bool m_peakBuildBusy = false;
     const void* m_peaksFor = nullptr;   ///< the buffer the peaks were built from

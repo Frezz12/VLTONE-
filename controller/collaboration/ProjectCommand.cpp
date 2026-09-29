@@ -163,6 +163,9 @@ bool pluginChainFromName(const std::string& name, PluginChain& out) {
 
 std::string pluginPropertyName(PluginProperty property) {
     switch (property) {
+        case PluginProperty::SlideDelivery: return "slideDelivery";
+        case PluginProperty::SlideBendRange: return "slideBendRange";
+        case PluginProperty::SlideReleaseReserve: return "slideReleaseReserve";
         case PluginProperty::Name: return "name";
         case PluginProperty::Bypassed: return "bypassed";
         case PluginProperty::Mix: return "mix";
@@ -180,7 +183,10 @@ std::string pluginPropertyFieldName(PluginProperty property) {
 }
 
 bool pluginPropertyFromName(const std::string& name, PluginProperty& out) {
-    if (name == "name") out = PluginProperty::Name;
+    if (name == "slideDelivery") out = PluginProperty::SlideDelivery;
+    else if (name == "slideBendRange") out = PluginProperty::SlideBendRange;
+    else if (name == "slideReleaseReserve") out = PluginProperty::SlideReleaseReserve;
+    else if (name == "name") out = PluginProperty::Name;
     else if (name == "bypassed") out = PluginProperty::Bypassed;
     else if (name == "mix") out = PluginProperty::Mix;
     else if (name == "channelMode") out = PluginProperty::ChannelMode;
@@ -235,6 +241,8 @@ std::string commandKind(const ProjectCommand& command) {
             return "clip.setProperty";
         else if constexpr (std::is_same_v<T, SetClipAsset>)
             return "clip.setAsset";
+        else if constexpr (std::is_same_v<T, SetSlideNote>)
+            return "slide.set";
         else if constexpr (std::is_same_v<T, SetClipSampleEdit>)
             return "clip.setSampleEdit";
         else if constexpr (std::is_same_v<T, SetClipFade>)
@@ -469,6 +477,14 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                        requireUuid(body.sourceTrackId, "sourceTrackId") &&
                        requireUuid(body.trackId, "trackId") &&
                        requireOptionalUuid(body.afterId, "afterId");
+            } else if constexpr (std::is_same_v<T, SetSlideNote>) {
+                if (value.meta.schemaVersion < 5) return fail("slide notes require protocol 5");
+                if (body.slide) {
+                    if (!requireUuid(body.slide->id,"slide.id") || !requireOptionalUuid(body.slide->referenceNoteId,"referenceNoteId")) return false;
+                    for (const auto& id : body.slide->targetNoteIds) if (!requireUuid(id,"targetNoteId")) return false;
+                }
+                return requireUuid(body.trackId, "trackId") && requireUuid(body.clipId, "clipId") &&
+                    requireOptionalUuid(body.takeId, "takeId") && requireUuid(body.slideId, "slideId");
             } else if constexpr (std::is_same_v<T, SetClipAsset> ||
                                  std::is_same_v<T, SetClipSampleEdit> ||
                                  std::is_same_v<T, SetClipFade> ||
@@ -646,8 +662,9 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
             } else if constexpr (std::is_same_v<T, SetAutomationTarget>) {
                 return requireUuid(body.trackId, "trackId") &&
                        requireUuid(body.clipId, "clipId") &&
-                       requireUuid(body.target.channelId,
-                                   "target.channelId") &&
+                       (body.target.channelId == "master" ||
+                        requireUuid(body.target.channelId,
+                                    "target.channelId")) &&
                        requireOptionalUuid(body.target.slotId,
                                            "target.slotId") &&
                        requireOptionalUuid(body.target.sendId,
@@ -657,6 +674,8 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                 return requireUuid(body.trackId, "trackId") &&
                        requireUuid(body.clipId, "clipId");
             } else if constexpr (std::is_same_v<T, AddTake>) {
+                if (value.meta.schemaVersion < 5 && !body.take.slideNotes.empty())
+                    return fail("slide notes require protocol 5");
                 return requireUuid(body.trackId, "trackId") &&
                        requireUuid(body.clipId, "clipId") &&
                        requireUuid(body.take.id, "take.id") &&
@@ -965,6 +984,9 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
             } else if constexpr (std::is_same_v<T, SetClipAsset>) {
                 fields.insert("clip:" + body.clipId + ":asset");
                 addTrackClipLandingHead(body.trackId);
+            } else if constexpr (std::is_same_v<T, SetSlideNote>) {
+                fields.insert("slide:" + body.slideId);
+                addClipDescendants(body.clipId);
             } else if constexpr (std::is_same_v<T, SetClipSampleEdit>) {
                 fields.insert("clip:" + body.clipId + ":sampleEdit");
                 fields.insert("project:tempoCascade");

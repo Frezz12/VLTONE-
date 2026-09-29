@@ -17,7 +17,8 @@
 namespace ui {
 
 inline constexpr int kLaneHeight = 72;   // default lane height
-inline constexpr int kMinLaneHeight = 44;
+inline constexpr int kMinLaneHeight = 24;
+inline constexpr int kCompactLaneHeight = 24;
 inline constexpr int kMaxLaneHeight = 320;
 inline constexpr int kRulerHeight = 34;
 inline constexpr int kRulerRowHeight = 20;

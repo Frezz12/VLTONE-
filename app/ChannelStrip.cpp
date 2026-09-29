@@ -12,8 +12,13 @@
 #include "UiConstants.hpp"
 
 #include "EngineController.hpp"
+#include "AutomationEditorWindow.hpp"
+#include "MixerWidget.hpp"
+#include "InspectorWidget.hpp"
 
 #include <QContextMenuEvent>
+#include <QComboBox>
+#include <QDir>
 #include <QApplication>
 #include <QCursor>
 #include <QDragEnterEvent>
@@ -863,11 +868,9 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
     panColumn->setContentsMargins(0, 0, 0, 0);
     panColumn->setSpacing(3);
     m_pan = new ui::PanKnob(panSection);
-    if (!m_master) {
-        m_pan->setAutomatable(true);
-        connect(m_pan, &ui::PanKnob::automateRequested, this,
-                [this] { emit automateControlRequested(m_trackId, true); });
-    }
+    m_pan->setAutomatable(true);
+    connect(m_pan, &ui::PanKnob::automateRequested, this,
+            [this] { emit automateControlRequested(channelId(), true); });
     m_panLabel = new QLabel(QStringLiteral("C"), panSection);
     m_panLabel->setAlignment(Qt::AlignCenter);
     m_panLabel->setFixedWidth(23);
@@ -2220,11 +2223,9 @@ QWidget* ChannelStrip::buildFaderRow() {
         }
         emit edited();
     });
-    if (!m_master) {
-        m_fader->setAutomatable(true);
-        connect(m_fader, &ui::FaderWidget::automateRequested, this,
-                [this] { emit automateControlRequested(m_trackId, false); });
-    }
+    m_fader->setAutomatable(true);
+    connect(m_fader, &ui::FaderWidget::automateRequested, this,
+            [this] { emit automateControlRequested(channelId(), false); });
 
     row->addStretch(1);
     row->addWidget(m_fader);
@@ -2610,23 +2611,23 @@ void ChannelStrip::syncFromModel() {
 }
 
 void ChannelStrip::refreshAutomationValues() {
-    if (m_master || !m_controller) return;
+    if (!m_controller) return;
     const auto* track =
         m_controller->project().findTrack(m_trackId.toStdString());
-    if (!track) return;
+    if (!track && !m_master) return;
 
-    double gain = track->volume;
-    double pan = track->pan;
+    double gain = m_master ? m_controller->masterVolume() : track->volume;
+    double pan = m_master ? m_controller->masterPan() : track->pan;
     if (m_controller->isPlaying()) {
         daw::AutomationTarget volume;
         volume.kind = daw::AutomationTargetKind::TrackVolume;
-        volume.channelId = track->id;
+        volume.channelId = channelId().toStdString();
         if (const auto value = m_controller->automationValueAtPlayhead(volume))
             gain = *value;
 
         daw::AutomationTarget panorama;
         panorama.kind = daw::AutomationTargetKind::TrackPan;
-        panorama.channelId = track->id;
+        panorama.channelId = channelId().toStdString();
         if (const auto value = m_controller->automationValueAtPlayhead(panorama))
             pan = *value;
     }
@@ -2718,15 +2719,33 @@ void ChannelStrip::mousePressEvent(QMouseEvent* ev) {
 }
 
 void ChannelStrip::contextMenuEvent(QContextMenuEvent* ev) {
-    if (m_master) return;
-    QMenu menu(this);
-    QMenu* automation = menu.addMenu(
+    auto* menu = buildContextMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    menu->popup(ev->globalPos());
+    ev->accept();
+}
+
+QMenu* ChannelStrip::buildContextMenu(QWidget* parent) {
+    auto* menu = new QMenu(parent);
+    menu->setObjectName(QStringLiteral("MixerChannelContextMenu"));
+    const QString channel = channelId();
+    auto* timeline = menu->addAction(m_master ? tr("Show Master on Timeline")
+                                            : tr("Show on Timeline"));
+    timeline->setObjectName(QStringLiteral("channel.timeline"));
+    connect(timeline, &QAction::triggered, this,
+            [this, channel] { emit timelineRequested(channel); });
+    QMenu* automation = menu->addMenu(
         icons::icon(icons::Glyph::AutomationCreate, th().textPrimary),
         tr("Create Automation Clip"));
-    QAction* volume = automation->addAction(tr("Volume"));
-    QAction* pan = automation->addAction(tr("Pan"));
-    QAction* mute = automation->addAction(tr("Mute"));
-    QHash<QAction*, QString> sends;
+    for (const auto& [text, kind] : {std::pair{tr("Volume"), 0},
+                                    std::pair{tr("Pan"), 1}, std::pair{tr("Mute"), 2}}) {
+        auto* action = automation->addAction(text);
+        action->setObjectName(QStringLiteral("channel.automate.%1").arg(kind));
+        connect(action, &QAction::triggered, this, [this, channel, kind] {
+            if (kind == 2) emit automateMuteRequested(channel);
+            else emit automateControlRequested(channel, kind == 1);
+        });
+    }
     if (const auto* track =
             m_controller->project().findTrack(m_trackId.toStdString())) {
         for (const daw::SendModel& send : track->sends) {
@@ -2736,19 +2755,189 @@ void ChannelStrip::contextMenuEvent(QContextMenuEvent* ev) {
                 destination = QString::fromStdString(target->name);
             }
             QAction* action = automation->addAction(tr("Send to %1").arg(destination));
-            sends.insert(action, QString::fromStdString(send.id));
+            connect(action, &QAction::triggered, this,
+                    [this, id = QString::fromStdString(send.id)] {
+                        emit automateSendRequested(m_trackId, id);
+                    });
         }
     }
-    menu.addSeparator();
-    QAction* remove = menu.addAction(tr("Remove Track"));
-    QAction* chosen = menu.exec(ev->globalPos());
-    if (chosen == volume) emit automateControlRequested(m_trackId, false);
-    else if (chosen == pan) emit automateControlRequested(m_trackId, true);
-    else if (chosen == mute) emit automateMuteRequested(m_trackId);
-    else if (sends.contains(chosen))
-        emit automateSendRequested(m_trackId, sends.value(chosen));
-    else if (chosen == remove)
-        emit removeRequested(m_trackId);
+    auto* processing = buildChainMenu(menu);
+    processing->setTitle(tr("Plugins and Channel Settings"));
+    menu->addMenu(processing);
+    menu->addSeparator();
+    for (const bool pan : {false, true}) {
+        auto* reset = menu->addAction(pan ? tr("Reset Pan") : tr("Reset Volume"));
+        reset->setObjectName(pan ? QStringLiteral("channel.resetPan") : QStringLiteral("channel.resetVolume"));
+        connect(reset, &QAction::triggered, this, [this, pan] {
+            if (m_master) {
+                if (pan) m_controller->setMasterPan(0);
+                else m_controller->setMasterVolume(1);
+            } else {
+                if (pan) m_controller->setTrackPan(m_trackId.toStdString(), 0);
+                else m_controller->setTrackVolume(m_trackId.toStdString(), 1);
+            }
+            syncFromModel();
+            emit edited();
+        });
+    }
+    if (!m_master) {
+        auto* rename = menu->addAction(tr("Rename Track…"));
+        connect(rename, &QAction::triggered, this, [this] {
+            const auto* track = m_controller->project().findTrack(m_trackId.toStdString());
+            if (!track) return;
+            bool accepted = false;
+            const QString name = QInputDialog::getText(this, tr("Rename Track"), tr("Name:"),
+                QLineEdit::Normal, QString::fromStdString(track->name), &accepted);
+            if (!accepted || name.trimmed().isEmpty()) return;
+            m_controller->renameTrack(m_trackId.toStdString(), name.trimmed().toStdString());
+            syncFromModel();
+            emit edited();
+        });
+        auto* duplicate = menu->addAction(tr("Duplicate Track"));
+        duplicate->setObjectName(QStringLiteral("channel.duplicate"));
+        connect(duplicate, &QAction::triggered, this, [this] {
+            if (!m_controller->duplicateTrack(m_trackId.toStdString(), true, true).empty())
+                emit trackCreated();
+        });
+    }
+    menu->addSeparator();
+    auto* create = menu->addMenu(tr("Create Track"));
+    create->setObjectName(QStringLiteral("channel.createTrack"));
+    const auto kinds = ui::addTrackKindItems(*create);
+    for (auto it = kinds.cbegin(); it != kinds.cend(); ++it)
+        connect(it.key(), &QAction::triggered, this, [this, spec = it.value()] {
+            if (!spec.create(*m_controller).empty()) emit trackCreated();
+        });
+    create->addSeparator();
+    connect(create->addAction(tr("Create Tracks…")), &QAction::triggered,
+            this, &ChannelStrip::createTracksRequested);
+    if (!m_master) {
+        menu->addSeparator();
+        auto* remove = menu->addAction(tr("Remove Track"));
+        remove->setObjectName(QStringLiteral("channel.remove"));
+        connect(remove, &QAction::triggered, this, [this] { emit removeRequested(m_trackId); });
+    }
+    return menu;
+}
+
+bool ChannelStrip::checkContextMenusForTest() {
+    daw::EngineController controller;
+    if (!controller.initialize(48000, 512, false).isOk()) return false;
+    const auto track = controller.addTrack(daw::TrackKind::Audio, "Channel");
+    ChannelStrip master(&controller, {}, true);
+    master.setAttribute(Qt::WA_DontShowOnScreen);
+    master.show();
+    QApplication::processEvents();
+    bool ok = true;
+    const auto check = [&](bool pass, const char* label) {
+        std::printf("%s mixer context: %s\n", pass ? "PASS" : "FAIL", label);
+        ok &= pass;
+    };
+    std::pair<std::string, std::string> automated;
+    connect(&master, &ChannelStrip::automateControlRequested, &master,
+            [&](const QString& channel, bool pan) {
+        daw::AutomationTarget target;
+        target.channelId = channel.toStdString();
+        target.kind = pan ? daw::AutomationTargetKind::TrackPan : daw::AutomationTargetKind::TrackVolume;
+        automated = controller.ensureAutomation(target);
+    });
+    QContextMenuEvent click(QContextMenuEvent::Mouse, QPoint(10, 10), master.mapToGlobal(QPoint(10, 10)));
+    QApplication::sendEvent(&master, &click);
+    auto* popup = master.findChild<QMenu*>(QStringLiteral("MixerChannelContextMenu"));
+    check(popup && popup->isVisible(), "right click opens a menu on Master");
+    if (popup) popup->close();
+    QApplication::processEvents();
+    std::unique_ptr<QMenu> menu(master.buildContextMenu(nullptr));
+    check(menu->findChild<QAction*>(QStringLiteral("channel.timeline")) &&
+          !menu->findChild<QAction*>(QStringLiteral("channel.remove")) &&
+          !menu->findChild<QAction*>(QStringLiteral("channel.duplicate")),
+          "Master offers a timeline action without duplicate or delete");
+    auto* volume = menu->findChild<QAction*>(QStringLiteral("channel.automate.0"));
+    auto* pan = menu->findChild<QAction*>(QStringLiteral("channel.automate.1"));
+    if (!volume || !pan) return false;
+    volume->trigger();
+    const auto* lane = controller.project().findTrack(automated.first);
+    check(lane && controller.project().findTrack(lane->parentId) &&
+          controller.project().findTrack(lane->parentId)->kind == daw::TrackKind::Master &&
+          !lane->clips.empty() &&
+          lane->clips.front().automation.target.channelId == daw::EngineController::kMasterChannelId,
+          "automation belongs to the Master timeline row and drives its real channel");
+    if (!lane) return false;
+    const auto row = lane->parentId;
+    const auto count = controller.project().tracks.size();
+    check(controller.ensureMasterTrack() == row && controller.project().tracks.size() == count,
+          "showing Master again reuses its timeline row");
+    AutomationEditorWindow editor(&controller, QString::fromStdString(automated.first),
+                                  QString::fromStdString(automated.second));
+    bool selectedMaster = false;
+    for (auto* combo : editor.findChildren<QComboBox*>())
+        selectedMaster |= combo->currentData().toString() == QLatin1String(daw::EngineController::kMasterChannelId);
+    check(selectedMaster, "the automation editor keeps Master as its selected target");
+    pan->trigger();
+    check(controller.project().findTrack(automated.first)->parentId == row,
+          "pan automation shares the same Master owner");
+    controller.setMasterVolume(0.3f);
+    controller.setMasterPan(0.7f);
+    menu->findChild<QAction*>(QStringLiteral("channel.resetVolume"))->trigger();
+    menu->findChild<QAction*>(QStringLiteral("channel.resetPan"))->trigger();
+    check(controller.masterVolume() == 1 && controller.masterPan() == 0,
+          "reset actions edit the real master fader and pan");
+    InspectorWidget inspector(&controller);
+    inspector.setTrack(QString::fromStdString(row));
+    QString inspectorChannel;
+    bool createRequested = false;
+    connect(&inspector, &InspectorWidget::timelineRequested, &inspector,
+            [&](const QString& channel) { inspectorChannel = channel; });
+    connect(&inspector, &InspectorWidget::createTracksRequested, &inspector,
+            [&] { createRequested = true; });
+    auto* inspectorStrip = inspector.findChild<ChannelStrip*>();
+    check(inspectorStrip && inspectorStrip->channelId() == QLatin1String(daw::EngineController::kMasterChannelId),
+          "the Master timeline inspector displays the real master channel");
+    if (!inspectorStrip) return false;
+    std::unique_ptr<QMenu> inspectorMenu(inspectorStrip->buildContextMenu(nullptr));
+    inspectorMenu->findChild<QAction*>(QStringLiteral("channel.timeline"))->trigger();
+    auto* inspectorCreate = inspectorMenu->findChild<QMenu*>(QStringLiteral("channel.createTrack"));
+    inspectorCreate->actions().last()->trigger();
+    check(inspectorChannel == QLatin1String(daw::EngineController::kMasterChannelId) && createRequested,
+          "the inspector forwards timeline and advanced track creation actions");
+    ChannelStrip ordinary(&controller, QString::fromStdString(track), false);
+    std::unique_ptr<QMenu> channelMenu(ordinary.buildContextMenu(nullptr));
+    auto* create = channelMenu->findChild<QMenu*>(QStringLiteral("channel.createTrack"));
+    auto* duplicate = channelMenu->findChild<QAction*>(QStringLiteral("channel.duplicate"));
+    check(create && duplicate && channelMenu->findChild<QAction*>(QStringLiteral("channel.remove")),
+          "ordinary channels offer create, duplicate and delete");
+    if (!create || !duplicate) return false;
+    const auto before = controller.project().tracks.size();
+    for (auto* action : create->actions()) {
+        if (action->isSeparator()) break;
+        action->trigger();
+    }
+    check(controller.project().tracks.size() == before + 9,
+          "quick creation makes all nine track types");
+    const auto beforeDuplicate = controller.project().tracks.size();
+    duplicate->trigger();
+    check(controller.project().tracks.size() == beforeDuplicate + 1,
+          "duplicate creates an independent channel");
+    MixerWidget mixer(&controller);
+    mixer.setAttribute(Qt::WA_DontShowOnScreen);
+    mixer.resize(800, 600);
+    mixer.show();
+    QApplication::processEvents();
+    QContextMenuEvent background(QContextMenuEvent::Mouse, QPoint(12, 12),
+                                 mixer.mapToGlobal(QPoint(12, 12)));
+    QApplication::sendEvent(&mixer, &background);
+    auto* backgroundMenu = mixer.findChild<QMenu*>(QStringLiteral("MixerContextMenu"));
+    check(backgroundMenu && backgroundMenu->isVisible(), "the mixer background also opens its context menu");
+    if (backgroundMenu) backgroundMenu->close();
+    const QString shots = qEnvironmentVariable("DAW_MIXER_CONTEXT_SHOTS");
+    if (!shots.isEmpty()) {
+        QDir().mkpath(shots);
+        menu->adjustSize();
+        channelMenu->adjustSize();
+        check(menu->grab().save(shots + "/master-menu.png") &&
+              channelMenu->grab().save(shots + "/channel-menu.png"), "menu screenshots");
+    }
+    return ok;
 }
 
 void ChannelStrip::paintEvent(QPaintEvent*) {

@@ -11,6 +11,7 @@
 #include "ProjectSerializer.hpp"
 
 #include <cmath>
+#include <set>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -578,6 +579,22 @@ int main() {
         p.bassOctave = true;
         check(mt::buildChords(single, p).front().pitch == 48,
               "the bass octave adds a root below the chord");
+        const auto withBass = mt::buildChords(single, p);
+        check(withBass[0].id.empty() && withBass[1].id == "root",
+              "added bass does not steal the source note identity");
+        p.inversion = 1;
+        p.addOctave = true;
+        const auto doubled = mt::buildChords(single, p);
+        check(doubled.size() == 4 && doubled[1].id == "root",
+              "inverted root is not doubled at the same pitch");
+        for (const int pitch : {0, 123, 127}) {
+            const auto edge = mt::buildChords({makeNote("edge", pitch, 0, 1, 100)}, p);
+            std::set<int> pitches;
+            bool valid = true;
+            for (const auto& voice : edge)
+                valid &= voice.pitch >= 0 && voice.pitch <= 127 && pitches.insert(voice.pitch).second;
+            check(valid, "out-of-range chord voices are omitted without stacked duplicates");
+        }
     }
 
     // ── Single-purpose edits ──

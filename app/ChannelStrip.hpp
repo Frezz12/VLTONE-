@@ -75,6 +75,7 @@ public:
     static bool checkDragLifecycleForTest();
     static bool checkFaderInputForTest();
     static bool checkGroupInputsForTest();
+    static bool checkContextMenusForTest();
     /// Re-read volume/pan/flags from the document (after undo, load, …).
     void syncFromModel();
     bool hasActiveGesture() const;
@@ -91,14 +92,14 @@ signals:
     void structureChanged();
     /// A new return track was created from the send menu.
     void trackCreated();
+    void timelineRequested(const QString& channelId);
+    void createTracksRequested();
     /// A loaded insert was clicked: open its editor. The strip does not own
     /// the window, so it only says which slot.
     void editorRequested(const QString& channelId, const QString& insertId);
     void patternRequested(const QString& patternId);
     void removeRequested(const QString& trackId);
-    /// The fader or the pan knob requested automation. Not emitted
-    /// on the master strip — the master bus is not a track in the document, so
-    /// there is nothing to hang a curve on.
+    /// The fader or pan requested automation on a track or the reserved master channel.
     void automateControlRequested(const QString& trackId, bool pan);
     void automateMuteRequested(const QString& trackId);
     void automateSendRequested(const QString& trackId, const QString& sendId);
@@ -171,6 +172,7 @@ private:
     /// The Audio FX header's menu: add a plugin, and the copy/paste that moves
     /// a whole chain — or a whole strip — from one channel to another.
     QMenu* buildChainMenu(QWidget* parent);
+    QMenu* buildContextMenu(QWidget* parent);
     /// A plugin slot was dropped at `index` of `channel`'s chain: a reorder
     /// when it came from the same channel, a move (Alt: a copy) when it came
     /// from another one.

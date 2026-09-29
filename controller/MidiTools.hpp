@@ -135,6 +135,8 @@ struct QuantizeParams {
     uint32_t seed = 1;
 };
 
+/// Shared audio/MIDI target grid; absolute project beats, including swing and groove.
+double gridTarget(double beats, const QuantizeParams& params);
 Notes quantize(Notes notes, const QuantizeParams& params);
 
 // ── Arpeggiator ─────────────────────────────────────────────────────────────

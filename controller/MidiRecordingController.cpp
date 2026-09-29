@@ -526,9 +526,15 @@ void EngineController::landMidiCapture(TrackModel &track,
                 target = &clip;
                 break;
             }
+        // A newly recorded layer uses the visible clip origin. Rebase the old
+        // audible range once before merging, rather than mixing source and
+        // visible coordinates in notes, take placements and comp windows.
+        if (target && target->offsetSeconds > 0.0)
+            sliceMidiClipContent(*target, 0.0, target->durationSeconds, recording.midiTempo, false);
         if (recording.semantics.midiOverdubMerge && target) {
             ClipModel merged = *target;
             merged.notes.clear();
+            merged.slideNotes.clear();
             merged.lanes.clear();
             merged.takes.clear();
             merged.comp.clear();
@@ -536,7 +542,7 @@ void EngineController::landMidiCapture(TrackModel &track,
             audible.clips.push_back(*target);
             for (const auto &part : midiPlaybackClips(audible, recording.midiTempo)) {
                 auto content =
-                    sliceMidiPerformance({part.notes, part.lanes}, 0, part.durationSeconds * bps);
+                    sliceMidiPerformance({part.notes, part.lanes,part.slideNotes}, 0, part.durationSeconds * bps);
                 mergeMidiPerformance(
                     merged, std::move(content), (part.startSeconds - target->startSeconds) * bps,
                     (part.startSeconds + part.durationSeconds - target->startSeconds) * bps);
@@ -548,6 +554,7 @@ void EngineController::landMidiCapture(TrackModel &track,
             for (auto &lane : merged.lanes)
                 for (auto &p : lane.points)
                     p.beats += shift;
+            for(auto& slide:merged.slideNotes)slide.startBeats+=shift;
             merged.startSeconds = earlier;
             merged.offsetSeconds = 0;
             merged.durationSeconds =
@@ -589,6 +596,7 @@ void EngineController::landMidiCapture(TrackModel &track,
             take.id = newUuid();
             take.name = "MIDI overdub";
             take.notes = std::move(merged.notes);
+            take.slideNotes=std::move(merged.slideNotes);
             take.lanes = std::move(merged.lanes);
             take.lengthSeconds = merged.durationSeconds;
             take.color = takeColor(track.color, target->takes.size());

@@ -35,6 +35,7 @@ struct TrackLocalState {
     std::uint32_t inputChannel = 0;
     std::uint32_t inputChannelCount = 1;
     double height = 72.0;
+    double expandedHeight = 72.0;
     bool expanded = true;
     bool automationExpanded = false;
 };
@@ -179,6 +180,7 @@ public:
                 track.inputChannel,
                 track.inputChannelCount,
                 track.height,
+                track.expandedHeight,
                 track.expanded,
                 track.automationExpanded,
             };
@@ -224,6 +226,7 @@ public:
                 track.inputChannel = local.inputChannel;
                 track.inputChannelCount = local.inputChannelCount;
                 track.height = local.height;
+                track.expandedHeight = local.expandedHeight;
                 track.expanded = local.expanded;
                 track.automationExpanded = local.automationExpanded;
             }
@@ -774,6 +777,7 @@ bool checkEngineProjectProjectionForTest(QString* error) {
         track->inputChannel = 0;
         track->inputChannelCount = 1;
         track->height = 72.0;
+        track->expandedHeight = 72.0;
         track->expanded = true;
         track->automationExpanded = false;
     }
@@ -812,6 +816,7 @@ bool checkEngineProjectProjectionForTest(QString* error) {
         !runtimeAudio->armed || !runtimeAudio->monitor ||
         !runtimeAudio->inputEnabled || runtimeAudio->inputChannel != 1 ||
         std::fabs(runtimeAudio->height - 137.0) > 0.001 ||
+        std::fabs(runtimeAudio->expandedHeight - 137.0) > 0.001 ||
         !engine.isPlaying() || !engine.isLoopEnabled() ||
         engine.undoDepth() != 0 || runtimeAudio->clips.empty() ||
         !runtimeAudio->clips.front().filePath.empty() ||

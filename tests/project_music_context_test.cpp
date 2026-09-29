@@ -194,6 +194,21 @@ int main() {
     check(near(openEnded.toBar, 4.0),
           "an omitted end bar resolves to the project end");
 
+    daw::ProjectModel trimmedProject;
+    trimmedProject.tempo = 120;
+    daw::TrackModel trimmedTrack;
+    trimmedTrack.id = "trimmed"; trimmedTrack.kind = daw::TrackKind::Midi;
+    daw::ClipModel trimmedClip;
+    trimmedClip.kind = daw::ClipKind::Midi;
+    trimmedClip.startSeconds = 3; trimmedClip.offsetSeconds = 1; trimmedClip.durationSeconds = 1;
+    trimmedClip.notes = {note(48, 0, .5), note(60, 3, .5)};
+    trimmedTrack.clips.push_back(trimmedClip); trimmedProject.tracks.push_back(trimmedTrack);
+    const auto trimmedContext = daw::ai::buildProjectMusicContext(trimmedProject, 1, 3);
+    check(trimmedContext.tracks[0].activity.noteCount == 1 &&
+              trimmedContext.tracks[0].activity.lowestPitch == 60 &&
+              near(trimmedContext.tracks[0].activity.activeBeats, .5),
+          "AI music context reads the audible MIDI range after a left trim");
+
     std::printf("\n%s\n", failures == 0 ? "ALL PASSED" : "FAILURES PRESENT");
     return failures;
 }

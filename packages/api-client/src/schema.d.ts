@@ -2928,6 +2928,7 @@ export interface components {
             required: boolean;
         } & unknown;
         samplerAssetBinding: components["schemas"]["pluginAssetBinding"] & unknown;
+        sidechainTrackIds: components["schemas"]["id"][];
         optionalPluginStateAssetRef: null | components["schemas"]["pluginStateAssetRef"];
         insertParameter: {
             id: string;
@@ -2964,7 +2965,7 @@ export interface components {
             /** @constant */
             format: "internal";
             /** @enum {unknown} */
-            uid: "daw.sampler" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
+            uid: "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
             vendor: string;
             pluginVersion: string;
             stateSchemaVersion: number;
@@ -2972,6 +2973,7 @@ export interface components {
             /** @enum {unknown} */
             channelMode: "auto" | "mono" | "stereo" | "dual-mono";
             sidechainTrackId: components["schemas"]["optionalId"];
+            sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
             stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
             rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
             parameters: components["schemas"]["insertParameter"][];
@@ -3004,7 +3006,7 @@ export interface components {
         automationTarget: {
             /** @enum {unknown} */
             kind: "volume" | "pan" | "mute" | "send" | "parameter";
-            channelId: components["schemas"]["id"];
+            channelId: components["schemas"]["id"] | "master";
             slotId: components["schemas"]["optionalId"];
             parameterId: string;
             sendId: components["schemas"]["optionalId"];
@@ -3088,11 +3090,15 @@ export interface components {
         trackPropertyPayload: {
             trackId: components["schemas"]["id"];
             /** @enum {unknown} */
-            property: "name" | "color" | "volume" | "pan" | "muted" | "mono" | "summing";
+            property: "name" | "color" | "volume" | "pan" | "muted" | "mono" | "summing" | "iconId";
             value: components["schemas"]["scalarValue"];
         } & ({
             /** @constant */
             property?: "name";
+            value?: string;
+        } | {
+            /** @constant */
+            property?: "iconId";
             value?: string;
         } | {
             /** @constant */
@@ -3285,7 +3291,7 @@ export interface components {
             };
             insert?: {
                 /** @enum {unknown} */
-                uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
+                uid?: "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
             };
         });
         pluginRefPayload: {
@@ -3322,15 +3328,15 @@ export interface components {
             };
             replacement?: {
                 /** @enum {unknown} */
-                uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
+                uid?: "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
             };
         });
         pluginPropertyPayload: {
             location: components["schemas"]["pluginLocation"];
             insertId: components["schemas"]["id"];
             /** @enum {unknown} */
-            property: "name" | "bypassed" | "mix" | "channelMode" | "sidechainTrackId";
-            value: components["schemas"]["scalarValue"];
+            property: "name" | "bypassed" | "mix" | "channelMode" | "sidechainTrackId" | "sidechainTrackIds";
+            value: components["schemas"]["scalarValue"] | components["schemas"]["sidechainTrackIds"];
         } & ({
             /** @constant */
             property?: "name";
@@ -3352,6 +3358,10 @@ export interface components {
             /** @constant */
             property?: "sidechainTrackId";
             value?: components["schemas"]["optionalId"];
+        } | {
+            /** @constant */
+            property?: "sidechainTrackIds";
+            value?: components["schemas"]["sidechainTrackIds"];
         });
         pluginStatePayload: {
             location: components["schemas"]["pluginLocation"];
@@ -3937,11 +3947,15 @@ export interface components {
                 trackPropertyPayload: {
                     trackId: components["schemas"]["id"];
                     /** @enum {unknown} */
-                    property: "name" | "color" | "volume" | "pan" | "muted" | "mono" | "summing";
+                    property: "name" | "color" | "volume" | "pan" | "muted" | "mono" | "summing" | "iconId";
                     value: components["schemas"]["scalarValue"];
                 } & ({
                     /** @constant */
                     property?: "name";
+                    value?: string;
+                } | {
+                    /** @constant */
+                    property?: "iconId";
                     value?: string;
                 } | {
                     /** @constant */
@@ -4234,7 +4248,7 @@ export interface components {
                     /** @constant */
                     format: "internal";
                     /** @enum {unknown} */
-                    uid: "daw.sampler" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
+                    uid: "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
                     vendor: string;
                     pluginVersion: string;
                     stateSchemaVersion: number;
@@ -4242,6 +4256,7 @@ export interface components {
                     /** @enum {unknown} */
                     channelMode: "auto" | "mono" | "stereo" | "dual-mono";
                     sidechainTrackId: components["schemas"]["optionalId"];
+                    sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
                     stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
                     rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
                     parameters: components["schemas"]["insertParameter"][];
@@ -4270,7 +4285,7 @@ export interface components {
                     };
                     insert?: {
                         /** @enum {unknown} */
-                        uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
+                        uid?: "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
                     };
                 });
                 pluginRefPayload: {
@@ -4307,15 +4322,16 @@ export interface components {
                     };
                     replacement?: {
                         /** @enum {unknown} */
-                        uid?: "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
+                        uid?: "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
                     };
                 });
+                sidechainTrackIds: components["schemas"]["id"][];
                 pluginPropertyPayload: {
                     location: components["schemas"]["pluginLocation"];
                     insertId: components["schemas"]["id"];
                     /** @enum {unknown} */
-                    property: "name" | "bypassed" | "mix" | "channelMode" | "sidechainTrackId";
-                    value: components["schemas"]["scalarValue"];
+                    property: "name" | "bypassed" | "mix" | "channelMode" | "sidechainTrackId" | "sidechainTrackIds";
+                    value: components["schemas"]["scalarValue"] | components["schemas"]["sidechainTrackIds"];
                 } & ({
                     /** @constant */
                     property?: "name";
@@ -4337,6 +4353,10 @@ export interface components {
                     /** @constant */
                     property?: "sidechainTrackId";
                     value?: components["schemas"]["optionalId"];
+                } | {
+                    /** @constant */
+                    property?: "sidechainTrackIds";
+                    value?: components["schemas"]["sidechainTrackIds"];
                 });
                 pluginStatePayload: {
                     location: components["schemas"]["pluginLocation"];
@@ -4473,7 +4493,7 @@ export interface components {
                 automationTarget: {
                     /** @enum {unknown} */
                     kind: "volume" | "pan" | "mute" | "send" | "parameter";
-                    channelId: components["schemas"]["id"];
+                    channelId: components["schemas"]["id"] | "master";
                     slotId: components["schemas"]["optionalId"];
                     parameterId: string;
                     sendId: components["schemas"]["optionalId"];
@@ -4908,6 +4928,7 @@ export interface components {
             /** @enum {unknown} */
             channelMode: "auto" | "mono" | "stereo" | "dual-mono";
             sidechainTrackId: components["schemas"]["optionalId"];
+            sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
             stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
             rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
             parameters: components["schemas"]["insertParameter"][];
@@ -5001,6 +5022,7 @@ export interface components {
                     /** @enum {unknown} */
                     channelMode: "auto" | "mono" | "stereo" | "dual-mono";
                     sidechainTrackId: components["schemas"]["optionalId"];
+                    sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
                     stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
                     rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
                     parameters: components["schemas"]["insertParameter"][];

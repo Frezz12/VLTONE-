@@ -30,10 +30,11 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
       <div className="studio-container">
         <div className="hero-topline"><span className="section-label">{c.eyebrow}</span><span className="status-dot">{t("betaTag")}</span></div>
         <div className="hero-editorial">
-          <h1 id="hero-title"><span>VLTone.</span><br />{c.title}</h1>
-          <div className="hero-copy-panel"><p>{c.intro}</p><div className="hero-actions"><Link className="vlt-button" href="/register">{c.start}<ArrowUpRight size={18} aria-hidden /></Link><a className="text-link" href="#overview">{c.explore}<ArrowDown size={16} aria-hidden /></a></div><span className="platform-caption">Windows & macOS</span></div>
+          <h1 id="hero-title">{c.title}</h1>
+          <div className="hero-copy-panel"><p>{c.intro}</p><div className="hero-actions"><Link className="vlt-button" href="/releases">{c.start}<ArrowDown size={18} aria-hidden /></Link><Link className="text-link" href="/manual">{c.explore}<ArrowUpRight size={16} aria-hidden /></Link></div><span className="platform-caption">Windows & macOS</span></div>
         </div>
         <StudioGallery locale={locale} items={c.gallery} />
+        <div className="studio-proof"><span>{ru ? "Скриншоты сборки 0.3.1 · готовится к выпуску" : "Screenshots from build 0.3.1 · in development"}</span><Link href="/releases">{ru ? "Доступные версии и изменения" : "Available versions & changelog"}<ArrowUpRight size={15} aria-hidden /></Link></div>
       </div>
       <div className="format-strip" aria-label={c.compatibility}><span>AUDIO + MIDI</span><span>VST / VST3</span><span>CLAP</span><span>AU <small>macOS</small></span><span>{c.export}</span></div>
     </section>
@@ -66,6 +67,6 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
         <div className="studio-faq"><h2>{c.faqTitle}</h2><div className="faq-list">{["platforms", "start", "beta"].map(key => <details key={key}><summary>{t(`faq.${key}.question`)}<Plus size={18} aria-hidden /></summary><p>{t(`faq.${key}.answer`)}</p></details>)}</div></div>
       </div>
     </section>
-    <section className="studio-cta studio-container" aria-labelledby="cta-title"><span className="section-label">{ru ? "Твоя следующая идея" : "Your next idea"}</span><h2 id="cta-title">{c.cta}</h2><div className="hero-actions"><Link className="vlt-button" href="/register">{c.start}<ArrowUpRight size={18} aria-hidden /></Link><Link className="text-link" href="/releases">{t("download")}<ArrowDown size={16} aria-hidden /></Link></div></section>
+    <section className="studio-cta studio-container" aria-labelledby="cta-title"><span className="section-label">Windows / macOS</span><h2 id="cta-title">{c.cta}</h2><div className="hero-actions"><Link className="vlt-button" href="/releases">{c.start}<ArrowDown size={18} aria-hidden /></Link><Link className="text-link" href="/manual">{c.explore}<ArrowUpRight size={16} aria-hidden /></Link></div></section>
   </main>;
 }

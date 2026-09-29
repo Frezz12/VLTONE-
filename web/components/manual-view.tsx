@@ -56,6 +56,7 @@ export function ManualView({ locale }: { locale: "ru" | "en" }) {
   const [activeId, setActiveId] = useState(categories[0].id);
   const [search, setSearch] = useState("");
   const [figure, setFigure] = useState<Figure | null>(null);
+  const [pendingChapter, setPendingChapter] = useState("");
   const dialogRef = useRef<HTMLDialogElement>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
@@ -68,18 +69,27 @@ export function ManualView({ locale }: { locale: "ru" | "en" }) {
 
   useEffect(() => {
     const openHash = () => {
-      const id = decodeURIComponent(window.location.hash.slice(1));
+      const id = window.location.hash.slice(1);
       if (!id) return;
       const owner = categories.find((category) => category.chapters.some((chapter) => chapter.id === id));
       if (!owner) return;
       setSearch("");
       setActiveId(owner.id);
-      window.requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView());
+      setPendingChapter(id);
     };
     openHash();
     window.addEventListener("hashchange", openHash);
     return () => window.removeEventListener("hashchange", openHash);
   }, [categories]);
+
+  useEffect(() => {
+    if (!pendingChapter) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(pendingChapter)?.scrollIntoView({ block: "start" });
+      setPendingChapter("");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeId, pendingChapter]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -91,6 +101,8 @@ export function ManualView({ locale }: { locale: "ru" | "en" }) {
   function selectTab(id: string) {
     setSearch("");
     setActiveId(id);
+    setPendingChapter("");
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
     document.getElementById("manual-content")?.scrollIntoView({ block: "start" });
   }
 
@@ -115,9 +127,10 @@ export function ManualView({ locale }: { locale: "ru" | "en" }) {
       <label className="manual-search">
         <span>{t("searchLabel")}</span>
         <span className="manual-search-field"><Search size={19} aria-hidden /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchPlaceholder")} type="search" /></span>
-        <small>{query ? t("resultCount", { count: resultCount }) : t("searchHint")}</small>
+        <small aria-live="polite">{query ? t("resultCount", { count: resultCount }) : t("searchHint")}</small>
       </label>
     </section>
+    <p className="manual-version">{t("versionNote")} <a href="/releases">{locale === "ru" ? "Версии и загрузки" : "Versions & downloads"}<ChevronRight size={14} aria-hidden /></a></p>
 
     <div className="manual-tabs" role="tablist" aria-label={t("categoryLabel")}>
       {categories.map((category, index) => {
@@ -173,7 +186,7 @@ export function ManualView({ locale }: { locale: "ru" | "en" }) {
       </div>
     </div>
 
-    <dialog className="manual-lightbox" ref={dialogRef} onClose={() => setFigure(null)} onClick={(event) => { if (event.target === event.currentTarget) setFigure(null); }}>
+    <dialog className="manual-lightbox" ref={dialogRef} aria-label={figure?.alt} onClose={() => setFigure(null)} onClick={(event) => { if (event.target === event.currentTarget) setFigure(null); }}>
       {figure && <div><button className="manual-lightbox-close" type="button" onClick={() => setFigure(null)} aria-label={t("closeImage")}><X size={20} aria-hidden /></button><div className="manual-lightbox-image"><Image fill sizes="96vw" src={`/manual/${locale}/${figure.slug}.png?v=${screenshotVersion}`} alt={figure.alt} /></div><p>{figure.caption}</p></div>}
     </dialog>
   </main>;

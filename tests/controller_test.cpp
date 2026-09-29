@@ -2009,6 +2009,126 @@ int main() {
               "and nothing else swaps places with them");
     }
 
+    // Master automation has a timeline owner, but drives the existing master
+    // fader and insert chain rather than adding a second audio bus.
+    {
+        daw::EngineController a;
+        a.initialize(48000, 512, false);
+        a.setTempo(120);
+        const auto source = a.addTrack(daw::TrackKind::Audio, "Master source");
+        a.importAudio(tonePath, source, 0);
+        a.setMasterVolume(0.4f);
+        daw::AutomationTarget volume;
+        volume.channelId = daw::EngineController::kMasterChannelId;
+        const auto mark = a.undoDepth();
+        const auto [lane, clip] = a.ensureAutomation(volume);
+        const auto* ownerLane = a.project().findTrack(lane);
+        const auto master = ownerLane ? ownerLane->parentId : std::string();
+        check(ownerLane && a.project().findTrack(master) &&
+              a.project().findTrack(master)->kind == daw::TrackKind::Master &&
+              !daw::carriesAudio(*a.project().findTrack(master)) && !a.trackNodes(master),
+              "master automation creates a timeline owner without another audio channel");
+        check(a.undoDepth() == mark + 1, "master owner, lane and curve form one undo action");
+        check(a.ensureAutomation(volume) == std::pair{lane, clip} &&
+              a.ensureMasterTrack() == master && a.undoDepth() == mark + 1,
+              "reopening master automation creates no duplicates or history entries");
+        a.undo();
+        check(!a.project().findTrack(master) && !a.project().findTrack(lane),
+              "one undo removes the new master owner and its automation");
+        a.redo();
+        check(a.project().findTrack(lane) && a.project().findTrack(master),
+              "redo restores master automation ownership");
+        a.setMasterVolumeLive(0.3f);
+        check(findClip(a, lane, clip) &&
+              std::abs(findClip(a, lane, clip)->automation.defaultValue - daw::normalizedFromGain(0.3)) < 1e-6,
+              "passive master automation follows the real fader");
+        a.setClipTrim(lane, clip, 0, 0, 0.5);
+        a.setAutomationPoints(lane, clip,
+            {{0, daw::normalizedFromGain(1), daw::AutomationSegment::Linear, 0},
+             {1, 0, daw::AutomationSegment::Linear, 0}});
+        a.setMasterVolumeLive(0);
+        const auto render = [&](const char* file) {
+            const auto path = (dir / file).string();
+            check(a.exportMixdown(path, false).isOk(), "master automation mixdown renders");
+            audio::platform::DecodedAudio output;
+            check(audio::platform::decodeAudioFile(path, output).isOk(), "master automation audio decodes");
+            return output;
+        };
+        const auto peak = [](const auto& output, unsigned channel, size_t from, size_t to) {
+            float value = 0;
+            for (size_t frame = from; frame < std::min<size_t>(to, output.frames); ++frame)
+                value = std::max(value, std::abs(output.interleaved[frame * output.channels + channel]));
+            return value;
+        };
+        const auto faded = render("master-volume-automation.wav");
+        check(faded.channels >= 2 && peak(faded, 0, 0, 6000) > 0.3f &&
+              peak(faded, 0, 18000, 24000) < peak(faded, 0, 0, 6000) * 0.35f,
+              "master volume automation is audible even with the static master fader at zero");
+        a.removeAutomationLane(lane);
+        a.setMasterVolume(1);
+        daw::AutomationTarget pan;
+        pan.kind = daw::AutomationTargetKind::TrackPan;
+        pan.channelId = daw::EngineController::kMasterChannelId;
+        const auto [panLane, panClip] = a.ensureAutomation(pan);
+        a.setClipTrim(panLane, panClip, 0, 0, 0.5);
+        a.setAutomationPoints(panLane, panClip,
+            {{0, 0.5, daw::AutomationSegment::Linear, 0},
+             {1, 0, daw::AutomationSegment::Linear, 0}});
+        a.seekSeconds(0.25);
+        const auto value = a.automationValueAtPlayhead(pan);
+        check(value && std::abs(*value + 0.5) < 0.02,
+              "master pan has an automated readout at the playhead");
+        const auto panned = render("master-pan-automation.wav");
+        check(panned.channels >= 2 && peak(panned, 0, 18000, 24000) > 0.3f &&
+              peak(panned, 1, 18000, 24000) < peak(panned, 0, 18000, 24000) * 0.35f,
+              "master pan automation reaches the stereo master fader");
+        const auto projectPath = (dir / "master-automation.vlproj").string();
+        check(a.saveProject(projectPath).isOk(), "master automation project saves");
+        daw::EngineController loaded;
+        loaded.initialize(48000, 512, false);
+        check(loaded.openProject(projectPath).isOk() &&
+              loaded.ensureAutomation(pan) == std::pair{panLane, panClip} &&
+              loaded.project().findTrack(panLane)->parentId == master,
+              "master automation retains its target and owner after reloading");
+
+        const auto delay = a.pluginManager().find(daw::plugins::Format::Internal, "daw.delay");
+        const auto slot = delay ? a.addInsert(daw::EngineController::kMasterChannelId, *delay) : std::string();
+        const auto parameters = a.insertParameters(daw::EngineController::kMasterChannelId, slot);
+        const auto parameter = std::find_if(parameters.begin(), parameters.end(),
+            [](const auto& info) { return info.isAutomatable && info.maxValue > info.minValue; });
+        if (check(!slot.empty() && parameter != parameters.end(), "master plugin exposes an automatable parameter")) {
+            daw::AutomationTarget target;
+            target.kind = daw::AutomationTargetKind::PluginParameter;
+            target.channelId = daw::EngineController::kMasterChannelId;
+            target.slotId = slot;
+            target.parameterId = parameter->id;
+            check(std::abs(a.automationToPlain(target, 0.25) -
+                  (parameter->minValue + 0.25 * (parameter->maxValue - parameter->minValue))) < 1e-6,
+                  "master plugin automation uses the plugin's parameter range");
+            const auto [fxLane, fxClip] = a.ensureAutomation(target);
+            a.setAutomationPoints(fxLane, fxClip,
+                {{0, 0.25, daw::AutomationSegment::Linear, 0},
+                 {1, 0.75, daw::AutomationSegment::Linear, 0}});
+            const auto curves = [&] {
+                const auto graph = a.routingGraph();
+                const auto* ids = a.trackNodes(daw::EngineController::kMasterChannelId);
+                for (const auto& entry : graph->nodes) {
+                    if (!ids || ids->inserts.empty() || entry.id != ids->inserts.front()) continue;
+                    const auto* node = dynamic_cast<const daw::plugins::PluginNode*>(entry.node);
+                    if (node) return node->automation();
+                }
+                return std::shared_ptr<const daw::plugins::PluginNode::AutomationCurves>{};
+            };
+            check(curves() && curves()->size() == 1 && !curves()->front().points.empty(),
+                  "the real master plugin receives its automation snapshot");
+            a.addTrack(daw::TrackKind::Audio, "Graph rebuild");
+            check(curves() && curves()->size() == 1,
+                  "master plugin automation survives graph rebuilding");
+            a.removeAutomationLane(fxLane);
+            check(curves() && curves()->empty(), "deleting master plugin automation clears its snapshot");
+        }
+    }
+
     // ── Automation trim is recomputed from the gesture origin ──
     {
         daw::EngineController a;
@@ -2850,6 +2970,85 @@ int main() {
         check(sharedBake && sharedBake == bakedAgain,
               "identical clips share one precomputed audio buffer");
 
+        // GUI polling is cache-only, and an in-flight effect must never make
+        // the arrangement alternate between processed and source envelopes.
+        {
+            daw::EngineController async;
+            async.initialize(48000, 512, false);
+            const auto at = async.addTrack(daw::TrackKind::Audio, "Async sample");
+            const auto ac = async.importAudio(tonePath, at, 0.0);
+            const auto source = async.cachedClipSampleData(at, ac);
+            const auto initialRevision = async.clipWaveformRevision();
+            async.setClipSampleParameter(at, ac, "pre.boost", 0.1);
+            async.pumpPluginEvents();
+            async.setClipSampleParameter(at, ac, "pre.boost", 0.1);
+            async.setClipSampleParameter(at, ac, "stretch.pitch", 1.0);
+            async.setClipGain(at, ac, 0.6f);
+            async.setClipFade(at, ac, 0.02, 0.03);
+            check(async.cachedClipSampleData(at, ac) == source &&
+                      async.clipWaveformRevision() == initialRevision,
+                  "control tick and concurrent playback/gain/fade edits do not bake or publish clip DSP on the GUI thread");
+            const auto waitForBake = [&] {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+                do {
+                    async.pumpPluginEvents();
+                    const auto data = async.cachedClipSampleData(at, ac);
+                    if (data && data != source && async.clipWaveformRevision() > initialRevision) return true;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                } while (std::chrono::steady_clock::now() < deadline);
+                return false;
+            };
+            check(waitForBake(), "background clip bake publishes audio and waveform together");
+            const auto previous = async.cachedClipSampleData(at, ac);
+            const auto envelope = async.clipWaveform(*async.audioClip(at, ac));
+            async.setClipSampleParameter(at, ac, "pre.boost", 0.7);
+            check(async.cachedClipSampleData(at, ac) == previous &&
+                      async.clipWaveform(*async.audioClip(at, ac)).peaks == envelope.peaks,
+                  "pending Boost edit retains the last complete waveform and editor audio");
+            async.pumpPluginEvents();
+            async.commitClipSampleParameterEdit(at, ac, "pre.boost", 0.1, "Change Boost");
+            async.undo();
+            // Drain even after the cached value matches: the superseded
+            // worker must not republish its result after undo or an ABA edit.
+            async.setClipSampleParameter(at, ac, "pre.boost", 0.2);
+            async.setClipSampleParameter(at, ac, "pre.boost", 0.1);
+            for (int tick = 0; tick < 100; ++tick) {
+                async.pumpPluginEvents();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            check(async.cachedClipSampleData(at, ac) == previous &&
+                      async.clipWaveform(*async.audioClip(at, ac)).peaks == envelope.peaks,
+                  "undo and rapid repeated settings reject obsolete background bakes");
+            async.setClipSampleParameter(at, ac, "pre.boost", 0.35);
+            async.pumpPluginEvents();
+            async.play(); // Exact-consumer boundary cancels the worker and flushes the latest settings.
+            const auto flushed = async.cachedClipSampleData(at, ac);
+            check(flushed && flushed != previous && async.clipSampleData(at, ac) == flushed,
+                  "play flushes a pending clip bake before consuming the graph");
+            async.stop();
+            async.setClipSampleParameter(at, ac, "pre.boost", 0.8);
+            async.pumpPluginEvents();
+            async.removeClip(at, ac);
+            for (int tick = 0; tick < 10; ++tick) {
+                async.pumpPluginEvents();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            check(!async.cachedClipSampleData(at, ac),
+                  "deleting a clip during a bake cannot resurrect its audio");
+            const auto pendingClip = async.importAudio(tonePath, at, 0.0);
+            async.setClipSampleParameter(at, pendingClip, "pre.boost", 0.9);
+            async.pumpPluginEvents();
+            async.newProject(false);
+            check(async.project().tracks.empty() && !async.cachedClipSampleData(at, pendingClip),
+                  "replacing the project retires pending clip processing and old audio");
+            const auto closingTrack = async.addTrack(daw::TrackKind::Audio, "Closing");
+            const auto closingClip = async.importAudio(tonePath, closingTrack, 0.0);
+            async.setClipSampleParameter(closingTrack, closingClip, "pre.boost", 0.8);
+            async.pumpPluginEvents();
+            async.shutdown();
+            check(true, "shutdown cancels and joins pending clip processing");
+        }
+
         // Stretching a clip moves its end along the timeline, so the Time
         // control is pulled toward the grid: near a line it lands exactly on
         // it, and between lines it stays where the pointer put it.
@@ -3020,7 +3219,7 @@ int main() {
         check(std::fabs(r.project().findTrack(t)->height - 200.0) < 1e-6,
               "setTrackHeight applies");
         r.setTrackHeight(t, 5.0);   // below the clamp floor
-        check(r.project().findTrack(t)->height >= 30.0,
+        check(r.project().findTrack(t)->height == 24.0,
               "track height clamps to a sane minimum");
     }
 
@@ -5774,6 +5973,37 @@ int main() {
                 laneVisible = true;
         }
         check(!laneVisible, "hidden automation lane leaves the owner visible");
+    }
+
+    // Minimized lanes persist their own restore size, including through undo.
+    {
+        daw::EngineController compact;
+        compact.initialize(48000, 512, false);
+        const auto id = compact.addTrack(daw::TrackKind::Audio, "Compact lane");
+        compact.setTrackHeight(id, 137);
+        compact.setTrackHeight(id, 24);
+        compact.setTrackHeight(id, 24);
+        const auto* track = compact.project().findTrack(id);
+        check(track && track->height == 24 && track->expandedHeight == 137,
+              "repeated minimization retains the track restore height");
+        compact.commitTrackHeightEdit({{id, 137}});
+        compact.undo();
+        check(compact.project().findTrack(id)->height == 137,
+              "undo restores the height before minimization");
+        compact.redo();
+        check(compact.project().findTrack(id)->height == 24 &&
+                  compact.project().findTrack(id)->expandedHeight == 137,
+              "redo minimizes without forgetting the expanded height");
+        std::string bytes;
+        daw::ProjectModel loaded;
+        check(daw::ProjectSerializer::serializeDocument(compact.project(), bytes).isOk() &&
+                  daw::ProjectSerializer::deserializeDocument(loaded, bytes).isOk() &&
+                  loaded.findTrack(id) && loaded.findTrack(id)->height == 24 &&
+                  loaded.findTrack(id)->expandedHeight == 137,
+              "project round-trip keeps the minimized lane and its restore height");
+        compact.setTrackHeight(id, -10);
+        check(compact.project().findTrack(id)->height == 24,
+              "row height never shrinks below the interactive strip");
     }
 
     // ── Settings store round-trip ──

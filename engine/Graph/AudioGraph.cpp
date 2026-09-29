@@ -370,7 +370,7 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
                 if (edge.midiBuffer != kInvalidNode) {
                     if (!pair.midi) {
                         pair.midi = std::make_shared<MidiDelay>();
-                        pair.midi->prepare(delaySamples, kMidiEventsPerBlock);
+                        pair.midi->prepare(delaySamples, pitchEventCapacity(info.maxBlockSize, info.sampleRate) + pitchEventCapacity(delaySamples, info.sampleRate));
                     }
                     edge.midiDelayIndex =
                         std::uint32_t(compiled->midiDelays.size());
@@ -484,10 +484,10 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
     // MIDI scratch, sized here for the same reason as the audio scratch: the
     // renderer must only ever index into what the snapshot itself carries.
     compiled->midiBuffers.resize(midiBufferCount);
-    for (MidiBuffer& buffer : compiled->midiBuffers) buffer.reserve(kMidiEventsPerBlock);
+    for (MidiBuffer& buffer : compiled->midiBuffers) buffer.reserve(pitchEventCapacity(info.maxBlockSize, info.sampleRate));
     compiled->midiDelayBuffers.resize(compiled->midiDelays.size());
     for (MidiBuffer& buffer : compiled->midiDelayBuffers) {
-        buffer.reserve(kMidiEventsPerBlock);
+        buffer.reserve(pitchEventCapacity(info.maxBlockSize, info.sampleRate));
     }
     compiled->midiInputScratch.assign(compiled->inputEdges.size(), nullptr);
 

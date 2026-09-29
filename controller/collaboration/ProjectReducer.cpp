@@ -1,3 +1,4 @@
+#include "SlideNotes.hpp"
 #include "collaboration/ProjectReducer.hpp"
 #include "collaboration/MidiContentJson.hpp"
 #include <nlohmann/json.hpp>
@@ -376,7 +377,8 @@ bool automationTargetIsValid(const SharedProjectDocument& state,
                              const AutomationTarget& target) {
     if (target.parameterId.size() > 4096) return false;
     const TrackModel* channel = state.project.findTrack(target.channelId);
-    if (!channel) return false;
+    const bool master = target.channelId == "master";
+    if (!channel && !master) return false;
     switch (target.kind) {
         case AutomationTargetKind::TrackVolume:
         case AutomationTargetKind::TrackPan:
@@ -384,10 +386,11 @@ bool automationTargetIsValid(const SharedProjectDocument& state,
             return target.slotId.empty() && target.parameterId.empty() &&
                    target.sendId.empty();
         case AutomationTargetKind::SendLevel:
-            return target.slotId.empty() && target.parameterId.empty() &&
+            return !master && target.slotId.empty() && target.parameterId.empty() &&
                    !target.sendId.empty();
         case AutomationTargetKind::PluginParameter:
-            return !target.parameterId.empty() && target.sendId.empty();
+            return !target.parameterId.empty() && target.sendId.empty() &&
+                   (!master || !target.slotId.empty());
     }
     return false;
 }
@@ -741,9 +744,13 @@ bool validSharedInsert(const InsertModel& insert,
                        std::uint32_t schemaVersion) {
     const bool external = supportedExternal(insert);
     const bool allowed = supportedBuiltin(insert) ||
-                         (schemaVersion >= kProjectCommandSchemaVersion &&
+                         (schemaVersion >= kProjectCommandSchemaVersionV3 &&
                           external);
-    return allowed && !insert.id.empty() && !insert.uid.empty() &&
+    const bool slideSettings = insert.slideDelivery >= 0 && insert.slideDelivery <= 4 &&
+        std::isfinite(insert.slideBendRange) && insert.slideBendRange >= 1 && insert.slideBendRange <= 96 &&
+        std::isfinite(insert.slideReleaseReserve) && insert.slideReleaseReserve >= 0 && insert.slideReleaseReserve <= 20 &&
+        (schemaVersion >= 5 || (insert.slideDelivery == 0 && insert.slideBendRange == 2 && insert.slideReleaseReserve == 2));
+    return allowed && slideSettings && !insert.id.empty() && !insert.uid.empty() &&
            insert.name.size() <= 4096 && insert.vendor.size() <= 4096 &&
            insert.path.empty() && insert.stateFile.empty() &&
            insert.rightStateFile.empty() && insert.pluginVersion.size() > 0 &&
@@ -1060,7 +1067,9 @@ ApplyResult applyAddTrack(SharedProjectDocument& state,
     if (!body.parentId.empty()) {
         const TrackModel* parent = state.project.findTrack(body.parentId);
         if (!parent || (parent->kind != TrackKind::Folder &&
-                        parent->kind != TrackKind::Pattern)) {
+                        parent->kind != TrackKind::Pattern &&
+                        !(body.kind == TrackKind::Automation &&
+                          (carriesAudio(*parent) || parent->kind == TrackKind::Master)))) {
             return reject(ApplyCode::MissingEntity, "track parent does not exist");
         }
     }
@@ -1312,7 +1321,9 @@ ApplyResult applySetTrackParent(SharedProjectDocument& state,
     if (!body.parentId.empty()) {
         const TrackModel* parent = state.project.findTrack(body.parentId);
         if (!parent || (parent->kind != TrackKind::Folder &&
-                        parent->kind != TrackKind::Pattern)) {
+                        parent->kind != TrackKind::Pattern &&
+                        !(isAutomationLane(*track) &&
+                          (carriesAudio(*parent) || parent->kind == TrackKind::Master)))) {
             return reject(ApplyCode::MissingEntity,
                           "track parent does not exist or cannot own tracks");
         }
@@ -1999,6 +2010,38 @@ ApplyResult applySetClipAsset(SharedProjectDocument& state,
     return result;
 }
 
+ApplyResult applySetSlideNote(SharedProjectDocument& state, const ProjectCommand& command, const SetSlideNote& body) {
+    if (command.meta.schemaVersion < 5) return reject(ApplyCode::Unsupported, "slide notes require protocol 5");
+    if (clipScopeIsDeleted(state, body.trackId, body.clipId)) return reject(ApplyCode::DeletedEntity, "clip deleted");
+    auto location = findClip(state.project, body.clipId);
+    if (!location.clip || location.track->id != body.trackId || location.clip->kind != ClipKind::Midi)
+        return reject(ApplyCode::MissingEntity, "MIDI clip missing");
+    if (body.slide && (body.slide->id != body.slideId || !slides::valid(*body.slide)))
+        return reject(ApplyCode::InvalidCommand, "invalid slide note");
+    auto* list = &location.clip->slideNotes;
+    if (!body.takeId.empty()) {
+        auto take = std::find_if(location.clip->takes.begin(), location.clip->takes.end(), [&](const auto& t) { return t.id == body.takeId; });
+        if (take == location.clip->takes.end()) return reject(ApplyCode::MissingEntity, "MIDI take missing");
+        list = &take->slideNotes;
+    }
+    auto it = std::find_if(list->begin(), list->end(), [&](const auto& s) { return s.id == body.slideId; });
+    std::optional<SlideNoteModel> before;
+    if (it != list->end()) before = *it;
+    const bool changed = before != body.slide;
+    if (body.slide) { if (it == list->end()) list->push_back(*body.slide); else *it = *body.slide; }
+    else if (it != list->end()) list->erase(it);
+    ApplyResult result; result.code = changed ? ApplyCode::Applied : ApplyCode::NoChange;
+    result.impact.documentChanged = changed;
+    result.impact.timelineChanged = changed; result.impact.trackIds.insert(body.trackId); result.impact.clipIds.insert(body.clipId);
+    markCommandWriters(state, command, result.impact);
+    if (changed) {
+        auto inverse = inverseShell(command, SetSlideNote{body.trackId, body.clipId, body.takeId, body.slideId, before});
+        inverse.conditions.push_back(FieldWriterIs{"slide:"+body.slideId, command.meta.operationId});
+        result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    }
+    return result;
+}
+
 ApplyResult applySetClipSampleEdit(SharedProjectDocument& state,
                                    const ProjectCommand& command,
                                    const SetClipSampleEdit& body) {
@@ -2579,6 +2622,15 @@ ApplyResult applySetPluginProperty(SharedProjectDocument& state,
     PluginProperty inverseProperty = body.property;
     bool same = false;
     switch (body.property) {
+        case PluginProperty::SlideDelivery:
+        case PluginProperty::SlideBendRange:
+        case PluginProperty::SlideReleaseReserve: {
+            if(command.meta.schemaVersion<5)return reject(ApplyCode::Unsupported,"slide settings require protocol 5");
+            double value=0; if(!doubleValue(body.value,value))return reject(ApplyCode::InvalidCommand,"invalid slide setting");
+            if(body.property==PluginProperty::SlideDelivery){if(value<0||value>4||std::floor(value)!=value)return reject(ApplyCode::InvalidCommand,"invalid slide mode");before=std::int64_t(insert->slideDelivery);same=insert->slideDelivery==int(value);insert->slideDelivery=int(value);}
+            else {const bool bend=body.property==PluginProperty::SlideBendRange;if(value<(bend?1.:0.)||value>(bend?96.:20.))return reject(ApplyCode::InvalidCommand,"invalid slide range");auto& target=bend?insert->slideBendRange:insert->slideReleaseReserve;before=target;same=target==value;target=value;}
+            break;
+        }
         case PluginProperty::Name: {
             const auto* value = std::get_if<std::string>(&body.value);
             if (!value || value->size() > 4096)
@@ -4326,6 +4378,7 @@ ApplyResult applyRestoreCompSegment(SharedProjectDocument& state,
 }
 
 ApplyResult applyPrepareMidi(SharedProjectDocument& state, const ProjectCommand& command, const PrepareMidiPart& body) {
+    if(command.meta.schemaVersion<5 && (!body.content.slideNotes.empty()||std::any_of(body.content.takes.begin(),body.content.takes.end(),[](const auto& t){return !t.slideNotes.empty();}))) return reject(ApplyCode::Unsupported,"slide notes require protocol 5");
     const auto key = body.contentId + ":" + std::to_string(body.index);
     if (const auto it=state.preparedMidi.find(key); it!=state.preparedMidi.end()) {
         if (it->second.recordingId!=body.recordingId || it->second.count!=body.count || midiContentToJson(it->second.content)!=midiContentToJson(body.content))
@@ -4362,7 +4415,7 @@ ApplyResult applyMidiContent(SharedProjectDocument& state,const ProjectCommand& 
         content=it->second;
     }
     state.midiHistory[command.meta.operationId+":"+body.clipId]=*location.clip;
-    location.clip->notes=std::move(content.notes); location.clip->lanes=std::move(content.lanes);
+    location.clip->notes=std::move(content.notes); location.clip->slideNotes=std::move(content.slideNotes); location.clip->lanes=std::move(content.lanes);
     location.clip->takes=std::move(content.takes); location.clip->comp=std::move(content.comp); location.clip->expanded=content.expanded;
     ApplyResult result; result.code=ApplyCode::Applied; result.impact.documentChanged=true;
     result.impact.graphRebuild=true; result.impact.timelineChanged=true; result.impact.trackIds.insert(body.trackId); result.impact.clipIds.insert(body.clipId);
@@ -4508,6 +4561,8 @@ ApplyResult applyImpl(SharedProjectDocument& state,
             return applyClipProperty(state, command, body);
         else if constexpr (std::is_same_v<T, SetClipAsset>)
             return applySetClipAsset(state, command, body);
+        else if constexpr (std::is_same_v<T, SetSlideNote>)
+            return applySetSlideNote(state, command, body);
         else if constexpr (std::is_same_v<T, SetClipSampleEdit>)
             return applySetClipSampleEdit(state, command, body);
         else if constexpr (std::is_same_v<T, SetClipFade>)

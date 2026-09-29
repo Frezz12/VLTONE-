@@ -1,4 +1,6 @@
 #include "ProjectSerializer.hpp"
+#include "SlideNotes.hpp"
+#include "collaboration/MidiContentJson.hpp"
 #include "collaboration/CommandGateway.hpp"
 #include "collaboration/CommandJson.hpp"
 #include "collaboration/ConditionalUndo.hpp"
@@ -2979,6 +2981,60 @@ void multiSidechainContract() {
     check(!projectCommandFromJson(encoded), "insert wire rejects inconsistent legacy and multiple sources");
 }
 
+void slideProtocolContract() {
+    SharedProjectDocument state;TrackModel track;track.id=trackId("slide");track.kind=TrackKind::Midi;
+    ClipModel clip;clip.id=clipId("slide");clip.kind=ClipKind::Midi;
+    auto note=midiNote(testUuid("note","slide"),60,0,8);clip.notes={note};track.clips={clip};state.project.tracks={track};
+    auto slide=slides::create(clip.notes,1,2,72);
+    auto create=command("create-slide",SetSlideNote{track.id,clip.id,{},slide.id,slide});create.meta.schemaVersion=5;
+    auto wire=projectCommandToJson(create);auto decoded=projectCommandFromJson(wire);
+    check(decoded&&projectCommandToJson(*decoded)==wire,"protocol 5 slide command round-trips");
+    auto result=ProjectReducer::apply(state,create);
+    check(result.changed()&&result.inverse&&!result.impact.graphRebuild&&state.project.tracks[0].clips[0].slideNotes.size()==1,"slide projection updates the immutable schedule without rebuilding voices");
+    if(result.inverse){auto undo=*result.inverse;undo.meta=meta("undo-slide");undo.meta.schemaVersion=5;check(ProjectReducer::apply(state,undo).changed()&&state.project.tracks[0].clips[0].slideNotes.empty(),"slide creation has a conditional inverse");}
+    auto legacy=create;legacy.meta=meta("legacy-slide");legacy.meta.schemaVersion=4;
+    check(!ProjectReducer::apply(state,legacy).changed(),"protocol 4 cannot edit slide notes");
+    wire["payload"]["slide"]["points"][1]["time"]=0;check(!projectCommandFromJson(wire),"wire rejects unordered slide points");
+    clip.slideNotes={slide};TakeModel take;take.id=testUuid("take","slide");take.notes={note};slides::reidentify(take.notes,take.slideNotes);take.slideNotes={slides::create(take.notes,1,2,65)};clip.takes={take};
+    auto parts=prepareMidiContent(testUuid("recording","slide"),testUuid("content","slide"),clip);auto joined=joinMidiContent(parts);check(joined.slideNotes==clip.slideNotes&&joined.takes[0].slideNotes==take.slideNotes,"MIDI content parts preserve clip and take slides");
+}
+
+void masterAutomationContract() {
+    SharedProjectDocument state;
+    const auto master = trackId("master-owner");
+    const auto lane = trackId("master-automation");
+    const auto clip = clipId("master-automation");
+    check(ProjectReducer::apply(state, command("master-owner",
+        AddTrack{master, TrackKind::Master, "Master", 1, {}, {}})).changed(),
+        "shared master timeline owner is created");
+    check(ProjectReducer::apply(state, command("master-lane",
+        AddTrack{lane, TrackKind::Automation, "Master Volume", 1, master, master})).changed(),
+        "shared automation can be parented to a master timeline owner");
+    check(ProjectReducer::apply(state, command("master-curve",
+        AddClip{lane, clip, ClipKind::Automation, "Master Volume", 0, 4, 1, {}})).changed(),
+        "shared master automation curve is created");
+    AutomationTarget target;
+    target.channelId = "master";
+    const auto update = command("master-target", SetAutomationTarget{lane, clip, target});
+    const auto decoded = projectCommandFromJson(projectCommandToJson(update));
+    check(decoded && ProjectReducer::apply(state, *decoded).changed() &&
+          state.project.findTrack(lane)->clips.front().automation.target == target,
+        "master automation target round-trips and binds to the reserved master channel");
+    target.channelId = "invalid";
+    check(!projectCommandFromJson(projectCommandToJson(command("invalid-channel",
+        SetAutomationTarget{lane, clip, target}))),
+        "automation targets still reject channel IDs other than UUIDs or master");
+    target.channelId = "master";
+    check(!ProjectReducer::apply(state, command("master-audio-child",
+        AddTrack{trackId("invalid-master-child"), TrackKind::Audio, "Invalid", 1, master, lane})).changed(),
+        "a master timeline owner cannot contain an ordinary audio channel");
+    target.kind = AutomationTargetKind::SendLevel;
+    target.sendId = testUuid("send", "absent-master-send");
+    check(!ProjectReducer::apply(state, command("master-send-target",
+        SetAutomationTarget{lane, clip, target})).changed(),
+        "master automation cannot address an absent aux send");
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     const fs::path dir = fs::temp_directory_path() /
@@ -2997,6 +3053,8 @@ int main() {
     sharedSnapshotMetadataRoundTrip();
     routingPluginAssetReducerAndWire();
     multiSidechainContract();
+    slideProtocolContract();
+    masterAutomationContract();
     commandV2Contracts();
     gatewayOptimisticConfirmedReplay();
 

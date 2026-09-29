@@ -237,6 +237,8 @@ void grooveAt(const Groove& groove, double beats, double* offset,
     if (slot < groove.velocities.size()) *velocityScale = groove.velocities[slot];
 }
 
+} // namespace
+
 /// Where the grid wants this time, swing and groove included.
 double gridTarget(double beats, const QuantizeParams& p) {
     if (p.gridBeats <= 0.0) return beats;
@@ -254,6 +256,7 @@ double gridTarget(double beats, const QuantizeParams& p) {
     return target;
 }
 
+namespace {
 /// Pull one time towards the grid, honouring strength, the dead zone and the
 /// post-quantise jitter.
 double quantizeTime(double beats, const QuantizeParams& p, Rng& rng) {
@@ -867,14 +870,17 @@ Notes buildChords(const Notes& notes, const ChordParams& params) {
     if (params.bassOctave) intervals.insert(intervals.begin(), -12);
 
     for (const auto& note : notes) {
-        bool first = true;
+        std::vector<int> emitted;
         for (int interval : intervals) {
+            const int pitch = note.pitch + interval;
+            if (pitch < 0 || pitch > 127 ||
+                std::find(emitted.begin(), emitted.end(), pitch) != emitted.end()) continue;
+            emitted.push_back(pitch);
             NoteModel voice = note;
-            voice.pitch = note.pitch + interval;
+            voice.pitch = pitch;
             // The root keeps the original note's identity so the selection and
             // the undo entry still line up with what the user clicked.
-            if (!first) voice.id.clear();
-            first = false;
+            if (interval != (inversion > 0 ? 12 : 0)) voice.id.clear();
             out.push_back(voice);
         }
     }

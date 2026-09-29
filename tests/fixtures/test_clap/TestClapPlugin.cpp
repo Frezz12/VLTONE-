@@ -391,7 +391,15 @@ clap_process_status pluginProcess(const clap_plugin_t* plugin,
     return CLAP_PROCESS_CONTINUE;
 }
 
+std::uint32_t notePortCount(const clap_plugin_t*, bool) { return 1; }
+bool notePortGet(const clap_plugin_t*, std::uint32_t index, bool, clap_note_port_info_t* info) {
+    if(index!=0)return false;*info={};info->id=0;info->supported_dialects=CLAP_NOTE_DIALECT_CLAP|CLAP_NOTE_DIALECT_MIDI|CLAP_NOTE_DIALECT_MIDI_MPE;
+    info->preferred_dialect=CLAP_NOTE_DIALECT_CLAP;std::strcpy(info->name,"Notes");return true;
+}
+const clap_plugin_note_ports_t kNotePorts{notePortCount,notePortGet};
+
 const void* pluginGetExtension(const clap_plugin_t*, const char* id) {
+    if (std::strcmp(id, CLAP_EXT_NOTE_PORTS) == 0) return &kNotePorts;
     if (std::strcmp(id, CLAP_EXT_PARAMS) == 0) return &kParams;
     if (std::strcmp(id, CLAP_EXT_AUDIO_PORTS) == 0) return &kAudioPorts;
     if (std::strcmp(id, CLAP_EXT_LATENCY) == 0) return &kLatencyExt;

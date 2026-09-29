@@ -1,5 +1,6 @@
 #include "graphics/ScenePaintSource.hpp"
 #include "graphics/SceneRecordingTag.hpp"
+#include "graphics/SceneRecorder.hpp"
 #include <QHashFunctions>
 #include "SamplerPanel.hpp"
 #include "AudioImportPreparation.hpp"
@@ -24,6 +25,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QEnterEvent>
+#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMimeData>
@@ -265,13 +267,25 @@ void SamplerWaveform::setSample(std::shared_ptr<const sampler::SampleData> sampl
     const void* buffer = sample && sample->audio ? sample->audio.get() : nullptr;
     const bool sameAudio = buffer == m_peaksFor;
     const bool sameLength =
-        m_sample && sample && m_sample->baseFrames == sample->baseFrames;
+        (!m_sample && !sample) ||
+        (m_sample && sample && m_sample->baseFrames == sample->baseFrames);
+    // Keep the last complete envelope during an effect bake. Only clearing
+    // or replacing the source file should show an empty/loading strip.
+    if ((!sample || !sample->audio || !m_sample || m_sample->path != sample->path) &&
+        (!m_minima.isEmpty() || !m_maxima.isEmpty())) {
+        m_minima.clear();
+        m_maxima.clear();
+        m_peakSample.reset();
+        ++m_peakRevision;
+    }
     m_sample = std::move(sample);
     if (!sameAudio) {
         rebuildPeaks();
         update();
         return;
     }
+    if (m_peakSample && m_sample && m_peakSample->audio == m_sample->audio)
+        m_peakSample = m_sample;
     // The panel polls; repaint only when the audio or its visible length changes.
     if (!sameLength) update();
 }
@@ -304,8 +318,6 @@ void SamplerWaveform::setMarkers(double startOffset, double endOffset,
 
 void SamplerWaveform::rebuildPeaks() {
     ++m_peakGeneration;
-    m_minima.clear();
-    m_maxima.clear();
     m_peaksFor = m_sample && m_sample->audio ? m_sample->audio.get() : nullptr;
     requestPeakBuild();
 }
@@ -357,23 +369,27 @@ void SamplerWaveform::requestPeakBuild() {
             if (guard->m_peakGeneration != generation) { guard->requestPeakBuild(); return; }
             guard->m_minima = std::move(minima);
             guard->m_maxima = std::move(maxima);
+            guard->m_peakSample = guard->m_sample;
+            ++guard->m_peakRevision;
             guard->update();
         }, Qt::QueuedConnection);
     });
 }
 
 double SamplerWaveform::xForFraction(double fraction) const {
-    if (!m_sample || !m_sample->audio) return 0.0;
-    const double total = double(m_sample->audio->frames());
-    const double base = m_sample->baseFrames > 0 ? double(m_sample->baseFrames) : total;
+    const auto& sample = m_peakSample ? m_peakSample : m_sample;
+    if (!sample || !sample->audio) return 0.0;
+    const double total = double(sample->audio->frames());
+    const double base = sample->baseFrames > 0 ? double(sample->baseFrames) : total;
     if (total <= 0.0) return 0.0;
     return std::clamp(fraction, 0.0, 1.0) * base / total * double(width());
 }
 
 double SamplerWaveform::fractionForX(int x) const {
-    if (!m_sample || !m_sample->audio || width() <= 0) return 0.0;
-    const double total = double(m_sample->audio->frames());
-    const double base = m_sample->baseFrames > 0 ? double(m_sample->baseFrames) : total;
+    const auto& sample = m_peakSample ? m_peakSample : m_sample;
+    if (!sample || !sample->audio || width() <= 0) return 0.0;
+    const double total = double(sample->audio->frames());
+    const double base = sample->baseFrames > 0 ? double(sample->baseFrames) : total;
     if (base <= 0.0) return 0.0;
     return std::clamp(double(x) / double(width()) * total / base, 0.0, 1.0);
 }
@@ -464,8 +480,10 @@ void SamplerWaveform::paintWaveformBase(QPainter& p) {
 
 void SamplerWaveform::paintScene(QPainter& p, const QRegion&) {
     p.setRenderHint(QPainter::Antialiasing, true);
-    const quint64 key = qHashMulti(0, m_peakGeneration, m_minima.size(),
-        m_sample ? m_sample->baseFrames : 0, width(), height(), m_clipColor.rgba(),
+    const quint64 key = qHashMulti(0, m_peakRevision, m_minima.size(),
+        m_peakSample ? m_peakSample->baseFrames : 0,
+        m_peakSample && m_peakSample->audio ? m_peakSample->audio->frames() : 0,
+        width(), height(), m_clipColor.rgba(),
         th().well().rgba(), th().accent.rgba(), th().textSecondary.rgba());
     auto* scene = ui::graphics::sceneGeometrySink(p);
     if (!scene || scene->beginRetainedSection(1002, key != m_gpuWaveformKey)) {
@@ -1096,8 +1114,10 @@ sampler::SamplerInstance* SamplerPanel::sampler() const {
 std::shared_ptr<const sampler::SampleData> SamplerPanel::currentSample() {
     if (!m_controller) return {};
     if (m_context == Context::Clip) {
-        return m_controller->clipSampleData(m_channelId.toStdString(),
-                                            m_slotId.toStdString());
+        const auto track = m_channelId.toStdString(), clip = m_slotId.toStdString();
+        auto data = m_controller->cachedClipSampleData(track, clip);
+        if (!data) m_controller->requestClipSampleData(track, clip);
+        return data;
     }
     if (sampler::SamplerInstance* instance = sampler()) return instance->sample();
     return {};
@@ -1233,9 +1253,9 @@ QComboBox* SamplerPanel::combo(const QString& parameterId, const QStringList& it
     box->installEventFilter(this);
     box->addItems(items);
     box->setCurrentIndex(int(std::lround(readParameter(parameterId))));
-    connect(box, &QComboBox::currentIndexChanged, this, [this, parameterId](int index) {
+    connect(box, &QComboBox::currentIndexChanged, this, [this, parameterId, box](int index) {
         beginGesture(parameterId);
-        writeParameter(parameterId, double(index));
+        writeParameter(parameterId, box->itemData(index).isValid() ? box->itemData(index).toDouble() : double(index));
         endGesture(parameterId);
         refresh();
     });
@@ -1933,6 +1953,38 @@ QWidget* SamplerPanel::buildToolSection() {
     playback->addLayout(playbackGrid);
     playback->addStretch();
     addPage(tr("Playback"), playbackPage);
+    if (m_context == Context::Instrument) {
+        auto* slidePage = new QWidget(pages);
+        slidePage->setObjectName("SamplerSlidePage");
+        auto* layout = new QVBoxLayout(slidePage);
+        layout->setContentsMargins(0,0,0,0);
+        layout->setSpacing(8);
+        auto* glide = knobRow();
+        glide->addWidget(led(QStringLiteral("slide.legato"), tr("Legato")));
+        glide->addWidget(knob(QStringLiteral("slide.time"), tr("Legato time")));
+        glide->addWidget(led(QStringLiteral("slide.sync"), tr("Sync")));
+        auto* divisions = combo(QStringLiteral("slide.beats"),
+            {QStringLiteral("1/256"),QStringLiteral("1/128"),QStringLiteral("1/64"),
+             QStringLiteral("1/32"),QStringLiteral("1/16"),QStringLiteral("1/8"),
+             QStringLiteral("1/4"),QStringLiteral("1/2"),QStringLiteral("1/1")});
+        for (int i=0;i<divisions->count();++i) divisions->setItemData(i,std::exp2(i-6.));
+        glide->addLayout(choice(tr("Division"), divisions));
+        glide->addLayout(choice(tr("Shape"), combo(QStringLiteral("slide.shape"), {tr("Linear"), tr("S-Curve")})));
+        layout->addWidget(group(tr("Legato"), glide));
+        auto* pitch = knobRow();
+        pitch->addWidget(knob(QStringLiteral("slide.smoothing"), tr("Smoothing")));
+        auto* bendRange = knob(QStringLiteral("slide.bendrange"), tr("MIDI Bend Range"));
+        bendRange->setFixedWidth(132); // Keep the complete range label visible in both locales.
+        pitch->addWidget(bendRange);
+        auto* continuity = new QVBoxLayout;
+        continuity->addLayout(pitch);
+        auto* help = new QLabel(tr("Slide notes control each voice independently. Their duration sets the transition time. Legato connects overlapping notes without restarting the sample. MIDI Bend Range applies to incoming Pitch Bend."), slidePage);
+        help->setToolTip(help->text());
+        help->setText(tr("Slide duration sets the transition; the voice keeps playing.\nLegato connects overlapping notes. MIDI Bend Range affects incoming MIDI."));
+        continuity->addWidget(help);
+        layout->addWidget(group(tr("Pitch continuity"), continuity));
+        addPage(tr("Slide / Legato"), slidePage);
+    }
 
     if (m_context == Context::Instrument)
         addPage(tr("Envelope"), buildEnvelopeSection());
@@ -2128,12 +2180,31 @@ void SamplerPanel::refresh() {
         it.value()->setChecked(on);
     }
     for (auto it = m_combos.begin(); it != m_combos.end(); ++it) {
-        const int index = int(std::lround(readParameter(it.key())));
+        const double value = readParameter(it.key());
+        int index = int(std::lround(value));
+        if (it.value()->itemData(0).isValid()) {
+            index = 0;
+            for (int i=1;i<it.value()->count();++i)
+                if (std::abs(it.value()->itemData(i).toDouble()-value) <
+                    std::abs(it.value()->itemData(index).toDouble()-value)) index=i;
+        }
         if (it.value()->currentIndex() == index) continue;
         const QSignalBlocker block(it.value());
         it.value()->setCurrentIndex(index);
     }
 
+    if (auto* slidePage = findChild<QWidget*>("SamplerSlidePage")) {
+        const bool available = m_controller && m_controller->canEditSlideNotes();
+        slidePage->setEnabled(available);
+        auto* tabs = findChild<QTabBar*>("SamplerToolsTabs");
+        tabs->setTabEnabled(1, available);
+        tabs->setTabToolTip(1, available ? QString() : tr("Slide editing requires collaboration protocol 5. Reconnect to an updated session."));
+    }
+    if (m_context == Context::Instrument && m_knobs.contains("slide.time")) {
+        const bool sync = readParameter("slide.sync") >= .5;
+        m_knobs.value("slide.time")->setEnabled(!sync);
+        m_combos.value("slide.beats")->setEnabled(sync);
+    }
     if (m_envelope) {
         const QStringList ids{
             QStringLiteral("amp.delay"), QStringLiteral("amp.att"),
@@ -2268,7 +2339,76 @@ void SamplerPanel::revealSample() {
 }
 
 
+bool SamplerWaveform::checkPeakUpdatesForTest() {
+    SamplerWaveform waveform;
+    waveform.resize(320, 116);
+    const auto sample = [](float value, const char* path = "same.wav") {
+        auto result = std::make_shared<sampler::SampleData>();
+        auto audio = std::make_shared<daw::engine::SampleBuffer>(1, 4096, 48000);
+        std::fill_n(audio->writableChannel(0), audio->frames(), value);
+        result->audio = audio;
+        result->baseFrames = audio->frames();
+        result->path = path;
+        return result;
+    };
+    const auto wait = [&] {
+        QElapsedTimer time; time.start();
+        while (waveform.m_peakBuildBusy && time.elapsed() < 3000) {
+            QApplication::processEvents();
+            QThread::msleep(1);
+        }
+        return !waveform.m_peakBuildBusy;
+    };
+    const auto raster = [&] {
+        QImage image(waveform.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        waveform.paintScene(painter, waveform.rect());
+        return image;
+    };
+    auto cache = std::make_shared<ui::graphics::SceneRecordingCache>();
+    const auto geometry = [&] {
+        ui::graphics::SceneRecorder recorder(waveform.size(), 1, cache);
+        { QPainter painter(&recorder); waveform.paintScene(painter, waveform.rect()); }
+        QVector<ui::graphics::SceneVertex> vertices;
+        for (const auto& mesh : cache->sections.at(1002))
+            if (mesh.color == QColor(Qt::white)) vertices += mesh.vertices;
+        return vertices;
+    };
+    waveform.setSample(sample(.1f));
+    if (!wait() || waveform.m_minima.isEmpty()) return false;
+    const auto before = raster();
+    const auto beforeGeometry = geometry();
+    waveform.setSample(sample(.8f));
+    if (waveform.m_minima.isEmpty() || raster() != before || geometry() != beforeGeometry)
+        return false; // No blank frame while a replacement is being prepared.
+    if (!wait() || raster() == before || geometry() == beforeGeometry) return false;
+    waveform.setSample(sample(.4f));
+    waveform.setSample(sample(.2f));
+    if (!wait() || waveform.m_maxima.isEmpty() || waveform.m_maxima.front() != .2f) return false;
+    const auto beforeTail = raster();
+    const auto beforeTailGeometry = geometry();
+    const double markerBeforeTail = waveform.xForFraction(1.0);
+    auto tail = sample(.6f);
+    auto tailAudio = std::make_shared<daw::engine::SampleBuffer>(1, 8192, 48000);
+    std::fill_n(tailAudio->writableChannel(0), tailAudio->frames(), .6f);
+    tail->audio = tailAudio; // Reverb extends total frames, not marker base frames.
+    waveform.setSample(tail);
+    waveform.setSample(tail); // Ordinary panel polling during the peak rebuild.
+    if (waveform.xForFraction(1.0) != markerBeforeTail || raster() != beforeTail ||
+        geometry() != beforeTailGeometry) return false;
+    if (!wait() || waveform.xForFraction(1.0) != markerBeforeTail * .5 ||
+        raster() == beforeTail || geometry() == beforeTailGeometry) return false;
+    waveform.setSample(sample(.5f, "different.wav"));
+    if (!waveform.m_minima.isEmpty()) return false;
+    waveform.setSample({});
+    if (!wait() || !waveform.m_minima.isEmpty()) return false;
+    std::fprintf(stderr, "PASS Sampler waveform: retained CPU/GPU envelope, atomic publication, stale result rejection, clear during rebuild\n");
+    return true;
+}
+
 bool SamplerPanel::checkLayoutForTest() {
+    if (!SamplerWaveform::checkPeakUpdatesForTest()) return false;
     daw::EngineController controller;
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto descriptor = controller.pluginManager().find(
@@ -2308,6 +2448,9 @@ bool SamplerPanel::checkLayoutForTest() {
                     tabs->setCurrentIndex(index);
                     QApplication::processEvents();
                     scroll->verticalScrollBar()->setValue(0);
+                    if (context == Context::Instrument && tabs->tabText(index) == tr("Slide / Legato") &&
+                        qEnvironmentVariableIsSet("DAW_SLIDE_CHECK_DIR"))
+                        panel.grab().save(qEnvironmentVariable("DAW_SLIDE_CHECK_DIR") + "/sampler-" + preset.id + ".png");
                     check(scroll->horizontalScrollBar()->maximum() == 0,
                           "horizontal overflow at supported editor size");
                     check(fxStrip->mapTo(&panel, QPoint()).y() ==

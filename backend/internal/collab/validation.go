@@ -21,11 +21,13 @@ const (
 	CollaborationProtocolV2           = "vlt-collab-v2"
 	CollaborationProtocolV3           = "vlt-collab-v3"
 	CollaborationProtocolV4           = "vlt-collab-v4"
+	CollaborationProtocolV5           = "vlt-collab-v5"
 	CollaborationProtocol             = CollaborationProtocolV2
 	CollaborationProjectFormatVersion = 7
 	CollaborationCommandSchemaVersion = 2
 	CollaborationCommandSchemaV3      = 3
 	CollaborationCommandSchemaV4      = 4
+	CollaborationCommandSchemaV5      = 5
 	MaxOperationPayloadBytes          = 1 << 20
 	MaxOperationPreconditions         = 1024
 	MaxOperationTouchedFields         = 8192
@@ -71,7 +73,7 @@ var (
 
 func SupportedCommandSchemaVersion(version int) bool {
 	return version == CollaborationCommandSchemaVersion ||
-		version == CollaborationCommandSchemaV3 || version == CollaborationCommandSchemaV4
+		version == CollaborationCommandSchemaV3 || version == CollaborationCommandSchemaV4 || version == CollaborationCommandSchemaV5
 }
 
 func CollaborationProtocolForSchema(version int) (string, bool) {
@@ -82,6 +84,8 @@ func CollaborationProtocolForSchema(version int) (string, bool) {
 		return CollaborationProtocolV3, true
 	case CollaborationCommandSchemaV4:
 		return CollaborationProtocolV4, true
+	case CollaborationCommandSchemaV5:
+		return CollaborationProtocolV5, true
 	default:
 		return "", false
 	}

@@ -321,6 +321,26 @@ void setFolderColor(const QString& folder, const QString& color) {
                          QJsonDocument(colors).toJson(QJsonDocument::Compact));
 }
 
+static QStringList explicitAiFolders() {
+    QSettings settings;
+    if (settings.contains(key("aiFolders"))) return settings.value(key("aiFolders")).toStringList();
+    QStringList paths = settings.value(key("folders")).toStringList();
+    // Older versions persisted default shortcuts together with newly added
+    // roots. They are not evidence of an explicit grant to scan home folders.
+    for (const auto location : {QStandardPaths::MusicLocation, QStandardPaths::DownloadLocation}) {
+        const QString automatic = QStandardPaths::writableLocation(location);
+        paths.removeIf([&](const QString& path) { return samePath(path, automatic); });
+    }
+    return paths;
+}
+
+QStringList aiContentPaths() {
+    QStringList paths = explicitAiFolders();
+    for (const Collection& collection : collections()) paths.append(collection.paths);
+    paths.removeDuplicates();
+    return paths;
+}
+
 QStringList folders() {
     QSettings settings;
     if (!settings.contains(key("folders"))) return defaultFolders();
@@ -331,24 +351,37 @@ QStringList folders() {
 
 void setFolders(const QStringList& folders) {
     QSettings().setValue(key("folders"), folders);
+    QSettings().setValue(key("aiFolders"), folders);
 }
 
 bool addFolder(const QString& folder) {
     const QString clean = QDir::cleanPath(folder);
     if (clean.isEmpty()) return false;
     QStringList current = folders();
-    if (current.contains(clean)) return false;
-    current << clean;
-    setFolders(current);
+    QStringList granted = explicitAiFolders();
+    const auto matches = [&clean](const QString& path) { return samePath(path, clean); };
+    const bool alreadyVisible = std::any_of(current.cbegin(), current.cend(), matches);
+    const bool alreadyGranted = std::any_of(granted.cbegin(), granted.cend(), matches);
+    if (alreadyVisible && alreadyGranted) return false;
+    if (!alreadyVisible) current << clean;
+    if (!alreadyGranted) granted << clean;
+    QSettings settings;
+    settings.setValue(key("folders"), current);
+    settings.setValue(key("aiFolders"), granted);
     return true;
 }
 
 void removeFolder(const QString& folder) {
     QStringList current = folders();
-    current.removeAll(QDir::cleanPath(folder));
+    QStringList granted = explicitAiFolders();
+    const auto matches = [&folder](const QString& path) { return samePath(path, folder); };
+    current.removeIf(matches);
+    granted.removeIf(matches);
     // Written even when nothing was removed: the first removal has to stop the
     // defaults from coming back, and only a stored (possibly empty) list does.
-    setFolders(current);
+    QSettings settings;
+    settings.setValue(key("folders"), current);
+    settings.setValue(key("aiFolders"), granted);
 }
 
 QStringList ignoredExtensions() {

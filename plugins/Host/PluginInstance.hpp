@@ -80,12 +80,20 @@ public:
 /// must be realtime-safe, while everything else is control thread and may
 /// allocate or block. The two must never overlap — that is what
 /// `RealtimeEngine::RenderGate` is for.
+enum class SlideDelivery : std::uint8_t { Auto, NoteExpression, MPE, PitchBend, Off };
+struct PitchCapabilities {
+    bool perNote = false;
+    bool mpe = false;
+    bool pitchBend = false;
+    bool continuous = false;
+};
 class PluginInstance {
 public:
     virtual ~PluginInstance() = default;
 
     virtual const PluginDescriptor& descriptor() const noexcept = 0;
     virtual void setListener(PluginListener* listener) noexcept = 0;
+    virtual PitchCapabilities pitchCapabilities() const noexcept { return {}; }
 
     // ── Control thread ──
 
@@ -176,6 +184,7 @@ public:
 
     virtual std::uint32_t latencySamples() const noexcept = 0;
     virtual std::uint32_t tailSamples() const noexcept = 0;
+    virtual bool tailSamplesKnown() const noexcept { return false; }
 };
 
 /// Finds and opens plugins of one format.

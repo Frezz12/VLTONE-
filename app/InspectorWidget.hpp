@@ -57,6 +57,9 @@ signals:
     /// refresh. Value changes are handled by the cheaper `syncFromModel()`.
     void structureChanged();
     void trackCreated();
+    void timelineRequested(const QString& channelId);
+    void createTracksRequested();
+    void trackRemoved(const QString& trackId);
     void collapsedChanged(bool collapsed);
     void pluginEditorRequested(const QString& channelId, const QString& insertId);
     void automateControlRequested(const QString& trackId, bool pan);

@@ -1,4 +1,5 @@
 #pragma once
+#include "Host/PitchDelivery.hpp"
 
 #include "Common/LockFreeQueue.hpp"
 #include "Common/RealtimeSnapshot.hpp"
@@ -61,6 +62,12 @@ public:
 
     // ── Control thread ──
 
+    void setSlideDelivery(SlideDelivery mode, double range, double tailSeconds) noexcept {
+        m_slideMode.store(mode); m_slideRange.store(std::clamp(range,1.,96.)); m_slideTail.store(std::clamp(tailSeconds,0.,20.));
+    }
+    SlideDelivery slideDelivery() const noexcept { return PitchDelivery::resolve(m_slideMode.load(), m_pitchCapabilities); }
+    bool slideOverloaded() const noexcept { return m_slideOverloaded.load(); }
+    bool slideClipped() const noexcept { return m_slideClipped.load(); }
     PluginInstance* instance() noexcept { return m_instance.get(); }
     const PluginInstance* instance() const noexcept { return m_instance.get(); }
 
@@ -200,6 +207,11 @@ private:
         PluginNode& m_owner;
     };
 
+    PitchDelivery m_pitchDelivery;
+    PitchCapabilities m_pitchCapabilities;
+    std::atomic<SlideDelivery> m_slideMode{SlideDelivery::Auto};
+    std::atomic<double> m_slideRange{2}, m_slideTail{2};
+    std::atomic<bool> m_slideOverloaded{false},m_slideClipped{false};
     std::string m_name;
     std::unique_ptr<PluginInstance> m_instance;
     Sink m_sink;

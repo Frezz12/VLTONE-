@@ -103,7 +103,10 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
     m_inputPointers.assign(inputChannels, nullptr);
     m_sidechainPointers.assign(m_pluginSidechainChannels, nullptr);
     m_outputPointers.assign(outputChannels, nullptr);
-    m_blockEvents.reserve(2048);
+    const auto pitchCapacity = engine::pitchEventCapacity(info.maxBlockSize, info.sampleRate);
+    m_blockEvents.reserve(pitchCapacity);
+    m_pitchDelivery.prepare(pitchCapacity);
+    m_pitchCapabilities = m_instance ? m_instance->pitchCapabilities() : PitchCapabilities{};
     m_curveCursor.assign(2048, 0);
 
     if (!m_instance) return;
@@ -119,6 +122,7 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
     processInfo.sidechainConnected = m_sidechainConnected;
 
     if (m_instance->activate(processInfo)) {
+        m_pitchCapabilities=m_instance->pitchCapabilities();
         m_instance->startProcessing();
         const bool ready = m_instance->isProcessing();
         m_ready.store(ready, std::memory_order_release);
@@ -137,6 +141,7 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
 }
 
 void PluginNode::reset() {
+    m_pitchDelivery.reset();
     m_processFailed.store(false, std::memory_order_relaxed);
     // A bypassed insert may have declined activation. CLAP reset requires an
     // active instance even though that slot contributes only the dry signal.
@@ -217,6 +222,7 @@ void PluginNode::resume() {
 }
 
 void PluginNode::Sink::push(const PluginEvent& event) noexcept {
+    if(event.kind==PluginEvent::Kind::NoteEnd){m_owner.m_pitchDelivery.voiceEnded(event.noteId,event.channel,event.key);return;}
     // A plugin may echo an automation value back through its output event list.
     // The original host gesture has already been captured; playback must not
     // become a second live gesture on the next UI pump.
@@ -227,9 +233,9 @@ void PluginNode::Sink::push(const PluginEvent& event) noexcept {
          event.kind == PluginEvent::Kind::NoteOff ||
          event.kind == PluginEvent::Kind::NoteChoke ||
          event.kind == PluginEvent::Kind::MidiController ||
-         event.kind == PluginEvent::Kind::PolyPressure)) {
+         event.kind == PluginEvent::Kind::PolyPressure || event.kind == PluginEvent::Kind::NotePitch)) {
         engine::MidiEvent midi;
-        midi.frameOffset = event.frameOffset;
+        midi.frameOffset = event.frameOffset; midi.noteId=m_owner.m_pitchDelivery.sourceNoteId(event.noteId); midi.notePan=float(event.notePan);
         const std::uint8_t channel = std::uint8_t(event.channel) & 0x0F;
         if (event.kind == PluginEvent::Kind::NoteOn) {
             midi.status = engine::MidiEvent::kNoteOn | channel;
@@ -240,6 +246,8 @@ void PluginNode::Sink::push(const PluginEvent& event) noexcept {
             midi.status = engine::MidiEvent::kNoteOff | channel;
             midi.data1 = std::uint8_t(std::clamp<int>(event.key, 0, 127));
             midi.data2 = std::uint8_t(std::lround(std::clamp(event.value, 0.0, 1.0) * 127.0));
+        } else if (event.kind == PluginEvent::Kind::NotePitch) {
+            midi.status=channel; midi.data1=std::uint8_t(std::clamp<int>(event.key,0,127)); midi.isPitchExpression=true; midi.pitch=event.pitch;
         } else if (event.kind == PluginEvent::Kind::PolyPressure) {
             midi.status = engine::MidiEvent::kPolyPressure | channel;
             midi.data1 = std::uint8_t(std::clamp<int>(event.key, 0, 127));
@@ -795,8 +803,12 @@ void PluginNode::process(const engine::ProcessContext& context) {
                     note.frameOffset, frames > 0 ? frames - 1 : 0);
                 converted.channel = std::int16_t(note.channel());
                 converted.key = std::int16_t(note.data1);
-                converted.noteId = -1;   // addressed by key and channel
-                if (note.isNoteOn()) {
+                converted.noteId = note.noteId;
+                converted.pitch = note.pitch;
+                if (note.isPitchExpression) {
+                    converted.kind = PluginEvent::Kind::NotePitch;
+                    converted.value = note.pitch.at(0);
+                } else if (note.isNoteOn()) {
                     converted.kind = PluginEvent::Kind::NoteOn;
                     converted.value = double(note.data2) / 127.0;
                     converted.notePan =
@@ -978,7 +990,10 @@ void PluginNode::process(const engine::ProcessContext& context) {
     processContext.outputs = m_outputPointers.data();
     processContext.outputChannels = outCount;
     processContext.frames = frames;
-    processContext.inputEvents = m_blockEvents;
+    processContext.inputEvents = m_pitchDelivery.process(m_blockEvents, frames, context.sampleRate,
+        slideDelivery(), (m_slideMode.load()==SlideDelivery::Auto && slideDelivery()==SlideDelivery::MPE && m_slideRange.load()==2 ? 48. : m_slideRange.load()), m_slideTail.load(), m_instance->tailSamplesKnown() ? m_instance->tailSamples() : 0xffffffffu, m_pitchCapabilities.continuous);
+    m_slideOverloaded.store(m_pitchDelivery.overloaded);
+    m_slideClipped.store(m_pitchDelivery.clipped);
     processContext.outputEvents = &m_sink;
     processContext.transport = context.transport;
     processContext.sampleTime = context.timelinePosition;

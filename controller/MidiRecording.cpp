@@ -1,4 +1,5 @@
 #include "MidiRecording.hpp"
+#include "SlideNotes.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -152,6 +153,7 @@ MidiPerformance sliceMidiPerformance(const MidiPerformance &data, double from, d
             note.releaseVelocity = 0;
         result.notes.push_back(std::move(note));
     }
+    result.slideNotes=slides::crop(data.notes,data.slideNotes,result.notes,from,to);
     for (const auto &source : data.lanes) {
         if (source.points.empty() || source.points.front().beats >= to)
             continue;
@@ -181,6 +183,7 @@ MidiPerformance sliceMidiPerformance(const MidiPerformance &data, double from, d
 }
 
 void mergeMidiPerformance(ClipModel &clip, MidiPerformance data, double offset, double end) {
+    for(auto& s:data.slideNotes){s.startBeats+=offset;clip.slideNotes.push_back(std::move(s));}
     for (auto &n : data.notes) {
         n.startBeats += offset;
         clip.notes.push_back(std::move(n));
@@ -209,8 +212,11 @@ void mergeMidiPerformance(ClipModel &clip, MidiPerformance data, double offset, 
 
 void sliceMidiClipContent(ClipModel &clip, double from, double to, double tempo, bool newIds) {
     const double bps = tempo / 60.0;
-    // Plain MIDI notes are clip-relative; offsetSeconds is audio source metadata.
-    auto data = sliceMidiPerformance({clip.notes, clip.lanes}, from * bps, to * bps, newIds);
+    // Notes and comp windows keep their source origin through non-destructive
+    // edge trims. Materialize a requested range relative to the visible head.
+    from += clip.offsetSeconds;
+    to += clip.offsetSeconds;
+    auto data = sliceMidiPerformance({clip.notes, clip.lanes, clip.slideNotes}, from * bps, to * bps, newIds);
     if (!newIds) {
         std::vector<ControllerLane> lanes;
         for (const auto &original : clip.lanes) {
@@ -227,13 +233,15 @@ void sliceMidiClipContent(ClipModel &clip, double from, double to, double tempo,
         data.lanes = std::move(lanes);
     }
     clip.notes = std::move(data.notes);
+    clip.slideNotes = std::move(data.slideNotes);
     clip.lanes = std::move(data.lanes);
     clip.offsetSeconds = 0;
     for (auto &take : clip.takes) {
         auto data = sliceMidiPerformance(
-            {take.notes, take.lanes}, (from - take.clipOffsetSeconds + take.offsetSeconds) * bps,
+            {take.notes, take.lanes, take.slideNotes}, (from - take.clipOffsetSeconds + take.offsetSeconds) * bps,
             (to - take.clipOffsetSeconds + take.offsetSeconds) * bps, newIds);
         take.notes = std::move(data.notes);
+        take.slideNotes = std::move(data.slideNotes);
         take.lanes = std::move(data.lanes);
         take.clipOffsetSeconds = 0;
         take.offsetSeconds = 0;
@@ -263,6 +271,16 @@ std::vector<ClipModel> midiPlaybackClips(const TrackModel &track, double tempo) 
             continue;
         if (clip.takes.empty()) {
             result.push_back(clip);
+            if (clip.offsetSeconds > 0.0) {
+                auto& part = result.back();
+                auto data = sliceMidiPerformance(
+                    {std::move(part.notes), std::move(part.lanes), std::move(part.slideNotes)}, clip.offsetSeconds * bps,
+                    (clip.offsetSeconds + clip.durationSeconds) * bps, false);
+                part.notes = std::move(data.notes);
+                part.lanes = std::move(data.lanes);
+                part.slideNotes = std::move(data.slideNotes);
+                part.offsetSeconds = 0.0;
+            }
             continue;
         }
         for (const auto &segment : clip.comp) {
@@ -270,11 +288,11 @@ std::vector<ClipModel> midiPlaybackClips(const TrackModel &track, double tempo) 
                                            [&](const auto &t) { return t.id == segment.takeId; });
             if (take == clip.takes.end() || take->muted)
                 continue;
-            const double from = std::max({0.0, segment.startSeconds, take->clipOffsetSeconds});
-            const double to = std::min({clip.durationSeconds, segment.endSeconds,
+            const double from = std::max({clip.offsetSeconds, segment.startSeconds, take->clipOffsetSeconds});
+            const double to = std::min({clip.offsetSeconds + clip.durationSeconds, segment.endSeconds,
                                         take->clipOffsetSeconds + take->lengthSeconds});
             auto data = sliceMidiPerformance(
-                {take->notes, take->lanes},
+                {take->notes, take->lanes, take->slideNotes},
                 (from - take->clipOffsetSeconds + take->offsetSeconds) * bps,
                 (to - take->clipOffsetSeconds + take->offsetSeconds) * bps, false);
             if (!(to > from))
@@ -284,9 +302,10 @@ std::vector<ClipModel> midiPlaybackClips(const TrackModel &track, double tempo) 
             part.kind = ClipKind::Midi;
             part.muted = clip.muted;
             part.patternClipId = clip.patternClipId;
-            part.startSeconds = clip.startSeconds + from;
+            part.startSeconds = clip.startSeconds + from - clip.offsetSeconds;
             part.durationSeconds = to - from;
             part.notes = std::move(data.notes);
+            part.slideNotes = std::move(data.slideNotes);
             part.lanes = std::move(data.lanes);
             result.push_back(std::move(part));
         }

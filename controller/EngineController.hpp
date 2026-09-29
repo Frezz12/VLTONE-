@@ -18,6 +18,7 @@
 #include "Host/PluginNode.hpp"
 #include "Internal/SamplerInstance.hpp"
 #include "Internal/SamplerPrecompute.hpp"
+#include "Job/BackgroundExecutor.hpp"
 
 #include "Engine/RealtimeEngine.hpp"
 #include "Common/RealtimeSnapshot.hpp"
@@ -449,6 +450,8 @@ public:
     /// the time this returns, so `project().findTrack(returned)` resolves
     /// immediately — see the note above submitSharedMutation in the .cpp.
     std::string addTrack(TrackKind kind, const std::string& name = "");
+    /// One timeline owner for the existing master channel; creates no audio bus.
+    std::string ensureMasterTrack();
     void removeTrack(const std::string& trackId);
     collab::SharedMutationResult renameTrack(const std::string& trackId,
                                              const std::string& name);
@@ -990,6 +993,14 @@ public:
     void beginWarpEdit(const std::string& trackId, const std::string& clipId);
     void commitWarpEdit();
     void cancelWarpEdit();
+    // Audition-only maps never enter the document, autosave or offline render.
+    bool beginWarpPreview(const std::string& trackId, const std::string& clipId);
+    bool updateWarpPreview(const ClipWarpModel& map);
+    bool auditionWarpPreview(bool after);
+    bool commitWarpPreview();
+    void cancelWarpPreview();
+    bool warpPreviewActive();
+    const ClipWarpModel* warpPreviewMap() const;
     /// Replace or clear the media referenced by one clip while keeping that
     /// clip's processing, stretch and private FX state. Empty clears it.
     bool setClipAudioFile(const std::string& trackId,
@@ -1005,6 +1016,11 @@ public:
     /// placement renderer. Null for MIDI, layered or missing-file clips.
     std::shared_ptr<const plugins::sampler::SampleData> clipSampleData(
         const std::string& trackId, const std::string& clipId);
+    /// Editor polling must not bake audio on the GUI thread. Keep the last
+    /// completed version visible until its replacement is published.
+    std::shared_ptr<const plugins::sampler::SampleData> cachedClipSampleData(
+        const std::string& trackId, const std::string& clipId) const;
+    void requestClipSampleData(const std::string& trackId, const std::string& clipId);
     struct ClipWaveformView {
         const WaveformPeaks* peaks = nullptr;
         const engine::SampleBuffer* samples = nullptr;
@@ -1611,9 +1627,18 @@ public:
     /// about the document; this is where the result lands, gets clamped, and
     /// becomes a single undo entry instead of one per touched note.
     void setClipNotes(const std::string& trackId, const std::string& clipId,
-                      std::vector<NoteModel> notes, const std::string& label);
+                      std::vector<NoteModel> notes, const std::string& label,
+                      bool stretchSlides = false);
 
     // ── Master / metering ──
+    struct InstrumentSlideStatus { plugins::SlideDelivery mode = plugins::SlideDelivery::Off; bool overloaded = false, clipped = false; };
+    InstrumentSlideStatus instrumentSlideStatus(const std::string& trackId);
+    void setInstrumentSlideSettings(const std::string& trackId, int mode, double range, double reserve, bool undo = true);
+    void setClipMidiObjects(const std::string& trackId, const std::string& clipId, std::vector<NoteModel> notes, std::vector<SlideNoteModel> slides, const std::string& label, bool undo = true, std::optional<std::string> takeId = {});
+    bool canEditSlideNotes() const noexcept { return !m_sharedMutationSink || m_sharedMutationSink->commandSchemaVersion() >= 5; }
+    void setClipSlideNotes(const std::string& trackId, const std::string& clipId,
+        std::vector<SlideNoteModel> notes, const std::string& label = "Edit Slide Notes", bool undo = true, std::optional<std::string> takeId = {});
+
     void setMasterVolume(float volume);
     void setMasterVolumeLive(float volume);
     void commitMasterVolumeEdit(float before,
@@ -1950,6 +1975,7 @@ public:
     std::size_t undoDepth() const { return m_undo.depth(); }
     std::size_t undoEstimatedBytes() const { return m_undo.estimatedBytes(); }
     std::uint64_t projectRevision() const { return m_undo.revision(); }
+    std::uint64_t projectGeneration() const { return m_projectGeneration; }
     /// Includes live placements before their gesture enters undo history.
     std::uint64_t clipGeometryRevision() const { return m_clipGeometryRevision; }
     /// How deep the stack can get. Beyond it `undoDepth` stops rising, so a
@@ -2046,7 +2072,7 @@ private:
     std::string submitOptimisticSharedAudioTrack(
         collab::SharedAssetMutationRequest request, TrackModel track,
         const std::string& afterId);
-    bool cloudProjectBound();
+    bool cloudProjectBound() const;
 
     /// Bookkeeping for a clip shared ahead of its upload: where it plays from
     /// on this machine, and which asset request is still in flight for it.
@@ -2138,7 +2164,8 @@ private:
         engine::SamplePos endSample = 0;
     };
     PlacementSpan emitClipPlacements(const ClipModel& clip,
-                                     engine::ClipPlayerNode::ClipList& list);
+                                     engine::ClipPlayerNode::ClipList& list,
+                                     bool allowWarpPreview = false);
     /// A clip's length in seconds, falling back to its source's length when the
     /// document stores no duration.
     double effectiveClipLength(const ClipModel& clip);
@@ -2190,12 +2217,22 @@ private:
     std::unique_ptr<DeviceCallback> m_callback;
 
     ProjectModel m_project;
+    std::uint64_t m_projectGeneration = 1;
     std::string m_exclusiveAuditionTrackId;
     struct WarpEdit {
         std::string trackId, clipId;
         ClipWarpModel before;
     };
     std::optional<WarpEdit> m_warpEdit;
+    struct WarpPreview {
+        std::string trackId, clipId, fingerprint;
+        ClipWarpModel before, proposed;
+        double startSeconds = 0, tempo = 120;
+        int numerator = 4, denominator = 4;
+        bool after = true;
+    };
+    std::optional<WarpPreview> m_warpPreview;
+    bool validWarpPreview() const;
     std::unordered_map<std::string, ClipWarpModel> m_sampleWarpOrigins;
     void applyClipWarpState(const std::string& trackId, const std::string& clipId,
                            const ClipWarpModel& warp, double fallbackDuration);
@@ -2301,6 +2338,8 @@ private:
     std::uint64_t m_graphRebuildCount = 0;
     std::unordered_map<std::string, std::uint64_t> m_midiNotesRevisions;
     std::uint64_t m_midiNotesRevisionCounter = 0;
+    std::unordered_map<std::string, std::int32_t> m_midiVoiceIds;
+    std::int32_t m_nextMidiVoiceId = 1;
 
     /// Stem capture points, live only for the duration of a render. Held here
     /// rather than patched into the graph once because `rebuildGraph` discards
@@ -2427,23 +2466,42 @@ private:
     };
     std::vector<SharedClipSampleCacheEntry> m_sharedClipSampleCache;
     std::uint64_t m_clipWaveformRevision = 0;
+    static ClipSampleCacheEntry buildClipSample(
+        const std::string& path, const plugins::sampler::PrecomputeSettings& settings,
+        std::shared_ptr<const engine::SampleBuffer> raw, bool waveform,
+        plugins::sampler::PrecomputeCancellation cancellation = {});
     std::shared_ptr<const plugins::sampler::SampleData> processedClipSample(
         const ClipModel& clip, const std::string& path,
-        std::shared_ptr<const engine::SampleBuffer> raw);
+        std::shared_ptr<const engine::SampleBuffer> raw, bool livePlacement = false);
 
     /// Tracks whose clip list is waiting to be handed to the engine because
     /// producing it means re-rendering a sample.
     ///
-    /// Baking a precomputed effect is O(length of the file), and a knob drag
-    /// asks for it once per mouse move — on a long clip that is a frozen
-    /// interface. The built-in sampler uses a cancellable worker, but clip
-    /// bakes feed a shared cache and graph publication path and are still
-    /// synchronized here. Coalescing costs at most one tick of latency.
-    /// Anything
+    /// A single cancellable background job bakes immutable audio/peaks; the
+    /// control thread validates and publishes them together. New knob values
+    /// replace queued work, never add workers or block the GUI. Anything
     /// that must be exact *now* — an export, an offline analysis, hitting play
     /// — flushes first.
     std::vector<std::string> m_deferredClipSync;
+    std::vector<std::pair<std::string, std::string>> m_clipSampleViewRequests;
+    struct ClipSampleBake {
+        std::string trackId, clipId;
+        ClipSampleCacheEntry result;
+        std::shared_ptr<const engine::SampleBuffer> raw;
+        PreparedAudio prepared;
+        double sampleRate = 0;
+        std::uint64_t generation = 0;
+        std::atomic<bool> complete{false};
+    };
+    std::shared_ptr<ClipSampleBake> m_clipSampleBake;
+    engine::BackgroundExecutor::Handle m_clipSampleBakeTask;
+    std::optional<std::uint64_t> m_failedClipSampleGeneration;
+    std::shared_ptr<std::atomic<std::uint64_t>> m_clipSampleGeneration =
+        std::make_shared<std::atomic<std::uint64_t>>(0);
     void deferClipSync(const std::string& trackId);
+    void pumpDeferredClipSync();
+    bool queueClipSampleBake(const TrackModel& track, const ClipModel& clip);
+    void cancelClipSampleBake();
     void flushDeferredClipSync();
     static constexpr std::uint32_t kPluginCompatibilitySweepTicks = 64;
     std::uint64_t m_pluginMainThreadGeneration =
@@ -2704,6 +2762,8 @@ private:
         // Add/remove/whole-vector transforms intentionally fall back to the
         // complete snapshot required to preserve order and membership.
         std::vector<NoteModel> structuralBefore;
+        std::vector<NoteModel> slideNotesBefore, slideNotesLast;
+        std::vector<SlideNoteModel> slidesBefore;
     };
     NoteEdit m_noteEdit;
     std::uint64_t m_noteEditIndexBuildCount = 0;

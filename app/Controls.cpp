@@ -3,6 +3,7 @@
 #include "EngineController.hpp"
 #include "GlassPanel.hpp"
 #include "Theme.hpp"
+#include "UiConstants.hpp"
 
 #include <QAction>
 #include <QContextMenuEvent>
@@ -10,6 +11,7 @@
 #include <QFontMetrics>
 #include <QLabel>
 #include <QKeyEvent>
+#include <QHideEvent>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
@@ -26,6 +28,159 @@
 #include <cmath>
 
 namespace ui {
+
+QString navigationScrollBarStyle() {
+    const Theme& theme = th();
+    const QColor rail = mixColors(theme.panelBottom(), theme.well(), 0.65);
+    return QStringLiteral(R"(
+QScrollBar { background: %1; border: 1px solid %2; border-radius: 5px; margin: 0px; }
+QScrollBar:horizontal { height: %3px; border-bottom: none; }
+QScrollBar:vertical { width: %3px; }
+QScrollBar::handle { border: 1px solid %8; border-radius: 4px; min-width: 0px; min-height: 0px; }
+QScrollBar::handle:horizontal { min-width: 32px; margin: 3px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 %4, stop:1 %8); }
+QScrollBar::handle:vertical { min-height: 32px; margin: 3px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 %4, stop:1 %8); }
+QScrollBar::handle:hover { background: %5; }
+QScrollBar::handle:pressed { background: %6; }
+QScrollBar::handle:disabled { background: %7; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; border: none; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+)")
+        .arg(rail.name(), theme.separator().name())
+        .arg(kTimelineScrollExtent)
+        .arg(mixColors(rail, theme.textPrimary, 0.36).name(),
+             mixColors(rail, theme.textPrimary, 0.43).name(),
+             mixColors(rail, theme.textPrimary, 0.56).name(),
+             mixColors(rail, theme.textPrimary, 0.12).name(),
+             mixColors(rail, theme.textPrimary, 0.24).name());
+}
+
+ViewControlStrip::ViewControlStrip(QWidget* parent) : QWidget(parent) {
+    setFixedSize(kViewControlWidth, 3 * kViewControlHeight);
+    setAttribute(Qt::WA_OpaquePaintEvent);
+    setAttribute(Qt::WA_NoMousePropagation);
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+            QOverload<>::of(&QWidget::update));
+}
+
+void ViewControlStrip::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    const Theme& theme = th();
+    painter.fillRect(rect(), theme.headerBackground);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setBrush(mixColors(theme.headerBackground, theme.well(), 0.32));
+    painter.setPen(theme.sectionDivider());
+    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
+    for (int i = 1; i < 3; ++i)
+        painter.drawLine(3, i * kViewControlHeight, width() - 4, i * kViewControlHeight);
+}
+
+void paintViewControl(QPainter& painter, const QWidget* control,
+                      icons::Glyph glyph, bool pressed) {
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const Theme& theme = th();
+    const QRectF cell = QRectF(control->rect()).adjusted(1.0, 1.0, -1.0, -1.0);
+    if (pressed || (control->isEnabled() && control->underMouse())) {
+        QColor fill = pressed ? QColor(0, 0, 0, theme.dark ? 40 : 22) : theme.textPrimary;
+        if (!pressed) fill.setAlpha(theme.dark ? 22 : 16);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(fill);
+        painter.drawRoundedRect(cell, 2, 2);
+    }
+    QStyleOption option;
+    option.initFrom(control);
+    if (control->hasFocus() && (option.state & QStyle::State_KeyboardFocusChange)) {
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(theme.textPrimary, 1.0, Qt::DotLine));
+        painter.drawRoundedRect(cell, 2, 2);
+    }
+    const QPointF centre = QRectF(control->rect()).center();
+    icons::paint(painter, glyph,
+                 QRectF(centre.x() - 7.0, centre.y() - 7.0, 14.0, 14.0),
+                 control->isEnabled() ? theme.textPrimary : theme.textSecondary);
+}
+
+ViewScrubSlider::ViewScrubSlider(icons::Glyph glyph, Axis axis, int resetValue,
+                                QWidget* parent)
+    : QSlider(Qt::Horizontal, parent), m_glyph(glyph), m_axis(axis),
+      m_resetValue(resetValue) {
+    setFixedSize(kViewControlWidth, kViewControlHeight);
+    setCursor(axis == Axis::Vertical ? Qt::SizeVerCursor : Qt::SizeHorCursor);
+    setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
+}
+
+void ViewScrubSlider::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    paintViewControl(painter, this, m_glyph, isSliderDown());
+}
+
+void ViewScrubSlider::mousePressEvent(QMouseEvent* event) {
+    if (event->button() != Qt::LeftButton) {
+        QSlider::mousePressEvent(event);
+        return;
+    }
+    m_positionAccumulator = sliderPosition();
+    m_cursorDrag.begin(event->globalPosition());
+    setFocus(Qt::MouseFocusReason);
+    setSliderDown(true);
+    event->accept();
+    update();
+}
+
+void ViewScrubSlider::mouseMoveEvent(QMouseEvent* event) {
+    if (!isSliderDown()) return;
+    if (!(event->buttons() & Qt::LeftButton)) {
+        m_cursorDrag.cancel();
+        setSliderDown(false);
+        update();
+        return;
+    }
+    applyPointerDelta(m_cursorDrag.takeDelta(event->globalPosition()), event->modifiers());
+    event->accept();
+}
+
+void ViewScrubSlider::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() != Qt::LeftButton || !isSliderDown()) return;
+    applyPointerDelta(m_cursorDrag.finish(event->globalPosition()), event->modifiers());
+    setSliderDown(false);
+    event->accept();
+    update();
+}
+
+void ViewScrubSlider::hideEvent(QHideEvent* event) {
+    m_cursorDrag.cancel();
+    if (isSliderDown()) setSliderDown(false);
+    QSlider::hideEvent(event);
+}
+
+void ViewScrubSlider::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (event->button() != Qt::LeftButton) {
+        QSlider::mouseDoubleClickEvent(event);
+        return;
+    }
+    m_cursorDrag.cancel();
+    setSliderDown(false);
+    setValue(m_resetValue);
+    event->accept();
+}
+
+void ViewScrubSlider::enterEvent(QEnterEvent* event) { QSlider::enterEvent(event); update(); }
+void ViewScrubSlider::leaveEvent(QEvent* event) { QSlider::leaveEvent(event); update(); }
+
+bool ViewScrubSlider::applyPointerDelta(const QPointF& delta, Qt::KeyboardModifiers modifiers) {
+    const double moved = m_axis == Axis::Vertical ? -delta.y() : delta.x();
+    if (std::abs(moved) < 1.0e-9) return false;
+    const double throwPixels = m_axis == Axis::Horizontal
+        ? (modifiers & Qt::ShiftModifier ? 720.0 : 180.0)
+        : (modifiers & Qt::ShiftModifier ? 360.0 : 90.0);
+    m_positionAccumulator = std::clamp(
+        m_positionAccumulator + moved / throwPixels * double(maximum() - minimum()),
+        double(minimum()), double(maximum()));
+    setSliderPosition(int(std::lround(m_positionAccumulator)));
+    return true;
+}
 
 namespace {
 bool g_automationCreationMode = false;
@@ -857,10 +1012,17 @@ MsrButton::MsrButton(const QString& letter, const QColor& activeColor,
             QOverload<>::of(&QWidget::update));
 }
 
-void MsrButton::enterEvent(QEnterEvent*) { m_hoverFade.setTarget(1.0); }
-void MsrButton::leaveEvent(QEvent*) { m_hoverFade.setTarget(0.0); }
+void MsrButton::enterEvent(QEnterEvent*) {
+    if (property("consoleButton").toBool()) update();
+    else m_hoverFade.setTarget(1.0);
+}
+void MsrButton::leaveEvent(QEvent*) {
+    if (property("consoleButton").toBool()) update();
+    else m_hoverFade.setTarget(0.0);
+}
 
 void MsrButton::setChipSize(int w, int h) {
+    if (size() == QSize(w, h)) return;
     setFixedSize(w, h);
     update();
 }
@@ -886,6 +1048,44 @@ void MsrButton::setActiveColor(const QColor& color) {
 void MsrButton::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
+    if (property("consoleButton").toBool()) {
+        const auto& t = th();
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        QColor fill = isChecked() ? mixColors(t.surface, m_active, 0.24)
+                                 : mixColors(t.surface, t.background, 0.40);
+        if (underMouse()) fill = mixColors(fill, t.textPrimary, 0.09);
+        if (isDown()) fill = mixColors(fill, t.well(), 0.60);
+        if (!isEnabled()) p.setOpacity(0.4);
+        p.setBrush(fill);
+        p.setPen(QPen(isChecked() ? mixColors(t.surface, m_active, 0.65)
+                                 : t.separator(), 1));
+        p.drawRoundedRect(r, 5, 5);
+        QFont f = font();
+        f.setPixelSize(std::clamp(height() - 5, 9, 10));
+        f.setWeight(QFont::Medium);
+        p.setFont(f);
+        p.setPen(isChecked() ? t.textPrimary : t.textSecondary);
+        p.drawText(r.adjusted(0, 0, 0, isChecked() ? -2 : 0),
+                   Qt::AlignCenter, m_letter);
+        // Shape as well as colour identifies an active channel state.
+        if (isChecked()) {
+            p.setPen(QPen(mixColors(m_active, t.textPrimary, 0.45), 1.5,
+                          Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(QPointF(r.center().x() - 3, r.bottom() - 2),
+                       QPointF(r.center().x() + 3, r.bottom() - 2));
+        }
+        if (m_autoMark) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(t.accentHighlight);
+            p.drawEllipse(QPointF(r.right() - 3, r.top() + 3), 1.5, 1.5);
+        }
+        if (hasFocus()) {
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(t.accentHighlight, 1));
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 4, 4);
+        }
+        return;
+    }
     m_pressFade.setTarget(isDown() ? 1.0 : 0.0);
     const double hover = m_hoverFade.value();
     const double press = m_pressFade.value();
@@ -3180,7 +3380,13 @@ InlineNameEdit::InlineNameEdit(const QString& text, QWidget* parent)
     // the end of a long value. An inert track name should show its beginning
     // and clip the tail instead.
     setCursorPosition(0);
-    setToolTip(tr("%1\nDouble-click to rename").arg(text));
+}
+
+void InlineNameEdit::beginEditing() {
+    setReadOnly(false);
+    setFocusPolicy(Qt::StrongFocus);
+    setFocus(Qt::OtherFocusReason);
+    selectAll();
 }
 
 bool InlineNameEdit::event(QEvent* ev) {
@@ -3200,17 +3406,7 @@ bool InlineNameEdit::event(QEvent* ev) {
 
 void InlineNameEdit::mouseDoubleClickEvent(QMouseEvent* ev) {
     if (isReadOnly()) {
-        const int textRight = textMargins().left() +
-                              std::max(8, fontMetrics().horizontalAdvance(text())) +
-                              4;
-        if (ev->position().x() > textRight) {
-            ev->ignore();
-            return;
-        }
-        setReadOnly(false);
-        setFocusPolicy(Qt::StrongFocus);
-        setFocus(Qt::MouseFocusReason);
-        selectAll();
+        ev->ignore();
         return;
     }
     QLineEdit::mouseDoubleClickEvent(ev);
@@ -3243,7 +3439,6 @@ void InlineNameEdit::endEditing() {
     // which moves QLineEdit's cursor back to the end.
     deselect();
     setCursorPosition(0);
-    setToolTip(tr("%1\nDouble-click to rename").arg(text()));
 }
 
 // ── helpers ──
@@ -3288,6 +3483,7 @@ ResizeHandle::ResizeHandle(Qt::Orientation orientation, QWidget* parent)
     setCursor(orientation == Qt::Horizontal ? Qt::SizeVerCursor
                                             : Qt::SizeHorCursor);
     setFocusPolicy(Qt::NoFocus);
+    setMouseTracking(true);
     setAutoFillBackground(false);
     if (parent) parent->installEventFilter(this);
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
@@ -3365,15 +3561,26 @@ void ResizeHandle::mousePressEvent(QMouseEvent* ev) {
 }
 
 void ResizeHandle::mouseMoveEvent(QMouseEvent* ev) {
-    if (!m_dragging || !(ev->buttons() & Qt::LeftButton) || !onDrag) return;
+    if (!(ev->buttons() & Qt::LeftButton)) m_dragging = false;
+    if (!m_dragging || !onDrag) return;
     onDrag(int(along(ev) - m_start));
     ev->accept();
 }
 
 void ResizeHandle::mouseReleaseEvent(QMouseEvent* ev) {
-    if (ev->button() != Qt::LeftButton) return;
+    if (ev->button() != Qt::LeftButton || !m_dragging) return;
     m_dragging = false;
+    // A busy GUI may coalesce the last move. Commit the release position so
+    // every panel finishes at the pointer rather than the previous sample.
+    if (onDrag) onDrag(int(along(ev) - m_start));
     ev->accept();
+}
+
+bool ResizeHandle::event(QEvent* event) {
+    if (event->type() == QEvent::UngrabMouse || event->type() == QEvent::Hide ||
+        event->type() == QEvent::WindowDeactivate)
+        m_dragging = false;
+    return QWidget::event(event);
 }
 
 bool ResizeHandle::eventFilter(QObject* watched, QEvent* event) {
@@ -3394,6 +3601,7 @@ std::string NewTrackSpec::create(daw::EngineController& controller) const {
     if (kind == daw::TrackKind::Folder) return controller.addFolder(summing);
     // All quick-add entry points share the same numbering, including menus.
     const char* format = kind == daw::TrackKind::Midi ? QT_TRANSLATE_NOOP("MainWindow", "MIDI %1")
+                       : kind == daw::TrackKind::Instrument ? QT_TRANSLATE_NOOP("MainWindow", "Instrument %1")
                        : kind == daw::TrackKind::Pattern ? QT_TRANSLATE_NOOP("MainWindow", "Pattern %1")
                        : kind == daw::TrackKind::Aux ? QT_TRANSLATE_NOOP("MainWindow", "Send %1")
                        : QT_TRANSLATE_NOOP("MainWindow", "Audio %1");
@@ -3421,6 +3629,7 @@ QHash<QAction*, NewTrackSpec> addTrackKindItems(QMenu& menu) {
     static const Entry entries[] = {
         {QT_TRANSLATE_NOOP("ui", "Add Audio Track"), {daw::TrackKind::Audio, false}},
         {QT_TRANSLATE_NOOP("ui", "Add MIDI Track"), {daw::TrackKind::Midi, false}},
+        {QT_TRANSLATE_NOOP("ui", "Add Instrument Track"), {daw::TrackKind::Instrument, false}},
         {QT_TRANSLATE_NOOP("ui", "Add Pattern Track"), {daw::TrackKind::Pattern, true}},
         // A lane with no track over it, for curves that drive anything in the
         // project. The per-track lanes are made with A, not from here.

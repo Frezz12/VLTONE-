@@ -177,6 +177,7 @@ struct LocalSessionState {
 
 struct LocalTrackUiState {
     double height = 72.0;
+    double expandedHeight = 72.0;
     bool expanded = true;
     bool automationExpanded = false;
 };

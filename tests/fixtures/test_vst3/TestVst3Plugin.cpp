@@ -20,11 +20,13 @@
 #include <pluginterfaces/base/funknownimpl.h>
 #include <pluginterfaces/base/ibstream.h>
 #include <pluginterfaces/base/ipluginbase.h>
+#include <pluginterfaces/gui/iplugview.h>
 #include <pluginterfaces/vst/ivstaudioprocessor.h>
 #include <pluginterfaces/vst/ivstcomponent.h>
 #include <pluginterfaces/vst/ivstparameterchanges.h>
 #include <pluginterfaces/vst/ivsteditcontroller.h>
 #include <pluginterfaces/vst/ivstevents.h>
+#include <pluginterfaces/vst/ivstnoteexpression.h>
 #include <pluginterfaces/vst/ivstmidicontrollers.h>
 #include <pluginterfaces/vst/ivsthostapplication.h>
 #include <pluginterfaces/vst/ivstmessage.h>
@@ -261,13 +263,14 @@ public:
                 for (int32 i = 0; i < data.inputEvents->getEventCount(); ++i) {
                     Event event{};
                     if (data.inputEvents->getEvent(i, event) != kResultOk) continue;
-                    if (event.type == Event::kNoteOnEvent) m_voice = event.noteOn.velocity;
+                    if (event.type == Event::kNoteOnEvent) {m_voice = event.noteOn.velocity;m_voiceId=event.noteOn.noteId;m_tuning=1;}
+                    if (event.type == Event::kNoteExpressionValueEvent) {if(event.noteExpressionValue.noteId!=m_voiceId||event.noteExpressionValue.typeId!=kTuningTypeID)m_voice=-999;else m_tuning=1+(event.noteExpressionValue.value-.5)*20;}
                     if (event.type == Event::kNoteOffEvent) m_voice = 0.0f;
                 }
             }
             for (int32 ch = 0; ch < m_outputChannels; ++ch) {
                 for (int32 i = 0; i < frames; ++i)
-                    out[ch][i] = m_voice * float(m_gain * m_midiVolume);
+                    out[ch][i] = m_voice * float(m_gain * m_midiVolume * m_tuning);
             }
             return kResultOk;
         }
@@ -400,6 +403,7 @@ private:
     double m_offset = 0.0;
     double m_midiVolume = 1.0;
     bool m_instrument = false;
+    int32 m_voiceId=-1;double m_tuning=1;
     bool m_active = false;
     bool m_eventInputActive = false;
     bool m_audioOutputActive = false;
@@ -412,7 +416,40 @@ private:
 
 // ── Controller ─────────────────────────────────────────────────────────────
 
-class TestController : public U::Implements<U::Directly<IEditController, IMidiMapping,
+// Optional view exercises host ownership without requiring a native display.
+class TestView final : public U::Implements<U::Directly<IPlugView>> {
+public:
+    TestView() { trace("create\n"); }
+    ~TestView() { trace("destroy\n"); }
+    tresult PLUGIN_API isPlatformTypeSupported(FIDString) override { return kResultTrue; }
+    tresult PLUGIN_API attached(void*, FIDString) override { trace("attach\n"); return kResultOk; }
+    tresult PLUGIN_API removed() override { trace("remove\n"); return kResultOk; }
+    tresult PLUGIN_API onWheel(float) override { return kResultFalse; }
+    tresult PLUGIN_API onKeyDown(char16, int16, int16) override { return kResultFalse; }
+    tresult PLUGIN_API onKeyUp(char16, int16, int16) override { return kResultFalse; }
+    tresult PLUGIN_API getSize(ViewRect* size) override {
+        if (!size) return kInvalidArgument;
+        *size = ViewRect(0, 0, 320, 180);
+        return kResultOk;
+    }
+    tresult PLUGIN_API onSize(ViewRect*) override { return kResultOk; }
+    tresult PLUGIN_API onFocus(TBool) override { return kResultOk; }
+    tresult PLUGIN_API setFrame(IPlugFrame*) override { return kResultOk; }
+    tresult PLUGIN_API canResize() override { return kResultFalse; }
+    tresult PLUGIN_API checkSizeConstraint(ViewRect*) override { return kResultOk; }
+private:
+    static void trace(const char* event) {
+        const char* path = std::getenv("DAW_TEST_VST3_EDITOR_TRACE");
+        if (path) {
+            if (auto* file = std::fopen(path, "a")) {
+                std::fputs(event, file);
+                std::fclose(file);
+            }
+        }
+    }
+};
+
+class TestController : public U::Implements<U::Directly<IEditController, IMidiMapping, INoteExpressionController,
                                                         IConnectionPoint>,
                                             U::Indirectly<IPluginBase>> {
 public:
@@ -535,7 +572,16 @@ public:
     }
     // No GUI: the host must fall back to its generic parameter panel, and that
     // fallback needs a plugin that genuinely has no editor to be tested with.
-    IPlugView* PLUGIN_API createView(FIDString) override { return nullptr; }
+    IPlugView* PLUGIN_API createView(FIDString) override {
+        return std::getenv("DAW_TEST_VST3_EDITOR_TRACE") ? new TestView : nullptr;
+    }
+
+    int32 PLUGIN_API getNoteExpressionCount(int32 bus,int16) override {return bus==0?1:0;}
+    tresult PLUGIN_API getNoteExpressionInfo(int32 bus,int16,int32 index,NoteExpressionTypeInfo& info) override {
+        if(bus||index)return kResultFalse;info={};info.typeId=kTuningTypeID;info.valueDesc.defaultValue=.5;info.valueDesc.minimum=0;info.valueDesc.maximum=1;return kResultOk;
+    }
+    tresult PLUGIN_API getNoteExpressionStringByValue(int32,int16,NoteExpressionTypeID,NoteExpressionValue,String128) override {return kResultFalse;}
+    tresult PLUGIN_API getNoteExpressionValueByString(int32,int16,NoteExpressionTypeID,const TChar*,NoteExpressionValue&) override {return kResultFalse;}
 
     tresult PLUGIN_API getMidiControllerAssignment(int32 busIndex, int16,
                                                     CtrlNumber controller,

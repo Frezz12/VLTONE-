@@ -169,7 +169,12 @@ class Voice {
 public:
     void start(int key, int channel, float velocity, float notePan,
                const SamplerSettings& settings, const SampleData& sample,
-               double sampleRate, bool smoothStart = false) noexcept;
+               double sampleRate, bool smoothStart = false, std::int32_t noteId = -1) noexcept;
+    std::int32_t noteId() const noexcept { return m_noteId; }
+    bool hasExplicitPitch() const noexcept { return m_pitch.active; }
+    void setPitch(engine::PitchRamp pitch, double sampleRate, double smoothingMs) noexcept;
+    void setBend(double semitones, double sampleRate, double smoothingMs) noexcept;
+    void retarget(int key, std::int32_t id, double seconds, bool curved, double sampleRate) noexcept;
     /// `cutWhenEnvelopeOff` is the instance's answer to "would this note ever
     /// stop on its own" — true for a looping sample whose amplitude envelope is
     /// switched off, which otherwise sounds forever.
@@ -235,6 +240,14 @@ private:
 
     bool m_active = false;
     int m_key = 60;
+    std::int32_t m_noteId = -1;
+    engine::PitchRamp m_pitch, m_bend;
+    std::uint32_t m_pitchFrame = 0, m_bendFrame = 0;
+    double m_pitchCorrection = 0;
+    std::uint32_t m_correctionFrames = 0, m_correctionRemaining = 0;
+    bool m_rendered = false, m_legato = false;
+    double m_legatoSlideBias = 0, m_legatoSlideSegment = -1e300;
+    double nextPitch() noexcept;
     int m_channel = 0;
     float m_velocity = 1.0f;
     float m_notePan = 0.0f;

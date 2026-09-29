@@ -125,6 +125,7 @@ CloudDocumentProjection projectForCloudSnapshotV1(const ProjectModel& source) {
         track.inputChannelCount = 1;
         track.inputEnabled = false;
         track.height = 72.0;
+        track.expandedHeight = 72.0;
         track.expanded = true;
         track.automationExpanded = false;
 
@@ -214,6 +215,7 @@ bool containsLocalPathOrUiState(const ProjectModel& document,
             track.recordMode != TrackRecordMode::UseGlobal ||
             track.inputEnabled || track.inputChannel != 0 ||
             track.inputChannelCount != 1 || track.height != 72.0 ||
+            track.expandedHeight != 72.0 ||
             !track.expanded || track.automationExpanded) {
             if (firstLocation) *firstLocation = location + "/local-state";
             return true;

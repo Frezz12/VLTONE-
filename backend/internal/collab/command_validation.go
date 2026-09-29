@@ -364,7 +364,7 @@ func deriveCommandMetadataForSchema(kind string, payload json.RawMessage,
 			switch property {
 			case "sidechainTrackIds":
 				add(prefix+"sidechainTrackId", prefix+"generation")
-			case "name", "bypassed", "mix", "channelMode", "sidechainTrackId":
+			case "name", "bypassed", "mix", "channelMode", "sidechainTrackId", "slideDelivery", "slideBendRange", "slideReleaseReserve":
 				add(prefix+property, prefix+"generation")
 			default:
 				return nil, nil, invalidf("plugin property is unsupported")
@@ -415,6 +415,21 @@ func deriveCommandMetadataForSchema(kind string, payload json.RawMessage,
 			return nil, nil, err
 		}
 		add("samplerFx:"+instrumentID+":volume", "samplerFx:"+instrumentID+":pan")
+	case "slide.set":
+		body, err := commandPayloadObject(payload)
+		if err != nil {
+			return nil, nil, err
+		}
+		clipID, err := requiredPayloadUUID(body, "clipId")
+		if err != nil {
+			return nil, nil, err
+		}
+		id, err := requiredPayloadUUID(body, "slideId")
+		if err != nil {
+			return nil, nil, err
+		}
+		add("slide:" + id)
+		addClipDescendants(clipID)
 	case "note.upsert", "note.restore", "note.delete":
 		body, err := commandPayloadObject(payload)
 		if err != nil {
@@ -1062,6 +1077,12 @@ func deriveLifecycleStepsForSchema(kind string, payload json.RawMessage,
 		instrumentID, _ := identifier("instrumentId")
 		addLive("track:", trackID)
 		addLive("plugin:", instrumentID)
+	case "slide.set":
+		if err := parents(false); err != nil {
+			return nil, err
+		}
+		takeID, _ := optionalIdentifier("takeId")
+		addLive("take:", takeID)
 	case "note.upsert":
 		if err := parents(false); err != nil {
 			return nil, err
@@ -1143,8 +1164,11 @@ func deriveLifecycleStepsForSchema(kind string, payload json.RawMessage,
 			return nil, err
 		}
 		target, _ := commandPayloadObject(body["target"])
-		channelID, _ := requiredPayloadUUID(target, "channelId")
-		addLive("track:", channelID)
+		channelID, _ := payloadString(target, "channelId", 64, false)
+		// Master is an always-present engine channel, not a project track UUID.
+		if channelID != "master" {
+			addLive("track:", channelID)
+		}
 	case "take.add":
 		if err := parents(false); err != nil {
 			return nil, err

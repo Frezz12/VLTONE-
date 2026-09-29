@@ -1,5 +1,25 @@
 import { expect, test } from "@playwright/test";
 
+for (const [locale, chapter, title] of [
+  ["ru", "slide-notes", "Слайд-ноты и рисуемая высота"],
+  ["en", "slide-routing", "Slides in plugins: MIDI, MPE and range"],
+  ["ru", "chord-generator", "Генератор аккордов"],
+  ["en", "warp-audio", "Warp: audio timing with markers"],
+]) {
+  test(`manual opens new chapter ${chapter} in ${locale}`, async ({ page }) => {
+    await page.context().addCookies([{ name: "vlt-locale", value: locale, url: "http://127.0.0.1:3100" }]);
+    await page.goto(`/manual#${chapter}`);
+    await expect(page.getByRole("heading", { name: title, exact: true })).toBeInViewport();
+    await expect(page.locator(`#${chapter} .manual-section ol li`)).not.toHaveCount(0);
+    const images = page.locator(`#${chapter} img`);
+    for (const img of await images.all()) {
+      await img.scrollIntoViewIfNeeded();
+      await expect.poll(() => img.evaluate(node => (node as HTMLImageElement).naturalWidth)).toBeGreaterThan(100);
+    }
+    await expect(page.locator(".manual-version")).toContainText("0.3.1");
+  });
+}
+
 test("manual navigation, search, deep links, and locale switch", async ({ page }) => {
   await page.context().addCookies([{ name: "vlt-locale", value: "ru", url: "http://127.0.0.1:3100" }]);
   await page.goto("/manual");

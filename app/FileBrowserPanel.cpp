@@ -9,6 +9,7 @@
 #include "ChannelStripPresets.hpp"
 
 #include "BrowserPrefs.hpp"
+#include <QSettings>
 #include "BrowserSettingsPage.hpp"
 #include "Controls.hpp"
 #include "EngineController.hpp"
@@ -944,11 +945,14 @@ bool FileBrowserPanel::checkSearchForTest(QObject* keyboardTarget) {
         if (!file.open(QIODevice::WriteOnly)) return fail("cannot write fixture");
     }
     const auto savedFolders = ui::browserprefs::folders();
+    const auto savedAiFolders = QSettings().value("browser/aiFolders");
     const auto savedIgnored = ui::browserprefs::ignoredExtensions();
     const auto restore = qScopeGuard([&] {
         m_searchField->clear();
         m_search->cancel();
         ui::browserprefs::setFolders(savedFolders);
+        if (savedAiFolders.isValid()) QSettings().setValue("browser/aiFolders", savedAiFolders);
+        else QSettings().remove("browser/aiFolders");
         ui::browserprefs::setIgnoredExtensions(savedIgnored.join(QLatin1Char(',')));
         reloadSettings();
         activateCollection(savedActiveCollection, false);

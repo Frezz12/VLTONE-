@@ -41,6 +41,7 @@
 #include <QStyle>
 #include <QToolButton>
 #include <QToolTip>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -55,13 +56,10 @@ constexpr int kIndentStep = 14;
 /// and what is left is a square side that meets the timeline with no seam.
 constexpr double kRightOverhang = 12.0;
 
-/// The kind icon's tile. Big enough to be the row's landmark — it is what the
-/// eye finds a track by when the names are all "Audio 4" — and tall enough to
-/// stand beside both the name and the chip strip under it.
+/// Track identity sits beside the name and its small state buttons.
 constexpr int kIconSize = 34;
 
-/// The chips: four of them plus the fader and the pan on one line, so they are
-/// deliberately smaller than the mixer's.
+/// Channel buttons sit below the name; level and pan stay to their right.
 constexpr int kChipW = 19;
 constexpr int kChipH = 15;
 constexpr int kChipGap = 3;
@@ -71,7 +69,6 @@ constexpr int kFaderMin = 68;
 constexpr int kPanWidth = 28;
 constexpr int kPanHeight = 28;
 constexpr int kPartGap = 6;
-constexpr int kFullChipStrip = 4 * kChipW + 3 * kChipGap;
 
 /// Full-height row geometry stays aligned to the timeline, while the painted
 /// inset surface gives each channel a modern card silhouette and breathing
@@ -153,7 +150,8 @@ protected:
                                       m_primary ? 0.75 : 0.45)
                           : mixColors(t.separator(), t.surfaceElevated, 0.20);
         p.setPen(QPen(edge, m_selected ? 1.35 : 1.0));
-        p.drawRoundedRect(card, 8.0, 8.0);
+        const qreal radius = height() < 44 ? 4.0 : Theme::cornerRadius;
+        p.drawRoundedRect(card, radius, radius);
 
         if (m_primary) {
             QColor shine = mixColors(wash, t.textPrimary, 0.25);
@@ -223,6 +221,8 @@ public:
     void makeDisclosure(bool expanded) {
         m_disclosure = true;
         m_expanded = expanded;
+        setCheckable(true);
+        setChecked(expanded);
         setAttribute(Qt::WA_TransparentForMouseEvents, false);
         setCursor(Qt::PointingHandCursor);
     }
@@ -244,37 +244,41 @@ protected:
         fill.setAlpha(t.dark ? 46 : 34);
         p.setPen(QPen(mixColors(m_color, t.background, t.dark ? 0.55 : 0.35), 1.0));
         p.setBrush(fill);
-        p.drawRoundedRect(tile, 8.0, 8.0);
+        p.drawRoundedRect(tile, 6.0, 6.0);
 
         // The glyphs are drawn on a 24-unit grid; give this one the tile minus
         // its padding so a bigger tile means a bigger icon, not more air.
         const QColor ink = mixColors(m_color, t.textPrimary, 0.30);
         const QIcon chosen = ui::trackicons::icon(m_iconId, ink);
-        const QRect glyphRect = tile.adjusted(5, 5, -5, -5).toAlignedRect();
+        const int inset = width() > 24 ? 5 : 3;
+        const QRect glyphRect = tile.adjusted(inset, inset, -inset, -inset).toAlignedRect();
         if (chosen.isNull()) icons::paint(p, m_glyph, glyphRect, ink);
         else chosen.paint(&p, glyphRect);
         if (hasFocus() || underMouse()) {
             p.setPen(QPen(hasFocus() ? t.accentHighlight : ink, 1));
             p.setBrush(Qt::NoBrush);
-            p.drawRoundedRect(tile, 8, 8);
+            p.drawRoundedRect(tile, 6, 6);
         }
 
         if (!m_disclosure) return;
         // A chevron tucked into the corner: this tile opens and closes. It sits
         // on a disc of the row's own colour, so it stays a legible badge over
         // whatever part of the folder glyph happens to be under it.
-        const QPointF centre(tile.right() - 5.5, tile.bottom() - 5.0);
+        const QPointF centre(tile.right() - 4.0, tile.bottom() - 4.0);
         p.setPen(Qt::NoPen);
         p.setBrush(mixColors(t.surface, m_color, 0.16));
-        p.drawEllipse(centre, 6.0, 6.0);
+        p.drawEllipse(centre, 4.5, 4.5);
         QPen pen(mixColors(m_color, t.textPrimary, 0.55), 1.6);
         pen.setCapStyle(Qt::RoundCap);
         pen.setJoinStyle(Qt::RoundJoin);
         p.setPen(pen);
         p.setBrush(Qt::NoBrush);
-        const double dy = m_expanded ? 1.6 : -1.6;
-        p.drawPolyline(QPolygonF({centre + QPointF(-3.2, -dy), centre,
-                                  centre + QPointF(3.2, -dy)}));
+        if (m_expanded)
+            p.drawPolyline(QPolygonF({centre + QPointF(-2.3, -1.0),
+                centre + QPointF(0, 1.3), centre + QPointF(2.3, -1.0)}));
+        else
+            p.drawPolyline(QPolygonF({centre + QPointF(-1.0, -2.3),
+                centre + QPointF(1.3, 0), centre + QPointF(-1.0, 2.3)}));
     }
 
 private:
@@ -404,6 +408,11 @@ TrackListWidget::TrackListWidget(daw::EngineController* controller,
                                      tr("Unmute every track"), m_ruler);
     m_clearSolos = new ui::MsrButton("S", Theme::solo(),
                                      tr("Clear every solo"), m_ruler);
+    for (auto* chip : {m_clearMutes, m_clearSolos}) {
+        chip->setProperty("consoleButton", true);
+        chip->setChipSize(22, 22);
+        chip->setFocusPolicy(Qt::StrongFocus);
+    }
     m_clearMutes->setObjectName(QStringLiteral("ClearAllMutesButton"));
     m_clearSolos->setObjectName(QStringLiteral("ClearAllSolosButton"));
     m_clearMutes->setAccessibleName(tr("Unmute every track"));
@@ -540,10 +549,11 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
 
     auto* name = new ui::InlineNameEdit(QString::fromStdString(track.name),
                                         container);
+    name->setToolTip(QString::fromStdString(track.name));
     name->setProperty("trackId", id);
     name->setProperty("trackSelectionOnly", true);
     name->installEventFilter(this);
-    name->setMinimumWidth(40);
+    name->setMinimumWidth(20);
     name->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     connect(name, &QLineEdit::editingFinished, this, [this, id, name] {
         const auto result = m_controller->renameTrack(
@@ -561,6 +571,9 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
                           const QString& tip) {
         auto* b = new ui::MsrButton(letter, active, tip, container);
         b->setChipSize(kChipW, kChipH);
+        b->setProperty("consoleButton", true);
+        b->setAccessibleName(tip);
+        b->setFocusPolicy(Qt::StrongFocus);
         return b;
     };
 
@@ -633,6 +646,7 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
     ui::MsrButton* patternButton = nullptr;
     if (pattern) {
         patternButton = chip("P", color, tr("Open Pattern editor"));
+        patternButton->setCheckable(false);
         patternButton->setAccessibleName(tr("Open Pattern editor"));
         connect(patternButton, &QAbstractButton::clicked, this,
                 [this, id] { emit openPatternRequested(id); });
@@ -709,56 +723,27 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
         meter->setFixedWidth(5);
     }
 
-    // The name over the chips, with the icon standing beside both of them —
-    // one line for the whole channel instead of the old two-row stack.
-    auto* stack = new QVBoxLayout;
-    stack->setContentsMargins(0, 0, 0, 0);
-    stack->setSpacing(2);
-    stack->addStretch(1);
-    stack->addWidget(name);
-    if (!automationLane && (!folder || channel)) stack->addWidget(chips);
-    stack->addStretch(1);
-
-    // The controls live in a band of their own, centred in the row: a lane can
-    // be dragged taller or grown by an open take stack, and the channel's name
-    // and fader belong in the middle of whatever height it ends up with. The
-    // colour rail and the meter stay outside the band, so they run the row's
-    // full height and mark the lane rather than the controls.
+    // Keep the same controls alive in both sizes. Only their geometry changes,
+    // so keyboard focus and an in-progress channel gesture survive resizing.
     auto* band = new QWidget(container);
     band->setObjectName(QStringLiteral("TrackRowBand"));
     band->setProperty("trackId", id);
+    band->setProperty("trackFreeAreaOnly", true);
     band->setMouseTracking(true);
-    band->setMaximumHeight(ui::kLaneHeight);
-    auto* h = new QHBoxLayout(band);
-    h->setContentsMargins(0, 0, 0, 0);
-    h->setSpacing(kPartGap);
-    h->addWidget(icon, 0, Qt::AlignVCenter);
-    h->addLayout(stack, 1);
-    if (folder && !channel) {
-        // Nothing to fade and nothing to pan: the two chips take the place the
-        // fader would have had, pinned right and centred on the row.
-        auto* count = new QLabel(band);
+    band->installEventFilter(this);
+    for (QWidget* control : std::initializer_list<QWidget*>{icon, name, chips, fader, pan}) {
+        if (control) control->setParent(band);
+    }
+    QLabel* count = nullptr;
+    if (folder) {
+        count = new QLabel(band);
         count->setProperty("trackId", id);
-        count->setMouseTracking(true);
         count->installEventFilter(this);
         count->setObjectName("FolderCount");
         count->setText(QString::number(
             daw::subtreeOf(m_controller->project(), track.id).size()));
         count->setToolTip(tr("Tracks in this folder"));
-        h->addWidget(count, 0, Qt::AlignVCenter);
-        h->addWidget(chips, 0, Qt::AlignVCenter);
-        const int chipCount = patternButton ? 3 : 2;
-        chips->setFixedWidth(chipCount * kChipW +
-                             (chipCount - 1) * kChipGap);
-    } else if (fader && pan) {
-        h->addWidget(fader, 2);
-        h->addWidget(pan, 0, Qt::AlignVCenter);
-    } else {
-        // An automation lane: no channel, so no fader and no pan to lay out.
-        // What it drives is its name. Mute and Solo are channel states and have
-        // no meaning on a curve lane, so the header deliberately ends cleanly.
-        h->addStretch(1);
-        chips->hide();
+        count->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     }
 
     auto* bandColumn = new QVBoxLayout;
@@ -780,7 +765,7 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
 
     m_rows.push_back({track.id, folder, channel, depth, container, colorBar,
                       icon, fader, pan, meter, mute, solo, monitor, record,
-                      patternButton, name});
+                      patternButton, name, band, chips, count});
     m_rows.back().kind = int(track.kind);
     applyRowAdaptivity(m_rows.back());
     return container;
@@ -801,6 +786,7 @@ void TrackListWidget::syncTrackValues(const QStringList& trackIds) {
             name && !name->hasFocus() && row.displayedName != t->name) {
             QSignalBlocker block(name);
             name->setText(QString::fromStdString(t->name));
+            name->setToolTip(QString::fromStdString(t->name) + QLatin1Char('\n') + row.band->toolTip());
             row.displayedName = t->name;
             row.icon->setAccessibleName(tr("Icon for %1").arg(QString::fromStdString(t->name)));
         }
@@ -994,53 +980,104 @@ void TrackListWidget::refreshMeters() {
 
 void TrackListWidget::syncRowHeights() { layoutRows(); }
 
-void TrackListWidget::applyRowAdaptivity(const Row& row) {
-    if (!row.fader) return;
-    // Everything on the row that cannot give up a pixel, so what is left is
-    // what the name, the fader and the pan have to share.
-    const int width = m_rowsHost && m_rowsHost->width() > 0
-                          ? m_rowsHost->width()
-                          : ui::kTrackHeaderWidth;
-    int chipCount = 0;
-    for (const QWidget* chip : {static_cast<QWidget*>(row.mute),
-                                static_cast<QWidget*>(row.solo),
-                                static_cast<QWidget*>(row.pattern),
-                                static_cast<QWidget*>(row.monitor),
-                                static_cast<QWidget*>(row.record)}) {
-        if (chip && !chip->isHidden()) ++chipCount;
+void TrackListWidget::toggleCompactRows(const QString& id) {
+    const auto* source = m_controller->project().findTrack(id.toStdString());
+    if (!source) return;
+    const bool minimize = ui::laneHeightFor(source->height) > ui::kCompactLaneHeight;
+    std::vector<std::pair<std::string, double>> before;
+    for (const auto& target : actionTargets(id)) {
+        const auto* track = m_controller->project().findTrack(target);
+        if (!track) continue;
+        // Mixed selections follow the clicked row, and already minimized rows
+        // retain their own restore size.
+        const bool compact = ui::laneHeightFor(track->height) <= ui::kCompactLaneHeight;
+        if (compact == minimize) continue;
+        before.emplace_back(target, track->height);
+        const int restore = ui::laneHeightFor(track->expandedHeight);
+        m_controller->setTrackHeight(target, minimize ? ui::kCompactLaneHeight
+            : restore > ui::kCompactLaneHeight ? restore : ui::kLaneHeight);
     }
-    const int stackMin = std::max(
-        40, chipCount > 0 ? chipCount * kChipW + (chipCount - 1) * kChipGap
-                          : 0);
+    m_controller->commitTrackHeightEdit(before);
+    layoutRows();
+    emit trackHeightChanged();
+}
 
-    // When the normal throw no longer fits, level and pan both stay reachable
-    // as a compact pair of round controls.
-    constexpr int kCompactFaderSide = 24;
-    const int fixed = 4 /*left margin*/ + 6 /*colour rail*/ + kIconSize +
-                      (row.meter ? row.meter->width() : 0) + 4 * kPartGap;
-    // Deep folder nesting must not push level/pan out of reach. Indentation
-    // gives up space before channel controls do; wider columns restore it.
-    const int compactPair = stackMin + 2 * kPartGap + kCompactFaderSide + kPanWidth;
-    const int indent = std::min(row.depth * kIndentStep, std::max(0, width - fixed - compactPair));
+void TrackListWidget::applyRowAdaptivity(const Row& row) {
+    if (!row.container || !row.band) return;
+    const auto* track = m_controller->project().findTrack(row.id);
+    if (!track) return;
+    const int baseHeight = ui::laneHeightFor(track->height);
+    const bool singleLine = baseHeight < 44;
+    const bool compact = baseHeight <= ui::kCompactLaneHeight;
+    const int bandHeight = singleLine ? baseHeight : 50;
+    row.band->setFixedHeight(std::min(bandHeight, row.container->height()));
+    // Give indentation back before hiding a control in a narrow header.
+    const int indent = std::min(row.depth * kIndentStep,
+        std::max(0, row.container->width() - ui::kMinTrackHeaderWidth));
     if (auto* spacer = row.container->layout()->itemAt(0)->spacerItem();
         spacer && spacer->sizeHint().width() != indent) {
         spacer->changeSize(indent, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
         row.container->layout()->invalidate();
     }
-    const int flexible = width - fixed - indent;
-    // Compact before the full throw would squeeze the pan off the row.
-    const bool normalFader = flexible >= kFullChipStrip + kPartGap + kFaderMin +
-        (row.pan ? kPartGap + kPanWidth : 0);
-    const bool showFader = normalFader ||
-        flexible >= kFullChipStrip + kPartGap + kCompactFaderSide;
-    const bool showPan =
-        normalFader
-            ? flexible >= kFullChipStrip + 2 * kPartGap + kFaderMin + kPanWidth
-            : flexible >= stackMin + 2 * kPartGap +
-                              kCompactFaderSide + kPanWidth;
-    row.fader->setCompactKnob(showFader && !normalFader);
-    row.fader->setVisible(showFader);
-    if (row.pan) row.pan->setVisible(showPan);
+    row.container->layout()->activate();
+    const int w = row.band->width();
+    const int h = row.band->height();
+    const int iconSide = singleLine ? 20 : kIconSize;
+    const int buttonWidth = singleLine ? 20 : kChipW;
+    const int buttonHeight = singleLine ? 20 : kChipH;
+    const int lineY = (h - 20) / 2;
+    row.icon->setFixedSize(iconSide, iconSide);
+    row.icon->move(0, (h - iconSide) / 2);
+    const QString tip = compact ? tr("Double-click to restore track height")
+                                : tr("Double-click to minimize track");
+    row.band->setToolTip(tip);
+    row.nameEdit->setToolTip(QString::fromStdString(track->name) + QLatin1Char('\n') + tip);
+
+    int chipCount = 0;
+    for (ui::MsrButton* chip : {row.mute, row.solo, row.pattern, row.monitor, row.record}) {
+        if (!chip) continue;
+        const bool visible = chip == row.record ? m_recordEngaged
+            : chip == row.monitor ? !singleLine : true;
+        chip->setVisible(visible);
+        chip->setChipSize(buttonWidth, buttonHeight);
+        if (visible) ++chipCount;
+    }
+    const int chipWidth = chipCount ? chipCount * buttonWidth + (chipCount - 1) * kChipGap : 0;
+    row.chips->setVisible(chipCount > 0);
+    const int nameX = iconSide + kPartGap;
+    if (row.fader) row.fader->setVisible(!singleLine);
+    if (row.pan) row.pan->setVisible(!singleLine);
+    if (row.count) row.count->setVisible(!singleLine && !row.hasChannel);
+    if (singleLine) {
+        const int chipsX = w - chipWidth;
+        row.chips->setGeometry(chipsX, lineY, chipWidth, 20);
+        row.nameEdit->setGeometry(nameX, lineY, std::max(20, chipsX - kPartGap - nameX), 20);
+    } else if (row.fader) {
+        // Original channel arrangement: icon, name over small state buttons,
+        // then a centred horizontal level control and pan on the same line.
+        const int stackMin = std::max(40, chipWidth);
+        const int available = w - nameX - 2 * kPartGap - kPanWidth;
+        const bool knob = available < stackMin + kFaderMin;
+        const int stackWidth = knob ? available - 24
+            : std::clamp(w * 3 / 10, stackMin, available - kFaderMin);
+        const int nameY = (h - (20 + 1 + kChipH)) / 2;
+        row.nameEdit->setGeometry(nameX, nameY, std::max(20, stackWidth), 20);
+        row.chips->setGeometry(nameX, nameY + 21, chipWidth, kChipH);
+        const int faderX = nameX + stackWidth + kPartGap;
+        row.fader->setCompactKnob(knob);
+        row.fader->setGeometry(faderX, (h - (knob ? 24 : 22)) / 2,
+                              knob ? 24 : available - stackWidth, knob ? 24 : 22);
+        row.pan->move(w - kPanWidth, (h - kPanHeight) / 2);
+    } else {
+        // Plain folders keep their count and M/S at the right, as before.
+        const int chipsX = w - chipWidth;
+        const int countWidth = row.count ? 20 : 0;
+        const int nameRight = chipsX - (chipCount ? kPartGap : 0) - countWidth;
+        row.nameEdit->setGeometry(nameX, lineY, std::max(20, nameRight - nameX), 20);
+        row.chips->setGeometry(chipsX, (h - kChipH) / 2, chipWidth, kChipH);
+        if (row.count) row.count->setGeometry(nameRight, lineY, countWidth - 4, 20);
+    }
+    row.chips->layout()->activate();
 }
 
 /// A row's rectangle in the column's own coordinates. The rows sit on a host
@@ -2005,16 +2042,46 @@ bool TrackListWidget::eventFilter(QObject* obj, QEvent* ev) {
     const QVariant id = w->property("trackId");
     if (!id.isValid()) return QWidget::eventFilter(obj, ev);
 
+    // Layouts may deliver the band's final width only when its hidden row is
+    // first shown. Reflow on that geometry event as well as on column resize.
+    if (ev->type() == QEvent::Resize && w->objectName() == QLatin1String("TrackRowBand")) {
+        const int index = rowIndexOf(id.toString());
+        if (index >= 0) applyRowAdaptivity(m_rows[std::size_t(index)]);
+        return QWidget::eventFilter(obj, ev);
+    }
+
+    // Empty header space and an idle name share one size gesture. Check the
+    // actual hit area because a control can ignore a double-click and let it
+    // bubble through the band and row; resetting pan must never resize a track.
+    if (ev->type() == QEvent::MouseButtonDblClick) {
+        auto* mouse = static_cast<QMouseEvent*>(ev);
+        const auto* name = qobject_cast<QLineEdit*>(w);
+        const QPoint local = w->mapFromGlobal(mouse->globalPosition().toPoint());
+        if (mouse->button() == Qt::LeftButton && (!name || name->isReadOnly()) &&
+            w->rect().contains(local) && !w->childAt(local)) {
+            m_pressing = false;
+            m_dragging = false;
+            toggleCompactRows(id.toString());
+            mouse->accept();
+            return true;
+        }
+    }
+
     // Text entry still owns its caret and selection gestures, but clicking the
     // track name must first establish the same row context as clicking any
     // other non-control part of the header.
     if (w->property("trackSelectionOnly").toBool()) {
-        if (ev->type() == QEvent::MouseButtonPress) {
+        const auto* name = qobject_cast<QLineEdit*>(w);
+        const bool editing = name && !name->isReadOnly();
+        if (ev->type() == QEvent::MouseButtonPress && !editing) {
             auto* mouse = static_cast<QMouseEvent*>(ev);
             if (mouse->button() == Qt::LeftButton)
                 clickSelect(id.toString(), mouse->modifiers());
         }
-        return QWidget::eventFilter(obj, ev);
+        // An idle name opens the track menu, including Rename. During an edit
+        // QLineEdit keeps its text-specific context menu.
+        if (ev->type() != QEvent::ContextMenu || editing)
+            return QWidget::eventFilter(obj, ev);
     }
 
     // Mouse events ignored by a real control can bubble into its parent. The
@@ -2299,6 +2366,26 @@ void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
     const bool isPattern = track->kind == daw::TrackKind::Pattern;
     const bool channel = daw::carriesAudio(*track);
     const int selected = int(m_selectedIds.size());
+
+    auto* renameAction = menu.addAction(tr("Rename Track…"));
+    renameAction->setObjectName(QStringLiteral("track.rename"));
+    connect(renameAction, &QAction::triggered, this, [this, id] {
+        // QMenu restores the previous focus after its action fires. Begin the
+        // edit after that restoration, otherwise focusOut commits it at once.
+        QTimer::singleShot(0, this, [this, id] {
+            const int index = rowIndexOf(id);
+            if (index >= 0)
+                if (auto* name = qobject_cast<ui::InlineNameEdit*>(m_rows[std::size_t(index)].nameEdit))
+                    name->beginEditing();
+        });
+    });
+    auto* compactAction = menu.addAction(
+        ui::laneHeightFor(track->height) <= ui::kCompactLaneHeight
+            ? tr("Restore track height") : tr("Minimize track"));
+    compactAction->setObjectName(QStringLiteral("track.toggleCompact"));
+    connect(compactAction, &QAction::triggered, this,
+            [this, id] { toggleCompactRows(id); });
+    menu.addSeparator();
 
     QAction* sharedPlugins = nullptr;
     if (selected > 1 && m_selectedIds.contains(id)) {

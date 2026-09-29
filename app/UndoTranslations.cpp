@@ -7,6 +7,10 @@ namespace ui {
 namespace {
 
 [[maybe_unused]] const char* const kUndoCommandNames[] = {
+    QT_TRANSLATE_NOOP("UndoCommands", "Edit Slide Notes"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Set Slide Delivery"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Extend Slide Base Notes"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Align Warp Timing"),
     QT_TRANSLATE_NOOP("UndoCommands", "Strip Silence"),
     QT_TRANSLATE_NOOP("UndoCommands", "Save Clip to Library"),
     QT_TRANSLATE_NOOP("UndoCommands", "Rename Library Clip"),

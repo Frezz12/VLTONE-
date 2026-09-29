@@ -87,6 +87,7 @@ struct Attachment {
     int sampleRate = 0;
     int channels = 0;
     std::string contentId;
+    bool folder = false;
 };
 
 /// What the user is looking at.
@@ -128,6 +129,7 @@ struct ToolContext {
         searchCommands;
     std::function<bool(const std::string&, InteractionMode, std::string&)>
         invokeCommand;
+    std::function<nlohmann::json()> uiContext;
     std::vector<Attachment> attachments;
     /// The instructions in force: the main prompt and the playbooks the model
     /// may load. Null means the text compiled into this build, which is what a

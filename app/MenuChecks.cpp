@@ -119,14 +119,19 @@ bool MainWindow::checkCommandMenusForTest() {
         QMenu actions;
         roll.populateActionsMenu(actions);
         QPointer<QAction> leaf;
-        if (!actions.actions().isEmpty() && actions.actions().front()->menu()) {
-            for (auto* action : actions.actions().front()->menu()->actions()) {
+        if (auto* edit = find(&actions, "PianoRollWindow", "Edit"); edit && edit->menu()) {
+            for (auto* action : edit->menu()->actions()) {
                 if (!action->isSeparator() && !action->menu()) { leaf = action; break; }
             }
         }
-        ui::clearMenu(actions);
-        roll.populateActionsMenu(actions);
-        check(leaf && !actions.isEmpty(),
+        check(leaf, "editor Edit menu exposes an editor-owned action");
+        for (int i = 0; i < 3; ++i) {
+            ui::clearMenu(actions);
+            roll.populateActionsMenu(actions);
+        }
+        auto* reopenedEdit = find(&actions, "PianoRollWindow", "Edit");
+        check(leaf && reopenedEdit && reopenedEdit->menu() &&
+              reopenedEdit->menu()->actions().contains(leaf.data()),
               "reopening editor menus preserves the editor-owned actions");
     }
 

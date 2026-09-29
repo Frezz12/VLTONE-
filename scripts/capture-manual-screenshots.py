@@ -123,7 +123,8 @@ def main() -> None:
                 prefs.mkdir(parents=True)
                 environment = {key: value for key, value in os.environ.items() if not key.startswith("DAW_SHOT_")}
                 environment.update({
-                    "QT_QPA_PLATFORM": "offscreen",
+                    "QT_QPA_PLATFORM": "offscreen:configfile=" + os.path.relpath(ROOT / "scripts/screenshot-screen.json", executable.parent),
+                    "VLT_GPU_WORKSPACE": "0",
                     "QT_SCALE_FACTOR": "1",
                     "DAW_PREF_DIR": str(prefs),
                     "DAW_SHOT_SIZE": "1440x1200",

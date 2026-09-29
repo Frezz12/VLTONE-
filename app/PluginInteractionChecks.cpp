@@ -255,12 +255,17 @@ bool MainWindow::checkPluginSidechainForTest() {
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QApplication::sendEvent(menu, &escape); wait(40);
     check(!menu->isVisible(), "Escape closes");
+    controller.renameTrack(snare, "Snare renamed");
+    editor->pollForTest();
+    check(combo->toolTip().contains("Snare renamed"), "closed header refreshes selected source names");
+    const auto added = controller.addTrack(daw::TrackKind::Audio, "Added after editor opened");
     combo->showPopup(); wait(40);
+    check(actionFor(added) != nullptr, "opening picker discovers newly added tracks");
     check(click(actionFor({})) && selected().empty() && menu->isVisible(), "Off clears all sources");
     menu->hide();
     std::fprintf(stderr, "%s multi-sidechain UI: pointer, persistent popup, keyboard, undo/redo, 28px header\n", ok ? "PASS" : "FAIL");
     editor->close(); wait(40);
-    for (const auto& id : {track, kick, snare, percussion}) controller.removeTrack(id);
+    for (const auto& id : {track, kick, snare, percussion, added}) controller.removeTrack(id);
     return ok;
 }
 

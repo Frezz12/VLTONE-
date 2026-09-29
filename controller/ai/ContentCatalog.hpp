@@ -68,6 +68,8 @@ struct ContentItem {
     std::uintmax_t sizeBytes = 0;
     std::optional<AudioContentMetadata> audio;
     std::optional<MidiContentMetadata> midi;
+    /// User-granted root name and relative subfolder, without an absolute path.
+    std::string location;
 };
 
 struct BrowserGrantReport {
@@ -136,7 +138,7 @@ public:
     std::vector<ContentItem> search(
         std::string_view query = {},
         std::optional<ContentType> type = std::nullopt,
-        std::size_t limit = 40) const;
+        std::size_t limit = 40, std::string_view withinFolder = {}) const;
 
     /// Trusted native-code boundary. Returns no path when the id is unknown,
     /// its grant was revoked, or its target now resolves outside a grant.

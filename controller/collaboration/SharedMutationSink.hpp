@@ -43,6 +43,7 @@ public:
     virtual ~SharedMutationSink() = default;
 
     virtual bool handlesCloudBinding() = 0;
+    virtual std::uint32_t commandSchemaVersion() const noexcept { return kProjectCommandSchemaVersion; }
     virtual SharedMutationResult submit(SharedMutationRequest request) = 0;
 
     virtual SharedMutationResult setTimeSignature(int numerator,

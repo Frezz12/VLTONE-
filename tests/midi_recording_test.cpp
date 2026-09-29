@@ -465,7 +465,38 @@ int main() {
     offsetClip.offsetSeconds = .5;
     sliceMidiClipContent(offsetClip, 1, 2, 120, false);
     check(offsetClip.offsetSeconds == 0 && offsetClip.notes.front().lengthBeats == 2,
-          "MIDI slicing preserves clip-relative timing independently of audio offset metadata");
+          "MIDI slicing rebases a range from the trimmed visible head");
+    auto trimmed = original;
+    trimmed.startSeconds = 1;
+    trimmed.offsetSeconds = 1;
+    trimmed.durationSeconds = 3;
+    ControllerLane sustain;
+    sustain.id = newUuid(); sustain.cc = 64;
+    sustain.points = {{0, 1, AutomationSegment::Hold}, {4, 0}};
+    trimmed.lanes.push_back(sustain);
+    TrackModel trimmedTrack;
+    trimmedTrack.clips.push_back(trimmed);
+    const auto audible = midiPlaybackClips(trimmedTrack, 120);
+    check(audible.size() == 1 && audible[0].startSeconds == 1 &&
+              audible[0].offsetSeconds == 0 && audible[0].notes.size() == 1 &&
+              audible[0].notes[0].startBeats == 0 && audible[0].notes[0].lengthBeats == 6 &&
+              audible[0].lanes[0].defaultValue == 1 &&
+              audible[0].lanes[0].points.back().beats == 2 &&
+              trimmedTrack.clips[0].notes[0].lengthBeats == 8,
+          "left trim chases held notes and controllers without mutating the MIDI source");
+    auto trimmedComp = layered[0];
+    trimmedComp.startSeconds = 1; trimmedComp.offsetSeconds = 1; trimmedComp.durationSeconds = 2;
+    normalizeComp(trimmedComp);
+    trimmedTrack.clips = {trimmedComp};
+    const auto compParts = midiPlaybackClips(trimmedTrack, 120);
+    check(!compParts.empty() && compParts.front().startSeconds == 1 &&
+              compParts.back().startSeconds + compParts.back().durationSeconds == 3,
+          "left-trimmed MIDI comp keeps its original timeline placement");
+    auto retimedTrim = trimmed;
+    retimeClipToTempo(retimedTrim, 2);
+    check(retimedTrim.offsetSeconds == 2 && retimedTrim.durationSeconds == 6 &&
+              retimedTrim.notes == trimmed.notes,
+          "tempo changes retain the trimmed source boundary in musical time");
 
     {
         EngineController patternController;

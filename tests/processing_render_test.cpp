@@ -225,6 +225,110 @@ int main() {
                   rmsFile(report.outputs.front().filePath) > 0.01,
               "standalone MIDI bounce renders the instrument sound");
     }
+    // Four selected MIDI channels are one render through their shared bus,
+    // with clip/track isolation and an atomic, reversible source replacement.
+    for (const bool selectClips : {false, true}) {
+        daw::EngineController controller;
+        check(controller.initialize(48000, 256, false).isOk(),
+              "combined MIDI bounce initializes headless");
+        controller.setRecordDirectory(dir.string());
+        const auto bus = controller.addTrack(daw::TrackKind::Bus, "Shared bus");
+        const auto compressor = controller.pluginManager().find(
+            daw::plugins::Format::Internal, "daw.compressor");
+        check(compressor && !controller.addInsert(bus, *compressor).empty(),
+              "combined MIDI sources have a shared compressor");
+        daw::EngineController::BounceRequest request;
+        request.startSeconds = 0.3;
+        request.endSeconds = 0.45;
+        request.destination = selectClips
+            ? daw::EngineController::BounceDestination::Replace
+            : daw::EngineController::BounceDestination::NewTrack;
+        std::vector<daw::EngineController::ClipAddress> sources;
+        for (int index = 0; index < 4; ++index) {
+            const auto track = controller.addTrack(daw::TrackKind::Midi,
+                                                  "MIDI " + std::to_string(index + 1));
+            check(controller.loadInstrumentSampler(track, tone), "combined MIDI instrument loads");
+            controller.setTrackOutputBus(track, bus);
+            controller.setTrackVolume(track, 0.4f + 0.1f * index);
+            controller.setTrackPan(track, -0.6f + 0.4f * index);
+            const auto clip = controller.addMidiClip(track, 0.25, 0.5);
+            controller.addNote(track, clip, 60 + index * 2, 0, 0.5, 100);
+            sources.push_back({track, clip});
+            if (selectClips) request.clips.push_back({track, clip});
+            else request.tracks.push_back(track);
+        }
+        const auto other = controller.addTrack(daw::TrackKind::Midi, "Unselected");
+        controller.loadInstrumentSampler(other, tone);
+        const auto otherClip = controller.addMidiClip(other, 0.25, 0.5);
+        controller.addNote(other, otherClip, 72, 0, 0.5, 127);
+        std::string extraClip;
+        if (selectClips) {
+            extraClip = controller.addMidiClip(sources.front().trackId, 0.25, 0.5);
+            controller.addNote(sources.front().trackId, extraClip, 76, 0, 0.5, 127);
+        }
+        daw::rendering::Spec reference;
+        reference.outputDir = dir.string();
+        reference.baseName = selectClips ? "selected-clips" : "selected-tracks";
+        reference.file.encoding = audio::platform::Encoding::Float32;
+        reference.range = daw::rendering::Range::Custom;
+        reference.customStartSeconds = request.startSeconds;
+        reference.customEndSeconds = request.endSeconds;
+        reference.preRollSeconds = request.startSeconds;
+        reference.bypassSends = true;
+        reference.bypassMasterChain = true;
+        reference.sourceTrackIds = request.tracks;
+        for (const auto& source : request.clips) reference.sourceClipIds.push_back(source.clipId);
+        daw::rendering::Report referenceReport;
+        check(controller.renderProject(reference, {}, referenceReport).isOk() &&
+              referenceReport.files.size() == 1,
+              "selected MIDI mix renders as a reference");
+        const auto count = controller.project().tracks.size();
+        const auto mark = controller.undoDepth();
+        daw::EngineController::BounceReport cancelled;
+        check(controller.bounceInPlace(request, [](const auto&) { return false; }, cancelled).isOk() &&
+              cancelled.cancelled && cancelled.outputs.empty() &&
+              controller.project().tracks.size() == count && controller.undoDepth() == mark,
+              "cancelling a combined bounce changes no tracks or history");
+        daw::EngineController::BounceReport report;
+        if (!check(controller.bounceInPlace(request, {}, report).isOk() &&
+                   report.outputs.size() == 1 && controller.project().tracks.size() == count + 1,
+                   "four selected MIDI sources create exactly one audio track and file")) continue;
+        const auto& output = report.outputs.front();
+        const auto* destination = controller.project().findTrack(output.destinationTrackId);
+        const auto* clip = findClip(controller, output.destinationTrackId, output.clipId);
+        check(destination && destination->kind == daw::TrackKind::Audio && destination->clips.size() == 1 &&
+              destination->outputBusId.empty() && destination->volume == 1 && destination->pan == 0 &&
+              clip && !clip->playbackInjection.active() && std::abs(clip->startSeconds - 0.3) < 1e-6,
+              "the common audio clip has its own unity channel and the selected start time");
+        audio::platform::DecodedAudio expected, actual;
+        bool identical = !referenceReport.files.empty() &&
+            audio::platform::decodeAudioFile(referenceReport.files.front(), expected).isOk() &&
+            audio::platform::decodeAudioFile(output.filePath, actual).isOk() &&
+            expected.channels == actual.channels && expected.interleaved.size() == actual.interleaved.size();
+        double error = 0;
+        if (identical) for (std::size_t index = 0; index < expected.interleaved.size(); ++index)
+            error = std::max(error, std::abs(double(expected.interleaved[index]) - actual.interleaved[index]));
+        check(identical && error < 2e-5 && rmsFile(output.filePath) > 0.01,
+              "one bounce matches the selected stereo mix through the shared effect, without other sources");
+        for (const auto& source : sources) {
+            const auto* track = controller.project().findTrack(source.trackId);
+            check(track && std::count_if(track->clips.begin(), track->clips.end(),
+                [](const auto& item) { return item.muted; }) == 1,
+                "only the rendered region of each selected MIDI source is muted");
+        }
+        check(findClip(controller, other, otherClip) && !findClip(controller, other, otherClip)->muted &&
+              (extraClip.empty() || !findClip(controller, sources.front().trackId, extraClip)->muted),
+              "unselected tracks and overlapping unselected clips remain unchanged");
+        check(controller.undoDepth() == mark + 1, "combined bounce is one undo action");
+        controller.undo();
+        check(!controller.project().findTrack(output.destinationTrackId) &&
+              findClip(controller, sources.front().trackId, sources.front().clipId) &&
+              !findClip(controller, sources.front().trackId, sources.front().clipId)->muted,
+              "one undo removes the mix and restores its MIDI sources");
+        controller.redo();
+        check(findClip(controller, output.destinationTrackId, output.clipId),
+              "redo restores the common bounced clip");
+    }
     // An isolated MIDI source inside a Pattern still needs its owner clip as
     // a playback gate. The owner must not admit the other Pattern sounds.
     {

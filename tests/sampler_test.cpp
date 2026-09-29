@@ -193,8 +193,8 @@ int main() {
                   !sampler::isPrecomputed(std::uint32_t(Param::Volume)),
               "the precomputed range covers the right knobs");
         check(sampler::indexOf(ModTarget::Pitch, ModParam::LfoShape) ==
-                  sampler::kParameterCount - 1,
-              "the INS matrix ends exactly at the table's end");
+                  sampler::kLegacyParameterCount - 1,
+              "slide controls append after every legacy SMP and INS index");
     }
 
     // ── The factory ──

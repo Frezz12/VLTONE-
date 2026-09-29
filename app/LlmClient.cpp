@@ -3,6 +3,7 @@
 
 #include <QNetworkReply>
 #include <QUrl>
+#include <QDateTime>
 
 #include <algorithm>
 #include <limits>
@@ -18,7 +19,7 @@ namespace {
 
 /// Long enough for a model that is thinking, short enough that a dead endpoint
 /// does not leave the panel spinning forever.
-constexpr int kTimeoutMs = 180'000;
+constexpr int kTimeoutMs = 600'000;
 constexpr int kAccountTimeoutMs = 15'000;
 
 std::string toStd(const QString& s) { return s.toStdString(); }
@@ -57,11 +58,13 @@ QUrl resolvedEndpoint(const QString& raw, LlmClient::Provider provider) {
 LlmClient::LlmClient(Provider provider, QObject* parent)
     : QObject(parent), m_provider(provider) {
     m_net.setTransferTimeout(kTimeoutMs);
+    m_retryTimer.setSingleShot(true);
+    connect(&m_retryTimer, &QTimer::timeout, this, &LlmClient::attempt);
 }
 
 LlmClient::~LlmClient() { cancel(); }
 
-bool LlmClient::busy() const { return !m_inFlight.isNull(); }
+bool LlmClient::busy() const { return bool(m_onReply); }
 
 QString LlmClient::displayName() const {
     if (!m_config.displayName.isEmpty()) return m_config.displayName;
@@ -81,6 +84,9 @@ void LlmClient::answer(ai::ModelReply reply) {
     Reply callback = std::move(m_onReply);
     m_onReply = nullptr;
     m_decoder.reset();
+    m_system.clear();
+    m_messages.clear();
+    if (m_statusSink) m_statusSink({});
     if (callback) callback(std::move(reply));
 }
 
@@ -88,6 +94,17 @@ void LlmClient::send(const QString& system,
                      const std::vector<ai::Message>& messages, Reply onReply) {
     cancel();
     m_onReply = std::move(onReply);
+    m_system = system;
+    m_messages = messages;
+    m_retries = 0;
+    attempt();
+}
+
+void LlmClient::attempt() {
+    if (!m_onReply) return;
+    m_decoder.reset();
+    m_freeRequest = false;
+    if (m_statusSink) m_statusSink(tr("Waiting for the model…"));
 
     const bool managed = m_config.transport == LlmConfig::Transport::Managed;
     auto* account = account::Service::instance();
@@ -111,19 +128,44 @@ void LlmClient::send(const QString& system,
 
     const bool stream = m_config.stream;
     if (managed) {
-        requestManagedLease(system, messages, stream);
+        requestManagedLease(m_system, m_messages, stream);
         return;
     }
 
     const QString model =
         m_config.model.isEmpty() ? defaultModel() : m_config.model;
     const json body = wire::requestBody(m_provider, toStd(model),
-                                        m_config.maxTokens, toStd(system),
-                                        messages, stream,
+                                        m_config.maxTokens, toStd(m_system),
+                                        m_messages, stream,
                                         /*vendorExtensions=*/false,
                                         &m_availableTools);
     sendToProvider(resolvedEndpoint(m_config.endpoint, m_provider).toString(),
                    m_config.apiKey, body, stream);
+}
+
+bool LlmClient::scheduleRetry(int status, const QByteArray& retryAfter,
+                              bool transportFailure) {
+    const bool transient = status == 408 || status == 429 || status == 500 ||
+                           status == 502 || status == 503 || status == 504 ||
+                           status == 529 || (status == 0 && transportFailure);
+    if (!transient || m_retries >= std::clamp(m_config.maxRetries, 0, 5) ||
+        (m_decoder && m_decoder->hasOutput())) return false;
+    int delay = std::min(60, 5 * (1 << m_retries));
+    bool numeric = false;
+    const int seconds = retryAfter.trimmed().toInt(&numeric);
+    if (numeric) delay = std::max(delay, seconds);
+    else if (!retryAfter.isEmpty()) {
+        const auto date = QDateTime::fromString(QString::fromLatin1(retryAfter), Qt::RFC2822Date);
+        if (date.isValid()) delay = int(std::max<qint64>(delay, QDateTime::currentDateTimeUtc().secsTo(date)));
+    }
+    // A provider asking us to wait longer should receive a manual retry later.
+    if (delay > 900) return false;
+    ++m_retries;
+    if (m_statusSink)
+        m_statusSink(tr("Model busy. Retry %1/%2 in %3 s…")
+            .arg(m_retries).arg(std::clamp(m_config.maxRetries, 0, 5)).arg(delay));
+    m_retryTimer.start(delay * 1000);
+    return true;
 }
 
 void LlmClient::requestManagedLease(
@@ -167,6 +209,7 @@ void LlmClient::requestManagedLease(
             http->error() != QNetworkReply::NoError || status < 200 ||
             status >= 300;
         const QString transportError = http->errorString();
+        const QByteArray retryAfter = http->rawHeader("Retry-After");
         http->deleteLater();
         if (m_inFlight != http) return;
         m_inFlight = nullptr;
@@ -175,6 +218,8 @@ void LlmClient::requestManagedLease(
                                         payload.constData() + payload.size(),
                                         nullptr, /*allow_exceptions=*/false);
         if (failed || parsed.is_discarded() || !parsed.is_object()) {
+            // A failed lease has not sent the project to a provider yet.
+            if (failed && scheduleRetry(status, retryAfter, false)) return;
             QString detail;
             if (!parsed.is_discarded())
                 detail = QString::fromStdString(
@@ -198,6 +243,7 @@ void LlmClient::requestManagedLease(
         const auto freeValue = parsed.find("is_free");
         const bool isFree = freeValue != parsed.end() &&
                             freeValue->is_boolean() && freeValue->get<bool>();
+        m_freeRequest = isFree;
         const QString provider = fromJsonString(parsed, "provider");
         const QString expected = m_provider == Provider::Anthropic
                                      ? QStringLiteral("anthropic")
@@ -243,6 +289,7 @@ void LlmClient::sendToProvider(const QString& endpoint, const QString& apiKey,
     }
 
     QNetworkRequest request(url);
+    request.setTransferTimeout(std::clamp(m_config.timeoutSeconds, 60, 1800) * 1000);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     if (!apiKey.isEmpty()) {
         if (m_provider == Provider::Anthropic)
@@ -287,6 +334,7 @@ void LlmClient::sendToProvider(const QString& endpoint, const QString& apiKey,
         const bool failed =
             http->error() != QNetworkReply::NoError || status >= 400;
         const QString transportError = http->errorString();
+        const QByteArray retryAfter = http->rawHeader("Retry-After");
         const QByteArray contentType =
             http->header(QNetworkRequest::ContentTypeHeader).toByteArray();
         http->deleteLater();
@@ -301,6 +349,11 @@ void LlmClient::sendToProvider(const QString& endpoint, const QString& apiKey,
 
         ai::ModelReply reply;
         ai::AiSession::Usage usage;
+        if (m_decoder && (eventStream || contentType.isEmpty())) {
+            m_decoder->feed(std::string_view(payload.constData(), std::size_t(payload.size())));
+            reply = m_decoder->reply();
+            usage = m_decoder->usage();
+        }
         if (failed) {
             QString detail;
             if (!parsed.is_discarded())
@@ -313,15 +366,17 @@ void LlmClient::sendToProvider(const QString& endpoint, const QString& apiKey,
             reply.error = toStd(displayName() + QStringLiteral(": ") + detail +
                                 (status ? QStringLiteral(" (HTTP %1)").arg(status)
                                         : QString()));
-        } else if (m_decoder && eventStream) {
-            m_decoder->feed(std::string_view(payload.constData(),
-                                             std::size_t(payload.size())));
+        } else if (m_decoder && (eventStream || contentType.isEmpty())) {
             if (m_partialSink) {
                 const std::string text = m_decoder->takeText();
                 if (!text.empty()) m_partialSink(QString::fromStdString(text));
             }
             reply = m_decoder->reply();
             usage = m_decoder->usage();
+            if (!m_decoder->done() && reply.error.empty())
+                reply.error = "The connection ended before the response was complete. You can continue from the saved text.";
+            if (reply.error.empty() && reply.text.empty() && reply.calls.empty())
+                reply.error = "The model returned an empty response. Try again.";
             if (m_usageSink) m_usageSink(usage);
         } else if (parsed.is_discarded()) {
             reply.error = toStd(displayName()) + " sent something that is not JSON";
@@ -329,6 +384,31 @@ void LlmClient::sendToProvider(const QString& endpoint, const QString& apiKey,
             reply = wire::parseReply(m_provider, parsed);
             usage = wire::parseUsage(m_provider, parsed);
             if (m_usageSink) m_usageSink(usage);
+        }
+
+        if (!reply.error.empty()) reply.calls.clear();
+        int retryStatus = m_decoder && m_decoder->errorStatus()
+                              ? m_decoder->errorStatus() : status;
+        const bool emptyResponse = reply.text.empty() && reply.calls.empty() &&
+            (reply.error == "The model returned an empty response. Try again." ||
+             reply.error == "the model answered with no choices");
+        if (emptyResponse && status >= 200 && status < 300) retryStatus = 503;
+        if (failed && status < 400) retryStatus = 0;
+        // Never replay a partially generated response, nor an ambiguous paid
+        // request. A rejected paid request is settled before obtaining a lease.
+        const bool safeRetry = status >= 400 || m_freeRequest ||
+                               m_config.transport == LlmConfig::Transport::Direct;
+        if (!reply.error.empty() && safeRetry &&
+            (m_reservationId.isEmpty() || status >= 400)) {
+            if (scheduleRetry(retryStatus, retryAfter, failed)) {
+                if (!m_reservationId.isEmpty()) {
+                    const int delay = m_retryTimer.remainingTime();
+                    m_retryTimer.stop();
+                    settleManaged(0, QStringLiteral("provider_rejected"),
+                                  [this, delay] { m_retryTimer.start(delay); });
+                }
+                return;
+            }
         }
 
         auto deliver = [this, reply = std::move(reply)]() mutable {
@@ -410,6 +490,9 @@ void LlmClient::settleManaged(qint64 actualTokens, const QString& outcome,
 }
 
 void LlmClient::cancel() {
+    m_retryTimer.stop();
+    m_system.clear();
+    m_messages.clear();
     m_onReply = nullptr;
     m_decoder.reset();
     if (!m_reservationId.isEmpty())

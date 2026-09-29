@@ -26,7 +26,10 @@ inline QByteArray channelViewState(const daw::ProjectModel& project,
         out << quint64(inserts.size());
         for (const auto& insert : inserts) slot(insert);
     };
-    if (id.empty()) { writeSlots(project.masterInserts); return bytes; }
+    const auto* selected = project.findTrack(id);
+    if (id.empty() || (selected && selected->kind == daw::TrackKind::Master)) {
+        writeSlots(project.masterInserts); return bytes;
+    }
     if (const auto* track = project.findTrack(id)) {
         out << int(track->kind) << track->summing;
         slot(track->instrument);

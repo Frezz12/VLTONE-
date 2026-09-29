@@ -190,6 +190,24 @@ audio::Result EngineController::bounceInPlace(
             job.sourceTrackIds.end());
     }
 
+    // Bounce the selection together, so shared effects hear the same summed
+    // signal as playback. An aggregate has no single source channel to replace.
+    if (jobs.size() > 1) {
+        BounceJob mix;
+        for (const BounceJob& job : jobs) {
+            mix.sourceTrackIds.insert(mix.sourceTrackIds.end(),
+                job.sourceTrackIds.begin(), job.sourceTrackIds.end());
+            mix.sourceClipIds.insert(mix.sourceClipIds.end(),
+                job.sourceClipIds.begin(), job.sourceClipIds.end());
+            mix.affected.insert(mix.affected.end(), job.affected.begin(), job.affected.end());
+        }
+        std::sort(mix.sourceTrackIds.begin(), mix.sourceTrackIds.end());
+        mix.sourceTrackIds.erase(std::unique(mix.sourceTrackIds.begin(),
+            mix.sourceTrackIds.end()), mix.sourceTrackIds.end());
+        jobs.clear();
+        jobs.push_back(std::move(mix));
+    }
+
     const bool printTrack =
         layerEnabled(request.fxLayers, BounceFxLayer::Track);
     const bool printFolders =

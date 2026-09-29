@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -184,6 +185,46 @@ int main() {
 
         check(factory.inspect("/nowhere/at/all.vst3").empty(),
               "inspecting something that is not a plugin reports nothing, and does not throw");
+    }
+
+    // Closing before native attachment must release the capability probe too.
+    {
+        const auto path = std::filesystem::temp_directory_path() / "daw_vst3_editor_trace.txt";
+        std::error_code error;
+        std::filesystem::remove(path, error);
+#if defined(_WIN32)
+        ::_putenv_s("DAW_TEST_VST3_EDITOR_TRACE", path.string().c_str());
+#else
+        ::setenv("DAW_TEST_VST3_EDITOR_TRACE", path.string().c_str(), 1);
+#endif
+        const auto trace = [&] {
+            std::ifstream file(path);
+            return std::string(std::istreambuf_iterator<char>(file), {});
+        };
+        auto instance = factory.create(descriptor);
+        std::uint32_t width = 0, height = 0;
+        check(instance && instance->hasEditor() && instance->editorSize(width, height) &&
+                  width == 320 && height == 180 && trace() == "create\n",
+              "editor capability and size share one unattached probe");
+        if (instance) {
+            instance->closeEditor();
+            instance->closeEditor();
+            check(!instance->isEditorOpen() && trace() == "create\ndestroy\n",
+                  "cancelling editor loading releases its probe exactly once");
+            check(instance->openEditor(&width, nullptr) && instance->isEditorOpen(),
+                  "an editor opens normally after its probe was cancelled");
+            instance->closeEditor();
+            check(!instance->isEditorOpen() &&
+                      trace() == "create\ndestroy\ncreate\nattach\nremove\ndestroy\n",
+                  "closing an attached editor removes and releases its view");
+        }
+        instance.reset();
+#if defined(_WIN32)
+        ::_putenv_s("DAW_TEST_VST3_EDITOR_TRACE", "");
+#else
+        ::unsetenv("DAW_TEST_VST3_EDITOR_TRACE");
+#endif
+        std::filesystem::remove(path, error);
     }
 
     // ── Instantiate, and look at the two halves ──
@@ -628,6 +669,10 @@ int main() {
                 instance->process(context);
                 check(std::fabs(left[0] - 0.375f) < 1e-6f,
                       "IMidiMapping turns CC/mod-wheel data into a processor parameter");
+                check(instance->pitchCapabilities().perNote,"VST3 discovers advertised per-note tuning");
+                note.noteId=1234;PluginEvent tuning;tuning.kind=PluginEvent::Kind::NotePitch;tuning.noteId=1234;tuning.value=12;tuning.frameOffset=12;
+                std::array<PluginEvent,2> expression{note,tuning};context.inputEvents=expression;instance->process(context);
+                check(std::fabs(left[0]-.75f)<1e-6f,"VST3 tuning reaches the matching note ID in the declared normalized range");
                 instance->stopProcessing();
                 instance->deactivate();
             }

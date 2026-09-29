@@ -123,6 +123,7 @@ void retimeClipToTempo(ClipModel& clip, double ratio) {
         clip.fadeOutSeconds *= ratio;
     }
     if(clip.kind==ClipKind::Midi) {
+        clip.offsetSeconds *= ratio;
         retimeClipComp(clip,ratio);
         for(auto& take:clip.takes){take.offsetSeconds*=ratio;take.lengthSeconds*=ratio;}
     }
@@ -428,7 +429,8 @@ void normalizeComp(ClipModel& clip) {
         return;
     }
 
-    const double limit = clip.durationSeconds > 0.0 ? clip.durationSeconds
+    const double sourceOffset = clip.kind == ClipKind::Midi ? clip.offsetSeconds : 0.0;
+    const double limit = clip.durationSeconds > 0.0 ? sourceOffset + clip.durationSeconds
                                                     : std::numeric_limits<double>::max();
 
     std::vector<CompSegment> kept;
@@ -532,7 +534,8 @@ void selectWholeTake(ClipModel& clip, const std::string& takeId) {
     // A clip with no duration of its own (nothing on the timeline sets one to
     // zero, but a hand-written project could) falls back to the take's length
     // rather than an infinite segment, which would serialise as a bad number.
-    const double end = clip.durationSeconds > 0.0 ? clip.durationSeconds
+    const double sourceOffset = clip.kind == ClipKind::Midi ? clip.offsetSeconds : 0.0;
+    const double end = clip.durationSeconds > 0.0 ? sourceOffset + clip.durationSeconds
                                                   : take->lengthSeconds;
     if (end <= 0.0) return;
     clip.comp.clear();
@@ -561,12 +564,15 @@ void promoteToTake(ClipModel& clip) {
     take.channels = clip.channels;
     take.color = clip.color;
     take.notes = clip.notes;
+    take.slideNotes = clip.slideNotes;
     take.lanes = clip.lanes;
     if (clip.kind == ClipKind::Midi) {
         // MIDI content belongs to the take now; retaining it on the clip would
         // duplicate persistent note/lane identities in shared snapshots.
         take.offsetSeconds = 0.0;
+        take.lengthSeconds += clip.offsetSeconds;
         clip.notes.clear();
+        clip.slideNotes.clear();
         clip.lanes.clear();
     }
     clip.takes.push_back(std::move(take));

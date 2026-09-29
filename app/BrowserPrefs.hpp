@@ -56,6 +56,8 @@ void setFolderColor(const QString& folder, const QString& color);
 
 /// The roots the tree shows. Absolute paths, in the order the user added them.
 QStringList folders();
+/// Explicit user grants only: no default Music/Downloads roots.
+QStringList aiContentPaths();
 void setFolders(const QStringList& folders);
 /// Add a folder if it is not already there. False when it was a duplicate.
 bool addFolder(const QString& folder);

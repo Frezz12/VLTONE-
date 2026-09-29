@@ -54,6 +54,7 @@ enum class Glyph {
     // Collaboration surfaces: the session status strip, the join checklist and
     // the cloud project browser.
     Cloud, CloudUpload, CloudOff, Users, Link, Key, Check, Warning,
+    Copy, Edit,
     /// An open arc, meant to be rotated by the caller to indicate work in
     /// flight. It carries no animation of its own.
     Spinner

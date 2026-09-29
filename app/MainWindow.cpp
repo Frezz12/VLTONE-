@@ -5825,27 +5825,20 @@ bool MainWindow::checkTrackSelectionForTest() {
             std::fprintf(stderr, "the track name editor is missing\n");
             return false;
         }
-        const int blankX = name->textMargins().left() +
-                           std::max(8, name->fontMetrics().horizontalAdvance(
-                                           name->text())) +
-                           5;
-        const QPoint blank(blankX, name->height() / 2);
-        QMouseEvent blankName(QEvent::MouseButtonDblClick, QPointF(blank),
-                              QPointF(name->mapToGlobal(blank)),
-                              Qt::LeftButton, Qt::LeftButton,
-                              Qt::NoModifier);
-        QApplication::sendEvent(name, &blankName);
-        if (!name->isReadOnly()) {
-            std::fprintf(stderr,
-                         "double-clicking past the track text started a rename\n");
+        m_trackList->setSelectedTrack(QString::fromStdString(ids[0]));
+        QMenu menu;
+        m_trackList->populateSelectedTrackActionsMenu(menu);
+        auto* renameAction = menu.findChild<QAction*>("track.rename");
+        if (!renameAction) {
+            std::fprintf(stderr, "the track menu is missing Rename\n");
             return false;
         }
-        const QPoint local(4, name->height() / 2);
-        QMouseEvent openName(QEvent::MouseButtonDblClick, QPointF(local),
-                             QPointF(name->mapToGlobal(local)),
-                             Qt::LeftButton, Qt::LeftButton,
-                             Qt::NoModifier);
-        QApplication::sendEvent(name, &openName);
+        renameAction->trigger();
+        QApplication::processEvents();
+        if (name->isReadOnly()) {
+            std::fprintf(stderr, "the track menu did not start renaming\n");
+            return false;
+        }
         const QString renamed =
             QStringLiteral("Beginning of a deliberately very long track name");
         name->setText(renamed);
@@ -6148,9 +6141,11 @@ bool MainWindow::checkTrackSelectionForTest() {
             return false;
         }
         auto* compact = m_trackList->rowFaderForTest(deep);
-        if (!deepControls.first || !compact || !compact->isCompactKnob()) {
+        if (!deepControls.first || !compact ||
+            !m_trackList->rowRectForTrack(deep).contains(
+                QRect(compact->mapTo(m_trackList, QPoint{}), compact->size()))) {
             std::fprintf(stderr,
-                         "a deeply nested row did not compact its fader\n");
+                         "a deeply nested row clipped its level control\n");
             return false;
         }
         for (auto it = chain.rbegin(); it != chain.rend(); ++it)
@@ -8123,7 +8118,8 @@ bool MainWindow::checkAuxiliaryWindowPolicyForTest() {
     m_pianoRollFrame->setMaximized(true);
     QApplication::processEvents();
     const bool maximizedInsideHost = m_pianoRollFrame->isMaximized() &&
-        m_pianoRollFrame->geometry() == m_editorBody->geometry();
+        m_pianoRollFrame->geometry() == QRect(m_arrangementHost->mapTo(m_editorHost, QPoint()),
+                                             m_arrangementHost->size());
     m_pianoRollFrame->setMaximized(false);
     QApplication::processEvents();
     const bool restoredAfterMaximize =
@@ -8268,6 +8264,18 @@ bool MainWindow::checkAuxiliaryWindowPolicyForTest() {
 
 bool MainWindow::checkPianoRollForTest() {
     if (!m_pianoRoll || !m_contextPanel) return false;
+    const bool wasMaximized = m_pianoRollFrame->isMaximized();
+    const QRect previousFrame = m_pianoRollFrame->geometry();
+    m_pianoRollFrame->setMaximized(true);
+    QApplication::processEvents();
+    const bool leavesInspectorVisible = m_pianoRollFrame->geometry() ==
+        QRect(m_arrangementHost->mapTo(m_editorHost, QPoint()), m_arrangementHost->size());
+    m_pianoRollFrame->setMaximized(wasMaximized);
+    QApplication::processEvents();
+    if (!leavesInspectorVisible || m_pianoRollFrame->geometry() != previousFrame) {
+        std::fprintf(stderr, "Piano Roll maximize must respect inspector and restore its previous bounds\n");
+        return false;
+    }
     const bool panelWasEnabled = m_contextPanel->isPanelEnabled();
     if (!panelWasEnabled) m_contextPanel->setPanelEnabled(true);
 
@@ -9135,6 +9143,9 @@ MainWindow::~MainWindow() {
     if (m_recordingLeases)
         disconnect(m_recordingLeases, nullptr, this, nullptr);
     m_publicationUi.reset();
+    // This QObject is also owned by a member unique_ptr. Destroy it before
+    // the remaining Qt children so the member cannot delete it a second time.
+    m_cloudMidiRecording.reset();
 #endif
     ui::setAutomationCreationMode(false);
     delete m_noteContextPanel;
@@ -9316,6 +9327,33 @@ void MainWindow::buildLayout() {
     m_aiPanel = new AiChatPanel(&m_controller, central);
     m_aiPanel->setSelectionModel(&m_selection);
     m_aiPanel->setCommandManager(m_shortcuts);
+    m_aiPanel->setUiContextProvider([this] {
+        nlohmann::json state;
+        state["openPluginEditors"] = nlohmann::json::array();
+        for (auto* editor : m_pluginEditors) {
+            if (!editor || !editor->isVisible() || editor->isClosing()) continue;
+            state["openPluginEditors"].push_back({
+                {"channelId", editor->channelId().toStdString()},
+                {"insertId", editor->insertId().toStdString()},
+                {"pluginUid", editor->pluginUid().toStdString()}});
+        }
+        if (m_pianoRoll && m_pianoRoll->isVisible()) {
+            state["pianoRoll"] = {{"trackId", m_pianoRoll->trackId().toStdString()},
+                                   {"clipId", m_pianoRoll->clipId().toStdString()},
+                                   {"active", m_pianoRollFrame && m_pianoRollFrame->isEditorActive()}};
+            auto& notes = state["pianoRoll"]["selectedNotes"];
+            notes = nlohmann::json::array();
+            const auto selected = m_pianoRoll->selectedNotesForAssistant();
+            state["pianoRoll"]["selectedNoteCount"] = selected.size();
+            for (const auto& note : selected) {
+                if (notes.size() >= 128) break;
+                notes.push_back({{"id", note.id}, {"pitch", note.pitch},
+                    {"startBeats", note.startBeats}, {"lengthBeats", note.lengthBeats}, {"velocity", note.velocity}});
+            }
+            state["pianoRoll"]["selectionTruncated"] = selected.size() > notes.size();
+        }
+        return state;
+    });
     m_aiWidth = ui::aiprefs::width();
     m_aiPanel->setFixedWidth(m_aiWidth);
     connect(m_aiPanel, &AiChatPanel::statusMessage, this,
@@ -9332,7 +9370,7 @@ void MainWindow::buildLayout() {
 
     auto* aiHandle = new ui::ResizeHandle(Qt::Vertical, m_aiPanel);
     aiHandle->setEdge(Qt::LeftEdge);
-    aiHandle->onDragStart = [this] { m_aiDragStartWidth = m_aiWidth; };
+    aiHandle->onDragStart = [this] { m_aiDragStartWidth = m_aiPanel->width(); };
     aiHandle->onDrag = [this](int delta) {
         // Always on the right, so widening is always dragging left.
         m_aiWidth = std::clamp(m_aiDragStartWidth - delta, 240, 720);
@@ -9366,7 +9404,7 @@ void MainWindow::buildLayout() {
 
     auto* webHandle = new ui::ResizeHandle(Qt::Vertical, m_webContainer);
     webHandle->setEdge(Qt::LeftEdge);
-    webHandle->onDragStart = [this] { m_webDragStartWidth = m_webWidth; };
+    webHandle->onDragStart = [this] { m_webDragStartWidth = m_webContainer->width(); };
     webHandle->onDrag = [this](int delta) {
         m_webWidth = std::clamp(m_webDragStartWidth - delta,
                                 ui::webprefs::kMinWidth,
@@ -9390,7 +9428,7 @@ void MainWindow::buildLayout() {
     notebookLayout->setSpacing(0);
     auto* notebookHandle = new ui::ResizeHandle(Qt::Vertical, m_notebookContainer);
     notebookHandle->setEdge(Qt::LeftEdge);
-    notebookHandle->onDragStart = [this] { m_notebookDragStartWidth = m_notebookWidth; };
+    notebookHandle->onDragStart = [this] { m_notebookDragStartWidth = m_notebookContainer->width(); };
     notebookHandle->onDrag = [this](int delta) {
         m_notebookWidth = std::clamp(m_notebookDragStartWidth - delta, 320, 800);
         applyRightPanelWidths();
@@ -9486,6 +9524,7 @@ void MainWindow::buildLayout() {
     m_warpPanel->hide();
     connect(m_warpEditor, &WarpEditorWidget::edited, this, [this] { m_timeline->update(); markDirty(); });
     connect(m_warpEditor, &WarpEditorWidget::liveEdited, this, [this] { m_timeline->update(); });
+    connect(m_warpEditor, &WarpEditorWidget::closeRequested, this, [this] { setWarpVisible(false); });
 
     auto* handle = new ui::ResizeHandle(Qt::Horizontal, m_bottomPanel);
     handle->setEdge(Qt::TopEdge);
@@ -9730,14 +9769,14 @@ void MainWindow::buildLayout() {
                 trackHeightEdit->active = false;
                 trackHeightEdit->changed = false;
             });
-    connect(m_toolPanel, &ToolPanel::createTracksRequested, this,
-            [this] {
-                CreateTracksDialog dialog(m_controller, this);
-                if (dialog.exec() != QDialog::Accepted || dialog.createdTrackIds().empty()) return;
-                syncViews();
-                selectTrackFromHeader(QString::fromStdString(dialog.createdTrackIds().front()));
-                markDirty();
-            });
+    const auto createTracks = [this] {
+        CreateTracksDialog dialog(m_controller, this);
+        if (dialog.exec() != QDialog::Accepted || dialog.createdTrackIds().empty()) return;
+        syncViews();
+        selectTrackFromHeader(QString::fromStdString(dialog.createdTrackIds().front()));
+        markDirty();
+    };
+    connect(m_toolPanel, &ToolPanel::createTracksRequested, this, createTracks);
     const auto alignRulerHeaders = [this](int height) {
         m_trackList->setRulerHeight(height);
         m_inspector->setHeaderHeight(height);
@@ -9954,6 +9993,36 @@ void MainWindow::buildLayout() {
         m_trackList->setSelectedTrack(id);
         selectTrackFromHeader(id);
     });
+    connect(m_mixer, &MixerWidget::createTracksRequested, this, createTracks,
+            Qt::QueuedConnection);
+    const auto showChannelOnTimeline = [this](const QString& channel) {
+        const auto before = m_controller.undoDepth();
+        const std::string id = channel == QLatin1String(daw::EngineController::kMasterChannelId)
+            ? m_controller.ensureMasterTrack() : channel.toStdString();
+        const auto* track = m_controller.project().findTrack(id);
+        if (!track) return;
+        for (std::string parent = track->parentId; !parent.empty();) {
+            const auto* owner = m_controller.project().findTrack(parent);
+            if (!owner) break;
+            m_controller.setFolderExpanded(parent, true);
+            parent = owner->parentId;
+        }
+        syncViews();
+        selectTrackFromHeader(QString::fromStdString(id));
+        const auto& rows = daw::visibleTracks(m_controller.project());
+        for (int i = 0; i < int(rows.size()); ++i)
+            if (m_controller.project().tracks[rows[std::size_t(i)].index].id == id) {
+                m_timeline->ensureLaneVisible(i);
+                break;
+            }
+        if (m_controller.undoDepth() != before) markDirty();
+    };
+    connect(m_mixer, &MixerWidget::timelineRequested, this, showChannelOnTimeline,
+            Qt::QueuedConnection);
+    connect(m_inspector, &InspectorWidget::timelineRequested, this, showChannelOnTimeline,
+            Qt::QueuedConnection);
+    connect(m_inspector, &InspectorWidget::createTracksRequested, this, createTracks,
+            Qt::QueuedConnection);
     connect(m_mixer, &MixerWidget::channelEdited, this,
             [this](const QString& trackId, bool localFileDirty) {
         if (localFileDirty) markDirty({trackId});
@@ -9995,12 +10064,16 @@ void MainWindow::buildLayout() {
             });
     connect(m_mixer, &MixerWidget::openPatternRequested, this,
             &MainWindow::openPattern);
-    connect(m_mixer, &MixerWidget::trackRemoved, this, [this](const QString& id) {
+    const auto removeChannelTrack = [this](const QString& id) {
         m_controller.removeTrack(id.toStdString());
         if (m_selectedTrackId == id) m_selectedTrackId.clear();
         syncViews();
         markDirty();
-    });
+    };
+    connect(m_mixer, &MixerWidget::trackRemoved, this, removeChannelTrack,
+            Qt::QueuedConnection);
+    connect(m_inspector, &InspectorWidget::trackRemoved, this, removeChannelTrack,
+            Qt::QueuedConnection);
 
     connect(m_inspector, &InspectorWidget::edited, this, [this](bool localFileDirty) {
         if (localFileDirty) markDirty();
@@ -10840,6 +10913,7 @@ void MainWindow::setAiVisible(bool visible, bool persist) {
     if (m_transport) m_transport->setAiVisible(visible);
     applyRightPanelWidths();
     layoutBottomPanels();
+    if (visible && persist) m_aiPanel->setFocus(Qt::ShortcutFocusReason);
 }
 
 void MainWindow::setInspectorVisible(bool visible) {
@@ -13773,8 +13847,15 @@ bool MainWindow::checkBrowser(const QString& folder, const QString& audioFile,
 bool MainWindow::checkAiAssistant() {
     // The panel installs a scripted stand-in for a provider, so this exercises
     // the real panel → session → dispatch → document → undo path with no key
-    // and no network, and costs nothing to run on every build.
-    return m_aiPanel && m_aiPanel->checkAgentForTest();
+    // and no provider calls. Open its actual host so layout/keyboard checks
+    // also exercise a visible viewport, rather than a hidden zero-width child.
+    if (!m_aiPanel) return false;
+    const bool wasVisible = !m_aiPanel->isHidden();
+    setAiVisible(true, /*persist=*/false);
+    QApplication::processEvents();
+    const bool ok = m_aiPanel->checkAgentForTest();
+    setAiVisible(wasVisible, /*persist=*/false);
+    return ok;
 }
 
 bool MainWindow::checkAiMusic() {
@@ -14350,7 +14431,7 @@ void MainWindow::openPianoRoll(const QString& trackId, const QString& clipId) {
         if (!m_editorHost) return;
         m_pianoRollFrame = new InternalEditorFrame(
             QStringLiteral("internalEditors/pianoRoll"), m_editorHost);
-        m_pianoRollFrame->setWorkspaceArea(m_editorBody);
+        m_pianoRollFrame->setWorkspaceArea(m_arrangementHost);
         // One QAction per history command: a second editor shortcut competes
         // with the main menu and Qt drops Ctrl+Z as ambiguous.
         m_pianoRoll = new PianoRollWindow(
@@ -14381,7 +14462,10 @@ void MainWindow::openPianoRoll(const QString& trackId, const QString& clipId) {
                     if (m_midiInput) m_midiInput->refreshTarget();
                 });
         connect(m_pianoRoll, &PianoRollWindow::noteSelectionChanged, this,
-                [this](bool) { syncPianoRollContextPanel(); });
+                [this](bool) {
+                    syncPianoRollContextPanel();
+                    if (m_aiPanel && m_aiPanel->isVisible()) m_aiPanel->refreshContext();
+                });
         connect(m_pianoRoll, &PianoRollWindow::clipSwitchRequested, this,
                 &MainWindow::openPianoRoll);
         connect(m_pianoRoll, &PianoRollWindow::internalWindowRequested, this,

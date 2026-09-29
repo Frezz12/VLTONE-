@@ -22,7 +22,7 @@ ProjectCommand ConditionalUndoHistory::withFreshMeta(
     ProjectCommand prepared = command;
     const std::string originatingTransaction = command.meta.transactionId;
     prepared.meta = std::move(freshMeta);
-    prepared.meta.schemaVersion = kProjectCommandSchemaVersion;
+    // freshMeta carries the negotiated session version, including older rooms.
     if (prepared.meta.transactionId.empty())
         prepared.meta.transactionId = originatingTransaction;
     return prepared;

@@ -79,6 +79,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     explicit TimelineWidget(daw::EngineController* controller,
                             QWidget* parent = nullptr);
     ~TimelineWidget() override;
+    static bool checkMidiClipOpeningForTest();
     /// Place the shared view controls directly above the right scroll rail.
     void setNavigationControls(QWidget* controls);
     /// Room for the ruler, view-control column and both scroll rails.
@@ -279,6 +280,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     std::uint64_t staticFramePaintCountForTest() const {
         return m_staticFramePaintCount;
     }
+    quint64 gpuLaneTileBuildsForTest() const { return m_gpuLaneTiles.builds(); }
     /// Horizontal navigation state for the headless middle-drag check.
     double horizontalScrollForTest() const { return m_scrollSeconds; }
     double pixelsPerSecondForTest() const { return m_pixelsPerSecond; }
@@ -297,6 +299,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     /// can click on a lane it has just created.
     int laneCentreForTest(int lane) const;
     static bool checkInterruptedPointerGestureForTest();
+    static bool checkTrackPresentationForTest();
     /// Geometry probes for the real-mouse region drag check.
     double regionStartSecondsForTest() const { return m_regionStart; }
     int regionFirstLaneForTest() const { return m_regionLaneA; }
@@ -673,6 +676,8 @@ private:
 
     void drawPatternClips(QPainter& p, const daw::TrackModel& pattern,
                           int laneTop, int bodyHeight);
+    void drawFolderPreview(QPainter& p, const daw::TrackModel& folder,
+                           int laneTop, int bodyHeight);
     void drawWaveform(QPainter& p, const daw::ClipModel& clip,
                       const QRectF& area);
     /// The envelope of an already-decoded peak set across `area`, where the
@@ -814,6 +819,7 @@ private:
     double m_seededPlayheadTrailPx = 0.0;
     QPixmap m_staticFrame;
     bool m_staticFrameValid = false;
+    bool m_staticViewportDirty = false;
     double m_staticFrameScroll = 0.0;
     double m_staticFrameScale = 0.0;
     std::uint64_t m_staticFramePaintCount = 0;
@@ -821,6 +827,9 @@ private:
     using PatternSources = std::vector<std::pair<std::string, std::size_t>>;
     std::unordered_map<std::string, std::unordered_map<std::string, PatternSources>> m_patternSources;
     std::array<std::uint64_t, 3> m_patternSourcesStamp{};
+    struct FolderPreviewRow { std::string id; int depth = 0; };
+    std::unordered_map<std::string, std::vector<FolderPreviewRow>> m_folderPreviewRows;
+    std::array<std::uint64_t, 2> m_folderPreviewStamp{};
     struct MidiPreviewCacheEntry {
         daw::MidiPreviewIndex index;
         std::uint64_t revision = 0;

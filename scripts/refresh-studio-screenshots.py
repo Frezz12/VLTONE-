@@ -14,8 +14,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 SHOTS = {
-    "workspace": {},
-    "piano": {"DAW_SHOT_PIANOROLL": "selected"},
+    "workspace": {"DAW_SHOT_MIXER": "off"},
+    "piano": {"DAW_SHOT_PIANOROLL": "maximized"},
+    "render": {"DAW_SHOT_EXPORT": "mix"},
     "mixer": {"DAW_SHOT_MIXER": "420"},
     "pattern": {"DAW_SHOT_PATTERN": "editor"},
     "sampler": {"DAW_SHOT_SAMPLER": "sample"},
@@ -23,6 +24,9 @@ SHOTS = {
     "plugins": {"DAW_SHOT_PLUGINS": "0"},
     "ai": {"DAW_SHOT_AI": "complete"},
     "recovery": {"DAW_SHOT_RECOVERY": "1"},
+    "compressor": {"DAW_SHOT_PLUGIN_EDITOR": "Compressor", "DAW_SHOT_DELAY": "1800"},
+    "delay": {"DAW_SHOT_PLUGIN_EDITOR": "Delay", "DAW_SHOT_DELAY": "1800"},
+    "track-icons": {"DAW_SHOT_TRACK_ICONS": "picker", "DAW_SHOT_DELAY": "1200"},
 }
 
 
@@ -44,13 +48,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--executable", type=Path, default=ROOT / "build/bin/VLTONE")
     parser.add_argument("--only", action="append", choices=SHOTS.keys())
+    parser.add_argument("--originals", type=Path, default=ROOT / "artifacts/website-0.3.1")
     args = parser.parse_args()
     executable = args.executable.resolve(strict=True)
     encoder = shutil.which("cwebp")
     if not encoder:
-        parser.error("cwebp is required to create the website variants")
+        from PIL import Image
     chosen = {name: values for name, values in SHOTS.items() if not args.only or name in args.only}
-    originals = ROOT / "artifacts/website-2026-09-26"
+    originals = args.originals
     public = ROOT / "web/public/images/studio"
 
     with tempfile.TemporaryDirectory(prefix="vltone-studio-shots-") as temp:
@@ -73,7 +78,8 @@ def main() -> None:
                 prefs.mkdir(parents=True)
                 environment = {key: value for key, value in os.environ.items() if not key.startswith("DAW_SHOT_")}
                 environment.update({
-                    "QT_QPA_PLATFORM": "offscreen",
+                    "QT_QPA_PLATFORM": "offscreen:configfile=" + os.path.relpath(ROOT / "scripts/screenshot-screen.json", executable.parent),
+                    "VLT_GPU_WORKSPACE": "0",
                     # QMessageBox clips translated button labels at 2x under
                     # Qt's offscreen platform; 1.5x keeps the real dialog legible.
                     "QT_SCALE_FACTOR": "1.5" if name == "recovery" else "2",
@@ -92,8 +98,14 @@ def main() -> None:
                     suffix = "-small" if mobile else ""
                     target = public / f"{name}-{locale}{suffix}.webp"
                     encoded = staging / target.name
-                    run([encoder, "-quiet", "-q", "84", "-m", "6", "-resize", str(min(width, limit)), "0",
-                         str(source), "-o", str(encoded)], timeout=30)
+                    if encoder:
+                        run([encoder, "-quiet", "-q", "84", "-m", "6", "-resize", str(min(width, limit)), "0",
+                             str(source), "-o", str(encoded)], timeout=30)
+                    else:
+                        with Image.open(source) as image:
+                            target_width = min(width, limit)
+                            image.resize((target_width, round(image.height * target_width / width)),
+                                         Image.Resampling.LANCZOS).save(encoded, "WEBP", quality=84, method=6)
                     if encoded.stat().st_size <= 100:
                         raise RuntimeError(f"Failed to encode: {target}")
                     results.append((encoded, target))

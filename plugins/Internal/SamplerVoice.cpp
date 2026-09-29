@@ -195,9 +195,13 @@ float Svf::processLowpass(int channel, float input) noexcept {
 
 void Voice::start(int key, int channel, float velocity, float notePan,
                   const SamplerSettings& settings, const SampleData& sample,
-                  double sampleRate, bool smoothStart) noexcept {
+                  double sampleRate, bool smoothStart, std::int32_t noteId) noexcept {
     m_active = true;
     m_key = key;
+    m_noteId = noteId;
+    m_pitch = {}; m_bend = {}; m_pitchFrame = m_bendFrame = 0;
+    m_pitchCorrection = 0; m_correctionRemaining = 0; m_rendered = false;
+    m_legato = false; m_legatoSlideBias = 0; m_legatoSlideSegment = -1e300;
     m_channel = channel;
     m_velocity = velocity;
     m_notePan = std::clamp(notePan, -1.0f, 1.0f);
@@ -222,6 +226,9 @@ void Voice::start(int key, int channel, float velocity, float notePan,
 
 void Voice::release(bool cutWhenEnvelopeOff) noexcept {
     if (!m_active) return;
+    const double heldPitch = m_pitch.at(m_pitchFrame)+(m_correctionRemaining?m_pitchCorrection*double(m_correctionRemaining)/m_correctionFrames:0);
+    m_correctionRemaining=0;
+    m_pitch.from = m_pitch.to = heldPitch; m_pitch.frames = 0;
     m_amp.noteOff();
     for (Envelope& env : m_modEnv) env.noteOff();
     // With the amplitude envelope switched off a one-shot is meant to play to
@@ -233,6 +240,59 @@ void Voice::release(bool cutWhenEnvelopeOff) noexcept {
 void Voice::choke() noexcept {
     // Repeated triggers must not restart a tail that is already fading out.
     if (m_cutRemaining < 0) release(true);
+}
+
+double Voice::nextPitch() noexcept {
+    m_rendered = true;
+    double result = m_pitch.at(m_pitchFrame) + m_bend.at(m_bendFrame);
+    if (m_pitchFrame < m_pitch.frames) ++m_pitchFrame;
+    if (m_bendFrame < m_bend.frames) ++m_bendFrame;
+    if (m_correctionRemaining) {
+        result += m_pitchCorrection * double(m_correctionRemaining) / m_correctionFrames;
+        --m_correctionRemaining;
+    }
+    return result;
+}
+
+void Voice::setPitch(engine::PitchRamp pitch, double sampleRate, double smoothingMs) noexcept {
+    const double current = m_pitch.at(m_pitchFrame) + (m_correctionRemaining ? m_pitchCorrection * double(m_correctionRemaining) / m_correctionFrames : 0);
+    // An inactive expression does not cancel automatic legato. The first
+    // explicit segment starts from the actual legato pitch; its target and
+    // duration stay intact, including when that segment spans many blocks.
+    if (!pitch.active && !m_pitch.active) return;
+    if (pitch.active && !m_pitch.active && m_legato) {
+        const double shape = engine::curve::shapeT(pitch.phaseFrom, pitch.shape, pitch.tension);
+        const double fraction = pitch.shapeTo != pitch.shapeFrom ?
+            (shape - pitch.shapeFrom) / (pitch.shapeTo - pitch.shapeFrom) : 0;
+        m_legatoSlideBias = fraction < 1 - 1e-9 ? (current - pitch.at(0)) / (1 - fraction) : 0;
+        m_legatoSlideSegment = pitch.segmentStart;
+        m_legato = false;
+    }
+    if (!pitch.active || pitch.segmentStart != m_legatoSlideSegment || pitch.edited)
+        m_legatoSlideBias = 0;
+    pitch.from += m_legatoSlideBias;
+    if(pitch.edited){
+        m_pitchCorrection=m_rendered?current-pitch.at(0):0;
+        m_correctionFrames=std::uint32_t(sampleRate*smoothingMs*.001);
+        m_correctionRemaining=std::abs(m_pitchCorrection)>1e-7?m_correctionFrames:0;
+    }
+    m_pitch = pitch; m_pitchFrame = 0;
+}
+
+void Voice::setBend(double semitones, double sampleRate, double smoothingMs) noexcept {
+    const double current = m_bend.at(m_bendFrame);
+    m_bend = {}; m_bend.from = m_rendered ? current : semitones; m_bend.to = semitones;
+    m_bend.frames = std::uint32_t(sampleRate * smoothingMs * .001); m_bendFrame = 0;
+}
+
+void Voice::retarget(int key, std::int32_t id, double seconds, bool curved, double sampleRate) noexcept {
+    const double current = m_key + m_pitch.at(m_pitchFrame)+(m_correctionRemaining?m_pitchCorrection*double(m_correctionRemaining)/m_correctionFrames:0);
+    m_key = key; m_noteId = id;
+    m_legato = true; m_legatoSlideBias = 0; m_legatoSlideSegment = -1e300;
+    m_pitch = {}; m_pitch.from = current-key; m_pitch.to = 0;
+    m_pitch.frames = std::uint32_t(sampleRate*seconds);
+    m_pitch.shape = curved ? engine::curve::Shape::SCurve : engine::curve::Shape::Linear;
+    m_pitchFrame = 0; m_correctionRemaining = 0;
 }
 
 void Voice::kill() noexcept {
@@ -316,13 +376,15 @@ engine::FrameCount Voice::fillResampled(const SampleData& sample,
                                         engine::FrameCount count, double rate) noexcept {
     const engine::SampleBuffer& audio = *sample.audio;
     const bool stereo = audio.channels() > 1;
-    const double step = std::abs(rate);
+    const double baseStep = std::abs(rate);
     if (engine::PcmReadScope::current()) {
         audio.hintRead(engine::FrameCount(std::clamp(region.loopMode ? region.loopStart : region.start, 0., double(audio.frames()))));
         audio.hintRead(engine::FrameCount(std::clamp(m_position - 8192., 0., double(audio.frames()))));
     }
 
     for (engine::FrameCount i = 0; i < count; ++i) {
+        const double delta = nextPitch();
+        const double step = baseStep * (delta == 0 ? 1.0 : std::exp2(delta / 12.0));
         const double fade = fadeGain(settings, region, m_position);
         left[i] = readSample(audio, 0, m_position) * float(fade);
         right[i] = stereo ? readSample(audio, 1, m_position) * float(fade) : left[i];
@@ -460,8 +522,11 @@ void Voice::render(const SampleData& sample, const SamplerSettings& settings,
         const bool spectral = settings.stretchMode != 0 && stretcher;
         if (spectral) {
             const double timeRate = rateScale / std::max(settings.stretchTime, 0.001);
+            double delta = 0;
+            for (engine::FrameCount i = 0; i < count; ++i) delta += nextPitch();
+            delta /= count;
             produced = fillStretched(sample, settings, region, sourceLeft, sourceRight,
-                                     count, semitones + settings.stretchPitch, timeRate, *stretcher);
+                                     count, semitones + settings.stretchPitch + delta, timeRate, *stretcher);
         } else {
             m_resetStretch = true;
             produced = fillResampled(sample, settings, region, sourceLeft, sourceRight,

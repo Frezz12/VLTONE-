@@ -760,9 +760,10 @@ void InspectorWidget::rebuild() {
     // A folder that does not sum has no channel — no fader, no inserts, no
     // routing. Showing an empty console for it would offer controls that
     // govern nothing.
-    const bool valid = selected != nullptr && daw::carriesAudio(*selected);
+    const bool master = selected && selected->kind == daw::TrackKind::Master;
+    const bool valid = selected && (daw::carriesAudio(*selected) || master);
     if (valid) {
-        m_strip = new ChannelStrip(m_controller, m_trackId, /*master=*/false,
+        m_strip = new ChannelStrip(m_controller, m_trackId, master,
                                    m_content);
         // The inspector shows the whole console for the selected track and
         // scrolls if it does not fit, rather than folding sections away.
@@ -788,6 +789,12 @@ void InspectorWidget::rebuild() {
         }, Qt::QueuedConnection);
         connect(m_strip, &ChannelStrip::trackCreated, this,
                 &InspectorWidget::trackCreated, Qt::QueuedConnection);
+        connect(m_strip, &ChannelStrip::timelineRequested, this,
+                &InspectorWidget::timelineRequested);
+        connect(m_strip, &ChannelStrip::createTracksRequested, this,
+                &InspectorWidget::createTracksRequested);
+        connect(m_strip, &ChannelStrip::removeRequested, this,
+                &InspectorWidget::trackRemoved);
         m_stripSlot->addWidget(m_strip, 0, Qt::AlignHCenter);
     }
     loadProperties();

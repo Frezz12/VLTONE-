@@ -73,6 +73,10 @@ void setHistoryLimit(int turns);
 /// which some OpenAI-compatible servers need.
 bool streaming();
 void setStreaming(bool on);
+int timeoutSeconds();
+void setTimeoutSeconds(int seconds);
+int maxRetries();
+void setMaxRetries(int retries);
 
 // ── Music generation ────────────────────────────────────────────────────────
 //

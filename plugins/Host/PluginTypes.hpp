@@ -1,4 +1,5 @@
 #pragma once
+#include "DSP/PitchRamp.hpp"
 
 #include "Common/Types.hpp"
 
@@ -106,6 +107,8 @@ struct PluginEvent {
         /// carries the VST3 ControllerNumbers value (0…131), `value` is 0…1.
         MidiController,
         PolyPressure,
+        NotePitch,
+        NoteEnd, ///< Plugin reports that the voice and its release have finished.
     };
 
     Kind kind = Kind::ParamValue;
@@ -120,6 +123,8 @@ struct PluginEvent {
     /// Host-only per-note stereo position, -1 ... 1. Format adapters may
     /// ignore it; internal instruments can render it without inventing a CC.
     double notePan = 0.0;
+    engine::PitchRamp pitch;
+    bool preferMidi = false; ///< Force MIDI dialect for explicit channel/MPE delivery.
 };
 static_assert(std::is_trivially_copyable_v<PluginEvent>,
               "PluginEvent travels through a lock-free ring");

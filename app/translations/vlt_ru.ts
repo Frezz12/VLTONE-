@@ -473,6 +473,324 @@ Anything changed since — by the assistant or by you — is undone as well. One
         <source>/compose Apply composition candidate %1 to the currently selected MIDI track.</source>
         <translation>/compose Применить вариант композиции %1 к выбранной MIDI-дорожке.</translation>
     </message>
+    <message>
+        <source>Latest message ↓</source>
+        <translation>К последнему сообщению ↓</translation>
+    </message>
+    <message>
+        <source>New conversation</source>
+        <translation>Новый чат</translation>
+    </message>
+    <message>
+        <source>Clear the conversation? Project edits will be kept.</source>
+        <translation>Очистить переписку? Изменения проекта сохранятся.</translation>
+    </message>
+    <message>
+        <source>Chat…</source>
+        <translation>Чат…</translation>
+    </message>
+    <message>
+        <source>Search, copy or export this conversation (Ctrl+F)</source>
+        <translation>Поиск, копирование и экспорт переписки (Ctrl+F)</translation>
+    </message>
+    <message>
+        <source>Remove selected attachments</source>
+        <translation>Открепить выбранное</translation>
+    </message>
+    <message>
+        <source>Remove all attachments</source>
+        <translation>Открепить всё</translation>
+    </message>
+    <message>
+        <source>Attach samples or MIDI…</source>
+        <translation>Прикрепить сэмплы или MIDI…</translation>
+    </message>
+    <message>
+        <source>Attach samples or MIDI</source>
+        <translation>Прикрепить сэмплы или MIDI</translation>
+    </message>
+    <message>
+        <source>Audio and MIDI (*.wav *.flac *.aif *.aiff *.mp3 *.ogg *.m4a *.mid *.midi)</source>
+        <translation>Аудио и MIDI (*.wav *.flac *.aif *.aiff *.mp3 *.ogg *.m4a *.mid *.midi)</translation>
+    </message>
+    <message>
+        <source>Attach a sample folder…</source>
+        <translation>Прикрепить папку сэмплов…</translation>
+    </message>
+    <message>
+        <source>Attach a sample folder</source>
+        <translation>Прикрепить папку сэмплов</translation>
+    </message>
+    <message>
+        <source>Refresh added library</source>
+        <translation>Обновить добавленную библиотеку</translation>
+    </message>
+    <message>
+        <source>Context · project and playhead</source>
+        <translation>Контекст · проект и курсор</translation>
+    </message>
+    <message>
+        <source>Selection · %1 · %2 clips</source>
+        <translation>Выделено · %1 · клипов: %2</translation>
+    </message>
+    <message>
+        <source>Click to inspect selection, instruments, samples and library access.</source>
+        <translation>Нажмите, чтобы проверить выделение, инструменты, сэмплы и доступ к библиотеке.</translation>
+    </message>
+    <message>
+        <source>Assistant context</source>
+        <translation>Контекст AI</translation>
+    </message>
+    <message>
+        <source>Project: %1
+Tempo: %2 BPM
+
+Selection is captured when you send a request.
+</source>
+        <translation>Проект: %1
+Темп: %2 BPM
+
+Выделение фиксируется при отправке запроса.
+</translation>
+    </message>
+    <message>
+        <source>Instrument: %1
+</source>
+        <translation>Инструмент: %1
+</translation>
+    </message>
+    <message>
+        <source>Effect: %1
+</source>
+        <translation>Эффект: %1
+</translation>
+    </message>
+    <message>
+        <source>Clip: %1</source>
+        <translation>Клип: %1</translation>
+    </message>
+    <message>
+        <source> · Sample: %1</source>
+        <translation> · Сэмпл: %1</translation>
+    </message>
+    <message>
+        <source>Allowed library and attachments:</source>
+        <translation>Доступная библиотека и вложения:</translation>
+    </message>
+    <message>
+        <source>No files or folders added.</source>
+        <translation>Файлы и папки не добавлены.</translation>
+    </message>
+    <message>
+        <source>Only added library locations and explicit attachments are indexed. Folder attachments include their subfolders.</source>
+        <translation>Индексируются только добавленная библиотека и явные вложения. Прикреплённые папки включают вложенные папки.</translation>
+    </message>
+    <message>
+        <source>Conversation</source>
+        <translation>Переписка</translation>
+    </message>
+    <message>
+        <source>Find in conversation — Enter for next match</source>
+        <translation>Поиск по переписке — Enter для следующего совпадения</translation>
+    </message>
+    <message>
+        <source>Find in conversation</source>
+        <translation>Поиск по переписке</translation>
+    </message>
+    <message>
+        <source>Copy all</source>
+        <translation>Копировать всё</translation>
+    </message>
+    <message>
+        <source>Export…</source>
+        <translation>Экспорт…</translation>
+    </message>
+    <message>
+        <source>Export conversation</source>
+        <translation>Экспорт переписки</translation>
+    </message>
+    <message>
+        <source>Text files (*.txt)</source>
+        <translation>Текстовые файлы (*.txt)</translation>
+    </message>
+    <message>
+        <source>Could not save the conversation.</source>
+        <translation>Не удалось сохранить переписку.</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>Копировать</translation>
+    </message>
+    <message>
+        <source>Copy message</source>
+        <translation>Копировать сообщение</translation>
+    </message>
+    <message>
+        <source>Message copied</source>
+        <translation>Сообщение скопировано</translation>
+    </message>
+    <message>
+        <source>Edit</source>
+        <translation>Изменить</translation>
+    </message>
+    <message>
+        <source>Edit as new request</source>
+        <translation>Изменить и отправить новым запросом</translation>
+    </message>
+    <message>
+        <source>Edit request</source>
+        <translation>Изменить запрос</translation>
+    </message>
+    <message>
+        <source>Replace the current draft?</source>
+        <translation>Заменить текущий черновик?</translation>
+    </message>
+    <message>
+        <source>Continue request</source>
+        <translation>Продолжить запрос</translation>
+    </message>
+    <message>
+        <source>Attach an audio file, MIDI file or sample folder.</source>
+        <translation>Прикрепите аудиофайл, MIDI или папку сэмплов.</translation>
+    </message>
+    <message>
+        <source>Folder · %1</source>
+        <translation>Папка · %1</translation>
+    </message>
+    <message>
+        <source>Attachments · %1</source>
+        <translation>Вложения · %1</translation>
+    </message>
+    <message>
+        <source>Click to inspect attachments. Select an item and press Delete to detach.</source>
+        <translation>Нажмите, чтобы посмотреть вложения. Выберите элемент и нажмите Delete, чтобы открепить.</translation>
+    </message>
+    <message>
+        <source>Stopped. You can continue this request.</source>
+        <translation>Остановлено. Запрос можно продолжить.</translation>
+    </message>
+    <message>
+        <source>Attach selected samples</source>
+        <translation>Прикрепить выбранные сэмплы</translation>
+    </message>
+    <message>
+        <source>Sampler source: %1
+</source>
+        <translation>Сэмпл инструмента: %1
+</translation>
+    </message>
+    <message>
+        <source>New AI chat</source>
+        <translation>Новый AI-чат</translation>
+    </message>
+    <message>
+        <source>You · %1</source>
+        <translation>Вы · %1</translation>
+    </message>
+    <message>
+        <source>Actions</source>
+        <translation>Действия</translation>
+    </message>
+    <message>
+        <source>Done</source>
+        <translation>Готово</translation>
+    </message>
+    <message>
+        <source>Replan</source>
+        <translation>Уточнение</translation>
+    </message>
+    <message>
+        <source>Revert request</source>
+        <translation>Откатить запрос</translation>
+    </message>
+    <message>
+        <source>VLT AI · Writing</source>
+        <translation>VLT AI · Ответ</translation>
+    </message>
+    <message>
+        <source>VLT AI · Error</source>
+        <translation>VLT AI · Ошибка</translation>
+    </message>
+    <message>
+        <source> · %1 notes</source>
+        <translation> · нот: %1</translation>
+    </message>
+    <message>
+        <source> · in project</source>
+        <translation> · в проекте</translation>
+    </message>
+    <message>
+        <source>Used by: %1</source>
+        <translation>Используется: %1</translation>
+    </message>
+    <message>
+        <source>Attached folder · %1</source>
+        <translation>Прикреплённая папка · %1</translation>
+    </message>
+    <message>
+        <source>Indexed files: %1 (up to 200 shown). Refresh the added library to include new files.</source>
+        <translation>Файлов в списке: %1 (до 200). Обновите библиотеку, чтобы добавить новые файлы.</translation>
+    </message>
+    <message>
+        <source>Double-click a folder to see indexed samples.</source>
+        <translation>Дважды нажмите на папку, чтобы посмотреть сэмплы в индексе.</translation>
+    </message>
+    <message>
+        <source>AI model</source>
+        <translation>Модель ИИ</translation>
+    </message>
+    <message>
+        <source>Write a message…</source>
+        <translation>Напишите сообщение…</translation>
+    </message>
+    <message>
+        <source>You</source>
+        <translation>Вы</translation>
+    </message>
+    <message>
+        <source>Create track</source>
+        <translation>Создание дорожки</translation>
+    </message>
+    <message>
+        <source>Create MIDI clip</source>
+        <translation>Создание MIDI-клипа</translation>
+    </message>
+    <message>
+        <source>Write notes</source>
+        <translation>Запись нот</translation>
+    </message>
+    <message>
+        <source>Prepare musical variations</source>
+        <translation>Подготовка музыкальных вариантов</translation>
+    </message>
+    <message>
+        <source>Read project</source>
+        <translation>Чтение проекта</translation>
+    </message>
+    <message>
+        <source>Load sample</source>
+        <translation>Загрузка семпла</translation>
+    </message>
+    <message>
+        <source>Add instrument or effect</source>
+        <translation>Добавление инструмента или эффекта</translation>
+    </message>
+    <message>
+        <source>Adjust sound</source>
+        <translation>Настройка звучания</translation>
+    </message>
+    <message>
+        <source>Project action</source>
+        <translation>Действие в проекте</translation>
+    </message>
+    <message>
+        <source>AI chat</source>
+        <translation>AI-чат</translation>
+    </message>
+    <message>
+        <source>AI music</source>
+        <translation>AI-музыка</translation>
+    </message>
 </context>
 <context>
     <name>AiSettingsPage</name>
@@ -767,6 +1085,26 @@ Anything changed since — by the assistant or by you — is undone as well. One
     <message>
         <source>Instructions: %1 (%2). Playbooks: %3.</source>
         <translation>Инструкции: %1 (%2). Плейбуки: %3.</translation>
+    </message>
+    <message>
+        <source> min</source>
+        <translation> мин</translation>
+    </message>
+    <message>
+        <source>How long to wait without receiving data. Stop cancels immediately.</source>
+        <translation>Время ожидания без получения данных. Кнопка «Стоп» отменяет запрос сразу.</translation>
+    </message>
+    <message>
+        <source>Response timeout</source>
+        <translation>Ожидание ответа</translation>
+    </message>
+    <message>
+        <source>Automatic retries</source>
+        <translation>Повторные попытки</translation>
+    </message>
+    <message>
+        <source>Retry temporary errors before any output arrives. Partial responses are kept for manual continuation.</source>
+        <translation>Повторять запрос при временной ошибке до начала ответа. Частичный ответ сохраняется для продолжения вручную.</translation>
     </message>
 </context>
 <context>
@@ -1262,6 +1600,7 @@ Anything changed since — by the assistant or by you — is undone as well. One
 </context>
 <context>
     <name>AutomationEditorWindow</name>
+    <message><source>Master</source><translation>Мастер</translation></message>
     <message>
         <source>Click to add · Shift-click: add on curve · drag to move · Shift-drag: time/range · double-click: reset · Alt-segment: curve</source>
         <translation>Клик: добавить · Shift+клик: добавить на кривой · перетаскивание: переместить · Shift+перетаскивание: время/диапазон · двойной клик: сброс · Alt+сегмент: изгиб</translation>
@@ -1532,6 +1871,18 @@ Anything changed since — by the assistant or by you — is undone as well. One
 </context>
 <context>
     <name>BounceInPlaceDialog</name>
+    <message>
+        <source>Mix into one new audio track</source>
+        <translation>Свести в одну новую аудиодорожку</translation>
+    </message>
+    <message>
+        <source>Bounce result</source>
+        <translation>Результат сведения</translation>
+    </message>
+    <message>
+        <source>Selected sources will be mixed into one audio clip on a new track. The rendered source regions will be muted.</source>
+        <translation>Выбранные источники будут сведены в один аудиоклип на новой дорожке. Отрендеренные участки исходников будут заглушены.</translation>
+    </message>
     <message>
         <source>Bounce in Place</source>
         <translation type="unfinished"></translation>
@@ -1911,6 +2262,17 @@ Will be skipped: %3</source>
 </context>
 <context>
     <name>ChannelStrip</name>
+    <message><source>Show Master on Timeline</source><translation>Показать мастер на таймлайне</translation></message>
+    <message><source>Show on Timeline</source><translation>Показать на таймлайне</translation></message>
+    <message><source>Plugins and Channel Settings</source><translation>Плагины и настройки канала</translation></message>
+    <message><source>Reset Pan</source><translation>Сбросить панораму</translation></message>
+    <message><source>Reset Volume</source><translation>Сбросить громкость</translation></message>
+    <message><source>Rename Track…</source><translation>Переименовать дорожку…</translation></message>
+    <message><source>Rename Track</source><translation>Переименовать дорожку</translation></message>
+    <message><source>Name:</source><translation>Название:</translation></message>
+    <message><source>Duplicate Track</source><translation>Дублировать дорожку</translation></message>
+    <message><source>Create Track</source><translation>Создать дорожку</translation></message>
+    <message><source>Create Tracks…</source><translation>Создать дорожки…</translation></message>
     <message>
         <source>Choose…</source>
         <translation>Выбрать…</translation>
@@ -2354,7 +2716,7 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     </message>
     <message>
         <source>Inversion</source>
-        <translation>Инверсия</translation>
+        <translation>Обращение</translation>
     </message>
     <message>
         <source>Double the root an octave up</source>
@@ -2363,6 +2725,118 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message>
         <source>Add a root an octave down</source>
         <translation>Добавить основу на октаву ниже</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>Источник</translation>
+    </message>
+    <message>
+        <source>From existing notes</source>
+        <translation>Из существующих нот</translation>
+    </message>
+    <message>
+        <source>New chord</source>
+        <translation>Новый аккорд</translation>
+    </message>
+    <message>
+        <source>Root position</source>
+        <translation>Основной вид</translation>
+    </message>
+    <message>
+        <source>Root note</source>
+        <translation>Основная нота</translation>
+    </message>
+    <message>
+        <source>Velocity</source>
+        <translation>Сила нажатия</translation>
+    </message>
+    <message>
+        <source>Start, beats</source>
+        <translation>Начало, доли</translation>
+    </message>
+    <message>
+        <source>Length, beats</source>
+        <translation>Длина, доли</translation>
+    </message>
+    <message>
+        <source>Double root +1 octave</source>
+        <translation>Основа +1 октава</translation>
+    </message>
+    <message>
+        <source>Bass −1 octave</source>
+        <translation>Бас −1 октава</translation>
+    </message>
+    <message>
+        <source>Adds a new chord; existing notes stay.</source>
+        <translation>Добавляет новый аккорд, сохраняя существующие ноты.</translation>
+    </message>
+    <message>
+        <source>Builds chords from %1 notes.</source>
+        <translation>Строит аккорды из %1 нот.</translation>
+    </message>
+    <message>
+        <source>Select notes, or choose New chord.</source>
+        <translation>Выделите ноты или выберите «Новый аккорд».</translation>
+    </message>
+    <message>
+        <source>Major</source>
+        <translation>Мажор</translation>
+    </message>
+    <message>
+        <source>Minor</source>
+        <translation>Минор</translation>
+    </message>
+    <message>
+        <source>Diminished</source>
+        <translation>Уменьшённый</translation>
+    </message>
+    <message>
+        <source>Augmented</source>
+        <translation>Увеличенный</translation>
+    </message>
+    <message>
+        <source>Major 7</source>
+        <translation>Большой мажорный септаккорд</translation>
+    </message>
+    <message>
+        <source>Minor 7</source>
+        <translation>Малый минорный септаккорд</translation>
+    </message>
+    <message>
+        <source>Dominant 7</source>
+        <translation>Доминантсептаккорд</translation>
+    </message>
+    <message>
+        <source>Minor 7♭5</source>
+        <translation>Полууменьшённый септаккорд</translation>
+    </message>
+    <message>
+        <source>Diminished 7</source>
+        <translation>Уменьшённый септаккорд</translation>
+    </message>
+    <message>
+        <source>Sus2</source>
+        <translation>Sus2</translation>
+    </message>
+    <message>
+        <source>Sus4</source>
+        <translation>Sus4</translation>
+    </message>
+    <message>
+        <source>Add9</source>
+        <translation>Add9</translation>
+    </message>
+    <message>
+        <source>Major 9</source>
+        <translation>Мажорный нонаккорд</translation>
+    </message>
+    <message>
+        <source>Minor 9</source>
+        <translation>Минорный нонаккорд</translation>
+    </message>
+    <message>
+        <source>Power</source>
+        <translation>Квинта</translation>
     </message>
 </context>
 <context>
@@ -4085,15 +4559,25 @@ Up to 10 MB</source>
     </message>
     <message>
         <source>Ignore mute and solo</source>
-        <translation>Игнорировать выключенные и только на одном канале</translation>
+        <translation>Игнорировать Mute и Solo</translation>
     </message>
     <message>
         <source>Stems ignore faders and pan (pre-fader)</source>
         <translation>Стем игнорируют фейдеры и панораму (до фейдера)</translation>
     </message>
     <message>
+        <source>Pre-fader stems</source>
+        <translation>Стемы до фейдера</translation>
+    </message>
+    <message>
+        <source>+
+Cover</source>
+        <translation>+
+Обложка</translation>
+    </message>
+    <message>
         <source>Take each stem from ahead of its fader, so it arrives at unity with pan centred. The master mix is unaffected.</source>
-        <translation>Каждый стем берется с учетом его фейдера, поэтому он достигает единицы с центрированной панорамой. Мастер-микс не затрагивается.</translation>
+        <translation>Каждый стем берётся до фейдера: с единичным усилением и панорамой по центру. Мастер-микс не затрагивается.</translation>
     </message>
     <message>
         <source>Dither to 16/24-bit</source>
@@ -5638,6 +6122,7 @@ Release to keep this clip in the project</source><translation>Сохранить
 </context>
 <context>
     <name>MainWindow</name>
+    <message><source>Instrument %1</source><translation>Инструмент %1</translation></message>
     <message>
         <source>Plugin scan could not finish. Open Plugin Manager for details.</source>
         <translation>Не удалось завершить сканирование. Подробности — в менеджере плагинов.</translation>
@@ -8108,6 +8593,8 @@ The current project has not been changed.</source>
 </context>
 <context>
     <name>MixerWidget</name>
+    <message><source>Show Master on Timeline</source><translation>Показать мастер на таймлайне</translation></message>
+    <message><source>Create Tracks…</source><translation>Создать дорожки…</translation></message>
     <message>
         <source>MIXER</source>
         <translation>МИКШЕР</translation>
@@ -9207,6 +9694,34 @@ Click to load. Drag onto Audio FX.</source>
         <source>%1 · previewing — press Apply to keep it</source>
         <translation>%1 · предварительный просмотр — нажмите Применить, чтобы сохранить</translation>
     </message>
+    <message>
+        <source>Slide</source>
+        <translation>Слайд</translation>
+    </message>
+    <message>
+        <source>Slide editing requires collaboration protocol 5. Reconnect to an updated session.</source>
+        <translation>Для редактирования слайдов нужен протокол совместной работы 5. Подключитесь к обновлённой сессии.</translation>
+    </message>
+    <message>
+        <source>Inactive slide: no base note is sounding here. Rebind it or extend the base note.</source>
+        <translation>Слайд неактивен: здесь нет звучащей основной ноты. Перепривяжите слайд или продлите ноту.</translation>
+    </message>
+    <message>
+        <source>Slide curve — inactive: rebind or extend the base note</source>
+        <translation>Слайд неактивен: перепривяжите или продлите основную ноту</translation>
+    </message>
+    <message>
+        <source>Replace sample · %1</source>
+        <translation>Заменить семпл · %1</translation>
+    </message>
+    <message>
+        <source>Could not load sample: %1</source>
+        <translation>Не удалось загрузить семпл: %1</translation>
+    </message>
+    <message>
+        <source>Sample replaced: %1 — sampler settings kept</source>
+        <translation>Семпл заменён: %1 — настройки сохранены</translation>
+    </message>
 </context>
 <context>
     <name>PianoRollWindow</name>
@@ -9979,6 +10494,90 @@ Click to load. Drag onto Audio FX.</source>
         <source>Show all pattern sources automatically</source>
         <translation>Автоматически показывать все звуки паттерна</translation>
     </message>
+    <message>
+        <source>Chord</source>
+        <translation>Аккорд</translation>
+    </message>
+    <message>
+        <source>MIDI exported</source>
+        <translation>MIDI экспортирован</translation>
+    </message>
+    <message>
+        <source>One note</source>
+        <translation>Одна нота</translation>
+    </message>
+    <message>
+        <source>Ordinary notes were exported. Slide curves are not included in MIDI export; use audio export to preserve them.</source>
+        <translation>Обычные ноты экспортированы. Кривые слайдов не входят в MIDI-файл. Для сохранения слайдов используйте экспорт аудио.</translation>
+    </message>
+    <message>
+        <source>Slide</source>
+        <translation>Слайд</translation>
+    </message>
+    <message>
+        <source>Slide (6)</source>
+        <translation>Слайд (6)</translation>
+    </message>
+    <message>
+        <source>Slide targets</source>
+        <translation>Воздействие слайда</translation>
+    </message>
+    <message>
+        <source>Slide the selected sounding note, or a fixed set of chord notes</source>
+        <translation>Слайд выбранной звучащей ноты или сохранённого набора нот аккорда</translation>
+    </message>
+    <message>
+        <source>Slide editing requires collaboration protocol 5. Reconnect to an updated session.</source>
+        <translation>Для редактирования слайдов нужен протокол совместной работы 5. Подключитесь к обновлённой сессии.</translation>
+    </message>
+    <message>
+        <source>Piano roll horizontal scroll</source>
+        <translation>Прокрутка piano roll по времени</translation>
+    </message>
+    <message>
+        <source>Move left or right through the clip</source>
+        <translation>Перемещение по времени внутри клипа</translation>
+    </message>
+    <message>
+        <source>Piano roll vertical scroll</source>
+        <translation>Прокрутка piano roll по высоте нот</translation>
+    </message>
+    <message>
+        <source>Move up or down through the notes</source>
+        <translation>Перемещение вверх или вниз по нотам</translation>
+    </message>
+    <message>
+        <source>Note width / horizontal zoom</source>
+        <translation>Ширина нот / масштаб по времени</translation>
+    </message>
+    <message>
+        <source>Note width: drag left or right; Shift for precision; double-click resets</source>
+        <translation>Ширина нот: тяните влево или вправо; Shift — точная настройка; двойной щелчок — сброс</translation>
+    </message>
+    <message>
+        <source>Note height: drag up or down; Shift for precision; double-click resets</source>
+        <translation>Высота нот: тяните вверх или вниз; Shift — точная настройка; двойной щелчок — сброс</translation>
+    </message>
+    <message>
+        <source>Zoom %1%</source>
+        <translation>Масштаб %1%</translation>
+    </message>
+    <message>
+        <source>Note height %1 px</source>
+        <translation>Высота нот %1 px</translation>
+    </message>
+    <message>
+        <source>Chords…</source>
+        <translation>Аккорды…</translation>
+    </message>
+    <message>
+        <source>Chord Generator (%1)</source>
+        <translation>Генератор аккордов (%1)</translation>
+    </message>
+    <message>
+        <source>%1 · bar %2</source>
+        <translation>%1 · такт %2</translation>
+    </message>
 </context>
 <context>
     <name>PluginEditorWindow</name>
@@ -10141,6 +10740,102 @@ Click to load. Drag onto Audio FX.</source>
     <message>
         <source>Automate this parameter</source>
         <translation>Автоматизировать этот параметр</translation>
+    </message>
+    <message>
+        <source> s</source>
+        <translation> с</translation>
+    </message>
+    <message>
+        <source> st</source>
+        <translation> пт</translation>
+    </message>
+    <message>
+        <source>Affects the entire channel. Match the bend range in the instrument.</source>
+        <translation>Влияет на весь канал. Установите такой же диапазон изгиба в инструменте.</translation>
+    </message>
+    <message>
+        <source>Bend range ±</source>
+        <translation>Диапазон изгиба ±</translation>
+    </message>
+    <message>
+        <source>Channel 1 is common. Channels 2–16 retain pitch through release. Match the member bend range in the instrument.</source>
+        <translation>Канал 1 — общий. Каналы 2–16 сохраняют высоту на релизе. Установите такой же диапазон изгиба голосов в инструменте.</translation>
+    </message>
+    <message>
+        <source>Delivery</source>
+        <translation>Передача</translation>
+    </message>
+    <message>
+        <source>Independent pitch for each sounding note.</source>
+        <translation>Независимая высота каждой звучащей ноты.</translation>
+    </message>
+    <message>
+        <source>MPE</source>
+        <translation>MPE</translation>
+    </message>
+    <message>
+        <source>MPE overloaded: new voice skipped</source>
+        <translation>Перегрузка MPE: новый голос пропущен</translation>
+    </message>
+    <message>
+        <source>MPE · channels 2–16</source>
+        <translation>MPE · каналы 2–16</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>Выключено</translation>
+    </message>
+    <message>
+        <source>Per note</source>
+        <translation>По нотам</translation>
+    </message>
+    <message>
+        <source>Per-note pitch</source>
+        <translation>Высота каждой ноты</translation>
+    </message>
+    <message>
+        <source>Pitch Bend</source>
+        <translation>Pitch Bend</translation>
+    </message>
+    <message>
+        <source>Pitch Bend · affects the entire channel</source>
+        <translation>Pitch Bend · влияет на весь канал</translation>
+    </message>
+    <message>
+        <source>Slide</source>
+        <translation>Слайд</translation>
+    </message>
+    <message>
+        <source>Slide !</source>
+        <translation>Слайд !</translation>
+    </message>
+    <message>
+        <source>Slide delivery</source>
+        <translation>Передача слайда</translation>
+    </message>
+    <message>
+        <source>Slide delivery settings</source>
+        <translation>Настройки передачи слайда</translation>
+    </message>
+    <message>
+        <source>Slide exceeds the instrument bend range</source>
+        <translation>Слайд выходит за диапазон изгиба инструмента</translation>
+    </message>
+    <message>
+        <source>Slide unavailable or disabled</source>
+        <translation>Слайд недоступен или выключен</translation>
+    </message>
+    <message>
+        <source>The requested mode is unsupported or disabled.</source>
+        <translation>Выбранный режим не поддерживается или выключен.</translation>
+    </message>
+    <message>
+        <source>Unknown release reserve</source>
+        <translation>Резерв для неизвестного релиза</translation>
+    </message>
+    <message>
+        <source>Slide editing requires collaboration protocol 5. Reconnect to an updated session.</source>
+        <translation>Для редактирования слайдов нужен протокол совместной работы 5. Подключитесь к обновлённой сессии.</translation>
     </message>
 </context>
 <context>
@@ -11872,6 +12567,59 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
         <source>Version 1 · Offline Render</source>
         <translation>Версия 1 · Offline Render</translation>
     </message>
+    <message>
+        <source>Beats</source>
+        <translation>Доли</translation>
+    </message>
+    <message>
+        <source>Legato</source>
+        <translation>Legato</translation>
+    </message>
+    <message>
+        <source>Legato time</source>
+        <translation>Время Legato</translation>
+    </message>
+    <message>
+        <source>Linear</source>
+        <translation>Линейный</translation>
+    </message>
+    <message>
+        <source>MIDI Bend Range</source>
+        <translation>Диапазон MIDI Bend</translation>
+    </message>
+    <message>
+        <source>Pitch continuity</source>
+        <translation>Непрерывность высоты</translation>
+    </message>
+    <message>
+        <source>S-Curve</source>
+        <translation>S-образная</translation>
+    </message>
+    <message>
+        <source>Shape</source>
+        <translation>Форма</translation>
+    </message>
+    <message>
+        <source>Slide / Legato</source>
+        <translation>Слайд / Legato</translation>
+    </message>
+    <message>
+        <source>Slide notes control each voice independently. Their duration sets the transition time. Legato connects overlapping notes without restarting the sample. MIDI Bend Range applies to incoming Pitch Bend.</source>
+        <translation>Слайд-ноты управляют каждым голосом отдельно. Их длительность задаёт время перехода. Legato связывает перекрывающиеся ноты без перезапуска семпла. Диапазон MIDI Bend относится к входящему Pitch Bend.</translation>
+    </message>
+    <message>
+        <source>Smoothing</source>
+        <translation>Сглаживание</translation>
+    </message>
+    <message>
+        <source>Sync</source>
+        <translation>Синхр.</translation>
+    </message>
+    <message><source>Division</source><translation>Деление</translation></message>
+    <message><source>Slide editing requires collaboration protocol 5. Reconnect to an updated session.</source><translation>Для редактирования слайдов нужен протокол совместной работы 5. Подключитесь к обновлённой сессии.</translation></message>
+    <message><source>Slide duration sets the transition; the voice keeps playing.
+Legato connects overlapping notes. MIDI Bend Range affects incoming MIDI.</source><translation>Длительность слайда задаёт переход; звучащий голос сохраняется.
+Legato связывает перекрывающиеся ноты. Диапазон MIDI Bend относится к входящему MIDI.</translation></message>
 </context>
 <context>
     <name>SamplerWaveform</name>
@@ -14060,6 +14808,26 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
 <context>
     <name>TrackListWidget</name>
     <message>
+        <source>Rename Track…</source>
+        <translation>Переименовать дорожку…</translation>
+    </message>
+    <message>
+        <source>Double-click to restore track height</source>
+        <translation>Двойной щелчок — развернуть дорожку</translation>
+    </message>
+    <message>
+        <source>Double-click to minimize track</source>
+        <translation>Двойной щелчок — свернуть дорожку</translation>
+    </message>
+    <message>
+        <source>Minimize track</source>
+        <translation>Свернуть дорожку</translation>
+    </message>
+    <message>
+        <source>Restore track height</source>
+        <translation>Развернуть дорожку</translation>
+    </message>
+    <message>
         <source>Icon for %1</source>
         <translation>Иконка трека «%1»</translation>
     </message>
@@ -14630,6 +15398,10 @@ Restart: when playback is paused, Space jumps back to the position where the cur
 </context>
 <context>
     <name>UndoCommands</name>
+    <message>
+        <source>Align Warp Timing</source>
+        <translation>Выравнивание ритма Warp</translation>
+    </message>
     <message><source>Save Clip to Library</source><translation>Сохранить клип в хранилище</translation></message>
     <message><source>Rename Library Clip</source><translation>Переименовать сохранённый клип</translation></message>
     <message><source>Remove Library Clip</source><translation>Удалить сохранённый клип</translation></message>
@@ -14951,6 +15723,18 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message>
         <source>Strip Silence</source>
         <translation>Удалить тишину</translation>
+    </message>
+    <message>
+        <source>Edit Slide Notes</source>
+        <translation>Изменить слайд-ноты</translation>
+    </message>
+    <message>
+        <source>Extend Slide Base Notes</source>
+        <translation>Продлить основные ноты слайда</translation>
+    </message>
+    <message>
+        <source>Set Slide Delivery</source>
+        <translation>Настроить передачу слайда</translation>
     </message>
 </context>
 <context>
@@ -15853,6 +16637,7 @@ Restart: when playback is paused, Space jumps back to the position where the cur
 </context>
 <context>
     <name>ui</name>
+    <message><source>Add Instrument Track</source><translation>Добавить инструментальную дорожку</translation></message>
     <message>
         <source>Add Audio Track</source>
         <translation>Добавить аудиодорожку</translation>
@@ -17354,6 +18139,525 @@ I измеряется при воспроизведении. Нажмите д�
     <message>
         <source>Default</source>
         <translation>По умолчанию</translation>
+    </message>
+</context>
+<context>
+    <name>WarpEditorWidget</name>
+    <message>
+        <source> ms</source>
+        <translation> мс</translation>
+    </message>
+    <message>
+        <source> · ambiguous</source>
+        <translation> · неоднозначно</translation>
+    </message>
+    <message>
+        <source>%1 attacks</source>
+        <translation>Атак: %1</translation>
+    </message>
+    <message>
+        <source>%1 bars</source>
+        <translation>Тактов: %1</translation>
+    </message>
+    <message>
+        <source>%1 moves · %2 ms max · %3 to review</source>
+        <translation>Смещений: %1 · до %2 мс · проверить: %3</translation>
+    </message>
+    <message>
+        <source>%1 transient suggestions · Double-click to add · Ctrl+wheel to zoom</source>
+        <translation>Подсказок: %1 · Двойной щелчок — маркер · Ctrl+колесо — масштаб</translation>
+    </message>
+    <message>
+        <source>%1 uncertain attacks · %2 moves limited by neighbouring markers</source>
+        <translation>Неуверенных атак: %1 · Смещений, ограниченных соседними маркерами: %2</translation>
+    </message>
+    <message>
+        <source>After</source>
+        <translation>После</translation>
+    </message>
+    <message>
+        <source>Algorithm</source>
+        <translation>Алгоритм</translation>
+    </message>
+    <message>
+        <source>Alternatives: %1 BPM</source>
+        <translation>Варианты: %1 BPM</translation>
+    </message>
+    <message>
+        <source>Analysis failed. Manual Warp editing is available.</source>
+        <translation>Анализ не выполнен. Ручное редактирование Warp доступно.</translation>
+    </message>
+    <message>
+        <source>Analysis unavailable</source>
+        <translation>Анализ недоступен</translation>
+    </message>
+    <message>
+        <source>Analyzing transients… You can already add markers.</source>
+        <translation>Анализ транзиентов… Уже можно добавлять маркеры.</translation>
+    </message>
+    <message>
+        <source>Analyzing…</source>
+        <translation>Анализ…</translation>
+    </message>
+    <message>
+        <source>Apply</source>
+        <translation>Применить</translation>
+    </message>
+    <message>
+        <source>Audio warp markers</source>
+        <translation>Маркеры Warp</translation>
+    </message>
+    <message>
+        <source>Beat</source>
+        <translation>Доля</translation>
+    </message>
+    <message>
+        <source>Before</source>
+        <translation>До</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Choose a source with at least %1 full bars from the range start.</source>
+        <translation>Выберите источник длиной не менее %1 полных тактов от начала диапазона.</translation>
+    </message>
+    <message>
+        <source>Close Warp</source>
+        <translation>Закрыть Warp</translation>
+    </message>
+    <message>
+        <source>Complex</source>
+        <translation>Комплексный</translation>
+    </message>
+    <message>
+        <source>Could not save the groove preset.</source>
+        <translation>Не удалось сохранить грув.</translation>
+    </message>
+    <message>
+        <source>Delete</source>
+        <translation>Удалить</translation>
+    </message>
+    <message>
+        <source>Detecting tempo…</source>
+        <translation>Определение темпа…</translation>
+    </message>
+    <message>
+        <source>Division</source>
+        <translation>Деление</translation>
+    </message>
+    <message>
+        <source>Double-click: marker · Drag ruler: range · Ctrl+wheel: zoom</source>
+        <translation>Двойной щелчок — маркер · Выделение на линейке — диапазон · Ctrl+колесо — масштаб</translation>
+    </message>
+    <message>
+        <source>Drag to navigate · Drag the edges to zoom · Arrow keys to pan</source>
+        <translation>Перетаскивание — навигация · Края — масштаб · Стрелки — прокрутка</translation>
+    </message>
+    <message>
+        <source>Drums</source>
+        <translation>Ударные</translation>
+    </message>
+    <message>
+        <source>Extract groove</source>
+        <translation>Извлечь грув</translation>
+    </message>
+    <message>
+        <source>Fit</source>
+        <translation>Вписать</translation>
+    </message>
+    <message>
+        <source>From beat</source>
+        <translation>С доли</translation>
+    </message>
+    <message>
+        <source>Groove</source>
+        <translation>Грув</translation>
+    </message>
+    <message>
+        <source>Groove length</source>
+        <translation>Длина грува</translation>
+    </message>
+    <message>
+        <source>Groove name</source>
+        <translation>Название грува</translation>
+    </message>
+    <message>
+        <source>Groove saved · Use Preview groove to audition it</source>
+        <translation>Грув сохранён · Нажмите «Прослушать грув»</translation>
+    </message>
+    <message>
+        <source>Groove source</source>
+        <translation>Источник грува</translation>
+    </message>
+    <message>
+        <source>Include uncertain attacks</source>
+        <translation>Включить неуверенные атаки</translation>
+    </message>
+    <message>
+        <source>Keep timing within</source>
+        <translation>Сохранить смещения в пределах</translation>
+    </message>
+    <message>
+        <source>Length</source>
+        <translation>Длина</translation>
+    </message>
+    <message>
+        <source>Lock Position</source>
+        <translation>Зафиксировать позицию</translation>
+    </message>
+    <message>
+        <source>Lock position</source>
+        <translation>Зафиксировать позицию</translation>
+    </message>
+    <message>
+        <source>Loop</source>
+        <translation>Петля</translation>
+    </message>
+    <message>
+        <source>Missing audio</source>
+        <translation>Аудио недоступно</translation>
+    </message>
+    <message>
+        <source>No reliable attacks in this range. Adjust sensitivity or choose a MIDI clip.</source>
+        <translation>В диапазоне нет уверенных атак. Измените чувствительность или выберите MIDI-клип.</translation>
+    </message>
+    <message>
+        <source>No timing changes</source>
+        <translation>Нет изменений времени</translation>
+    </message>
+    <message>
+        <source>Preserve Pitch</source>
+        <translation>Сохранять высоту тона</translation>
+    </message>
+    <message>
+        <source>Preview cancelled because the clip or project changed.</source>
+        <translation>Предпрослушивание отменено: клип или проект изменился.</translation>
+    </message>
+    <message>
+        <source>Preview cancelled · Original timing restored</source>
+        <translation>Предпрослушивание отменено · Исходный ритм восстановлен</translation>
+    </message>
+    <message>
+        <source>Preview groove</source>
+        <translation>Прослушать грув</translation>
+    </message>
+    <message>
+        <source>Preview only · Compare Before / After, then Apply or Cancel</source>
+        <translation>Предпрослушивание · Сравните «До / После», затем примените или отмените</translation>
+    </message>
+    <message>
+        <source>Project grid</source>
+        <translation>Сетка проекта</translation>
+    </message>
+    <message>
+        <source>Quantize</source>
+        <translation>Квантизация</translation>
+    </message>
+    <message>
+        <source>Range</source>
+        <translation>Диапазон</translation>
+    </message>
+    <message>
+        <source>Range end, beat</source>
+        <translation>Конец диапазона, доля</translation>
+    </message>
+    <message>
+        <source>Range start, beat</source>
+        <translation>Начало диапазона, доля</translation>
+    </message>
+    <message>
+        <source>Reset Position</source>
+        <translation>Сбросить позицию</translation>
+    </message>
+    <message>
+        <source>Reset map</source>
+        <translation>Сбросить карту</translation>
+    </message>
+    <message>
+        <source>Right-click an audio clip and choose Warp Audio</source>
+        <translation>Нажмите ПКМ по аудиоклипу и выберите Warp Audio</translation>
+    </message>
+    <message>
+        <source>Save groove</source>
+        <translation>Сохранить грув</translation>
+    </message>
+    <message>
+        <source>Save groove…</source>
+        <translation>Сохранить грув…</translation>
+    </message>
+    <message>
+        <source>Select an audio clip</source>
+        <translation>Выберите аудиоклип</translation>
+    </message>
+    <message>
+        <source>Selected marker</source>
+        <translation>Выбранный маркер</translation>
+    </message>
+    <message>
+        <source>Sensitivity</source>
+        <translation>Чувствительность</translation>
+    </message>
+    <message>
+        <source>Snap</source>
+        <translation>Привязка</translation>
+    </message>
+    <message>
+        <source>Sound</source>
+        <translation>Звук</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>Источник</translation>
+    </message>
+    <message>
+        <source>Source %1 BPM · confidence %2%</source>
+        <translation>Источник: %1 BPM · уверенность %2%</translation>
+    </message>
+    <message>
+        <source>Source %1 ms → Beat %2
+Δ %5 ms · Left %3x · Right %4x</source>
+        <translation>Источник %1 мс → Доля %2
+Δ %5 мс · Слева %3x · Справа %4x</translation>
+    </message>
+    <message>
+        <source>Source audio is unavailable.</source>
+        <translation>Исходное аудио недоступно.</translation>
+    </message>
+    <message>
+        <source>Source position, milliseconds</source>
+        <translation>Позиция в источнике, миллисекунды</translation>
+    </message>
+    <message>
+        <source>Stretch algorithm</source>
+        <translation>Алгоритм растяжения</translation>
+    </message>
+    <message>
+        <source>Suggest</source>
+        <translation>Предложить</translation>
+    </message>
+    <message>
+        <source>Suggest alignment</source>
+        <translation>Предложить выравнивание</translation>
+    </message>
+    <message>
+        <source>Swing</source>
+        <translation>Свинг</translation>
+    </message>
+    <message>
+        <source>Swing division</source>
+        <translation>Деление свинга</translation>
+    </message>
+    <message>
+        <source>Target position, beat</source>
+        <translation>Целевая позиция, доля</translation>
+    </message>
+    <message>
+        <source>Tempo unavailable</source>
+        <translation>Темп не определён</translation>
+    </message>
+    <message>
+        <source>The user groove library is full (64 presets).</source>
+        <translation>Библиотека грувов заполнена (64 пресета).</translation>
+    </message>
+    <message>
+        <source>This audio clip</source>
+        <translation>Этот аудиоклип</translation>
+    </message>
+    <message>
+        <source>This proposal exceeds the supported stretch range.</source>
+        <translation>Предложение превышает допустимый диапазон растяжения.</translation>
+    </message>
+    <message>
+        <source>Timing</source>
+        <translation>Ритм</translation>
+    </message>
+    <message>
+        <source>Timing applied · Undo restores the previous map</source>
+        <translation>Ритм применён · «Отменить» восстановит прежнюю карту</translation>
+    </message>
+    <message>
+        <source>Timing strength</source>
+        <translation>Сила выравнивания</translation>
+    </message>
+    <message>
+        <source>To beat</source>
+        <translation>До доли</translation>
+    </message>
+    <message>
+        <source>Tolerance</source>
+        <translation>Допуск</translation>
+    </message>
+    <message>
+        <source>Transient sensitivity</source>
+        <translation>Чувствительность к транзиентам</translation>
+    </message>
+    <message>
+        <source>Unlock</source>
+        <translation>Разблокировать</translation>
+    </message>
+    <message>
+        <source>Vocal</source>
+        <translation>Вокал</translation>
+    </message>
+    <message>
+        <source>Warp</source>
+        <translation>Warp</translation>
+    </message>
+    <message>
+        <source>Warp audio editor</source>
+        <translation>Аудиоредактор Warp</translation>
+    </message>
+    <message>
+        <source>Warp grid</source>
+        <translation>Сетка Warp</translation>
+    </message>
+    <message>
+        <source>Warp overview navigation</source>
+        <translation>Обзор и навигация Warp</translation>
+    </message>
+    <message>
+        <source>Warp settings</source>
+        <translation>Настройки Warp</translation>
+    </message>
+    <message>
+        <source>Whole clip</source>
+        <translation>Весь клип</translation>
+    </message>
+</context>
+<context>
+    <name>ui::LlmClient</name>
+    <message>
+        <source>Waiting for the model…</source>
+        <translation>Ожидание модели…</translation>
+    </message>
+    <message>
+        <source>Model busy. Retry %1/%2 in %3 s…</source>
+        <translation>Модель занята. Попытка %1/%2 через %3 с…</translation>
+    </message>
+</context>
+<context>
+    <name>SlideCurveEditor</name>
+    <message>
+        <source> % time</source>
+        <translation> % времени</translation>
+    </message>
+    <message>
+        <source> st</source>
+        <translation> пт</translation>
+    </message>
+    <message>
+        <source>Audition phrase</source>
+        <translation>Прослушать фразу</translation>
+    </message>
+    <message>
+        <source>Copy shape</source>
+        <translation>Копировать форму</translation>
+    </message>
+    <message>
+        <source>Curve preset</source>
+        <translation>Готовая форма</translation>
+    </message>
+    <message>
+        <source>Drag points; click to add. Alt-drag a segment to bend it. Right-click deletes a point. Escape cancels the gesture.</source>
+        <translation>Перетаскивайте точки; щелчок добавляет точку. Alt и перетаскивание изгибают сегмент. Правая кнопка удаляет точку. Esc отменяет жест.</translation>
+    </message>
+    <message>
+        <source>Drawing tool</source>
+        <translation>Инструмент рисования</translation>
+    </message>
+    <message>
+        <source>Extend base note</source>
+        <translation>Продлить основную ноту</translation>
+    </message>
+    <message>
+        <source>First point follows the voice · Alt-drag bends · Esc cancels</source>
+        <translation>Начало следует голосу · Alt изгибает · Esc отменяет</translation>
+    </message>
+    <message>
+        <source>Linear</source>
+        <translation>Линейный</translation>
+    </message>
+    <message>
+        <source>Paste shape</source>
+        <translation>Вставить форму</translation>
+    </message>
+    <message>
+        <source>Pencil</source>
+        <translation>Карандаш</translation>
+    </message>
+    <message>
+        <source>Pitch: cent</source>
+        <translation>Высота: цент</translation>
+    </message>
+    <message>
+        <source>Pitch: free</source>
+        <translation>Высота: свободно</translation>
+    </message>
+    <message>
+        <source>Pitch: semitone</source>
+        <translation>Высота: полутон</translation>
+    </message>
+    <message>
+        <source>Points</source>
+        <translation>Точки</translation>
+    </message>
+    <message>
+        <source>Rebind</source>
+        <translation>Перепривязать</translation>
+    </message>
+    <message>
+        <source>Return</source>
+        <translation>Возврат</translation>
+    </message>
+    <message>
+        <source>Selected point pitch in semitones and cents</source>
+        <translation>Высота выбранной точки в полутонах и центах</translation>
+    </message>
+    <message>
+        <source>Selected point time</source>
+        <translation>Время выбранной точки</translation>
+    </message>
+    <message>
+        <source>Shape…</source>
+        <translation>Форма…</translation>
+    </message>
+    <message>
+        <source>Slide curve</source>
+        <translation>Кривая слайда</translation>
+    </message>
+    <message>
+        <source>Slide pitch curve</source>
+        <translation>Кривая высоты слайда</translation>
+    </message>
+    <message>
+        <source>Smooth</source>
+        <translation>Плавный</translation>
+    </message>
+    <message>
+        <source>Time in slide · %1 beats</source>
+        <translation>Время слайда · %1 доли</translation>
+    </message>
+    <message>
+        <source>Time: 1/16</source>
+        <translation>Время: 1/16</translation>
+    </message>
+    <message>
+        <source>Time: 1/32</source>
+        <translation>Время: 1/32</translation>
+    </message>
+    <message>
+        <source>Time: free</source>
+        <translation>Время: свободно</translation>
+    </message>
+    <message>
+        <source>Wave</source>
+        <translation>Волна</translation>
+    </message>
+    <message>
+        <source>Point limit reached (256). Finish this stroke or use a second slide.</source>
+        <translation>Достигнут предел: 256 точек. Завершите рисунок или добавьте второй слайд.</translation>
     </message>
 </context>
 </TS>

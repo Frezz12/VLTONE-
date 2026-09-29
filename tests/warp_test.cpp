@@ -1,6 +1,7 @@
 #include "EngineController.hpp"
 #include "ProjectSerializer.hpp"
 #include "WarpAnalysis.hpp"
+#include "WarpTools.hpp"
 #include "Internal/EqualizerInstance.hpp"
 #include "cloud/PublishPreflight.hpp"
 #include "DSP/WarpPlayback.hpp"
@@ -32,6 +33,40 @@ int main() {
     map.markers = {{"start", 0, 0, true}, {"middle", .5, 1.5, false}, {"end", 2, 4, true}};
     check(validWarp(map), "valid monotonic Warp map");
     check(near(warpSourceAt(map, 1.5), .5) && near(warpBeatAt(map, .5), 1.5), "forward and inverse mapping agree");
+    auto timing = map; timing.markers[1].targetBeats = 1.13;
+    warptools::AlignParams params; params.timing.gridBeats = .5;
+    params.timing.strength = 0;
+    check(warptools::align(timing, {}, params).map == timing, "zero strength is the exact original map");
+    params.timing.strength = .5;
+    const auto half = warptools::align(timing, {}, params);
+    check(near(half.map.markers[1].targetBeats, 1.065), "assisted 50 percent timing halves the error");
+    params.timing.strength = 1;
+    check(near(warptools::align(timing, {}, params).map.markers[1].targetBeats, 1), "assisted 100 percent timing lands on the grid");
+    params.timing.strength = .5;
+    check(warptools::align(timing, {}, params).map == half.map, "strength recomputation does not accumulate corrections");
+    params.timing.toleranceBeats = .14;
+    check(warptools::align(timing, {}, params).map == timing, "tolerance preserves intentional microtiming");
+    params.timing.toleranceBeats = 0; params.timing.strength = 1; params.timing.swing = .66;
+    params.timing.swingUnitBeats = .5; timing.markers[1].targetBeats = 1.49;
+    const double sharedTarget = miditools::gridTarget(1.49, params.timing);
+    auto swing = warptools::align(timing, {}, params);
+    check(near(swing.map.markers[1].targetBeats, sharedTarget), "audio and MIDI use the same Swing target");
+    params.timing.groove = miditools::groovePresets().back(); params.originBeats = 3.5;
+    swing = warptools::align(timing, {}, params);
+    check(near(swing.map.markers[1].targetBeats, miditools::gridTarget(4.99, params.timing) - 3.5), "groove phase follows project beats, including odd meter origins");
+    params = {}; params.addTransients = true;
+    const std::vector<analysis::WarpTransient> candidates{{.31, .9, .95}, {.81, .8, .2}};
+    const auto proposed = warptools::align(timing, candidates, params);
+    check(proposed.added == 1 && proposed.uncertain == 1 && validWarp(proposed.map), "only confident attacks become assisted markers");
+    params.includeUncertain = true;
+    check(warptools::align(timing, candidates, params).added == 2, "uncertain attacks require explicit inclusion");
+    timing.markers[1].locked = true;
+    check(warptools::align(timing, candidates, params).map.markers[2] == timing.markers[1], "assistant preserves a manual locked anchor and its id");
+    params.beginBeats = 2; params.endBeats = 3;
+    const auto ranged = warptools::align(timing, candidates, params);
+    check(near(warpSourceAt(ranged.map, .3), warpSourceAt(timing, .3)) && near(warpSourceAt(ranged.map, 3.7), warpSourceAt(timing, 3.7)), "range boundary anchors keep outside audio unchanged");
+    const auto groove = warptools::extractGroove({.01, .28, .49, .78}, 3.5, .25, "Human 7/8");
+    check(groove.offsets.size() == 14 && near(groove.offsets[1], .03) && groove.velocities.empty(), "audio groove extraction captures timing without velocity");
     auto broken = map; broken.markers[1].targetBeats = 5;
     check(!validWarp(broken), "crossed Warp markers are rejected");
     broken = map; broken.markers[1].sourceSeconds = std::numeric_limits<double>::quiet_NaN();
@@ -102,6 +137,44 @@ int main() {
     controller.setTempo(150);
     check(near(controller.audioClip(track.id, clip.id)->durationSeconds, 1.6) && controller.audioClip(track.id, clip.id)->warp == map, "tempo edits preserve musical marker positions");
     controller.setTempo(120);
+    const auto previewDepth = controller.undoDepth();
+    auto proposal = map; proposal.markers[1].targetBeats = 1.25;
+    check(controller.beginWarpPreview(track.id, clip.id) && controller.updateWarpPreview(proposal), "controller starts an immutable Warp preview");
+    check(controller.audioClip(track.id, clip.id)->warp == map && controller.undoDepth() == previewDepth,
+          "preview leaves the document and history untouched");
+    const auto savedDuringPreview = controller.prepareProjectSave();
+    check(savedDuringPreview.project.tracks.front().clips.front().warp == map, "autosave snapshot excludes preview timing");
+    check(controller.auditionWarpPreview(false) && controller.auditionWarpPreview(true) && controller.warpPreviewActive(), "Before After switches the live audition");
+    const auto livePeak = [&] {
+        audio::AudioBuffer input(2, 256), output(2, 256);
+        input.clear(); controller.seekSeconds(0); controller.play();
+        float loudest = 0; int frame = 0;
+        for (int offset = 0; offset < 43000; offset += 256) {
+            controller.processDeviceBlockForTest(input, output, 256);
+            for (int i = 0; i < 256; ++i) if (offset + i > 26000 && offset + i < 40000 && std::abs(output.getChannel(0)[i]) > loudest) {
+                loudest = std::abs(output.getChannel(0)[i]); frame = offset + i;
+            }
+        }
+        controller.pause(); return frame;
+    };
+    check(std::abs(livePeak() - 30000) < 500, "After audition moves the attack through the real device callback");
+    controller.auditionWarpPreview(false);
+    check(std::abs(livePeak() - 36000) < 500, "Before audition restores confirmed attack timing in the real callback");
+    controller.auditionWarpPreview(true);
+    auto invalidProposal = proposal; invalidProposal.markers.front().targetBeats = .1;
+    check(!controller.updateWarpPreview(invalidProposal) && *controller.warpPreviewMap() == proposal, "preview rejects altered clip boundaries without losing the valid proposal");
+    controller.cancelWarpPreview();
+    check(!controller.warpPreviewActive() && controller.audioClip(track.id, clip.id)->warp == map && controller.undoDepth() == previewDepth, "Cancel restores confirmed playback without history");
+    controller.beginWarpPreview(track.id, clip.id); controller.updateWarpPreview(proposal); controller.commitWarpPreview();
+    check(controller.audioClip(track.id, clip.id)->warp == proposal && controller.undoDepth() == previewDepth + 1, "Apply stores one undoable Warp operation");
+    controller.undo(); check(controller.audioClip(track.id, clip.id)->warp == map, "Undo restores the pre-assistant map");
+    controller.redo(); check(controller.audioClip(track.id, clip.id)->warp == proposal, "Redo restores accepted assistant timing"); controller.undo();
+    controller.beginWarpPreview(track.id, clip.id); controller.updateWarpPreview(proposal); controller.setTempo(121);
+    check(!controller.warpPreviewActive(), "tempo edits invalidate a pending proposal"); controller.undo();
+    controller.beginWarpPreview(track.id, clip.id); controller.updateWarpPreview(proposal); controller.setClipStartSeconds(track.id, clip.id, .25);
+    check(!controller.warpPreviewActive(), "clip movement invalidates the proposal grid origin");
+    // Placement updates are live gesture primitives, without their own undo.
+    controller.setClipStartSeconds(track.id, clip.id, 0);
     std::string encoded; ProjectModel decoded;
     check(ProjectSerializer::serializeDocument(controller.project(), encoded).isOk() &&
           ProjectSerializer::deserializeDocument(decoded, encoded).isOk() && decoded.tracks[0].clips[0].warp == map, "Warp project serialization round-trip");
@@ -133,12 +206,22 @@ int main() {
     ProjectSerializer::deserializeDocument(decoded, oldDocument);
     check(decoded.tracks.front().clips.front().warp.empty(), "projects without Warp load with Warp Off");
     const auto output = (dir / "warped.wav").string();
+    const auto confirmedOutput = (dir / "confirmed.wav").string();
+    check(controller.exportMixdown(confirmedOutput, false).isOk(), "confirmed timing exports before an audition");
+    controller.beginWarpPreview(track.id, clip.id); controller.updateWarpPreview(proposal);
     check(controller.exportMixdown(output, false).isOk(), "Warp exports through the ordinary mixdown pipeline");
     audio::platform::DecodedAudio exported; audio::platform::decodeAudioFile(output, exported);
     double loudest = 0; int peakFrame = 0;
     for (int i = 35000; i < 37000 && i < int(exported.frames); ++i)
         if (std::abs(exported.interleaved[i * exported.channels]) > loudest) { loudest = std::abs(exported.interleaved[i * exported.channels]); peakFrame = i; }
     check(std::abs(peakFrame - 36000) < 480 && loudest > .1, "export contains the warped attack at its musical position");
+    check(controller.audioClip(track.id, clip.id)->warp == map, "mixdown during preview exports only committed timing");
+    audio::platform::DecodedAudio confirmed; audio::platform::decodeAudioFile(confirmedOutput, confirmed);
+    check(confirmed.frames == exported.frames && confirmed.interleaved == exported.interleaved,
+          "preview and confirmed exports are sample-identical, including the initial transition");
+    check(controller.warpPreviewActive() && std::abs(livePeak() - 30000) < 500,
+          "mixdown restores the pending After audition on return");
+    controller.cancelWarpPreview();
     EngineController rack; rack.initialize(48000, 256, false);
     const auto rackTrack = rack.addTrack(TrackKind::Audio, "Offline rack");
     rack.addInsert(rackTrack, plugins::equalizer::EqualizerInstance::staticDescriptor());

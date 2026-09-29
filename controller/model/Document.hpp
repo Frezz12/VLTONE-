@@ -216,6 +216,21 @@ struct AutomationPoint {
     friend bool operator==(const AutomationPoint&, const AutomationPoint&) = default;
 };
 
+/// A silent, editable pitch gesture. Point times are fractions of its length;
+/// values are MIDI pitches (fractional semitones), not normalised controllers.
+struct SlideNoteModel {
+    std::string id;
+    double startBeats = 0.0;
+    double lengthBeats = 1.0;
+    std::string referenceNoteId;
+    std::vector<std::string> targetNoteIds;
+    bool chord = false;
+    bool resumed = false; // Pitch reached before a split/chased fragment.
+    bool muted = false;
+    std::vector<AutomationPoint> points;
+    friend bool operator==(const SlideNoteModel&, const SlideNoteModel&) = default;
+};
+
 /// Where a curve is sent.
 enum class AutomationTargetKind : uint8_t {
     TrackVolume = 0,
@@ -317,6 +332,7 @@ struct TakeModel {
     int channels = 0;
     uint32_t color = 0x4A90D9;
     std::vector<NoteModel> notes;  // MIDI takes
+    std::vector<SlideNoteModel> slideNotes;
     AssetRef asset;               // v6 cloud identity; filePath is legacy/cache
     std::vector<ControllerLane> lanes; // MIDI take's own automation
 };
@@ -533,6 +549,7 @@ struct ClipModel {
     /// source tracks without hiding ownership in timeline geometry.
     std::string patternClipId;
     std::vector<NoteModel> notes;  // MIDI clips only
+    std::vector<SlideNoteModel> slideNotes;
     /// Controller/automation curves drawn under the notes. MIDI clips only.
     std::vector<ControllerLane> lanes;
 
@@ -673,6 +690,9 @@ struct InsertModel {
     /// an empty list is the explicit "Off" value.
     PluginChannelMode channelMode = PluginChannelMode::Auto;
     PluginEditorChannel editorChannel = PluginEditorChannel::Left;
+    int slideDelivery = 0; // Auto, note expression, MPE, channel bend, off
+    double slideBendRange = 2.0;
+    double slideReleaseReserve = 2.0;
     std::vector<std::string> sidechainTrackIds;
 
     /// Editor placement, so reopening a project puts the window back.
@@ -739,6 +759,7 @@ struct TrackModel {
     unsigned monitorInputMask = 3;    // runtime only: uncovered sides of an automatic monitor
     bool mono = false;                // true = fold to mono; false = keep stereo
     double height = 72.0;             // lane height in px (resizable)
+    double expandedHeight = 72.0;     // restore size after minimizing the lane
     bool expanded = true;             // folders
     /// Automation disclosure is independent from folder disclosure. A Pattern
     /// or summing folder can keep its musical children open while its curve

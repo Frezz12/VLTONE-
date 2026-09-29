@@ -4,6 +4,7 @@
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDialogButtonBox>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -13,6 +14,9 @@
 #include <QRandomGenerator>
 #include <QScrollArea>
 #include <QSizePolicy>
+#include <QSpinBox>
+#include <QDoubleSpinBox>
+#include <QSignalBlocker>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
@@ -203,6 +207,10 @@ bool ToolDialog::previewEnabled() const {
     return m_preview && m_preview->isChecked();
 }
 
+void ToolDialog::setApplyEnabled(bool enabled) {
+    if (m_buttons) m_buttons->button(QDialogButtonBox::Apply)->setEnabled(enabled);
+}
+
 void ToolDialog::finishLayout() {
     m_preview = new QCheckBox(tr("Preview"), this);
     m_preview->setChecked(true);
@@ -232,9 +240,10 @@ void ToolDialog::finishLayout() {
     const QSize formSize = m_form->minimumSize();
     const int footerHeight = std::max(m_preview->sizeHint().height(),
                                       m_buttons->sizeHint().height());
-    const QSize preferred(std::clamp(formSize.width() + 24, 520, 720),
+    const bool compact = property("vlt.compactEditor").toBool();
+    const QSize preferred(std::clamp(formSize.width() + 24, compact ? 360 : 520, compact ? 480 : 720),
                           std::clamp(formSize.height() + footerHeight + 30,
-                                     300, 640));
+                                     compact ? 220 : 300, 640));
     resize(preferred);
 }
 
@@ -246,6 +255,10 @@ void ToolDialog::watch(QWidget* widget) {
         connect(knob, &ui::Knob::valueChanged, this, &ToolDialog::paramsChanged);
     } else if (auto* check = qobject_cast<QCheckBox*>(widget)) {
         connect(check, &QCheckBox::toggled, this, &ToolDialog::paramsChanged);
+    } else if (auto* spin = qobject_cast<QSpinBox*>(widget)) {
+        connect(spin, &QSpinBox::valueChanged, this, &ToolDialog::paramsChanged);
+    } else if (auto* spin = qobject_cast<QDoubleSpinBox*>(widget)) {
+        connect(spin, &QDoubleSpinBox::valueChanged, this, &ToolDialog::paramsChanged);
     }
 }
 
@@ -938,32 +951,111 @@ mt::RandomParams RandomizeDialog::params() const {
 
 ChordDialog::ChordDialog(QWidget* parent)
     : ToolDialog(tr("Chord Generator"), parent) {
+    setProperty("vlt.compactEditor", true);
     auto* grid = form();
+    grid->setAlignment(Qt::AlignTop);
     int row = 0;
-
+    const auto field = [&](const QString& label, QWidget* control) {
+        auto* caption = new QLabel(label, this);
+        caption->setBuddy(control);
+        control->setAccessibleName(label);
+        grid->addWidget(caption, row, 0);
+        grid->addWidget(control, row++, 1);
+        watch(control);
+    };
+    m_source = new QComboBox(this);
+    m_source->setObjectName("ChordSource");
+    m_source->addItems({tr("From existing notes"), tr("New chord")});
+    field(tr("Source"), m_source);
     m_type = new QComboBox(this);
-    for (auto type : mt::allChordTypes()) {
-        m_type->addItem(QString::fromStdString(mt::chordName(type)), int(type));
-    }
-    grid->addWidget(new QLabel(tr("Chord"), this), row, 0);
-    grid->addWidget(m_type, row++, 1);
+    m_type->setObjectName("ChordType");
+    for (auto type : mt::allChordTypes())
+        m_type->addItem(QCoreApplication::translate("ChordDialog", mt::chordName(type).c_str()), int(type));
+    field(tr("Chord"), m_type);
+    m_inversion = new QSpinBox(this);
+    m_inversion->setButtonSymbols(QAbstractSpinBox::PlusMinus);
+    m_inversion->setObjectName("ChordInversion");
+    m_inversion->setRange(0, 4);
+    m_inversion->setSpecialValueText(tr("Root position"));
+    field(tr("Inversion"), m_inversion);
 
-    m_inversion = numberKnob(0, 4, 0);
-    grid->addWidget(new QLabel(tr("Inversion"), this), row, 0);
-    grid->addWidget(withReadout(m_inversion, QString()), row++, 1);
-
-    m_addOctave = new QCheckBox(tr("Double the root an octave up"), this);
-    grid->addWidget(m_addOctave, row++, 1);
-    m_bassOctave = new QCheckBox(tr("Add a root an octave down"), this);
+    m_newChord = new QWidget(this);
+    auto* details = new QGridLayout(m_newChord);
+    details->setContentsMargins(0, 4, 0, 4);
+    details->setHorizontalSpacing(8);
+    const auto detail = [&](const QString& label, QWidget* control, int r, int c) {
+        auto* caption = new QLabel(label, m_newChord);
+        caption->setBuddy(control);
+        control->setAccessibleName(label);
+        details->addWidget(caption, r, c);
+        details->addWidget(control, r, c + 1);
+        watch(control);
+    };
+    m_root = new QComboBox(m_newChord);
+    m_root->setObjectName("ChordRoot");
+    for (int pitch = 0; pitch < 128; ++pitch)
+        m_root->addItem(QString::fromStdString(mt::pitchName(pitch)), pitch);
+    m_root->setCurrentIndex(60);
+    detail(tr("Root note"), m_root, 0, 0);
+    m_velocity = new QSpinBox(m_newChord);
+    m_velocity->setButtonSymbols(QAbstractSpinBox::PlusMinus);
+    m_velocity->setObjectName("ChordVelocity");
+    m_velocity->setRange(1, 127);
+    m_velocity->setValue(100);
+    detail(tr("Velocity"), m_velocity, 0, 2);
+    const auto beatInput = [&](const char* name, double low, double value) {
+        auto* input = new QDoubleSpinBox(m_newChord);
+        input->setButtonSymbols(QAbstractSpinBox::PlusMinus);
+        input->setObjectName(name);
+        input->setRange(low, 100000.0);
+        input->setDecimals(3);
+        input->setSingleStep(0.25);
+        input->setValue(value);
+        input->setKeyboardTracking(false);
+        return input;
+    };
+    m_start = beatInput("ChordStart", 0.0, 0.0);
+    m_length = beatInput("ChordLength", 1.0 / 32.0, 4.0);
+    detail(tr("Start, beats"), m_start, 1, 0);
+    detail(tr("Length, beats"), m_length, 1, 2);
+    grid->addWidget(m_newChord, row++, 0, 1, 2);
+    m_addOctave = new QCheckBox(tr("Double root +1 octave"), this);
+    m_bassOctave = new QCheckBox(tr("Bass −1 octave"), this);
+    m_addOctave->setObjectName("ChordDoubleRoot");
+    m_bassOctave->setObjectName("ChordBass");
+    grid->addWidget(m_addOctave, row, 0);
     grid->addWidget(m_bassOctave, row++, 1);
-
-    for (QWidget* widget : {static_cast<QWidget*>(m_type),
-                            static_cast<QWidget*>(m_inversion),
-                            static_cast<QWidget*>(m_addOctave),
-                            static_cast<QWidget*>(m_bassOctave)}) {
-        watch(widget);
-    }
+    watch(m_addOctave);
+    watch(m_bassOctave);
+    m_summary = new QLabel(this);
+    m_summary->setWordWrap(true);
+    m_summary->setMinimumWidth(0);
+    m_summary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    grid->addWidget(m_summary, row++, 0, 1, 2);
     finishLayout();
+    connect(this, &ToolDialog::paramsChanged, this, &ChordDialog::updateSummary);
+    setContext({}, 0.0, 4.0, 100);
+}
+
+void ChordDialog::setContext(const mt::Notes& notes, double start, double length,
+                             int velocity, double endBeats) {
+    const QSignalBlocker block(this);
+    m_endBeats = std::max(1.0 / 32.0, endBeats);
+    m_start->setMaximum(m_endBeats - 1.0 / 32.0);
+    m_length->setMaximum(m_endBeats);
+    m_sourceCount = int(notes.size());
+    m_sourcePitch = notes.empty() ? 60 : notes.front().pitch;
+    m_source->setCurrentIndex(notes.empty() ? 1 : 0);
+    m_root->setCurrentIndex(std::clamp(m_sourcePitch, 0, 127));
+    m_start->setValue(start);
+    m_length->setValue(length);
+    m_velocity->setValue(velocity);
+    updateSummary();
+    if (!isVisible()) {
+        form()->activate();
+        resize(std::max(400, form()->minimumSize().width() + 24),
+               form()->minimumSize().height() + 70);
+    }
 }
 
 mt::ChordParams ChordDialog::params() const {
@@ -973,4 +1065,39 @@ mt::ChordParams ChordDialog::params() const {
     p.addOctave = m_addOctave->isChecked();
     p.bassOctave = m_bassOctave->isChecked();
     return p;
+}
+
+mt::Notes ChordDialog::generate(const mt::Notes& notes) const {
+    if (m_source->currentIndex() == 0) return mt::buildChords(notes, params());
+    daw::NoteModel root;
+    root.pitch = m_root->currentData().toInt();
+    root.startBeats = m_start->value();
+    root.lengthBeats = m_length->value();
+    root.velocity = m_velocity->value();
+    auto result = notes;
+    const auto chord = mt::buildChords({root}, params());
+    result.insert(result.end(), chord.begin(), chord.end());
+    return result;
+}
+
+void ChordDialog::updateSummary() {
+    const bool insert = m_source->currentIndex() == 1;
+    m_newChord->setVisible(insert);
+    const QSignalBlocker lengthBlock(m_length);
+    m_length->setMaximum(std::max(1.0 / 32.0, m_endBeats - m_start->value()));
+    mt::ChordParams plain = params();
+    plain.inversion = 0; plain.addOctave = false; plain.bassOctave = false;
+    daw::NoteModel root;
+    root.pitch = 60;
+    const QSignalBlocker block(m_inversion);
+    m_inversion->setMaximum(int(mt::buildChords({root}, plain).size()) - 1);
+    root.pitch = insert ? m_root->currentData().toInt() : m_sourcePitch;
+    QStringList pitches;
+    for (const auto& voice : mt::buildChords({root}, params()))
+        pitches << QString::fromStdString(mt::pitchName(voice.pitch));
+    const QString target = insert ? tr("Adds a new chord; existing notes stay.")
+        : m_sourceCount ? tr("Builds chords from %1 notes.").arg(m_sourceCount)
+                        : tr("Select notes, or choose New chord.");
+    m_summary->setText(pitches.join(QStringLiteral(" · ")) + QStringLiteral("\n") + target);
+    setApplyEnabled(insert || m_sourceCount > 0);
 }

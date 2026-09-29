@@ -161,6 +161,16 @@ const std::vector<ParameterInfo>& table() {
                 out.push_back(std::move(info));
             }
         }
+        const ParameterInfo slide[] = {
+            {indexOf(SlideParam::Legato), "slide.legato", "Legato", "", 0, 1, 0, true, true},
+            {indexOf(SlideParam::TimeMs), "slide.time", "Legato Time", "ms", 0, 2000, 100},
+            {indexOf(SlideParam::TempoSync), "slide.sync", "Legato Tempo Sync", "", 0, 1, 0, true, true},
+            {indexOf(SlideParam::Beats), "slide.beats", "Legato Beats", "beats", 0.015625, 4, 0.25},
+            {indexOf(SlideParam::Shape), "slide.shape", "Legato Shape", "", 0, 1, 1, true, true},
+            {indexOf(SlideParam::SmoothingMs), "slide.smoothing", "Slide Smoothing", "ms", 0, 20, 2},
+            {indexOf(SlideParam::BendRange), "slide.bendrange", "MIDI Bend Range", "st", 1, 96, 2}
+        };
+        out.insert(out.end(), std::begin(slide), std::end(slide));
         return out;
     }();
     return built;
@@ -190,6 +200,10 @@ bool isPrecomputed(std::uint32_t index) noexcept { return inPrecomputedRange(ind
 std::string parameterText(std::uint32_t index, double value) {
     if (index >= kParameterCount) return {};
 
+    if (index == indexOf(SlideParam::Shape)) return value >= .5 ? "S-Curve" : "Linear";
+    if (index == indexOf(SlideParam::TimeMs) || index == indexOf(SlideParam::SmoothingMs)) return decimals(value, 1, " ms");
+    if (index == indexOf(SlideParam::BendRange)) return decimals(value, 1, " st");
+    if (index == indexOf(SlideParam::Beats)) return decimals(value, 3, " beats");
     switch (Param(index)) {
         case Param::Volume: {
             if (value <= 0.0001) return "-inf dB";
@@ -237,7 +251,7 @@ std::string parameterText(std::uint32_t index, double value) {
     if (info.isStepped && info.minValue == 0.0 && info.maxValue == 1.0) {
         return value >= 0.5 ? "On" : "Off";
     }
-    if (index >= kMainCount) {
+    if (index >= kMainCount && index < kLegacyParameterCount) {
         const std::uint32_t modParam = (index - kMainCount) % kModParamCount;
         if (ModParam(modParam) == ModParam::LfoShape) {
             switch (int(std::lround(value))) {

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -14,11 +15,12 @@ namespace daw::collab {
 
 inline constexpr std::uint32_t kProjectCommandSchemaVersionV2 = 2;
 inline constexpr std::uint32_t kProjectCommandSchemaVersionV3 = 3;
-inline constexpr std::uint32_t kProjectCommandSchemaVersion = 4;
+inline constexpr std::uint32_t kProjectCommandSchemaVersionV4 = 4;
+inline constexpr std::uint32_t kProjectCommandSchemaVersion = 5;
 
 inline constexpr bool supportedProjectCommandSchemaVersion(
     std::uint32_t version) noexcept {
-    return version == kProjectCommandSchemaVersionV2 || version == kProjectCommandSchemaVersionV3 ||
+    return version == kProjectCommandSchemaVersionV2 || version == kProjectCommandSchemaVersionV3 || version == kProjectCommandSchemaVersionV4 ||
            version == kProjectCommandSchemaVersion;
 }
 inline constexpr std::size_t kMaxProjectCommandPreconditions = 1024;
@@ -103,6 +105,7 @@ struct PluginLocation {
 };
 
 enum class PluginProperty : std::uint8_t {
+    SlideDelivery, SlideBendRange, SlideReleaseReserve,
     Name,
     Bypassed,
     Mix,
@@ -271,6 +274,12 @@ struct SetClipSampleEdit {
     std::string trackId;
     std::string clipId;
     ClipSampleEditModel sampleEdit;
+};
+
+/// One pitch gesture is an atomic collaborative edit. Null removes it.
+struct SetSlideNote {
+    std::string trackId, clipId, takeId, slideId;
+    std::optional<SlideNoteModel> slide;
 };
 
 struct SetClipFade {
@@ -621,7 +630,7 @@ using CommandBody = std::variant<SetProjectScalar, SetTimeSignature,
                                  RemovePluginParameter,
                                  SetPluginAssetBinding,
                                  RemovePluginAssetBinding,
-                                 SetSamplerFxLevels, UpsertMidiNote,
+                                 SetSamplerFxLevels, SetSlideNote, UpsertMidiNote,
                                  DeleteMidiNote, RestoreMidiNote,
                                  UpsertAutomationPoint,
                                  DeleteAutomationPoint,

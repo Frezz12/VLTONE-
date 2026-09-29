@@ -43,165 +43,9 @@ int sliderForTimelineZoom(double pixelsPerSecond) {
     return int(std::lround(position * kCompactZoomSteps));
 }
 
-constexpr int kViewControlWidth = ui::kTimelineScrollExtent;
-constexpr int kViewControlHeight = 24;
-
-class TimelineViewControls final : public QWidget {
-public:
-    explicit TimelineViewControls(QWidget* parent) : QWidget(parent) {
-        setObjectName(QStringLiteral("TimelineViewControls"));
-        setFixedSize(kViewControlWidth, 3 * kViewControlHeight);
-        setAttribute(Qt::WA_OpaquePaintEvent);
-        setAttribute(Qt::WA_NoMousePropagation);
-        connect(&ThemeManager::instance(), &ThemeManager::changed, this,
-                QOverload<>::of(&QWidget::update));
-    }
-
-protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        const Theme& theme = th();
-        painter.fillRect(rect(), theme.headerBackground);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setBrush(mixColors(theme.headerBackground, theme.well(), 0.32));
-        painter.setPen(theme.sectionDivider());
-        painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
-        for (int i = 1; i < 3; ++i)
-            painter.drawLine(3, i * kViewControlHeight,
-                             width() - 4, i * kViewControlHeight);
-    }
-};
-
-void paintViewControl(QPainter& painter, const QWidget* control,
-                      icons::Glyph glyph, bool pressed) {
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    const Theme& theme = th();
-    const QRectF cell = QRectF(control->rect()).adjusted(1.0, 1.0, -1.0, -1.0);
-    if (pressed || (control->isEnabled() && control->underMouse())) {
-        QColor fill = pressed ? QColor(0, 0, 0, theme.dark ? 40 : 22)
-                              : theme.textPrimary;
-        if (!pressed) fill.setAlpha(theme.dark ? 22 : 16);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(fill);
-        painter.drawRoundedRect(cell, 2, 2);
-    }
-    QStyleOption option;
-    option.initFrom(control);
-    if (control->hasFocus() && (option.state & QStyle::State_KeyboardFocusChange)) {
-        painter.setBrush(Qt::NoBrush);
-        painter.setPen(QPen(theme.textPrimary, 1.0, Qt::DotLine));
-        painter.drawRoundedRect(cell, 2, 2);
-    }
-    const QPointF centre = QRectF(control->rect()).center();
-    icons::paint(painter, glyph,
-                 QRectF(centre.x() - 7.0, centre.y() - 7.0, 14.0, 14.0),
-                 control->isEnabled() ? theme.textPrimary : theme.textSecondary);
-}
-
-class TimelineScrubButton final : public QSlider {
-public:
-    enum class Axis { Horizontal, Vertical };
-
-    TimelineScrubButton(icons::Glyph glyph, Axis axis, int resetValue,
-                        QWidget* parent)
-        : QSlider(Qt::Horizontal, parent), m_glyph(glyph), m_axis(axis),
-          m_resetValue(resetValue) {
-        setFixedSize(kViewControlWidth, kViewControlHeight);
-        setCursor(axis == Axis::Vertical ? Qt::SizeVerCursor
-                                        : Qt::SizeHorCursor);
-        setFocusPolicy(Qt::StrongFocus);
-        setMouseTracking(true);
-    }
-
-protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        paintViewControl(painter, this, m_glyph, isSliderDown());
-    }
-
-    void mousePressEvent(QMouseEvent* event) override {
-        if (event->button() != Qt::LeftButton) {
-            QSlider::mousePressEvent(event);
-            return;
-        }
-        m_positionAccumulator = sliderPosition();
-        m_cursorDrag.begin(event->globalPosition());
-        setFocus(Qt::MouseFocusReason);
-        setSliderDown(true);
-        event->accept();
-        update();
-    }
-
-    void mouseMoveEvent(QMouseEvent* event) override {
-        if (!isSliderDown()) return;
-        if (!(event->buttons() & Qt::LeftButton)) {
-            m_cursorDrag.cancel();
-            setSliderDown(false);
-            update();
-            return;
-        }
-        applyPointerDelta(m_cursorDrag.takeDelta(event->globalPosition()),
-                          event->modifiers());
-        event->accept();
-    }
-
-    void mouseReleaseEvent(QMouseEvent* event) override {
-        if (event->button() != Qt::LeftButton || !isSliderDown()) return;
-        applyPointerDelta(m_cursorDrag.finish(event->globalPosition()),
-                          event->modifiers());
-        setSliderDown(false);
-        event->accept();
-        update();
-    }
-
-    void hideEvent(QHideEvent* event) override {
-        m_cursorDrag.cancel();
-        if (isSliderDown()) setSliderDown(false);
-        QSlider::hideEvent(event);
-    }
-
-    void mouseDoubleClickEvent(QMouseEvent* event) override {
-        if (event->button() != Qt::LeftButton) {
-            QSlider::mouseDoubleClickEvent(event);
-            return;
-        }
-        setValue(m_resetValue);
-        event->accept();
-    }
-
-    void enterEvent(QEnterEvent* event) override {
-        QSlider::enterEvent(event);
-        update();
-    }
-
-    void leaveEvent(QEvent* event) override {
-        QSlider::leaveEvent(event);
-        update();
-    }
-
-private:
-    bool applyPointerDelta(const QPointF& delta,
-                           Qt::KeyboardModifiers modifiers) {
-        const double moved = (m_axis == Axis::Vertical ? -delta.y()
-                                                       : delta.x());
-        if (std::abs(moved) < 1.0e-9) return false;
-        const double throwPixels = m_axis == Axis::Horizontal
-            ? (modifiers & Qt::ShiftModifier ? 720.0 : 180.0)
-            : (modifiers & Qt::ShiftModifier ? 360.0 : 90.0);
-        m_positionAccumulator = std::clamp(
-            m_positionAccumulator + moved / throwPixels *
-                                        double(maximum() - minimum()),
-            double(minimum()), double(maximum()));
-        setSliderPosition(int(std::lround(m_positionAccumulator)));
-        return true;
-    }
-
-    icons::Glyph m_glyph;
-    Axis m_axis = Axis::Horizontal;
-    int m_resetValue = 0;
-    double m_positionAccumulator = 0.0;
-    ui::LockedCursorDrag m_cursorDrag;
-};
+using ui::kViewControlWidth;
+using ui::kViewControlHeight;
+using ui::paintViewControl;
 
 class WaveformScaleButton final : public ui::IconButton {
 public:
@@ -466,7 +310,8 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     timelineLayout->setContentsMargins(2, 0, 2, 0);
     timelineLayout->setSpacing(0);
     timelineLayout->addStretch(1);
-    auto* viewControls = new TimelineViewControls(m_timelineZone);
+    auto* viewControls = new ui::ViewControlStrip(m_timelineZone);
+    viewControls->setObjectName(QStringLiteral("TimelineViewControls"));
     m_timelineViewControls = viewControls;
     auto* viewRow = new QVBoxLayout(viewControls);
     viewRow->setContentsMargins(0, 0, 0, 0);
@@ -475,8 +320,8 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
         [this](double scale) { emit waveformScaleChanged(scale); }, viewControls);
     viewRow->addWidget(m_waveformScale);
 
-    m_trackHeightSlider = new TimelineScrubButton(
-        icons::Glyph::ResizeVertical, TimelineScrubButton::Axis::Vertical,
+    m_trackHeightSlider = new ui::ViewScrubSlider(
+        icons::Glyph::ResizeVertical, ui::ViewScrubSlider::Axis::Vertical,
         ui::kLaneHeight, viewControls);
     m_trackHeightSlider->setObjectName(QStringLiteral("TimelineTrackHeightSlider"));
     m_trackHeightSlider->setRange(ui::kMinLaneHeight, 180);
@@ -488,8 +333,8 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
         tr("Track height: drag the icon up or down; double-click resets"));
 
     const int defaultZoomValue = sliderForTimelineZoom(80.0);
-    m_timelineZoomSlider = new TimelineScrubButton(
-        icons::Glyph::ResizeHorizontal, TimelineScrubButton::Axis::Horizontal,
+    m_timelineZoomSlider = new ui::ViewScrubSlider(
+        icons::Glyph::ResizeHorizontal, ui::ViewScrubSlider::Axis::Horizontal,
         defaultZoomValue, viewControls);
     m_timelineZoomSlider->setObjectName(QStringLiteral("TimelineZoomSlider"));
     m_timelineZoomSlider->setRange(0, kCompactZoomSteps);

@@ -65,6 +65,8 @@ signals:
     /// not emit this, so the shell can keep its existing strip widgets alive.
     void structureChanged();
     void trackCreated();
+    void timelineRequested(const QString& channelId);
+    void createTracksRequested();
     void trackRemoved(const QString& trackId);
     void pluginEditorRequested(const QString& channelId, const QString& insertId);
     void openPatternRequested(const QString& patternId);
@@ -74,6 +76,7 @@ signals:
     void settingsRequested();
 
 private:
+    void contextMenuEvent(QContextMenuEvent*) override;
     bool eventFilter(QObject* object, QEvent* event) override;
     void syncVisibleStrips();
     void applyChannelWidth(int width);

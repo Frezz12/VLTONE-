@@ -571,10 +571,27 @@ SamplerSettings SamplerInstance::snapshot() const noexcept {
     return s;
 }
 
+double SamplerInstance::legatoSeconds() const noexcept {
+    return slideValue(SlideParam::TempoSync) >= .5
+        ? slideValue(SlideParam::Beats) * 60.0 / std::max(m_tempo, 1.0)
+        : slideValue(SlideParam::TimeMs) * .001;
+}
+
 void SamplerInstance::noteOn(int key, int channel, float velocity,
-                             float pan) noexcept {
+                             float pan, std::int32_t id) noexcept {
     auto sample = m_sample.read();
     if (!sample) return;
+    const bool legato = slideValue(SlideParam::Legato) >= .5;
+    {
+        auto held = std::find_if(m_heldNotes.begin(), m_heldNotes.end(), [](const auto& n) { return n.stamp == 0; });
+        if (held == m_heldNotes.end()) {if(legato)return;held=std::min_element(m_heldNotes.begin(),m_heldNotes.end(),[](const auto& a,const auto& b){return a.stamp<b.stamp;});}
+        *held = HeldNote{key, channel, id, ++m_voiceStamp};
+        if(legato)for (auto& voice : m_voices) {
+            if (!voice.active() || voice.releasing() || voice.hasExplicitPitch() || voice.channel() != channel) continue;
+            voice.retarget(key, id, legatoSeconds(), slideValue(SlideParam::Shape) >= .5, m_sampleRate);
+            return;
+        }
+    }
 
     // Cut Itself applies across this instance's keys and MIDI channels. Use
     // short paired fades: killing a bass at a nonzero sample clicks, while a
@@ -609,20 +626,30 @@ void SamplerInstance::noteOn(int key, int channel, float velocity,
         }
     }
 
-    chosen->start(key, channel, velocity, pan, snapshot(), *sample, m_sampleRate, smoothStart);
+    chosen->start(key, channel, velocity, pan, snapshot(), *sample, m_sampleRate, smoothStart, id);
+    chosen->setBend(m_channelBend[channel & 15] * slideValue(SlideParam::BendRange), m_sampleRate, 0);
     chosen->setStartedAt(++m_voiceStamp);
 }
 
-void SamplerInstance::noteOff(int key, int channel) noexcept {
+void SamplerInstance::noteOff(int key, int channel, std::int32_t id) noexcept {
+    for (auto& held : m_heldNotes)
+        if ((id >= 0 ? held.id == id : held.key == key && (channel < 0 || held.channel == channel))) held.stamp = 0;
     const bool ampEnvOn =
         m_values[std::uint32_t(Param::AmpEnvOn)].load(std::memory_order_relaxed) >= 0.5;
     const bool looping =
         m_values[std::uint32_t(Param::LoopMode)].load(std::memory_order_relaxed) >= 0.5;
     for (Voice& voice : m_voices) {
         if (!voice.active() || voice.releasing()) continue;
-        if (voice.key() != key) continue;
+        if (id >= 0 ? voice.noteId() != id : voice.key() != key) continue;
         if (channel >= 0 && voice.channel() != channel) continue;
-        voice.release(!ampEnvOn && looping);
+        const HeldNote* latest = nullptr;
+        if (slideValue(SlideParam::Legato) >= .5) {
+            for (const auto& held : m_heldNotes)
+                if (held.stamp && held.channel == voice.channel() && (!latest || held.stamp > latest->stamp) &&
+                    std::none_of(std::begin(m_voices),std::end(m_voices),[&](const auto& other){return &other!=&voice&&other.active()&&!other.releasing()&&other.noteId()==held.id&&other.channel()==held.channel;})) latest = &held;
+        }
+        if (latest) voice.retarget(latest->key, latest->id, legatoSeconds(), slideValue(SlideParam::Shape) >= .5, m_sampleRate);
+        else voice.release(!ampEnvOn && looping);
     }
 }
 
@@ -651,21 +678,57 @@ void SamplerInstance::applyEvent(const PluginEvent& event, std::uint32_t) noexce
             break;
         case PluginEvent::Kind::NoteOn:
             noteOn(int(event.key), int(event.channel), float(event.value),
-                   float(event.notePan));
+                   float(event.notePan), event.noteId);
             break;
         case PluginEvent::Kind::NoteOff:
-            noteOff(int(event.key), int(event.channel));
+            noteOff(int(event.key), int(event.channel), event.noteId);
+            break;
+        case PluginEvent::Kind::NotePitch:
+            // A held source note can still own an explicit curve after mono
+            // legato has temporarily given its physical voice to another key.
+            if (event.pitch.active && event.noteId >= 0 && slideValue(SlideParam::Legato) >= .5 &&
+                std::none_of(std::begin(m_voices), std::end(m_voices), [&](const auto& v) {
+                    return v.active() && !v.releasing() && v.noteId() == event.noteId && v.channel() == event.channel;
+                })) {
+                auto held = std::find_if(m_heldNotes.begin(), m_heldNotes.end(), [&](const auto& n) {
+                    return n.stamp && n.id == event.noteId && n.channel == event.channel;
+                });
+                if (held != m_heldNotes.end()) for (auto& v : m_voices) {
+                    if (v.active() && !v.releasing() && !v.hasExplicitPitch() && v.channel() == event.channel) {
+                        v.retarget(held->key, held->id, legatoSeconds(), slideValue(SlideParam::Shape) >= .5, m_sampleRate);
+                        break;
+                    }
+                }
+            }
+            for (auto& voice : m_voices) {
+                if (!voice.active() || voice.releasing() || voice.channel() != event.channel) continue;
+                if (event.noteId >= 0 ? voice.noteId() != event.noteId : voice.key() != event.key || voice.channel() != event.channel) continue;
+                voice.setPitch(event.pitch, m_sampleRate, slideValue(SlideParam::SmoothingMs));
+            }
             break;
         case PluginEvent::Kind::NoteChoke:
             for (Voice& voice : m_voices) {
-                if (voice.active() && voice.key() == int(event.key)) voice.choke();
+                if (voice.active() && (event.channel < 0 || voice.channel()==event.channel) &&
+                    (event.noteId>=0 ? voice.noteId()==event.noteId : voice.key()==int(event.key))) voice.choke();
+            }
+            break;
+        case PluginEvent::Kind::MidiController:
+            if (event.paramIndex == 129 && event.channel >= 0 && event.channel < 16) {
+                const double raw = std::clamp(event.value, 0.0, 1.0) * 16383.0 - 8192.0;
+                const double bend = raw / (raw < 0 ? 8192.0 : 8191.0);
+                m_channelBend[event.channel] = bend;
+                for (auto& voice : m_voices)
+                    if (voice.active() && voice.channel() == event.channel)
+                        voice.setBend(bend * slideValue(SlideParam::BendRange), m_sampleRate, slideValue(SlideParam::SmoothingMs));
+            } else if (event.paramIndex == 120 || event.paramIndex == 123) {
+                for (auto& held : m_heldNotes) if (held.channel == event.channel) held.stamp = 0;
+                for (auto& voice : m_voices) if (voice.active() && voice.channel() == event.channel) voice.choke();
             }
             break;
         case PluginEvent::Kind::ParamGestureBegin:
         case PluginEvent::Kind::ParamGestureEnd:
-        // No sampler mapping is assigned to these expressive MIDI messages.
-        case PluginEvent::Kind::MidiController:
         case PluginEvent::Kind::PolyPressure:
+        case PluginEvent::Kind::NoteEnd:
             break;
     }
 }
@@ -718,6 +781,7 @@ PluginProcessDisposition SamplerInstance::process(
     }
 
     SamplerSettings settings = snapshot();
+    m_tempo = context.transport.tempo > 0 ? context.transport.tempo : 120;
     std::uint32_t cursor = 0;
     for (const PluginEvent& event : context.inputEvents) {
         const std::uint32_t at = std::min(event.frameOffset, frames);
@@ -736,6 +800,8 @@ PluginProcessDisposition SamplerInstance::process(
 
 void SamplerInstance::reset() noexcept {
     for (Voice& voice : m_voices) voice.kill();
+    m_heldNotes = {};
+    std::fill(std::begin(m_channelBend), std::end(m_channelBend), 0.0);
     for (double& phase : m_globalPhase) phase = 0.0;
 }
 

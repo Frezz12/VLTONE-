@@ -226,10 +226,10 @@ if(DAW_BUILD_TESTS)
         ../tests/modulation_ui_test.cpp ModulationPanel.cpp ModulationPanel.hpp
         WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
     qt_add_executable(warp_ui_test
-        ../tests/warp_ui_test.cpp WarpEditorWidget.cpp WarpEditorWidget.hpp WaveformPaint.cpp
+        ../tests/warp_ui_test.cpp WarpEditorWidget.cpp WarpEditorWidget.hpp WaveformPaint.cpp Icons.cpp
         WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
     target_include_directories(warp_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(warp_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test)
+    target_link_libraries(warp_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test Qt6::Svg)
     add_test(NAME warp_ui_test COMMAND warp_ui_test)
     set_tests_properties(warp_ui_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 60)
     if(WIN32)
@@ -300,6 +300,7 @@ if(DAW_BUILD_TESTS)
     qt_add_executable(render_ui_test
         ../tests/render_ui_test.cpp
         PreviewLoader.cpp PreviewLoader.hpp
+        BounceInPlaceDialog.cpp BounceInPlaceDialog.hpp
         ExportDialog.cpp ExportDialog.hpp ExportPrefs.cpp
         SelectionModel.cpp SelectionModel.hpp Theme.cpp Typography.cpp GlassPanel.cpp GlassPanel.hpp)
     target_include_directories(render_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -364,6 +365,10 @@ qt_add_resources(daw "vltone_fonts"
     PREFIX "/fonts"
     BASE "${CMAKE_SOURCE_DIR}/fonts"
     FILES ${VLTONE_UI_FONTS} "${CMAKE_SOURCE_DIR}/fonts/OFL.txt")
+if(TARGET warp_ui_test)
+    qt_add_resources(warp_ui_test "warp_test_fonts"
+        PREFIX "/fonts" BASE "${CMAKE_SOURCE_DIR}/fonts" FILES ${VLTONE_UI_FONTS})
+endif()
 if(TARGET browser_navigation_test)
     qt_add_resources(browser_navigation_test "browser_test_fonts"
         PREFIX "/fonts" BASE "${CMAKE_SOURCE_DIR}/fonts"
@@ -476,6 +481,14 @@ if(DAW_BUILD_TESTS)
                 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
         endif()
     endforeach()
+    add_test(NAME track_presentation_ui_test COMMAND $<TARGET_FILE:daw> --uiperfcheck)
+    set_tests_properties(track_presentation_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;VLT_TRACK_PRESENTATION_CHECK_ONLY=1"
+        TIMEOUT 45 RUN_SERIAL TRUE)
+    if(WIN32)
+        set_tests_properties(track_presentation_ui_test PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     add_test(NAME track_mixer_sync_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
     add_test(NAME plugin_sidechain_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
     add_test(NAME inspector_normalize_ui_test COMMAND $<TARGET_FILE:daw> --selftest)

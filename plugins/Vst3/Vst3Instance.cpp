@@ -1,4 +1,5 @@
 #include "Vst3/Vst3Instance.hpp"
+#include "pluginterfaces/vst/ivstnoteexpression.h"
 
 #include <pluginterfaces/base/ipluginbase.h>
 #include <pluginterfaces/gui/iplugviewcontentscalesupport.h>
@@ -252,6 +253,14 @@ bool Vst3Instance::initialize(IPluginFactory* factory) {
 void Vst3Instance::readMidiMappings() {
     for (auto& channel : m_midiParameterMappings) channel.fill(-1);
     if (!m_controller) return;
+    m_pitchCapabilities = {};
+    FUnknownPtr<INoteExpressionController> expressions(m_controller);
+    if (expressions) {
+        NoteExpressionTypeInfo info{};
+        for (int32 i=0; i<expressions->getNoteExpressionCount(0,0); ++i)
+            if (expressions->getNoteExpressionInfo(0,0,i,info)==kResultOk && info.typeId==kTuningTypeID)
+                m_pitchCapabilities.perNote=true;
+    }
     FUnknownPtr<IMidiMapping> mapping(m_controller);
     if (!mapping) return;
 
@@ -266,6 +275,7 @@ void Vst3Instance::readMidiMappings() {
             if (found != m_parameterIndexById.end()) {
                 m_midiParameterMappings[std::size_t(channel)][std::size_t(controller)] =
                     std::int32_t(found->second);
+                if (controller == 129) m_pitchCapabilities.pitchBend = true;
             }
         }
     }
@@ -601,8 +611,10 @@ bool Vst3Instance::activate(const PluginProcessInfo& info) {
     const std::size_t capacity = std::max<std::size_t>(m_parameters.size(), 32);
     m_inputChanges->reserve(capacity);
     m_outputChanges->reserve(capacity);
-    m_events->reserve(kMaxEventsPerBlock);
-    m_outputEvents->reserve(kMaxEventsPerBlock);
+    for(const auto& channel:m_midiParameterMappings) if(channel[129]>=0)
+        m_inputChanges->reserveParameterPoints(m_parameterIds[channel[129]],std::size_t(m_maxBlockSize) + 128);
+    m_events->reserve(engine::pitchEventCapacity(info.maxBlockSize, info.sampleRate));
+    m_outputEvents->reserve(engine::pitchEventCapacity(info.maxBlockSize, info.sampleRate));
 
     refreshLatency();
     m_restartLatency.store(false, std::memory_order_release);
@@ -682,6 +694,8 @@ bool Vst3Instance::serviceOfflineRestart() {
         const auto capacity = std::max<std::size_t>(m_parameters.size(), 32);
         m_inputChanges->reserve(capacity);
         m_outputChanges->reserve(capacity);
+    for(const auto& channel:m_midiParameterMappings) if(channel[129]>=0)
+        m_inputChanges->reserveParameterPoints(m_parameterIds[channel[129]],std::size_t(m_maxBlockSize) + 128);
     }
     if (flags & (kMidiCCAssignmentChanged | kParamTitlesChanged)) readMidiMappings();
     if (flags & kParamValuesChanged) notifyControllerValues();
@@ -863,6 +877,9 @@ bool Vst3Instance::openEditor(void* parentHandle, PluginEditorHost* host) {
 }
 
 void Vst3Instance::closeEditor() {
+    // Capability/size probes can create a view before the host's queued
+    // native attach. Closing during that wait must release the probe too.
+    m_probeView = nullptr;
     if (!m_view) return;
     IPtr<IPlugView> view = m_view;
     m_view = nullptr;
@@ -971,13 +988,13 @@ PluginProcessDisposition Vst3Instance::process(
                     // -1, not a made-up id: VST3 lets a host address a note by
                     // pitch and channel, and inventing ids would mean tracking
                     // them across blocks for no gain.
-                    note.noteOn.noteId = -1;
+                    note.noteOn.noteId = event.noteId;
                 } else {
                     note.type = Event::kNoteOffEvent;
                     note.noteOff.channel = int16(event.channel);
                     note.noteOff.pitch = int16(event.key);
                     note.noteOff.velocity = 0.0f;
-                    note.noteOff.noteId = -1;
+                    note.noteOff.noteId = event.noteId;
                 }
                 m_events->addEvent(note);
                 break;
@@ -997,6 +1014,15 @@ PluginProcessDisposition Vst3Instance::process(
                                std::clamp(event.value, 0.0, 1.0));
                 }
                 break;
+            }
+            case PluginEvent::Kind::NotePitch: {
+                if (!m_pitchCapabilities.perNote || m_events->full() || event.noteId < 0) break;
+                Event pitch{}; pitch.type = Event::kNoteExpressionValueEvent;
+                pitch.busIndex = 0; pitch.sampleOffset = int32(event.frameOffset);
+                pitch.noteExpressionValue.noteId = event.noteId;
+                pitch.noteExpressionValue.typeId = kTuningTypeID;
+                pitch.noteExpressionValue.value = std::clamp(.5 + event.value/240., 0., 1.);
+                m_events->addEvent(pitch); break;
             }
             case PluginEvent::Kind::PolyPressure: {
                 if (m_events->full()) break;

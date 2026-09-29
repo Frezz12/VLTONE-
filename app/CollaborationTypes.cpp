@@ -556,13 +556,14 @@ QString protocolNameForCommandSchema(int schemaVersion) {
     if (schemaVersion == kProtocolVersionV2)
         return QString::fromLatin1(kProtocolNameV2);
     if (schemaVersion == kProtocolVersionV3) return QString::fromLatin1(kProtocolNameV3);
+    if (schemaVersion == kProtocolVersionV4) return QString::fromLatin1(kProtocolNameV4);
     if (schemaVersion == kProtocolVersion)
         return QString::fromLatin1(kProtocolName);
     return {};
 }
 
 bool isSupportedProtocolName(const QString& protocol) {
-    return protocol == QLatin1String(kProtocolNameV2) || protocol == QLatin1String(kProtocolNameV3) ||
+    return protocol == QLatin1String(kProtocolNameV2) || protocol == QLatin1String(kProtocolNameV3) || protocol == QLatin1String(kProtocolNameV4) ||
            protocol == QLatin1String(kProtocolName);
 }
 

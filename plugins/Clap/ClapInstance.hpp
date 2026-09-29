@@ -22,6 +22,7 @@ public:
     ~ClapInstance() override;
     /// Called after host_data is installed; CLAP init may call host callbacks.
     bool initialize();
+    PitchCapabilities pitchCapabilities() const noexcept override { return m_pitchCapabilities; }
 
     const PluginDescriptor& descriptor() const noexcept override { return m_descriptor; }
     void setListener(PluginListener* listener) noexcept override {
@@ -73,6 +74,7 @@ public:
     std::uint32_t latencySamples() const noexcept override {
         return m_latency.load(std::memory_order_relaxed);
     }
+    bool tailSamplesKnown() const noexcept override { return m_tailExt != nullptr; }
     std::uint32_t tailSamples() const noexcept override {
         return m_tail.load(std::memory_order_relaxed);
     }
@@ -129,6 +131,7 @@ private:
     std::shared_ptr<ClapModule> m_module;
     const clap_plugin_t* m_plugin = nullptr;
     PluginDescriptor m_descriptor;
+    PitchCapabilities m_pitchCapabilities;
 
     const clap_plugin_params_t* m_params = nullptr;
     const clap_plugin_state_t* m_state = nullptr;

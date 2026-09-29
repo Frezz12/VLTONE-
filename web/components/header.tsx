@@ -36,7 +36,7 @@ export function Header({ locale }: { locale: string }) {
         </nav>
       </div>
       <div className="header-navigation">
-        <Link className="header-start" href="/register">{ru ? "Попробовать VLTone" : "Try VLTone"}<ArrowUpRight size={15} aria-hidden /></Link>
+        <Link className="header-start" href="/register">{ru ? "Создать аккаунт" : "Create account"}<ArrowUpRight size={15} aria-hidden /></Link>
         <button className="header-icon locale-link" type="button" onClick={switchLocale} aria-label={ru ? "Open in English" : "Открыть на русском"} title={ru ? "English" : "Русский"}><Globe2 size={20} strokeWidth={1.8} aria-hidden /></button>
         <Link className="header-icon account-link" href="/account" aria-label={ru ? "Аккаунт" : "Account"} title={ru ? "Аккаунт" : "Account"} aria-current={pathname.includes("/account") ? "page" : undefined}><CircleUserRound size={21} strokeWidth={1.8} aria-hidden /></Link>
       </div>

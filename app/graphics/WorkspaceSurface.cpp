@@ -22,6 +22,7 @@
 #include <QHelpEvent>
 #include <QMouseEvent>
 #include <QPaintEvent>
+#include <QPlainTextEdit>
 #include <QQuickWindow>
 #include <QScreen>
 #include <QScrollArea>
@@ -62,7 +63,8 @@ double threadCpuMs() {
 bool nativeControlAsset(const QWidget* widget) {
     // Native platform styles can bypass QPainter and require a CGContext/HDC.
     // Cache these small controls at full DPI; never use this for editor canvases.
-    return widget->inherits("QFocusFrame") || widget->inherits("QLineEdit") ||
+    return widget->property("vlt.nativeControlAsset").toBool() ||
+           widget->inherits("QFocusFrame") || widget->inherits("QLineEdit") ||
            widget->inherits("QScrollBar") || widget->inherits("QAbstractButton") ||
            widget->inherits("QComboBox") || widget->inherits("QAbstractSpinBox") ||
            widget->inherits("QSlider") || widget->inherits("QDial") ||
@@ -91,6 +93,20 @@ void clearPressedPointer(QPointer<QWidget>& pressed) {
 bool isScrollViewport(QWidget* widget) {
     auto* scroll = widget ? qobject_cast<QAbstractScrollArea*>(widget->parentWidget()) : nullptr;
     return scroll && scroll->viewport() == widget;
+}
+QWidget* clickFocusTarget(QWidget* source, QWidget* target) {
+    // Mouse delivery through Quick bypasses QWidget's native focus walk. A
+    // text editor is hit through its NoFocus viewport, not through the editor.
+    // Preserve that walk, including focus proxies, before delivering the press.
+    for (auto* current = target; current; current = current->parentWidget()) {
+        if (current != source && !source->isAncestorOf(current)) break;
+        if (current->isEnabled() && (current->focusPolicy() & Qt::ClickFocus)) {
+            while (current->focusProxy()) current = current->focusProxy();
+            return current;
+        }
+        if (current == source) break;
+    }
+    return nullptr;
 }
 QWidget* pointerTarget(QPointer<QWidget>& pressed, QEvent::Type type,
                        Qt::MouseButtons buttons, QWidget* hit) {
@@ -203,6 +219,14 @@ bool WorkspaceSurface::checkPointerRoutingForTest() {
     const bool scrollViewportRecognized = isScrollViewport(scroll.viewport()) &&
         !isScrollViewport(page);
 
+    QWidget composer;
+    QPlainTextEdit input(&composer);
+    composer.setFocusPolicy(Qt::ClickFocus);
+    composer.setFocusProxy(&input);
+    const bool editorReceivesFocus =
+        clickFocusTarget(&composer, input.viewport()) == &input &&
+        clickFocusTarget(&composer, &composer) == &input;
+
     class DeletesOwner final : public QObject {
     public:
         explicit DeletesOwner(QObject* owner) : m_owner(owner) {}
@@ -218,7 +242,7 @@ bool WorkspaceSurface::checkPointerRoutingForTest() {
 
     return freshPress && staleReleaseHeals && activeDragKeepsGrab &&
            combo.ungrabs == 2 &&
-           wheelClimbsToScroller && scrollViewportRecognized &&
+           wheelClimbsToScroller && scrollViewportRecognized && editorReceivesFocus &&
            reentrantDeletionDetected;
 }
 WorkspaceSurface::WorkspaceSurface(QWidget* source) : QObject(source), m_source(source),
@@ -238,7 +262,11 @@ WorkspaceSurface::WorkspaceSurface(QWidget* source) : QObject(source), m_source(
     format.setSamples(4);
     format.setSwapInterval(QSettings().value("ui/frameMode").toString() == "unlimited" ? 0 : 1);
     m_window->setFormat(format);
-    m_window->setColor(Qt::transparent);
+    // Most QWidget roots rely on their window's palette for unpainted areas.
+    // A transparent swapchain exposes the backing store/native siblings while
+    // resizing. Only genuinely translucent top-level editors need alpha here.
+    m_window->setColor(source->window()->testAttribute(Qt::WA_TranslucentBackground)
+        ? QColor(Qt::transparent) : source->palette().color(QPalette::Window));
     m_item = new SceneItem(m_window->contentItem());
     m_segments.push_back(m_item);
     connect(m_item, &SceneItem::resourceError, this, &WorkspaceSurface::fail, Qt::QueuedConnection);
@@ -428,10 +456,16 @@ void WorkspaceSurface::resizeSurface() {
         if (widget->property("vlt.nativeOverlay").toBool() &&
             widget->isVisible() && !widget->isWindow()) {
             widget->raise();
+            // Qt's QObject order may already put the frame last even though
+            // raising the native Quick sibling just covered its HWND/NSView.
+            if (widget->windowHandle()) widget->windowHandle()->raise();
         }
     }
     m_item->setSize(m_source->size());
-    invalidate();
+    // Resizing changes this layer and descendant clips, not every control's
+    // pixels. Child Resize events invalidate only the panes whose sizes change.
+    m_dirty.insert(m_source);
+    requestCapture();
 }
 void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& snapshot, QSet<quintptr>& wanted) {
     if (m_stopping || !widget || widget == m_container || !widget->isVisible() ||
@@ -515,6 +549,8 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
                 canvas->paintScene(painter, QRegion(widget->rect()));
             } else widget->render(&recorder, QPoint(), QRegion(), QWidget::RenderFlags());
             if (!recorder.supported()) {
+                qWarning("GPU scene unsupported operation in %s (%s)",
+                         widget->metaObject()->className(), qPrintable(widget->objectName()));
                 fail(tr("A canvas uses a composition operation that is not supported by the experimental renderer."));
                 return;
             }
@@ -803,9 +839,9 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
         if (!target) return true;
         if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick) {
             m_pressed = target;
-            if (target->focusPolicy() & Qt::ClickFocus) {
-                m_container->setFocusProxy(target);
-                target->setFocus(Qt::MouseFocusReason);
+            if (auto* focus = clickFocusTarget(m_source, target)) {
+                m_container->setFocusProxy(focus);
+                focus->setFocus(Qt::MouseFocusReason);
             }
         }
         const auto local = target->mapFrom(m_source, mouse->position());
@@ -945,6 +981,13 @@ bool WorkspaceSurface::forwardInput(QEvent* event) {
 }
 bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
     if (m_stopping || m_capturing || !m_source) return false;
+    // A full-size native Quick child can become exposed after Qt discarded
+    // the root's initial backing-store request while it was still unmapped.
+    // That leaves dirty widgets queued, so later QWidget::update() calls are
+    // coalesced into a request that will never arrive. Let Qt drain them once
+    // the native surface is exposed; do not poll or mutate its private state.
+    if (object == m_window && event->type() == QEvent::Expose && m_window->isExposed())
+        QCoreApplication::postEvent(m_source->window(), new QEvent(QEvent::UpdateRequest), Qt::LowEventPriority);
     if (event->type() == QEvent::UpdateRequest && object == m_source->window()) {
         m_collectedGeometryUpdates = m_geometryExposure && collectWidgetUpdates(m_source, m_dirty);
         // Geometry damage belongs to Qt's next backing-store update, not the
@@ -993,6 +1036,8 @@ bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
         m_layers.erase(reinterpret_cast<quintptr>(widget));
     }
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange) {
+        if (widget == m_source && !widget->window()->testAttribute(Qt::WA_TranslucentBackground))
+            m_window->setColor(widget->palette().color(QPalette::Window));
         const auto found = m_layers.find(reinterpret_cast<quintptr>(widget));
         if (found != m_layers.end() && found->second.recording) found->second.recording->sections.clear();
     }

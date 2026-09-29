@@ -1,6 +1,7 @@
 #include "AiChatPanel.hpp"
 
 #include "AiPrefs.hpp"
+#include "AiChatChecks.hpp"
 #include "AccountService.hpp"
 #include "BrowserPrefs.hpp"
 #include "Controls.hpp"
@@ -12,12 +13,14 @@
 #include "SelectionModel.hpp"
 #include "ShortcutManager.hpp"
 #include "Theme.hpp"
+#include "graphics/WorkspaceSurface.hpp"
 #include "ai/AiSession.hpp"
 #include "ai/AiTools.hpp"
 #include "ai/ContentCatalog.hpp"
 #include "ai/CompositionEngine.hpp"
 #include "ai/MusicGen.hpp"
 #include "platform/AudioFileDecoder.hpp"
+#include "Internal/SamplerInstance.hpp"
 
 #include "Core/AudioBuffer.hpp"
 #include "Recording/RecordingEngine.hpp"
@@ -31,6 +34,13 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileInfo>
+#include <QFileDialog>
+#include <QClipboard>
+#include <QLineEdit>
+#include <QSaveFile>
+#include <QShortcut>
+#include <QUuid>
+#include <QTemporaryDir>
 #include <QFontDatabase>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -43,9 +53,11 @@
 #include <QToolButton>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>
+#include <QQuickWindow>
 #include <QProcessEnvironment>
 #include <QPushButton>
 #include <QScrollArea>
@@ -88,7 +100,7 @@ bool commandAllowsMode(const ShortcutManager::Metadata& metadata,
 
 // Compact enough to leave the transcript in charge, with one quiet metadata
 // line for the model and the project-aware library state.
-constexpr int kHeaderHeight = 68;
+constexpr int kHeaderHeight = 76;
 constexpr int kAttachmentsMaxHeight = 70;
 
 // ── Transcript furniture, shared by both modes ───────────────────────────────
@@ -97,14 +109,35 @@ constexpr int kAttachmentsMaxHeight = 70;
 // the same cards, and two transcripts that drifted apart in spacing and
 // silhouette would read as two different programs.
 
+QToolButton* messageAction(QWidget* parent, icons::Glyph glyph, const QString& label) {
+    auto* button = new QToolButton(parent);
+    button->setObjectName("AiMessageAction");
+    button->setProperty("aiGlyph", int(glyph));
+    button->setIcon(icons::icon(glyph, th().textSecondary, 16));
+    button->setIconSize(QSize(16, 16));
+    button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    button->setFixedSize(28, 28);
+    button->setAutoRaise(true);
+    button->setCursor(Qt::PointingHandCursor);
+    button->setFocusPolicy(Qt::StrongFocus);
+    button->setAccessibleName(label);
+    button->setToolTip(label);
+    return button;
+}
+
 QLabel* cardText(QWidget* parent, const QString& text, const char* objectName,
                  bool secondary = false) {
     auto* label = new QLabel(text, parent);
     label->setObjectName(objectName);
     label->setTextFormat(Qt::PlainText);
     label->setWordWrap(true);
-    label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+    label->setFocusPolicy(Qt::ClickFocus);
+    auto policy = label->sizePolicy();
+    policy.setHorizontalPolicy(QSizePolicy::Ignored);
+    // Keep QLabel's height-for-width flag: clearing it clips long wrapped
+    // answers instead of growing the transcript and its vertical scroll range.
+    label->setSizePolicy(policy);
     if (secondary)
         label->setAccessibleDescription(
             QObject::tr("Secondary message text"));
@@ -291,8 +324,8 @@ AiChatPanel::AiChatPanel(daw::EngineController* controller, QWidget* parent)
     setAutoFillBackground(false);
     setMinimumWidth(240);
     setAcceptDrops(true);
-    setCornerRadius(22);
-    setShadowMargin(6);
+    setCornerRadius(Theme::cornerRadius);
+    setShadowMargin(0);
     setAccentColor(th().accentHighlight);
     // This panel participates in layout, so unlike the floating context plate
     // there is no scene behind it to refract. Freezing the empty backdrop keeps
@@ -305,9 +338,7 @@ AiChatPanel::AiChatPanel(daw::EngineController* controller, QWidget* parent)
         std::make_shared<ai::CompositionCandidateStore>();
 
     auto* column = new QVBoxLayout(this);
-    // Keep every child inside the painted glass plate. The six-pixel outer
-    // gutter belongs to the soft shadow and animated rim, not to the content.
-    column->setContentsMargins(10, 8, 10, 10);
+    column->setContentsMargins(8, 0, 8, 8);
     column->setSpacing(0);
     column->addWidget(buildHeader());
 
@@ -334,10 +365,36 @@ AiChatPanel::AiChatPanel(daw::EngineController* controller, QWidget* parent)
     m_transcriptBody->setObjectName("AiTranscriptBody");
     m_transcriptBody->setAttribute(Qt::WA_StyledBackground, true);
     m_transcriptLayout = new QVBoxLayout(m_transcriptBody);
-    m_transcriptLayout->setContentsMargins(8, 10, 8, 12);
-    m_transcriptLayout->setSpacing(8);
+    m_transcriptLayout->setContentsMargins(0, 12, 0, 12);
+    m_transcriptLayout->setSpacing(12);
     m_transcript->setWidget(m_transcriptBody);
     chatColumn->addWidget(m_transcript, 1);
+
+    m_latestButton = new QToolButton(chat);
+    m_latestButton->setObjectName("AiContextButton");
+    m_latestButton->setText(tr("Latest message ↓"));
+    m_latestButton->hide();
+    chatColumn->addWidget(m_latestButton, 0, Qt::AlignHCenter);
+    connect(m_latestButton, &QToolButton::clicked, this, [this] {
+        m_followOutput = true;
+        m_transcript->verticalScrollBar()->setValue(m_transcript->verticalScrollBar()->maximum());
+        m_latestButton->hide();
+    });
+    connect(m_transcript->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
+        const auto* scroll = m_transcript->verticalScrollBar();
+        m_followOutput = scroll->maximum() - value <= 24;
+        m_latestButton->setVisible(!m_followOutput);
+    });
+    connect(m_transcript->verticalScrollBar(), &QScrollBar::rangeChanged, this, [this](int, int maximum) {
+        if (!m_followOutput) return;
+        // Wrapped text is laid out after setText returns. Follow its final
+        // height rather than the previous chunk's scrollbar range.
+        const QSignalBlocker block(m_transcript->verticalScrollBar());
+        m_transcript->verticalScrollBar()->setValue(maximum);
+    });
+    // Claim Find before the main window's plugin-search shortcut. Key events
+    // from focused children propagate here when their editor does not use them.
+    installEventFilter(this);
 
     m_stack->addWidget(chat);
     m_stack->addWidget(buildEmptyState());
@@ -405,7 +462,7 @@ QWidget* AiChatPanel::buildHeader() {
     header->setFixedHeight(kHeaderHeight);
 
     auto* column = new QVBoxLayout(header);
-    column->setContentsMargins(8, 6, 4, 5);
+    column->setContentsMargins(4, 8, 0, 8);
     column->setSpacing(2);
 
     auto* row = new QHBoxLayout;
@@ -418,55 +475,70 @@ QWidget* AiChatPanel::buildHeader() {
     mark->setFixedSize(27, 27);
     row->addWidget(mark);
 
-    m_titleLabel = new QLabel(tr("New AI chat"), header);
+    m_titleLabel = new QLabel(tr("AI chat"), header);
     m_titleLabel->setObjectName("AiTitle");
-    row->addWidget(m_titleLabel);
-    row->addStretch(1);
+    m_titleLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    row->addWidget(m_titleLabel, 1);
 
     auto* clear = new ui::IconButton(icons::Glyph::Trash,
                                      tr("Start a new conversation"), header);
-    clear->setButtonSize(22, 20);
+    clear->setButtonSize(26, 26);
+    clear->setAccessibleName(clear->toolTip());
+    clear->setFocusPolicy(Qt::StrongFocus);
     connect(clear, &QAbstractButton::clicked, this, [this] {
+        if (m_session->running()) return;
+        if (!m_session->messages().empty() && QMessageBox::question(
+                this, tr("New conversation"), tr("Clear the conversation? Project edits will be kept.")) != QMessageBox::Yes) return;
         m_session->clear();
         renderTranscript();
         updateUsageLabel();
     });
     row->addWidget(clear);
 
+    auto* history = messageAction(header, icons::Glyph::Search,
+                                  tr("Search, copy or export this conversation (Ctrl+F)"));
+    history->setFixedSize(26, 26);
+    connect(history, &QToolButton::clicked, this, &AiChatPanel::showConversation);
+    row->addWidget(history);
+
     auto* rules = new ui::IconButton(
         icons::Glyph::NoteStyle,
         tr("Standing instructions for this project"), header);
-    rules->setButtonSize(22, 20);
+    rules->setButtonSize(26, 26);
+    rules->setAccessibleName(rules->toolTip());
+    rules->setFocusPolicy(Qt::StrongFocus);
     connect(rules, &QAbstractButton::clicked, this,
             &AiChatPanel::editInstructions);
     row->addWidget(rules);
 
     auto* gear = new ui::IconButton(icons::Glyph::Gear,
                                     tr("Assistant settings"), header);
-    gear->setButtonSize(22, 20);
+    gear->setButtonSize(26, 26);
+    gear->setAccessibleName(gear->toolTip());
+    gear->setFocusPolicy(Qt::StrongFocus);
     connect(gear, &QAbstractButton::clicked, this,
             &AiChatPanel::settingsRequested);
     row->addWidget(gear);
     column->addLayout(row);
 
     auto* meta = new QHBoxLayout;
-    meta->setContentsMargins(32, 0, 4, 0);
+    meta->setContentsMargins(0, 2, 0, 0);
     meta->setSpacing(6);
     // The model is a *choice*, not a caption: one key and one URL cover every
     // model a provider offers, and which one suits the request is decided here
     // rather than in a settings window.
     m_modelLabel = new QToolButton(header);
     m_modelLabel->setObjectName("AiModel");
+    m_modelLabel->setAccessibleName(tr("AI model"));
     m_modelLabel->setPopupMode(QToolButton::InstantPopup);
     m_modelLabel->setToolButtonStyle(Qt::ToolButtonTextOnly);
     m_modelLabel->setCursor(Qt::PointingHandCursor);
-    m_modelLabel->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+    m_modelLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     auto* modelMenu = new QMenu(m_modelLabel);
     connect(modelMenu, &QMenu::aboutToShow, this,
             [this, modelMenu] { populateModelMenu(modelMenu); });
     m_modelLabel->setMenu(modelMenu);
-    meta->addWidget(m_modelLabel);
-    meta->addStretch(1);
+    meta->addWidget(m_modelLabel, 1);
 
     m_contentIndexLabel = new QLabel(header);
     m_contentIndexLabel->setObjectName("AiIndexStatus");
@@ -492,8 +564,22 @@ QWidget* AiChatPanel::buildComposer() {
     composer->setProperty("inputFocused", false);
     composer->setAttribute(Qt::WA_StyledBackground, true);
     auto* column = new QVBoxLayout(composer);
-    column->setContentsMargins(10, 8, 10, 9);
+    column->setContentsMargins(10, 8, 10, 8);
     column->setSpacing(6);
+
+    m_contextButton = new QToolButton(composer);
+    m_contextButton->setObjectName("AiContextButton");
+    m_contextButton->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    m_contextButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    connect(m_contextButton, &QToolButton::clicked, this, &AiChatPanel::showContext);
+    column->addWidget(m_contextButton);
+    updateSelectionContext();
+    m_attachmentButton = new QToolButton(composer);
+    m_attachmentButton->setObjectName("AiContextButton");
+    m_attachmentButton->setCheckable(true);
+    m_attachmentButton->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    m_attachmentButton->hide();
+    column->addWidget(m_attachmentButton);
 
     m_attachHint = new QLabel(tr("Drop samples here to let the assistant use them"),
                               composer);
@@ -507,6 +593,47 @@ QWidget* AiChatPanel::buildComposer() {
     m_attachments->setFrameShape(QFrame::NoFrame);
     m_attachments->setMaximumHeight(kAttachmentsMaxHeight);
     m_attachments->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_attachments->installEventFilter(this);
+    connect(m_attachments, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
+        const QString path = item->data(Qt::UserRole).toString();
+        if (!QFileInfo(path).isDir() || !m_contentCatalog) return;
+        QDialog dialog(this);
+        dialog.setWindowTitle(tr("Attached folder · %1").arg(QFileInfo(path).fileName()));
+        dialog.resize(540, 380);
+        auto* column = new QVBoxLayout(&dialog);
+        const auto files = m_contentCatalog->search({}, std::nullopt, 200, path.toStdString());
+        QStringList lines;
+        for (const auto& file : files) {
+            QString line = QString::fromStdString(file.location + "/" + file.name);
+            if (file.audio) line += QStringLiteral(" · %1 s").arg(file.audio->durationSeconds, 0, 'f', 1);
+            lines << line;
+        }
+        auto* note = new QLabel(tr("Indexed files: %1 (up to 200 shown). Refresh the added library to include new files.").arg(files.size()), &dialog);
+        note->setWordWrap(true);
+        column->addWidget(note);
+        auto* list = new QPlainTextEdit(lines.join('\n'), &dialog);
+        list->setReadOnly(true);
+        column->addWidget(list);
+        auto* close = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+        connect(close, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        column->addWidget(close);
+        dialog.exec();
+    });
+    m_attachments->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_attachmentButton, &QToolButton::toggled, this, [this](bool expanded) {
+        m_attachments->setVisible(m_mode == Mode::Assistant && expanded &&
+                                  m_attachments->count() > 0);
+    });
+    connect(m_attachments, &QListWidget::customContextMenuRequested, this, [this](const QPoint& point) {
+        QMenu menu(this);
+        menu.addAction(tr("Remove selected attachments"), this, [this] {
+            qDeleteAll(m_attachments->selectedItems()); refreshAttachments();
+        });
+        menu.addAction(tr("Remove all attachments"), this, [this] {
+            m_attachments->clear(); refreshAttachments();
+        });
+        menu.exec(m_attachments->viewport()->mapToGlobal(point));
+    });
     m_attachments->setToolTip(
         tr("Files the assistant may load. Select and press Backspace to remove."));
     m_attachments->hide();
@@ -514,9 +641,12 @@ QWidget* AiChatPanel::buildComposer() {
 
     m_input = new QPlainTextEdit(composer);
     m_input->setObjectName("AiInput");
+    // Qt's native text caret uses composition modes outside the scene
+    // recorder. Cache this small input surface like the other native controls.
+    m_input->viewport()->setProperty("vlt.nativeControlAsset", true);
     m_input->setPlaceholderText(
-        tr("Make a piano part, write the chords, mix the channel…"));
-    m_input->setFixedHeight(72);
+        tr("Write a message…"));
+    m_input->setFixedHeight(68);
     m_input->setFrameShape(QFrame::NoFrame);
     m_input->setFocusPolicy(Qt::StrongFocus);
     m_input->setTabChangesFocus(true);
@@ -529,6 +659,8 @@ QWidget* AiChatPanel::buildComposer() {
     // padding to the editor instead of leaving a focused-looking dead area.
     composer->setFocusPolicy(Qt::ClickFocus);
     composer->setFocusProxy(m_input);
+    setFocusPolicy(Qt::ClickFocus);
+    setFocusProxy(m_input);
     column->addWidget(m_input);
 
     auto* buttons = new QHBoxLayout;
@@ -539,7 +671,31 @@ QWidget* AiChatPanel::buildComposer() {
                                       tr("Attach a sample"), composer);
     attach->setButtonSize(28, 28);
     connect(attach, &QAbstractButton::clicked, this, [this] {
-        emit statusMessage(tr("Drag a sample from the browser into the assistant"));
+        QMenu menu(this);
+        menu.addAction(tr("Attach samples or MIDI…"), this, [this] {
+            for (const auto& file : QFileDialog::getOpenFileNames(this, tr("Attach samples or MIDI"), {},
+                    tr("Audio and MIDI (*.wav *.flac *.aif *.aiff *.mp3 *.ogg *.m4a *.mid *.midi)"))) addAttachment(file);
+        });
+        menu.addAction(tr("Attach a sample folder…"), this, [this] {
+            const auto folder = QFileDialog::getExistingDirectory(this, tr("Attach a sample folder"));
+            if (!folder.isEmpty()) addAttachment(folder);
+        });
+        menu.addAction(tr("Attach selected samples"), this, [this] {
+            if (!m_selection) return;
+            QSet<QString> tracks, clips;
+            for (const auto& id : m_selection->tracks()) tracks.insert(id);
+            for (const auto& clip : m_selection->clips()) { tracks.insert(clip.trackId); clips.insert(clip.clipId); }
+            for (const auto& track : m_controller->project().tracks) {
+                if (!tracks.contains(QString::fromStdString(track.id))) continue;
+                if (auto* sampler = m_controller->samplerInstance(track.id, track.instrument.id))
+                    addAttachment(QString::fromStdString(sampler->samplePath()));
+                for (const auto& clip : track.clips)
+                    if (clips.isEmpty() || clips.contains(QString::fromStdString(clip.id)))
+                        addAttachment(QString::fromStdString(clip.filePath));
+            }
+        });
+        menu.addAction(tr("Refresh added library"), this, [this] { startContentIndex(true); });
+        menu.exec(QCursor::pos());
     });
     buttons->addWidget(attach);
 
@@ -577,6 +733,10 @@ QWidget* AiChatPanel::buildComposer() {
     buttons->addWidget(m_sendButton);
 
     column->addLayout(buttons);
+    for (auto* button : composer->findChildren<ui::IconButton*>()) {
+        button->setAccessibleName(button->toolTip());
+        button->setFocusPolicy(Qt::StrongFocus);
+    }
     return composer;
 }
 
@@ -662,14 +822,10 @@ void AiChatPanel::applyTheme() {
     markFill.setAlphaF(t.dark ? 0.16 : 0.10);
     QColor modelFill = t.surfaceElevated;
     modelFill.setAlphaF(t.dark ? 0.78 : 0.88);
-    QColor composerFill = mixColors(t.surfaceElevated, t.background, 0.16);
-    composerFill.setAlphaF(1.0);
     QColor inputFill = t.well();
     inputFill.setAlphaF(t.dark ? 0.78 : 0.86);
     QColor inputBorder = mixColors(t.separator(), t.accent, 0.20);
     inputBorder.setAlphaF(t.dark ? 0.68 : 0.54);
-    QColor userTop = mixColors(t.surfaceElevated, t.accent, 0.25);
-    userTop.setAlphaF(t.dark ? 0.88 : 0.82);
     QColor userBottom = mixColors(t.surface, t.accent, 0.14);
     userBottom.setAlphaF(t.dark ? 0.82 : 0.76);
     QColor userBorder = mixColors(t.separator(), t.accentHighlight, 0.58);
@@ -678,8 +834,6 @@ void AiChatPanel::applyTheme() {
     assistantTop.setAlphaF(t.dark ? 0.54 : 0.68);
     QColor assistantBorder = mixColors(t.separator(), t.accent, 0.26);
     assistantBorder.setAlphaF(t.dark ? 0.42 : 0.34);
-    QColor actionTop = mixColors(t.well(), t.accent, 0.08);
-    actionTop.setAlphaF(t.dark ? 0.90 : 0.82);
     QColor actionBottom = t.well();
     actionBottom.setAlphaF(t.dark ? 0.82 : 0.76);
     QColor actionBorder = mixColors(t.separator(), t.accentHighlight, 0.18);
@@ -703,9 +857,15 @@ void AiChatPanel::applyTheme() {
 #AiTranscript, #AiTranscriptBody, #AiMessageRow {
     background: transparent; border: none;
 }
-#AiHeader { background: transparent; border: none; }
+#AiHeader { background: transparent; border: none; border-bottom: 1px solid %SEP%; }
+#AiContextButton { background: transparent; border: none; border-radius: 8px; color: %TEXT2%; font-size: 10px; padding: 3px 4px; text-align: left; }
+#AiContextButton:hover, #AiContextButton:focus { background: %MODEL_FILL%; color: %TEXT1%; }
+#AiMessageAction { background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 0; }
+#AiMessageAction:hover { background: %MODEL_FILL%; }
+#AiMessageAction:pressed { background: %MARK_FILL%; }
+#AiMessageAction:focus { border: 1px solid %ACCENT_SOFT%; }
 #AiMark { background: %MARK_FILL%; border: 1px solid %ACCENT_SOFT%;
-          border-radius: 9px; color: %TEXT1%; font-size: 10px;
+          border-radius: 8px; color: %TEXT1%; font-size: 10px;
           font-weight: 750; }
 #AiTitle { color: %TEXT1%; font-size: 12px; font-weight: 650; }
 /* Room on the right for the menu caret QToolButton draws itself, or it lands
@@ -720,34 +880,32 @@ void AiChatPanel::applyTheme() {
 #AiIndexStatus { color: %TEXT2%; font-size: 10px; font-weight: 600; }
 #AiHint { color: %TEXT2%; font-size: 11px; }
 #AiEmptyMark { background: %MARK_FILL%; border: 1px solid %ACCENT_SOFT%;
-               border-radius: 21px; color: %TEXT1%; font-size: 12px;
+               border-radius: 8px; color: %TEXT1%; font-size: 12px;
                font-weight: 750; }
 #AiEmptyKicker { color: %ACCENT_SOFT%; font-size: 10px; font-weight: 650; }
 #AiEmptyTitle { color: %TEXT1%; font-size: 13px; font-weight: 650; }
 #AiOpenSettings { background: %MARK_FILL%; border: 1px solid %ACCENT_SOFT%;
-                  border-radius: 9px; color: %TEXT1%; padding: 6px 14px; }
+                  border-radius: 8px; color: %TEXT1%; padding: 6px 14px; }
 #AiOpenSettings:hover { background: %MODEL_FILL%; }
-#AiComposer { background: %COMPOSER_FILL%; border: 2px solid %INPUT_BORDER%;
-              border-radius: 17px; }
-#AiComposer[inputFocused="true"] { border: 2px solid %ACCENT_SOFT%; }
+#AiComposer { background: %INPUT_FILL%; border: 1px solid %INPUT_BORDER%;
+              border-radius: 8px; }
+#AiComposer[inputFocused="true"] { border: 1px solid %ACCENT_SOFT%; }
 #AiUserCard {
-    background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
-                                stop:0 %USER_TOP%, stop:1 %USER_BOTTOM%);
-    border: 1px solid %USER_BORDER%; border-radius: 14px;
+    background: %USER_BOTTOM%;
+    border: 1px solid %USER_BORDER%; border-radius: 8px;
 }
 #AiAssistantCard, #AiLiveCard {
-    background: transparent; border: none; border-radius: 0px;
+    background: %ASSISTANT_TOP%; border: 1px solid %ASSISTANT_BORDER%; border-radius: 8px;
 }
 #AiActionCard {
-    background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
-                                stop:0 %ACTION_TOP%, stop:1 %ACTION_BOTTOM%);
-    border: 1px solid %ACTION_BORDER%; border-radius: 11px;
+    background: %ACTION_BOTTOM%;
+    border: 1px solid %ACTION_BORDER%; border-radius: 8px;
 }
 #AiErrorCard { background: %ERROR_FILL%; border: 1px solid %ERROR%;
-               border-radius: 12px; }
+               border-radius: 8px; }
 #AiThinkingCard { background: %MARK_FILL%; border: 1px solid %ASSISTANT_BORDER%;
-                  border-radius: 12px; }
-#AiMessageText { color: %TEXT1%; font-size: 12px; }
+                  border-radius: 8px; }
+#AiMessageText { color: %TEXT1%; font-size: 13px; }
 #AiMessageSecondary { color: %TEXT2%; font-size: 11px; }
 #AiUserRole, #AiAssistantRole, #AiActionRole, #AiLiveRole {
     font-size: 10px; font-weight: 650;
@@ -756,31 +914,22 @@ void AiChatPanel::applyTheme() {
 #AiAssistantRole, #AiLiveRole { color: %ACCENT_SOFT%; }
 #AiActionRole { color: %TEXT2%; }
 #AiActionStatusOk, #AiActionStatusWarn, #AiActionStatusError {
-    border-radius: 5px; padding: 2px 5px; font-family: "%MONO%";
-    font-size: 8px; font-weight: 700;
+    border-radius: 8px; padding: 2px 5px; font-family: "%MONO%";
+    font-size: 10px; font-weight: 600;
 }
 #AiActionStatusOk { background: %STATUS_FILL%; color: %ACCENT_SOFT%; }
 #AiActionStatusWarn { background: %MARK_FILL%; color: %TEXT1%; }
 #AiActionStatusError { background: %ERROR_FILL%; color: %ERROR%; }
-#AiActionText { color: %TEXT2%; font-family: "%MONO%"; font-size: 9px; }
+#AiActionText { color: %TEXT2%; font-size: 11px; }
 #AiCandidateCard { background: %ASSISTANT_TOP%; border: 1px solid %ACTION_BORDER%;
-                   border-radius: 9px; }
+                   border-radius: 8px; }
 #AiCandidateTitle { color: %TEXT1%; font-size: 9px; font-weight: 750;
                     letter-spacing: 0.7px; }
 #AiCandidateScore { color: %TEXT2%; font-size: 9px; }
 #AiCandidateButton { background: %MARK_FILL%; border: 1px solid %ACCENT_SOFT%;
-                     border-radius: 6px; color: %TEXT1%; font-size: 8px;
+                     border-radius: 8px; color: %TEXT1%; font-size: 8px;
                      font-weight: 700; padding: 3px 7px; }
 #AiCandidateButton:hover { background: %MODEL_FILL%; }
-#AiSuggestionPanel { background: %ASSISTANT_TOP%; border: 1px solid %ASSISTANT_BORDER%;
-                     border-radius: 13px; }
-#AiSuggestionTitle { color: %TEXT2%; font-size: 10px; font-weight: 650; }
-#AiSuggestionButton { background: transparent; border: none; border-radius: 7px;
-                      color: %TEXT1%; font-size: 11px; padding: 7px 8px;
-                      text-align: left; }
-#AiSuggestionButton:hover, #AiSuggestionButton:focus {
-    background: %MARK_FILL%; color: %TEXT1%;
-}
 #AiRevertButton { background: transparent; border: none; color: %TEXT2%;
                   font-size: 9px; font-weight: 650;
                   padding: 2px 0; text-align: left; }
@@ -789,7 +938,7 @@ void AiChatPanel::applyTheme() {
            font-size: 12px; padding: 2px; selection-background-color: %SELECT%; }
 #AiInput:focus { border: none; }
 #AiAttachments { background: %INPUT_FILL%; border: 1px solid %INPUT_BORDER%;
-                 border-radius: 10px; color: %TEXT1%; font-size: 11px; padding: 7px; }
+                 border-radius: 8px; color: %TEXT1%; font-size: 11px; padding: 7px; }
 #AiAttachments::item:selected { background: %SELECT%; color: %TEXT1%; }
 #AiTranscript QScrollBar:vertical { background: transparent; width: 7px; margin: 4px 0; }
 #AiTranscript QScrollBar::handle:vertical { background: %SEP%; min-height: 28px;
@@ -800,15 +949,12 @@ void AiChatPanel::applyTheme() {
                       .replace("%MONO%", fixedFamily)
                       .replace("%MARK_FILL%", css(markFill))
                       .replace("%MODEL_FILL%", css(modelFill))
-                      .replace("%COMPOSER_FILL%", css(composerFill))
                       .replace("%INPUT_FILL%", css(inputFill))
                       .replace("%INPUT_BORDER%", css(inputBorder))
-                      .replace("%USER_TOP%", css(userTop))
                       .replace("%USER_BOTTOM%", css(userBottom))
                       .replace("%USER_BORDER%", css(userBorder))
                       .replace("%ASSISTANT_TOP%", css(assistantTop))
                       .replace("%ASSISTANT_BORDER%", css(assistantBorder))
-                      .replace("%ACTION_TOP%", css(actionTop))
                       .replace("%ACTION_BOTTOM%", css(actionBottom))
                       .replace("%ACTION_BORDER%", css(actionBorder))
                       .replace("%STATUS_FILL%", css(statusFill))
@@ -819,6 +965,9 @@ void AiChatPanel::applyTheme() {
                       .replace("%SELECT%", css(t.selection))
                       .replace("%TEXT1%", css(t.textPrimary))
                       .replace("%TEXT2%", css(t.textSecondary)));
+    for (auto* button : findChildren<QToolButton*>())
+        if (button->property("aiGlyph").isValid())
+            button->setIcon(icons::icon(icons::Glyph(button->property("aiGlyph").toInt()), t.textSecondary, 16));
     renderTranscript();
 }
 
@@ -840,7 +989,7 @@ void AiChatPanel::showEvent(QShowEvent* event) {
 void AiChatPanel::startContentIndex(bool force) {
     if (!m_contentCatalog) return;
     std::vector<std::string> roots;
-    for (const QString& folder : ui::browserprefs::folders())
+    for (const QString& folder : contentPaths())
         roots.push_back(folder.toStdString());
     m_contentCatalog->setBrowserRoots(std::move(roots));
     const ai::CatalogIndexStatus before = m_contentCatalog->status();
@@ -903,15 +1052,14 @@ void AiChatPanel::hideEvent(QHideEvent* event) {
 }
 
 QRect AiChatPanel::plateRect() const {
-    return rect().adjusted(4, 4, -4, -4);
+    return rect();
 }
 
 QPainterPath AiChatPanel::plateShape() const {
     const QRectF r = QRectF(plateRect()).adjusted(0.5, 0.5, -0.5, -0.5);
     if (r.isEmpty()) return {};
     QPainterPath path;
-    const qreal radius = std::min<qreal>(20.0, r.height() / 2.0);
-    path.addRoundedRect(r, radius, radius);
+    path.addRoundedRect(r, Theme::cornerRadius, Theme::cornerRadius);
     return path;
 }
 
@@ -940,6 +1088,9 @@ void AiChatPanel::paintEvent(QPaintEvent* event) {
 // ── Settings ────────────────────────────────────────────────────────────────
 
 void AiChatPanel::reloadSettings() {
+    // Account quota/model refreshes can arrive during a generation. Replacing
+    // that client would silently cancel the request and leave the session busy.
+    if (m_session && m_session->running()) return;
     ui::aiprefs::ModelConnection connection;
     QString active = ui::aiprefs::activeModelId();
     if (!ui::aiprefs::modelById(active, &connection)) {
@@ -975,6 +1126,8 @@ void AiChatPanel::reloadSettings() {
         config.displayName = connection.displayName;
         config.model = connection.model;
         config.stream = ui::aiprefs::streaming();
+        config.timeoutSeconds = ui::aiprefs::timeoutSeconds();
+        config.maxRetries = ui::aiprefs::maxRetries();
         if (connection.source == ui::aiprefs::ModelSource::Managed) {
             config.transport = ui::LlmConfig::Transport::Managed;
             if (auto* account = account::Service::instance())
@@ -1079,35 +1232,266 @@ void AiChatPanel::updateReadiness() {
 
 // ── Attachments ─────────────────────────────────────────────────────────────
 
+QStringList AiChatPanel::contentPaths() const {
+    QStringList paths = ui::browserprefs::aiContentPaths();
+    if (m_attachments)
+        for (int i = 0; i < m_attachments->count(); ++i)
+            paths << m_attachments->item(i)->data(Qt::UserRole).toString();
+    paths.removeDuplicates();
+    return paths;
+}
+
+void AiChatPanel::setSelectionModel(ui::SelectionModel* selection) {
+    if (m_selection) disconnect(m_selection, nullptr, this, nullptr);
+    m_selection = selection;
+    if (m_selection) connect(m_selection, &ui::SelectionModel::changed, this, &AiChatPanel::updateSelectionContext);
+    updateSelectionContext();
+}
+
+void AiChatPanel::updateSelectionContext() {
+    if (!m_contextButton) return;
+    QStringList names;
+    if (m_selection) {
+        QSet<QString> tracks;
+        for (const auto& id : m_selection->tracks()) tracks.insert(id);
+        for (const auto& clip : m_selection->clips()) tracks.insert(clip.trackId);
+        for (const auto& track : m_controller->project().tracks) {
+            if (!tracks.contains(QString::fromStdString(track.id))) continue;
+            names << QString::fromStdString(track.name);
+        }
+    }
+    const int clips = m_selection ? int(m_selection->clips().size()) : 0;
+    QString text = names.isEmpty() ? tr("Context · project and playhead")
+        : tr("Selection · %1 · %2 clips").arg(names.join(", ")).arg(clips);
+    if (m_uiContext) {
+        const auto state = m_uiContext();
+        if (state.contains("pianoRoll")) {
+            const auto& piano = state["pianoRoll"];
+            const auto count = piano.value("selectedNoteCount", 0);
+            if (count > 0) text += tr(" · %1 notes").arg(count);
+        }
+    }
+    m_contextButton->setText(text);
+    m_contextButton->setToolTip(text + "\n" + tr("Click to inspect selection, instruments, samples and library access."));
+    m_contextButton->setAccessibleName(text);
+    if (m_attachments) {
+        QHash<QString, QStringList> usage;
+        const auto key = [](const QString& path) {
+            QString normalized = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+#ifdef Q_OS_WIN
+            normalized = normalized.toCaseFolded();
+#endif
+            return normalized;
+        };
+        for (const auto& track : m_controller->project().tracks) {
+            const QString name = QString::fromStdString(track.name);
+            for (const auto& clip : track.clips)
+                if (!clip.filePath.empty()) usage[key(QString::fromStdString(clip.filePath))] << name;
+            if (auto* sampler = m_controller->samplerInstance(track.id, track.instrument.id)) {
+                const auto path = sampler->samplePath();
+                if (!path.empty()) usage[key(QString::fromStdString(path))] << name;
+            }
+        }
+        for (int i = 0; i < m_attachments->count(); ++i) {
+            auto* item = m_attachments->item(i);
+            const QString path = item->data(Qt::UserRole).toString();
+            auto names = usage.value(key(path));
+            names.removeDuplicates();
+            item->setText(item->data(Qt::UserRole + 2).toString() + (names.isEmpty() ? QString() : tr(" · in project")));
+            item->setToolTip(path + (names.isEmpty() ? QString() : "\n" + tr("Used by: %1").arg(names.join(", "))));
+        }
+    }
+}
+
+void AiChatPanel::showContext() {
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Assistant context"));
+    dialog.resize(570, 440);
+    auto* layout = new QVBoxLayout(&dialog);
+    QString text = tr("Project: %1\nTempo: %2 BPM\n\nSelection is captured when you send a request.\n")
+        .arg(QString::fromStdString(m_controller->projectName())).arg(m_controller->tempo());
+    QSet<QString> tracks, clips;
+    if (m_selection) {
+        for (const auto& id : m_selection->tracks()) tracks.insert(id);
+        for (const auto& clip : m_selection->clips()) { tracks.insert(clip.trackId); clips.insert(clip.clipId); }
+    }
+    for (const auto& track : m_controller->project().tracks) {
+        if (!tracks.contains(QString::fromStdString(track.id))) continue;
+        text += "\n" + QString::fromStdString(track.name) + "\n";
+        if (track.instrument.isLoaded()) text += tr("Instrument: %1\n").arg(QString::fromStdString(track.instrument.name));
+        if (auto* sampler = m_controller->samplerInstance(track.id, track.instrument.id))
+            text += tr("Sampler source: %1\n").arg(QFileInfo(QString::fromStdString(sampler->samplePath())).fileName());
+        for (const auto& slot : track.inserts)
+            if (slot.isLoaded()) text += tr("Effect: %1\n").arg(QString::fromStdString(slot.name));
+        for (const auto& clip : track.clips) {
+            if (!clips.isEmpty() && !clips.contains(QString::fromStdString(clip.id))) continue;
+            text += tr("Clip: %1").arg(QString::fromStdString(clip.name));
+            if (!clip.filePath.empty()) text += tr(" · Sample: %1").arg(QFileInfo(QString::fromStdString(clip.filePath)).fileName());
+            text += '\n';
+        }
+    }
+    text += "\n" + tr("Allowed library and attachments:") + "\n";
+    const auto paths = contentPaths();
+    text += paths.isEmpty() ? tr("No files or folders added.") : paths.join('\n');
+    text += "\n\n" + tr("Only added library locations and explicit attachments are indexed. Folder attachments include their subfolders.");
+    auto* details = new QPlainTextEdit(text, &dialog);
+    details->setReadOnly(true);
+    layout->addWidget(details);
+    auto* close = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(close, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(close);
+    dialog.exec();
+}
+
+QString AiChatPanel::conversationText() const {
+    QString text;
+    for (const auto& message : m_session->messages()) {
+        if (!message.text.empty()) text += (message.role == ai::Role::User ? tr("You") : tr("VLT AI")) + ":\n" + QString::fromStdString(message.text) + "\n\n";
+        for (const auto& outcome : message.outcomes)
+            text += QString::fromStdString(outcome.name) + ": " + QString::fromStdString(outcome.result.dump(2)) + "\n\n";
+    }
+    if (!m_streaming.isEmpty()) text += tr("VLT AI · Writing") + ":\n" + m_streaming;
+    return text;
+}
+
+void AiChatPanel::showConversation() {
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Conversation"));
+    dialog.resize(650, 520);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* search = new QLineEdit(&dialog);
+    search->setPlaceholderText(tr("Find in conversation — Enter for next match"));
+    search->setAccessibleName(tr("Find in conversation"));
+    layout->addWidget(search);
+    auto* text = new QPlainTextEdit(conversationText(), &dialog);
+    text->setReadOnly(true);
+    layout->addWidget(text);
+    connect(search, &QLineEdit::returnPressed, &dialog, [text, search] {
+        if (!text->find(search->text())) { text->moveCursor(QTextCursor::Start); text->find(search->text()); }
+    });
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    auto* copy = buttons->addButton(tr("Copy all"), QDialogButtonBox::ActionRole);
+    connect(copy, &QPushButton::clicked, &dialog, [text] { QApplication::clipboard()->setText(text->toPlainText()); });
+    auto* save = buttons->addButton(tr("Export…"), QDialogButtonBox::ActionRole);
+    connect(save, &QPushButton::clicked, &dialog, [this, text, &dialog] {
+        const auto path = QFileDialog::getSaveFileName(&dialog, tr("Export conversation"), "conversation.txt", tr("Text files (*.txt)"));
+        if (path.isEmpty()) return;
+        QSaveFile file(path);
+        const auto bytes = text->toPlainText().toUtf8();
+        if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
+            QMessageBox::warning(&dialog, tr("Export conversation"), tr("Could not save the conversation."));
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    search->setFocus();
+    dialog.exec();
+}
+
+void AiChatPanel::addMessageActions(QWidget* card, QVBoxLayout* layout, std::size_t index) {
+    const auto& message = m_session->messages()[index];
+    const QString text = QString::fromStdString(message.text);
+    auto* actions = new QHBoxLayout;
+    actions->setContentsMargins(0, 0, 0, 0);
+    auto* copy = messageAction(card, icons::Glyph::Copy, tr("Copy message"));
+    copy->setObjectName("AiMessageAction");
+    copy->setProperty("aiReadOnlyAction", true);
+    copy->setAccessibleName(tr("Copy message"));
+    connect(copy, &QToolButton::clicked, this, [this, text] {
+        QApplication::clipboard()->setText(text); emit statusMessage(tr("Message copied"));
+    });
+    actions->addWidget(copy);
+    if (message.role == ai::Role::User) {
+        auto* edit = messageAction(card, icons::Glyph::Edit, tr("Edit as new request"));
+        edit->setToolTip(tr("Edit as new request"));
+        edit->setObjectName("AiMessageAction");
+        edit->setProperty("aiReadOnlyAction", true);
+        connect(edit, &QToolButton::clicked, this, [this, text] {
+            if (!m_input->toPlainText().trimmed().isEmpty() &&
+                QMessageBox::question(this, tr("Edit request"), tr("Replace the current draft?")) != QMessageBox::Yes) return;
+            m_input->setPlainText(text); m_input->setFocus();
+        });
+        actions->addWidget(edit);
+    }
+    const bool canRevert = std::any_of(m_session->checkpoints().begin(), m_session->checkpoints().end(),
+        [index](const auto& checkpoint) { return checkpoint.messageIndex == index; });
+    if (message.role == ai::Role::User && canRevert) {
+        auto* revert = messageAction(card, icons::Glyph::Undo,
+                                    tr("Restore the project to before this request"));
+        revert->setEnabled(!m_session->running());
+        connect(revert, &QToolButton::clicked, this, [this, index] { revertToMessage(index); });
+        actions->addWidget(revert);
+    }
+    actions->setSpacing(2);
+    actions->addStretch();
+    layout->addLayout(actions);
+}
+
+void AiChatPanel::continueRequest() {
+    if (!m_client || !m_session->resume()) return;
+    m_followOutput = true;
+    renderTranscript(); updateBusyState(); step();
+}
+
 void AiChatPanel::addAttachment(const QString& path) {
     const QFileInfo info(path);
-    if (!info.exists() || !info.isFile()) return;
-    const QString absolute = info.absoluteFilePath();
+    if (!info.exists() || (!info.isFile() && !info.isDir())) return;
+    const QString absolute = info.canonicalFilePath();
     for (int i = 0; i < m_attachments->count(); ++i)
         if (m_attachments->item(i)->data(Qt::UserRole).toString() == absolute)
             return;
 
     audio::platform::AudioFileInfo probed;
     const bool decodable =
-        audio::platform::probeAudioFile(absolute.toStdString(), probed).isOk();
+        info.isFile() && audio::platform::probeAudioFile(absolute.toStdString(), probed).isOk();
+    const auto suffix = info.suffix().toLower();
+    if (!info.isDir() && !decodable && suffix != "mid" && suffix != "midi") {
+        emit statusMessage(tr("Attach an audio file, MIDI file or sample folder."));
+        return;
+    }
 
     auto* item = new QListWidgetItem(m_attachments);
     item->setData(Qt::UserRole, absolute);
-    item->setText(decodable ? QStringLiteral("%1  ·  %2 s")
+    item->setData(Qt::UserRole + 1, "attachment_" + QUuid::createUuid().toString(QUuid::WithoutBraces));
+    item->setText(info.isDir() ? tr("Folder · %1").arg(info.fileName()) : decodable ? QStringLiteral("%1  ·  %2 s")
                                   .arg(info.fileName())
                                   .arg(probed.durationSeconds(), 0, 'f', 1)
                             : info.fileName());
     item->setToolTip(absolute);
+    item->setData(Qt::UserRole + 2, item->text());
     item->setIcon(icons::icon(decodable ? icons::Glyph::Waveform
                                         : icons::Glyph::Import,
                               th().textSecondary, 12));
     refreshAttachments();
+    updateSelectionContext();
     emit statusMessage(tr("Attached %1").arg(info.fileName()));
 }
 
 void AiChatPanel::refreshAttachments() {
     const bool any = m_attachments->count() > 0;
-    m_attachments->setVisible(any);
+    m_attachmentButton->setVisible(any && m_mode == Mode::Assistant);
+    m_attachmentButton->setText(tr("Attachments · %1").arg(m_attachments->count()));
+    QStringList names;
+    for (int i = 0; i < m_attachments->count(); ++i) names << m_attachments->item(i)->text();
+    m_attachmentButton->setToolTip(tr("Click to inspect attachments. Select an item and press Delete to detach.") + "\n" + tr("Double-click a folder to see indexed samples.") + "\n" + names.join('\n'));
+    m_attachments->setVisible(any && m_mode == Mode::Assistant &&
+                              m_attachmentButton->isChecked());
+    startContentIndex(false);
+    {
+        auto context = m_session->context();
+        context.attachments.clear();
+        for (int i = 0; i < m_attachments->count(); ++i) {
+            const auto* item = m_attachments->item(i);
+            const QString path = item->data(Qt::UserRole).toString();
+            const QFileInfo info(path);
+            audio::platform::AudioFileInfo audio;
+            if (info.isFile()) audio::platform::probeAudioFile(path.toStdString(), audio);
+            context.attachments.push_back({info.fileName().toStdString(), path.toStdString(), audio.durationSeconds(),
+                int(audio.sampleRate), int(audio.channels), item->data(Qt::UserRole + 1).toString().toStdString(), info.isDir()});
+        }
+        context.sampleFolders.clear();
+        for (const auto& path : contentPaths()) context.sampleFolders.push_back(path.toStdString());
+        m_session->setContext(std::move(context));
+    }
     // The plus control and drag tooltip carry this affordance without keeping
     // a permanent instruction line above every message.
     m_attachHint->hide();
@@ -1125,6 +1509,15 @@ void AiChatPanel::dropEvent(QDropEvent* event) {
 }
 
 bool AiChatPanel::eventFilter(QObject* watched, QEvent* event) {
+    if (m_mode == Mode::Assistant && (event->type() == QEvent::ShortcutOverride ||
+                                     event->type() == QEvent::KeyPress)) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->matches(QKeySequence::Find)) {
+            event->accept();
+            if (event->type() == QEvent::KeyPress) showConversation();
+            return true;
+        }
+    }
     if (watched == m_input) {
         if (event->type() == QEvent::FocusIn ||
             event->type() == QEvent::FocusOut) {
@@ -1150,9 +1543,14 @@ bool AiChatPanel::eventFilter(QObject* watched, QEvent* event) {
             }
         }
     }
-    if (watched == m_attachments && event->type() == QEvent::KeyPress) {
+    if (watched == m_attachments && (event->type() == QEvent::KeyPress ||
+                                    event->type() == QEvent::ShortcutOverride)) {
         auto* key = static_cast<QKeyEvent*>(event);
         if (key->key() == Qt::Key_Backspace || key->key() == Qt::Key_Delete) {
+            if (event->type() == QEvent::ShortcutOverride) {
+                event->accept();
+                return true;
+            }
             qDeleteAll(m_attachments->selectedItems());
             refreshAttachments();
             return true;
@@ -1185,15 +1583,17 @@ void AiChatPanel::send() {
     }
 
     ai::ToolContext context;
+    context.uiContext = m_uiContext;
     for (int i = 0; i < m_attachments->count(); ++i) {
         const QString path = m_attachments->item(i)->data(Qt::UserRole).toString();
         audio::platform::AudioFileInfo probed;
-        audio::platform::probeAudioFile(path.toStdString(), probed);
+        const bool folder = QFileInfo(path).isDir();
+        if (!folder) audio::platform::probeAudioFile(path.toStdString(), probed);
         context.attachments.push_back(
             ai::Attachment{QFileInfo(path).fileName().toStdString(),
                            path.toStdString(), probed.durationSeconds(),
                            int(probed.sampleRate), int(probed.channels),
-                           "attachment_" + std::to_string(i + 1)});
+                           m_attachments->item(i)->data(Qt::UserRole + 1).toString().toStdString(), folder});
     }
 
     // What the user is looking at, so "this" and "here" mean something. Read at
@@ -1221,9 +1621,9 @@ void AiChatPanel::send() {
     }
     // The assistant searches exactly the folders the browser shows, and nothing
     // else — the same promise the browser makes to the user.
-    for (const QString& folder : ui::browserprefs::folders())
+    for (const QString& folder : contentPaths())
         context.sampleFolders.push_back(folder.toStdString());
-    startContentIndex(/*force=*/true);
+    startContentIndex(/*force=*/false);
     context.contentCatalog = m_contentCatalog;
     context.compositionCandidates = m_compositionCandidates;
 
@@ -1324,12 +1724,17 @@ void AiChatPanel::send() {
 
     m_session->begin(text.toStdString());
     m_input->clear();
+    m_followOutput = true;
     renderTranscript();
     updateBusyState();
     step();
 }
 
 void AiChatPanel::step() {
+    m_client->setStatusSink([this](const QString& status) {
+        m_requestStatus = status;
+        if (m_requestStatusLabel) m_requestStatusLabel->setText(status);
+    });
     m_client->setAvailableTools(m_session->availableTools());
     m_client->setUsageSink([this](ai::AiSession::Usage usage) {
         m_session->addUsage(usage);
@@ -1346,7 +1751,7 @@ void AiChatPanel::step() {
             m_streamFlushPending = false;
             if (m_streamingLabel) {
                 m_streamingLabel->setText(m_streaming);
-                if (m_transcript) m_transcript->verticalScrollBar()->setValue(
+                if (m_transcript && m_followOutput) m_transcript->verticalScrollBar()->setValue(
                     m_transcript->verticalScrollBar()->maximum());
             } else if (!m_streaming.isEmpty()) renderTranscript();
         });
@@ -1379,11 +1784,13 @@ void AiChatPanel::updateUsageLabel() {
 
 void AiChatPanel::onReply(ai::ModelReply reply) {
     m_streaming.clear();
+    const auto revision = m_controller->projectRevision();
     const ai::AiSession::Step next = m_session->applyReply(reply);
     renderTranscript();
     // The document may have changed under the shell's views, whether or not the
     // run is over — the tracks should appear as they are made, not at the end.
-    emit projectChanged();
+    if (m_controller->projectRevision() != revision) emit projectChanged();
+    updateSelectionContext();
 
     if (next == ai::AiSession::Step::NeedsRequest) {
         step();
@@ -1394,6 +1801,7 @@ void AiChatPanel::onReply(ai::ModelReply reply) {
 
 void AiChatPanel::endRun() {
     updateBusyState();
+    reloadSettings();
     if (!m_session->lastError().empty())
         emit statusMessage(
             tr("Assistant: %1")
@@ -1418,10 +1826,10 @@ void AiChatPanel::stop() {
     m_session->cancel();
     if (m_client) m_client->cancel();
     // `cancel` drops the callback, so nothing else will close the run.
-    m_session->applyReply(ai::ModelReply{});
+    m_session->applyReply(ai::ModelReply{m_streaming.toStdString(), {}, tr("Stopped. You can continue this request.").toStdString()});
+    m_streaming.clear();
     renderTranscript();
     updateBusyState();
-    emit projectChanged();
 }
 
 void AiChatPanel::updateBusyState() {
@@ -1467,16 +1875,18 @@ void AiChatPanel::setMode(Mode mode, bool persist) {
 void AiChatPanel::applyModeToComposer() {
     const bool music = m_mode == Mode::Music;
     if (m_titleLabel)
-        m_titleLabel->setText(music ? tr("New AI music") : tr("New AI chat"));
+        m_titleLabel->setText(music ? tr("AI music") : tr("AI chat"));
     if (m_instrumentalButton) m_instrumentalButton->setVisible(music);
     if (m_attachHint) m_attachHint->hide();
-    if (m_attachments) m_attachments->setVisible(!music &&
+    if (m_attachmentButton) m_attachmentButton->setVisible(!music &&
+                                                            m_attachments->count() > 0);
+    if (m_attachments) m_attachments->setVisible(!music && m_attachmentButton->isChecked() &&
                                                  m_attachments->count() > 0);
     if (m_promptsButton) m_promptsButton->setVisible(!music);
     if (!m_input) return;
     m_input->setPlaceholderText(
         music ? tr("Warm lo-fi beat, dusty piano, brushed drums…")
-              : tr("Make a piano part, write the chords, mix the channel…"));
+              : tr("Write a message…"));
 }
 
 void AiChatPanel::sendMusic() {
@@ -1700,6 +2110,10 @@ void AiChatPanel::renderTranscript() {
     if (!m_transcript || !m_transcriptLayout) return;
 
     m_streamingLabel = nullptr;
+    m_requestStatusLabel = nullptr;
+    const bool follow = m_followOutput;
+    const int scrollPosition = m_transcript->verticalScrollBar()->value();
+    const QSignalBlocker scrollSignals(m_transcript->verticalScrollBar());
 
     // Which user turns can still be taken back, so the link is only offered
     // where it would actually work.
@@ -1735,8 +2149,8 @@ void AiChatPanel::renderTranscript() {
         const auto end = widget->property("aiMessageEnd").toULongLong();
         if (end > prefix || end >= m_transcriptHashes.size()) break;
         start = size_t(end); ++keep;
-        for (auto* button : widget->findChildren<QPushButton*>())
-            button->setEnabled(!m_session->running());
+        for (auto* button : widget->findChildren<QAbstractButton*>())
+            button->setEnabled(button->property("aiReadOnlyAction").toBool() || !m_session->running());
     }
     while (auto* item = m_transcriptLayout->takeAt(keep)) {
         delete item->widget(); delete item;
@@ -1747,24 +2161,10 @@ void AiChatPanel::renderTranscript() {
         const ai::Message& message = messages[at];
         switch (message.role) {
             case ai::Role::User: {
-                const QString mode = QString::fromLatin1(
-                    ai::interactionModeName(
-                        ai::inferInteractionMode(message.text)));
-                auto card = messageCard(
-                    m_transcriptBody, "AiUserCard",
-                    tr("You · %1").arg(mode), "AiUserRole");
+                auto card = messageCard(m_transcriptBody, "AiUserCard", tr("You"), "AiUserRole");
                 card.second->addWidget(cardText(m_transcriptBody, 
                     QString::fromStdString(message.text), "AiMessageText"));
-                if (revertable.contains(qulonglong(at))) {
-                    auto* revert = new QPushButton(tr("Revert request"), card.first);
-                    revert->setObjectName("AiRevertButton");
-                    revert->setEnabled(!m_session->running());
-                    revert->setCursor(Qt::PointingHandCursor);
-                    revert->setToolTip(tr("Restore the project to before this request"));
-                    connect(revert, &QAbstractButton::clicked, this,
-                            [this, at] { revertToMessage(at); });
-                    card.second->addWidget(revert, 0, Qt::AlignLeft);
-                }
+                addMessageActions(card.first, card.second, at);
                 wrapRow(m_transcriptLayout, m_transcriptBody, card.first, 1, 8, 0);
                 break;
             }
@@ -1775,6 +2175,7 @@ void AiChatPanel::renderTranscript() {
                                          "AiAssistantRole");
                     card.second->addWidget(cardText(m_transcriptBody, 
                         QString::fromStdString(message.text), "AiMessageText"));
+                    addMessageActions(card.first, card.second, at);
                     wrapRow(m_transcriptLayout, m_transcriptBody, card.first, 0, 10, 1);
                 }
                 break;
@@ -1823,13 +2224,25 @@ void AiChatPanel::renderTranscript() {
                                               QSizePolicy::Fixed);
                         actionLayout->addWidget(status, 0, Qt::AlignTop);
 
-                        QString detail = QString::fromStdString(out.name);
+                        const auto activityLabel = [this](const std::string& name) {
+                            if (name == "add_track") return tr("Create track");
+                            if (name == "add_midi_clip") return tr("Create MIDI clip");
+                            if (name == "set_clip_notes") return tr("Write notes");
+                            if (name == "compose_candidates") return tr("Prepare musical variations");
+                            if (name == "get_project" || name == "get_project_context") return tr("Read project");
+                            if (name == "load_sample") return tr("Load sample");
+                            if (name == "add_plugin") return tr("Add instrument or effect");
+                            if (name == "set_plugin_parameter") return tr("Adjust sound");
+                            return tr("Project action");
+                        };
+                        QString detail = activityLabel(out.name);
                         if (!out.ok) {
                             if (!resultError.empty())
                                 detail += QStringLiteral(" — ") +
                                           QString::fromStdString(resultError);
                         }
                         auto* action = cardText(m_transcriptBody, detail, "AiActionText", true);
+                        action->setToolTip(QString::fromStdString(out.name));
                         actionLayout->addWidget(action, 1);
                         card.second->addWidget(actionRow);
 
@@ -1935,6 +2348,11 @@ void AiChatPanel::renderTranscript() {
                              "AiActionStatusError");
         card.second->addWidget(cardText(m_transcriptBody, 
             QString::fromStdString(m_session->lastError()), "AiMessageText"));
+        auto* retry = messageAction(card.first, icons::Glyph::Reload, tr("Continue request"));
+        retry->setObjectName("AiMessageAction");
+        retry->setEnabled(!m_session->running() && m_client != nullptr);
+        connect(retry, &QToolButton::clicked, this, &AiChatPanel::continueRequest);
+        card.second->addWidget(retry, 0, Qt::AlignLeft);
         wrapRow(m_transcriptLayout, m_transcriptBody, card.first, 0, 10, 1);
     }
 
@@ -1948,8 +2366,9 @@ void AiChatPanel::renderTranscript() {
     if (m_session->running()) {
         auto card = messageCard(m_transcriptBody, "AiThinkingCard", tr("VLT AI"),
                              "AiAssistantRole");
-        card.second->addWidget(cardText(m_transcriptBody, tr("Working…"), "AiMessageSecondary",
-                                        true));
+        m_requestStatusLabel = cardText(m_transcriptBody,
+            m_requestStatus.isEmpty() ? tr("Working…") : m_requestStatus, "AiMessageSecondary", true);
+        card.second->addWidget(m_requestStatusLabel);
         wrapRow(m_transcriptLayout, m_transcriptBody, card.first, 0, 6, 4);
     }
 
@@ -1961,40 +2380,15 @@ void AiChatPanel::renderTranscript() {
             "AiMessageSecondary", true));
         wrapRow(m_transcriptLayout, m_transcriptBody, card.first, 0, 10, 1);
 
-        auto* suggestions = new QWidget(m_transcriptBody);
-        suggestions->setObjectName("AiSuggestionPanel");
-        suggestions->setAttribute(Qt::WA_StyledBackground, true);
-        auto* suggestionLayout = new QVBoxLayout(suggestions);
-        suggestionLayout->setContentsMargins(7, 7, 7, 7);
-        suggestionLayout->setSpacing(2);
-        auto* suggestionTitle = new QLabel(tr("Try a project-aware prompt"),
-                                           suggestions);
-        suggestionTitle->setObjectName("AiSuggestionTitle");
-        suggestionLayout->addWidget(suggestionTitle);
-        const QStringList prompts{
-            tr("Create a four-bar piano progression"),
-            tr("Balance the selected track in the mix"),
-            tr("Explain what is selected right now")};
-        for (const QString& prompt : prompts) {
-            auto* button = new QPushButton(prompt, suggestions);
-            button->setObjectName("AiSuggestionButton");
-            button->setCursor(Qt::PointingHandCursor);
-            button->setFocusPolicy(Qt::StrongFocus);
-            connect(button, &QAbstractButton::clicked, this,
-                    [this, prompt] {
-                        m_input->setPlainText(prompt);
-                        m_input->setFocus(Qt::ShortcutFocusReason);
-                    });
-            suggestionLayout->addWidget(button);
-        }
-        wrapRow(m_transcriptLayout, m_transcriptBody, suggestions, 0, 10, 1);
+
     }
 
     m_transcriptLayout->addStretch(1);
-    QTimer::singleShot(0, m_transcript, [this] {
+    QTimer::singleShot(0, m_transcript, [this, follow, scrollPosition] {
         if (!m_transcript) return;
-        m_transcript->verticalScrollBar()->setValue(
-            m_transcript->verticalScrollBar()->maximum());
+        const QSignalBlocker block(m_transcript->verticalScrollBar());
+        m_transcript->verticalScrollBar()->setValue(follow && m_followOutput
+            ? m_transcript->verticalScrollBar()->maximum() : scrollPosition);
     });
 }
 
@@ -2081,6 +2475,7 @@ void AiChatPanel::showPromptMenu() {
 }
 
 bool AiChatPanel::checkAgentForTest() {
+    if (!ui::checkAiTransport()) return false;
     setMode(Mode::Assistant, /*persist=*/false);
 
     // A managed model remains selected while its short-lived account token is
@@ -2097,6 +2492,46 @@ bool AiChatPanel::checkAgentForTest() {
 
     m_client.reset(new ScriptedClient(this));
     updateReadiness();
+
+    // Reproduce first-open input through the physical input window. Sending
+    // keys straight to m_input would miss the viewport/focus routing bug.
+    renderTranscript();
+    if (!findChildren<QWidget*>(QStringLiteral("AiSuggestionPanel")).isEmpty()) return false;
+    window()->activateWindow();
+    QWidget* inputSource = window();
+    QWindow* inputWindow = window()->windowHandle();
+    for (auto* host = parentWidget(); host; host = host->parentWidget()) {
+        auto surfaces = host->findChildren<ui::graphics::WorkspaceSurface*>(QString(), Qt::FindDirectChildrenOnly);
+        if (!surfaces.isEmpty()) {
+            inputSource = host;
+            inputWindow = surfaces.front()->quickWindow();
+            break;
+        }
+    }
+    if (inputWindow) inputWindow->requestActivate();
+    QApplication::processEvents();
+    m_transcript->setFocus();
+    m_input->clear();
+    const QPointF inputPoint(12, 12);
+    const QPointF inputPosition = m_input->viewport()->mapTo(inputSource, inputPoint);
+    const QPointF inputGlobal = m_input->viewport()->mapToGlobal(inputPoint);
+    for (const auto type : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease}) {
+        QMouseEvent click(type, inputPosition, inputGlobal, Qt::LeftButton,
+                          type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(inputWindow, &click);
+    }
+    QApplication::processEvents();
+    if (QApplication::focusWidget() != m_input) {
+        std::fprintf(stderr, "FAIL AI chat: first viewport click did not focus the editor\n");
+        return false;
+    }
+    QKeyEvent typed(QEvent::KeyPress, Qt::Key_H, Qt::NoModifier, QStringLiteral("h"));
+    QApplication::sendEvent(inputWindow, &typed);
+    if (m_input->toPlainText() != QStringLiteral("h")) {
+        std::fprintf(stderr, "FAIL AI chat: first-open keyboard input was lost\n");
+        return false;
+    }
+    std::fprintf(stderr, "PASS AI chat: first-open click and typing without suggestions\n");
 
     // Exercise the actual editor path, not just setPlainText(): this catches a
     // disabled composer or a key filter that steals normal text/newlines.
@@ -2127,6 +2562,105 @@ bool AiChatPanel::checkAgentForTest() {
     for (int i = 0; i < 400 && m_session->running(); ++i)
         QApplication::processEvents(QEventLoop::AllEvents, 5);
     if (m_session->running()) return false;
+
+    const bool wasHidden = isHidden();
+    show();
+    QApplication::processEvents();
+    QTemporaryDir folders;
+    if (!folders.isValid() || !QDir(folders.path()).mkdir("Samples")) return false;
+    const int attachedBefore = m_attachments->count();
+    addAttachment(folders.path());
+    addAttachment(folders.path());
+    addAttachment(folders.path() + "/Samples");
+    applyModeToComposer();
+    if (m_attachments->count() != attachedBefore + 2 || !m_attachments->isHidden()) {
+        std::fprintf(stderr, "FAIL AI chat: folder deduplication or collapsed list\n"); return false;
+    }
+    const auto remainingId = m_attachments->item(attachedBefore + 1)->data(Qt::UserRole + 1);
+    m_attachmentButton->setChecked(true);
+    m_attachments->setFocus();
+    m_attachments->clearSelection();
+    m_attachments->item(attachedBefore)->setSelected(true);
+    QKeyEvent claimRemove(QEvent::ShortcutOverride, Qt::Key_Delete, Qt::NoModifier);
+    QApplication::sendEvent(m_attachments, &claimRemove);
+    if (!claimRemove.isAccepted()) return false;
+    QKeyEvent remove(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    QApplication::sendEvent(m_attachments, &remove);
+    if (m_attachments->count() != attachedBefore + 1 ||
+        m_attachments->item(attachedBefore)->data(Qt::UserRole + 1) != remainingId) {
+        std::fprintf(stderr, "FAIL AI chat: attachment Delete or stable id\n"); return false;
+    }
+    delete m_attachments->takeItem(attachedBefore);
+    m_attachmentButton->setChecked(false);
+    refreshAttachments();
+    const auto actions = m_transcriptBody->findChildren<QToolButton*>("AiMessageAction");
+    if (actions.isEmpty()) { std::fprintf(stderr, "FAIL AI chat: missing copy action\n"); return false; }
+    auto* clipboard = QApplication::clipboard();
+    auto* previous = new QMimeData;
+    if (const auto* mime = clipboard->mimeData())
+        for (const auto& format : mime->formats()) previous->setData(format, mime->data(format));
+    actions.front()->click();
+    const bool copied = clipboard->text() == QString::fromStdString(m_session->messages().front().text);
+    clipboard->setMimeData(previous);
+    if (!copied) { std::fprintf(stderr, "FAIL AI chat: copy text\n"); return false; }
+    bool foundConversation = false;
+    QTimer::singleShot(0, this, [&] {
+        for (auto* widget : QApplication::topLevelWidgets()) {
+            auto* dialog = qobject_cast<QDialog*>(widget);
+            if (dialog && dialog->windowTitle() == tr("Conversation")) {
+                foundConversation = true;
+                dialog->reject();
+            }
+        }
+    });
+    m_input->setFocus();
+    const auto findChord = QKeySequence(QKeySequence::Find)[0];
+    QKeyEvent findOverride(QEvent::ShortcutOverride, findChord.key(), findChord.keyboardModifiers());
+    QApplication::sendEvent(m_input, &findOverride);
+    QKeyEvent findPress(QEvent::KeyPress, findChord.key(), findChord.keyboardModifiers());
+    QApplication::sendEvent(m_input, &findPress);
+    QApplication::processEvents();
+    if (!foundConversation) { std::fprintf(stderr, "FAIL AI chat: Find shortcut\n"); return false; }
+    // Reading earlier messages must not be interrupted by a streamed update.
+    m_session->begin("/help Explain the arrangement");
+    m_session->applyReply({std::string(2500, 'a'), {}, {}});
+    // Explicit newlines avoid depending on font-dependent long-word wrapping.
+    m_session->begin("/help Explain each bar");
+    std::string longAnswer;
+    for (int i = 0; i < 100; ++i) longAnswer += "A bar of music.\n";
+    m_session->applyReply({longAnswer, {}, {}});
+    const auto settleLayout = [] {
+        QEventLoop loop;
+        QTimer::singleShot(50, &loop, &QEventLoop::quit);
+        loop.exec();
+    };
+    m_followOutput = true;
+    renderTranscript();
+    settleLayout();
+    auto* scroll = m_transcript->verticalScrollBar();
+    const bool followed = scroll->value() == scroll->maximum();
+    scroll->setValue(0);
+    m_followOutput = false;
+    m_streaming = "A new fragment";
+    renderTranscript();
+    settleLayout();
+    const bool anchored = followed && scroll->maximum() > 0 && scroll->value() == 0 &&
+                          m_transcriptBody->width() <= m_transcript->viewport()->width();
+    m_streaming.clear();
+    setVisible(!wasHidden);
+    if (!anchored) {
+        std::fprintf(stderr, "FAIL AI chat: scroll/width maximum=%d value=%d body=%dx%d viewport=%dx%d messages=%zu visible=%d\n",
+                     scroll->maximum(), scroll->value(), m_transcriptBody->width(), m_transcriptBody->height(),
+                     m_transcript->viewport()->width(), m_transcript->viewport()->height(),
+                     m_session->messages().size(), int(m_transcript->isVisible()));
+        for (const auto* label : m_transcriptBody->findChildren<QLabel*>("AiMessageText"))
+            std::fprintf(stderr, "  text=%d height=%d hint=%d minimum=%d hfw=%d\n", int(label->text().size()),
+                         label->height(), label->sizeHint().height(), label->minimumSizeHint().height(),
+                         label->heightForWidth(label->width()));
+        return false;
+    }
+    std::fprintf(stderr, "PASS AI chat: compact folders, deduplication, Delete, stable ids, message copy and Find\n");
+    std::fprintf(stderr, "PASS AI chat: streaming preserves the reader's scroll position\n");
 
     const daw::TrackModel* made = nullptr;
     for (const daw::TrackModel& track : m_controller->project().tracks)

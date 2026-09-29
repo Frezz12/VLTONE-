@@ -1,6 +1,7 @@
 #include "ai/CompositionEngine.hpp"
 
 #include <cmath>
+#include <algorithm>
 #include <cstdio>
 #include <set>
 #include <sstream>
@@ -172,6 +173,27 @@ int main() {
     check(!ai::validateCompositionRequest(bad).valid() &&
               ai::generateCompositionCandidates(bad).empty(),
           "an invalid request is reported and produces no candidates");
+
+    ai::CompositionRequest extended;
+    extended.role = ai::CompositionRole::Chords;
+    extended.bars = 1;
+    extended.rhythmicDensity = 0;
+    extended.creativity = 0;
+    extended.pitchRange = ai::CompositionPitchRange{48, 84};
+    extended.harmony = {{0, 1.5, 0, {0, 4, 7, 11, 2}}, {1.5, 2.5, 5, {5, 9, 0, 4}}};
+    const auto extendedCandidates = ai::generateCompositionCandidates(extended);
+    bool complete = extendedCandidates.size() == 3;
+    for (const auto& candidate : extendedCandidates) {
+        std::vector<int> first, second;
+        for (const auto& note : candidate.notes) {
+            if (std::abs(note.startBeats) < 1e-6) first.push_back(note.pitch % 12);
+            if (std::abs(note.startBeats - 1.5) < 1e-6) second.push_back(note.pitch % 12);
+            if (note.startBeats < 1.5 && note.startBeats + note.lengthBeats > 1.5) complete = false;
+        }
+        std::sort(first.begin(), first.end()); std::sort(second.begin(), second.end());
+        complete = complete && first == std::vector<int>({0, 2, 4, 7, 11}) && second == std::vector<int>({0, 4, 5, 9});
+    }
+    check(complete, "extended chords keep every tone and change at off-grid harmony boundaries");
 
     std::printf("\n%s\n", failures == 0 ? "ALL PASSED" : "FAILURES PRESENT");
     return failures;

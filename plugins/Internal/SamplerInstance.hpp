@@ -44,6 +44,7 @@ public:
 
     // ── PluginInstance ──
     const PluginDescriptor& descriptor() const noexcept override { return m_descriptor; }
+    PitchCapabilities pitchCapabilities() const noexcept override { return {true, false, true, true}; }
     void setListener(PluginListener* listener) noexcept override { m_listener = listener; }
 
     bool setBusLayout(const PluginBusLayout& wanted, PluginBusLayout& accepted) override;
@@ -126,8 +127,14 @@ private:
     /// Read the parameter array into the plain snapshot a block's voices use.
     SamplerSettings snapshot() const noexcept;
     void applyEvent(const PluginEvent& event, std::uint32_t frameOffset) noexcept;
-    void noteOn(int key, int channel, float velocity, float pan) noexcept;
-    void noteOff(int key, int channel) noexcept;
+    void noteOn(int key, int channel, float velocity, float pan, std::int32_t id = -1) noexcept;
+    void noteOff(int key, int channel, std::int32_t id = -1) noexcept;
+    double slideValue(SlideParam p) const noexcept { return m_values[indexOf(p)].load(std::memory_order_relaxed); }
+    double legatoSeconds() const noexcept;
+    struct HeldNote { int key = 0, channel = 0; std::int32_t id = -1; std::uint64_t stamp = 0; };
+    std::array<HeldNote, 128> m_heldNotes{};
+    double m_channelBend[16]{};
+    double m_tempo = 120;
     /// Render `frames` starting at `offset` into the context's outputs.
     void renderSlice(const PluginProcessContext& context, const SamplerSettings& settings,
                      std::uint32_t offset, std::uint32_t frames) noexcept;

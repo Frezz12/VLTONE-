@@ -12,7 +12,7 @@ test("public pages work without cookies and a refusal persists", async ({ page }
   await expect(page.getByRole("region", { name: "Выбор cookie" })).toHaveCount(0);
   await page.getByRole("button", { name: "Open in English" }).click();
   await expect(page).toHaveURL(/\?lang=en$/);
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("Your sound");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Record, arrange and mix");
   expect(await page.context().cookies()).toEqual([]);
   await page.goto("/privacy");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
@@ -24,7 +24,7 @@ test("necessary-only choice enables language and can be withdrawn later", async 
   await expect(page.getByRole("region", { name: "Выбор cookie" })).toHaveCount(0);
   await page.getByRole("button", { name: "Open in English" }).click();
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("Your sound");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Record, arrange and mix");
   expect((await page.context().cookies()).find(cookie => cookie.name === "vlt-locale")?.value).toBe("en");
 
   await page.context().addCookies([{ name: "vlt_web_session", value: "old-session", httpOnly: true, url: "http://127.0.0.1:3100" }]);

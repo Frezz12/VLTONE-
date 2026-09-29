@@ -51,6 +51,9 @@ json insertToJson(const InsertModel& i) {
     if (i.stateSchemaVersion > 0)
         j["stateSchemaVersion"] = i.stateSchemaVersion;
     j["mix"] = i.mix;
+    if (i.slideDelivery || i.slideBendRange != 2 || i.slideReleaseReserve != 2) {
+        j["slideDelivery"] = i.slideDelivery; j["slideBendRange"] = i.slideBendRange; j["slideReleaseReserve"] = i.slideReleaseReserve;
+    }
     if (i.channelMode != PluginChannelMode::Auto)
         j["channelMode"] = toString(i.channelMode);
     if (i.editorChannel != PluginEditorChannel::Left)
@@ -96,6 +99,9 @@ InsertModel insertFromJson(const json& j) {
     i.pluginVersion = j.value("pluginVersion", "");
     i.stateSchemaVersion = std::max(0, j.value("stateSchemaVersion", 0));
     i.mix = j.value("mix", 1.0f);
+    i.slideDelivery = std::clamp(j.value("slideDelivery",0),0,4);
+    i.slideBendRange = std::clamp(j.value("slideBendRange",2.),1.,96.);
+    i.slideReleaseReserve = std::clamp(j.value("slideReleaseReserve",2.),0.,20.);
     i.channelMode = pluginChannelModeFromString(
         j.value("channelMode", std::string("auto")));
     i.editorChannel = pluginEditorChannelFromString(

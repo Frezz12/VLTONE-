@@ -426,9 +426,12 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		if err := requireIDs("insertId"); err != nil {
 			return err
 		}
-		property, err := payloadEnum(body, "property", "name", "bypassed", "mix", "channelMode", "sidechainTrackId", "sidechainTrackIds")
+		property, err := payloadEnum(body, "property", "name", "bypassed", "mix", "channelMode", "sidechainTrackId", "sidechainTrackIds", "slideDelivery", "slideBendRange", "slideReleaseReserve")
 		if err != nil {
 			return err
+		}
+		if strings.HasPrefix(property, "slide") && schemaVersion < 5 {
+			return invalidf("slide settings require protocol 5")
 		}
 		return validatePluginPropertyValue(body, property)
 	case "plugin.setState":
@@ -542,6 +545,31 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		}
 		_, err := payloadNumber(body, "pan", -1, 1, false)
 		return err
+	case "slide.set":
+		if schemaVersion < 5 {
+			return invalidf("slide notes require protocol 5")
+		}
+		if err := exactPayloadKeys(body, []string{"trackId", "clipId", "takeId", "slideId", "slide"}, nil); err != nil {
+			return err
+		}
+		if err := requireIDs("trackId", "clipId", "slideId"); err != nil {
+			return err
+		}
+		if err := optionalPayloadUUIDIfPresent(body, "takeId"); err != nil {
+			return err
+		}
+		if string(body["slide"]) == "null" {
+			return nil
+		}
+		if err := validateSlidePayload(body["slide"]); err != nil {
+			return err
+		}
+		id, _ := requiredPayloadUUID(body, "slideId")
+		nested, _ := requiredNestedPayloadUUID(body, "slide", "id")
+		if id != nested {
+			return invalidf("slide ID mismatch")
+		}
+		return nil
 	case "note.upsert":
 		if err := exactPayloadKeys(body, []string{"trackId", "clipId", "note"}, []string{"afterId"}); err != nil {
 			return err
@@ -682,6 +710,9 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		if err := requireIDs("trackId", "clipId"); err != nil {
 			return err
 		}
+		if schemaVersion < 5 && midiContentHasSlides(body["take"]) {
+			return invalidf("slide notes require protocol 5")
+		}
 		var take map[string]json.RawMessage
 		if json.Unmarshal(body["take"], &take) == nil && take["notes"] != nil && take["asset"] == nil && schemaVersion < 4 {
 			return invalidf("MIDI takes require command schema v4")
@@ -761,6 +792,9 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 	case "recording.prepareMidi", "recording.applyMidi", "recording.restoreMidi":
 		if schemaVersion < CollaborationCommandSchemaV4 {
 			return invalidf("MIDI recording requires schema 4")
+		}
+		if schemaVersion < CollaborationCommandSchemaV5 && kind == "recording.prepareMidi" && midiContentHasSlides(body["content"]) {
+			return invalidf("slide notes require schema 5")
 		}
 		return validateMidiRecordingPayload(kind, body)
 	case "recording.commit":
@@ -1149,6 +1183,15 @@ func validatePluginPropertyValue(body map[string]json.RawMessage, property strin
 	case "mix":
 		_, err := payloadNumber(body, "value", 0, 1, false)
 		return err
+	case "slideDelivery":
+		_, err := payloadInteger(body, "value", 0, 4)
+		return err
+	case "slideBendRange":
+		_, err := payloadNumber(body, "value", 1, 96, false)
+		return err
+	case "slideReleaseReserve":
+		_, err := payloadNumber(body, "value", 0, 20, false)
+		return err
 	case "channelMode":
 		_, err := payloadEnum(body, "value", "auto", "mono", "stereo", "dual-mono")
 		return err
@@ -1210,7 +1253,7 @@ func validateSharedInsert(raw json.RawMessage,
 		return "", "", "", invalidf("command payload insert must be an object")
 	}
 	required := []string{"id", "name", "bypassed", "format", "uid", "vendor", "pluginVersion", "stateSchemaVersion", "mix", "channelMode", "sidechainTrackId", "stateAsset", "rightStateAsset", "parameters", "rightParameters", "assetBindings"}
-	if err := exactPayloadKeys(body, required, []string{"sidechainTrackIds"}); err != nil {
+	if err := exactPayloadKeys(body, required, []string{"sidechainTrackIds", "slideDelivery", "slideBendRange", "slideReleaseReserve"}); err != nil {
 		return "", "", "", err
 	}
 	insertID, err := requiredPayloadUUID(body, "id")
@@ -1260,6 +1303,16 @@ func validateSharedInsert(raw json.RawMessage,
 	}
 	if _, err := payloadNumber(body, "mix", 0, 1, false); err != nil {
 		return "", "", "", err
+	}
+	for _, key := range []string{"slideDelivery", "slideBendRange", "slideReleaseReserve"} {
+		if raw, ok := body[key]; ok {
+			if schemaVersion < 5 {
+				return "", "", "", invalidf("slide settings require protocol 5")
+			}
+			if err := validatePluginPropertyValue(map[string]json.RawMessage{"value": raw}, key); err != nil {
+				return "", "", "", err
+			}
+		}
 	}
 	if _, err := payloadEnum(body, "channelMode", "auto", "mono", "stereo", "dual-mono"); err != nil {
 		return "", "", "", err
@@ -1476,8 +1529,14 @@ func validateAutomationTarget(raw json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if _, err := requiredPayloadUUID(body, "channelId"); err != nil {
+	channelID, err := payloadString(body, "channelId", 64, false)
+	if err != nil {
 		return err
+	}
+	if channelID != "master" {
+		if _, err := requiredPayloadUUID(body, "channelId"); err != nil {
+			return err
+		}
 	}
 	slotID, err := optionalPayloadUUIDValue(body, "slotId")
 	if err != nil {
@@ -1497,11 +1556,11 @@ func validateAutomationTarget(raw json.RawMessage) error {
 			return invalidf("automation channel target contains unrelated identifiers")
 		}
 	case "send":
-		if slotID != "" || parameterID != "" || sendID == "" {
+		if channelID == "master" || slotID != "" || parameterID != "" || sendID == "" {
 			return invalidf("automation send target is incomplete")
 		}
 	case "parameter":
-		if parameterID == "" || sendID != "" {
+		if parameterID == "" || sendID != "" || (channelID == "master" && slotID == "") {
 			return invalidf("automation parameter target is incomplete")
 		}
 	}

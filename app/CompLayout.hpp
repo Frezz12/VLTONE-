@@ -105,6 +105,7 @@ inline void clearCompFactor(const std::string& trackId) {
 
 /// Extra lane height the comp editor needs right now, animation included.
 inline int compExtraHeight(const daw::TrackModel& track) {
+    if (laneHeightFor(track.height) <= kCompactLaneHeight) return 0;
     const int rows = expandedTakeCount(track);
     if (rows == 0) return 0;
     return int(std::lround(double(rows * kTakeRowHeight) * compFactor(track)));

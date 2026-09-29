@@ -334,6 +334,11 @@ bool streaming() { return QSettings().value(key("streaming"), true).toBool(); }
 
 void setStreaming(bool on) { QSettings().setValue(key("streaming"), on); }
 
+int timeoutSeconds() { return std::clamp(QSettings().value(key("timeoutSeconds"), 600).toInt(), 60, 1800); }
+void setTimeoutSeconds(int seconds) { QSettings().setValue(key("timeoutSeconds"), std::clamp(seconds, 60, 1800)); }
+int maxRetries() { return std::clamp(QSettings().value(key("maxRetries"), 3).toInt(), 0, 5); }
+void setMaxRetries(int retries) { QSettings().setValue(key("maxRetries"), std::clamp(retries, 0, 5)); }
+
 bool visible() { return QSettings().value(key("visible"), false).toBool(); }
 
 void setVisible(bool visible) { QSettings().setValue(key("visible"), visible); }

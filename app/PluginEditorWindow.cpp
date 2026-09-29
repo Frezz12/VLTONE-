@@ -45,6 +45,9 @@
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QComboBox>
+#include <QDialog>
+#include <QDoubleSpinBox>
+#include <QFormLayout>
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QSlider>
@@ -286,10 +289,12 @@ public:
         });
     }
     std::function<void(const std::vector<std::string>&)> selectionChanged;
+    std::function<std::vector<daw::EngineController::SidechainSource>()> availableSources;
 
     void setSources(const std::vector<daw::EngineController::SidechainSource>& sources,
                     const std::vector<std::string>& selected) {
         m_sources = sources;
+        const bool selectionChanged = m_selected != selected;
         m_selected = selected;
         QStringList names;
         for (const auto& id : selected) {
@@ -307,16 +312,25 @@ public:
             : selected.size() == 1 ? PluginEditorWindow::tr("Side Chain: %1").arg(names.front())
             : PluginEditorWindow::tr("Side Chain: %1 sources").arg(selected.size());
         if (count() != 1) { clear(); addItem(label); }
-        else setItemText(0, label);
-        setItemData(0, selected.empty() ? QString() : QStringLiteral("connected"));
-        setCurrentIndex(0);
-        setToolTip((names.isEmpty() ? label : names.join(QLatin1Char('\n'))) + QLatin1Char('\n') +
-            PluginEditorWindow::tr("Select one or more sources. Their post-fader signals are summed into the sidechain input."));
-        syncChecks();
-        update();
+        else if (itemText(0) != label) setItemText(0, label);
+        const QString connected = selected.empty() ? QString() : QStringLiteral("connected");
+        if (itemData(0).toString() != connected) setItemData(0, connected);
+        if (currentIndex() != 0) setCurrentIndex(0);
+        const QString tooltip = (names.isEmpty() ? label : names.join(QLatin1Char('\n'))) + QLatin1Char('\n') +
+            PluginEditorWindow::tr("Select one or more sources. Their post-fader signals are summed into the sidechain input.");
+        if (toolTip() != tooltip) setToolTip(tooltip);
+        if (selectionChanged) syncChecks();
     }
     void showPopup() override {
         if (!isEnabled() || m_menu->isVisible()) return;
+        // Walking the routing graph belongs to opening the picker, not the
+        // 200 ms editor poll. Keep selected/missing sources available to remove.
+        auto sources = availableSources ? availableSources() : m_sources;
+        for (const auto& source : m_sources) {
+            if (std::none_of(sources.begin(), sources.end(),
+                [&](const auto& candidate) { return candidate.id == source.id; }))
+                sources.push_back(source);
+        }
         m_menu->clear();
         auto* off = m_menu->addAction(PluginEditorWindow::tr("Side Chain: Off"));
         off->setCheckable(true);
@@ -324,7 +338,7 @@ public:
             if (selectionChanged) selectionChanged({});
         });
         m_menu->addSeparator();
-        for (const auto& source : m_sources) {
+        for (const auto& source : sources) {
             const QString name = QString::fromStdString(source.name);
             auto* action = m_menu->addAction(fontMetrics().elidedText(name, Qt::ElideRight, 320));
             action->setToolTip(name);
@@ -401,7 +415,6 @@ PluginEditorWindow::PluginEditorWindow(daw::EngineController* controller,
     setProperty("dawPluginEditor", true);
     setFocusPolicy(Qt::StrongFocus);
     m_nativeKeyboard = std::make_unique<PluginEditorNativeKeyboard>(this);
-    qApp->installEventFilter(this);
     m_layout = new QVBoxLayout(this);
     m_layout->setContentsMargins(0, 0, 0, 0);
     m_layout->setSpacing(0);
@@ -589,6 +602,27 @@ void PluginEditorWindow::buildWrapper() {
     connect(m_dockToggle, &QToolButton::toggled, this,
             [this](bool on) { setParameterDockVisible(on); });
     row->addWidget(m_dockToggle);
+    if (const auto* track=m_controller->project().findTrack(m_channelKey); track && track->instrument.id==m_insertKey) {
+        auto* slide=new QToolButton(m_wrapper);slide->setText(tr("Slide"));slide->setAccessibleName(tr("Slide delivery settings"));row->addWidget(slide);
+        auto* statusTimer=new QTimer(slide);statusTimer->setInterval(250);
+        const auto refresh=[this,slide]{auto node=m_controller->instrumentSlideStatus(m_channelKey);
+            using D=daw::plugins::SlideDelivery;QString state;
+            switch(node.mode){case D::NoteExpression:state=tr("Per-note pitch");break;case D::MPE:state=tr("MPE · channels 2–16");break;case D::PitchBend:state=tr("Pitch Bend · affects the entire channel");break;default:state=tr("Slide unavailable or disabled");break;}
+            if(node.overloaded)state=tr("MPE overloaded: new voice skipped");else if(node.clipped)state=tr("Slide exceeds the instrument bend range");
+            slide->setText(node.overloaded||node.clipped?tr("Slide !"):tr("Slide")+QStringLiteral(" · ")+state);slide->setToolTip(state);
+        };connect(statusTimer,&QTimer::timeout,slide,refresh);statusTimer->start();refresh();
+        connect(slide,&QToolButton::clicked,this,[this]{
+            const auto* track=m_controller->project().findTrack(m_channelKey);if(!track)return;const auto& slot=track->instrument;
+            auto* dialog=new QDialog(this,Qt::Tool);dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->setWindowTitle(tr("Slide delivery"));auto* form=new QFormLayout(dialog);
+            auto* mode=new QComboBox(dialog);mode->addItems({tr("Auto"),tr("Per note"),tr("MPE"),tr("Pitch Bend"),tr("Off")});mode->setCurrentIndex(slot.slideDelivery);form->addRow(tr("Delivery"),mode);
+            auto* range=new QDoubleSpinBox(dialog);range->setRange(1,96);range->setValue(slot.slideBendRange);range->setSuffix(tr(" st"));form->addRow(tr("Bend range ±"),range);
+            auto* tail=new QDoubleSpinBox(dialog);tail->setRange(0,20);tail->setValue(slot.slideReleaseReserve);tail->setSuffix(tr(" s"));form->addRow(tr("Unknown release reserve"),tail);
+            auto* status=new QLabel(dialog);status->setWordWrap(true);status->setMaximumWidth(360);form->addRow(status);
+            auto update=[this,mode,range,tail,status]{if(!m_controller->canEditSlideNotes()){mode->setEnabled(false);range->setEnabled(false);tail->setEnabled(false);status->setText(tr("Slide editing requires collaboration protocol 5. Reconnect to an updated session."));return;}m_controller->setInstrumentSlideSettings(m_channelKey,mode->currentIndex(),range->value(),tail->value());auto node=m_controller->instrumentSlideStatus(m_channelKey);auto actual=node.mode;status->setText(actual==daw::plugins::SlideDelivery::PitchBend?tr("Affects the entire channel. Match the bend range in the instrument."):actual==daw::plugins::SlideDelivery::MPE?tr("Channel 1 is common. Channels 2–16 retain pitch through release. Match the member bend range in the instrument."):actual==daw::plugins::SlideDelivery::NoteExpression?tr("Independent pitch for each sounding note."):tr("The requested mode is unsupported or disabled."));};
+            connect(mode,&QComboBox::activated,dialog,[mode,range,update](int i){if(i==2)range->setValue(48);update();});connect(range,&QDoubleSpinBox::editingFinished,dialog,update);connect(tail,&QDoubleSpinBox::editingFinished,dialog,update);update();dialog->show();
+        });
+    }
+
 
     auto* routing = new QWidget(m_wrapper);
     routing->setObjectName(QStringLiteral("PluginRouting"));
@@ -683,6 +717,9 @@ void PluginEditorWindow::buildWrapper() {
             emit projectEdited();
         }
         refreshWrapper();
+    };
+    sidechain->availableSources = [this] {
+        return m_controller->insertSidechainSources(m_channelKey);
     };
     refreshWrapper();
 }
@@ -1048,9 +1085,14 @@ void PluginEditorWindow::refreshWrapper() {
         return;
     }
 
-    // Source discovery checks the complete routing graph for feedback. It is
-    // needed only for plugins that actually expose an auxiliary input.
-    const auto sources = m_controller->insertSidechainSources(m_channelKey);
+    // Only selected names are needed for the closed header. Discover valid
+    // routes on demand when its popup opens, even in large playing projects.
+    std::vector<daw::EngineController::SidechainSource> sources;
+    sources.reserve(model->sidechainTrackIds.size());
+    for (const auto& id : model->sidechainTrackIds) {
+        if (const auto* source = m_controller->project().findTrack(id))
+            sources.push_back({source->id, source->name});
+    }
     m_sidechain->setEnabled(true);
     static_cast<PluginSidechainCombo*>(m_sidechain)->setSources(sources, model->sidechainTrackIds);
     m_refreshingWrapper = false;
@@ -1061,7 +1103,14 @@ void PluginEditorWindow::detachFromPlugin() {
     ++m_loadGeneration;
     m_pendingEditorPlugin = nullptr;
     m_editorReady = false;
-    if (!m_embedded) return;
+    if (!m_embedded) {
+        // VST3 capability checks may retain an unattached view while this
+        // window is still loading. Cancel it too, without closing another
+        // host's already attached editor.
+        if (auto* plugin = instance(); plugin && !plugin->isEditorOpen())
+            plugin->closeEditor();
+        return;
+    }
     m_embedded = false;
     // Only the instance the view was opened on may be told to close it. After a
     // Replace the slot holds a different plugin, and `closeEditor` on that one
@@ -1121,11 +1170,22 @@ bool PluginEditorWindow::routeHostKey(QKeyEvent* event, bool textEntry) {
 }
 
 bool PluginEditorWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (m_closing || !isVisible()) return false;
+    switch (event->type()) {
+    case QEvent::FocusIn:
+    case QEvent::MouseButtonPress:
+    case QEvent::ShortcutOverride:
+    case QEvent::KeyPress:
+    case QEvent::KeyRelease:
+        break;
+    default:
+        return false;
+    }
     auto* widget = qobject_cast<QWidget*>(watched);
     auto* frame = qobject_cast<InternalEditorFrame*>(parentWidget());
     const bool belongs = widget && (widget == this || isAncestorOf(widget) ||
         (frame && (widget == frame || frame->isAncestorOf(widget))));
-    if (!belongs || m_closing || !isVisible()) return false;
+    if (!belongs) return false;
     if (event->type() == QEvent::FocusIn || event->type() == QEvent::MouseButtonPress)
         emit keyboardFocusReceived();
     if (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress ||
@@ -1155,6 +1215,7 @@ void PluginEditorWindow::closeEvent(QCloseEvent* event) {
 }
 
 void PluginEditorWindow::hideEvent(QHideEvent* event) {
+    qApp->removeEventFilter(this);
     if (m_poll) m_poll->stop();
     if (m_editorIdle) m_editorIdle->stop();
     QWidget::hideEvent(event);
@@ -1190,6 +1251,7 @@ void PluginEditorWindow::resizeEvent(QResizeEvent* event) {
 }
 
 void PluginEditorWindow::showEvent(QShowEvent* event) {
+    qApp->installEventFilter(this);
     QWidget::showEvent(event);
     syncPollTimer();
     if (!isWindow()) {
