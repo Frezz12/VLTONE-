@@ -202,7 +202,7 @@ QString SessionActivity::headline() const {
         parts << SessionActivity::tr("%n file needs attention", nullptr,
                                      int(transfersFailed + hydrationFailed));
     if (localResultsPending > 0)
-        parts << SessionActivity::tr("%n local result awaiting publication", nullptr, int(localResultsPending));
+        parts << SessionActivity::tr("%n local result retained for recovery", nullptr, int(localResultsPending));
     if (persistentProblems > 0)
         parts << SessionActivity::tr("%n problem", nullptr, persistentProblems);
     if (hashRoundInFlight) parts << SessionActivity::tr("Verifying state");
@@ -603,7 +603,7 @@ void SessionStatusStrip::Impl::refreshPopup() {
     }
     for (auto it = localResults.cbegin(); it != localResults.cend(); ++it)
         addTask(QStringLiteral("recovery:") + it.key(), it.value(),
-                SessionActivity::tr("Local result awaiting publication"), true, false, -1);
+                SessionActivity::tr("Local result retained for recovery"), true, false, -1);
     if (activity.sync == CloudSyncPhase::Failed)
         addTask(QStringLiteral("sync"), SessionActivity::tr("Open project"),
                 activity.notice.isEmpty() ? activity.stateDetail : activity.notice, true, false, -1);

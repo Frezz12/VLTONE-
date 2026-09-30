@@ -1627,7 +1627,7 @@ bool EngineController::persistSharedAssetResult(const PendingSharedAssetMutation
     std::ifstream previous(platform::pathFromUtf8(path), std::ios::binary);
     const auto saved = nlohmann::json::parse(previous, nullptr, false);
     previous.close();
-    if (saved.is_object()) for (const auto key : {"command", "transactionId"})
+    if (saved.is_object()) for (const auto key : {"command", "transactionId", "label"})
         if (saved.contains(key)) value[key] = saved[key];
     const bool written = writeSharedResultRecovery(path, value);
     if (written && m_sharedResultRecoveryCallback) m_sharedResultRecoveryCallback(path);

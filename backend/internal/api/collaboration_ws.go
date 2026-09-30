@@ -108,6 +108,20 @@ type collaborationWireCommand struct {
 
 type collaborationOpSubmit struct {
 	Command json.RawMessage `json:"command"`
+	// The first 0.3.2 desktop build placed this inside the payload. Accept it
+	// during recovery, while current clients use the documented envelope field.
+	SessionVersion int64 `json:"sessionVersion,omitempty"`
+}
+
+func (request collaborationOpSubmit) sessionVersion(envelopeVersion int64) (int64, error) {
+	if envelopeVersion < 0 || request.SessionVersion < 0 ||
+		(envelopeVersion != 0 && request.SessionVersion != 0 && envelopeVersion != request.SessionVersion) {
+		return 0, errors.New("conflicting or invalid session version")
+	}
+	if envelopeVersion == 0 {
+		return request.SessionVersion, nil
+	}
+	return envelopeVersion, nil
 }
 
 type collaborationSafePresence struct {
@@ -798,6 +812,10 @@ func (connection *collaborationRoomConnection) submitOperation(ctx context.Conte
 	if err := decodeCollaborationJSON(envelope.Payload, &request); err != nil {
 		return err
 	}
+	sessionVersion, err := request.sessionVersion(envelope.SessionVersion)
+	if err != nil {
+		return err
+	}
 	command, transactionID, err := parseCollaborationWireCommand(request.Command)
 	if err != nil {
 		return err
@@ -824,7 +842,7 @@ func (connection *collaborationRoomConnection) submitOperation(ctx context.Conte
 			ActorSessionID: connection.authSessionID, OpID: opID,
 			TransactionID: transactionID, Kind: command.Kind,
 			SchemaVersion: command.SchemaVersion, BaseSeq: command.BaseServerSeq,
-			SessionVersion: envelope.SessionVersion,
+			SessionVersion: sessionVersion,
 			Payload:        command.Payload, Preconditions: preconditions,
 			TouchedFields: command.TouchedFields,
 		})

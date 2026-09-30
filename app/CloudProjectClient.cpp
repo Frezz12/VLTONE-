@@ -767,13 +767,15 @@ std::optional<CloudProjectInvite> parseInvite(const QJsonObject& object,
     if (!exactKeys(object,
                    {"id", "project_id", "role", "expires_at", "created_at"},
                    {"invited_by", "accepted_by", "accepted_at",
-                    "revoked_at"})) {
+                    "revoked_at", "code_digits"})) {
         if (error) error->message = QStringLiteral("Invalid invite shape");
         return std::nullopt;
     }
     CloudProjectInvite invite;
     const auto role = memberRole(object.value(QStringLiteral("role")).toString());
-    if (!normalizedUuid(object.value(QStringLiteral("id")), &invite.id) ||
+    if ((object.contains(QStringLiteral("code_digits")) &&
+         !boundedInteger(object.value(QStringLiteral("code_digits")), 0, 32)) ||
+        !normalizedUuid(object.value(QStringLiteral("id")), &invite.id) ||
         !normalizedUuid(object.value(QStringLiteral("project_id")),
                         &invite.projectId) ||
         !optionalUuid(object, "invited_by", &invite.invitedBy) || !role ||
@@ -3927,6 +3929,44 @@ bool checkCloudProjectClientForTest(QString* error) {
         return fail(QStringLiteral("edit lease without policy revision reached the network"));
     failures = 0;
 
+    QJsonObject invitation{{QStringLiteral("id"), sessionId},
+        {QStringLiteral("project_id"), projectId},
+        {QStringLiteral("role"), QStringLiteral("editor")},
+        {QStringLiteral("created_at"), QStringLiteral("2026-09-30T12:00:00Z")},
+        {QStringLiteral("expires_at"), QStringLiteral("2026-10-01T12:00:00Z")}};
+    FakeCloudNetwork inviteNetwork;
+    CloudProjectClient inviteClient([credentials] { return credentials; }, &inviteNetwork, nullptr);
+    int createdInvites = 0, listedInvites = 0, inviteErrors = 0;
+    QObject::connect(&inviteClient, &CloudProjectClient::inviteCreated,
+        [&](quint64, const CreatedCloudProjectInvite& result) {
+            if (result.invite.projectId == projectId && result.oneTimeCode == QStringLiteral("123456789012")) ++createdInvites;
+        });
+    QObject::connect(&inviteClient, &CloudProjectClient::invitesListed,
+        [&](quint64, const QVector<CloudProjectInvite>& result) {
+            if (result.size() == 1 && result.front().projectId == projectId) ++listedInvites;
+        });
+    QObject::connect(&inviteClient, &CloudProjectClient::requestFailed,
+        [&](quint64, CloudRequestKind, const CloudClientError&) { ++inviteErrors; });
+    // Both older servers (code_digits) and the minimal public response work.
+    for (int variant = 0; variant < 2; ++variant) {
+        if (variant) invitation.insert(QStringLiteral("code_digits"), 12);
+        inviteNetwork.scripts.push_back({201, compact(QJsonObject{
+            {QStringLiteral("invite"), invitation}, {QStringLiteral("token"), QString(48, QLatin1Char('t'))},
+            {QStringLiteral("code"), QStringLiteral("123456789012")}})});
+        CreateCloudProjectInviteInput input; input.role = CloudMemberRole::Editor; input.expiresInSeconds = 86400;
+        inviteClient.createInvite(projectId, input);
+        if (!waitUntil([&] { return createdInvites == variant + 1 || inviteErrors; }) || inviteErrors)
+            return fail(QStringLiteral("server invitation creation metadata was rejected"));
+        inviteNetwork.scripts.push_back({200, compact(QJsonObject{{QStringLiteral("invites"), QJsonArray{invitation}}})});
+        inviteClient.listInvites(projectId);
+        if (!waitUntil([&] { return listedInvites == variant + 1 || inviteErrors; }) || inviteErrors)
+            return fail(QStringLiteral("server invitation list metadata was rejected"));
+    }
+    for (const QJsonValue invalid : {QJsonValue(-1), QJsonValue(33), QJsonValue(1.5), QJsonValue(QStringLiteral("12"))}) {
+        invitation.insert(QStringLiteral("code_digits"), invalid);
+        ParseFailure parse;
+        if (parseInvite(invitation, &parse)) return fail(QStringLiteral("invalid invitation code width was accepted"));
+    }
     return true;
 }
 

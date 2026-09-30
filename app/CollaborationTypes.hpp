@@ -240,6 +240,7 @@ struct WireEnvelope {
     quint64 ephemeralSequence = 0;
     qint64 sentAtMs = 0;
     qint64 serverTimeMs = 0;
+    quint64 sessionVersion = 0;
     QJsonObject payload;
 };
 

@@ -717,6 +717,8 @@ bool CollaborationService::sendEnvelope(WireType type,
     envelope.messageId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     envelope.sentAtMs = nowMs();
     envelope.payload = payload;
+    if (type == WireType::OpSubmit && m_commandSchemaVersion >= 6)
+        envelope.sessionVersion = m_control.sessionVersion;
     // Per-kind sequences. The room bus coalesces each kind under its own key
     // and drains them independently, so a shared counter would let a newer
     // selection/drag retire an older cursor sample at the receiver's dedupe.
@@ -756,7 +758,6 @@ void CollaborationService::setPendingRecoveryBlocked(bool blocked) {
 bool CollaborationService::submitOperation(const QJsonObject& command) {
     if (!canSubmitOperations() || command.isEmpty()) return false;
     QJsonObject payload{{QStringLiteral("command"), command}};
-    if (m_commandSchemaVersion >= 6) payload.insert(QStringLiteral("sessionVersion"), double(m_control.sessionVersion));
     return sendEnvelope(WireType::OpSubmit, payload);
 }
 
@@ -764,7 +765,6 @@ bool CollaborationService::submitRecoveryOperation(
     const QJsonObject& command) {
     if (!canSubmitRecoveryOperations() || command.isEmpty()) return false;
     QJsonObject payload{{QStringLiteral("command"), command}};
-    if (m_commandSchemaVersion >= 6) payload.insert(QStringLiteral("sessionVersion"), double(m_control.sessionVersion));
     return sendEnvelope(WireType::OpSubmit, payload);
 }
 
@@ -1555,6 +1555,25 @@ bool checkCollaborationPresenceSafetyForTest(QString* error) {
     service.m_state = CollaborationState::Synced;
     service.m_localRole = QStringLiteral("editor");
     if (!service.installSessionControl(control)) return fail(QStringLiteral("initial control not installed"));
+    QVector<QJsonObject> submissions;
+    const auto submissionCheck = QObject::connect(&service, &CollaborationService::outboundTextMessage,
+        [&submissions](const QString& text) {
+            const auto envelope = QJsonDocument::fromJson(text.toUtf8()).object();
+            if (envelope.value(QStringLiteral("type")) == QLatin1String("op.submit")) submissions.append(envelope);
+        });
+    if (!service.submitOperation({{QStringLiteral("kind"), QStringLiteral("project.setScalar")}}))
+        return fail(QStringLiteral("v6 document submission was not emitted"));
+    service.m_pendingRecoveryBlocked = true;
+    if (!service.submitRecoveryOperation({{QStringLiteral("kind"), QStringLiteral("plugin.setState")}}))
+        return fail(QStringLiteral("v6 recovery submission was not emitted"));
+    service.m_pendingRecoveryBlocked = false;
+    QObject::disconnect(submissionCheck);
+    if (submissions.size() != 2) return fail(QStringLiteral("document submission frames were lost"));
+    for (const auto& submission : submissions) {
+        if (submission.value(QStringLiteral("sessionVersion")).toInt() != 1 ||
+            submission.value(QStringLiteral("payload")).toObject().contains(QStringLiteral("sessionVersion")))
+            return fail(QStringLiteral("session policy version was not encoded at the envelope level"));
+    }
     const QString originalHost = service.m_control.hostMemberId;
     service.m_control.hostMemberId = service.localParticipantId();
     service.m_localRole = QStringLiteral("owner");

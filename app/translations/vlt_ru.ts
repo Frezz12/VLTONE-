@@ -13155,11 +13155,11 @@ Legato связывает перекрывающиеся ноты. Диапаз�
         </translation>
     </message>
     <message numerus="yes">
-        <source>%n local result awaiting publication</source>
+        <source>%n local result retained for recovery</source>
         <translation>
-            <numerusform>%n локальный результат ожидает публикации</numerusform>
-            <numerusform>%n локальных результата ожидают публикации</numerusform>
-            <numerusform>%n локальных результатов ожидают публикации</numerusform>
+            <numerusform>%n локальный результат сохранён для восстановления</numerusform>
+            <numerusform>%n локальных результата сохранены для восстановления</numerusform>
+            <numerusform>%n локальных результатов сохранены для восстановления</numerusform>
         </translation>
     </message>
     <message>
@@ -13283,8 +13283,8 @@ Legato связывает перекрывающиеся ноты. Диапаз�
         <translation>Внешний плагин</translation>
     </message>
     <message>
-        <source>Local result awaiting publication</source>
-        <translation>Локальный результат ожидает публикации</translation>
+        <source>Local result retained for recovery</source>
+        <translation>Локальный результат сохранён для восстановления</translation>
     </message>
     <message>
         <source>Open project</source>

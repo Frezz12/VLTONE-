@@ -121,13 +121,13 @@ func TestSessionAndInviteSecretsNeverSerialize(t *testing.T) {
 	if (model.ProjectSession{}).PasswordRequired() {
 		t.Fatal("an open session reported PasswordRequired")
 	}
-	// code_digits is safe and useful: it tells the join dialog how wide the
-	// input should be without revealing anything about the code.
+	// Code width is internal metadata. The shipped desktop accepts an exact
+	// public invite shape, and the join dialog already accepts the code format.
 	encoded, err := json.Marshal(invite)
 	if err != nil {
 		t.Fatalf("marshal invite: %v", err)
 	}
-	if !strings.Contains(string(encoded), "code_digits") {
-		t.Fatalf("invite payload lost code_digits: %s", encoded)
+	if strings.Contains(string(encoded), "code_digits") {
+		t.Fatalf("invite payload contains internal code metadata: %s", encoded)
 	}
 }

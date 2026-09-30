@@ -83,7 +83,7 @@ type ProjectInvite struct {
 	// struct is serialised straight to the client by ListInvites, and a
 	// disclosed lookup value would let anyone confirm a guess offline.
 	CodeLookup   *string    `gorm:"uniqueIndex" json:"-"`
-	CodeDigits   int16      `gorm:"not null;default:0" json:"code_digits"`
+	CodeDigits   int16      `gorm:"not null;default:0" json:"-"`
 	AttemptCount int        `gorm:"not null;default:0" json:"-"`
 	LockedUntil  *time.Time `json:"-"`
 }

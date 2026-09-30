@@ -979,10 +979,14 @@ CollaborationCommandBridge::replaceConfirmedSnapshot(
     // the wrong prior value even though its last-writer guard still passes.
     // Only the confirmed reducer ApplyResult is safe enough for actor history.
     std::vector<std::string> incorporatedPending;
+    std::unordered_set<std::string> incorporatedTransactions;
     incorporatedPending.reserve(m_gateway->pending().size());
     for (const ProjectCommand& pending : m_gateway->pending()) {
-        if (snapshot.appliedOperationIds.contains(pending.meta.operationId))
+        if (snapshot.appliedOperationIds.contains(pending.meta.operationId)) {
             incorporatedPending.push_back(pending.meta.operationId);
+            if (!pending.meta.transactionId.empty())
+                incorporatedTransactions.insert(pending.meta.transactionId);
+        }
     }
     std::vector<std::string> incorporatedWatches;
     incorporatedWatches.reserve(m_watchedDurableOperationIds.size());
@@ -1039,6 +1043,8 @@ CollaborationCommandBridge::replaceConfirmedSnapshot(
         // per-operation signals.
         for (const std::string& operationId : incorporatedWatches)
             observeDurableOperation(operationId, serverSequence, true);
+        for (const auto& transaction : incorporatedTransactions)
+            emit localTransactionDurablyObserved(QString::fromStdString(transaction));
         m_resyncPending = false;
         drainDeferredCommitted();
         if (m_deferredOverflow) {
@@ -2093,6 +2099,9 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
         [] { return true; }, [&] { return projectId; });
     int snapshotAckHistoryWarnings = 0;
     int snapshotAckDurabilityFailures = 0;
+    QStringList snapshotAckTransactions;
+    QObject::connect(&snapshotAckBridge, &CollaborationCommandBridge::localTransactionDurablyObserved,
+        [&](const QString& transaction) { snapshotAckTransactions.append(transaction); });
     QVector<DurableSignal> snapshotAckDurableSignals;
     bool snapshotAckSignalFollowedInstall = true;
     QObject::connect(
@@ -2146,6 +2155,7 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
         snapshotAckBridge.canRedo() ||
         snapshotAckHistoryWarnings != 1 ||
         snapshotAckDurabilityFailures != 0 ||
+        snapshotAckTransactions != QStringList{snapshotAckSent.front().value(QStringLiteral("transactionId")).toString()} ||
         !snapshotAckSignalFollowedInstall ||
         snapshotAckDurableSignals.size() != 1 ||
         snapshotAckDurableSignals.front().operationId !=
@@ -2172,6 +2182,8 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
         return fail(QStringLiteral(
             "delayed duplicate own ack recreated pending/history state"));
     }
+    if (snapshotAckTransactions.size() != 1)
+        return fail(QStringLiteral("snapshot transaction cleanup was repeated after delayed acknowledgement"));
 
     // A durable watch is one-shot in both directions. Explicit server
     // rejection keeps its validated reason, while a local optimistic rollback

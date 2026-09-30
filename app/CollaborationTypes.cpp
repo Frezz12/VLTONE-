@@ -515,6 +515,8 @@ QJsonObject wireEnvelopeToJson(const WireEnvelope& envelope) {
         json.insert(QStringLiteral("sentAtMs"), double(envelope.sentAtMs));
     if (envelope.serverTimeMs > 0)
         json.insert(QStringLiteral("serverTimeMs"), double(envelope.serverTimeMs));
+    if (envelope.sessionVersion > 0)
+        json.insert(QStringLiteral("sessionVersion"), double(envelope.sessionVersion));
     const QString participant = safeSemanticId(envelope.participantId);
     if (!participant.isEmpty())
         json.insert(QStringLiteral("participantId"), participant);
@@ -557,6 +559,8 @@ std::optional<WireEnvelope> wireEnvelopeFromJson(const QJsonObject& json,
     envelope.sentAtMs = integerValue(json.value(QStringLiteral("sentAtMs")));
     envelope.serverTimeMs =
         integerValue(json.value(QStringLiteral("serverTimeMs")));
+    envelope.sessionVersion = quint64(std::max<qint64>(
+        0, integerValue(json.value(QStringLiteral("sessionVersion")))));
     envelope.payload = json.value(QStringLiteral("payload")).toObject();
     return envelope;
 }

@@ -16,6 +16,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -2129,6 +2130,23 @@ void verifySessionControlsAndStateUpload() {
 } // namespace
 
 int main() {
+    // Recovery manifests intentionally outlive cancelled/failed operations.
+    // Keep those fixtures out of the application's real recovery scan, even
+    // when this executable is invoked directly instead of through CTest.
+    const auto testTemporary = std::filesystem::temp_directory_path() /
+        ("vlt-shared-mutation-test-" + daw::newUuid());
+    std::filesystem::create_directories(testTemporary);
+    for (const char* variable : {"TMP", "TEMP", "TMPDIR"}) {
+#ifdef _WIN32
+        if (_putenv_s(variable, testTemporary.string().c_str()) != 0) return 1;
+#else
+        if (setenv(variable, testTemporary.string().c_str(), 1) != 0) return 1;
+#endif
+    }
+    if (!std::filesystem::equivalent(std::filesystem::temp_directory_path(), testTemporary)) {
+        std::fprintf(stderr, "FAIL  could not isolate test recovery files\n");
+        return 1;
+    }
     verifySharedShelfAndRecordingSilence();
     verifySharedMidiComp();
     verifyDerivedRenderAssets();

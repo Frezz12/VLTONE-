@@ -1517,7 +1517,7 @@ components:
         accepted_at: { type: [string, "null"], format: date-time }
         revoked_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
-        code_digits: { type: integer, minimum: 0, maximum: 32, description: Width of the short numeric code, or 0 when the invite has none. The code itself is never returned after creation. }
+        code_digits: { type: integer, minimum: 0, maximum: 32, deprecated: true, description: Optional legacy server metadata. Current servers omit it; the code itself is never returned after creation. }
     CreatedProjectInvite:
       type: object
       additionalProperties: false
