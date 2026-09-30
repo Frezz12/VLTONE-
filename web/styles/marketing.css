@@ -65,6 +65,7 @@ svg { flex-shrink: 0; }
 .workflow-copy h3 { margin: 18px 0 10px; font-size: clamp(22px, 2.2vw, 30px); font-weight: 500; letter-spacing: -.04em; line-height: 1.2; }
 .workflow-copy p { max-width: 400px; margin: 0 0 10px; font-size: 14px; line-height: 1.65; color: #60666c; }
 .studio-extras { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 30px; margin-top: 44px; }
+.studio-home > .studio-extras { padding-bottom: 52px; }
 .studio-extras a { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-content: start; padding: 26px 0 0; border-top: 1px solid #ffffff2b; color: #e8ebef; }
 .studio-extras a > span { grid-column: 1 / -1; color: #9ca4ad; font: 11px/1.4 var(--vlt-font-mono); }
 .studio-extras strong { max-width: 250px; font-size: 20px; font-weight: 400; line-height: 1.4; letter-spacing: -.02em; }
